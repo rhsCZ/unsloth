@@ -185,6 +185,11 @@ export interface OpenAIChatCompletionsRequest {
 export interface OpenAIChatDelta {
   role?: string;
   content?: string;
+  // llama-server (with --jinja, default --reasoning-format) splits
+  // <think>...</think> out of content into this field. The chat
+  // adapter re-wraps it back into <think> tags so parseAssistantContent
+  // can render it as a reasoning block.
+  reasoning_content?: string;
 }
 
 export interface OpenAIChatChunkChoice {

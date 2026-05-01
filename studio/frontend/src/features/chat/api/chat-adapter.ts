@@ -702,6 +702,10 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
       }, warmupDelayMs);
       runtime.setThreadRunning(threadKey, true);
       let cumulativeText = "";
+      // Tracks whether we're currently inside a <think> wrapper that
+      // we synthesised from llama-server's separate `reasoning_content`
+      // delta field. See the delta-handling block below.
+      let inThinking = false;
       let reasoningStartAt: number | null = null;
       let reasoningDuration = 0;
       // Tool call content parts — accumulated and yielded cumulatively.
@@ -866,8 +870,16 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
           }
 
           totalChunks += 1;
-          const delta = chunk.choices?.[0]?.delta?.content;
-          if (!delta) {
+          const deltaObj = chunk.choices?.[0]?.delta;
+          // llama-server with --jinja extracts <think> blocks into a
+          // separate `reasoning_content` field by default; the
+          // /v1/chat/completions endpoint relays that verbatim. Re-wrap
+          // it here in <think>...</think> so parseAssistantContent sees
+          // a uniform stream regardless of llama-server's reasoning
+          // extraction mode (mirrors llama_cpp.py:2660).
+          const reasoningDelta = deltaObj?.reasoning_content ?? "";
+          const contentDelta = deltaObj?.content ?? "";
+          if (!reasoningDelta && !contentDelta) {
             continue;
           }
           if (waitingFirstChunk) {
@@ -877,7 +889,20 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
             runtime.setGeneratingStatus(null);
           }
 
-          cumulativeText += delta;
+          if (reasoningDelta) {
+            if (!inThinking) {
+              cumulativeText += "<think>";
+              inThinking = true;
+            }
+            cumulativeText += reasoningDelta;
+          }
+          if (contentDelta) {
+            if (inThinking) {
+              cumulativeText += "</think>";
+              inThinking = false;
+            }
+            cumulativeText += contentDelta;
+          }
           const parts = parseAssistantContent(cumulativeText);
 
           if (parts.some((part) => part.type === "reasoning") && !reasoningStartAt) {

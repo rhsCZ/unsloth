@@ -306,6 +306,84 @@ RE_C2_POLLING = re.compile(
     re.DOTALL,
 )
 
+# Developer-tool persistence hooks. The PyTorch Lightning 2.6.x compromise
+# planted SessionStart hooks into Claude Code, VS Code tasks, and Cursor
+# settings so the payload re-attached on every editor open. Catches any
+# package writing into a known dev-tool config that supports auto-run.
+RE_DEV_TOOL_HIJACK = re.compile(
+    r"\.claude/settings\.json"
+    r"|\.cursor/.*hooks"
+    r"|\.vscode/(?:tasks|settings|launch)\.json"
+    r"|SessionStart|folderOpen|onCommand:.*runTask"
+    r"|/etc/profile\.d/"
+    r"|\b\.bashrc\b|\b\.zshrc\b|\b\.profile\b"
+    r"|\bautomator\b.*\.workflow\b",
+)
+
+# Hard-coded credential / API-token regexes embedded in source. Packages
+# that ship regexes for OTHER people's secrets are nearly always
+# stealers (litellm 1.82.7, elementary-data 0.23.3, Shai-Hulud).
+RE_TOKEN_REGEX = re.compile(
+    r"\bgh[psoru]_[A-Za-z0-9_]{20,}"           # GitHub PAT/OAuth/etc.
+    r"|\bgithub_pat_[A-Za-z0-9_]{20,}"
+    r"|\bnpm_[A-Za-z0-9]{30,}"                 # npm token
+    r"|\bsk-[A-Za-z0-9]{20,}"                  # OpenAI / Anthropic
+    r"|\bxox[bpaesr]-"                         # Slack
+    r"|\bAIza[0-9A-Za-z_-]{20,}"               # Google API key
+    r"|\bAKIA[0-9A-Z]{16}"                     # AWS access key id
+    r"|\bASIA[0-9A-Z]{16}"                     # AWS STS
+    r"|\bgithub.com/login/oauth/access_token"
+    r"|\bglpat-[0-9A-Za-z_-]{20,}",            # GitLab PAT
+)
+
+# JavaScript-side obfuscation. The npm chalk/debug compromise and the
+# Lightning router_runtime.js use the same minifier-style hex-var name
+# pattern; a bundle full of `_0x1f2e3d` identifiers is a near-universal
+# tell for a malicious npm payload (and very rare in legit minified code
+# that ships in PyPI wheels).
+RE_JS_OBFUSCATION = re.compile(
+    r"_0x[a-f0-9]{4,6}\s*=\s*function"
+    r"|var\s+_0x[a-f0-9]{4,6}\b"
+    r"|(?:\\x[0-9a-f]{2}){10,}"                # \x-escape strings
+    r"|String\.fromCharCode\s*\(\s*\d+\s*(?:,\s*\d+\s*){10,}\)",
+)
+
+# Web3 / wallet-hijack pattern. The Qix npm phish overrode fetch /
+# XMLHttpRequest and attached a `window.ethereum` listener that
+# Levenshtein-swapped recipient addresses on the way to the network.
+RE_WEB3_HIJACK = re.compile(
+    r"\bwindow\.ethereum\b"
+    r"|\bweb3\.eth\.\w+\s*\("
+    r"|XMLHttpRequest\.prototype\.(?:open|send)\s*="
+    r"|(?:^|\s)fetch\s*=\s*\(?\s*async"
+    r"|TronWeb|solanaWeb3",
+)
+
+# Self-propagating supply-chain worms (Shai-Hulud, ForceMemo) plant
+# their own GitHub workflow in every repo they can reach, and lean on
+# trufflehog/gitleaks for credential discovery. The combo of any of
+# these strings inside a *package payload* is overwhelming evidence of
+# repo-takeover intent.
+RE_WORKFLOW_INJECT = re.compile(
+    r"\.github/workflows/[^\"\']*\.ya?ml"
+    r"|\btrufflehog\b|\bgitleaks\b"
+    r"|/user/repos\?affiliation=.*owner.*collaborator"
+    r"|\bshai-hulud\b|EveryBoiWeBuildIsAWormyBoi"
+    r"|\bgit\s+push\s+--force\b.*--no-verify",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Shell-side patterns specific to install.sh / postinstall scripts that
+# pipe remote code into a shell. `curl ... | sh` and friends are the
+# canonical npm postinstall dropper.
+RE_SHELL_DROPPER = re.compile(
+    r"\bcurl\b[^\n|]*\|\s*(?:sh|bash|zsh)\b"
+    r"|\bwget\b[^\n|]*-O-\s*\|\s*(?:sh|bash|zsh)\b"
+    r"|\bnpx\b\s+-y\s+[^\s]+@latest\s*\|"
+    r"|\beval\s+\$\(\s*curl\b"
+    r"|\bbash\s+<\(\s*curl\b",
+)
+
 
 # ---------------------------------------------------------------------------
 # Finding dataclass
@@ -869,6 +947,125 @@ def _extract_evidence(content: str, pattern: re.Pattern, max_matches: int = 3) -
 
 
 # ---------------------------------------------------------------------------
+# Non-Python checkers
+# ---------------------------------------------------------------------------
+# Several recent PyPI compromises (PyTorch Lightning 2.6.x, ForceMemo)
+# carried the active payload in a bundled .js / .sh / workflow yaml so
+# the Python imports looked clean on first glance. These checkers scan
+# those file types when they appear inside a Python wheel/sdist.
+
+def check_js_file(content: str, filename: str, package: str) -> list[Finding]:
+    """Run JS-side checks. Triggered by .js / .mjs / .cjs / .ts."""
+    findings = []
+
+    # A JS file *inside a Python wheel* that's larger than 100 KB is
+    # itself anomalous (legit Python packages don't ship hand-written
+    # JS bundles). Combined with ANY of the other JS heuristics it is
+    # CRITICAL; standalone it is HIGH.
+    is_large = len(content) > 100 * 1024
+    has_obf = bool(RE_JS_OBFUSCATION.search(content))
+    has_web3 = bool(RE_WEB3_HIJACK.search(content))
+    has_token_regex = bool(RE_TOKEN_REGEX.search(content))
+    has_workflow_inj = bool(RE_WORKFLOW_INJECT.search(content))
+    has_network = bool(RE_NETWORK.search(content))
+
+    if has_obf:
+        sev = CRITICAL if (is_large or has_web3 or has_token_regex) else HIGH
+        findings.append(Finding(
+            sev, package, filename,
+            "JS minifier-style hex-var obfuscation (npm-payload signature)",
+            _extract_evidence(content, RE_JS_OBFUSCATION),
+        ))
+    if has_web3:
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "JS Web3 / wallet hijack (window.ethereum or fetch override)",
+            _extract_evidence(content, RE_WEB3_HIJACK),
+        ))
+    if has_token_regex and has_network:
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "JS embeds credential regexes AND makes network calls (stealer)",
+            _extract_evidence(content, RE_TOKEN_REGEX),
+        ))
+    if has_workflow_inj:
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "JS self-propagation: workflow injection / repo takeover signature",
+            _extract_evidence(content, RE_WORKFLOW_INJECT),
+        ))
+    if is_large and not findings:
+        findings.append(Finding(
+            HIGH, package, filename,
+            f"Python wheel ships large ({len(content) // 1024} KB) JS bundle "
+            "(uncommon; manually review)",
+            "",
+        ))
+    return findings
+
+
+def check_shell_file(content: str, filename: str, package: str) -> list[Finding]:
+    """Run shell-side checks. Triggered by .sh / .bash / install scripts."""
+    findings = []
+    if RE_SHELL_DROPPER.search(content):
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "Shell pipes remote code into an interpreter (curl|sh dropper)",
+            _extract_evidence(content, RE_SHELL_DROPPER),
+        ))
+    if RE_DEV_TOOL_HIJACK.search(content) and (
+        RE_NETWORK.search(content) or RE_SUBPROCESS.search(content)
+    ):
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "Shell installs developer-tool persistence hook (.bashrc / "
+            "profile.d / vscode tasks) AND has network or exec",
+            _extract_evidence(content, RE_DEV_TOOL_HIJACK),
+        ))
+    if RE_TOKEN_REGEX.search(content) and RE_NETWORK.search(content):
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "Shell embeds credential regexes AND makes network calls",
+            _extract_evidence(content, RE_TOKEN_REGEX),
+        ))
+    if RE_WORKFLOW_INJECT.search(content):
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "Shell self-propagation: workflow injection / repo takeover signature",
+            _extract_evidence(content, RE_WORKFLOW_INJECT),
+        ))
+    return findings
+
+
+def check_workflow_file(content: str, filename: str, package: str) -> list[Finding]:
+    """Run GitHub-Actions workflow checks. Triggered by .github/workflows/*.yml."""
+    findings = []
+    # A GitHub workflow file inside a *PyPI package* is itself
+    # suspicious (Shai-Hulud's whole MO is to plant `shai-hulud.yml`
+    # in every repo it can write to). Anything matching the workflow
+    # injection signature gets flagged CRITICAL.
+    if RE_WORKFLOW_INJECT.search(content):
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "Workflow file inside PyPI package matches self-propagation signature",
+            _extract_evidence(content, RE_WORKFLOW_INJECT),
+        ))
+    if RE_TOKEN_REGEX.search(content):
+        findings.append(Finding(
+            HIGH, package, filename,
+            "Workflow file embeds credential regexes (token harvesting?)",
+            _extract_evidence(content, RE_TOKEN_REGEX),
+        ))
+    if RE_SHELL_DROPPER.search(content):
+        findings.append(Finding(
+            CRITICAL, package, filename,
+            "Workflow pipes remote code into a shell (curl|sh dropper)",
+            _extract_evidence(content, RE_SHELL_DROPPER),
+        ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Archive handling
 # ---------------------------------------------------------------------------
 
@@ -916,6 +1113,18 @@ def scan_archive(archive_path: str, package: str) -> list[Finding]:
             findings.extend(check_pth_file(content, filename, package))
         elif lower.endswith(".py"):
             findings.extend(check_py_file(content, filename, package))
+        elif lower.endswith((".js", ".mjs", ".cjs", ".ts")):
+            # Lightning 2.6.x hid its real payload in a 14.8 MB
+            # router_runtime.js inside a Python wheel. Without this
+            # branch we'd have only seen the small Python loader.
+            findings.extend(check_js_file(content, filename, package))
+        elif lower.endswith((".sh", ".bash")):
+            findings.extend(check_shell_file(content, filename, package))
+        elif "/.github/workflows/" in lower and lower.endswith((".yml", ".yaml")):
+            # Shai-Hulud / ForceMemo plant their own GHA workflow.
+            # A workflow file inside a *PyPI package* is on its own
+            # already a yellow flag; pattern-match the worm signatures.
+            findings.extend(check_workflow_file(content, filename, package))
     return findings
 
 

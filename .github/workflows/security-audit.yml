@@ -261,6 +261,126 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ─────────────────────────────────────────────────────────────
+      # OSV-Scanner: cross-ecosystem advisory DB (PyPI + npm + cargo)
+      # ─────────────────────────────────────────────────────────────
+      - name: OSV-Scanner (PyPI + npm + cargo, cross-ecosystem advisories)
+        # OSV's advisory feed is a superset of GitHub-Advisory + RustSec
+        # + npm advisories; running it alongside the per-ecosystem audit
+        # tools catches CVEs that haven't propagated to the per-ecosystem
+        # DBs yet (e.g. langchain-core CVE-2025-68664 was on OSV before
+        # GitHub Advisory). Single binary, one transitive resolver, all
+        # three lockfile types in one pass. Non-blocking until baselines
+        # close.
+        continue-on-error: true
+        run: |
+          set +e
+          curl -fsSL -o /tmp/osv-scanner.tar.gz \
+            https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64.tar.gz
+          tar -xzf /tmp/osv-scanner.tar.gz -C /tmp osv-scanner
+          /tmp/osv-scanner --version
+          /tmp/osv-scanner scan source \
+            --lockfile=studio/frontend/package-lock.json \
+            --lockfile=studio/src-tauri/Cargo.lock \
+            --lockfile=requirements.txt:audit-reqs/unsloth-deps.txt \
+            --lockfile=requirements.txt:audit-reqs/studio.txt \
+            --lockfile=requirements.txt:audit-reqs/no-torch-runtime.txt \
+            --lockfile=requirements.txt:audit-reqs/overrides.txt \
+            --lockfile=requirements.txt:audit-reqs/extras.txt \
+            --lockfile=requirements.txt:audit-reqs/extras-no-deps.txt \
+            --format=table 2>&1 | tee logs-osv-scanner.txt
+          {
+            echo "## OSV-Scanner (cross-ecosystem)"
+            echo
+            echo '```'
+            tail -200 logs-osv-scanner.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────
+      # Semgrep: design-flaw detection (catches what regex-pattern
+      # scanning of malicious authors cannot — first-party logic bugs
+      # like langchain-core CVE-2025-68664 dumps/dumpd injection,
+      # n8n CVE-2025-68668 _pyodide.eval_code sandbox escape, marimo
+      # CVE-2026-39987 unauth WebSocket).
+      # ─────────────────────────────────────────────────────────────
+      - name: Semgrep (supply-chain + python rule packs)
+        continue-on-error: true
+        run: |
+          set +e
+          python -m pip install --quiet 'semgrep>=1.95'
+          semgrep --version
+          semgrep scan \
+            --config p/supply-chain \
+            --config p/python \
+            --config p/javascript \
+            --config p/security-audit \
+            --severity ERROR --severity WARNING \
+            --metrics off \
+            --timeout 120 \
+            studio/backend unsloth scripts \
+            2>&1 | tee logs-semgrep.txt
+          {
+            echo "## Semgrep (supply-chain + python + javascript rules)"
+            echo
+            echo '```'
+            tail -200 logs-semgrep.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────
+      # Lockfile pin verifier. The litellm 1.82.7 attack window was
+      # ~40 minutes; anyone resolving with `>=` got the malicious
+      # version automatically. Flag every spec in the requirements
+      # files that does not pin to an exact `==` (or `@` for git
+      # refs, or `===` for arbitrary equality). Warning-only for now;
+      # graduate to blocking once the baseline is clean.
+      # ─────────────────────────────────────────────────────────────
+      - name: Lockfile pin verifier (Python requirements)
+        continue-on-error: true
+        run: |
+          python <<'PY' | tee logs-pin-verifier.txt
+          import re
+          from pathlib import Path
+
+          # Specs that look like `pkg==1.2.3` or `pkg @ git+...` or
+          # bare comments / -r lines are pinned-or-not-applicable.
+          PINNED = re.compile(r"^\s*[A-Za-z0-9_.\-]+\s*(?:===|==)\s*[^,;]+\s*$")
+          GIT_OR_URL = re.compile(r"^\s*[A-Za-z0-9_.\-]+\s*@\s*(?:git\+|https?://)")
+
+          unpinned = []
+          for f in sorted(Path("studio/backend/requirements").glob("*.txt")):
+              for i, raw in enumerate(f.read_text().splitlines(), 1):
+                  line = raw.strip()
+                  if not line or line.startswith("#") or line.startswith("-"):
+                      continue
+                  spec = line.split("#", 1)[0].strip().split(";", 1)[0].strip()
+                  if not spec:
+                      continue
+                  if "git+" in spec or PINNED.match(spec) or GIT_OR_URL.match(spec):
+                      continue
+                  unpinned.append((str(f), i, line))
+
+          print(f"::group::Lockfile pin status")
+          if unpinned:
+              print(f"WARN: {len(unpinned)} non-`==` specs across requirements/*.txt")
+              print("(litellm 1.82.7 wave hit anyone on `>=`; tighten when feasible.)")
+              for f, i, line in unpinned[:80]:
+                  print(f"  {f}:{i}: {line}")
+              if len(unpinned) > 80:
+                  print(f"  ... and {len(unpinned) - 80} more")
+          else:
+              print("OK: every spec is exact-pinned.")
+          print("::endgroup::")
+          PY
+          {
+            echo "## Lockfile pin verifier"
+            echo
+            echo '```'
+            cat logs-pin-verifier.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -270,6 +390,9 @@ jobs:
             logs-npm-audit.txt
             logs-npm-audit.json
             logs-cargo-audit.txt
+            logs-osv-scanner.txt
+            logs-semgrep.txt
+            logs-pin-verifier.txt
             audit-reqs/
           retention-days: 30
 

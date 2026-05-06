@@ -19,9 +19,10 @@ name: Studio backend CI
 on:
   pull_request:
     paths:
-      - 'studio/backend/**'
+      - 'studio/**'
       - 'unsloth/**'
       - 'unsloth_cli/**'
+      - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/studio-backend-ci.yml'
   push:
@@ -81,6 +82,69 @@ jobs:
           python -m pytest tests/ -q --tb=short \
             --ignore=tests/test_studio_api.py \
             -k 'not llama_cpp_load_progress_live and not TestGpuAutoSelection and not TestPreSpawnGpuResolution and not TestPerGpuFitGuardAllCounts and not TestTransformersIntrospection and not test_returns_cuda_when_cuda_available and not test_calls_cuda_cache_when_cuda'
+
+  repo-cpu-tests:
+    # Top-level tests/ tree was previously not run anywhere in CI. The
+    # tests/conftest.py harness (mirrors unsloth-zoo PR #624) pre-loads
+    # unsloth_zoo.device_type and unsloth.device_type under a mocked
+    # torch.cuda.is_available so the unsloth import chain succeeds on
+    # CPU. Locally validated: 302 passed, 9 skipped, 12 deselected in
+    # ~7 seconds.
+    name: Repo tests (CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install deps (shared shape with backend pytest job)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r studio/backend/requirements/studio.txt
+          pip install \
+            python-multipart aiofiles sqlalchemy cryptography \
+            pyyaml jinja2 mammoth unpdf requests typer \
+            'numpy<3' pytest pytest-asyncio httpx
+          pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.4,<2.11'
+          pip install 'transformers>=4.51,<5.5'
+          pip install -e . --no-deps
+
+      - name: Repo tests (CPU)
+        env:
+          # tests/python/* import install_python_stack from studio/.
+          PYTHONPATH: ${{ github.workspace }}/studio
+          # Skip lazy compilation work the unsloth import chain wants to
+          # do at import time on a real GPU.
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python -m pytest -q --tb=short -m 'not server and not e2e' \
+            tests/test_loader_glob_skip.py \
+            tests/test_raw_text.py \
+            tests/test_cli_export_unpacking.py \
+            tests/test_studio_install_workspace_guard.py \
+            tests/test_studio_root_resilience.py \
+            tests/python/test_install_python_stack.py \
+            tests/python/test_no_torch_filtering.py \
+            tests/python/test_studio_import_no_torch.py \
+            tests/python/test_tokenizers_and_torch_constraint.py \
+            tests/python/test_unsloth_run_tool_policy_resolver.py \
+            tests/python/test_flash_attn_install_python_stack.py \
+            tests/python/test_cross_platform_parity.py \
+            tests/python/test_fast_sentence_transformer_redirect_lifecycle.py \
+            tests/studio/test_chat_preset_builtin_invariants.py \
+            tests/studio/test_cli_studio_defaults.py \
+            tests/studio/test_studio_gguf_export_script_pin.py \
+            tests/studio/test_cli_repo_variant.py \
+            tests/studio/test_cli_run_alias.py \
+            tests/studio/test_llama_cpp_wall_clock_cap.py \
+            tests/studio/test_cancel_atomicity.py \
+            tests/studio/test_cancel_id_wiring.py \
+            tests/studio/test_stream_cancel_registration_timing.py \
+            tests/studio/test_studio_text_descender_clipping.py
 
   ruff:
     name: Backend ruff lint (non-blocking)

@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-# Multi-language supply-chain audit. Each job is independent and runs
-# in parallel. Triggers:
+# Multi-language supply-chain audit. Triggers:
 #   - PRs touching any dependency manifest (Python / npm / Cargo) or
 #     this workflow file,
 #   - push to main / pip,
@@ -10,11 +9,27 @@
 #     when no PR opens,
 #   - workflow_dispatch for ad-hoc invocations.
 #
-# All four jobs are non-blocking initially. The default branch already
+# Two jobs:
+#   - advisory-audit:    one runner that runs pip-audit + npm audit +
+#                        cargo audit back-to-back. All three are
+#                        advisory-DB lookups -- fast, lockfile-driven,
+#                        no archive download. Setting up the python /
+#                        node / rust toolchains on one runner and
+#                        running the three commands serially is
+#                        cheaper than spinning up three runners.
+#   - pip-scan-packages: 3-shard matrix that downloads + pattern-scans
+#                        every PyPI archive in the transitive closure.
+#                        This is the expensive job (~6 min/shard,
+#                        running in parallel) and it must stay
+#                        independent so a CVE-DB hit in advisory-audit
+#                        does not block the supply-chain pattern scan
+#                        (or vice versa).
+#
+# All steps are non-blocking initially. The default branch already
 # carries a known-vuln backlog (the dependabot banner shows 17 today,
 # pip-audit catches 2 more, npm/cargo will catch their own); a hard
 # gate now would block every PR on a baseline we have not triaged.
-# As each baseline closes, drop continue-on-error.
+# As each baseline closes, drop continue-on-error per step.
 #
 # Dependency coverage:
 #   - unsloth core (pyproject.toml [project.dependencies])
@@ -23,7 +38,7 @@
 #     trl / datasets / diffusers / sentence-transformers / etc.)
 #   - all six Studio backend requirements files
 #   - Studio frontend (npm) and Tauri shell (cargo)
-# Each Python job builds a combined dep list from pyproject.toml +
+# Each Python step builds a filtered dep list from pyproject.toml +
 # requirements/*.txt before auditing. We do NOT install any of these
 # -- pip-audit resolves through PyPI metadata, scan_packages.py
 # downloads sdist/wheel archives and inspects them without running
@@ -58,12 +73,14 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────
-  # Python: declared-deps audit (resolve from PyPI, do NOT install)
+  # Combined advisory-DB audit: pip-audit + npm audit + cargo audit
+  # all on one runner. Each step is continue-on-error so a finding in
+  # one toolchain does not suppress the others.
   # ─────────────────────────────────────────────────────────────────────
-  pip-audit:
-    name: pip-audit (declared Python deps, no install)
+  advisory-audit:
+    name: advisory audit (pip + npm + cargo)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -72,10 +89,32 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install pip-audit (only)
-        run: python -m pip install --upgrade pip 'pip-audit>=2.7'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: studio/frontend/package-lock.json
 
-      - name: Build filtered requirements set
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri -> target
+
+      - name: Install pip-audit + cargo-audit
+        # cargo-audit pulls advisories from the RustSec advisory-db on
+        # first run and caches them under ~/.cargo/advisory-db. Pin
+        # --locked so the version we install matches Cargo.lock
+        # determinism.
+        # npm audit is bundled with the node toolchain, no install.
+        run: |
+          python -m pip install --upgrade pip 'pip-audit>=2.7'
+          cargo install --locked --version '^0.21' cargo-audit
+
+      # ─────────────────────────────────────────────────────────────
+      # Python: pip-audit
+      # ─────────────────────────────────────────────────────────────
+      - name: Build filtered Python requirements set
         # Two transforms:
         #   (1) Generate audit-reqs/unsloth-deps.txt from pyproject.toml
         #       so pip-audit sees the unsloth pip package's own dep set
@@ -111,13 +150,10 @@ jobs:
           for f in studio.txt extras.txt extras-no-deps.txt \
                    no-torch-runtime.txt overrides.txt triton-kernels.txt; do
             python <<PY > "audit-reqs/$f"
-          import re
           src = "studio/backend/requirements/$f"
           with open(src) as fh:
               for line in fh:
                   stripped = line.strip()
-                  # Skip pure git+ specs but leave a marker so the
-                  # exclusion is auditable.
                   before_comment = stripped.split("#", 1)[0]
                   if "git+" in before_comment:
                       print(f"# [security-audit] skipped git+ spec: {stripped}")
@@ -125,16 +161,8 @@ jobs:
                   print(line.rstrip("\n"))
           PY
           done
-          echo "::group::audit-reqs/unsloth-deps.txt"
-          cat audit-reqs/unsloth-deps.txt
-          echo "::endgroup::"
-          for f in audit-reqs/*.txt; do
-            echo "::group::$f"
-            cat "$f"
-            echo "::endgroup::"
-          done
 
-      - name: Audit declared deps via -r (no install)
+      - name: pip-audit (declared Python deps, no install)
         # `-r requirements.txt` resolves the requirements through pip's
         # dependency resolver against PyPI metadata and audits the
         # resolved tree without ever executing setup.py / install
@@ -142,20 +170,15 @@ jobs:
         # and -- critically -- safer: an attacker who has compromised
         # a transitive dep cannot run code in this job.
         #
-        # extras.txt + extras-no-deps.txt are audited separately
-        # (`continue-on-error` per step) because some of their members
-        # ship legacy setup.py scripts that the resolver tries to
-        # build at metadata-collection time. openai-whisper's setup.py
-        # imports `pkg_resources`, which the isolated build env's
-        # current setuptools no longer ships. PIP_CONSTRAINT pins an
-        # older setuptools into the build env so those builds resolve;
-        # if that still fails, the step continues so the rest of the
-        # audit completes.
+        # extras.txt + extras-no-deps.txt have legacy setup.py
+        # packages (notably openai-whisper) whose setup.py imports
+        # `pkg_resources`, which the isolated build env's current
+        # setuptools no longer ships. PIP_CONSTRAINT pins an older
+        # setuptools into the build env so those builds resolve.
+        # Per-file loop so one bad file doesn't take out the whole
+        # audit.
         continue-on-error: true
         env:
-          # Pin setuptools into pip's isolated build envs. This fixes
-          # the "ModuleNotFoundError: No module named 'pkg_resources'"
-          # raised when openai-whisper's setup.py imports it.
           PIP_CONSTRAINT: ${{ github.workspace }}/audit-reqs/build-constraints.txt
         run: |
           set +e
@@ -181,7 +204,7 @@ jobs:
             echo "::endgroup::"
           done
           {
-            echo "## pip-audit"
+            echo "## pip-audit (Python)"
             echo
             echo '### Coverage'
             echo '- unsloth core + `huggingfacenotorch` extras (pyproject.toml)'
@@ -194,12 +217,59 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ─────────────────────────────────────────────────────────────
+      # npm: Studio frontend
+      # ─────────────────────────────────────────────────────────────
+      - name: npm audit (Studio frontend)
+        # `npm audit` resolves the lockfile through the npmjs.com
+        # advisory DB. `--audit-level=high` filters the noise floor
+        # to only HIGH and CRITICAL. We do NOT pass --omit=dev: a
+        # malicious dev-only dep can still steal secrets from a CI
+        # runner, so dev deps need to be in the audit surface.
+        continue-on-error: true
+        working-directory: studio/frontend
+        run: |
+          set +e
+          npm audit --audit-level=high | tee ../../logs-npm-audit.txt
+          # Always also write the full JSON for grep-ability.
+          npm audit --json > ../../logs-npm-audit.json || true
+          {
+            echo "## npm audit (Studio frontend)"
+            echo
+            echo '```'
+            tail -200 ../../logs-npm-audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────
+      # cargo: Studio Tauri shell
+      # ─────────────────────────────────────────────────────────────
+      - name: cargo audit (Studio Tauri)
+        # `--deny warnings` would make the job fail on any advisory.
+        # Keep non-blocking initially; drop continue-on-error after
+        # the baseline closes.
+        continue-on-error: true
+        working-directory: studio/src-tauri
+        run: |
+          set +e
+          cargo audit | tee ../../logs-cargo-audit.txt
+          {
+            echo "## cargo audit (Studio Tauri)"
+            echo
+            echo '```'
+            tail -200 ../../logs-cargo-audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pip-audit-log
+          name: advisory-audit-logs
           path: |
             logs-pip-audit.txt
+            logs-npm-audit.txt
+            logs-npm-audit.json
+            logs-cargo-audit.txt
             audit-reqs/
           retention-days: 30
 
@@ -270,7 +340,7 @@ jobs:
         run: python -m pip install --upgrade pip requests packaging
 
       - name: Build filtered requirements set
-        # Mirrors the pip-audit job's input transform: pyproject.toml
+        # Mirrors the advisory-audit job's input transform: pyproject.toml
         # extraction + git+ stripping. scan_packages.py downloads
         # PyPI archives without building, so it tolerates legacy
         # setup.py packages (no resolver dry-run); but `--with-deps`
@@ -376,97 +446,4 @@ jobs:
           path: |
             logs-scan-packages-${{ matrix.shard.id }}.txt
             audit-reqs/
-          retention-days: 30
-
-  # ─────────────────────────────────────────────────────────────────────
-  # npm: frontend dep audit
-  # ─────────────────────────────────────────────────────────────────────
-  npm-audit:
-    name: npm audit (Studio frontend)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: studio/frontend/package-lock.json
-
-      - name: npm audit (high+ severity, declared + transitive)
-        # `npm audit` resolves the lockfile through the npmjs.com
-        # advisory DB. `--audit-level=high` filters the noise floor
-        # to only HIGH and CRITICAL. We do NOT pass --omit=dev: a
-        # malicious dev-only dep can still steal secrets from a CI
-        # runner, so dev deps need to be in the audit surface.
-        continue-on-error: true
-        working-directory: studio/frontend
-        run: |
-          set +e
-          npm audit --audit-level=high | tee ../../logs-npm-audit.txt
-          # Always also write the full JSON for grep-ability.
-          npm audit --json > ../../logs-npm-audit.json || true
-          {
-            echo "## npm audit (Studio frontend)"
-            echo
-            echo '```'
-            tail -200 ../../logs-npm-audit.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: npm-audit-log
-          path: |
-            logs-npm-audit.txt
-            logs-npm-audit.json
-          retention-days: 30
-
-  # ─────────────────────────────────────────────────────────────────────
-  # cargo: Tauri Rust dep audit
-  # ─────────────────────────────────────────────────────────────────────
-  cargo-audit:
-    name: cargo audit (Studio Tauri)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: studio/src-tauri -> target
-
-      - name: Install cargo-audit
-        # cargo-audit pulls advisories from
-        # https://github.com/rustsec/advisory-db on first run and
-        # caches them under ~/.cargo/advisory-db. Pin --locked so the
-        # version we install matches Cargo.lock determinism.
-        run: cargo install --locked --version '^0.21' cargo-audit
-
-      - name: cargo audit (RustSec advisory DB)
-        # `--deny warnings` would make the job fail on any advisory.
-        # Keep non-blocking initially; drop continue-on-error after
-        # the baseline closes.
-        continue-on-error: true
-        working-directory: studio/src-tauri
-        run: |
-          set +e
-          cargo audit | tee ../../logs-cargo-audit.txt
-          {
-            echo "## cargo audit (Studio Tauri)"
-            echo
-            echo '```'
-            tail -200 ../../logs-cargo-audit.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: cargo-audit-log
-          path: logs-cargo-audit.txt
           retention-days: 30

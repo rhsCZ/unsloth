@@ -87,12 +87,9 @@ jobs:
           bash install.sh --local --no-torch 2>&1 | tee logs/install.log
 
       - name: Assert llama.cpp prebuilt was installed (no source-build fallback)
-        # ubuntu-latest is CPU-only and x86_64. install.sh should route the
-        # llama.cpp prebuilt resolver at ggml-org/llama.cpp and pick up the
-        # bin-ubuntu-x64.tar.gz asset directly. If the install log says it
-        # fell back to a source build, the routing in studio/setup.sh
-        # regressed and free CI runners (plus every CPU-only Linux user)
-        # are paying a 3 minute compile cost again. Fail loudly.
+        # ubuntu-latest is CPU-only x86_64, so studio/setup.sh should route
+        # to ggml-org/llama.cpp and grab bin-ubuntu-x64.tar.gz. A source
+        # build here means the routing regressed.
         run: |
           if grep -q "falling back to source build" logs/install.log; then
             echo "::error::llama.cpp prebuilt path failed on ubuntu-latest. studio/setup.sh routing regressed; CPU-only Linux x86_64 should hit ggml-org/llama.cpp's bin-ubuntu-x64.tar.gz."

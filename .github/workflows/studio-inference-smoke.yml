@@ -749,15 +749,18 @@ jobs:
           print(f"[json] PASS json_object -> {parsed}")
 
           # ── 2. OpenAI image_url (data URI base64) ───────────────────
-          # 4x4 solid-red PNG. Tiny so the prompt fits in context. The
-          # assertion is loose: any vision-aware response that mentions
-          # the colour or the image at all is enough to prove the
-          # multimodal path is wired up end to end.
-          PNG_4X4_RED_B64 = (
-              "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEUlEQVR4"
-              "nGP8z8AAQYwMyAwAFsoBAUgUmCEAAAAASUVORK5CYII="
+          # 64x64 solid-red PNG. stb_image (used by Studio's image
+          # normaliser at routes/inference.py:3410) rejects 4x4 or
+          # smaller PNGs as truncated, so we go up to 64x64 -- still
+          # tiny in token cost. The assertion is loose: any non-empty
+          # response from the vision path proves multimodal end-to-end
+          # wiring; small VL quants are weak at colour identification.
+          PNG_64X64_RED_B64 = (
+              "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYklEQVR4nO3PMQ0AIADAMEAI/k"
+              "UhBhEcDcmqYJtn7/GzpQNeNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA"
+              "1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaBdCJ0BmMJ25zMAAAAASUVORK5CYII="
           )
-          data_uri = f"data:image/png;base64,{PNG_4X4_RED_B64}"
+          data_uri = f"data:image/png;base64,{PNG_64X64_RED_B64}"
 
           client = OpenAI(base_url = f"{BASE}/v1", api_key = KEY)
           openai_resp = client.chat.completions.create(
@@ -805,7 +808,7 @@ jobs:
                           "source": {
                               "type":       "base64",
                               "media_type": "image/png",
-                              "data":       PNG_4X4_RED_B64,
+                              "data":       PNG_64X64_RED_B64,
                           },
                       },
                       {"type": "text", "text": "Describe this image briefly."},

@@ -213,10 +213,19 @@ jobs:
               return replies
 
           def run_anthropic():
-              # Anthropic SDK appends /v1/messages itself, so base_url
-              # must NOT include /v1 (otherwise the request hits
-              # /v1/v1/messages and 405s).
-              client = Anthropic(base_url = BASE, api_key = KEY)
+              # Two SDK quirks vs. Studio:
+              #   1. base_url must NOT include /v1 -- the SDK appends
+              #      /v1/messages itself; otherwise the request hits
+              #      /v1/v1/messages and 405s.
+              #   2. The SDK sends `x-api-key` by default, but Studio's
+              #      auth layer is HTTPBearer-only. Override via
+              #      default_headers so Authorization: Bearer ... is
+              #      sent instead.
+              client = Anthropic(
+                  base_url        = BASE,
+                  api_key         = "unused",
+                  default_headers = {"Authorization": f"Bearer {KEY}"},
+              )
               history, replies = [], []
               for prompt in PROMPTS:
                   history.append({"role": "user", "content": prompt})
@@ -323,45 +332,50 @@ jobs:
           set -o pipefail
           bash install.sh --local --no-torch 2>&1 | tee logs/install.log
 
-      - name: Boot Studio one-liner (loads model + prints API key)
+      - name: Reset auth + boot Studio (API-only, default tool policy)
+        # We deliberately use the API-only mode rather than
+        # `unsloth studio run` because the latter calls
+        # `set_tool_policy(...)` with a resolved bool: on loopback the
+        # default resolves to True, which forces every request through
+        # the server-side agentic loop and breaks the standard
+        # function-calling test below. API-only mode leaves
+        # tool_policy=None so each request's `enable_tools` field is
+        # honoured.
         run: |
+          unsloth studio reset-password
           mkdir -p logs
-          # `unsloth studio run` boots the server, loads the GGUF via
-          # the HF_HOME-cached path, and prints the API key on the
-          # banner. We deliberately do NOT pass --enable-tools: that
-          # forces the process-level tool policy to True, which
-          # hijacks every request through the server-side agentic
-          # loop and breaks the function-calling test below. Default
-          # policy (None) honours each request's `enable_tools` flag,
-          # which is what the script under "Tool calling" relies on.
-          unsloth studio run \
-              --model "$GGUF_REPO" --gguf-variant "$GGUF_VARIANT" \
-              --port "$STUDIO_PORT" --host 127.0.0.1 \
-              -y \
-              > logs/studio.log 2>&1 &
+          UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p "$STUDIO_PORT" \
+            > logs/studio.log 2>&1 &
           echo "STUDIO_PID=$!" >> "$GITHUB_ENV"
 
-      - name: Wait for `unsloth studio run` banner + capture API key
-        # `unsloth studio run` boots the HTTP server, loads the GGUF
-        # synchronously, and only then prints the banner with the API
-        # key. So once `sk-unsloth-` shows up in the log AND /api/health
-        # responds, the model is loaded and ready.
+      - name: Wait for /api/health, log in, change password, load model
         run: |
-          for i in $(seq 1 600); do
-            if grep -qE 'sk-unsloth-[a-f0-9]+' logs/studio.log 2>/dev/null \
-               && curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /dev/null 2>&1; then
-              break
+          for i in $(seq 1 60); do
+            if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
+              jq -e '.status == "healthy"' /tmp/health.json && break
             fi
             sleep 1
           done
-          API_KEY=$(grep -oE 'sk-unsloth-[a-f0-9]+' logs/studio.log | head -1)
-          if [ -z "$API_KEY" ]; then
-            echo "::error::no sk-unsloth- API key in studio.log after 600s"
-            tail -400 logs/studio.log
-            exit 1
-          fi
-          echo "::add-mask::$API_KEY"
-          echo "API_KEY=$API_KEY" >> "$GITHUB_ENV"
+          jq -e '.status == "healthy"' /tmp/health.json
+          OLD=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+          NEW="CITool-$(python -c 'import secrets; print(secrets.token_urlsafe(12))')"
+          echo "::add-mask::$OLD"
+          echo "::add-mask::$NEW"
+          OLD_TOKEN=$(curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d "{\"username\":\"unsloth\",\"password\":\"$OLD\"}" | jq -r .access_token)
+          curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/change-password" \
+            -H "Authorization: Bearer $OLD_TOKEN" -H 'content-type: application/json' \
+            -d "{\"current_password\":\"$OLD\",\"new_password\":\"$NEW\"}" > /dev/null
+          TOKEN=$(curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d "{\"username\":\"unsloth\",\"password\":\"$NEW\"}" | jq -r .access_token)
+          echo "API_KEY=$TOKEN" >> "$GITHUB_ENV"
+          curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/inference/load" \
+            -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            --max-time 600 \
+            -d "{\"model_path\":\"$GGUF_REPO\",\"gguf_variant\":\"$GGUF_VARIANT\",\"is_lora\":false,\"max_seq_length\":2048}" \
+            | jq '{status, display_name}'
 
       - name: Tool calling, server-side tools, thinking on/off
         env:
@@ -595,33 +609,47 @@ jobs:
       - name: Install OpenAI + Anthropic Python SDKs
         run: pip install 'openai>=1.50' 'anthropic>=0.40'
 
-      - name: Boot Studio one-liner (HF repo path picks up mmproj automatically)
+      - name: Reset auth + boot Studio (API-only)
+        # See Job 2's comment: API-only mode keeps tool_policy=None so
+        # response_format requests aren't routed through the agentic
+        # tool loop.
         run: |
+          unsloth studio reset-password
           mkdir -p logs
-          unsloth studio run \
-              --model "$GGUF_REPO" --gguf-variant "$GGUF_VARIANT" \
-              --port "$STUDIO_PORT" --host 127.0.0.1 \
-              -y \
-              > logs/studio.log 2>&1 &
+          UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p "$STUDIO_PORT" \
+            > logs/studio.log 2>&1 &
           echo "STUDIO_PID=$!" >> "$GITHUB_ENV"
 
-      - name: Wait for `unsloth studio run` banner + capture API key
+      - name: Wait for /api/health, log in, change password, load model
         run: |
-          for i in $(seq 1 900); do
-            if grep -qE 'sk-unsloth-[a-f0-9]+' logs/studio.log 2>/dev/null \
-               && curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /dev/null 2>&1; then
-              break
+          for i in $(seq 1 60); do
+            if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
+              jq -e '.status == "healthy"' /tmp/health.json && break
             fi
             sleep 1
           done
-          API_KEY=$(grep -oE 'sk-unsloth-[a-f0-9]+' logs/studio.log | head -1)
-          if [ -z "$API_KEY" ]; then
-            echo "::error::no sk-unsloth- API key in studio.log after 900s"
-            tail -400 logs/studio.log
-            exit 1
-          fi
-          echo "::add-mask::$API_KEY"
-          echo "API_KEY=$API_KEY" >> "$GITHUB_ENV"
+          jq -e '.status == "healthy"' /tmp/health.json
+          OLD=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+          NEW="CIJson-$(python -c 'import secrets; print(secrets.token_urlsafe(12))')"
+          echo "::add-mask::$OLD"
+          echo "::add-mask::$NEW"
+          OLD_TOKEN=$(curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d "{\"username\":\"unsloth\",\"password\":\"$OLD\"}" | jq -r .access_token)
+          curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/change-password" \
+            -H "Authorization: Bearer $OLD_TOKEN" -H 'content-type: application/json' \
+            -d "{\"current_password\":\"$OLD\",\"new_password\":\"$NEW\"}" > /dev/null
+          TOKEN=$(curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d "{\"username\":\"unsloth\",\"password\":\"$NEW\"}" | jq -r .access_token)
+          echo "API_KEY=$TOKEN" >> "$GITHUB_ENV"
+          # Load the GGUF (mmproj is auto-detected via the HF repo
+          # lookup, the cached file is pulled out of HF_HOME).
+          curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/inference/load" \
+            -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            --max-time 900 \
+            -d "{\"model_path\":\"$GGUF_REPO\",\"gguf_variant\":\"$GGUF_VARIANT\",\"is_lora\":false,\"max_seq_length\":2048}" \
+            | jq '{status, display_name, is_vision}'
 
       - name: JSON schema decoding + image input
         env:
@@ -724,9 +752,16 @@ jobs:
           print("[image/openai] PASS image_url accepted, non-empty response")
 
           # ── 3. Anthropic source/base64 image ────────────────────────
-          # Anthropic SDK appends /v1/messages itself; base_url is the
-          # bare host (no /v1) -- otherwise the SDK posts to /v1/v1/messages.
-          anthropic = Anthropic(base_url = BASE, api_key = KEY)
+          # Two SDK quirks vs. Studio: base_url must NOT include /v1
+          # (the SDK appends it itself; otherwise /v1/v1/messages -> 405),
+          # and Studio's auth is HTTPBearer-only so the SDK's default
+          # x-api-key header is ignored -- send Authorization: Bearer
+          # via default_headers.
+          anthropic = Anthropic(
+              base_url        = BASE,
+              api_key         = "unused",
+              default_headers = {"Authorization": f"Bearer {KEY}"},
+          )
           a_msg = anthropic.messages.create(
               model       = "default",
               max_tokens  = 80,

@@ -1,18 +1,34 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-# pip-audit on the Studio backend's resolved dep tree. Runs:
-#   - on PRs touching any requirements file or pyproject.toml,
-#   - nightly on a schedule against main, so newly-published CVEs
-#     surface even when no PR opens,
-#   - on workflow_dispatch for ad-hoc invocations.
+# Multi-language supply-chain audit. Each job is independent and runs
+# in parallel. Triggers:
+#   - PRs touching any dependency manifest (Python / npm / Cargo) or
+#     this workflow file,
+#   - push to main / pip,
+#   - nightly @ 04:13 UTC so newly-published advisories surface even
+#     when no PR opens,
+#   - workflow_dispatch for ad-hoc invocations.
 #
-# pip-audit is non-blocking initially. The default branch already
-# carries 17 known vulnerabilities (per the dependabot banner on
-# every push), so a hard gate today would block every PR on a
-# baseline we haven't triaged. As the baseline closes, drop
-# continue-on-error and the next PR that introduces a NEW vuln
-# will be blocked instead.
+# All four jobs are non-blocking initially. The default branch already
+# carries a known-vuln backlog (the dependabot banner shows 17 today,
+# pip-audit catches 2 more, npm/cargo will catch their own); a hard
+# gate now would block every PR on a baseline we have not triaged.
+# As each baseline closes, drop continue-on-error.
+#
+# Dependency coverage:
+#   - unsloth core (pyproject.toml [project.dependencies])
+#   - unsloth `huggingfacenotorch` extras (the canonical install path
+#     for fine-tuning users; pulls transformers / peft / accelerate /
+#     trl / datasets / diffusers / sentence-transformers / etc.)
+#   - all six Studio backend requirements files
+#   - Studio frontend (npm) and Tauri shell (cargo)
+# Each Python job builds a combined dep list from pyproject.toml +
+# requirements/*.txt before auditing. We do NOT install any of these
+# -- pip-audit resolves through PyPI metadata, scan_packages.py
+# downloads sdist/wheel archives and inspects them without running
+# install hooks, so an attacker who has compromised a transitive dep
+# cannot execute code in this workflow.
 
 name: Security audit
 
@@ -20,14 +36,17 @@ on:
   pull_request:
     paths:
       - 'studio/backend/requirements/**'
+      - 'studio/frontend/package.json'
+      - 'studio/frontend/package-lock.json'
+      - 'studio/src-tauri/Cargo.toml'
+      - 'studio/src-tauri/Cargo.lock'
       - 'pyproject.toml'
+      - 'scripts/scan_packages.py'
       - '.github/workflows/security-audit.yml'
   push:
     branches: [main, pip]
   schedule:
-    # 04:13 UTC every day. Off-the-hour so we don't pile onto the
-    # GitHub-Actions cron rush at :00.
-    - cron: '13 4 * * *'
+    - cron: '13 4 * * *'   # 04:13 UTC daily, off the cron rush
   workflow_dispatch:
 
 concurrency:
@@ -38,10 +57,13 @@ permissions:
   contents: read
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Python: declared-deps audit (resolve from PyPI, do NOT install)
+  # ─────────────────────────────────────────────────────────────────────
   pip-audit:
-    name: pip-audit (Studio backend deps)
+    name: pip-audit (declared Python deps, no install)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -50,47 +72,287 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install pip-audit + the dep set under test
-        # We resolve the same dep set Studio's backend pytest matrix
-        # installs, then pip-audit it. This audits what Studio
-        # actually loads at runtime, not what pyproject.toml's
-        # transitive resolution might pull in differently on a
-        # different host.
-        run: |
-          python -m pip install --upgrade pip 'pip-audit>=2.7'
-          pip install -r studio/backend/requirements/studio.txt
-          pip install \
-            python-multipart aiofiles sqlalchemy cryptography \
-            pyyaml jinja2 mammoth unpdf requests typer \
-            'numpy<3' pytest pytest-asyncio httpx
-          pip install --index-url https://download.pytorch.org/whl/cpu \
-            'torch>=2.4,<2.11' 'torchvision<0.26'
-          pip install 'transformers>=4.51,<5.5'
-          pip install 'bitsandbytes>=0.45'
-          pip install 'unsloth_zoo>=2026.5.1'
-          pip install -e . --no-deps
+      - name: Install pip-audit (only)
+        run: python -m pip install --upgrade pip 'pip-audit>=2.7'
 
-      - name: pip-audit (informational, drives baseline triage)
-        # `--strict`: fail on any finding (we'll use it once the
-        # baseline is clean).
-        # For now, run without --strict and let the runner surface
-        # the count + which packages are affected. Output goes to
-        # the workflow summary so it's grep-able.
+      - name: Build unsloth-deps.txt from pyproject.toml
+        # tomllib is in the stdlib on 3.11+. We extract:
+        #   - [project.dependencies]  (the four core deps)
+        #   - [project.optional-dependencies].huggingfacenotorch
+        #     (the no-torch fine-tuning bundle; pulls transformers /
+        #     peft / accelerate / trl / datasets / diffusers /
+        #     sentence-transformers / huggingface_hub / hf_transfer
+        #     and friends -- the most realistic surface area for an
+        #     unsloth user)
+        # The `huggingface` extra is `huggingfacenotorch` plus torch /
+        # torchvision / triton, which we deliberately skip here: the
+        # Studio backend requirements already pin a torch and
+        # pip-audit on Studio's matrix-resolved set audits the same
+        # ground. We avoid re-resolving torch from PyPI metadata
+        # because the +cu* / +cpu local-version tags trip up the
+        # resolver in `-r` mode.
+        run: |
+          python <<'PY' > unsloth-deps.txt
+          import tomllib, sys
+          with open("pyproject.toml", "rb") as f:
+              d = tomllib.load(f)
+          core = d["project"]["dependencies"]
+          extras = d["project"]["optional-dependencies"]["huggingfacenotorch"]
+          print("# Auto-generated from pyproject.toml by security-audit.yml.")
+          print("# core deps + huggingfacenotorch extras.")
+          for spec in core + extras:
+              print(spec)
+          PY
+          echo "::group::unsloth-deps.txt"
+          cat unsloth-deps.txt
+          echo "::endgroup::"
+
+      - name: Audit declared deps via -r (no install)
+        # `-r requirements.txt` resolves the requirements through pip's
+        # dependency resolver against PyPI metadata and audits the
+        # resolved tree without ever executing setup.py / install
+        # hooks. Way faster than installing the full Studio runtime
+        # and -- critically -- safer: an attacker who has compromised
+        # a transitive dep cannot run code in this job.
+        # Audits unsloth core + huggingfacenotorch extras alongside
+        # every committed Studio requirements file so cross-file
+        # conflicts and cross-stack vulns surface together.
         continue-on-error: true
         run: |
-          pip-audit --format=columns | tee logs-audit.txt
+          set +e
+          pip-audit \
+            -r unsloth-deps.txt \
+            -r studio/backend/requirements/studio.txt \
+            -r studio/backend/requirements/extras.txt \
+            -r studio/backend/requirements/extras-no-deps.txt \
+            -r studio/backend/requirements/no-torch-runtime.txt \
+            -r studio/backend/requirements/overrides.txt \
+            -r studio/backend/requirements/triton-kernels.txt \
+            --format=columns \
+            | tee logs-pip-audit.txt
           {
-            echo "## pip-audit results"
+            echo "## pip-audit"
             echo
-            echo "\`\`\`"
-            cat logs-audit.txt
-            echo "\`\`\`"
+            echo '### Coverage'
+            echo '- unsloth core + `huggingfacenotorch` extras (pyproject.toml)'
+            echo '- studio/backend/requirements/{studio,extras,extras-no-deps,no-torch-runtime,overrides,triton-kernels}.txt'
+            echo
+            echo '### Findings'
+            echo '```'
+            cat logs-pip-audit.txt
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload audit log
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: pip-audit-log
-          path: logs-audit.txt
+          path: |
+            logs-pip-audit.txt
+            unsloth-deps.txt
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Python: pre-install package scan (no install, no execution)
+  # ─────────────────────────────────────────────────────────────────────
+  pip-scan-packages:
+    # Downloads each declared dep WITHOUT installing it and inspects
+    # the archive contents for known malicious patterns: weaponized
+    # .pth files, credential stealers, obfuscated payloads,
+    # install-time droppers, suspicious subprocess / network /
+    # base64-blob combinations.
+    #
+    # This is the kind of check that would have caught:
+    #   - litellm 1.82.7 / 1.82.8  (March 2026, supply-chain compromise)
+    #   - the typo-squat campaign against PyTorch Lightning
+    # before either landed in the install path. pip-audit only knows
+    # about CVE-published vulnerabilities, so it does NOT see novel
+    # malicious uploads. scan_packages.py runs deterministic regex
+    # pattern matching, no LLM calls.
+    #
+    # `--with-deps` makes the scan transitive: every package the
+    # declared set resolves to gets fetched and pattern-scanned, not
+    # just the top-level pins. Resolving the full transitive closure
+    # of the unsloth + Studio dep tree downloads several hundred
+    # archives, hence the longer timeout.
+    name: pip scan-packages (pre-install pattern scan, transitive)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install scan_packages.py runtime deps
+        # scan_packages.py imports requests + packaging at runtime to
+        # talk to PyPI's JSON API and to parse version specifiers. We
+        # do not install the packages it scans -- those are downloaded
+        # raw and inspected without ever touching `pip install`.
+        run: python -m pip install --upgrade pip requests packaging
+
+      - name: Build unsloth-deps.txt from pyproject.toml
+        # Same extraction as pip-audit. Kept inline (rather than a
+        # shared composite action) to keep this workflow file
+        # self-contained and reviewable.
+        run: |
+          python <<'PY' > unsloth-deps.txt
+          import tomllib
+          with open("pyproject.toml", "rb") as f:
+              d = tomllib.load(f)
+          core = d["project"]["dependencies"]
+          extras = d["project"]["optional-dependencies"]["huggingfacenotorch"]
+          for spec in core + extras:
+              print(spec)
+          PY
+
+      - name: Sanity-check scan_packages.py
+        # The scanner lives at scripts/scan_packages.py in this repo
+        # so we don't depend on a network fetch at job time.
+        run: |
+          test -f scripts/scan_packages.py
+          head -3 scripts/scan_packages.py
+          grep -q "Standalone pre-install package scanner" scripts/scan_packages.py
+
+      - name: Scan declared + transitive Python deps
+        # scan_packages.py exits 1 on CRITICAL/HIGH findings, 0 on
+        # clean. We swallow the exit because the baseline isn't
+        # triaged yet; surface the findings in the workflow summary.
+        # Drop continue-on-error after the first clean run on main.
+        #
+        # `--with-deps` walks PyPI metadata to enumerate every
+        # transitive dep the declared set would install, then scans
+        # them all. Without this flag, we'd only catch a malicious
+        # *direct* dep -- and supply-chain attacks usually land
+        # several hops down (litellm 1.82.7 was a dep of a dep for
+        # most users).
+        continue-on-error: true
+        run: |
+          set +e
+          python scripts/scan_packages.py \
+            --with-deps \
+            -r unsloth-deps.txt \
+            -r studio/backend/requirements/studio.txt \
+            -r studio/backend/requirements/extras.txt \
+            -r studio/backend/requirements/extras-no-deps.txt \
+            -r studio/backend/requirements/no-torch-runtime.txt \
+            -r studio/backend/requirements/overrides.txt \
+            -r studio/backend/requirements/triton-kernels.txt \
+            2>&1 | tee logs-scan-packages.txt
+          {
+            echo "## scan_packages (pre-install, transitive)"
+            echo
+            echo '### Coverage'
+            echo '- unsloth core + `huggingfacenotorch` extras (pyproject.toml)'
+            echo '- studio/backend/requirements/{studio,extras,extras-no-deps,no-torch-runtime,overrides,triton-kernels}.txt'
+            echo '- transitive closure via `--with-deps`'
+            echo
+            echo '### Findings (tail)'
+            echo '```'
+            tail -200 logs-scan-packages.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-packages-log
+          path: |
+            logs-scan-packages.txt
+            unsloth-deps.txt
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────
+  # npm: frontend dep audit
+  # ─────────────────────────────────────────────────────────────────────
+  npm-audit:
+    name: npm audit (Studio frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: studio/frontend/package-lock.json
+
+      - name: npm audit (high+ severity, declared + transitive)
+        # `npm audit` resolves the lockfile through the npmjs.com
+        # advisory DB. `--audit-level=high` filters the noise floor
+        # to only HIGH and CRITICAL. We do NOT pass --omit=dev: a
+        # malicious dev-only dep can still steal secrets from a CI
+        # runner, so dev deps need to be in the audit surface.
+        continue-on-error: true
+        working-directory: studio/frontend
+        run: |
+          set +e
+          npm audit --audit-level=high | tee ../../logs-npm-audit.txt
+          # Always also write the full JSON for grep-ability.
+          npm audit --json > ../../logs-npm-audit.json || true
+          {
+            echo "## npm audit (Studio frontend)"
+            echo
+            echo '```'
+            tail -200 ../../logs-npm-audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-log
+          path: |
+            logs-npm-audit.txt
+            logs-npm-audit.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────
+  # cargo: Tauri Rust dep audit
+  # ─────────────────────────────────────────────────────────────────────
+  cargo-audit:
+    name: cargo audit (Studio Tauri)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri -> target
+
+      - name: Install cargo-audit
+        # cargo-audit pulls advisories from
+        # https://github.com/rustsec/advisory-db on first run and
+        # caches them under ~/.cargo/advisory-db. Pin --locked so the
+        # version we install matches Cargo.lock determinism.
+        run: cargo install --locked --version '^0.21' cargo-audit
+
+      - name: cargo audit (RustSec advisory DB)
+        # `--deny warnings` would make the job fail on any advisory.
+        # Keep non-blocking initially; drop continue-on-error after
+        # the baseline closes.
+        continue-on-error: true
+        working-directory: studio/src-tauri
+        run: |
+          set +e
+          cargo audit | tee ../../logs-cargo-audit.txt
+          {
+            echo "## cargo audit (Studio Tauri)"
+            echo
+            echo '```'
+            tail -200 ../../logs-cargo-audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit-log
+          path: logs-cargo-audit.txt
           retention-days: 30

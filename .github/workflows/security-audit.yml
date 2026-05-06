@@ -75,25 +75,30 @@ jobs:
       - name: Install pip-audit (only)
         run: python -m pip install --upgrade pip 'pip-audit>=2.7'
 
-      - name: Build unsloth-deps.txt from pyproject.toml
-        # tomllib is in the stdlib on 3.11+. We extract:
-        #   - [project.dependencies]  (the four core deps)
-        #   - [project.optional-dependencies].huggingfacenotorch
-        #     (the no-torch fine-tuning bundle; pulls transformers /
-        #     peft / accelerate / trl / datasets / diffusers /
-        #     sentence-transformers / huggingface_hub / hf_transfer
-        #     and friends -- the most realistic surface area for an
-        #     unsloth user)
+      - name: Build filtered requirements set
+        # Two transforms:
+        #   (1) Generate audit-reqs/unsloth-deps.txt from pyproject.toml
+        #       so pip-audit sees the unsloth pip package's own dep set
+        #       (core + huggingfacenotorch extras: transformers / peft /
+        #       accelerate / trl / datasets / diffusers /
+        #       sentence-transformers / huggingface_hub / hf_transfer /
+        #       etc.).
+        #   (2) Copy each studio/backend/requirements/*.txt into
+        #       audit-reqs/ with `git+` lines stripped. pip-audit's `-r`
+        #       mode does a dry-run resolve against PyPI metadata; a
+        #       `git+https://...` spec forces it to clone, which is
+        #       both slow and outside the threat model (we audit
+        #       PyPI-served archives; a git ref is whatever HEAD says
+        #       on the runner). A comment line is left in place so the
+        #       skipped specs are obvious in the artifact.
         # The `huggingface` extra is `huggingfacenotorch` plus torch /
-        # torchvision / triton, which we deliberately skip here: the
-        # Studio backend requirements already pin a torch and
-        # pip-audit on Studio's matrix-resolved set audits the same
-        # ground. We avoid re-resolving torch from PyPI metadata
-        # because the +cu* / +cpu local-version tags trip up the
-        # resolver in `-r` mode.
+        # torchvision / triton, deliberately skipped: Studio backend
+        # already pins a torch and the +cu* / +cpu local-version tags
+        # trip up the PyPI resolver in `-r` mode.
         run: |
-          python <<'PY' > unsloth-deps.txt
-          import tomllib, sys
+          mkdir -p audit-reqs
+          python <<'PY' > audit-reqs/unsloth-deps.txt
+          import tomllib
           with open("pyproject.toml", "rb") as f:
               d = tomllib.load(f)
           core = d["project"]["dependencies"]
@@ -103,9 +108,31 @@ jobs:
           for spec in core + extras:
               print(spec)
           PY
-          echo "::group::unsloth-deps.txt"
-          cat unsloth-deps.txt
+          for f in studio.txt extras.txt extras-no-deps.txt \
+                   no-torch-runtime.txt overrides.txt triton-kernels.txt; do
+            python <<PY > "audit-reqs/$f"
+          import re
+          src = "studio/backend/requirements/$f"
+          with open(src) as fh:
+              for line in fh:
+                  stripped = line.strip()
+                  # Skip pure git+ specs but leave a marker so the
+                  # exclusion is auditable.
+                  before_comment = stripped.split("#", 1)[0]
+                  if "git+" in before_comment:
+                      print(f"# [security-audit] skipped git+ spec: {stripped}")
+                      continue
+                  print(line.rstrip("\n"))
+          PY
+          done
+          echo "::group::audit-reqs/unsloth-deps.txt"
+          cat audit-reqs/unsloth-deps.txt
           echo "::endgroup::"
+          for f in audit-reqs/*.txt; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
 
       - name: Audit declared deps via -r (no install)
         # `-r requirements.txt` resolves the requirements through pip's
@@ -114,28 +141,52 @@ jobs:
         # hooks. Way faster than installing the full Studio runtime
         # and -- critically -- safer: an attacker who has compromised
         # a transitive dep cannot run code in this job.
-        # Audits unsloth core + huggingfacenotorch extras alongside
-        # every committed Studio requirements file so cross-file
-        # conflicts and cross-stack vulns surface together.
+        #
+        # extras.txt + extras-no-deps.txt are audited separately
+        # (`continue-on-error` per step) because some of their members
+        # ship legacy setup.py scripts that the resolver tries to
+        # build at metadata-collection time. openai-whisper's setup.py
+        # imports `pkg_resources`, which the isolated build env's
+        # current setuptools no longer ships. PIP_CONSTRAINT pins an
+        # older setuptools into the build env so those builds resolve;
+        # if that still fails, the step continues so the rest of the
+        # audit completes.
         continue-on-error: true
+        env:
+          # Pin setuptools into pip's isolated build envs. This fixes
+          # the "ModuleNotFoundError: No module named 'pkg_resources'"
+          # raised when openai-whisper's setup.py imports it.
+          PIP_CONSTRAINT: ${{ github.workspace }}/audit-reqs/build-constraints.txt
         run: |
           set +e
-          pip-audit \
-            -r unsloth-deps.txt \
-            -r studio/backend/requirements/studio.txt \
-            -r studio/backend/requirements/extras.txt \
-            -r studio/backend/requirements/extras-no-deps.txt \
-            -r studio/backend/requirements/no-torch-runtime.txt \
-            -r studio/backend/requirements/overrides.txt \
-            -r studio/backend/requirements/triton-kernels.txt \
-            --format=columns \
-            | tee logs-pip-audit.txt
+          cat > audit-reqs/build-constraints.txt <<'CONSTRAINTS'
+          setuptools<78
+          wheel
+          CONSTRAINTS
+          : > logs-pip-audit.txt
+          for f in unsloth-deps studio extras extras-no-deps \
+                   no-torch-runtime overrides triton-kernels; do
+            if ! grep -qE '^[^#[:space:]]' "audit-reqs/$f.txt"; then
+              echo "[security-audit] $f.txt has no PyPI specs after git+ filter, skipping" \
+                | tee -a logs-pip-audit.txt
+              continue
+            fi
+            echo "::group::pip-audit -r audit-reqs/$f.txt"
+            {
+              echo
+              echo "=== $f ==="
+              pip-audit -r "audit-reqs/$f.txt" --format=columns
+              echo "=== end $f (rc=$?) ==="
+            } 2>&1 | tee -a logs-pip-audit.txt
+            echo "::endgroup::"
+          done
           {
             echo "## pip-audit"
             echo
             echo '### Coverage'
             echo '- unsloth core + `huggingfacenotorch` extras (pyproject.toml)'
             echo '- studio/backend/requirements/{studio,extras,extras-no-deps,no-torch-runtime,overrides,triton-kernels}.txt'
+            echo '- `git+` specs are stripped before audit (out of scope: we audit PyPI archives)'
             echo
             echo '### Findings'
             echo '```'
@@ -149,7 +200,7 @@ jobs:
           name: pip-audit-log
           path: |
             logs-pip-audit.txt
-            unsloth-deps.txt
+            audit-reqs/
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────
@@ -193,20 +244,41 @@ jobs:
         # raw and inspected without ever touching `pip install`.
         run: python -m pip install --upgrade pip requests packaging
 
-      - name: Build unsloth-deps.txt from pyproject.toml
-        # Same extraction as pip-audit. Kept inline (rather than a
-        # shared composite action) to keep this workflow file
-        # self-contained and reviewable.
+      - name: Build filtered requirements set
+        # Mirrors the pip-audit job's input transform: pyproject.toml
+        # extraction + git+ stripping. scan_packages.py downloads
+        # PyPI archives without building, so it tolerates legacy
+        # setup.py packages (no resolver dry-run); but `--with-deps`
+        # delegates resolution to a single `pip download` call that
+        # cannot satisfy `git+` specs without git operations, so we
+        # strip them here too.
         run: |
-          python <<'PY' > unsloth-deps.txt
+          mkdir -p audit-reqs
+          python <<'PY' > audit-reqs/unsloth-deps.txt
           import tomllib
           with open("pyproject.toml", "rb") as f:
               d = tomllib.load(f)
           core = d["project"]["dependencies"]
           extras = d["project"]["optional-dependencies"]["huggingfacenotorch"]
+          print("# Auto-generated from pyproject.toml by security-audit.yml.")
+          print("# core deps + huggingfacenotorch extras.")
           for spec in core + extras:
               print(spec)
           PY
+          for f in studio.txt extras.txt extras-no-deps.txt \
+                   no-torch-runtime.txt overrides.txt triton-kernels.txt; do
+            python <<PY > "audit-reqs/$f"
+          src = "studio/backend/requirements/$f"
+          with open(src) as fh:
+              for line in fh:
+                  stripped = line.strip()
+                  before_comment = stripped.split("#", 1)[0]
+                  if "git+" in before_comment:
+                      print(f"# [security-audit] skipped git+ spec: {stripped}")
+                      continue
+                  print(line.rstrip("\n"))
+          PY
+          done
 
       - name: Sanity-check scan_packages.py
         # The scanner lives at scripts/scan_packages.py in this repo
@@ -228,26 +300,46 @@ jobs:
         # *direct* dep -- and supply-chain attacks usually land
         # several hops down (litellm 1.82.7 was a dep of a dep for
         # most users).
+        #
+        # We invoke per-file rather than passing every -r at once.
+        # `--with-deps` collapses all -r files into a single
+        # `pip download` call internally; if any file's resolver run
+        # fails, the whole batch returns 0 archives. Per-file keeps a
+        # bad file from blanking the entire scan.
         continue-on-error: true
         run: |
           set +e
-          python scripts/scan_packages.py \
-            --with-deps \
-            -r unsloth-deps.txt \
-            -r studio/backend/requirements/studio.txt \
-            -r studio/backend/requirements/extras.txt \
-            -r studio/backend/requirements/extras-no-deps.txt \
-            -r studio/backend/requirements/no-torch-runtime.txt \
-            -r studio/backend/requirements/overrides.txt \
-            -r studio/backend/requirements/triton-kernels.txt \
-            2>&1 | tee logs-scan-packages.txt
+          : > logs-scan-packages.txt
+          for f in unsloth-deps studio extras extras-no-deps \
+                   no-torch-runtime overrides triton-kernels; do
+            # Skip files whose only content is comments / blanks
+            # (e.g. triton-kernels.txt after git+ stripping). The
+            # scanner exits 2 + prints help on an empty input,
+            # which would just spam the log.
+            if ! grep -qE '^[^#[:space:]]' "audit-reqs/$f.txt"; then
+              echo "::group::scan_packages skipped: audit-reqs/$f.txt (empty after filter)"
+              echo "[security-audit] $f.txt has no PyPI specs after git+ filter, skipping" \
+                | tee -a logs-scan-packages.txt
+              echo "::endgroup::"
+              continue
+            fi
+            echo "::group::scan_packages.py -r audit-reqs/$f.txt --with-deps"
+            {
+              echo
+              echo "=== $f ==="
+              python scripts/scan_packages.py --with-deps -r "audit-reqs/$f.txt"
+              echo "=== end $f (rc=$?) ==="
+            } 2>&1 | tee -a logs-scan-packages.txt
+            echo "::endgroup::"
+          done
           {
             echo "## scan_packages (pre-install, transitive)"
             echo
             echo '### Coverage'
             echo '- unsloth core + `huggingfacenotorch` extras (pyproject.toml)'
             echo '- studio/backend/requirements/{studio,extras,extras-no-deps,no-torch-runtime,overrides,triton-kernels}.txt'
-            echo '- transitive closure via `--with-deps`'
+            echo '- transitive closure via `--with-deps`, scanned per-file'
+            echo '- `git+` specs are stripped (out of scope: we scan PyPI archives)'
             echo
             echo '### Findings (tail)'
             echo '```'
@@ -261,7 +353,7 @@ jobs:
           name: scan-packages-log
           path: |
             logs-scan-packages.txt
-            unsloth-deps.txt
+            audit-reqs/
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────

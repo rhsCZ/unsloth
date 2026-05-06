@@ -226,9 +226,34 @@ jobs:
     # just the top-level pins. Resolving the full transitive closure
     # of the unsloth + Studio dep tree downloads several hundred
     # archives, hence the longer timeout.
-    name: pip scan-packages (pre-install pattern scan, transitive)
+    #
+    # Sharded across runners for wall-clock parallelism. Each shard
+    # runs scan_packages.py once with --with-deps so its own slice
+    # benefits from pip's deduped transitive resolve. Shard
+    # composition tries to balance load:
+    #   - hf-stack: pyproject extras + no-torch-runtime
+    #               (~150 archives, transformers/peft/accelerate/...)
+    #   - studio:   FastAPI/Studio backend + overrides + extras-no-deps
+    #               (~150 archives, smaller scientific stack)
+    #   - extras:   the heavy openai-whisper / scikit-learn / librosa
+    #               stack (~250 archives, dominant cost)
+    # triton-kernels.txt is git+-only, fully skipped.
+    name: ${{ matrix.shard.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - name: 'pip scan-packages :: hf-stack'
+            id: hf-stack
+            files: 'unsloth-deps no-torch-runtime'
+          - name: 'pip scan-packages :: studio'
+            id: studio
+            files: 'studio overrides extras-no-deps'
+          - name: 'pip scan-packages :: extras'
+            id: extras
+            files: 'extras'
     steps:
       - uses: actions/checkout@v4
 
@@ -301,58 +326,55 @@ jobs:
         # several hops down (litellm 1.82.7 was a dep of a dep for
         # most users).
         #
-        # We invoke per-file rather than passing every -r at once.
-        # `--with-deps` collapses all -r files into a single
-        # `pip download` call internally; if any file's resolver run
-        # fails, the whole batch returns 0 archives. Per-file keeps a
-        # bad file from blanking the entire scan.
+        # This step runs once per matrix shard. Within a shard, every
+        # -r file is fed to a single `pip download` call so pip
+        # intersects version constraints and yields a deduped
+        # transitive set (no point fetching the same transformers
+        # wheel five times). Across shards we accept some redundant
+        # downloads in exchange for wall-clock parallelism.
         continue-on-error: true
+        env:
+          SHARD_FILES: ${{ matrix.shard.files }}
         run: |
           set +e
-          : > logs-scan-packages.txt
-          for f in unsloth-deps studio extras extras-no-deps \
-                   no-torch-runtime overrides triton-kernels; do
-            # Skip files whose only content is comments / blanks
-            # (e.g. triton-kernels.txt after git+ stripping). The
-            # scanner exits 2 + prints help on an empty input,
-            # which would just spam the log.
-            if ! grep -qE '^[^#[:space:]]' "audit-reqs/$f.txt"; then
-              echo "::group::scan_packages skipped: audit-reqs/$f.txt (empty after filter)"
-              echo "[security-audit] $f.txt has no PyPI specs after git+ filter, skipping" \
-                | tee -a logs-scan-packages.txt
-              echo "::endgroup::"
-              continue
+          mkdir -p logs
+          LOG="logs-scan-packages-${{ matrix.shard.id }}.txt"
+          echo "::group::shard ${{ matrix.shard.id }} input files"
+          REQ_ARGS=()
+          for f in $SHARD_FILES; do
+            if grep -qE '^[^#[:space:]]' "audit-reqs/$f.txt"; then
+              echo "  + audit-reqs/$f.txt"
+              REQ_ARGS+=( -r "audit-reqs/$f.txt" )
+            else
+              echo "  - audit-reqs/$f.txt (empty after git+ filter, skipping)"
             fi
-            echo "::group::scan_packages.py -r audit-reqs/$f.txt --with-deps"
-            {
-              echo
-              echo "=== $f ==="
-              python scripts/scan_packages.py --with-deps -r "audit-reqs/$f.txt"
-              echo "=== end $f (rc=$?) ==="
-            } 2>&1 | tee -a logs-scan-packages.txt
-            echo "::endgroup::"
           done
+          echo "::endgroup::"
+          if [ ${#REQ_ARGS[@]} -eq 0 ]; then
+            echo "[security-audit] shard ${{ matrix.shard.id }}: no PyPI specs, nothing to scan" \
+              | tee "$LOG"
+          else
+            python scripts/scan_packages.py --with-deps "${REQ_ARGS[@]}" \
+              2>&1 | tee "$LOG"
+          fi
           {
-            echo "## scan_packages (pre-install, transitive)"
+            echo "## scan_packages :: shard ${{ matrix.shard.id }}"
             echo
-            echo '### Coverage'
-            echo '- unsloth core + `huggingfacenotorch` extras (pyproject.toml)'
-            echo '- studio/backend/requirements/{studio,extras,extras-no-deps,no-torch-runtime,overrides,triton-kernels}.txt'
-            echo '- transitive closure via `--with-deps`, scanned per-file'
-            echo '- `git+` specs are stripped (out of scope: we scan PyPI archives)'
+            echo "### Files in this shard"
+            for f in $SHARD_FILES; do echo "- audit-reqs/$f.txt"; done
             echo
             echo '### Findings (tail)'
             echo '```'
-            tail -200 logs-scan-packages.txt
+            tail -200 "$LOG"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: scan-packages-log
+          name: scan-packages-log-${{ matrix.shard.id }}
           path: |
-            logs-scan-packages.txt
+            logs-scan-packages-${{ matrix.shard.id }}.txt
             audit-reqs/
           retention-days: 30
 

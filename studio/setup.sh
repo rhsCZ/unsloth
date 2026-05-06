@@ -582,11 +582,30 @@ _LLAMA_CPP_DEGRADED=false
 _LLAMA_FORCE_COMPILE="${UNSLOTH_LLAMA_FORCE_COMPILE:-0}"
 _REQUESTED_LLAMA_TAG="${UNSLOTH_LLAMA_TAG:-${_DEFAULT_LLAMA_TAG}}"
 _HOST_SYSTEM="$(uname -s 2>/dev/null || true)"
+_HOST_MACHINE="$(uname -m 2>/dev/null || true)"
+
+# Pick the release repo install_llama_prebuilt.py plans against.
+# unslothai/llama.cpp ships only Linux CUDA bundles, so CPU-only Linux
+# x86_64 routes to ggml-org for bin-ubuntu-x64.tar.gz. Anything with a
+# GPU tool installed stays on unslothai (CUDA bundle / ROCm source build).
+_LINUX_HAS_GPU=false
+for _GPU_TOOL in nvidia-smi rocminfo amd-smi hipconfig hipinfo; do
+    if command -v "$_GPU_TOOL" >/dev/null 2>&1; then
+        _LINUX_HAS_GPU=true
+        break
+    fi
+done
+
 if [ "$_HOST_SYSTEM" = "Darwin" ]; then
+    _HELPER_RELEASE_REPO="ggml-org/llama.cpp"
+elif [ "$_HOST_SYSTEM" = "Linux" ] \
+        && [ "$_HOST_MACHINE" = "x86_64" ] \
+        && [ "$_LINUX_HAS_GPU" = false ]; then
     _HELPER_RELEASE_REPO="ggml-org/llama.cpp"
 else
     _HELPER_RELEASE_REPO="unslothai/llama.cpp"
 fi
+unset _GPU_TOOL
 _LLAMA_PR="${UNSLOTH_LLAMA_PR:-}"
 _SKIP_PREBUILT_INSTALL=false
 _LLAMA_PR_FORCE="${UNSLOTH_LLAMA_PR_FORCE:-${_DEFAULT_LLAMA_PR_FORCE}}"

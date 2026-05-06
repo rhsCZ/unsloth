@@ -50,9 +50,15 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      # Pin to match .pre-commit-config.yaml so a CI-only ruff bump
-      # cannot disagree with what pre-commit accepted.
-      - run: pip install 'ruff==0.15.12' 'pyyaml>=6'
+      # Pin ruff to match .pre-commit-config.yaml so a CI-only ruff
+      # bump cannot disagree with what pre-commit accepted.
+      # codespell is pinned for the same reason: a reviewer should
+      # never see a typo report appear and disappear depending on
+      # which codespell version the runner happened to install.
+      - run: pip install 'ruff==0.15.12' 'pyyaml>=6' 'codespell>=2.3,<3'
+
+      - name: Linux deps for shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
 
       - name: Python AST/syntax check (every committed .py must compile)
         # python -m compileall uses the same parser the interpreter
@@ -266,6 +272,41 @@ jobs:
               sys.exit(1)
           print(f"{scanned} JSON files parse cleanly")
           PY
+
+      - name: codespell typo check (informational)
+        # Catches typos in code, comments, and docs across the repo.
+        # Skips lockfiles, generated assets, binary artefacts, and
+        # the LICENSE files (US/UK spelling drift in legal text is
+        # not ours to second-guess). The ignore-words-list pulls
+        # out short identifiers + valid technical terms that
+        # codespell's default dictionary would otherwise flag
+        # (e.g. `ans` as a math-quiz variable name in
+        # tests/utils/aime_eval.py, `parm`/`parms` in PyTorch
+        # nn.Module idioms). Non-blocking until the surfaced typos
+        # are fixed; drop continue-on-error after the cleanup.
+        continue-on-error: true
+        run: |
+          codespell \
+            --skip='*.lock,*.lockb,*.json,*.svg,*.png,*.jpg,*.jpeg,*.gif,*.ico,*.woff*,*.ttf,*.eot,*.zip,*.gz,*.gguf,*.safetensors,*.bin,node_modules,.git,build,dist,unsloth_compiled_cache,unsloth.egg-info,target,studio/frontend/dist,*.pyc,*-licenses.txt,LICENSE*' \
+            --ignore-words-list='ans,bu,hel,fo,te,ot,hist,ned,sav,recurser,datas,nin,parm,parms,checkin,nd,fr,inout,donot,uint' \
+            --quiet-level=2
+
+      - name: shellcheck on committed *.sh (informational)
+        # Goes beyond `bash -n` (which only parses): catches subtle
+        # shell bugs like unquoted variable expansions, useless
+        # `cat`, command substitutions inside `[[`, etc. The
+        # install/setup scripts are critical-path so the signal is
+        # worth surfacing. Non-blocking until install.sh's
+        # hand-rolled patterns get cleaned up; drop continue-on-error
+        # afterwards.
+        continue-on-error: true
+        run: |
+          # Exclude SC1090 ("source not followable") -- legitimate
+          # for installer scripts that source files at runtime
+          # paths shellcheck cannot resolve statically.
+          # SC2034 ("variable assigned but never used") fires on
+          # the export-only assignment idiom we use in install.sh.
+          shellcheck -e SC1090,SC2034 $(git ls-files '*.sh')
 
       - name: ruff format drift (informational)
         # The canonical formatter is scripts/run_ruff_format.py

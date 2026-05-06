@@ -901,16 +901,18 @@ class TestInstallShStructure:
         nvidia_call = body.find("_has_usable_nvidia_gpu")
         no_nvidia_branch = body.find('if [ -z "$_smi" ]')
         rocm_call = body.find("_has_amd_rocm_gpu")
-        assert nvidia_call >= 0, "get_torch_index_url should call _has_usable_nvidia_gpu"
-        assert no_nvidia_branch >= 0, (
-            "get_torch_index_url should gate ROCm on no-nvidia-smi"
-        )
-        assert rocm_call > no_nvidia_branch, (
-            "ROCm detection should sit inside the 'no nvidia-smi' branch"
-        )
-        assert nvidia_call < no_nvidia_branch, (
-            "NVIDIA detection should run before the no-nvidia-smi branch"
-        )
+        assert (
+            nvidia_call >= 0
+        ), "get_torch_index_url should call _has_usable_nvidia_gpu"
+        assert (
+            no_nvidia_branch >= 0
+        ), "get_torch_index_url should gate ROCm on no-nvidia-smi"
+        assert (
+            rocm_call > no_nvidia_branch
+        ), "ROCm detection should sit inside the 'no nvidia-smi' branch"
+        assert (
+            nvidia_call < no_nvidia_branch
+        ), "NVIDIA detection should run before the no-nvidia-smi branch"
 
     def test_bitsandbytes_amd_install(self):
         """install.sh should install bitsandbytes for AMD when ROCm detected."""
@@ -1011,9 +1013,12 @@ class TestLiveRegression:
         # Skip if nvidia-smi exists but does not actually list a GPU on this
         # host (containers occasionally ship the binary without a driver).
         check = subprocess.run(
-            ["bash", "-c",
-             "nvidia-smi -L 2>/dev/null | "
-             "awk '/^GPU[[:space:]]+[0-9]+:/{f=1} END{exit !f}'"],
+            [
+                "bash",
+                "-c",
+                "nvidia-smi -L 2>/dev/null | "
+                "awk '/^GPU[[:space:]]+[0-9]+:/{f=1} END{exit !f}'",
+            ],
             capture_output = True,
         )
         if check.returncode != 0:
@@ -1308,9 +1313,8 @@ class TestHardwareAmdBranching:
         # The dispatcher call may wrap onto multiple lines; allow whitespace
         # between the open paren and the literal func name argument.
         import re as _re
-        assert _re.search(
-            r'_smi_query\(\s*"get_visible_gpu_utilization"', func_body
-        )
+
+        assert _re.search(r'_smi_query\(\s*"get_visible_gpu_utilization"', func_body)
         smi = source[
             source.find("def _smi_query") : source.find(
                 "\ndef ", source.find("def _smi_query") + 1

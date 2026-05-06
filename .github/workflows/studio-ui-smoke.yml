@@ -159,22 +159,21 @@ jobs:
               def shoot(name):
                   page.screenshot(path = str(ART / f"{name}.png"), full_page = True)
 
-              # ── 1. Login with bootstrap password ─────────────────
-              page.goto(BASE)
-              # Auth form has #password, no username field (single-user
-              # bootstrap), and a single submit button.
-              page.locator("#password").wait_for(state = "visible")
-              page.fill("#password", PW)
-              shoot("01-login-filled")
-              page.locator('button[type="submit"]').click()
-
-              # ── 2. Forced change-password screen ────────────────
-              # /api/auth/login returns must_change_password=true on
-              # bootstrap; the frontend redirects to the change form.
+              # ── 1. Bootstrap-driven change-password flow ─────────
+              # /api/auth/status returns requires_password_change=true
+              # on a fresh install, so /login auto-redirects to
+              # /change-password. The HTML for that route is served
+              # with `<script>window.__UNSLOTH_BOOTSTRAP__={...}</script>`
+              # injected by main._inject_bootstrap, so the form's
+              # current-password field is pre-seeded -- the user only
+              # has to fill the new password twice and submit. We jump
+              # straight to /change-password to avoid the /login flash
+              # racing with the auto-redirect.
+              page.goto(f"{BASE}/change-password")
               page.locator("#new-password").wait_for(state = "visible", timeout = 30_000)
               page.fill("#new-password",     NEW)
               page.fill("#confirm-password", NEW)
-              shoot("02-change-password-filled")
+              shoot("01-change-password-filled")
               page.locator('button[type="submit"]').click()
 
               # ── 3. Chat surface loads ────────────────────────────
@@ -182,7 +181,7 @@ jobs:
               # it's visible, the auth+UI bootstrap is complete.
               composer = page.locator('textarea[aria-label="Message input"]')
               composer.wait_for(state = "visible", timeout = 60_000)
-              shoot("03-chat-loaded")
+              shoot("02-chat-loaded")
 
               # ── 4. Send a message and wait for a response ────────
               composer.fill("Reply with the single word: hello")
@@ -206,7 +205,7 @@ jobs:
                   }""",
                   timeout = 120_000,
               )
-              shoot("04-assistant-replied")
+              shoot("03-assistant-replied")
 
               # ── 5. Reload, confirm history persists ──────────────
               page.reload()
@@ -225,7 +224,7 @@ jobs:
                   }""",
                   timeout = 30_000,
               )
-              shoot("05-history-after-reload")
+              shoot("04-history-after-reload")
 
               # ── 6. Open the configuration / settings sheet ───────
               # The "Open configuration" button is in chat-page.tsx
@@ -234,7 +233,7 @@ jobs:
               cfg = page.locator('button[aria-label="Open configuration"]').first
               if cfg.count() > 0:
                   cfg.click()
-                  shoot("06-settings-open")
+                  shoot("05-settings-open")
                   # Close button is in chat-settings-sheet.tsx:857.
                   close = page.locator('button[aria-label="Close configuration"]').first
                   if close.count() > 0:

@@ -79,13 +79,7 @@ jobs:
         run: |
           python -m pytest tests/ -q --tb=short \
             --ignore=tests/test_studio_api.py \
-            -k 'not llama_cpp_load_progress_live
-                and not TestGpuAutoSelection
-                and not TestPreSpawnGpuResolution
-                and not TestPerGpuFitGuardAllCounts
-                and not TestTransformersIntrospection
-                and not test_returns_cuda_when_cuda_available
-                and not test_calls_cuda_cache_when_cuda'
+            -k 'not llama_cpp_load_progress_live and not TestGpuAutoSelection and not TestPreSpawnGpuResolution and not TestPerGpuFitGuardAllCounts and not TestTransformersIntrospection and not test_returns_cuda_when_cuda_available and not test_calls_cuda_cache_when_cuda'
 
   ruff:
     runs-on: ubuntu-latest

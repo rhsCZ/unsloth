@@ -324,16 +324,16 @@ RE_DEV_TOOL_HIJACK = re.compile(
 # that ship regexes for OTHER people's secrets are nearly always
 # stealers (litellm 1.82.7, elementary-data 0.23.3, Shai-Hulud).
 RE_TOKEN_REGEX = re.compile(
-    r"\bgh[psoru]_[A-Za-z0-9_]{20,}"           # GitHub PAT/OAuth/etc.
+    r"\bgh[psoru]_[A-Za-z0-9_]{20,}"  # GitHub PAT/OAuth/etc.
     r"|\bgithub_pat_[A-Za-z0-9_]{20,}"
-    r"|\bnpm_[A-Za-z0-9]{30,}"                 # npm token
-    r"|\bsk-[A-Za-z0-9]{20,}"                  # OpenAI / Anthropic
-    r"|\bxox[bpaesr]-"                         # Slack
-    r"|\bAIza[0-9A-Za-z_-]{20,}"               # Google API key
-    r"|\bAKIA[0-9A-Z]{16}"                     # AWS access key id
-    r"|\bASIA[0-9A-Z]{16}"                     # AWS STS
+    r"|\bnpm_[A-Za-z0-9]{30,}"  # npm token
+    r"|\bsk-[A-Za-z0-9]{20,}"  # OpenAI / Anthropic
+    r"|\bxox[bpaesr]-"  # Slack
+    r"|\bAIza[0-9A-Za-z_-]{20,}"  # Google API key
+    r"|\bAKIA[0-9A-Z]{16}"  # AWS access key id
+    r"|\bASIA[0-9A-Z]{16}"  # AWS STS
     r"|\bgithub.com/login/oauth/access_token"
-    r"|\bglpat-[0-9A-Za-z_-]{20,}",            # GitLab PAT
+    r"|\bglpat-[0-9A-Za-z_-]{20,}",  # GitLab PAT
 )
 
 # JavaScript-side obfuscation. The npm chalk/debug compromise and the
@@ -344,7 +344,7 @@ RE_TOKEN_REGEX = re.compile(
 RE_JS_OBFUSCATION = re.compile(
     r"_0x[a-f0-9]{4,6}\s*=\s*function"
     r"|var\s+_0x[a-f0-9]{4,6}\b"
-    r"|(?:\\x[0-9a-f]{2}){10,}"                # \x-escape strings
+    r"|(?:\\x[0-9a-f]{2}){10,}"  # \x-escape strings
     r"|String\.fromCharCode\s*\(\s*\d+\s*(?:,\s*\d+\s*){10,}\)",
 )
 
@@ -954,6 +954,7 @@ def _extract_evidence(content: str, pattern: re.Pattern, max_matches: int = 3) -
 # the Python imports looked clean on first glance. These checkers scan
 # those file types when they appear inside a Python wheel/sdist.
 
+
 def check_js_file(content: str, filename: str, package: str) -> list[Finding]:
     """Run JS-side checks. Triggered by .js / .mjs / .cjs / .ts."""
     findings = []
@@ -971,36 +972,56 @@ def check_js_file(content: str, filename: str, package: str) -> list[Finding]:
 
     if has_obf:
         sev = CRITICAL if (is_large or has_web3 or has_token_regex) else HIGH
-        findings.append(Finding(
-            sev, package, filename,
-            "JS minifier-style hex-var obfuscation (npm-payload signature)",
-            _extract_evidence(content, RE_JS_OBFUSCATION),
-        ))
+        findings.append(
+            Finding(
+                sev,
+                package,
+                filename,
+                "JS minifier-style hex-var obfuscation (npm-payload signature)",
+                _extract_evidence(content, RE_JS_OBFUSCATION),
+            )
+        )
     if has_web3:
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "JS Web3 / wallet hijack (window.ethereum or fetch override)",
-            _extract_evidence(content, RE_WEB3_HIJACK),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "JS Web3 / wallet hijack (window.ethereum or fetch override)",
+                _extract_evidence(content, RE_WEB3_HIJACK),
+            )
+        )
     if has_token_regex and has_network:
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "JS embeds credential regexes AND makes network calls (stealer)",
-            _extract_evidence(content, RE_TOKEN_REGEX),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "JS embeds credential regexes AND makes network calls (stealer)",
+                _extract_evidence(content, RE_TOKEN_REGEX),
+            )
+        )
     if has_workflow_inj:
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "JS self-propagation: workflow injection / repo takeover signature",
-            _extract_evidence(content, RE_WORKFLOW_INJECT),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "JS self-propagation: workflow injection / repo takeover signature",
+                _extract_evidence(content, RE_WORKFLOW_INJECT),
+            )
+        )
     if is_large and not findings:
-        findings.append(Finding(
-            HIGH, package, filename,
-            f"Python wheel ships large ({len(content) // 1024} KB) JS bundle "
-            "(uncommon; manually review)",
-            "",
-        ))
+        findings.append(
+            Finding(
+                HIGH,
+                package,
+                filename,
+                f"Python wheel ships large ({len(content) // 1024} KB) JS bundle "
+                "(uncommon; manually review)",
+                "",
+            )
+        )
     return findings
 
 
@@ -1008,32 +1029,48 @@ def check_shell_file(content: str, filename: str, package: str) -> list[Finding]
     """Run shell-side checks. Triggered by .sh / .bash / install scripts."""
     findings = []
     if RE_SHELL_DROPPER.search(content):
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "Shell pipes remote code into an interpreter (curl|sh dropper)",
-            _extract_evidence(content, RE_SHELL_DROPPER),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "Shell pipes remote code into an interpreter (curl|sh dropper)",
+                _extract_evidence(content, RE_SHELL_DROPPER),
+            )
+        )
     if RE_DEV_TOOL_HIJACK.search(content) and (
         RE_NETWORK.search(content) or RE_SUBPROCESS.search(content)
     ):
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "Shell installs developer-tool persistence hook (.bashrc / "
-            "profile.d / vscode tasks) AND has network or exec",
-            _extract_evidence(content, RE_DEV_TOOL_HIJACK),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "Shell installs developer-tool persistence hook (.bashrc / "
+                "profile.d / vscode tasks) AND has network or exec",
+                _extract_evidence(content, RE_DEV_TOOL_HIJACK),
+            )
+        )
     if RE_TOKEN_REGEX.search(content) and RE_NETWORK.search(content):
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "Shell embeds credential regexes AND makes network calls",
-            _extract_evidence(content, RE_TOKEN_REGEX),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "Shell embeds credential regexes AND makes network calls",
+                _extract_evidence(content, RE_TOKEN_REGEX),
+            )
+        )
     if RE_WORKFLOW_INJECT.search(content):
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "Shell self-propagation: workflow injection / repo takeover signature",
-            _extract_evidence(content, RE_WORKFLOW_INJECT),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "Shell self-propagation: workflow injection / repo takeover signature",
+                _extract_evidence(content, RE_WORKFLOW_INJECT),
+            )
+        )
     return findings
 
 
@@ -1045,23 +1082,35 @@ def check_workflow_file(content: str, filename: str, package: str) -> list[Findi
     # in every repo it can write to). Anything matching the workflow
     # injection signature gets flagged CRITICAL.
     if RE_WORKFLOW_INJECT.search(content):
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "Workflow file inside PyPI package matches self-propagation signature",
-            _extract_evidence(content, RE_WORKFLOW_INJECT),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "Workflow file inside PyPI package matches self-propagation signature",
+                _extract_evidence(content, RE_WORKFLOW_INJECT),
+            )
+        )
     if RE_TOKEN_REGEX.search(content):
-        findings.append(Finding(
-            HIGH, package, filename,
-            "Workflow file embeds credential regexes (token harvesting?)",
-            _extract_evidence(content, RE_TOKEN_REGEX),
-        ))
+        findings.append(
+            Finding(
+                HIGH,
+                package,
+                filename,
+                "Workflow file embeds credential regexes (token harvesting?)",
+                _extract_evidence(content, RE_TOKEN_REGEX),
+            )
+        )
     if RE_SHELL_DROPPER.search(content):
-        findings.append(Finding(
-            CRITICAL, package, filename,
-            "Workflow pipes remote code into a shell (curl|sh dropper)",
-            _extract_evidence(content, RE_SHELL_DROPPER),
-        ))
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "Workflow pipes remote code into a shell (curl|sh dropper)",
+                _extract_evidence(content, RE_SHELL_DROPPER),
+            )
+        )
     return findings
 
 

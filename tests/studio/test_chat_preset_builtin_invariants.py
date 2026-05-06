@@ -9,10 +9,10 @@ import pytest
 
 WORKDIR = Path(__file__).resolve().parents[2]
 PRESET_POLICY = (
-    WORKDIR / "unsloth_repo/studio/frontend/src/features/chat/presets/preset-policy.ts"
+    WORKDIR / "studio/frontend/src/features/chat/presets/preset-policy.ts"
 )
 RUNTIME_TYPES = (
-    WORKDIR / "unsloth_repo/studio/frontend/src/features/chat/types/runtime.ts"
+    WORKDIR / "studio/frontend/src/features/chat/types/runtime.ts"
 )
 TEMP = WORKDIR / "temp" / "chat_preset_builtin_invariants"
 

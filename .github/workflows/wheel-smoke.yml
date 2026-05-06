@@ -34,6 +34,7 @@ concurrency:
 
 jobs:
   wheel:
+    name: Wheel build + content sanity + import smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

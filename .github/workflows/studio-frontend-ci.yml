@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   build:
+    name: Frontend build + bundle sanity
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

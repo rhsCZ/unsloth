@@ -33,6 +33,7 @@ concurrency:
 
 jobs:
   pytest:
+    name: Backend pytest (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -82,6 +83,7 @@ jobs:
             -k 'not llama_cpp_load_progress_live and not TestGpuAutoSelection and not TestPreSpawnGpuResolution and not TestPerGpuFitGuardAllCounts and not TestTransformersIntrospection and not test_returns_cuda_when_cuda_available and not test_calls_cuda_cache_when_cuda'
 
   ruff:
+    name: Backend ruff lint (non-blocking)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

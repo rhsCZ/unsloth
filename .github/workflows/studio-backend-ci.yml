@@ -12,7 +12,11 @@
 #   - -k 'not llama_cpp_load_progress_live': spawns a real llama.cpp process,
 #     not appropriate for CPU-only runners.
 #
-# ruff is non-blocking initially; remove `|| true` once the backend lints clean.
+# Three jobs:
+#   - pytest matrix (3.10/3.11/3.12/3.13) over studio/backend/tests
+#   - repo-cpu-tests: auto-discovered tests/ + state-isolated spoof files
+#   - python-lint: whole-repo Python gate (compileall + ruff +
+#     debugger-leftover scan)
 
 name: Backend CI
 
@@ -203,8 +207,12 @@ jobs:
               echo "::endgroup::"
           done
 
-  ruff:
-    name: Backend ruff lint (non-blocking)
+  python-lint:
+    # Whole-repo Python gate. Fast (~10-12 s) so it fits the same
+    # short-feedback budget as the old studio/backend-only ruff job,
+    # but actually blocks merges on real breakage rather than just
+    # printing the lint count.
+    name: Python lint (syntax + ruff + safety nets)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -213,6 +221,91 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-      - run: pip install ruff
-      - name: ruff check (non-blocking until accumulated drift is cleared)
-        run: ruff check studio/backend || true
+      # Pin to match .pre-commit-config.yaml so a CI-only ruff bump
+      # cannot disagree with what pre-commit accepted.
+      - run: pip install 'ruff==0.15.12'
+
+      - name: AST/syntax check (every committed .py must compile)
+        # python -m compileall uses the same parser the interpreter
+        # uses, so anything broken here would also crash at
+        # `import X` on a user's machine. Sub-second across 350+
+        # files. Hard gate.
+        run: |
+          python -m compileall -q -j 0 \
+            unsloth unsloth_cli studio tests cli.py unsloth-cli.py
+
+      - name: ruff check (whole repo)
+        # The narrow rule set in pyproject.toml [tool.ruff.lint]
+        # selects E9 / F63 / F7 / F82 -- syntax errors, broken
+        # comparisons, undefined names. The whole repo passes today,
+        # so this is now a hard gate; the prior studio/backend-only
+        # `|| true` was masking real breakage on the wider tree.
+        run: |
+          ruff check unsloth unsloth_cli studio tests cli.py unsloth-cli.py
+
+      - name: No leftover debugger / pdb / breakpoint calls
+        # Catches the "I'll just stick a breakpoint() here" mistake
+        # before it ships. AST-based so commented-out debugger
+        # markers don't false-positive (grep would). Sub-second.
+        run: |
+          python <<'PY'
+          import ast, pathlib, sys
+
+          SKIP_PARTS = {".venv", "venv", "build", "dist", ".git",
+                        "unsloth_compiled_cache", "node_modules"}
+
+          bad = []
+          scanned = 0
+          for path in sorted(pathlib.Path(".").rglob("*.py")):
+              if any(part in SKIP_PARTS for part in path.parts):
+                  continue
+              scanned += 1
+              try:
+                  tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+              except SyntaxError:
+                  continue   # compileall step above already fails this
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.Call):
+                      continue
+                  fn = node.func
+                  if isinstance(fn, ast.Name) and fn.id == "breakpoint":
+                      bad.append((path, node.lineno, "breakpoint()"))
+                  elif (isinstance(fn, ast.Attribute) and fn.attr == "set_trace"
+                        and isinstance(fn.value, ast.Name)
+                        and fn.value.id in {"pdb", "ipdb"}):
+                      bad.append((path, node.lineno, f"{fn.value.id}.set_trace()"))
+
+          if bad:
+              for path, lineno, what in bad:
+                  print(f"::error file={path},line={lineno}::leftover {what} -- remove before merging")
+              sys.exit(1)
+          print(f"no leftover debugger calls (scanned {scanned} files)")
+          PY
+
+      - name: SPDX-License-Identifier on every studio/backend .py (warning)
+        # studio/backend is the only tree where we have a strict
+        # SPDX policy right now (every committed .py opens with the
+        # AGPL-3.0-only line). Surface drift without blocking; the
+        # whole-repo rollout is a separate cleanup.
+        continue-on-error: true
+        run: |
+          missing=$(git ls-files 'studio/backend/*.py' \
+            | xargs grep -L "SPDX-License-Identifier" 2>/dev/null || true)
+          if [ -n "$missing" ]; then
+            count=$(echo "$missing" | wc -l)
+            echo "::warning::$count studio/backend Python files are missing SPDX-License-Identifier"
+            echo "$missing" | head -20
+          else
+            echo "all studio/backend .py files have SPDX-License-Identifier"
+          fi
+
+      - name: ruff format drift (informational; whole-repo count)
+        # The repo's canonical formatter is scripts/run_ruff_format.py
+        # = `ruff format` + scripts/enforce_kwargs_spacing.py. Plain
+        # `ruff format --check` reports the kwarg-spacing diff as
+        # drift, which is expected. Surface the count so we can
+        # track it; keep non-blocking until the custom pipeline is
+        # wired in here.
+        continue-on-error: true
+        run: |
+          ruff format --check unsloth unsloth_cli studio tests cli.py unsloth-cli.py

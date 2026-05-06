@@ -34,6 +34,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # FIXME: drop this step once @assistant-ui/* and assistant-stream
+      # leave 0.x -- on 1.x, caret ranges are conventional. Until then,
+      # every 0.minor on this surface is a SemVer-major (this is exactly
+      # how 2026.5.1 shipped a broken chat runtime: ^0.12.19 quietly
+      # resolved to 0.12.28).
+      - name: '@assistant-ui must be pinned exactly (no caret/tilde)'
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -e
+          if grep -nE '"(@assistant-ui/[a-z-]+|assistant-stream)":[[:space:]]*"[\^~]' studio/frontend/package.json; then
+            echo "::error file=studio/frontend/package.json::These packages must be pinned to exact versions until they leave 0.x. Drop the leading ^ or ~."
+            exit 1
+          fi
+          echo "All assistant-ui packages are pinned exactly."
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

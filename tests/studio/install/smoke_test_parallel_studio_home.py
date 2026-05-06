@@ -118,24 +118,27 @@ def _launch_backend(
     studio_home: Path, fake_home: Path, port: int, log_path: Path
 ) -> subprocess.Popen:
     log_path.parent.mkdir(parents = True, exist_ok = True)
-    fh = log_path.open("w")
     env = os.environ.copy()
     env["HOME"] = str(fake_home)
-    return subprocess.Popen(
-        [
-            str(studio_home / "bin" / "unsloth"),
-            "studio",
-            "-H",
-            "127.0.0.1",
-            "-p",
-            str(port),
-            "--silent",
-        ],
-        env = env,
-        stdout = fh,
-        stderr = subprocess.STDOUT,
-        start_new_session = True,
-    )
+    # The child process inherits a dup of stdout via Popen, so closing the
+    # parent's handle when this function returns is safe and avoids relying
+    # on GC timing to release the fd.
+    with log_path.open("w") as fh:
+        return subprocess.Popen(
+            [
+                str(studio_home / "bin" / "unsloth"),
+                "studio",
+                "-H",
+                "127.0.0.1",
+                "-p",
+                str(port),
+                "--silent",
+            ],
+            env = env,
+            stdout = fh,
+            stderr = subprocess.STDOUT,
+            start_new_session = True,
+        )
 
 
 def _wait_for_health(port: int, timeout: float) -> dict:
@@ -226,8 +229,18 @@ def _check_fake_home_clean(fake_home: Path) -> None:
         )
 
 
-def _backend_pid_python(pid: int) -> Path:
-    return Path(f"/proc/{pid}/exe").resolve()
+def _backend_pid_python(pid: int) -> Path | None:
+    """Resolve the binary backing a running PID. Linux exposes this at
+    /proc/PID/exe; on platforms without /proc (macOS, BSD, Windows) we
+    skip this check and rely on the install-time symlink + studio.conf
+    invariants to catch cross-resolution. Returns None when /proc is
+    unavailable so the caller can skip cleanly."""
+    if sys.platform != "linux":
+        return None
+    proc_exe = Path(f"/proc/{pid}/exe")
+    if not proc_exe.exists():
+        return None
+    return proc_exe.resolve()
 
 
 def run(n_installs: int, keep: bool) -> int:
@@ -338,13 +351,14 @@ def run(n_installs: int, keep: bool) -> int:
                     raise TestFailure(f"[{label}] GET {path} -> {code}")
 
             exe = _backend_pid_python(proc.pid)
-            expected_python = (
-                studio_home / "unsloth_studio" / "bin" / "python"
-            ).resolve()
-            if exe != expected_python:
-                raise TestFailure(
-                    f"[{label}] PID {proc.pid} exe={exe}, expected {expected_python}"
-                )
+            if exe is not None:
+                expected_python = (
+                    studio_home / "unsloth_studio" / "bin" / "python"
+                ).resolve()
+                if exe != expected_python:
+                    raise TestFailure(
+                        f"[{label}] PID {proc.pid} exe={exe}, expected {expected_python}"
+                    )
 
         versions = {h.get("version") for h in health_payloads.values()}
         if len(versions) != 1:

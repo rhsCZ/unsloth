@@ -44,7 +44,9 @@ def _preload_device_type(package: str, prereqs: tuple[str, ...] = ()) -> bool:
     """Pre-load <package>.device_type under a mocked
     torch.cuda.is_available() == True so its @cache permanently
     captures "cuda". prereqs lists submodule names of <package> that
-    must be loaded first (e.g. 'utils' for unsloth_zoo)."""
+    must be loaded first (e.g. 'utils' for unsloth_zoo). Returns False
+    if the package or any prerequisite cannot be imported, in which
+    case the caller falls back to a stub."""
     target = f"{package}.device_type"
     if target in sys.modules:
         return True
@@ -85,6 +87,9 @@ def _preload_device_type(package: str, prereqs: tuple[str, ...] = ()) -> bool:
             dt_spec.loader.exec_module(dt_mod)
         finally:
             torch.cuda.is_available = _orig_is_avail
+    except Exception:
+        sys.modules.pop(target, None)
+        return False
     finally:
         if not skeleton_already:
             sys.modules.pop(package, None)

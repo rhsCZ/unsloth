@@ -78,6 +78,7 @@ def _preload_device_type(package: str, prereqs: tuple[str, ...] = ()) -> bool:
         sys.modules[target] = dt_mod
 
         import torch
+
         _orig_is_avail = torch.cuda.is_available
         torch.cuda.is_available = lambda: True  # type: ignore[assignment]
         try:
@@ -99,11 +100,13 @@ def _patch_torch_cuda_for_import() -> None:
     CPU like normal."""
     try:
         import torch.cuda.memory as _cuda_memory  # type: ignore
-        _cuda_memory.mem_get_info = lambda *a, **k: (0, 80 * 1024 ** 3)
+
+        _cuda_memory.mem_get_info = lambda *a, **k: (0, 80 * 1024**3)
     except Exception:
         pass
     try:
         import torch
+
         torch.cuda.get_device_capability = lambda *a, **k: (8, 0)
         torch.cuda.is_bf16_supported = lambda *a, **k: True
     except Exception:

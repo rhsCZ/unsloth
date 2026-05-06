@@ -74,10 +74,11 @@ jobs:
       - name: Download GGUF if cache miss
         if: steps.cache-gguf.outputs.cache-hit != 'true'
         run: |
+          # huggingface-cli was deprecated in huggingface_hub 1.13; the new CLI is `hf`.
           python -m pip install --upgrade huggingface_hub hf_transfer
           mkdir -p gguf-cache
           HF_HUB_ENABLE_HF_TRANSFER=1 \
-            huggingface-cli download "$GGUF_REPO" "$GGUF_FILE" --local-dir gguf-cache
+            hf download "$GGUF_REPO" "$GGUF_FILE" --local-dir gguf-cache
 
       - name: Install Studio (--local, --no-torch keeps the install lean)
         run: bash install.sh --local --no-torch

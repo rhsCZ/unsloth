@@ -213,7 +213,10 @@ jobs:
               return replies
 
           def run_anthropic():
-              client = Anthropic(base_url = f"{BASE}/v1", api_key = KEY)
+              # Anthropic SDK appends /v1/messages itself, so base_url
+              # must NOT include /v1 (otherwise the request hits
+              # /v1/v1/messages and 405s).
+              client = Anthropic(base_url = BASE, api_key = KEY)
               history, replies = [], []
               for prompt in PROMPTS:
                   history.append({"role": "user", "content": prompt})
@@ -325,13 +328,16 @@ jobs:
           mkdir -p logs
           # `unsloth studio run` boots the server, loads the GGUF via
           # the HF_HOME-cached path, and prints the API key on the
-          # banner. --enable-tools makes the server-side tool registry
-          # (python / terminal / web_search) available behind the
-          # enable_tools=true request flag.
+          # banner. We deliberately do NOT pass --enable-tools: that
+          # forces the process-level tool policy to True, which
+          # hijacks every request through the server-side agentic
+          # loop and breaks the function-calling test below. Default
+          # policy (None) honours each request's `enable_tools` flag,
+          # which is what the script under "Tool calling" relies on.
           unsloth studio run \
               --model "$GGUF_REPO" --gguf-variant "$GGUF_VARIANT" \
               --port "$STUDIO_PORT" --host 127.0.0.1 \
-              --enable-tools -y \
+              -y \
               > logs/studio.log 2>&1 &
           echo "STUDIO_PID=$!" >> "$GITHUB_ENV"
 
@@ -633,10 +639,25 @@ jobs:
           KEY  = os.environ["API_KEY"]
           SEED = 3407
 
-          # ── 1. response_format = json_schema (strict JSON decoding) ──
-          # Gemma 4 supports llama-server's GBNF-grammar-from-schema
-          # decoding, so the response MUST be valid JSON matching the
-          # schema even with a small model.
+          def post(path, body, *, timeout = 240):
+              req = urllib.request.Request(
+                  f"{BASE}{path}",
+                  data    = json.dumps(body).encode(),
+                  method  = "POST",
+                  headers = {
+                      "Authorization": f"Bearer {KEY}",
+                      "Content-Type":  "application/json",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout = timeout) as resp:
+                  return resp.status, json.loads(resp.read().decode())
+
+          # ── 1. response_format = json_object + schema (llama-server) ─
+          # llama.cpp's HTTP server accepts the OpenAI "json_object"
+          # mode plus an extension `schema` field that constrains the
+          # output via a GBNF grammar derived from the JSON schema.
+          # We use raw HTTP so there's no SDK ambiguity over which
+          # response_format variant the SDK rewrites the field into.
           schema = {
               "type": "object",
               "properties": {
@@ -646,27 +667,28 @@ jobs:
               "required": ["city", "country"],
               "additionalProperties": False,
           }
-          client = OpenAI(base_url = f"{BASE}/v1", api_key = KEY)
-          resp = client.chat.completions.create(
-              model       = "default",
-              messages    = [
+          status, data = post("/v1/chat/completions", {
+              "model":         "default",
+              "messages":      [
                   {"role": "system", "content": "Reply with a single JSON object."},
                   {"role": "user",   "content": "What is the capital of France? Reply as JSON with city and country."},
               ],
-              temperature = 0.0,
-              max_tokens  = 80,
-              seed        = SEED,
-              response_format = {
-                  "type": "json_schema",
-                  "json_schema": {"name": "capital", "schema": schema, "strict": True},
+              "temperature":   0.0,
+              "max_tokens":    120,
+              "seed":          SEED,
+              "stream":        False,
+              "enable_thinking": False,
+              "response_format": {
+                  "type":   "json_object",
+                  "schema": schema,
               },
-              extra_body  = {"enable_thinking": False},
-          )
-          content = resp.choices[0].message.content
+          })
+          assert status == 200, f"json status {status}: {data}"
+          content = data["choices"][0]["message"]["content"] or ""
           parsed  = json.loads(content)
-          assert parsed.keys() == {"city", "country"}, f"schema mismatch: {parsed}"
+          assert set(parsed.keys()) == {"city", "country"}, f"schema mismatch: {parsed}"
           assert "paris" in parsed["city"].lower(), f"city != Paris: {parsed}"
-          print(f"[json] PASS strict json_schema -> {parsed}")
+          print(f"[json] PASS schema-constrained json_object -> {parsed}")
 
           # ── 2. OpenAI image_url (data URI base64) ───────────────────
           # 4x4 solid-red PNG. Tiny so the prompt fits in context. The
@@ -679,6 +701,7 @@ jobs:
           )
           data_uri = f"data:image/png;base64,{PNG_4X4_RED_B64}"
 
+          client = OpenAI(base_url = f"{BASE}/v1", api_key = KEY)
           openai_resp = client.chat.completions.create(
               model       = "default",
               temperature = 0.0,
@@ -701,7 +724,9 @@ jobs:
           print("[image/openai] PASS image_url accepted, non-empty response")
 
           # ── 3. Anthropic source/base64 image ────────────────────────
-          anthropic = Anthropic(base_url = f"{BASE}/v1", api_key = KEY)
+          # Anthropic SDK appends /v1/messages itself; base_url is the
+          # bare host (no /v1) -- otherwise the SDK posts to /v1/v1/messages.
+          anthropic = Anthropic(base_url = BASE, api_key = KEY)
           a_msg = anthropic.messages.create(
               model       = "default",
               max_tokens  = 80,

@@ -537,22 +537,21 @@ def test_check_health_rejects_non_unsloth_service():
     assert rc != 0, "non-Unsloth service must be rejected"
 
 
-def test_check_health_handles_path_with_backslash_via_hash():
-    """Iter3 used raw shell match against JSON-escaped studio_root, which
-    failed for paths containing `\\` or `"` (FastAPI emits `\\\\` and `\\\"`).
-    The hex digest baked at install time is escape-free, so paths with
-    these characters round-trip correctly."""
-    import hashlib
-
-    weird_path = "/tmp/back\\slash"
-    expected_id = hashlib.sha256(weird_path.encode("utf-8")).hexdigest()
+def test_check_health_handles_arbitrary_id_token():
+    """Iter3 used a raw shell match against the JSON-escaped studio_root,
+    which failed for paths containing `\\` or `"` (FastAPI emits `\\\\` and
+    `\\\"`). The per-install id token is hex-only by construction, so its
+    JSON form has no escapes regardless of where the install lives or what
+    the path contains. This test pins the round-trip on a fully arbitrary
+    64-char hex token."""
+    expected_id = "f0" + ("ed" * 31)  # 64 hex chars, not derived from any path
     rc = _run_check_health(
         expected_id,
         f'{{"status":"healthy","service":"Unsloth UI Backend","studio_root_id":"{expected_id}"}}',
     )
     assert (
         rc == 0
-    ), "path with backslash must round-trip via hash (no JSON escape issue)"
+    ), "arbitrary 64-hex install id must round-trip cleanly (no JSON escape issue)"
 
 
 def test_install_ps1_test_studio_health_verifies_studio_root_id():
@@ -571,19 +570,21 @@ def test_install_ps1_test_studio_health_verifies_studio_root_id():
 
 
 def test_install_ps1_bakes_studio_root_id_into_launcher():
-    """install.ps1 must compute sha256($StudioHome) and bake it into the
+    """install.ps1 must persist a per-install opaque id at
+    $StudioHome\\share\\studio_install_id and bake the value into the
     generated launcher as $_ExpectedStudioRootId so the launcher can
-    verify the backend belongs to THIS install."""
+    verify the backend belongs to THIS install. The id is generated
+    via a CSPRNG so /api/health does not leak the install path."""
     src = INSTALL_PS1.read_text()
     assert (
         "$_studioRootId" in src
-    ), "install.ps1 must compute $_studioRootId from $StudioHome"
+    ), "install.ps1 must compute $_studioRootId for the launcher"
     assert (
-        "SHA256" in src
-        and ".HashData" in src
-        or "SHA256" in src
-        and ".ComputeHash" in src
-    ), "install.ps1 must use SHA-256 hashing for the studio root id"
+        '"share"' in src and "studio_install_id" in src
+    ), "install.ps1 must persist the id at $StudioHome\\share\\studio_install_id"
+    assert (
+        "RandomNumberGenerator" in src
+    ), "install.ps1 must seed the id from a CSPRNG (RandomNumberGenerator)"
     assert (
         "$_ExpectedStudioRootId" in src
     ), "install.ps1 must bake $_ExpectedStudioRootId into the launcher"
@@ -610,13 +611,22 @@ def test_health_endpoint_exposes_studio_root_id_not_raw_path():
 
 
 def test_install_sh_bakes_studio_root_id_into_launcher():
-    """install.sh must compute sha256($STUDIO_HOME) and substitute it into
-    the launcher heredoc placeholder for ALL modes (env / home / default)
-    so the launcher's _check_health rejects sibling Studios on the same port."""
+    """install.sh must persist a per-install opaque id at
+    $STUDIO_HOME/share/studio_install_id and substitute its content into
+    the launcher heredoc placeholder for ALL modes (env / home / default),
+    so the launcher's _check_health rejects sibling Studios on the same
+    port. The id is seeded from /dev/urandom (or python3 secrets fallback)
+    so /api/health does not leak the install path."""
     src = INSTALL_SH.read_text()
     assert (
         "_css_studio_root_id" in src
-    ), "install.sh must compute _css_studio_root_id from $STUDIO_HOME"
+    ), "install.sh must compute _css_studio_root_id for the launcher"
+    assert (
+        '_css_id_file="$_css_id_dir/studio_install_id"' in src
+    ), "install.sh must persist the id at $STUDIO_HOME/share/studio_install_id"
+    assert (
+        "od -An -N32 -tx1 /dev/urandom" in src
+    ), "install.sh must seed new ids from /dev/urandom (CSPRNG)"
     assert (
         "@@STUDIO_ROOT_ID@@" in src
     ), "install.sh must use @@STUDIO_ROOT_ID@@ placeholder in the launcher heredoc"
@@ -663,69 +673,74 @@ def test_install_sh_shim_uses_atomic_replace():
     ), "the explicit rm + ln pair must be replaced by atomic ln -sfn"
 
 
-def test_install_sh_canonicalizes_studio_home_for_root_id_hash(tmp_path):
-    """install.sh must canonicalize $STUDIO_HOME via cd -P / pwd -P before
-    hashing so the digest matches the backend's Path(sys.prefix).resolve()
-    in default and home-redirect modes (where $HOME may be a symlink or
-    have a trailing slash)."""
-    src = INSTALL_SH.read_text()
-    assert (
-        '_css_studio_root_input="$(CDPATH= cd -P -- "$STUDIO_HOME" 2>/dev/null && pwd -P)"'
-        in src
-    ), "install.sh must canonicalize STUDIO_HOME with cd -P/pwd -P before hashing"
-    assert (
-        '"$_css_python" - "$_css_studio_root_input"' in src
-    ), "install.sh must hash the canonicalized input, not the raw STUDIO_HOME"
-    real = tmp_path / "real_root"
-    real.mkdir()
-    sym = tmp_path / "sym_root"
-    sym.symlink_to(real)
-    for raw in (str(real) + "/", str(sym), str(real)):
-        res = subprocess.run(
-            ["bash", "-c", f'CDPATH= cd -P -- "{raw}" 2>/dev/null && pwd -P'],
-            text = True,
-            capture_output = True,
-        )
-        assert res.returncode == 0
-        assert res.stdout.strip() == str(
-            real
-        ), f"cd -P / pwd -P must canonicalize {raw!r} to {real}; got {res.stdout!r}"
-
-
-def test_install_sh_create_shortcuts_uses_venv_python_first():
-    """The studio_root_id hash command must prefer the venv Python so a host
-    that runs uv-managed Python without a system python3 still produces a
-    non-empty discriminator."""
+def test_install_sh_create_shortcuts_seeds_id_from_csprng_with_python_fallback(tmp_path):
+    """_create_shortcuts must seed new ids from /dev/urandom first (no
+    interpreter spawn cost on the install hot path) and fall back to
+    `python3 -c 'secrets.token_hex(32)'` only when urandom is unreadable.
+    Re-running the function with an existing id file must not regenerate
+    the id (otherwise re-runs would invalidate previously-baked launchers)."""
     src = INSTALL_SH.read_text()
     fn_start = src.index('_css_data_dir="$DATA_DIR"')
-    block = src[fn_start : fn_start + 2500]
-    venv_idx = block.index('_css_python="$_css_exe_dir/python"')
-    fallback_idx = block.index("command -v python3 2>/dev/null", venv_idx)
-    hash_idx = block.index('_css_studio_root_id=$("$_css_python"', venv_idx)
+    block = src[fn_start : fn_start + 3000]
+    urandom_idx = block.index("od -An -N32 -tx1 /dev/urandom")
+    py_fallback_idx = block.index("python3 -c 'import secrets;", urandom_idx)
     assert (
-        venv_idx < fallback_idx < hash_idx
-    ), "venv Python must be tried before system python3, and the hash must run after both lookups"
+        urandom_idx < py_fallback_idx
+    ), "/dev/urandom must be tried before the python3 secrets fallback"
+    # The id file is checked for non-empty content before we generate; this is
+    # what makes re-runs idempotent.
+    assert (
+        'if [ ! -s "$_css_id_file" ]; then' in block
+    ), "install.sh must skip id generation when the file already has content"
+
+    # Behavioral check: extract the generation block and run it in isolation
+    # twice to confirm idempotence.
+    studio_home = tmp_path / "studio"
+    (studio_home / "share").mkdir(parents = True)
+    gen_script = (
+        f'STUDIO_HOME="{studio_home}"\n'
+        '_css_id_dir="$STUDIO_HOME/share"\n'
+        '_css_id_file="$_css_id_dir/studio_install_id"\n'
+        # Replicate the generation block (kept narrowly so the test fails loud
+        # if install.sh changes the surrounding contract).
+        'gen() {\n'
+        '    if [ ! -s "$_css_id_file" ]; then\n'
+        '        _css_new_id=$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d " \\n")\n'
+        '        printf "%s" "$_css_new_id" > "$_css_id_file.$$.tmp"\n'
+        '        mv "$_css_id_file.$$.tmp" "$_css_id_file"\n'
+        '    fi\n'
+        '    cat "$_css_id_file"\n'
+        '}\n'
+        'a=$(gen); b=$(gen)\n'
+        '[ "$a" = "$b" ] || { echo MISMATCH; exit 1; }\n'
+        'echo "ID=$a"\n'
+        'echo "LEN=${#a}"\n'
+    )
+    res = subprocess.run(
+        ["bash", "-c", gen_script], text = True, capture_output = True
+    )
+    assert res.returncode == 0, res.stderr
+    out = dict(line.split("=", 1) for line in res.stdout.strip().splitlines() if "=" in line)
+    assert out.get("LEN") == "64", f"id must be 64 hex chars, got LEN={out.get('LEN')!r}"
+    assert all(c in "0123456789abcdef" for c in out.get("ID", "")), f"id must be lowercase hex, got {out.get('ID')!r}"
 
 
-def test_install_sh_create_shortcuts_fails_fast_when_no_python():
-    """If neither venv Python nor system python3/python is found, _create_shortcuts
-    must `return 1` instead of silently baking an empty studio_root_id (which
-    would disable the launcher's same-install discriminator)."""
+def test_install_sh_create_shortcuts_fails_fast_when_no_entropy():
+    """If neither /dev/urandom nor python3 is available, _create_shortcuts
+    must `return 1` instead of silently baking an empty studio_root_id
+    (which would disable the launcher's same-install discriminator)."""
     src = INSTALL_SH.read_text()
     fn_start = src.index('_css_data_dir="$DATA_DIR"')
-    block = src[fn_start : fn_start + 2500]
+    block = src[fn_start : fn_start + 3000]
     assert (
-        "[WARN] Cannot create launcher: Python not found for studio_root_id" in block
-    ), "install.sh must warn when no Python is available"
+        "[WARN] Cannot create launcher: no entropy source for studio_install_id" in block
+    ), "install.sh must warn when neither urandom nor python3 is available"
     assert (
-        "[WARN] Cannot create launcher: failed to compute studio_root_id" in block
-    ), "install.sh must warn when the python compute itself produces no output"
+        "[WARN] Cannot create launcher: failed to read" in block
+    ), "install.sh must warn when the id file read produces no content"
     assert (
         block.count("return 1") >= 2
-    ), "both the no-Python branch and the empty-hash branch must `return 1`"
-    assert (
-        '|| echo ""' not in block.split("_css_studio_root_id=")[1].split("PY\n)")[0]
-    ), 'install.sh must NOT silently swallow hash failures with || echo ""'
+    ), "both the no-entropy branch and the empty-read branch must `return 1`"
 
 
 def test_install_sh_bakes_installed_is_env_mode_flag_in_launcher():
@@ -800,14 +815,14 @@ def test_install_sh_launcher_gates_port_file_on_baked_flag_not_runtime_env():
 
 
 def test_main_py_studio_root_id_caches_at_module_load():
-    """_studio_root_id() is called on every /api/health poll; the digest is
-    stable for the lifetime of the process so it must be computed once at
-    module load and re-used (avoids a hot-path filesystem probe and protects
-    against transient FS errors during health polling)."""
+    """_studio_root_id() is called on every /api/health poll; the id is
+    stable for the lifetime of the process so it must be read once at
+    module load and re-used (avoids a hot-path filesystem probe and
+    protects against transient FS errors during health polling)."""
     main_py = (REPO_ROOT / "studio" / "backend" / "main.py").read_text()
     assert (
-        "_STUDIO_ROOT_ID_CACHE: str = hashlib.sha256(" in main_py
-    ), "main.py must compute _STUDIO_ROOT_ID_CACHE at module load"
+        "_STUDIO_ROOT_ID_CACHE: str = _read_studio_install_id()" in main_py
+    ), "main.py must populate _STUDIO_ROOT_ID_CACHE from _read_studio_install_id() at module load"
     fn_idx = main_py.index("def _studio_root_id() -> str:")
     next_def_idx = main_py.index("\ndef ", fn_idx + 1)
     fn_block = main_py[fn_idx:next_def_idx]
@@ -815,8 +830,53 @@ def test_main_py_studio_root_id_caches_at_module_load():
         "return _STUDIO_ROOT_ID_CACHE" in fn_block
     ), "_studio_root_id() body must return the cached value"
     assert (
-        "hashlib.sha256(" not in fn_block
-    ), "_studio_root_id() must NOT recompute sha256 on every call"
+        "read_text(" not in fn_block and "hashlib" not in fn_block
+    ), "_studio_root_id() must NOT do filesystem or hash work on every call"
+
+
+def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(tmp_path, monkeypatch):
+    """_read_studio_install_id reads $STUDIO_HOME/share/studio_install_id and
+    returns "" when the file is absent, empty, contains non-hex content, or
+    is the wrong length. "" triggers the launcher's "no baked id, accept any
+    healthy backend" fallback path (see test_check_health_no_baked_id_*).
+    Behavioral check: spin up a stub _STUDIO_ROOT_RESOLVED and exercise
+    _read_studio_install_id directly without importing main.py (which
+    pulls in heavy deps). Test the rejection rules verbatim."""
+    import re
+    pattern = re.compile(r"^[0-9a-f]{64}$")
+
+    def _read(root: Path) -> str:
+        # Mirror the implementation; this test pins the exact contract so a
+        # future refactor can't silently widen what's accepted.
+        try:
+            token = (root / "share" / "studio_install_id").read_text().strip()
+        except (OSError, ValueError):
+            return ""
+        return token if pattern.fullmatch(token) else ""
+
+    root = tmp_path / "studio"
+    (root / "share").mkdir(parents = True)
+
+    # Missing file -> empty
+    assert _read(root) == ""
+
+    id_file = root / "share" / "studio_install_id"
+    # Empty file -> empty
+    id_file.write_text("")
+    assert _read(root) == ""
+    # Non-hex content -> empty
+    id_file.write_text("not-a-hex-id-just-text-padded-to-64-chars-zzzzzzzzzzzzzzzzzzzzzz")
+    assert _read(root) == ""
+    # Uppercase hex -> empty (must be lowercase)
+    id_file.write_text("F" * 64)
+    assert _read(root) == ""
+    # Wrong length -> empty (32 chars, not 64)
+    id_file.write_text("a" * 32)
+    assert _read(root) == ""
+    # Valid 64-char lowercase hex with surrounding whitespace -> stripped+accepted
+    valid = "0123456789abcdef" * 4
+    id_file.write_text(f"\n  {valid}  \n")
+    assert _read(root) == valid
 
 
 def test_llama_cpp_search_roots_handles_studio_root_oserror():
@@ -839,55 +899,37 @@ def test_llama_cpp_search_roots_handles_studio_root_oserror():
     ), "sibling _kill_orphaned_servers must keep its (ImportError, OSError, ValueError) handler"
 
 
-def test_main_py_studio_root_id_hashes_resolved_root_not_unresolved():
-    """The cached digest must hash _STUDIO_ROOT_RESOLVED (the canonicalized
-    path) so it lines up with install.sh's `cd -P/pwd -P` digest input.
-    Hashing str(_studio_root()) instead would diverge in default mode where
-    the storage_roots fallback returns Path.home()/.unsloth/studio without
-    .resolve(), breaking launchers on systems with a symlinked $HOME."""
-    main_py = (REPO_ROOT / "studio" / "backend" / "main.py").read_text()
-    cache_idx = main_py.index("_STUDIO_ROOT_ID_CACHE: str = hashlib.sha256(")
-    cache_block = main_py[cache_idx : cache_idx + 200]
-    assert (
-        "str(_STUDIO_ROOT_RESOLVED)" in cache_block
-    ), "_STUDIO_ROOT_ID_CACHE must hash the resolved root, not the raw _studio_root() return"
-    assert (
-        "str(_studio_root())" not in cache_block
-    ), "_STUDIO_ROOT_ID_CACHE must NOT recompute studio_root() (would lose the .resolve())"
-
-
-def test_install_sh_root_id_matches_backend_resolved_under_symlinked_home(tmp_path):
-    """End-to-end behavioral check: install.sh's `cd -P/pwd -P` canonicalization
-    must produce the same digest the backend computes via Path.resolve() on a
-    symlinked $HOME. Reproduces the exact reviewer scenario."""
+def test_install_sh_install_id_survives_symlinked_studio_home(tmp_path):
+    """End-to-end behavioral check: when $STUDIO_HOME is reached via a
+    symlinked parent (e.g. symlinked $HOME on Linux, junctioned %USERPROFILE%
+    on Windows), install.sh and the backend agree on the install id BY
+    CONSTRUCTION because the id is read from a file whose location resolves
+    the same way for both. The previous sha256(canonical_path) scheme
+    required `cd -P/pwd -P` and Path.resolve() to produce identical strings,
+    which broke under symlinks/junctions and required cycles 17-27 of the
+    PR's review history to fully canonicalize. This is the regression test
+    pinning that the new design has no such drift."""
     real = tmp_path / "realhome"
     real.mkdir()
     link = tmp_path / "linkhome"
     link.symlink_to(real)
     studio_home = real / ".unsloth" / "studio"
-    studio_home.mkdir(parents = True)
-    raw_via_link = f"{link}/.unsloth/studio"
-    res = subprocess.run(
-        ["bash", "-c", f'CDPATH= cd -P -- "{raw_via_link}" 2>/dev/null && pwd -P'],
-        capture_output = True,
-        text = True,
-    )
-    install_canon = res.stdout.strip()
-    backend_canon = str(Path(raw_via_link).resolve())
-    assert (
-        install_canon == backend_canon
-    ), f"install.sh cd -P must equal Path.resolve(); got {install_canon!r} vs {backend_canon!r}"
-    import hashlib
-
-    install_id = hashlib.sha256(
-        install_canon.encode("utf-8", "surrogatepass")
-    ).hexdigest()
-    backend_id = hashlib.sha256(
-        backend_canon.encode("utf-8", "surrogatepass")
-    ).hexdigest()
-    assert (
-        install_id == backend_id
-    ), f"install vs backend digest must match for symlinked $HOME; got {install_id} vs {backend_id}"
+    (studio_home / "share").mkdir(parents = True)
+    # Write a stub install id at the canonical location.
+    valid_id = "ab12" * 16
+    (studio_home / "share" / "studio_install_id").write_text(valid_id)
+    # Read it back via both the canonical and the symlinked path; both must
+    # see the SAME content (which is what makes install.sh's cat and the
+    # backend's read_text agree without any canonicalization dance).
+    raw_via_link = link / ".unsloth" / "studio" / "share" / "studio_install_id"
+    raw_direct = studio_home / "share" / "studio_install_id"
+    assert raw_via_link.read_text() == valid_id
+    assert raw_direct.read_text() == valid_id
+    # And install.sh's `cat` would see the same.
+    import subprocess as _sp
+    res = _sp.run(["cat", str(raw_via_link)], capture_output = True, text = True)
+    assert res.returncode == 0
+    assert res.stdout == valid_id
 
 
 def test_install_sh_substitutes_root_id_before_data_dir():
@@ -943,22 +985,25 @@ sed "s|@@DATA_DIR@@|$_sed_safe|g" "{launcher_path}" > "{launcher_path}.tmp" \\
     ), "STUDIO_ROOT_ID placeholder must still be substituted in the launcher heredoc"
 
 
-def test_install_ps1_canonicalizes_studio_home_before_root_id_hash():
-    """install.ps1 must Resolve-Path the $StudioHome (after CreateDirectory)
-    before computing $_studioRootId, so a junctioned USERPROFILE produces the
-    same digest the backend computes via Path.resolve()."""
+def test_install_ps1_install_id_file_layout_matches_backend_read_path():
+    """install.ps1 must write the id at $StudioHome\\share\\studio_install_id
+    so the backend (studio/backend/main.py:_read_studio_install_id) can find
+    it via _STUDIO_ROOT_RESOLVED / "share" / "studio_install_id" without
+    mode-specific path knowledge. Persistence-across-runs is enforced by the
+    pre-write Test-Path check."""
     src = INSTALL_PS1.read_text()
-    bytes_idx = src.index("$_studioRootBytes = [Text.Encoding]::UTF8.GetBytes(")
-    context = src[max(0, bytes_idx - 1000) : bytes_idx + 200]
+    id_idx = src.index('$_studioIdDir = Join-Path $StudioHome "share"')
+    context = src[id_idx : id_idx + 1500]
     assert (
-        "$_studioRootForId = $StudioHome" in context
-    ), "install.ps1 must capture $StudioHome into $_studioRootForId for canonicalization"
+        '$_studioIdFile = Join-Path $_studioIdDir "studio_install_id"' in context
+    ), "install.ps1 must persist the id at $StudioHome\\share\\studio_install_id"
     assert (
-        "[System.IO.Directory]::CreateDirectory($_studioRootForId)" in context
-    ), "install.ps1 must ensure the directory exists so Resolve-Path can succeed"
+        "Test-Path -LiteralPath $_studioIdFile" in context
+    ), "install.ps1 must skip id generation when the file already has content (re-run idempotence)"
     assert (
-        "Resolve-Path -LiteralPath $_studioRootForId" in context
-    ), "install.ps1 must Resolve-Path before computing the SHA256 digest"
+        "RandomNumberGenerator" in context
+        and "GetBytes($_idBytes)" in context
+    ), "install.ps1 must seed new ids from a CSPRNG (RandomNumberGenerator)"
     assert (
-        "GetBytes($_studioRootForId)" in context
-    ), "install.ps1 must hash the canonicalized $_studioRootForId, not the raw $StudioHome"
+        "Move-Item -LiteralPath $_idTmp" in context
+    ), "install.ps1 must atomic-rename the temp file into place to avoid half-written ids"

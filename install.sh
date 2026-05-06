@@ -504,33 +504,47 @@ create_studio_shortcuts() {
     _css_icon_png="$_css_data_dir/unsloth-studio.png"
     _css_gem_png="$_css_data_dir/unsloth-gem.png"
 
-    # Same-install discriminator: hash the canonical STUDIO_HOME so the
-    # launcher attaches only to its own /api/health (matches the backend's
-    # Path(sys.prefix).resolve()). Prefer venv Python so uv-managed hosts
-    # without system python3 still produce a non-empty digest.
-    _css_python="$_css_exe_dir/python"
-    if [ ! -x "$_css_python" ]; then
-        _css_python=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)
+    mkdir -p "$_css_data_dir"
+
+    # Same-install discriminator: per-install opaque id written once at install
+    # time and read by both this launcher and the backend (/api/health). Replaces
+    # the older sha256(canonical $STUDIO_HOME) scheme to (a) avoid leaking the
+    # install path on -H 0.0.0.0 deployments and (b) sidestep launcher/backend
+    # canonicalization drift (cd -P vs Path.resolve() symlink/junction handling).
+    # Lives at $STUDIO_HOME/share/ (not $DATA_DIR) so the backend can find it
+    # via _STUDIO_ROOT_RESOLVED / "share" / "studio_install_id" regardless of
+    # mode (in env-mode $STUDIO_HOME/share == $DATA_DIR; in default mode they
+    # diverge but the backend only knows the studio_root). 32 bytes of urandom
+    # -> 64 hex chars, byte-compatible with the prior digest so launcher
+    # placeholder, _check_health, and tests stay length-agnostic.
+    _css_id_dir="$STUDIO_HOME/share"
+    mkdir -p "$_css_id_dir"
+    _css_id_file="$_css_id_dir/studio_install_id"
+    if [ ! -s "$_css_id_file" ]; then
+        if [ -r /dev/urandom ]; then
+            _css_new_id=$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+        fi
+        if [ -z "${_css_new_id:-}" ] && command -v python3 >/dev/null 2>&1; then
+            _css_new_id=$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null)
+        fi
+        if [ -z "${_css_new_id:-}" ]; then
+            echo "[WARN] Cannot create launcher: no entropy source for studio_install_id" >&2
+            return 1
+        fi
+        # Atomic write so a partial install can't leave a half-written id.
+        _css_id_tmp="$_css_id_file.$$.tmp"
+        printf '%s' "$_css_new_id" > "$_css_id_tmp" \
+            && mv "$_css_id_tmp" "$_css_id_file"
+        chmod 600 "$_css_id_file" 2>/dev/null || true
+        unset _css_new_id _css_id_tmp
     fi
-    if [ -z "$_css_python" ] || [ ! -x "$_css_python" ]; then
-        echo "[WARN] Cannot create launcher: Python not found for studio_root_id" >&2
-        return 1
-    fi
-    _css_studio_root_input="$(CDPATH= cd -P -- "$STUDIO_HOME" 2>/dev/null && pwd -P)"
-    [ -z "$_css_studio_root_input" ] && _css_studio_root_input="$STUDIO_HOME"
-    _css_studio_root_id=$("$_css_python" - "$_css_studio_root_input" <<'PY' 2>/dev/null
-import hashlib, sys
-print(hashlib.sha256(sys.argv[1].encode("utf-8", "surrogatepass")).hexdigest())
-PY
-)
+    _css_studio_root_id=$(cat "$_css_id_file" 2>/dev/null)
     if [ -z "$_css_studio_root_id" ]; then
-        echo "[WARN] Cannot create launcher: failed to compute studio_root_id" >&2
+        echo "[WARN] Cannot create launcher: failed to read $_css_id_file" >&2
         return 1
     fi
     _css_is_env_mode=false
     [ "$_STUDIO_HOME_REDIRECT" = "env" ] && _css_is_env_mode=true
-
-    mkdir -p "$_css_data_dir"
 
     # ── Write launcher script ──
     # Single-quoted heredoc; @@DATA_DIR@@, @@STUDIO_ROOT_ID@@, and

@@ -42,22 +42,43 @@ if _STUDIO_ROOT_RESOLVED != _LEGACY_STUDIO_ROOT:
     if not os.environ.get("UNSLOTH_LLAMA_CPP_PATH"):
         os.environ["UNSLOTH_LLAMA_CPP_PATH"] = str(_STUDIO_ROOT_RESOLVED / "llama.cpp")
 
-import hashlib
 import mimetypes
+import re as _re
 import shutil
 import warnings
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version as package_version
 
 
-_STUDIO_ROOT_ID_CACHE: str = hashlib.sha256(
-    str(_STUDIO_ROOT_RESOLVED).encode("utf-8", "surrogatepass")
-).hexdigest()
+_STUDIO_INSTALL_ID_RE = _re.compile(r"^[0-9a-f]{64}$")
+
+
+def _read_studio_install_id() -> str:
+    """Per-install opaque id written by install.sh / install.ps1 at
+    $STUDIO_HOME/share/studio_install_id. Returns "" when the file is
+    absent (pre-PR install, fresh tree never run through the installer)
+    or contains anything other than a 64-char lowercase-hex token --
+    in which case /api/health emits "" and the launcher's _check_health
+    falls back to the existing "no baked id, accept any healthy
+    Unsloth backend" path. This intentionally replaces a previous
+    sha256(resolved_install_path) so the field carries no install-path
+    information for callers reaching /api/health (relevant when Studio
+    is run with -H 0.0.0.0)."""
+    try:
+        token = (_STUDIO_ROOT_RESOLVED / "share" / "studio_install_id").read_text().strip()
+    except (OSError, ValueError):
+        return ""
+    return token if _STUDIO_INSTALL_ID_RE.fullmatch(token) else ""
+
+
+_STUDIO_ROOT_ID_CACHE: str = _read_studio_install_id()
 
 
 def _studio_root_id() -> str:
-    """Same-install discriminator for /api/health (sha256 of the resolved
-    install root); avoids leaking the raw path to unauthenticated callers."""
+    """Same-install discriminator for /api/health: a per-install opaque
+    token written once by the installer and read once at module import.
+    Empty when no installer-written token is present; the launcher
+    contract treats "" as "no baked id, accept any healthy backend"."""
     return _STUDIO_ROOT_ID_CACHE
 
 

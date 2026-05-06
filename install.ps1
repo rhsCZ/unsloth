@@ -523,20 +523,35 @@ function Install-UnslothStudio {
                 [System.IO.Directory]::CreateDirectory($appDir) | Out-Null
             }
 
-            # Same-install discriminator: hash the resolved StudioHome so a
-            # junctioned USERPROFILE matches the backend's Path.resolve()
-            # digest in /api/health.
-            $_studioRootForId = $StudioHome
-            try {
-                [System.IO.Directory]::CreateDirectory($_studioRootForId) | Out-Null
-                $_studioRootForId = (Resolve-Path -LiteralPath $_studioRootForId -ErrorAction Stop).Path
-            } catch {
-                $_studioRootForId = $StudioHome
+            # Same-install discriminator: per-install opaque id written once at
+            # install time and read by both this launcher and the backend
+            # (/api/health). Replaces the older sha256(resolved $StudioHome)
+            # scheme to (a) avoid leaking the install path on -H 0.0.0.0
+            # deployments and (b) sidestep launcher/backend canonicalization
+            # drift (Resolve-Path vs Path.resolve() junction handling). Lives
+            # at $StudioHome\share\ (not $appDir) so the backend can find it
+            # via _STUDIO_ROOT_RESOLVED / "share" / "studio_install_id"
+            # regardless of mode. 32 bytes of crypto random -> 64 hex chars.
+            $_studioIdDir = Join-Path $StudioHome "share"
+            if (-not (Test-Path -LiteralPath $_studioIdDir)) {
+                [System.IO.Directory]::CreateDirectory($_studioIdDir) | Out-Null
             }
-            $_studioRootBytes = [Text.Encoding]::UTF8.GetBytes($_studioRootForId)
-            $_studioRootId = ([BitConverter]::ToString(
-                [Security.Cryptography.SHA256]::Create().ComputeHash($_studioRootBytes)
-            ) -replace '-', '').ToLowerInvariant()
+            $_studioIdFile = Join-Path $_studioIdDir "studio_install_id"
+            $_studioRootId = ""
+            if ((Test-Path -LiteralPath $_studioIdFile) -and `
+                ((Get-Item -LiteralPath $_studioIdFile).Length -gt 0)) {
+                $_studioRootId = ([System.IO.File]::ReadAllText($_studioIdFile)).Trim()
+            }
+            if (-not $_studioRootId) {
+                $_idBytes = New-Object byte[] 32
+                [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($_idBytes)
+                $_studioRootId = -join ($_idBytes | ForEach-Object { $_.ToString('x2') })
+                # Atomic write: write to a temp sibling then rename, so a partial
+                # install cannot leave a half-written id.
+                $_idTmp = $_studioIdFile + ".$PID.tmp"
+                [System.IO.File]::WriteAllText($_idTmp, $_studioRootId)
+                Move-Item -LiteralPath $_idTmp -Destination $_studioIdFile -Force
+            }
 
             # Env-mode: persist UNSLOTH_STUDIO_HOME (and llama path) so fresh
             # shells don't need to re-export, and bake per-install $portFile /

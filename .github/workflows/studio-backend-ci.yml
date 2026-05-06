@@ -50,19 +50,42 @@ jobs:
       - name: Install backend test dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
+          # Studio's declared backend deps:
+          pip install -r studio/backend/requirements/studio.txt
+          # Extras that studio.txt does not list but the import chain needs
+          # (python-multipart for FastAPI form/file uploads, sqlalchemy/cryptography
+          #  for the auth DB, yaml/jinja2 for utils.models.model_config, etc.):
           pip install \
-            fastapi uvicorn 'pydantic>=2' pydantic-settings typer pyjwt \
-            structlog python-multipart aiofiles sqlalchemy cryptography \
-            easydict addict diceware ddgs nest_asyncio \
-            mammoth unpdf 'numpy<3' matplotlib pandas \
-            pytest pytest-asyncio httpx
+            python-multipart aiofiles sqlalchemy cryptography \
+            pyyaml jinja2 mammoth unpdf requests \
+            'numpy<3' pytest pytest-asyncio httpx
+          # Torch CPU + transformers are required by a chunk of the backend test
+          # suite (gpu_selection, kv_cache_estimation, utils). CPU-only torch
+          # keeps the install ~250 MB / ~1 min on a clean runner.
+          pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.4,<2.11'
+          pip install 'transformers>=4.51,<5.5'
 
       - name: Backend tests
         working-directory: studio/backend
+        # Locally validated against this dep set: 831 passed, 5 skipped, 35 deselected.
+        # Deselections (all environment-specific, would never pass on a GPU-less
+        # `ubuntu-latest` runner regardless of code correctness):
+        #   - llama_cpp_load_progress_live: spawns a real llama.cpp process
+        #   - TestGpuAutoSelection / TestPreSpawnGpuResolution / TestPerGpuFitGuardAllCounts:
+        #       require live transformers config introspection on real GPUs
+        #   - TestTransformersIntrospection: same
+        #   - test_returns_cuda_when_cuda_available / test_calls_cuda_cache_when_cuda:
+        #       assume CUDA-capable GPU
         run: |
           python -m pytest tests/ -q --tb=short \
             --ignore=tests/test_studio_api.py \
-            -k 'not llama_cpp_load_progress_live'
+            -k 'not llama_cpp_load_progress_live
+                and not TestGpuAutoSelection
+                and not TestPreSpawnGpuResolution
+                and not TestPerGpuFitGuardAllCounts
+                and not TestTransformersIntrospection
+                and not test_returns_cuda_when_cuda_available
+                and not test_calls_cuda_cache_when_cuda'
 
   ruff:
     runs-on: ubuntu-latest

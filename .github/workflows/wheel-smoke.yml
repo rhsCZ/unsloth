@@ -96,14 +96,19 @@ jobs:
               sys.exit(0 if all(checks.values()) else 1)
           PY
 
-      - name: Studio backend import smoke (lightweight deps only)
+      - name: Studio backend import smoke
+        # Imports `studio.backend.main:app` from the freshly-installed wheel in
+        # a clean venv. This catches the class of bug that 2026.5.1 shipped with:
+        # frontend dist missing, package-lock.json missing, or the wheel's Python
+        # source tree broken in a way that surfaces only at app construction time.
         run: |
           python -m venv /tmp/v
           /tmp/v/bin/pip install --upgrade pip
+          /tmp/v/bin/pip install -r studio/backend/requirements/studio.txt
           /tmp/v/bin/pip install \
-            'numpy<3' fastapi uvicorn 'pydantic>=2' pydantic-settings \
-            typer pyjwt structlog python-multipart aiofiles sqlalchemy \
-            cryptography mammoth unpdf matplotlib pandas
+            python-multipart aiofiles sqlalchemy cryptography \
+            pyyaml jinja2 mammoth unpdf requests \
+            'numpy<3'
           /tmp/v/bin/pip install --no-deps dist/unsloth-*.whl
           # Run from /tmp so Python imports the installed package, not the source tree.
           cd /tmp

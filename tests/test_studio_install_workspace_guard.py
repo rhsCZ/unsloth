@@ -673,7 +673,9 @@ def test_install_sh_shim_uses_atomic_replace():
     ), "the explicit rm + ln pair must be replaced by atomic ln -sfn"
 
 
-def test_install_sh_create_shortcuts_seeds_id_from_csprng_with_python_fallback(tmp_path):
+def test_install_sh_create_shortcuts_seeds_id_from_csprng_with_python_fallback(
+    tmp_path,
+):
     """_create_shortcuts must seed new ids from /dev/urandom first (no
     interpreter spawn cost on the install hot path) and fall back to
     `python3 -c 'secrets.token_hex(32)'` only when urandom is unreadable.
@@ -703,26 +705,30 @@ def test_install_sh_create_shortcuts_seeds_id_from_csprng_with_python_fallback(t
         '_css_id_file="$_css_id_dir/studio_install_id"\n'
         # Replicate the generation block (kept narrowly so the test fails loud
         # if install.sh changes the surrounding contract).
-        'gen() {\n'
+        "gen() {\n"
         '    if [ ! -s "$_css_id_file" ]; then\n'
         '        _css_new_id=$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d " \\n")\n'
         '        printf "%s" "$_css_new_id" > "$_css_id_file.$$.tmp"\n'
         '        mv "$_css_id_file.$$.tmp" "$_css_id_file"\n'
-        '    fi\n'
+        "    fi\n"
         '    cat "$_css_id_file"\n'
-        '}\n'
-        'a=$(gen); b=$(gen)\n'
+        "}\n"
+        "a=$(gen); b=$(gen)\n"
         '[ "$a" = "$b" ] || { echo MISMATCH; exit 1; }\n'
         'echo "ID=$a"\n'
         'echo "LEN=${#a}"\n'
     )
-    res = subprocess.run(
-        ["bash", "-c", gen_script], text = True, capture_output = True
-    )
+    res = subprocess.run(["bash", "-c", gen_script], text = True, capture_output = True)
     assert res.returncode == 0, res.stderr
-    out = dict(line.split("=", 1) for line in res.stdout.strip().splitlines() if "=" in line)
-    assert out.get("LEN") == "64", f"id must be 64 hex chars, got LEN={out.get('LEN')!r}"
-    assert all(c in "0123456789abcdef" for c in out.get("ID", "")), f"id must be lowercase hex, got {out.get('ID')!r}"
+    out = dict(
+        line.split("=", 1) for line in res.stdout.strip().splitlines() if "=" in line
+    )
+    assert (
+        out.get("LEN") == "64"
+    ), f"id must be 64 hex chars, got LEN={out.get('LEN')!r}"
+    assert all(
+        c in "0123456789abcdef" for c in out.get("ID", "")
+    ), f"id must be lowercase hex, got {out.get('ID')!r}"
 
 
 def test_install_sh_create_shortcuts_fails_fast_when_no_entropy():
@@ -733,7 +739,8 @@ def test_install_sh_create_shortcuts_fails_fast_when_no_entropy():
     fn_start = src.index('_css_data_dir="$DATA_DIR"')
     block = src[fn_start : fn_start + 3000]
     assert (
-        "[WARN] Cannot create launcher: no entropy source for studio_install_id" in block
+        "[WARN] Cannot create launcher: no entropy source for studio_install_id"
+        in block
     ), "install.sh must warn when neither urandom nor python3 is available"
     assert (
         "[WARN] Cannot create launcher: failed to read" in block
@@ -834,7 +841,9 @@ def test_main_py_studio_root_id_caches_at_module_load():
     ), "_studio_root_id() must NOT do filesystem or hash work on every call"
 
 
-def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(tmp_path, monkeypatch):
+def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(
+    tmp_path, monkeypatch
+):
     """_read_studio_install_id reads $STUDIO_HOME/share/studio_install_id and
     returns "" when the file is absent, empty, contains non-hex content, or
     is the wrong length. "" triggers the launcher's "no baked id, accept any
@@ -843,6 +852,7 @@ def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(tmp_pa
     _read_studio_install_id directly without importing main.py (which
     pulls in heavy deps). Test the rejection rules verbatim."""
     import re
+
     pattern = re.compile(r"^[0-9a-f]{64}$")
 
     def _read(root: Path) -> str:
@@ -865,7 +875,9 @@ def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(tmp_pa
     id_file.write_text("")
     assert _read(root) == ""
     # Non-hex content -> empty
-    id_file.write_text("not-a-hex-id-just-text-padded-to-64-chars-zzzzzzzzzzzzzzzzzzzzzz")
+    id_file.write_text(
+        "not-a-hex-id-just-text-padded-to-64-chars-zzzzzzzzzzzzzzzzzzzzzz"
+    )
     assert _read(root) == ""
     # Uppercase hex -> empty (must be lowercase)
     id_file.write_text("F" * 64)
@@ -927,6 +939,7 @@ def test_install_sh_install_id_survives_symlinked_studio_home(tmp_path):
     assert raw_direct.read_text() == valid_id
     # And install.sh's `cat` would see the same.
     import subprocess as _sp
+
     res = _sp.run(["cat", str(raw_via_link)], capture_output = True, text = True)
     assert res.returncode == 0
     assert res.stdout == valid_id
@@ -1001,8 +1014,7 @@ def test_install_ps1_install_id_file_layout_matches_backend_read_path():
         "Test-Path -LiteralPath $_studioIdFile" in context
     ), "install.ps1 must skip id generation when the file already has content (re-run idempotence)"
     assert (
-        "RandomNumberGenerator" in context
-        and "GetBytes($_idBytes)" in context
+        "RandomNumberGenerator" in context and "GetBytes($_idBytes)" in context
     ), "install.ps1 must seed new ids from a CSPRNG (RandomNumberGenerator)"
     assert (
         "Move-Item -LiteralPath $_idTmp" in context

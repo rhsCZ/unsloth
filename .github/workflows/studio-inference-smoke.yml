@@ -1,20 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-# Real end-to-end smoke: install Studio from this branch via install.sh --local
-# --no-torch, download a tiny GGUF, boot Studio, log in, change password, load
-# the model, send a chat completion through /api/inference/chat/completions,
-# and assert a non-empty response.
+# End-to-end smoke: install Studio via install.sh --local --no-torch, download
+# a tiny GGUF, boot Studio, log in, change password, load the model, send a
+# chat completion, assert a non-empty response. Only workflow that tests "the
+# app actually works".
 #
-# This is the only workflow that tests "the app actually works" rather than
-# "the bundle parses" or "the imports succeed". Validated locally end-to-end:
-# fresh main install, Gemma 4 E2B IQ3_XXS GGUF (2.3 GB) loaded, chat
-# completion returned "Hello!" in <2s on B200; on free `ubuntu-latest` (no GPU,
-# CPU-only llama.cpp) the same path is slower but completes within the
-# 25-minute job timeout below.
-#
-# CPU-only, free runner. The GGUF is cached across runs via actions/cache so
-# only the first run on a given branch pays the ~2.3 GB download cost.
+# Model: Qwen3.5-2B UD-IQ3_XXS (~890 MiB) -- small enough that the cache miss
+# is cheap and inference fits in the 25 min CPU-runner budget. GGUF is cached
+# across runs via actions/cache.
 
 name: Studio inference smoke
 
@@ -35,8 +29,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GGUF_REPO: unsloth/gemma-4-E2B-it-GGUF
-  GGUF_FILE: gemma-4-E2B-it-UD-IQ3_XXS.gguf
+  GGUF_REPO: unsloth/Qwen3.5-2B-GGUF
+  GGUF_FILE: Qwen3.5-2B-UD-IQ3_XXS.gguf
   STUDIO_PORT: '18888'
 
 jobs:

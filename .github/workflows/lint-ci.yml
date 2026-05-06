@@ -114,23 +114,32 @@ jobs:
           PY
 
       - name: License-header drift (informational; whole repo)
-        # The repo currently uses two header families:
-        #   1. AGPL-3.0-only with `# SPDX-License-Identifier:`
-        #      across studio/ (every committed .py opens with it).
-        #   2. Apache-2.0 with the
-        #      `# Licensed under the Apache License, Version 2.0`
-        #      preamble across unsloth/, unsloth_cli/, scripts/.
-        # Either is acceptable. Empty files (mainly empty
-        # __init__.py) are skipped. We surface the count without
-        # blocking; cleaning up the missing files is real work and
-        # belongs in its own PR.
+        # Three header families are accepted across the repo:
+        #   1. SPDX one-liner: `# SPDX-License-Identifier: ...`
+        #      Used across studio/ (AGPL-3.0-only) and a few new
+        #      files elsewhere.
+        #   2. Apache-2.0 long form, marker phrase
+        #      "Licensed under the Apache License". Used across
+        #      unsloth/ and unsloth_cli/.
+        #   3. GNU long form, marker phrase "General Public License".
+        #      That single substring covers GPL, LGPL ("GNU Lesser
+        #      General Public License") and AGPL ("GNU Affero
+        #      General Public License") preambles, all three of
+        #      which appear in unsloth/kernels/* (LGPL/AGPL) without
+        #      the SPDX line.
+        # Empty files (mainly empty __init__.py) are skipped.
+        # Surfaced as a warning; cleaning up the actual misses is a
+        # follow-up PR, not a CI fix.
         continue-on-error: true
         run: |
           python <<'PY'
           import pathlib
 
-          SPDX   = "SPDX-License-Identifier"
-          APACHE = "Licensed under the Apache License"
+          ACCEPTED = (
+              "SPDX-License-Identifier",        # any SPDX line
+              "Licensed under the Apache License",  # Apache-2.0 long form
+              "General Public License",         # GPL / LGPL / AGPL long form
+          )
           SKIP_PARTS = {".venv", "venv", "build", "dist", ".git",
                         "unsloth_compiled_cache", "node_modules",
                         "unsloth.egg-info"}
@@ -143,8 +152,8 @@ jobs:
               text = path.read_text(encoding="utf-8", errors="replace")
               if not text.strip():
                   continue  # empty __init__.py etc.
-              head = "\n".join(text.splitlines()[:20])
-              if SPDX in head or APACHE in head:
+              head = "\n".join(text.splitlines()[:25])
+              if any(marker in head for marker in ACCEPTED):
                   continue
               if "studio" in path.parts:
                   studio_missing.append(path)
@@ -155,9 +164,9 @@ jobs:
           if total == 0:
               print("every committed .py has a recognised license header")
           else:
-              print(f"::warning::{total} Python files are missing both SPDX-License-Identifier "
-                    f"and the Apache-2.0 preamble (studio={len(studio_missing)}, "
-                    f"other={len(other_missing)})")
+              print(f"::warning::{total} Python files have no recognised license "
+                    f"header (SPDX / Apache-2.0 / GNU long form): "
+                    f"studio={len(studio_missing)}, other={len(other_missing)}")
               for path in (studio_missing + other_missing)[:30]:
                   print(f"  {path}")
               if total > 30:

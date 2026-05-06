@@ -120,6 +120,12 @@ def _launch_backend(
     log_path.parent.mkdir(parents = True, exist_ok = True)
     env = os.environ.copy()
     env["HOME"] = str(fake_home)
+    # Pin UNSLOTH_STUDIO_HOME (and clear the alias) so the child cannot
+    # inherit a Studio root from the caller's shell. Without this, a shell
+    # that already exports either var would override the per-label sys.prefix
+    # inference and every backend would resolve to the caller's install.
+    env["UNSLOTH_STUDIO_HOME"] = str(studio_home)
+    env.pop("STUDIO_HOME", None)
     # The child process inherits a dup of stdout via Popen, so closing the
     # parent's handle when this function returns is safe and avoids relying
     # on GC timing to release the fd.

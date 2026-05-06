@@ -1,0 +1,284 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
+
+# End-to-end Studio chat UI smoke via Playwright + Chromium against a
+# headless Linux runner. Boots Studio with the smallest GGUF
+# (gemma-3-270m-it UD-Q4_K_XL, ~254 MiB), drives the actual frontend
+# bundle, and asserts the full bootstrap-password / change-password /
+# send-message / persist-on-reload journey works end to end.
+#
+# This is the only workflow that catches regressions in the wiring
+# between the React frontend and the FastAPI backend, e.g. assistant-ui
+# version drift, /api/auth response shape changes, runtime-provider
+# regressions, or chat-history persistence breaking. Backend-only and
+# frontend-only CI happily pass while the actual user-visible UI is
+# broken (cf. the 2026.5.1 chat-history release).
+
+name: Studio UI CI
+
+on:
+  pull_request:
+    paths:
+      - 'studio/**'
+      - 'unsloth/**'
+      - 'unsloth_cli/**'
+      - 'install.sh'
+      - 'pyproject.toml'
+      - '.github/workflows/studio-ui-smoke.yml'
+  push:
+    branches: [main, pip]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ui-smoke:
+    name: Chat UI smoke (Playwright + Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GGUF_REPO: unsloth/gemma-3-270m-it-GGUF
+      GGUF_VARIANT: UD-Q4_K_XL
+      GGUF_FILE: gemma-3-270m-it-UD-Q4_K_XL.gguf
+      STUDIO_PORT: '18892'
+      HF_HOME: ${{ github.workspace }}/hf-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libssl-dev jq
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: studio/frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Cache HF_HOME for ${{ env.GGUF_REPO }}
+        id: cache-hf
+        uses: actions/cache@v4
+        with:
+          path: hf-cache
+          key: ${{ runner.os }}-hf-${{ env.GGUF_REPO }}-${{ env.GGUF_VARIANT }}-v1
+
+      - name: Prime HF_HOME with the GGUF
+        if: steps.cache-hf.outputs.cache-hit != 'true'
+        run: |
+          python -m pip install --upgrade huggingface_hub hf_transfer
+          mkdir -p hf-cache
+          HF_HUB_ENABLE_HF_TRANSFER=1 \
+            hf download "$GGUF_REPO" "$GGUF_FILE"
+
+      - name: Install Studio (--local, --no-torch)
+        run: |
+          mkdir -p logs
+          set -o pipefail
+          bash install.sh --local --no-torch 2>&1 | tee logs/install.log
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install 'playwright>=1.45'
+          # --with-deps installs the OS-level runtime libs Chromium
+          # needs (libnss3, libxkbcommon, etc.). About 30 s on a
+          # warm runner.
+          python -m playwright install --with-deps chromium
+
+      - name: Reset auth + boot Studio
+        run: |
+          unsloth studio reset-password
+          mkdir -p logs
+          UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p "$STUDIO_PORT" \
+            > logs/studio.log 2>&1 &
+          echo "STUDIO_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for /api/health
+        run: |
+          for i in $(seq 1 90); do
+            if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
+              jq -e '.status == "healthy"' /tmp/health.json && break
+            fi
+            sleep 1
+          done
+          jq -e '.status == "healthy"' /tmp/health.json
+
+      - name: Load the GGUF (so the chat send actually streams)
+        run: |
+          PW=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+          echo "::add-mask::$PW"
+          # Login with the bootstrap password to get a JWT, load the
+          # model via the API. The Playwright run below then logs in
+          # again through the UI and exercises the change-password
+          # gate -- the model is already loaded by then so the chat
+          # send path can stream.
+          TOKEN=$(curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d "{\"username\":\"unsloth\",\"password\":\"$PW\"}" | jq -r .access_token)
+          curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/inference/load" \
+            -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            --max-time 600 \
+            -d "{\"model_path\":\"$GGUF_REPO\",\"gguf_variant\":\"$GGUF_VARIANT\",\"is_lora\":false,\"max_seq_length\":2048}" \
+            | jq '{status, display_name}'
+          echo "STUDIO_BOOTSTRAP_PW=$PW" >> "$GITHUB_ENV"
+
+      - name: Drive the chat UI with Playwright
+        env:
+          BASE_URL: http://127.0.0.1:18892
+        run: |
+          mkdir -p logs/playwright
+          python - <<'PY'
+          import os
+          import time
+          from pathlib import Path
+          from playwright.sync_api import expect, sync_playwright
+
+          BASE = os.environ["BASE_URL"]
+          PW   = os.environ["STUDIO_BOOTSTRAP_PW"]
+          NEW  = "CIUiSmoke12345!"
+          ART  = Path("logs/playwright")
+          ART.mkdir(parents = True, exist_ok = True)
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless = True)
+              ctx     = browser.new_context(viewport = {"width": 1280, "height": 900})
+              page    = ctx.new_page()
+              page.set_default_timeout(30_000)
+
+              def shoot(name):
+                  page.screenshot(path = str(ART / f"{name}.png"), full_page = True)
+
+              # ── 1. Login with bootstrap password ─────────────────
+              page.goto(BASE)
+              # Auth form has #password, no username field (single-user
+              # bootstrap), and a single submit button.
+              page.locator("#password").wait_for(state = "visible")
+              page.fill("#password", PW)
+              shoot("01-login-filled")
+              page.locator('button[type="submit"]').click()
+
+              # ── 2. Forced change-password screen ────────────────
+              # /api/auth/login returns must_change_password=true on
+              # bootstrap; the frontend redirects to the change form.
+              page.locator("#new-password").wait_for(state = "visible", timeout = 30_000)
+              page.fill("#new-password",     NEW)
+              page.fill("#confirm-password", NEW)
+              shoot("02-change-password-filled")
+              page.locator('button[type="submit"]').click()
+
+              # ── 3. Chat surface loads ────────────────────────────
+              # The Message input textarea is the chat composer. Once
+              # it's visible, the auth+UI bootstrap is complete.
+              composer = page.locator('textarea[aria-label="Message input"]')
+              composer.wait_for(state = "visible", timeout = 60_000)
+              shoot("03-chat-loaded")
+
+              # ── 4. Send a message and wait for a response ────────
+              composer.fill("Reply with the single word: hello")
+              # The Send button only becomes enabled once content is
+              # in the textarea. aria-label is set in
+              # components/assistant-ui/thread.tsx:680.
+              page.locator('button[aria-label="Send message"]').click()
+
+              # The user message bubble appears immediately; the
+              # assistant response streams in. Wait for an assistant
+              # bubble with non-empty text. assistant-ui renders user
+              # turns as `[data-role="user"]` and assistant turns as
+              # `[data-role="assistant"]`.
+              page.wait_for_function(
+                  """() => {
+                      const els = document.querySelectorAll('[data-role="assistant"]');
+                      for (const el of els) {
+                          if ((el.innerText || '').trim().length > 0) return true;
+                      }
+                      return false;
+                  }""",
+                  timeout = 120_000,
+              )
+              shoot("04-assistant-replied")
+
+              # ── 5. Reload, confirm history persists ──────────────
+              page.reload()
+              composer = page.locator('textarea[aria-label="Message input"]')
+              composer.wait_for(state = "visible", timeout = 60_000)
+              # The assistant message from before the reload should
+              # still be on the page. Studio persists chats client-side
+              # and re-hydrates from the backend on load.
+              page.wait_for_function(
+                  """() => {
+                      const els = document.querySelectorAll('[data-role="assistant"]');
+                      for (const el of els) {
+                          if ((el.innerText || '').trim().length > 0) return true;
+                      }
+                      return false;
+                  }""",
+                  timeout = 30_000,
+              )
+              shoot("05-history-after-reload")
+
+              # ── 6. Open the configuration / settings sheet ───────
+              # The "Open configuration" button is in chat-page.tsx
+              # line 1077. Sanity-check that toggling settings does
+              # not crash the app.
+              cfg = page.locator('button[aria-label="Open configuration"]').first
+              if cfg.count() > 0:
+                  cfg.click()
+                  shoot("06-settings-open")
+                  # Close button is in chat-settings-sheet.tsx:857.
+                  close = page.locator('button[aria-label="Close configuration"]').first
+                  if close.count() > 0:
+                      close.click()
+              else:
+                  print("[ui] settings button not on this layout, skipping toggle test")
+
+              # ── 7. Old password must still be rejected on logout ─
+              # Hit the API directly (faster than navigating the
+              # account menu) and confirm the rotated password is the
+              # only one that works now.
+              import urllib.request, json as _json
+              def login(pw):
+                  req = urllib.request.Request(
+                      f"{BASE}/api/auth/login",
+                      data    = _json.dumps({"username": "unsloth", "password": pw}).encode(),
+                      method  = "POST",
+                      headers = {"Content-Type": "application/json"},
+                  )
+                  try:
+                      with urllib.request.urlopen(req, timeout = 10) as resp:
+                          return resp.status
+                  except urllib.error.HTTPError as exc:
+                      return exc.code
+              assert login(PW)  == 401, "old bootstrap password should be rejected"
+              assert login(NEW) == 200, "new password should now log in"
+              print("[ui] PASS UI flow + post-rotation auth check")
+
+              browser.close()
+          PY
+
+      - name: Stop Studio
+        if: always()
+        run: |
+          kill "${STUDIO_PID}" 2>/dev/null || true
+          sleep 2
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-ui-smoke-artifacts
+          path: |
+            logs/studio.log
+            logs/install.log
+            logs/playwright
+          retention-days: 7

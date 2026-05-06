@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
+
+# Runs the existing studio/backend/tests/ suite (~860 tests, all CPU-friendly)
+# on every PR that touches the backend or unsloth library. Until this lands,
+# none of those tests run automatically. Verified locally on Python 3.13 with
+# the surgical exclusions below: 861 pass, 4 skipped.
+#
+# Exclusions:
+#   - tests/test_studio_api.py: end-to-end against a live model + GGUF download,
+#     too heavy for free runners. Run separately when GPU CI is available.
+#   - -k 'not llama_cpp_load_progress_live': spawns a real llama.cpp process,
+#     not appropriate for CPU-only runners.
+#
+# ruff is non-blocking initially; remove `|| true` once the backend lints clean.
+
+name: Studio backend CI
+
+on:
+  pull_request:
+    paths:
+      - 'studio/backend/**'
+      - 'unsloth/**'
+      - 'unsloth_cli/**'
+      - 'pyproject.toml'
+      - '.github/workflows/studio-backend-ci.yml'
+  push:
+    branches: [main, pip]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python }}'
+          cache: 'pip'
+
+      - name: Install backend test dependencies (CPU only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            fastapi uvicorn 'pydantic>=2' pydantic-settings typer pyjwt \
+            structlog python-multipart aiofiles sqlalchemy cryptography \
+            easydict addict diceware ddgs nest_asyncio \
+            mammoth unpdf 'numpy<3' matplotlib pandas \
+            pytest pytest-asyncio httpx
+
+      - name: Backend tests
+        working-directory: studio/backend
+        run: |
+          python -m pytest tests/ -q --tb=short \
+            --ignore=tests/test_studio_api.py \
+            -k 'not llama_cpp_load_progress_live'
+
+  ruff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install ruff
+      - name: ruff check (non-blocking until accumulated drift is cleared)
+        run: ruff check studio/backend || true

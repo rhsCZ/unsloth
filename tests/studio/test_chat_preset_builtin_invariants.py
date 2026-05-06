@@ -8,12 +8,8 @@ from pathlib import Path
 import pytest
 
 WORKDIR = Path(__file__).resolve().parents[2]
-PRESET_POLICY = (
-    WORKDIR / "studio/frontend/src/features/chat/presets/preset-policy.ts"
-)
-RUNTIME_TYPES = (
-    WORKDIR / "studio/frontend/src/features/chat/types/runtime.ts"
-)
+PRESET_POLICY = WORKDIR / "studio/frontend/src/features/chat/presets/preset-policy.ts"
+RUNTIME_TYPES = WORKDIR / "studio/frontend/src/features/chat/types/runtime.ts"
 TEMP = WORKDIR / "temp" / "chat_preset_builtin_invariants"
 
 

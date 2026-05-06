@@ -83,6 +83,8 @@ jobs:
             hf download "$GGUF_REPO" "$GGUF_FILE"
 
       - name: Install Studio (--local, --no-torch)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p logs
           set -o pipefail

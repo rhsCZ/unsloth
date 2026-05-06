@@ -59,6 +59,13 @@ jobs:
           cache: 'pip'
 
       - name: Install Studio (--local, --no-torch)
+        # Pass the workflow token so the llama.cpp prebuilt installer's
+        # GitHub-API call to list releases isn't rate-limited (60/hr
+        # unauthenticated). Without this, three consecutive install +
+        # update + update calls in this job exceed the limit and the
+        # prebuilt path falls back to source build.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p logs
           set -o pipefail
@@ -71,6 +78,8 @@ jobs:
         # take the "prebuilt up to date and validated" code path. Any
         # source-build fallback or re-download here means setup.sh's
         # idempotency regressed.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
           unsloth studio update --local 2>&1 | tee logs/update.log
@@ -91,6 +100,8 @@ jobs:
         # flow (auto-update, then user-triggered update). Asserting the
         # second run is also clean rules out hidden state changes from
         # the first one.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
           unsloth studio update --local 2>&1 | tee logs/update2.log

@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
+
+# Focused PR gate for the MLX dispatch surface. Runs the three test files
+# documented in tests/studio/README.md against a Linux+CPU runner with
+# hardware probes spoofed (no Apple Silicon, no real GPU, no real MLX
+# install required):
+#
+#   - test_hardware_dispatch_matrix.py    parametrized 7-profile matrix
+#                                         + 2 dispatch-priority canaries
+#   - test_is_mlx_dispatch_gate.py        AST + runtime guard on
+#                                         unsloth._IS_MLX
+#   - test_mlx_training_worker_behaviors.py  AST contract checks on
+#                                            studio/backend/core/training/worker.py
+#
+# Surfaces "MLX dispatch broke" as its own check in the PR UI rather than
+# burying it inside the broader Backend CI. The Backend CI Repo tests
+# (CPU) job already covers test_mlx_training_worker_behaviors.py via auto
+# discovery, and runs the two state-sensitive matrix files in their own
+# pytest invocation; this workflow re-runs them in isolation as a focused
+# guard.
+
+name: MLX CI
+
+on:
+  pull_request:
+    paths:
+      - 'unsloth/__init__.py'
+      - 'studio/backend/utils/hardware.py'
+      - 'studio/backend/core/training/worker.py'
+      - 'tests/studio/test_hardware_dispatch_matrix.py'
+      - 'tests/studio/test_is_mlx_dispatch_gate.py'
+      - 'tests/studio/test_mlx_training_worker_behaviors.py'
+      - 'tests/conftest.py'
+      - '.github/workflows/mlx-ci.yml'
+  push:
+    branches: [main, pip]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mlx-dispatch:
+    name: MLX dispatch matrix + gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # The dispatch matrix and gate tests load unsloth/__init__.py and
+      # studio.backend.utils.hardware under monkeypatched probes, so the
+      # full unsloth import chain has to succeed on CPU. This mirrors the
+      # Repo tests (CPU) dep set in studio-backend-ci.yml.
+      - name: Install deps (CPU import chain for unsloth + studio backend)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r studio/backend/requirements/studio.txt
+          pip install \
+            python-multipart aiofiles sqlalchemy cryptography \
+            pyyaml jinja2 mammoth unpdf requests typer \
+            'numpy<3' pytest pytest-asyncio httpx
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            'torch>=2.4,<2.11' 'torchvision<0.26'
+          pip install 'transformers>=4.51,<5.5'
+          pip install 'bitsandbytes>=0.45'
+          pip install 'unsloth_zoo>=2026.5.1'
+          pip install -e . --no-deps
+
+      - name: MLX dispatch tests (3 files, ~36 tests, hardware spoofed)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/studio
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python -m pytest -v --tb=short \
+            tests/studio/test_hardware_dispatch_matrix.py \
+            tests/studio/test_is_mlx_dispatch_gate.py \
+            tests/studio/test_mlx_training_worker_behaviors.py

@@ -23,6 +23,9 @@ on:
       - '.github/workflows/studio-inference-smoke.yml'
   push:
     branches: [main, pip]
+  # Manual trigger for pre-warming the GGUF cache on main, or re-running
+  # against an arbitrary branch without pushing a no-op commit.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

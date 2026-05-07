@@ -91,8 +91,14 @@ jobs:
       # tells us exactly which hosts were dialed and we promote the
       # allowlist to block. Would have *contained* the litellm exfil
       # even if scan_packages had missed the .pth payload.
+      # SHA-pinned (not @v2): the litellm 1.82.7 attack chain hijacked
+      # mutable tags on aquasecurity/trivy-action and would have hit
+      # anyone using @v0 / @v2 / @latest references. Pinning to a 40-
+      # char SHA freezes this action at known-good code; Dependabot's
+      # github-actions ecosystem will auto-bump the SHA.
+      # v2.19.1 commit:
       - name: Harden runner (egress audit)
-        uses: step-security/harden-runner@v2
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
         with:
           egress-policy: audit
           disable-sudo: true
@@ -401,39 +407,21 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ─────────────────────────────────────────────────────────────
-      # Trivy filesystem CVE + IaC misconfig scan. Trivy's advisory
-      # feed is a different superset than OSV (NVD + GHSA + RustSec +
-      # GitLab + Aqua DB) and *also* catches IaC misconfigs in our
-      # Dockerfiles, k8s yaml, Tauri config, and shell scripts. Adds
-      # ~30 seconds; runs on the same runner so no extra setup cost.
+      # Trivy is deliberately NOT installed here. Trivy was the entry
+      # point for the litellm 1.82.7 supply-chain compromise (March
+      # 2026): attackers force-rewrote 76 of 77 tags in
+      # aquasecurity/trivy-action to point at malicious commits;
+      # anyone running the action with a tag ref auto-pulled a
+      # credential-harvesting payload. By design a security scanner
+      # has broad read access to runner secrets, which is exactly
+      # what made it the ideal pivot. We pick up Trivy's CVE coverage
+      # from OSV-Scanner (NVD + GHSA + GitLab) and its secret
+      # detection from TruffleHog. IaC misconfig detection (Trivy's
+      # one unique value-add) is unfilled for now -- revisit with
+      # checkov / kics when we ship a Dockerfile or k8s manifests.
+      # See https://docs.litellm.ai/blog/security-update-march-2026
+      # and the Microsoft / Trend Micro / Snyk incident write-ups.
       # ─────────────────────────────────────────────────────────────
-      - name: Trivy (filesystem CVE + IaC misconfig)
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          ignore-unfixed: false
-          severity: HIGH,CRITICAL
-          format: table
-          output: logs-trivy.txt
-          exit-code: '0'
-          # IaC scan covers Dockerfile, k8s yaml, Tauri config,
-          # GitHub workflows, shell scripts, etc. Runs alongside the
-          # vulnerability scan on the same scan-ref.
-          scanners: vuln,misconfig,secret
-
-      - name: Trivy summary
-        if: always()
-        continue-on-error: true
-        run: |
-          {
-            echo "## Trivy (CVEs + IaC misconfigs + secrets)"
-            echo
-            echo '```'
-            tail -200 logs-trivy.txt 2>/dev/null || echo '(no Trivy output)'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
       # ─────────────────────────────────────────────────────────────
       # TruffleHog secret-leak scan on the PR diff. Catches API keys
@@ -441,10 +429,12 @@ jobs:
       # filters out probabilistic findings, so we only flag tokens
       # that the source provider confirmed are live. On push to main
       # / pip we scan the full repo; on PR we scan base..head.
+      # SHA-pinned for the same reason as harden-runner above.
+      # v3.95.2 commit:
       # ─────────────────────────────────────────────────────────────
       - name: TruffleHog (secrets in diff)
         continue-on-error: true
-        uses: trufflesecurity/trufflehog@v3.95.2
+        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26  # v3.95.2
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha || '' }}
@@ -604,7 +594,6 @@ jobs:
             logs-osv-scanner.txt
             logs-semgrep.txt
             logs-pin-verifier.txt
-            logs-trivy.txt
             logs-actions-pinning.txt
             logs-hash-verifier.txt
             audit-reqs/
@@ -668,7 +657,7 @@ jobs:
       # within the scanner sandbox (it shouldn't; we never execute
       # the archive), harden-runner's audit log records the host.
       - name: Harden runner (egress audit)
-        uses: step-security/harden-runner@v2
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
         with:
           egress-policy: audit
           disable-sudo: true

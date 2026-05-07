@@ -130,6 +130,10 @@ jobs:
           BASE_URL: http://127.0.0.1:18896
           PW_ART_DIR: logs/playwright
           STUDIO_UI_STRICT: '1'
+          # macos-14 free runner is 3 vCPU / 7 GB / no Metal-accel
+          # available to llama.cpp from CI; gemma-3-270m turn latency
+          # has been observed to crowd the 180s default. Triple it.
+          STUDIO_UI_TURN_TIMEOUT_MS: '540000'
         run: |
           mkdir -p logs/playwright
           python tests/studio/playwright_chat_ui.py
@@ -174,6 +178,8 @@ jobs:
           STUDIO_NEW_PW: ${{ env.STUDIO_EXTRA_NEW_PW }}
           PW_ART_DIR: logs/playwright_extra
           STUDIO_UI_STRICT: '1'
+          # See "Drive the chat UI" step.
+          STUDIO_UI_TURN_TIMEOUT_MS: '540000'
           GGUF_REPO: ${{ env.GGUF_REPO }}
           GGUF_VARIANT: ${{ env.GGUF_VARIANT }}
         run: |

@@ -292,8 +292,13 @@ jobs:
     timeout-minutes: 25
     env:
       GGUF_REPO: unsloth/Qwen3.5-2B-GGUF
-      GGUF_VARIANT: UD-IQ3_XXS
-      GGUF_FILE: Qwen3.5-2B-UD-IQ3_XXS.gguf
+      # The Linux smoke uses UD-IQ3_XXS, but on Mac Metal that quant
+      # collapses for tool-call grammar at temperature=0 (model emits
+      # repeated padding tokens until max_tokens). UD-Q4_K_XL is the
+      # smallest published variant that produces well-formed tool
+      # calls + non-pathological text on M1.
+      GGUF_VARIANT: UD-Q4_K_XL
+      GGUF_FILE: Qwen3.5-2B-UD-Q4_K_XL.gguf
       STUDIO_PORT: '18898'
       HF_HOME: ${{ github.workspace }}/hf-cache
     steps:
@@ -607,8 +612,13 @@ jobs:
     timeout-minutes: 30
     env:
       GGUF_REPO: unsloth/gemma-4-E2B-it-GGUF
-      GGUF_VARIANT: UD-IQ3_XXS
-      GGUF_FILE: gemma-4-E2B-it-UD-IQ3_XXS.gguf
+      # Linux smoke uses UD-IQ3_XXS, but on Mac Metal that gemma-4
+      # quant emits sentinel tokens (<unused5>) for any prompt at
+      # temperature=0 -- inference path is fine, the quant itself is
+      # broken on Metal. UD-Q4_K_XL is the smallest published variant
+      # that generates real text on M1.
+      GGUF_VARIANT: UD-Q4_K_XL
+      GGUF_FILE: gemma-4-E2B-it-UD-Q4_K_XL.gguf
       MMPROJ_FILE: mmproj-F16.gguf
       STUDIO_PORT: '18899'
       HF_HOME: ${{ github.workspace }}/hf-cache

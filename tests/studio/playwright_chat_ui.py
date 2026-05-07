@@ -641,11 +641,10 @@ with sync_playwright() as p:
         # label; the role+name path fails when the sidebar collapses
         # to icon-only mode and the visible text gets visually hidden.
         candidates = [
-            page.locator(
-                f'[data-sidebar="menu-button"]:has-text("{label}")'
-            ).first,
+            page.locator(f'[data-sidebar="menu-button"]:has-text("{label}")').first,
             page.get_by_role(
-                "button", name = re.compile(rf"^\s*{label}\s*$", re.I),
+                "button",
+                name = re.compile(rf"^\s*{label}\s*$", re.I),
             ).first,
             page.locator(f'button:has-text("{label}")').first,
         ]

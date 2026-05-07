@@ -84,7 +84,10 @@ jobs:
   dispatch:
     name: dispatch
     runs-on: macos-14
-    timeout-minutes: 15
+    # 25 min: dispatch + spoofed matrix + 7-step real LoRA training is
+    # under 2 min; GGUF export builds llama.cpp via cmake on Apple
+    # Silicon (~5-7 min), so we budget headroom.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 

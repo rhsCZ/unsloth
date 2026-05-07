@@ -24,6 +24,19 @@ Captures and asserts:
     the trainer does not currently expose per-step grad norms).
   - Inference output contains "Unsloth".
 
+After in-memory inference, the trained model is exported in three
+formats, the in-memory model is dropped, and each export is
+reloaded from disk and asked to complete the same prompt:
+
+  - LoRA adapter (model.save_pretrained_merged(..., save_method="lora"))
+  - Merged 16-bit (model.save_pretrained_merged(..., save_method="merged_16bit"))
+  - GGUF (model.save_pretrained_gguf(...) -- builds llama.cpp via
+    cmake on the runner, then verifies via llama-cli subprocess).
+
+For each export the reloaded completion is asserted to contain
+"Unsloth", catching round-trip regressions where the saved weights
+silently corrupt or fail to load.
+
 This script is only runnable on a real Apple Silicon host (the import
 chain pulls real `mlx`, `mlx-lm`, and `unsloth_zoo.mlx_*`). It is
 invoked from .github/workflows/mlx-ci.yml on the macos-14 runner.
@@ -257,6 +270,184 @@ def main() -> int:
         f"  post loss={post_loss:.4f} grad_norm={post_grad_norm:.4f}\n"
         f"  generation: {output!r}",
         flush = True,
+    )
+
+    # ------------------------------------------------------------------
+    # Export round-trip phase: save in 3 formats, drop in-memory model,
+    # reload each from disk and re-run the inference assertion.
+    # ------------------------------------------------------------------
+    import gc
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    workdir = Path(tempfile.mkdtemp(prefix="unsloth_mlx_export_"))
+    print(f"\nExport round-trip workdir: {workdir}", flush=True)
+
+    lora_dir = workdir / "lora"
+    merged_dir = workdir / "merged_16bit"
+    gguf_dir = workdir / "gguf"
+
+    print("\n[export] Saving LoRA adapters...", flush=True)
+    model.save_pretrained_merged(
+        str(lora_dir), tokenizer=tokenizer, save_method="lora",
+    )
+    assert (lora_dir / "adapters.safetensors").exists(), (
+        f"adapters.safetensors missing in {lora_dir}"
+    )
+    assert (lora_dir / "adapter_config.json").exists(), (
+        f"adapter_config.json missing in {lora_dir}"
+    )
+    print(f"  lora dir contents: {sorted(p.name for p in lora_dir.iterdir())}",
+          flush=True)
+
+    print("\n[export] Saving merged_16bit...", flush=True)
+    model.save_pretrained_merged(
+        str(merged_dir), tokenizer=tokenizer, save_method="merged_16bit",
+    )
+    assert any(merged_dir.glob("*.safetensors")), (
+        f"merged dir {merged_dir} has no .safetensors weights"
+    )
+    print(
+        f"  merged dir contents: {sorted(p.name for p in merged_dir.iterdir())}",
+        flush=True,
+    )
+
+    # GGUF is heavier (clones + cmake-builds llama.cpp). Run last so a
+    # GGUF infra failure doesn't mask the LoRA / merged_16bit checks.
+    print("\n[export] Saving GGUF (builds llama.cpp via cmake)...", flush=True)
+    gguf_save_error: str | None = None
+    try:
+        # not_quantized = bf16 GGUF, skips the llama-quantize step. We
+        # only care that the round-trip works, not the quant fidelity.
+        model.save_pretrained_gguf(
+            str(gguf_dir),
+            tokenizer=tokenizer,
+            quantization_method="not_quantized",
+        )
+        gguf_files = sorted(gguf_dir.glob("*.gguf"))
+        assert gguf_files, f"no .gguf produced in {gguf_dir}"
+        print(
+            f"  gguf dir contents: {sorted(p.name for p in gguf_dir.iterdir())}",
+            flush=True,
+        )
+    except Exception as _e:
+        gguf_save_error = f"{type(_e).__name__}: {_e}"
+        print(f"  GGUF save FAILED: {gguf_save_error}", flush=True)
+
+    # Drop trained model + trainer to free memory before reloading.
+    print("\n[export] Dropping in-memory model before reload tests...",
+          flush=True)
+    del trainer, model
+    gc.collect()
+    mx.clear_cache()
+    if mx.metal.is_available():
+        try:
+            mx.set_wired_limit(0)
+        except Exception:
+            pass
+
+    def _reload_and_generate(label: str, save_dir: Path) -> str:
+        print(f"\n[reload:{label}] FastMLXModel.from_pretrained({save_dir})",
+              flush=True)
+        mx.random.seed(SEED)
+        m, t = FastMLXModel.from_pretrained(
+            str(save_dir),
+            load_in_4bit=False,
+            dtype="float16",
+            text_only=True,
+            max_seq_length=128,
+            random_state=SEED,
+            token=hf_token,
+        )
+        m.eval()
+        out = generate(m, t, prompt=prompt, max_tokens=24, verbose=False)
+        print(f"  [reload:{label}] output: {out!r}", flush=True)
+        assert "Unsloth" in out, (
+            f"reloaded {label!r} produced gibberish for prompt {prompt!r}: "
+            f"{out!r}"
+        )
+        del m, t
+        gc.collect()
+        mx.clear_cache()
+        return out
+
+    lora_reload_out = _reload_and_generate("lora", lora_dir)
+    merged_reload_out = _reload_and_generate("merged_16bit", merged_dir)
+
+    gguf_reload_out: str | None = None
+    if gguf_save_error is None:
+        # GGUF is reloaded via the llama-cli binary that
+        # save_pretrained_gguf just built (or a previously-cached one).
+        # Search common locations.
+        candidates = [
+            Path("llama.cpp/llama-cli"),
+            Path("llama.cpp/build/bin/llama-cli"),
+        ]
+        llama_cli = next((c for c in candidates if c.exists()), None)
+        gguf_files = sorted(gguf_dir.glob("*.gguf"))
+        if llama_cli is None:
+            gguf_save_error = (
+                f"llama-cli not found after build; checked {candidates}"
+            )
+        elif not gguf_files:
+            gguf_save_error = f"no .gguf files in {gguf_dir}"
+        else:
+            gguf_path = gguf_files[0]
+            print(
+                f"\n[reload:gguf] {llama_cli} -m {gguf_path.name} "
+                f"-p {prompt!r} -n 24",
+                flush=True,
+            )
+            try:
+                proc = subprocess.run(
+                    [
+                        str(llama_cli),
+                        "-m", str(gguf_path),
+                        "-p", prompt,
+                        "-n", "24",
+                        "--temp", "0",
+                        "--seed", str(SEED),
+                        "-no-cnv",  # disable conversation/chat mode
+                        "--no-warmup",
+                    ],
+                    capture_output=True, text=True, timeout=180,
+                )
+                gguf_reload_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                print(f"  [reload:gguf] llama-cli stdout (head):\n{proc.stdout[:600]}",
+                      flush=True)
+                if proc.returncode != 0:
+                    gguf_save_error = (
+                        f"llama-cli exit {proc.returncode}; "
+                        f"stderr head: {proc.stderr[:400]}"
+                    )
+                else:
+                    assert "Unsloth" in (proc.stdout or ""), (
+                        f"reloaded GGUF produced gibberish for prompt {prompt!r}: "
+                        f"stdout head: {proc.stdout[:400]!r}"
+                    )
+            except subprocess.TimeoutExpired:
+                gguf_save_error = "llama-cli timed out after 180s"
+
+    if gguf_save_error is not None:
+        # GGUF infra problems are not the same as gibberish output. Make
+        # this an explicit failure so we notice; if Mac CI starts hitting
+        # llama.cpp build flakes we can soften to a warn-and-continue.
+        raise RuntimeError(f"GGUF round-trip failed: {gguf_save_error}")
+
+    # Cleanup
+    try:
+        shutil.rmtree(workdir, ignore_errors=True)
+    except Exception:
+        pass
+
+    print(
+        f"\nOK: export round-trip passed in all 3 formats.\n"
+        f"  lora   reload: {lora_reload_out!r}\n"
+        f"  merged reload: {merged_reload_out!r}\n"
+        f"  gguf   reload: stdout-head ok, contained 'Unsloth'",
+        flush=True,
     )
     return 0
 

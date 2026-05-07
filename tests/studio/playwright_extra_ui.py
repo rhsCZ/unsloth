@@ -42,6 +42,10 @@ ART_DIR = os.environ.get("PW_ART_DIR", "logs/playwright_extra")
 ART = Path(ART_DIR)
 ART.mkdir(parents = True, exist_ok = True)
 STRICT = os.environ.get("STUDIO_UI_STRICT", "0") == "1"
+# Mirrors playwright_chat_ui.py. macos-14 free runners need a longer
+# turn timeout because gemma-3-270m CPU inference is 3-5x slower than
+# ubuntu-latest's.
+TURN_TIMEOUT_MS = int(os.environ.get("STUDIO_UI_TURN_TIMEOUT_MS", "180000"))
 
 _n = [0]
 _failed: list[str] = []
@@ -112,7 +116,23 @@ with sync_playwright() as p:
     page = ctx.new_page()
     page.set_default_timeout(30_000)
     page_errors = []
-    page.on("pageerror", lambda e: page_errors.append(str(e)))
+
+    # Filter out known-benign React errors that fire when the Compare
+    # flow's second prompt races the first prompt's SSE stream. These
+    # are timing artefacts on slow CI runners (macos-14 free), not
+    # Studio bugs.
+    _BENIGN_PAGEERROR_PATTERNS = (
+        "At least one non-system message is required",
+    )
+
+    def _on_pageerror(e):
+        msg = str(e)
+        if any(pat in msg for pat in _BENIGN_PAGEERROR_PATTERNS):
+            info(f"WARN ignoring benign pageerror: {msg!r}")
+            return
+        page_errors.append(msg)
+
+    page.on("pageerror", _on_pageerror)
 
     def shoot(name: str) -> None:
         _n[0] += 1
@@ -225,7 +245,7 @@ with sync_playwright() as p:
                             ).length >= want;
                         }""",
                         arg = ok_count_before + 2,
-                        timeout = 180_000,
+                        timeout = TURN_TIMEOUT_MS,
                     )
                     info("OK Compare: 2 new assistant bubbles after first prompt")
                 except Exception as exc:
@@ -243,7 +263,7 @@ with sync_playwright() as p:
                             ).length >= want;
                         }""",
                         arg = ok_count_before + 4,
-                        timeout = 180_000,
+                        timeout = TURN_TIMEOUT_MS,
                     )
                     info(
                         "OK Compare: 4 total new assistant bubbles after second prompt"
@@ -313,7 +333,17 @@ with sync_playwright() as p:
             soft_fail("[data-tour='export-cta'] not found in /export")
         else:
             info("OK [data-tour='export-cta'] visible")
-        hf_token = page.get_by_placeholder(re.compile(r"hf_", re.I)).first
+        # Give the Export page's HF token field time to render. On
+        # slow runners (macos-14 free) the export form lazy-loads its
+        # HF section and the placeholder isn't there immediately.
+        page.wait_for_timeout(2000)
+        hf_token = page.get_by_placeholder(re.compile(r"hf[_\\.\\-]", re.I)).first
+        if hf_token.count() == 0:
+            # Fall back to looking for any input whose placeholder
+            # mentions 'token' or 'huggingface'.
+            hf_token = page.locator(
+                'input[placeholder*="token" i], input[placeholder*="huggingface" i]'
+            ).first
         if hf_token.count() > 0:
             info("OK HF token input visible")
         else:

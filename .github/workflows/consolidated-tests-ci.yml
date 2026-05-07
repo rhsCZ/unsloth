@@ -52,14 +52,44 @@ permissions:
 
 jobs:
   consolidated:
-    name: Consolidated tests (unsloth Bucket-A + unsloth_zoo@main + test_apply_fused_lm_head)
+    # Matrix: three (transformers, TRL) combos cover the failure surface the
+    # PR cares about:
+    #   1. transformers==4.57.6 + TRL latest <1.0.0 (the just-before-5.x line)
+    #   2. transformers latest 5.x + TRL latest 1.x (the absolute upstream tip;
+    #      currently 5.8.0 + 1.3.0, both BEYOND the unsloth/unsloth_zoo
+    #      <=5.5.0 / <=0.24.0 caps -- the cell exists explicitly to surface
+    #      drift signal)
+    #   3. transformers + TRL pinned by pyproject.toml's dependency entries
+    #      (resolved dynamically at job time via tomllib)
+    # fail-fast: false so each cell runs independently. continue-on-error
+    # at the job level keeps the PR unblocked while we observe the matrix.
+    strategy:
+      fail-fast: false
+      matrix:
+        combo:
+          - id: t4576-trl0latest
+            label: "T 4.57.6 + TRL <1"
+            transformers_spec: "transformers==4.57.6"
+            trl_spec: "trl>=0.18.2,<1.0.0"
+          - id: tlatest5-trl1latest
+            label: "T latest 5.x + TRL latest 1.x"
+            transformers_spec: "transformers>=5,<6"
+            trl_spec: "trl>=1,<2"
+          - id: pyproject
+            label: "pyproject.toml pins (dynamic)"
+            transformers_spec: "__from_pyproject__"
+            trl_spec: "__from_pyproject__"
+    name: "Consolidated CPU (${{ matrix.combo.label }})"
     runs-on: ubuntu-latest
     timeout-minutes: 35
     # First-pass posture: surface results in the PR check UI without blocking
-    # merge. Flip to false (or delete this line) once one full run is green.
+    # merge. Flip to false (or delete this line) once every cell is green.
     continue-on-error: true
     env:
       UNSLOTH_ZOO_REF: ${{ inputs.unsloth_zoo_ref || 'main' }}
+      MATRIX_TRANSFORMERS_SPEC: ${{ matrix.combo.transformers_spec }}
+      MATRIX_TRL_SPEC: ${{ matrix.combo.trl_spec }}
+      MATRIX_COMBO_ID: ${{ matrix.combo.id }}
       # Hoisted to job-level so every step (Sanity, Bucket-A, unsloth_zoo
       # pytest, test_apply_fused_lm_head) inherits it. transformers' bundled
       # *_pb2.py was generated against an older protoc; the C++ protobuf
@@ -95,6 +125,46 @@ jobs:
       - name: Install uv (some unsloth_zoo dev tooling expects it on PATH)
         run: pip install uv
 
+      - name: Resolve matrix specs (handle __from_pyproject__ sentinel)
+        # The pyproject cell uses a sentinel; resolve the real `transformers`
+        # and `trl` constraints from the project's pyproject.toml at job time.
+        # unsloth's pyproject puts the LLM stack pins in
+        # [project.optional-dependencies] under the `huggingfacenotorch`
+        # extra (top-level [project.dependencies] is just typer/pydantic/etc.),
+        # so we walk every optional extra and pick the first matching spec.
+        # Other cells pass their spec through unchanged.
+        run: |
+          set -euxo pipefail
+          python <<'PY' >> "$GITHUB_ENV"
+          import os, re, tomllib
+          spec_t = os.environ["MATRIX_TRANSFORMERS_SPEC"]
+          spec_r = os.environ["MATRIX_TRL_SPEC"]
+
+          def _pkg_name(spec: str) -> str:
+              m = re.match(r"\s*([A-Za-z0-9_.-]+)", spec)
+              return (m.group(1).lower() if m else "")
+
+          if spec_t == "__from_pyproject__" or spec_r == "__from_pyproject__":
+              with open("pyproject.toml", "rb") as f:
+                  doc = tomllib.load(f)
+              proj = doc.get("project", {})
+              # Try top-level deps first, then all optional extras.
+              all_deps: list[str] = list(proj.get("dependencies", []))
+              for _name, dep_list in proj.get("optional-dependencies", {}).items():
+                  all_deps.extend(dep_list)
+
+              if spec_t == "__from_pyproject__":
+                  spec_t = next((x for x in all_deps if _pkg_name(x) == "transformers"),
+                                "transformers")
+              if spec_r == "__from_pyproject__":
+                  spec_r = next((x for x in all_deps if _pkg_name(x) == "trl"),
+                                "trl")
+          print(f"RESOLVED_TRANSFORMERS_SPEC={spec_t}")
+          print(f"RESOLVED_TRL_SPEC={spec_r}")
+          PY
+          # Echo to logs so the matrix cell label maps cleanly to a spec.
+          grep RESOLVED_ "$GITHUB_ENV" || true
+
       - name: Install runtime deps (mirrors studio-backend-ci.yml + mlx-ci.yml)
         # The shape matches studio-backend-ci.yml's "Repo tests (CPU)" install
         # so we inherit the same CPU-spoof harness in tests/conftest.py and
@@ -110,6 +180,7 @@ jobs:
         #     `import triton`. The triton PyPI wheel installs cleanly on
         #     Linux x86_64 even without CUDA (the import succeeds; runtime
         #     GPU work is what would fail, which we never do here).
+        # transformers + trl are matrix-parameterized.
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
@@ -120,17 +191,25 @@ jobs:
             'numpy<3' pytest==9.0.3 pytest-asyncio httpx \
             protobuf sentencepiece triton \
             psutil packaging tqdm safetensors datasets \
-            'peft>=0.18,<0.20' 'accelerate>=0.34,<2' 'trl>=0.13,<1'
+            'peft>=0.18,<0.20' 'accelerate>=0.34,<2'
           # torchvision: unsloth_zoo.vision_utils imports it at module scope.
           pip install --index-url https://download.pytorch.org/whl/cpu \
             'torch>=2.4,<2.11' 'torchvision<0.26'
-          pip install 'transformers>=4.51,<5.5'
+          # transformers + trl from the matrix combo.
+          pip install "$RESOLVED_TRANSFORMERS_SPEC"
+          pip install "$RESOLVED_TRL_SPEC"
           # bitsandbytes: hard import in unsloth/models/_utils.py. Recent
           # versions ship a CPU build that imports cleanly on Linux.
           pip install 'bitsandbytes>=0.45'
           # unsloth itself, editable, no-deps so pip does not fight the
           # explicit torch CPU-index install above.
           pip install -e . --no-deps
+          echo "::group::Installed transformers + trl + torch + unsloth versions"
+          pip show transformers
+          pip show trl
+          pip show torch
+          pip show unsloth
+          echo "::endgroup::"
 
       - name: Clone unsloth_zoo @ ${{ env.UNSLOTH_ZOO_REF }}
         # We need the repository tree (the wheel does not ship tests/), so
@@ -210,6 +289,12 @@ jobs:
           # Auto-generated by .github/workflows/consolidated-tests-ci.yml.
           # Wraps unsloth_zoo.compiler.test_apply_fused_lm_head so that
           # tests/conftest.py's GPU-spoof harness applies before the import.
+          # _zoo_aggressive_cuda_spoof extends conftest's harness with deeper
+          # patches (see tests/_zoo_aggressive_cuda_spoof.py).
+          import sys, pathlib
+          sys.path.insert(0, str(pathlib.Path(__file__).parent))
+          import _zoo_aggressive_cuda_spoof as _spoof
+          _spoof.apply()
           from unsloth_zoo.compiler import test_apply_fused_lm_head as _zoo_test
           def test_zoo_apply_fused_lm_head_runs():
               _zoo_test()
@@ -314,6 +399,10 @@ jobs:
           # tests/conftest.py GPU-spoof harness applies. continue-on-error
           # at the workflow level catches per-patch failures; this shim only
           # asserts that the two `required` helpers are reachable.
+          import sys, pathlib
+          sys.path.insert(0, str(pathlib.Path(__file__).parent))
+          import _zoo_aggressive_cuda_spoof as _spoof
+          _spoof.apply()
           import importlib, inspect
 
           MODULES = [
@@ -392,6 +481,10 @@ jobs:
           set -euxo pipefail
           cat > tests/_tiled_mlp_check_shim.py <<'PY'
           # Auto-generated by .github/workflows/consolidated-tests-ci.yml.
+          import sys, pathlib
+          sys.path.insert(0, str(pathlib.Path(__file__).parent))
+          import _zoo_aggressive_cuda_spoof as _spoof
+          _spoof.apply()
           import torch
           import torch.nn as nn
           from unsloth_zoo.tiled_mlp import patch_tiled_mlp, patch_mlp

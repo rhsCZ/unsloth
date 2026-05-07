@@ -218,9 +218,7 @@ def _drive(
                     for n_gpus in range(1, len(ranked) + 1):
                         subset = ranked[:n_gpus]
                         pool_mib = sum(free for _, free in subset)
-                        kv = inst._estimate_kv_cache_bytes(
-                            effective_ctx, cache_type_kv
-                        )
+                        kv = inst._estimate_kv_cache_bytes(effective_ctx, cache_type_kv)
                         total_mib = (model_size + kv) / (1024 * 1024)
                         if total_mib <= pool_mib * pin_fraction:
                             gpu_indices = sorted(idx for idx, _ in subset)

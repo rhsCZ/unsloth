@@ -2127,9 +2127,7 @@ class LlamaCppBackend:
                                     )
                                     total_mib = (model_size + kv) / (1024 * 1024)
                                     if total_mib <= pool_mib * pin_fraction:
-                                        gpu_indices = sorted(
-                                            idx for idx, _ in subset
-                                        )
+                                        gpu_indices = sorted(idx for idx, _ in subset)
                                         use_fit = False
                                         break
 

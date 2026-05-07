@@ -211,6 +211,92 @@ jobs:
             tests/studio/test_is_mlx_dispatch_gate.py \
             tests/studio/test_mlx_training_worker_behaviors.py
 
+      # Studio prebuilt llama.cpp install + GGUF inference. Drives the
+      # exact path Studio's setup.sh takes on macOS: invokes
+      # studio/install_llama_prebuilt.py with --published-repo
+      # ggml-org/llama.cpp and --published-release-tag b9049 (the
+      # latest llama.cpp release at the time this step was added; bump
+      # via UNSLOTH_LLAMA_TAG / DEFAULT_LLAMA_TAG when refreshing).
+      # The installer downloads llama-b9049-bin-macos-arm64.tar.gz,
+      # which is the universal Apple Silicon (arm64) build -- the
+      # same artifact works on M1/M2/M3/M4 because llama.cpp compiles
+      # against the ARMv8.2 baseline.
+      #
+      # The b9049 release also publishes:
+      #   - llama-b9049-bin-macos-arm64-kleidiai.tar.gz
+      #     KleidiAI dispatches at runtime; on M1 it falls back where
+      #     ISA features (e.g. I8MM) are missing, so this asset also
+      #     runs on M1 -- Studio just doesn't choose it by default.
+      #   - llama-b9049-bin-macos-x64.tar.gz
+      #     Intel-only; would only run on M1 via Rosetta 2 emulation,
+      #     which we explicitly avoid.
+      #   - iOS XCFramework
+      #     iOS-app build artifact, unrelated to a macOS desktop CI.
+      #
+      # After install, downloads a small published GGUF
+      # (unsloth/gemma-3-270m-it-GGUF, Q4_K_M) from HuggingFace and
+      # runs the prebuilt llama-cli on it. Asserts the prompt echo
+      # appears in stdout. If the install fails OR the binary exits
+      # non-zero, that's an Unsloth/Studio bug.
+      - name: Studio prebuilt llama.cpp install + GGUF inference (Mac M1)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          INSTALL_DIR="$HOME/.unsloth-studio-prebuilt-test/llama.cpp"
+          rm -rf "$INSTALL_DIR"
+          python studio/install_llama_prebuilt.py \
+            --install-dir "$INSTALL_DIR" \
+            --published-repo ggml-org/llama.cpp \
+            --published-release-tag b9049
+
+          LLAMA_CLI=""
+          for c in \
+            "$INSTALL_DIR/build/bin/llama-cli" \
+            "$INSTALL_DIR/llama-cli" \
+            "$INSTALL_DIR/bin/llama-cli"; do
+            if [ -x "$c" ]; then LLAMA_CLI="$c"; break; fi
+          done
+          if [ -z "$LLAMA_CLI" ]; then
+            echo "::error::llama-cli not found under $INSTALL_DIR"
+            find "$INSTALL_DIR" -maxdepth 4 -type f -name 'llama-*' || true
+            exit 1
+          fi
+          echo "found llama-cli at: $LLAMA_CLI"
+          "$LLAMA_CLI" --version || true
+
+          mkdir -p /tmp/ggufs
+          python -c "
+          from huggingface_hub import hf_hub_download
+          p = hf_hub_download(
+              'unsloth/gemma-3-270m-it-GGUF',
+              'gemma-3-270m-it-Q4_K_M.gguf',
+              local_dir = '/tmp/ggufs',
+          )
+          print('downloaded:', p)
+          "
+
+          PROMPT="Hello, my name is"
+          echo "=== llama-cli inference ==="
+          OUT=$("$LLAMA_CLI" \
+            -m /tmp/ggufs/gemma-3-270m-it-Q4_K_M.gguf \
+            -p "$PROMPT" \
+            -n 16 \
+            --temp 0 \
+            --seed 3407 \
+            -no-cnv \
+            --no-warmup 2>&1) || {
+              echo "::error::llama-cli exited non-zero"
+              echo "$OUT" | head -80
+              exit 1
+            }
+          echo "$OUT" | tail -40
+          if ! echo "$OUT" | grep -q "Hello"; then
+            echo "::error::llama-cli output did not contain the prompt echo 'Hello'"
+            exit 1
+          fi
+          echo "OK: Studio prebuilt llama.cpp on Mac M1 + GGUF inference works"
+
       # Real MLX training + inference smoke test. Trains
       # unsloth/gemma-3-270m-it for 7 deterministic LoRA steps
       # (batch_size=2, gradient_accumulation_steps=3) on a single

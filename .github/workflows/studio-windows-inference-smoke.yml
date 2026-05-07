@@ -55,6 +55,11 @@ jobs:
       GGUF_FILE: gemma-3-270m-it-UD-Q4_K_XL.gguf
       STUDIO_PORT: '18888'
       HF_HOME: ${{ github.workspace }}/hf-cache
+      # Force UTF-8 for stdio (Windows defaults to cp1252; hf
+      # download / Studio CLI print "✓" checkmarks and crash
+      # otherwise).
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
@@ -271,6 +276,11 @@ jobs:
       GGUF_FILE: Qwen3.5-2B-UD-Q4_K_XL.gguf
       STUDIO_PORT: '18898'
       HF_HOME: ${{ github.workspace }}/hf-cache
+      # Force UTF-8 for stdio (Windows defaults to cp1252; hf
+      # download / Studio CLI print "✓" checkmarks and crash
+      # otherwise).
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
@@ -576,6 +586,11 @@ jobs:
       MMPROJ_FILE: mmproj-F16.gguf
       STUDIO_PORT: '18899'
       HF_HOME: ${{ github.workspace }}/hf-cache
+      # Force UTF-8 for stdio (Windows defaults to cp1252; hf
+      # download / Studio CLI print "✓" checkmarks and crash
+      # otherwise).
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 

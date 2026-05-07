@@ -46,6 +46,10 @@ jobs:
       GGUF_FILE: gemma-3-270m-it-UD-Q4_K_XL.gguf
       STUDIO_PORT: '18895'
       HF_HOME: ${{ github.workspace }}/hf-cache
+      # Force UTF-8 for stdio (Windows defaults to cp1252; hf
+      # download prints a "✓" checkmark and crashes otherwise).
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 

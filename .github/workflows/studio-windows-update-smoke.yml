@@ -50,6 +50,12 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # Force UTF-8 for stdio (Windows defaults to cp1252; hf
+      # download / Studio CLI print "✓" checkmarks and crash
+      # otherwise).
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 

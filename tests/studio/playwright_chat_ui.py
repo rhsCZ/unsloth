@@ -398,34 +398,66 @@ with sync_playwright() as p:
         "Reply with exactly: hello",
         "What is 1+1? Reply with the digit only.",
         "Reply with exactly: world",
-        "Say the word 'tree' and nothing else.",
+        "Reply with exactly: tree",
         "What is 2+2? Reply with the digit only.",
     ]
 
-    def send_and_wait(prompt, want_assistants):
+    def _nonempty_bubble_count():
+        return page.evaluate("""() => {
+            const els = document.querySelectorAll('[data-role="assistant"]');
+            let n = 0;
+            for (const el of els) {
+                if ((el.innerText || '').trim().length > 0) n++;
+            }
+            return n;
+        }""")
+
+    def send_and_wait(prompt, idx):
+        # Wait until the previous turn's generation has fully stopped.
+        # If the Stop button is still attached, the prior turn is still
+        # streaming and we must NOT fire the next request -- doing so
+        # races against the assistant-ui composer's send-while-running
+        # gate and produces malformed messages on the wire (422 against
+        # /v1/chat/completions). 0 detach == the button never appeared,
+        # which is fine; we accept it.
+        page.wait_for_selector(
+            'button[aria-label="Send message"]',
+            state = "attached",
+            timeout = TURN_TIMEOUT_MS,
+        )
+        baseline = _nonempty_bubble_count()
         composer.click()
         composer.fill(prompt)
         page.locator('button[aria-label="Send message"]').click()
+        # Wait for ONE more non-empty bubble than the baseline. This
+        # is more robust than asserting an absolute count of `idx`,
+        # which mis-counts if the chat already had assistant text
+        # before this turn (e.g. a "model loaded" hint or a streaming
+        # placeholder mid-generation from the prior turn).
         page.wait_for_function(
-            """(want) => {
+            """(target) => {
                 const els = document.querySelectorAll('[data-role="assistant"]');
-                let nonEmpty = 0;
+                let n = 0;
                 for (const el of els) {
-                    if ((el.innerText || '').trim().length > 0) nonEmpty++;
+                    if ((el.innerText || '').trim().length > 0) n++;
                 }
-                return nonEmpty >= want;
+                return n >= target;
             }""",
-            arg = want_assistants,
+            arg = baseline + 1,
             timeout = TURN_TIMEOUT_MS,
         )
+        # Hard-wait for streaming to end so the NEXT turn's send isn't
+        # racing the prior turn's tail. Take a screenshot if it doesn't
+        # detach in time so we can debug post-mortem.
         try:
             page.wait_for_selector(
                 'button[aria-label="Stop generating"]',
                 state = "detached",
-                timeout = 60_000,
+                timeout = TURN_TIMEOUT_MS,
             )
         except Exception:
-            pass
+            shoot(f"04-turn-{idx}-still-streaming")
+            raise
 
     for i, p_ in enumerate(prompts, start = 1):
         step(f"turn {i}: {p_!r}")

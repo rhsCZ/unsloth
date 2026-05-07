@@ -154,6 +154,10 @@ jobs:
           # against a freshly-installed Studio (BASE_URL=...; STUDIO_OLD_PW=
           # $(cat ~/.unsloth/studio/auth/.bootstrap_password); python ...).
           PW_ART_DIR: logs/playwright
+          # Strict mode: in CI a missing button / nav / dialog must
+          # FAIL the test. Locally the test still runs against partial
+          # Studio installs without STUDIO_UI_STRICT.
+          STUDIO_UI_STRICT: '1'
         run: |
           mkdir -p logs/playwright
           python tests/studio/playwright_chat_ui.py

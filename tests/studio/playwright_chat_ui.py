@@ -58,6 +58,12 @@ ART_DIR = os.environ.get("PW_ART_DIR", "logs/playwright")
 ART = Path(ART_DIR)
 ART.mkdir(parents = True, exist_ok = True)
 
+# Strict mode -- when on (default in CI), the test fails loudly if any
+# expected button / nav / dialog is missing instead of logging a WARN
+# and continuing. Locally we leave it off so the test still runs against
+# a partial Studio install.
+STRICT = os.environ.get("STUDIO_UI_STRICT", "0") == "1"
+
 _n = [0]
 
 
@@ -71,6 +77,18 @@ def info(s):
 
 def fail(m):
     raise AssertionError(f"[ui] FAIL: {m}")
+
+
+def soft_fail(m):
+    """Hard fail in STRICT mode, info-warn otherwise.
+
+    Use for "this button should exist but didn't" assertions where
+    a missing element is a regression in CI but acceptable when
+    running against a partial Studio locally.
+    """
+    if STRICT:
+        fail(m)
+    info(f"WARN (strict-off): {m}")
 
 
 def login_via_api(pw):
@@ -282,36 +300,59 @@ with sync_playwright() as p:
     # surface here.
     # ─────────────────────────────────────────────────────
     step("model picker: open + drive search bar")
-    picker_btn = page.locator(
-        'button:has-text("gemma-3-270m"), '
-        'button:has-text("Gemma 3"), '
-        'button:has-text("Select model")'
-    ).first
+    # Stable selector first: [data-tour="chat-model-selector"] is the
+    # guided-tour anchor on the model picker button (app-sidebar.tsx).
+    # If the tour anchor moves the tour breaks, so this selector is at
+    # least as stable as anything else in the codebase.
+    picker_btn = page.locator('[data-tour="chat-model-selector"]').first
     if picker_btn.count() == 0:
-        # Fall back to any button mentioning the loaded model.
-        picker_btn = page.get_by_role(
-            "button",
-            name = re.compile(r"gemma-?3", re.I),
+        # Fall back to text-based locators for older Studio builds.
+        picker_btn = page.locator(
+            'button:has-text("gemma-3-270m"), '
+            'button:has-text("Gemma 3"), '
+            'button:has-text("Select model")'
         ).first
-    if picker_btn.count() > 0:
+    if picker_btn.count() == 0:
+        soft_fail("model picker button not found")
+    else:
         picker_btn.click()
         page.wait_for_timeout(500)
         shoot("03c-model-picker-open")
         search = page.get_by_placeholder(
             re.compile(r"Search.*models?", re.I),
         ).first
-        if search.count() > 0:
+        if search.count() == 0:
+            soft_fail("model picker search input not found")
+        else:
+            # Type "qwen" -> capture popover text. Type "llama" -> capture
+            # again. The two text snapshots must DIFFER, proving the
+            # typeahead actually filters the list (a regression that
+            # rendered the picker but ignored input would silently pass
+            # the old version of this test).
+            def picker_visible_text():
+                return page.evaluate("""() => {
+                    const el = document.querySelector(
+                        '[role="dialog"], [role="listbox"], [role="menu"]'
+                    );
+                    return el ? (el.innerText || '').trim() : '';
+                }""")
             search.fill("qwen")
             page.wait_for_timeout(800)
+            qwen_text = picker_visible_text()
             shoot("03d-model-picker-search-qwen")
             search.fill("")
             page.wait_for_timeout(300)
             search.fill("llama")
             page.wait_for_timeout(800)
+            llama_text = picker_visible_text()
             shoot("03e-model-picker-search-llama")
-            info("OK search bar filtered for qwen + llama")
-        else:
-            info("WARN model picker search input not found")
+            if qwen_text and llama_text and qwen_text == llama_text:
+                soft_fail(
+                    "model picker text was identical for qwen + llama "
+                    "queries -- typeahead may not be filtering"
+                )
+            else:
+                info("OK search bar filtered (qwen text != llama text)")
         # Close picker without changing selection.
         page.keyboard.press("Escape")
         page.wait_for_timeout(300)
@@ -387,7 +428,7 @@ with sync_playwright() as p:
         shoot("05-after-regenerate")
         info("regenerate completed")
     else:
-        info("regenerate button not visible (skip)")
+        soft_fail("regenerate button not visible")
 
     # ─────────────────────────────────────────────────────
     # 6. Add two more turns AFTER regenerate.
@@ -499,23 +540,50 @@ with sync_playwright() as p:
         step("theme toggle x3 with computed-color assertion")
         observed = []
         for cycle in range(3):
+            # Wait for any prior dropdown to fully detach. The Radix
+            # Account-menu sets data-state="open" while the view-
+            # transition is mid-flight; clicking it again before that
+            # clears would no-op silently and the for-loop bailed
+            # after cycle 1 in earlier runs.
+            try:
+                page.wait_for_function(
+                    """() => !document.querySelector('[role="menu"]')""",
+                    timeout = 3_000,
+                )
+            except Exception:
+                pass
+            page.wait_for_timeout(150)
             try:
                 acct.click(force = True)
             except Exception as exc:
-                info(f"  cycle {cycle + 1}: account-menu click failed ({exc!r})")
+                soft_fail(
+                    f"theme cycle {cycle + 1}: account-menu click failed "
+                    f"({exc!r})"
+                )
                 break
-            page.wait_for_timeout(400)
+            # Wait for the dropdown menu to actually render before
+            # querying its items.
+            try:
+                page.wait_for_selector('[role="menu"]', timeout = 3_000)
+            except Exception:
+                soft_fail(f"theme cycle {cycle + 1}: account menu didn't open")
+                break
             theme_item = page.get_by_role(
                 "menuitem",
                 name = re.compile(r"^(Light Mode|Dark Mode)$", re.I),
             ).first
             if theme_item.count() == 0:
                 page.keyboard.press("Escape")
+                soft_fail(f"theme cycle {cycle + 1}: theme menuitem missing")
                 break
             try:
                 theme_item.click(force = True)
-            except Exception:
+            except Exception as exc:
                 page.keyboard.press("Escape")
+                soft_fail(
+                    f"theme cycle {cycle + 1}: theme menuitem click failed "
+                    f"({exc!r})"
+                )
                 break
             # Settle. The ".dark" class on <html> is the ground
             # truth (theme-store toggles only that class); the
@@ -541,9 +609,11 @@ with sync_playwright() as p:
         rgbs = [parse_rgb(o["bg"]) for o in observed if parse_rgb(o["bg"])]
         light_seen = any(min(r) > 220 for r in rgbs)
         dark_seen = any(max(r) < 60 for r in rgbs)
+        if len(observed) < 3:
+            soft_fail(f"theme toggle ran only {len(observed)} cycle(s), expected 3")
         if not (light_seen and dark_seen):
-            info(
-                f"WARN expected both light + dark backgrounds across "
+            soft_fail(
+                f"expected both light + dark backgrounds across "
                 f"{len(rgbs)} cycles; light_seen={light_seen}, dark_seen={dark_seen}"
             )
         else:
@@ -557,13 +627,13 @@ with sync_playwright() as p:
             "button", name = re.compile(rf"^\s*{label}\s*$", re.I)
         ).first
         if btn.count() == 0:
-            info(f"nav '{label}' not found")
+            soft_fail(f"nav '{label}' not found")
             return False
         btn.click()
         page.wait_for_timeout(800)
         if expected_url_pat and not re.search(expected_url_pat, page.url):
-            info(
-                f"WARN clicking '{label}' didn't change url to /{expected_url_pat}; "
+            soft_fail(
+                f"clicking '{label}' didn't change url to /{expected_url_pat}; "
                 f"current: {page.url}"
             )
             return False
@@ -681,6 +751,12 @@ with sync_playwright() as p:
     )
     count_c = candidates.count()
     clicked_recent = False
+    # We sent the prompts ["Reply with exactly: hello", "What is 1+1?",
+    # "Reply with exactly: world", ...] above. The thread title that
+    # gets persisted is typically a snippet of the first user message
+    # (Studio summarises after a few turns). We accept either a literal
+    # word from one of our prompts OR a short Studio-summary heuristic.
+    PROMPT_KEYWORDS = ("hello", "world", "tree", "yes", "1+1", "2+2")
     for i in range(count_c):
         try:
             t = (candidates.nth(i).text_content() or "").strip()
@@ -695,11 +771,29 @@ with sync_playwright() as p:
                 shoot("15d-recent-clicked")
                 info(f"OK clicked recent entry: {t[:60]!r}")
                 clicked_recent = True
+                # Strict check: after clicking the Recents entry, the
+                # thread we land on must include at least one of our
+                # prompts in its rendered messages. Otherwise we
+                # navigated to a thread that wasn't ours.
+                turns_text = page.evaluate("""() => {
+                    const els = document.querySelectorAll(
+                        '[data-role="user"], [data-role="assistant"]'
+                    );
+                    return Array.from(els).map(e => (e.innerText || '')
+                        .toLowerCase()).join(' ');
+                }""")
+                if any(k in turns_text for k in PROMPT_KEYWORDS):
+                    info("OK landed on a thread that includes our prompts")
+                else:
+                    soft_fail(
+                        "Recents-clicked thread doesn't contain any of our "
+                        f"sent prompts; turns_text={turns_text[:120]!r}"
+                    )
                 break
         except Exception:
             continue
     if not clicked_recent:
-        info("no Recents entry was clickable -- skipped")
+        soft_fail("no Recents entry was clickable")
     # Back to chat.
     page.goto(f"{BASE}/chat")
     composer = page.locator('textarea[aria-label="Message input"]')

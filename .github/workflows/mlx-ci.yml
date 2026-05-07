@@ -245,10 +245,17 @@ jobs:
           set -euo pipefail
           INSTALL_DIR="$HOME/.unsloth-studio-prebuilt-test/llama.cpp"
           rm -rf "$INSTALL_DIR"
+          # --simple-policy is required when --published-repo points
+          # at upstream ggml-org/llama.cpp; that repo doesn't ship the
+          # llama-prebuilt-manifest.json asset Studio's default policy
+          # expects, so the simple platform-specific policy maps
+          # Darwin+arm64 -> bin-macos-arm64 directly. setup.sh passes
+          # this flag too.
           python studio/install_llama_prebuilt.py \
             --install-dir "$INSTALL_DIR" \
             --published-repo ggml-org/llama.cpp \
-            --published-release-tag b9049
+            --published-release-tag b9049 \
+            --simple-policy
 
           LLAMA_CLI=""
           for c in \

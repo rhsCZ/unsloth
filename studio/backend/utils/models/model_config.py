@@ -1355,15 +1355,12 @@ def detect_gguf_model_remote(
                 "RevisionNotFoundError",
                 "EntryNotFoundError",
             ):
-                logger.debug(
-                    f"Could not check GGUF files for '{repo_id}': {e}"
-                )
+                logger.debug(f"Could not check GGUF files for '{repo_id}': {e}")
                 return None
             if attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
     logger.warning(
-        f"Could not check GGUF files for '{repo_id}' after 3 attempts: "
-        f"{last_err}"
+        f"Could not check GGUF files for '{repo_id}' after 3 attempts: " f"{last_err}"
     )
     return None
 

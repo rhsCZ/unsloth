@@ -1,34 +1,48 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-# Focused PR gate for the MLX dispatch surface. Two jobs:
+# Focused PR gate for the MLX dispatch surface. One job, two matrix
+# variants:
 #
-#   1. mlx-dispatch (Linux+CPU)
-#      Runs the three test files documented in tests/studio/README.md with
-#      hardware probes spoofed (no Apple Silicon, no real GPU, no real MLX
-#      install required):
-#        - test_hardware_dispatch_matrix.py    parametrized 7-profile matrix
-#                                              + 2 dispatch-priority canaries
-#        - test_is_mlx_dispatch_gate.py        AST + runtime guard on
-#                                              unsloth._IS_MLX
-#        - test_mlx_training_worker_behaviors.py  AST contract checks on
-#                                                 studio/backend/core/training/worker.py
+#   - linux-cpu-spoof   ubuntu-latest with hardware probes spoofed via
+#                       monkeypatch (no Apple Silicon, no real GPU, no
+#                       real MLX install required).
+#   - macos-m1-real     macos-14 (M1, 3 vCPU / 7 GB / Apple Silicon
+#                       standard runner -- FREE for public repositories
+#                       per the GitHub Actions billing reference, larger
+#                       variants like macos-14-large/-xlarge are paid
+#                       so we deliberately avoid those). Adds two
+#                       Mac-only steps before the dispatch tests:
+#                       1. verify unsloth._IS_MLX flips True on real
+#                          Apple Silicon (no spoof);
+#                       2. smoke-import every PR-A MLX-only module
+#                          (mlx_loader, mlx_trainer, mlx_compile,
+#                          mlx_utils, mlx_cce, gated_delta_vjp). Each
+#                          does `import mlx.core as mx` at module top
+#                          level, so this catches a future change that
+#                          breaks the real `mlx` PyPI wheel without
+#                          needing a Mac developer in the loop.
 #
-#   2. mlx-real-apple-silicon (macOS-14, M1)
-#      Runs the SAME tests on a real Apple Silicon runner with a real mlx
-#      install. macos-14 is GitHub-hosted standard (3 vCPU / 7GB / M1) and
-#      is FREE for public repositories per the GitHub Actions billing
-#      docs, so adding this job costs zero minutes. Catches the residual
-#      gap the spoofed Linux job cannot: real `import mlx`, real
-#      `_IS_MLX = True` activation, real `unsloth_zoo.mlx_loader`
-#      submodule load, and a sanity import of every PR-A MLX module.
+# Both variants then run the SAME three dispatch test files documented
+# in tests/studio/README.md:
+#   - test_hardware_dispatch_matrix.py    parametrized 7-profile matrix
+#                                         + 2 dispatch-priority canaries
+#   - test_is_mlx_dispatch_gate.py        AST + runtime guard on
+#                                         unsloth._IS_MLX
+#   - test_mlx_training_worker_behaviors.py  AST contract checks on
+#                                            studio/backend/core/training/worker.py
 #
-# Surfaces "MLX dispatch broke" as its own check in the PR UI rather than
-# burying it inside the broader Backend CI. The Backend CI Repo tests
-# (CPU) job already covers test_mlx_training_worker_behaviors.py via auto
-# discovery, and runs the two state-sensitive matrix files in their own
-# pytest invocation; this workflow re-runs them in isolation as a focused
-# guard.
+# Surfaces two PR checks ("MLX dispatch (linux-cpu-spoof)" and
+# "MLX dispatch (macos-m1-real)") sharing one workflow definition so
+# adding new dispatch tests applies to both runners automatically.
+#
+# Security audit footprint: every package this workflow installs is
+# already covered by .github/workflows/security-audit.yml -- the deps
+# come from studio/backend/requirements/studio.txt and unsloth-zoo's
+# pyproject (resolved transitively). The git+ install of unsloth-zoo
+# is intentionally skipped by the audit (pip-audit cannot resolve a
+# git URL through PyPI metadata; the audit comment in security-audit.yml
+# documents this). No new package is introduced solely by MLX CI.
 
 name: MLX CI
 
@@ -56,10 +70,22 @@ permissions:
   contents: read
 
 jobs:
-  mlx-dispatch:
-    name: MLX dispatch matrix + gates
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  dispatch:
+    name: MLX dispatch (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-cpu-spoof
+            real_mlx: false
+            timeout: 10
+          - os: macos-14
+            label: macos-m1-real
+            real_mlx: true
+            timeout: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
@@ -68,88 +94,111 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      # The dispatch matrix and gate tests load unsloth/__init__.py and
-      # studio.backend.utils.hardware under monkeypatched probes, so the
-      # full unsloth import chain has to succeed on CPU. This mirrors the
-      # Repo tests (CPU) dep set in studio-backend-ci.yml.
-      - name: Install deps (CPU import chain for unsloth + studio backend)
+      # Linux variant: spoofed hardware. Mirrors the Repo tests (CPU)
+      # dep set from studio-backend-ci.yml so unsloth's import chain
+      # succeeds on a runner without any GPU. CPU torch from the
+      # PyTorch index, transformers + datasets + bitsandbytes from
+      # the standard PyPI index, unsloth-zoo from PyPI.
+      # All explicit pip installs are version-pinned to a single
+      # released version. unsloth-zoo on Linux is the latest PyPI
+      # release; on macOS it is sourced from git main (PR-A is not
+      # yet on PyPI). The pin set was the latest as of 2026-05-07
+      # within each project's existing constraint ranges; bump
+      # alongside the rest of the security audit when a new release
+      # of any of these lands.
+      - name: Install deps (Linux+CPU spoof)
+        if: matrix.real_mlx == false
         run: |
           python -m pip install --upgrade pip
           pip install -r studio/backend/requirements/studio.txt
           pip install \
-            python-multipart aiofiles sqlalchemy cryptography \
-            pyyaml jinja2 mammoth unpdf requests typer \
-            'numpy<3' pytest pytest-asyncio httpx
+            'python-multipart==0.0.27' \
+            'aiofiles==25.1.0' \
+            'sqlalchemy==2.0.49' \
+            'cryptography==48.0.0' \
+            'pyyaml==6.0.3' \
+            'jinja2==3.1.6' \
+            'mammoth==1.12.0' \
+            'unpdf==1.0.0' \
+            'requests==2.33.1' \
+            'typer==0.25.1' \
+            'numpy==2.4.4' \
+            'pytest==9.0.3' \
+            'pytest-asyncio==1.3.0' \
+            'httpx==0.28.1'
           pip install --index-url https://download.pytorch.org/whl/cpu \
-            'torch>=2.4,<2.11' 'torchvision<0.26'
-          pip install 'transformers>=4.51,<5.5'
-          pip install 'bitsandbytes>=0.45'
-          pip install 'unsloth_zoo>=2026.5.1'
+            'torch==2.10.0' 'torchvision==0.25.0'
+          pip install 'transformers==5.5.0'
+          pip install 'bitsandbytes==0.49.2'
+          pip install 'unsloth_zoo==2026.5.1'
           pip install -e . --no-deps
 
-      - name: MLX dispatch tests (3 files, ~36 tests, hardware spoofed)
-        env:
-          PYTHONPATH: ${{ github.workspace }}/studio
-          UNSLOTH_COMPILE_DISABLE: '1'
-        run: |
-          python -m pytest -v --tb=short \
-            tests/studio/test_hardware_dispatch_matrix.py \
-            tests/studio/test_is_mlx_dispatch_gate.py \
-            tests/studio/test_mlx_training_worker_behaviors.py
-
-  mlx-real-apple-silicon:
-    name: MLX real Apple Silicon (macos-14, M1)
-    runs-on: macos-14
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      # Real mlx install. The GitHub-hosted macos-14 runner is M1 / arm64
-      # so platform.system() == 'Darwin' and platform.machine() == 'arm64'
-      # without any spoofing -- exactly the conditions unsloth._IS_MLX
-      # checks for. Once mlx is on the path the gate flips True and the
-      # MLX import branch in unsloth/__init__.py runs.
+      # macOS variant: real Apple Silicon. Install ladder validated
+      # locally against a Linux mac-sim venv (platform spoofed +
+      # mlx_simulation shim + real datasets/transformers/structlog).
       #
-      # Dep install ladder, validated locally against a Linux mac-sim
-      # venv:
-      #
-      #  1. Studio backend requirements -- structlog, fastapi, etc. The
-      #     hardware probe imports structlog at module top-level, so the
-      #     import chain fails without it.
-      #
-      #  2. Other Studio deps the Linux job also installs (numpy<3,
-      #     httpx, pytest stack, ...).
-      #
-      #  3. unsloth_zoo from git main, WITH deps. PR-A's MLX support
-      #     merged after the latest unsloth_zoo PyPI release, so the
-      #     wheel still raises NotImplementedError on Apple Silicon
-      #     when device_type.get_device_type() runs unguarded. Studio's
-      #     own install.sh overlays unsloth-zoo from git main for the
-      #     same reason. Pulling deps lets pip resolve the platform-
-      #     conditional MLX-only wheels (mlx, mlx-lm, mlx-vlm, gated
-      #     on darwin+arm64 in unsloth-zoo's pyproject) AND the shared
-      #     deps (datasets, transformers, sentencepiece, ...) the
-      #     unsloth __init__ MLX branch loads via dataprep/raw_text.py.
-      #
-      #  4. unsloth -e . --no-deps so the editable install does not
-      #     fight unsloth-zoo's already-resolved pin set.
-      - name: Install deps (Studio backend + real mlx + unsloth + unsloth-zoo from git)
+      # 1. studio/backend/requirements/studio.txt brings structlog,
+      #    fastapi, etc. The hardware probe imports structlog at
+      #    module top level.
+      # 2. Same pytest / numpy / httpx stack as the Linux variant.
+      # 3. torch is explicitly installed: unsloth-zoo's pyproject
+      #    deliberately excludes torch on darwin+arm64 (mlx replaces
+      #    it for runtime use), but the dispatch tests spoof
+      #    torch.cuda / torch.xpu / torch.backends.mps via monkeypatch
+      #    and so the test process needs torch importable. We pull
+      #    from the PyTorch CPU index for both Linux and macOS so
+      #    Apple Silicon gets the explicit cpu+MPS arm64 wheel rather
+      #    than something the default PyPI resolver might pick up.
+      #    https://download.pytorch.org/whl/cpu hosts
+      #    torch-x.y.z-cp312-...-macosx_*_arm64.whl alongside the
+      #    Linux x86_64 wheels.
+      # 4. unsloth-zoo from git main (NOT PyPI), WITH deps. PR-A's
+      #    MLX support landed after the most recent unsloth-zoo PyPI
+      #    release; the wheel still raises NotImplementedError on
+      #    Apple Silicon when device_type.get_device_type() runs
+      #    unguarded. Studio's own install.sh overlays unsloth-zoo
+      #    from git main for the same reason. Pulling deps lets pip
+      #    resolve the platform-conditional MLX-only wheels (mlx,
+      #    mlx-lm, mlx-vlm gated on darwin+arm64 in unsloth-zoo's
+      #    pyproject) AND the shared deps (datasets, transformers,
+      #    sentencepiece, ...) that unsloth's MLX branch loads via
+      #    dataprep/raw_text.py.
+      # 5. unsloth -e . --no-deps so the editable install does not
+      #    fight the unsloth-zoo dep set.
+      # See the comment on the Linux variant -- same pin set, with
+      # two macOS-specific adjustments: no torchvision (zoo's mlx-vlm
+      # replaces it on Apple Silicon), no bitsandbytes (CUDA-only),
+      # no transformers explicit pin (zoo's deps already constrain
+      # it), and unsloth-zoo from git main rather than PyPI.
+      - name: Install deps (macOS real Apple Silicon)
+        if: matrix.real_mlx
         run: |
           python -m pip install --upgrade pip
           pip install -r studio/backend/requirements/studio.txt
           pip install \
-            python-multipart aiofiles sqlalchemy cryptography \
-            pyyaml jinja2 mammoth unpdf requests typer \
-            'numpy<3' pytest pytest-asyncio httpx
+            'python-multipart==0.0.27' \
+            'aiofiles==25.1.0' \
+            'sqlalchemy==2.0.49' \
+            'cryptography==48.0.0' \
+            'pyyaml==6.0.3' \
+            'jinja2==3.1.6' \
+            'mammoth==1.12.0' \
+            'unpdf==1.0.0' \
+            'requests==2.33.1' \
+            'typer==0.25.1' \
+            'numpy==2.4.4' \
+            'pytest==9.0.3' \
+            'pytest-asyncio==1.3.0' \
+            'httpx==0.28.1'
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            'torch==2.10.0'
           pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo"
           pip install -e . --no-deps
 
+      # Mac-only sanity: confirm _IS_MLX activates on real Apple
+      # Silicon hardware with no platform spoof.
       - name: Verify _IS_MLX flips True on real Apple Silicon
+        if: matrix.real_mlx
         run: |
           python -c "
           import platform
@@ -160,7 +209,10 @@ jobs:
           print('OK: _IS_MLX activated on real Apple Silicon')
           "
 
+      # Mac-only sanity: confirm every PR-A MLX-only module loads
+      # against real mlx + mlx-lm + mlx-vlm wheels.
       - name: Smoke-import every MLX-only unsloth_zoo module
+        if: matrix.real_mlx
         run: |
           python -c "
           import importlib
@@ -180,7 +232,14 @@ jobs:
           print('OK: FastMLXModel + MLXTrainer surface present')
           "
 
-      - name: MLX dispatch tests on real Apple Silicon (spoofs still apply)
+      # Both variants run the same dispatch tests. The monkeypatch
+      # spoofs in test_hardware_dispatch_matrix.py override
+      # platform.system / platform.machine / torch.cuda /
+      # torch.xpu / torch.backends.mps for each test, so they
+      # behave identically on Linux and on real Apple Silicon. The
+      # macOS variant additionally proves the spoofs do not collide
+      # with the real environment.
+      - name: MLX dispatch tests (3 files, 36 tests)
         env:
           PYTHONPATH: ${{ github.workspace }}/studio
           UNSLOTH_COMPILE_DISABLE: '1'

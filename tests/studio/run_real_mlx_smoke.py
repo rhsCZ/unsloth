@@ -97,12 +97,21 @@ def _seed_everything() -> None:
 def _peak_gpu_gb() -> float:
     import mlx.core as mx
 
-    if mx.metal.is_available():
-        try:
-            return float(mx.metal.get_peak_memory()) / (1024**3)
-        except Exception:
-            return 0.0
-    return 0.0
+    if not mx.metal.is_available():
+        return 0.0
+    # Newer MLX deprecates mx.metal.get_peak_memory in favour of the
+    # top-level mx.get_peak_memory; fall back to the old API for
+    # compatibility with older MLX versions still present in the
+    # environment.
+    getter = getattr(mx, "get_peak_memory", None) or getattr(
+        mx.metal, "get_peak_memory", None
+    )
+    if getter is None:
+        return 0.0
+    try:
+        return float(getter()) / (1024**3)
+    except Exception:
+        return 0.0
 
 
 def _peak_rss_gb() -> float:

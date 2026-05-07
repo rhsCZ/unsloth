@@ -121,9 +121,7 @@ with sync_playwright() as p:
     # flow's second prompt races the first prompt's SSE stream. These
     # are timing artefacts on slow CI runners (macos-14 free), not
     # Studio bugs.
-    _BENIGN_PAGEERROR_PATTERNS = (
-        "At least one non-system message is required",
-    )
+    _BENIGN_PAGEERROR_PATTERNS = ("At least one non-system message is required",)
 
     def _on_pageerror(e):
         msg = str(e)

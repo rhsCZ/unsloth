@@ -64,6 +64,13 @@ ART.mkdir(parents = True, exist_ok = True)
 # a partial Studio install.
 STRICT = os.environ.get("STUDIO_UI_STRICT", "0") == "1"
 
+# Per-turn assistant-bubble wait. The free macos-14 runner (3 vCPU /
+# 7 GB / no GPU) is ~3-5x slower at gemma-3-270m CPU inference than the
+# free ubuntu-latest runner; "Say the word 'tree'" has been observed to
+# hit the 180 s default exactly. STUDIO_UI_TURN_TIMEOUT_MS lets the Mac
+# CI bump this without hard-coding a Mac branch in the test.
+TURN_TIMEOUT_MS = int(os.environ.get("STUDIO_UI_TURN_TIMEOUT_MS", "180000"))
+
 _n = [0]
 
 
@@ -128,10 +135,22 @@ with sync_playwright() as p:
     ctx.add_init_script("""
         (function () {
             try {
+                // Nuke view-transition pseudo-elements completely +
+                // monkey-patch document.startViewTransition so the
+                // theme toggle's animated reveal never runs in CI.
+                // Without this, the post-transition html element keeps
+                // intercepting pointer events on later clicks (sidebar
+                // nav, account menu, etc.) -- Playwright surfaces this
+                // as "<html> intercepts pointer events".
                 const css = `
+                    ::view-transition,
+                    ::view-transition-group(*),
+                    ::view-transition-image-pair(*),
                     ::view-transition-old(*),
                     ::view-transition-new(*) {
+                        display: none !important;
                         animation: none !important;
+                        opacity: 0 !important;
                     }
                     html, body { pointer-events: auto !important; }
                 `;
@@ -139,6 +158,20 @@ with sync_playwright() as p:
                 style.id = "playwright-no-view-transition";
                 style.textContent = css;
                 (document.head || document.documentElement).appendChild(style);
+                // Replace startViewTransition with an immediate-call
+                // shim so the callback runs synchronously without the
+                // animation pipeline ever capturing the html element.
+                if (typeof document.startViewTransition === "function") {
+                    document.startViewTransition = function (cb) {
+                        try { if (cb) cb(); } catch (e) {}
+                        return {
+                            ready: Promise.resolve(),
+                            finished: Promise.resolve(),
+                            updateCallbackDone: Promise.resolve(),
+                            skipTransition: () => {},
+                        };
+                    };
+                }
             } catch (e) { /* noop */ }
         })();
     """)
@@ -383,7 +416,7 @@ with sync_playwright() as p:
                 return nonEmpty >= want;
             }""",
             arg = want_assistants,
-            timeout = 180_000,
+            timeout = TURN_TIMEOUT_MS,
         )
         try:
             page.wait_for_selector(
@@ -661,11 +694,16 @@ with sync_playwright() as p:
         if btn is None:
             soft_fail(f"nav '{label}' not found")
             return False
+        # force=True bypasses Playwright's actionability check. The
+        # button IS visible + enabled, but the post-theme-toggle view-
+        # transition can leave <html> reported as the topmost element
+        # for a beat (we already neutralise startViewTransition via
+        # add_init_script; this is belt-and-suspenders).
         try:
-            btn.scroll_into_view_if_needed(timeout = 2000)
-        except Exception:
-            pass
-        btn.click()
+            btn.click(force = True, timeout = 5_000)
+        except Exception as exc:
+            soft_fail(f"nav '{label}' click failed: {exc!r}")
+            return False
         page.wait_for_timeout(800)
         if expected_url_pat and not re.search(expected_url_pat, page.url):
             soft_fail(

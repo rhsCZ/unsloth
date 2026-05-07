@@ -76,13 +76,36 @@ with sync_playwright() as p:
     ctx.add_init_script("""
         (function () {
             try {
+                // Same shim as playwright_chat_ui.py: nuke view-
+                // transition pseudo-elements + monkey-patch
+                // startViewTransition so the html element never gets
+                // captured (which Playwright surfaces as "<html>
+                // intercepts pointer events" on later clicks).
                 const style = document.createElement("style");
                 style.textContent = `
+                    ::view-transition,
+                    ::view-transition-group(*),
+                    ::view-transition-image-pair(*),
                     ::view-transition-old(*),
-                    ::view-transition-new(*) { animation: none !important; }
+                    ::view-transition-new(*) {
+                        display: none !important;
+                        animation: none !important;
+                        opacity: 0 !important;
+                    }
                     html, body { pointer-events: auto !important; }
                 `;
                 (document.head || document.documentElement).appendChild(style);
+                if (typeof document.startViewTransition === "function") {
+                    document.startViewTransition = function (cb) {
+                        try { if (cb) cb(); } catch (e) {}
+                        return {
+                            ready: Promise.resolve(),
+                            finished: Promise.resolve(),
+                            updateCallbackDone: Promise.resolve(),
+                            skipTransition: () => {},
+                        };
+                    };
+                }
             } catch (e) {}
         })();
     """)

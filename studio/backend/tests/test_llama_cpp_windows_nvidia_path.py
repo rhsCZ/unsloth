@@ -8,6 +8,7 @@ nvidia-cublas-cu13, etc.) and the prebuilt llama-server.exe must find
 those DLLs at runtime to load CUDA. Mirrors the Linux LD_LIBRARY_PATH
 block. See unslothai/unsloth#5106.
 """
+
 from __future__ import annotations
 
 import sys
@@ -28,8 +29,12 @@ sys.modules.setdefault("structlog", _types.ModuleType("structlog"))
 
 _httpx_stub = _types.ModuleType("httpx")
 for _exc_name in (
-    "ConnectError", "TimeoutException", "ReadTimeout",
-    "ReadError", "RemoteProtocolError", "CloseError",
+    "ConnectError",
+    "TimeoutException",
+    "ReadTimeout",
+    "ReadError",
+    "RemoteProtocolError",
+    "CloseError",
 ):
     setattr(_httpx_stub, _exc_name, type(_exc_name, (Exception,), {}))
 
@@ -41,7 +46,9 @@ class _FakeTimeout:
 
 _httpx_stub.Timeout = _FakeTimeout
 _httpx_stub.Client = type(
-    "Client", (), {
+    "Client",
+    (),
+    {
         "__init__": lambda self, **kw: None,
         "__enter__": lambda self: self,
         "__exit__": lambda self, *a: None,
@@ -73,11 +80,14 @@ class TestWindowsPipNvidiaDllDirs:
         assert result == []
 
     def test_picks_up_bin_layout(self, tmp_path):
-        _make_nvidia_layout(tmp_path, {
-            "cuda_runtime": "bin",
-            "cublas": "bin",
-            "cudnn": "bin",
-        })
+        _make_nvidia_layout(
+            tmp_path,
+            {
+                "cuda_runtime": "bin",
+                "cublas": "bin",
+                "cudnn": "bin",
+            },
+        )
         result = LlamaCppBackend._windows_pip_nvidia_dll_dirs(str(tmp_path))
         assert len(result) == 3
         assert all(Path(p).is_dir() for p in result)
@@ -86,10 +96,13 @@ class TestWindowsPipNvidiaDllDirs:
         assert names == {"cuda_runtime", "cublas", "cudnn"}
 
     def test_picks_up_library_bin_layout(self, tmp_path):
-        _make_nvidia_layout(tmp_path, {
-            "cuda_runtime": "library_bin",
-            "cublas": "library_bin",
-        })
+        _make_nvidia_layout(
+            tmp_path,
+            {
+                "cuda_runtime": "library_bin",
+                "cublas": "library_bin",
+            },
+        )
         result = LlamaCppBackend._windows_pip_nvidia_dll_dirs(str(tmp_path))
         assert len(result) == 2
         for p in result:
@@ -98,12 +111,15 @@ class TestWindowsPipNvidiaDllDirs:
             assert Path(p).parent.parent.name in {"cuda_runtime", "cublas"}
 
     def test_mixed_layouts_all_resolved(self, tmp_path):
-        _make_nvidia_layout(tmp_path, {
-            "cuda_runtime": "bin",
-            "cublas": "library_bin",
-            "cudnn": "bin",
-            "nvjitlink": "library_bin",
-        })
+        _make_nvidia_layout(
+            tmp_path,
+            {
+                "cuda_runtime": "bin",
+                "cublas": "library_bin",
+                "cudnn": "bin",
+                "nvjitlink": "library_bin",
+            },
+        )
         result = LlamaCppBackend._windows_pip_nvidia_dll_dirs(str(tmp_path))
         assert len(result) == 4
 

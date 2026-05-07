@@ -336,6 +336,7 @@ with sync_playwright() as p:
                     );
                     return el ? (el.innerText || '').trim() : '';
                 }""")
+
             search.fill("qwen")
             page.wait_for_timeout(800)
             qwen_text = picker_visible_text()
@@ -557,8 +558,7 @@ with sync_playwright() as p:
                 acct.click(force = True)
             except Exception as exc:
                 soft_fail(
-                    f"theme cycle {cycle + 1}: account-menu click failed "
-                    f"({exc!r})"
+                    f"theme cycle {cycle + 1}: account-menu click failed " f"({exc!r})"
                 )
                 break
             # Wait for the dropdown menu to actually render before

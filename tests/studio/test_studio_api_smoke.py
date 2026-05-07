@@ -39,7 +39,7 @@ from pathlib import Path
 
 BASE = os.environ["BASE_URL"]
 OLD = os.environ["STUDIO_OLD_PW"]
-NEW = os.environ.get("STUDIO_NEW_PW",  "ApiSmoke-NEW-2026!")
+NEW = os.environ.get("STUDIO_NEW_PW", "ApiSmoke-NEW-2026!")
 NEW2 = os.environ.get("STUDIO_NEW2_PW", "ApiSmoke-NEW2-2026!")
 AUTH_DIR = Path(
     os.environ.get("STUDIO_AUTH_DIR", str(Path.home() / ".unsloth" / "studio" / "auth"))
@@ -98,7 +98,9 @@ def http(
 def login(password: str) -> tuple[int, str | None]:
     """POST /api/auth/login. Returns (status, access_token-or-None)."""
     code, body = http(
-        "POST", "/api/auth/login", body = {"username": "unsloth", "password": password},
+        "POST",
+        "/api/auth/login",
+        body = {"username": "unsloth", "password": password},
     )
     if code == 200 and isinstance(body, dict):
         return code, body.get("access_token")
@@ -129,7 +131,9 @@ try:
         acao = r.headers.get("Access-Control-Allow-Origin", "")
         acac = r.headers.get("Access-Control-Allow-Credentials", "")
         if acao == "*" and acac.lower() == "true":
-            fail(f"CORS: wildcard origin + credentials=true (acao={acao!r}, acac={acac!r})")
+            fail(
+                f"CORS: wildcard origin + credentials=true (acao={acao!r}, acac={acac!r})"
+            )
         else:
             ok(f"CORS preflight acao={acao!r} acac={acac!r}")
 except Exception as exc:
@@ -144,7 +148,8 @@ if boot_path.exists():
     bootstrap_pw = boot_path.read_text().strip()
     if bootstrap_pw:
         req = urllib.request.Request(
-            f"{BASE}/", headers = {"Origin": "https://evil.example"},
+            f"{BASE}/",
+            headers = {"Origin": "https://evil.example"},
         )
         try:
             with urllib.request.urlopen(req, timeout = 10) as r:
@@ -182,7 +187,8 @@ if code != 200 or not old_token:
     sys.exit(1)
 ok("bootstrap login -> 200")
 code, body = http(
-    "POST", "/api/auth/change-password",
+    "POST",
+    "/api/auth/change-password",
     body = {"current_password": OLD, "new_password": NEW},
     headers = {"Authorization": f"Bearer {old_token}"},
 )
@@ -208,7 +214,8 @@ for endpoint in ("/api/system", "/api/system/hardware", "/api/system/gpu-visibil
 # Load the model. Sections 5 + 7 below need a loaded model.
 section("Load the GGUF for /v1 tests")
 code, body = http(
-    "POST", "/api/inference/load",
+    "POST",
+    "/api/inference/load",
     body = {
         "model_path": GGUF_REPO,
         "gguf_variant": os.environ.get("GGUF_VARIANT", "UD-Q4_K_XL"),
@@ -264,12 +271,24 @@ section("JWT expiry")
 # Forge a JWT with exp=now-1 using the install's signing secret.
 # auth/storage.py:get_user_and_secret('unsloth') returns (salt, hash, jwt_secret, must_change_pw).
 try:
-    sys.path.insert(0, str(Path.home() / ".unsloth" / "studio" / "unsloth_studio" / "lib" /
-                          f"python{sys.version_info.major}.{sys.version_info.minor}" /
-                          "site-packages" / "studio" / "backend"))
+    sys.path.insert(
+        0,
+        str(
+            Path.home()
+            / ".unsloth"
+            / "studio"
+            / "unsloth_studio"
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+            / "studio"
+            / "backend"
+        ),
+    )
     # Best-effort import; not all installs ship the backend at this path.
     import jwt  # type: ignore[import-not-found]
     from auth import storage  # type: ignore[import-not-found]
+
     rec = storage.get_user_and_secret("unsloth")
     if rec is None:
         fail("get_user_and_secret returned None; can't forge JWT")
@@ -281,7 +300,8 @@ try:
             algorithm = "HS256",
         )
         code, _ = http(
-            "GET", "/api/inference/status",
+            "GET",
+            "/api/inference/status",
             headers = {"Authorization": f"Bearer {expired}"},
         )
         if code == 401:
@@ -298,7 +318,8 @@ except Exception as exc:
 section("API key lifecycle")
 
 code, body = http(
-    "POST", "/api/auth/api-keys",
+    "POST",
+    "/api/auth/api-keys",
     body = {"name": "smoke-key"},
     headers = AUTH_HEADER,
 )
@@ -327,7 +348,8 @@ else:
         # Use the key against /v1/chat/completions (the workflow has
         # already loaded gemma-3-270m).
         code, body = http(
-            "POST", "/v1/chat/completions",
+            "POST",
+            "/v1/chat/completions",
             body = {
                 "model": GGUF_REPO,
                 "messages": [{"role": "user", "content": "Reply with: ok"}],
@@ -344,14 +366,17 @@ else:
 
         # Delete + verify rejection.
         code, _ = http(
-            "DELETE", f"/api/auth/api-keys/{api_id}", headers = AUTH_HEADER,
+            "DELETE",
+            f"/api/auth/api-keys/{api_id}",
+            headers = AUTH_HEADER,
         )
         if code in (200, 204):
             ok(f"DELETE /api/auth/api-keys/{api_id} -> {code}")
         else:
             fail(f"DELETE /api/auth/api-keys/{api_id} -> {code}")
         code, _ = http(
-            "POST", "/v1/chat/completions",
+            "POST",
+            "/v1/chat/completions",
             body = {
                 "model": GGUF_REPO,
                 "messages": [{"role": "user", "content": "test"}],
@@ -371,6 +396,7 @@ else:
 # ─────────────────────────────────────────────────────────────────────────
 section("Auth file-mode hardening")
 import platform as _platform
+
 if _platform.system() != "Linux":
     ok("(non-Linux, skipping file-mode checks)")
 else:
@@ -389,9 +415,7 @@ else:
         if actual_mode == expected_mode:
             ok(f"{path} mode={oct(actual_mode)}")
         else:
-            fail(
-                f"{path} mode={oct(actual_mode)} (expected {oct(expected_mode)})"
-            )
+            fail(f"{path} mode={oct(actual_mode)} (expected {oct(expected_mode)})")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -412,7 +436,8 @@ else:
 
 # /v1/embeddings either returns embedding OR structured 4xx.
 code, body = http(
-    "POST", "/v1/embeddings",
+    "POST",
+    "/v1/embeddings",
     body = {"model": GGUF_REPO, "input": "hello"},
     headers = AUTH_HEADER,
     timeout = 30,
@@ -426,7 +451,8 @@ else:
 
 # /v1/responses minimal request.
 code, body = http(
-    "POST", "/v1/responses",
+    "POST",
+    "/v1/responses",
     body = {
         "model": GGUF_REPO,
         "input": "Reply with: ok",
@@ -442,7 +468,8 @@ else:
 
 # Bogus variant must be rejected.
 code, _ = http(
-    "POST", "/api/inference/load",
+    "POST",
+    "/api/inference/load",
     body = {
         "model_path": GGUF_REPO,
         "gguf_variant": "UD-Q9_BOGUS_DOES_NOT_EXIST",
@@ -457,6 +484,7 @@ if 400 <= code < 500:
 else:
     fail(f"bogus gguf_variant returned {code} (expected 4xx)")
 
+
 # Force-reload of the same repo: child PID must change.
 # Read the inference status before.
 def _llama_pid() -> int | None:
@@ -465,9 +493,11 @@ def _llama_pid() -> int | None:
         return None
     return body.get("llama_server_pid") or body.get("pid")
 
+
 before_pid = _llama_pid()
 code, _ = http(
-    "POST", "/api/inference/load",
+    "POST",
+    "/api/inference/load",
     body = {
         "model_path": GGUF_REPO,
         "gguf_variant": os.environ.get("GGUF_VARIANT", "UD-Q4_K_XL"),
@@ -496,21 +526,21 @@ section("Endpoint auth audit")
 # without an entry here fails the audit, forcing the author to make
 # the auth decision explicit.
 PUBLIC = {
-    ("GET",  "/api/health"),
-    ("GET",  "/api/auth/status"),
+    ("GET", "/api/health"),
+    ("GET", "/api/auth/status"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/desktop-login"),
     ("POST", "/api/auth/refresh"),
 }
 EXPECTED_AUTH_ENDPOINTS = [
     # Auth-required (sample -- not exhaustive; covers the key surfaces)
-    ("GET",  "/api/inference/status"),
-    ("GET",  "/api/inference/models"),
-    ("GET",  "/v1/models"),
-    ("GET",  "/api/system"),
-    ("GET",  "/api/system/hardware"),
-    ("GET",  "/api/system/gpu-visibility"),
-    ("GET",  "/api/auth/api-keys"),
+    ("GET", "/api/inference/status"),
+    ("GET", "/api/inference/models"),
+    ("GET", "/v1/models"),
+    ("GET", "/api/system"),
+    ("GET", "/api/system/hardware"),
+    ("GET", "/api/system/gpu-visibility"),
+    ("GET", "/api/auth/api-keys"),
     ("POST", "/api/inference/load"),
     ("POST", "/api/shutdown"),  # don't actually fire it!
 ]
@@ -535,7 +565,9 @@ for method, path in EXPECTED_AUTH_ENDPOINTS:
         fail(f"{method} {path} unauthenticated returned {code} (expected 401/403)")
 for method, path in PUBLIC:
     code, _ = http(method, path)
-    if 200 <= code < 500:  # public endpoints either 200 or 4xx (bad input), never connection-refused
+    if (
+        200 <= code < 500
+    ):  # public endpoints either 200 or 4xx (bad input), never connection-refused
         ok(f"{method} {path} public -> {code}")
     else:
         fail(f"{method} {path} public returned unexpected {code}")

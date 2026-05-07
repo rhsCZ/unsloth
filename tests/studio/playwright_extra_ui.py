@@ -94,7 +94,8 @@ with sync_playwright() as p:
     def shoot(name: str) -> None:
         _n[0] += 1
         page.screenshot(
-            path = str(ART / f"{_n[0]:02d}-{name}.png"), full_page = True,
+            path = str(ART / f"{_n[0]:02d}-{name}.png"),
+            full_page = True,
         )
 
     # ─────────────────────────────────────────────────────
@@ -155,7 +156,8 @@ with sync_playwright() as p:
     compare_nav = page.locator('[data-tour="chat-compare"]').first
     if compare_nav.count() == 0:
         compare_nav = page.get_by_role(
-            "button", name = re.compile(r"^\s*Compare\s*$", re.I),
+            "button",
+            name = re.compile(r"^\s*Compare\s*$", re.I),
         ).first
     if compare_nav.count() == 0:
         soft_fail("Compare nav not found")
@@ -214,7 +216,9 @@ with sync_playwright() as p:
                         arg = ok_count_before + 4,
                         timeout = 180_000,
                     )
-                    info("OK Compare: 4 total new assistant bubbles after second prompt")
+                    info(
+                        "OK Compare: 4 total new assistant bubbles after second prompt"
+                    )
                 except Exception as exc:
                     soft_fail(f"Compare: 4 bubbles didn't appear: {exc!r}")
                 shoot("04-compare-after-B")
@@ -232,7 +236,9 @@ with sync_playwright() as p:
     page.wait_for_timeout(1500)
     shoot("05-recipes-list")
     # Template cards render as <button> elements.
-    templates = page.locator("main button").filter(has_not_text = re.compile(r"^(\+|Create)"))
+    templates = page.locator("main button").filter(
+        has_not_text = re.compile(r"^(\+|Create)")
+    )
     n_templates = templates.count()
     info(f"recipe templates visible: {n_templates}")
     if n_templates == 0:
@@ -266,7 +272,9 @@ with sync_playwright() as p:
     shoot("07-export")
     if chat_only:
         if "/export" in page.url:
-            soft_fail(f"chat-only mode should redirect /export -> /chat; url={page.url}")
+            soft_fail(
+                f"chat-only mode should redirect /export -> /chat; url={page.url}"
+            )
         else:
             info(f"OK chat-only redirected /export -> {page.url}")
     else:
@@ -291,12 +299,16 @@ with sync_playwright() as p:
     shoot("08-studio")
     if chat_only:
         if "/studio" in page.url:
-            soft_fail(f"chat-only mode should redirect /studio -> /chat; url={page.url}")
+            soft_fail(
+                f"chat-only mode should redirect /studio -> /chat; url={page.url}"
+            )
         else:
             info(f"OK chat-only redirected /studio -> {page.url}")
     else:
         for tab_name in ("Configure", "Current run", "History"):
-            tab = page.get_by_role("tab", name = re.compile(rf"^\s*{tab_name}\s*$", re.I)).first
+            tab = page.get_by_role(
+                "tab", name = re.compile(rf"^\s*{tab_name}\s*$", re.I)
+            ).first
             if tab.count() == 0:
                 soft_fail(f"tab '{tab_name}' not found in /studio")
             else:
@@ -328,11 +340,19 @@ with sync_playwright() as p:
         shoot("09-settings-open")
         # Each tab is a button with the visible text as accessible name.
         # Tabs available depend on chat_only mode.
-        candidate_tabs = ("General", "Profile", "Appearance", "Chat", "Developer", "About")
+        candidate_tabs = (
+            "General",
+            "Profile",
+            "Appearance",
+            "Chat",
+            "Developer",
+            "About",
+        )
         seen_tabs = []
         for tab_name in candidate_tabs:
             btn = page.get_by_role(
-                "button", name = re.compile(rf"^\s*{tab_name}\s*$", re.I),
+                "button",
+                name = re.compile(rf"^\s*{tab_name}\s*$", re.I),
             ).first
             if btn.count() == 0:
                 continue
@@ -350,7 +370,9 @@ with sync_playwright() as p:
                     info(f"OK Settings tab '{tab_name}' body length={body_text}")
                     seen_tabs.append(tab_name)
                 else:
-                    soft_fail(f"Settings tab '{tab_name}' body suspiciously short: {body_text}")
+                    soft_fail(
+                        f"Settings tab '{tab_name}' body suspiciously short: {body_text}"
+                    )
             except Exception as exc:
                 soft_fail(f"Settings tab '{tab_name}' click failed: {exc!r}")
         shoot("10-settings-tabs-visited")

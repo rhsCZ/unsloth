@@ -49,25 +49,35 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 BASE = os.environ["BASE_URL"]
-OLD  = os.environ["STUDIO_OLD_PW"]
-NEW  = os.environ["STUDIO_NEW_PW"]
+OLD = os.environ["STUDIO_OLD_PW"]
+NEW = os.environ["STUDIO_NEW_PW"]
 NEW2 = os.environ.get("STUDIO_NEW2_PW", NEW + "X9!")
-GGUF_REPO    = os.environ.get("GGUF_REPO",    "unsloth/gemma-3-270m-it-GGUF")
+GGUF_REPO = os.environ.get("GGUF_REPO", "unsloth/gemma-3-270m-it-GGUF")
 GGUF_VARIANT = os.environ.get("GGUF_VARIANT", "UD-Q4_K_XL")
 ART_DIR = os.environ.get("PW_ART_DIR", "logs/playwright")
 ART = Path(ART_DIR)
 ART.mkdir(parents = True, exist_ok = True)
 
 _n = [0]
-def step(s):  print(f"[ui] STEP {s}", flush = True)
-def info(s):  print(f"[ui] {s}",      flush = True)
-def fail(m):  raise AssertionError(f"[ui] FAIL: {m}")
+
+
+def step(s):
+    print(f"[ui] STEP {s}", flush = True)
+
+
+def info(s):
+    print(f"[ui] {s}", flush = True)
+
+
+def fail(m):
+    raise AssertionError(f"[ui] FAIL: {m}")
+
 
 def login_via_api(pw):
     req = urllib.request.Request(
         f"{BASE}/api/auth/login",
-        data    = json.dumps({"username": "unsloth", "password": pw}).encode(),
-        method  = "POST",
+        data = json.dumps({"username": "unsloth", "password": pw}).encode(),
+        method = "POST",
         headers = {"Content-Type": "application/json"},
     )
     try:
@@ -76,6 +86,7 @@ def login_via_api(pw):
     except urllib.error.HTTPError as exc:
         return exc.code
 
+
 def parse_rgb(s):
     m = re.search(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", s or "")
     return tuple(int(x) for x in m.groups()) if m else None
@@ -83,7 +94,7 @@ def parse_rgb(s):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless = True)
-    ctx     = browser.new_context(
+    ctx = browser.new_context(
         viewport = {"width": 1280, "height": 900},
         # Reduces motion so the theme toggle's view-transition
         # animation doesn't briefly intercept pointer events
@@ -113,13 +124,15 @@ with sync_playwright() as p:
             } catch (e) { /* noop */ }
         })();
     """)
-    page    = ctx.new_page()
+    page = ctx.new_page()
     page.set_default_timeout(30_000)
     page_errors = []
     page.on("pageerror", lambda e: page_errors.append(str(e)))
     console_errors = []
-    page.on("console", lambda m: console_errors.append(m.text)
-            if m.type == "error" else None)
+    page.on(
+        "console",
+        lambda m: console_errors.append(m.text) if m.type == "error" else None,
+    )
 
     def shoot(name):
         _n[0] += 1
@@ -140,7 +153,7 @@ with sync_playwright() as p:
     page.goto(f"{BASE}/change-password")
     page.locator("#new-password").wait_for(state = "visible", timeout = 30_000)
     shoot("01-change-password-initial")
-    page.fill("#new-password",     NEW)
+    page.fill("#new-password", NEW)
     page.fill("#confirm-password", NEW)
     shoot("02-change-password-filled")
     page.locator('button[type="submit"]').click()
@@ -165,14 +178,17 @@ with sync_playwright() as p:
             "() => localStorage.getItem('unsloth_auth_refresh_token')",
         )
         if refresh_token:
-            refresh = page.evaluate(f"""async (rt) => {{
+            refresh = page.evaluate(
+                f"""async (rt) => {{
                 const r = await fetch("{BASE}/api/auth/refresh", {{
                     method: "POST",
                     headers: {{"Content-Type": "application/json"}},
                     body: JSON.stringify({{refresh_token: rt}}),
                 }});
                 return await r.json();
-            }}""", refresh_token)
+            }}""",
+                refresh_token,
+            )
             token = refresh.get("access_token")
     if not token:
         fail("could not obtain auth token after change-password")
@@ -185,19 +201,25 @@ with sync_playwright() as p:
     # which is what this assertion guards.
     step("default_models[0] matches DEFAULT_MODELS_GGUF[0]")
     EXPECTED_DEFAULT = os.environ.get(
-        "EXPECTED_DEFAULT_MODEL", "unsloth/gemma-4-E2B-it-GGUF",
+        "EXPECTED_DEFAULT_MODEL",
+        "unsloth/gemma-4-E2B-it-GGUF",
     )
-    defaults = page.evaluate(f"""async (token) => {{
+    defaults = page.evaluate(
+        f"""async (token) => {{
         const r = await fetch("{BASE}/api/models/list", {{
             headers: {{ "Authorization": "Bearer " + token }},
         }});
         return await r.json();
-    }}""", token)
+    }}""",
+        token,
+    )
     if not defaults.get("default_models"):
         fail(f"/api/models/list returned no default_models: {defaults}")
     if defaults["default_models"][0] != EXPECTED_DEFAULT:
-        fail(f"default_models[0]={defaults['default_models'][0]!r}, "
-             f"expected {EXPECTED_DEFAULT!r}; defaults.py drift?")
+        fail(
+            f"default_models[0]={defaults['default_models'][0]!r}, "
+            f"expected {EXPECTED_DEFAULT!r}; defaults.py drift?"
+        )
     info(f"OK default_models[0] = {EXPECTED_DEFAULT}")
 
     # The model selector button text on the chat page should say
@@ -205,10 +227,12 @@ with sync_playwright() as p:
     # loaded. The model-selector renders the current model name
     # (or "Select model" if no current); for a fresh chat it
     # should surface the default.
-    selector_btn = page.locator('button:has-text("Select model"), '
-                                'button:has-text("gemma"), '
-                                'button:has-text("Qwen"), '
-                                'button:has-text("Llama")').first
+    selector_btn = page.locator(
+        'button:has-text("Select model"), '
+        'button:has-text("gemma"), '
+        'button:has-text("Qwen"), '
+        'button:has-text("Llama")'
+    ).first
     if selector_btn.count() > 0:
         sel_text = (selector_btn.text_content() or "").strip()
         info(f"model selector button text: {sel_text!r}")
@@ -238,7 +262,9 @@ with sync_playwright() as p:
         return {{status: r.status, body: await r.json()}};
     }}""")
     if load_resp["status"] != 200:
-        fail(f"/api/inference/load returned {load_resp['status']}: {load_resp.get('body')!r}")
+        fail(
+            f"/api/inference/load returned {load_resp['status']}: {load_resp.get('body')!r}"
+        )
     info(f"loaded model: {load_resp['body'].get('display_name')}")
 
     # Studio caches the per-context model state in zustand; reload
@@ -264,10 +290,12 @@ with sync_playwright() as p:
     if picker_btn.count() == 0:
         # Fall back to any button mentioning the loaded model.
         picker_btn = page.get_by_role(
-            "button", name = re.compile(r"gemma-?3", re.I),
+            "button",
+            name = re.compile(r"gemma-?3", re.I),
         ).first
     if picker_btn.count() > 0:
-        picker_btn.click(); page.wait_for_timeout(500)
+        picker_btn.click()
+        page.wait_for_timeout(500)
         shoot("03c-model-picker-open")
         search = page.get_by_placeholder(
             re.compile(r"Search.*models?", re.I),
@@ -285,7 +313,8 @@ with sync_playwright() as p:
         else:
             info("WARN model picker search input not found")
         # Close picker without changing selection.
-        page.keyboard.press("Escape"); page.wait_for_timeout(300)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
 
     # ─────────────────────────────────────────────────────
     # 4. Five chat turns, all non-empty.
@@ -311,7 +340,7 @@ with sync_playwright() as p:
                 }
                 return nonEmpty >= want;
             }""",
-            arg     = want_assistants,
+            arg = want_assistants,
             timeout = 180_000,
         )
         try:
@@ -339,7 +368,8 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     step("regenerate last assistant turn")
     last_assistant = page.locator('[data-role="assistant"]').last
-    last_assistant.hover(); page.wait_for_timeout(400)
+    last_assistant.hover()
+    page.wait_for_timeout(400)
     regen_btn = page.get_by_role(
         "button",
         name = re.compile(r"(reload|regenerate)", re.I),
@@ -394,10 +424,13 @@ with sync_playwright() as p:
         before = toggle.get_attribute("aria-label") or ""
         toggle.click()
         page.wait_for_timeout(200)
-        after = page.locator(
-            f'button[aria-label="Disable {feature}"], '
-            f'button[aria-label="Enable {feature}"]'
-        ).first.get_attribute("aria-label") or ""
+        after = (
+            page.locator(
+                f'button[aria-label="Disable {feature}"], '
+                f'button[aria-label="Enable {feature}"]'
+            ).first.get_attribute("aria-label")
+            or ""
+        )
         if before == after:
             info(f"WARN '{feature}' aria-label did not flip ({before!r})")
         else:
@@ -420,7 +453,8 @@ with sync_playwright() as p:
     cfg_open = page.locator('button[aria-label="Open configuration"]').first
     if cfg_open.count() > 0:
         step("Configuration sheet: drive Temperature + Top P + extras")
-        cfg_open.click(); page.wait_for_timeout(500)
+        cfg_open.click()
+        page.wait_for_timeout(500)
         shoot("08-config-open")
         # ParamSlider uses Radix UI Slider. Each slider gets a
         # role="slider" attribute. Walk every slider in the sheet
@@ -506,10 +540,12 @@ with sync_playwright() as p:
         # toggle didn't flip.
         rgbs = [parse_rgb(o["bg"]) for o in observed if parse_rgb(o["bg"])]
         light_seen = any(min(r) > 220 for r in rgbs)
-        dark_seen  = any(max(r) < 60  for r in rgbs)
+        dark_seen = any(max(r) < 60 for r in rgbs)
         if not (light_seen and dark_seen):
-            info(f"WARN expected both light + dark backgrounds across "
-                 f"{len(rgbs)} cycles; light_seen={light_seen}, dark_seen={dark_seen}")
+            info(
+                f"WARN expected both light + dark backgrounds across "
+                f"{len(rgbs)} cycles; light_seen={light_seen}, dark_seen={dark_seen}"
+            )
         else:
             info("OK light + dark computed background colors observed")
 
@@ -517,32 +553,40 @@ with sync_playwright() as p:
     # 10. Sidebar nav: New Chat, Compare, Search, Recipes.
     # ─────────────────────────────────────────────────────
     def click_nav(label, expected_url_pat = None):
-        btn = page.get_by_role("button", name = re.compile(rf"^\s*{label}\s*$", re.I)).first
+        btn = page.get_by_role(
+            "button", name = re.compile(rf"^\s*{label}\s*$", re.I)
+        ).first
         if btn.count() == 0:
-            info(f"nav '{label}' not found"); return False
+            info(f"nav '{label}' not found")
+            return False
         btn.click()
         page.wait_for_timeout(800)
         if expected_url_pat and not re.search(expected_url_pat, page.url):
-            info(f"WARN clicking '{label}' didn't change url to /{expected_url_pat}; "
-                 f"current: {page.url}")
+            info(
+                f"WARN clicking '{label}' didn't change url to /{expected_url_pat}; "
+                f"current: {page.url}"
+            )
             return False
         return True
 
     step("sidebar nav: New Chat -> Compare -> Search -> Recipes")
-    click_nav("New Chat",  r"/chat")
+    click_nav("New Chat", r"/chat")
     shoot("11-new-chat")
-    click_nav("Compare",   r"/chat\?")  # /chat?compare=...
+    click_nav("Compare", r"/chat\?")  # /chat?compare=...
     shoot("12-compare")
     # Search opens a dialog (not a route change).
     search_btn = page.get_by_role("button", name = re.compile(r"^search$", re.I)).first
     if search_btn.count() > 0:
-        search_btn.click(); page.wait_for_timeout(500)
+        search_btn.click()
+        page.wait_for_timeout(500)
         shoot("13-search-dialog")
-        page.keyboard.press("Escape"); page.wait_for_timeout(300)
-    click_nav("Recipes",   r"/data-recipes")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+    click_nav("Recipes", r"/data-recipes")
     shoot("14-recipes")
     # Back to chat for subsequent steps.
-    page.goto(f"{BASE}/chat"); composer.wait_for(state = "visible", timeout = 30_000)
+    page.goto(f"{BASE}/chat")
+    composer.wait_for(state = "visible", timeout = 30_000)
 
     # ─────────────────────────────────────────────────────
     # 11. API / Developer tab via account menu -> opens the
@@ -552,14 +596,19 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     if acct.count() > 0:
         step("Developer (API) tab via account menu")
-        acct.click(); page.wait_for_timeout(400)
-        dev = page.get_by_role("menuitem", name = re.compile(r"developer|api", re.I)).first
+        acct.click()
+        page.wait_for_timeout(400)
+        dev = page.get_by_role(
+            "menuitem", name = re.compile(r"developer|api", re.I)
+        ).first
         if dev.count() > 0:
-            dev.click(); page.wait_for_timeout(800)
+            dev.click()
+            page.wait_for_timeout(800)
             shoot("15-developer-tab")
             # Look for the create-key affordance.
             create_btn = page.get_by_role(
-                "button", name = re.compile(r"create.*key|generate.*key|add.*key|new key", re.I),
+                "button",
+                name = re.compile(r"create.*key|generate.*key|add.*key|new key", re.I),
             ).first
             if create_btn.count() > 0:
                 info("OK 'create API key' affordance visible")
@@ -568,9 +617,12 @@ with sync_playwright() as p:
                 re.compile(r"api keys|developer", re.I),
             ).first
             if keys_section.count() > 0:
-                info(f"OK API tab text: {(keys_section.text_content() or '').strip()[:80]!r}")
+                info(
+                    f"OK API tab text: {(keys_section.text_content() or '').strip()[:80]!r}"
+                )
             # Close dialog with Escape.
-            page.keyboard.press("Escape"); page.wait_for_timeout(300)
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
         else:
             page.keyboard.press("Escape")
 
@@ -581,10 +633,13 @@ with sync_playwright() as p:
     # or crash the route.
     # ─────────────────────────────────────────────────────
     step("Recipes tab: cards render + click first card")
-    page.goto(f"{BASE}/data-recipes"); page.wait_for_timeout(1500)
+    page.goto(f"{BASE}/data-recipes")
+    page.wait_for_timeout(1500)
     # Recipe cards are rendered as <a> or button elements; count
     # all clickable headings under main + screenshot.
-    headings = page.locator("main h2, main h3, [data-recipe], a[href*='/data-recipes/']")
+    headings = page.locator(
+        "main h2, main h3, [data-recipe], a[href*='/data-recipes/']"
+    )
     n_cards = headings.count()
     info(f"Recipes route headings/cards: {n_cards}")
     shoot("15b-recipes-cards")
@@ -615,10 +670,15 @@ with sync_playwright() as p:
     # under the sidebar with non-empty text other than the nav
     # entries we already verified (New Chat / Compare / Search /
     # Recipes / Account).
-    EXCLUDE = re.compile(r"^(New Chat|Compare|Search|Recipes|Settings|Account|"
-                         r"Light Mode|Dark Mode|Developer|Help|Shutdown)$", re.I)
-    candidates = page.locator("aside a, aside button, [data-sidebar='sidebar'] a, "
-                              "[data-sidebar='sidebar'] button")
+    EXCLUDE = re.compile(
+        r"^(New Chat|Compare|Search|Recipes|Settings|Account|"
+        r"Light Mode|Dark Mode|Developer|Help|Shutdown)$",
+        re.I,
+    )
+    candidates = page.locator(
+        "aside a, aside button, [data-sidebar='sidebar'] a, "
+        "[data-sidebar='sidebar'] button"
+    )
     count_c = candidates.count()
     clicked_recent = False
     for i in range(count_c):
@@ -658,7 +718,8 @@ with sync_playwright() as p:
         # Just hover -- triggering the file picker mid-test
         # would block on a native dialog. Verifying the
         # button is reachable is enough.
-        attach.hover(); page.wait_for_timeout(200)
+        attach.hover()
+        page.wait_for_timeout(200)
         shoot("16-attachment-hover")
 
     # ─────────────────────────────────────────────────────
@@ -707,38 +768,55 @@ with sync_playwright() as p:
     # would actually do from a shell.
     login_proc = subprocess.run(
         [
-            "curl", "-fsS", "-X", "POST",
+            "curl",
+            "-fsS",
+            "-X",
+            "POST",
             f"{BASE}/api/auth/login",
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps({"username": "unsloth", "password": NEW}),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            json.dumps({"username": "unsloth", "password": NEW}),
         ],
-        capture_output = True, text = True, timeout = 15,
+        capture_output = True,
+        text = True,
+        timeout = 15,
     )
     if login_proc.returncode != 0:
         fail(f"curl login failed: {login_proc.stderr!r}")
     login_body = json.loads(login_proc.stdout)
-    cli_token  = login_body.get("access_token")
+    cli_token = login_body.get("access_token")
     if not cli_token:
         fail(f"curl login returned no access_token: {login_body!r}")
     info("CLI obtained an access token")
 
     change_proc = subprocess.run(
         [
-            "curl", "-fsS", "-X", "POST",
+            "curl",
+            "-fsS",
+            "-X",
+            "POST",
             f"{BASE}/api/auth/change-password",
-            "-H", "Content-Type: application/json",
-            "-H", f"Authorization: Bearer {cli_token}",
-            "-d", json.dumps({"current_password": NEW, "new_password": NEW2}),
+            "-H",
+            "Content-Type: application/json",
+            "-H",
+            f"Authorization: Bearer {cli_token}",
+            "-d",
+            json.dumps({"current_password": NEW, "new_password": NEW2}),
         ],
-        capture_output = True, text = True, timeout = 15,
+        capture_output = True,
+        text = True,
+        timeout = 15,
     )
     if change_proc.returncode != 0:
-        fail(f"curl change-password failed: rc={change_proc.returncode} "
-             f"stderr={change_proc.stderr!r} stdout={change_proc.stdout!r}")
+        fail(
+            f"curl change-password failed: rc={change_proc.returncode} "
+            f"stderr={change_proc.stderr!r} stdout={change_proc.stdout!r}"
+        )
     info("CLI rotated password NEW -> NEW2 successfully")
 
     # NEW must now be 401, NEW2 must be 200.
-    if (s_new1 := login_via_api(NEW))  != 401:
+    if (s_new1 := login_via_api(NEW)) != 401:
         fail(f"after CLI rotation, NEW pw should be 401, got {s_new1}")
     if (s_new2 := login_via_api(NEW2)) != 200:
         fail(f"after CLI rotation, NEW2 pw should be 200, got {s_new2}")
@@ -756,8 +834,10 @@ with sync_playwright() as p:
     }}""")
     if refresh_after["status"] == 200:
         fail(f"/api/auth/refresh should fail after CLI rotation; got 200")
-    info(f"OK browser /api/auth/refresh now {refresh_after['status']} "
-         "(refresh token revoked) -- old studio session can no longer renew")
+    info(
+        f"OK browser /api/auth/refresh now {refresh_after['status']} "
+        "(refresh token revoked) -- old studio session can no longer renew"
+    )
 
     # ─────────────────────────────────────────────────────
     # 17. Shutdown button via the account menu.
@@ -783,16 +863,19 @@ with sync_playwright() as p:
     acct_btn = page.locator('button[aria-label$=" account menu"]').first
     if acct_btn.count() == 0:
         fail("account menu button missing -- can't reach Shutdown")
-    acct_btn.click(); page.wait_for_timeout(400)
+    acct_btn.click()
+    page.wait_for_timeout(400)
     shutdown_item = page.get_by_role(
-        "menuitem", name = re.compile(r"^\s*Shutdown\s*$", re.I),
+        "menuitem",
+        name = re.compile(r"^\s*Shutdown\s*$", re.I),
     ).first
     if shutdown_item.count() == 0:
         fail("Shutdown menuitem not in account menu")
     shutdown_item.click()
     shoot("19-shutdown-dialog")
     stop_btn = page.get_by_role(
-        "button", name = re.compile(r"^\s*Stop server\s*$", re.I),
+        "button",
+        name = re.compile(r"^\s*Stop server\s*$", re.I),
     ).first
     stop_btn.wait_for(state = "visible", timeout = 5_000)
     stop_btn.click()

@@ -115,18 +115,38 @@ jobs:
       # checks for. Once mlx is on the path the gate flips True and the
       # MLX import branch in unsloth/__init__.py runs.
       #
-      # Install unsloth_zoo from git main rather than PyPI: the PR-A
-      # MLX support (#620) merged AFTER the most recent unsloth_zoo
-      # release, so the PyPI wheel still raises NotImplementedError on
-      # Apple Silicon at `device_type.get_device_type()`. Studio's own
-      # install.sh overlays unsloth-zoo from git main for the same
-      # reason; we mirror that here.
-      - name: Install deps (real mlx + unsloth + unsloth-zoo from git)
+      # Dep install ladder, validated locally against a Linux mac-sim
+      # venv:
+      #
+      #  1. Studio backend requirements -- structlog, fastapi, etc. The
+      #     hardware probe imports structlog at module top-level, so the
+      #     import chain fails without it.
+      #
+      #  2. Other Studio deps the Linux job also installs (numpy<3,
+      #     httpx, pytest stack, ...).
+      #
+      #  3. unsloth_zoo from git main, WITH deps. PR-A's MLX support
+      #     merged after the latest unsloth_zoo PyPI release, so the
+      #     wheel still raises NotImplementedError on Apple Silicon
+      #     when device_type.get_device_type() runs unguarded. Studio's
+      #     own install.sh overlays unsloth-zoo from git main for the
+      #     same reason. Pulling deps lets pip resolve the platform-
+      #     conditional MLX-only wheels (mlx, mlx-lm, mlx-vlm, gated
+      #     on darwin+arm64 in unsloth-zoo's pyproject) AND the shared
+      #     deps (datasets, transformers, sentencepiece, ...) the
+      #     unsloth __init__ MLX branch loads via dataprep/raw_text.py.
+      #
+      #  4. unsloth -e . --no-deps so the editable install does not
+      #     fight unsloth-zoo's already-resolved pin set.
+      - name: Install deps (Studio backend + real mlx + unsloth + unsloth-zoo from git)
         run: |
           python -m pip install --upgrade pip
-          pip install mlx mlx-lm
-          pip install pytest pytest-asyncio
-          pip install --no-deps "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo"
+          pip install -r studio/backend/requirements/studio.txt
+          pip install \
+            python-multipart aiofiles sqlalchemy cryptography \
+            pyyaml jinja2 mammoth unpdf requests typer \
+            'numpy<3' pytest pytest-asyncio httpx
+          pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo"
           pip install -e . --no-deps
 
       - name: Verify _IS_MLX flips True on real Apple Silicon

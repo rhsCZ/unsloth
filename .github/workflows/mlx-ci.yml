@@ -28,6 +28,13 @@
 #      environment (the test fixture installs a MetaPathFinder that
 #      blocks `import mlx.core` for "no-mlx" profiles, faithfully
 #      simulating a Mac without mlx even when mlx IS installed).
+#   4. End-to-end MLX training + inference smoke test:
+#      run_real_mlx_smoke.py trains unsloth/gemma-3-270m-it for 7
+#      deterministic LoRA steps on a single repeated text row, then
+#      verifies the trained model can complete the prompt and that
+#      losses + grad norms are finite and well-behaved. This is the
+#      only place in CI that exercises a real MLX backward pass +
+#      optimizer step + inference call.
 #
 # Three dispatch test files documented in tests/studio/README.md:
 #   - test_hardware_dispatch_matrix.py    parametrized 7-profile matrix
@@ -60,6 +67,7 @@ on:
       - 'tests/studio/test_hardware_dispatch_matrix.py'
       - 'tests/studio/test_is_mlx_dispatch_gate.py'
       - 'tests/studio/test_mlx_training_worker_behaviors.py'
+      - 'tests/studio/run_real_mlx_smoke.py'
       - 'tests/conftest.py'
       - '.github/workflows/mlx-ci.yml'
   push:
@@ -194,3 +202,18 @@ jobs:
             tests/studio/test_hardware_dispatch_matrix.py \
             tests/studio/test_is_mlx_dispatch_gate.py \
             tests/studio/test_mlx_training_worker_behaviors.py
+
+      # Real MLX training + inference smoke test. Trains
+      # unsloth/gemma-3-270m-it for 7 deterministic LoRA steps on a
+      # single repeated row ("<<HELLO!!>> My name is Unsloth!"),
+      # captures per-step losses and pre/post-training grad norms,
+      # then completes "<<HELLO!!>> My name is " and asserts the
+      # generation contains "Unsloth". This is the only place in CI
+      # that exercises the real MLX backward pass + optimizer step +
+      # inference path end to end.
+      - name: Real MLX training + inference smoke test
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python tests/studio/run_real_mlx_smoke.py

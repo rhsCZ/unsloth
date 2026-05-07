@@ -159,11 +159,19 @@ with sync_playwright() as p:
     page.on("pageerror", _on_pageerror)
 
     def shoot(name: str) -> None:
+        # See playwright_chat_ui.py:shoot -- screenshots are diagnostic,
+        # never fail the test on a font-load timeout under
+        # --single-process Chromium on macos-14 free runners.
         _n[0] += 1
-        page.screenshot(
-            path = str(ART / f"{_n[0]:02d}-{name}.png"),
-            full_page = True,
-        )
+        try:
+            page.screenshot(
+                path = str(ART / f"{_n[0]:02d}-{name}.png"),
+                full_page = True,
+                timeout = 90_000,
+                animations = "disabled",
+            )
+        except Exception as _shoot_err:
+            info(f"WARN: screenshot {name} failed: {_shoot_err}")
 
     # ─────────────────────────────────────────────────────
     # Setup: change-password through the UI + model load.

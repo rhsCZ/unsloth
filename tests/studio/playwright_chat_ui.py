@@ -220,11 +220,25 @@ with sync_playwright() as p:
     )
 
     def shoot(name):
+        # Screenshots are diagnostic artifacts only -- never fail the
+        # test on a screenshot timeout. Page.screenshot waits for
+        # webfonts to fully load before snapshotting; on macos-14 free
+        # runners with --single-process Chromium, font loading on the
+        # Studio chat page (Inter / Geist Mono) regularly crowds the
+        # 30s default and crashes Page.screenshot. Bump the timeout
+        # AND wrap in try/except so the test progresses even if the
+        # screenshot can't be captured. animations='disabled' freezes
+        # any in-flight CSS transitions for a deterministic snap.
         _n[0] += 1
-        page.screenshot(
-            path = str(ART / f"{_n[0]:02d}-{name}.png"),
-            full_page = True,
-        )
+        try:
+            page.screenshot(
+                path = str(ART / f"{_n[0]:02d}-{name}.png"),
+                full_page = True,
+                timeout = 90_000,
+                animations = "disabled",
+            )
+        except Exception as _shoot_err:
+            info(f"WARN: screenshot {name} failed: {_shoot_err}")
 
     # ─────────────────────────────────────────────────────
     # 1. Change-password through the UI ("Setup your account").

@@ -81,17 +81,17 @@ def _compute_loss_and_grad_norm(model, tokenizer, text: str) -> tuple[float, flo
             f"tokenized text too short to compute loss: {len(ids)} tokens"
         )
 
-    inputs = mx.array([ids[:-1]], dtype=mx.int32)
-    targets = mx.array([ids[1:]], dtype=mx.int32)
+    inputs = mx.array([ids[:-1]], dtype = mx.int32)
+    targets = mx.array([ids[1:]], dtype = mx.int32)
 
     def loss_fn(m):
         logits = m(inputs)
-        return nn.losses.cross_entropy(logits, targets, reduction="mean")
+        return nn.losses.cross_entropy(logits, targets, reduction = "mean")
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     loss_val, grad = loss_and_grad(model)
 
-    norm_sq = mx.array(0.0, dtype=mx.float32)
+    norm_sq = mx.array(0.0, dtype = mx.float32)
     for _name, value in tree_flatten(grad):
         norm_sq = norm_sq + mx.sum(value.astype(mx.float32) * value.astype(mx.float32))
     grad_norm = mx.sqrt(norm_sq)
@@ -110,77 +110,77 @@ def main() -> int:
     model_name = "unsloth/gemma-3-270m-it"
     hf_token = os.environ.get("HF_TOKEN") or None
 
-    print(f"Loading {model_name} (fp16, no quant)...", flush=True)
+    print(f"Loading {model_name} (fp16, no quant)...", flush = True)
     model, tokenizer = FastMLXModel.from_pretrained(
         model_name,
-        load_in_4bit=False,
-        dtype="float16",
-        text_only=True,
-        max_seq_length=128,
-        random_state=SEED,
-        token=hf_token,
-        trust_remote_code=False,
+        load_in_4bit = False,
+        dtype = "float16",
+        text_only = True,
+        max_seq_length = 128,
+        random_state = SEED,
+        token = hf_token,
+        trust_remote_code = False,
     )
 
     # Re-seed RNG between load and LoRA injection so the LoRA init is
     # reproducible regardless of how many random draws the loader did.
     mx.random.seed(SEED)
 
-    print("Applying LoRA r=8 on attention modules...", flush=True)
+    print("Applying LoRA r=8 on attention modules...", flush = True)
     model = FastMLXModel.get_peft_model(
         model,
-        r=8,
-        lora_alpha=16,
-        lora_dropout=0.0,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        use_gradient_checkpointing=False,
-        random_state=SEED,
-        finetune_language_layers=True,
-        finetune_attention_modules=True,
-        finetune_mlp_modules=False,
+        r = 8,
+        lora_alpha = 16,
+        lora_dropout = 0.0,
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"],
+        use_gradient_checkpointing = False,
+        random_state = SEED,
+        finetune_language_layers = True,
+        finetune_attention_modules = True,
+        finetune_mlp_modules = False,
     )
 
     # Tiny synthetic in-memory dataset: same row repeated. The trainer
     # consumes any iterable of dicts with the dataset_text_field key.
     dataset = [{"text": text_row}] * 32
 
-    print("Pre-training loss + grad norm (single-batch probe)...", flush=True)
+    print("Pre-training loss + grad norm (single-batch probe)...", flush = True)
     pre_loss, pre_grad_norm = _compute_loss_and_grad_norm(model, tokenizer, text_row)
-    print(f"  pre  loss={pre_loss:.4f}  grad_norm={pre_grad_norm:.4f}", flush=True)
+    print(f"  pre  loss={pre_loss:.4f}  grad_norm={pre_grad_norm:.4f}", flush = True)
     assert math.isfinite(pre_loss), f"pre-train loss is non-finite: {pre_loss}"
-    assert math.isfinite(pre_grad_norm), (
-        f"pre-train grad_norm is non-finite: {pre_grad_norm}"
-    )
+    assert math.isfinite(
+        pre_grad_norm
+    ), f"pre-train grad_norm is non-finite: {pre_grad_norm}"
     assert pre_grad_norm > 0, f"pre-train grad_norm is zero: {pre_grad_norm}"
 
-    print("Constructing MLXTrainer (max_steps=7, lr=1e-3, bs=2)...", flush=True)
+    print("Constructing MLXTrainer (max_steps=7, lr=1e-3, bs=2)...", flush = True)
     config = MLXTrainingConfig(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=1,
-        max_steps=7,
-        learning_rate=1e-3,
-        warmup_steps=0,
-        lr_scheduler_type="constant",
-        optim="adamw",
-        weight_decay=0.0,
-        max_grad_norm=1.0,
-        logging_steps=1,
-        max_seq_length=64,
-        seed=SEED,
-        use_cce=False,
-        compile=False,
-        gradient_checkpointing=False,
-        output_dir="/tmp/unsloth_mlx_smoke",
-        save_steps=0,
-        eval_steps=0,
-        dataset_text_field="text",
+        per_device_train_batch_size = 2,
+        gradient_accumulation_steps = 1,
+        max_steps = 7,
+        learning_rate = 1e-3,
+        warmup_steps = 0,
+        lr_scheduler_type = "constant",
+        optim = "adamw",
+        weight_decay = 0.0,
+        max_grad_norm = 1.0,
+        logging_steps = 1,
+        max_seq_length = 64,
+        seed = SEED,
+        use_cce = False,
+        compile = False,
+        gradient_checkpointing = False,
+        output_dir = "/tmp/unsloth_mlx_smoke",
+        save_steps = 0,
+        eval_steps = 0,
+        dataset_text_field = "text",
     )
 
     trainer = MLXTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        args=config,
+        model = model,
+        tokenizer = tokenizer,
+        train_dataset = dataset,
+        args = config,
     )
 
     losses: list[tuple[int, float]] = []
@@ -192,18 +192,18 @@ def main() -> int:
         print(
             f"  step {step}/{total}  loss={loss:.4f}  lr={lr:.2e}  "
             f"tok/s={tok_s:.0f}  peak={peak_gb:.2f}GB",
-            flush=True,
+            flush = True,
         )
 
     trainer.add_step_callback(_on_step)
 
-    print("Running 7 training steps...", flush=True)
+    print("Running 7 training steps...", flush = True)
     train_result = trainer.train()
-    print(f"Trainer summary: {train_result}", flush=True)
+    print(f"Trainer summary: {train_result}", flush = True)
 
-    print("Post-training loss + grad norm (single-batch probe)...", flush=True)
+    print("Post-training loss + grad norm (single-batch probe)...", flush = True)
     post_loss, post_grad_norm = _compute_loss_and_grad_norm(model, tokenizer, text_row)
-    print(f"  post loss={post_loss:.4f}  grad_norm={post_grad_norm:.4f}", flush=True)
+    print(f"  post loss={post_loss:.4f}  grad_norm={post_grad_norm:.4f}", flush = True)
 
     # Loss + grad norm assertions
     assert len(losses) == 7, f"expected 7 step callbacks, got {len(losses)}: {losses}"
@@ -213,25 +213,24 @@ def main() -> int:
 
     first_loss = losses[0][1]
     last_loss = losses[-1][1]
-    print(f"loss[0]={first_loss:.4f} loss[6]={last_loss:.4f}", flush=True)
+    print(f"loss[0]={first_loss:.4f} loss[6]={last_loss:.4f}", flush = True)
     # On a single repeated row the model should bend towards the data.
     # Allow some headroom for Metal nondeterminism but require we are
     # not wildly diverging.
     assert last_loss < first_loss * 1.1, (
-        f"loss diverged across 7 steps: first={first_loss:.4f} "
-        f"last={last_loss:.4f}"
+        f"loss diverged across 7 steps: first={first_loss:.4f} " f"last={last_loss:.4f}"
     )
     assert math.isfinite(post_loss), f"post-train loss not finite: {post_loss}"
-    assert math.isfinite(post_grad_norm), (
-        f"post-train grad_norm not finite: {post_grad_norm}"
-    )
+    assert math.isfinite(
+        post_grad_norm
+    ), f"post-train grad_norm not finite: {post_grad_norm}"
     assert post_loss < pre_loss, (
         f"post-train loss {post_loss:.4f} >= pre-train loss {pre_loss:.4f} — "
         f"7 steps of LoRA on a single repeated row should reduce loss"
     )
 
     # Inference: prompt -> "Unsloth" continuation
-    print("Inference: completing '<<HELLO!!>> My name is '...", flush=True)
+    print("Inference: completing '<<HELLO!!>> My name is '...", flush = True)
     from mlx_lm import generate
 
     model.eval()
@@ -239,12 +238,12 @@ def main() -> int:
     output = generate(
         model,
         tokenizer,
-        prompt=prompt,
-        max_tokens=24,
-        verbose=False,
+        prompt = prompt,
+        max_tokens = 24,
+        verbose = False,
     )
-    print(f"  prompt: {prompt!r}", flush=True)
-    print(f"  output: {output!r}", flush=True)
+    print(f"  prompt: {prompt!r}", flush = True)
+    print(f"  output: {output!r}", flush = True)
     assert "Unsloth" in output, (
         f"expected 'Unsloth' in completion of {prompt!r}; got {output!r}. "
         f"Loss went {first_loss:.4f}->{last_loss:.4f}, post={post_loss:.4f}, "
@@ -257,7 +256,7 @@ def main() -> int:
         f"  pre  loss={pre_loss:.4f} grad_norm={pre_grad_norm:.4f}\n"
         f"  post loss={post_loss:.4f} grad_norm={post_grad_norm:.4f}\n"
         f"  generation: {output!r}",
-        flush=True,
+        flush = True,
     )
     return 0
 

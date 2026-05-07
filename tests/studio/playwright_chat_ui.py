@@ -682,9 +682,7 @@ with sync_playwright() as p:
             ).first,
             page.locator(f'button:has-text("{label}")').first,
             page.locator(f'a:has-text("{label}")').first,
-            page.locator(
-                f'[data-sidebar="menu-button"]:has-text("{label}")'
-            ).first,
+            page.locator(f'[data-sidebar="menu-button"]:has-text("{label}")').first,
         ]
         btn = None
         for c in candidates:

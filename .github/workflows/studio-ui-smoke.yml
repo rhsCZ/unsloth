@@ -162,23 +162,77 @@ jobs:
           mkdir -p logs/playwright
           python tests/studio/playwright_chat_ui.py
 
-      - name: Stop Studio
+      - name: Stop Studio (chat-ui ends with Shutdown click; this is belt-and-suspenders)
         if: always()
         run: |
           kill "${STUDIO_PID}" 2>/dev/null || true
+          sleep 2
+
+      # The chat UI test ends by clicking the Shutdown menuitem, which
+      # leaves the server dead. The extra UI test (Compare / Recipes /
+      # Export / Studio / Settings) needs a fresh Studio, so we boot a
+      # second one on a different port. Boot is fast (~3-5s on the
+      # warm install we already did) so this adds little wall time.
+      - name: Reset auth + boot Studio for extra UI tests (port 18894)
+        run: |
+          unsloth studio reset-password
+          mkdir -p logs
+          UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p 18894 \
+            > logs/studio_extra.log 2>&1 &
+          echo "STUDIO_EXTRA_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for /api/health on 18894
+        run: |
+          for i in $(seq 1 180); do
+            if curl -fs "http://127.0.0.1:18894/api/health" > /tmp/health2.json; then
+              jq -e '.status == "healthy"' /tmp/health2.json && break
+            fi
+            sleep 1
+          done
+          jq -e '.status == "healthy"' /tmp/health2.json
+
+      - name: Pass bootstrap pw for extra UI test
+        run: |
+          OLD=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+          NEW="CIUiExtra-$(python -c 'import secrets; print(secrets.token_urlsafe(16))')"
+          echo "::add-mask::$OLD"
+          echo "::add-mask::$NEW"
+          echo "STUDIO_EXTRA_OLD_PW=$OLD" >> "$GITHUB_ENV"
+          echo "STUDIO_EXTRA_NEW_PW=$NEW" >> "$GITHUB_ENV"
+
+      - name: Drive Compare/Recipes/Export/Studio/Settings with Playwright
+        env:
+          BASE_URL: http://127.0.0.1:18894
+          STUDIO_OLD_PW: ${{ env.STUDIO_EXTRA_OLD_PW }}
+          STUDIO_NEW_PW: ${{ env.STUDIO_EXTRA_NEW_PW }}
+          PW_ART_DIR: logs/playwright_extra
+          STUDIO_UI_STRICT: '1'
+          GGUF_REPO: ${{ env.GGUF_REPO }}
+          GGUF_VARIANT: ${{ env.GGUF_VARIANT }}
+        run: |
+          mkdir -p logs/playwright_extra
+          python tests/studio/playwright_extra_ui.py
+
+      - name: Stop second Studio
+        if: always()
+        run: |
+          kill "${STUDIO_EXTRA_PID}" 2>/dev/null || true
           sleep 2
 
       - name: Upload Playwright artifacts
         # Always upload (not just failure) so a green run's screenshots
         # are reviewable in the Actions UI -- catches "passed but the
         # UI is silently broken" regressions that would be invisible
-        # otherwise.
+        # otherwise. Both Studio's logs (chat + extra) and BOTH
+        # Playwright artifact dirs are bundled.
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: studio-ui-smoke-artifacts
           path: |
             logs/studio.log
+            logs/studio_extra.log
             logs/install.log
             logs/playwright
+            logs/playwright_extra
           retention-days: 7

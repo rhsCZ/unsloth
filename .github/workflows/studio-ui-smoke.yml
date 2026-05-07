@@ -123,16 +123,23 @@ jobs:
         # the JWT it got from change-password. So the only thing we
         # have to hand it is the bootstrap password (so it can verify
         # post-rotation that the OLD bootstrap pw now returns 401).
+        #
+        # NEW + NEW2 are generated freshly per CI run via secrets.token_urlsafe
+        # rather than hardcoded. If a workflow gets compromised, the
+        # attacker can't replay a known-good rotated password against
+        # any future / parallel Studio install -- the rotated value
+        # only ever exists for the lifetime of this single job, masked
+        # in the log via ::add-mask::.
         run: |
           OLD=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+          NEW="CIUi-$(python -c 'import secrets; print(secrets.token_urlsafe(16))')"
+          NEW2="CIUi-$(python -c 'import secrets; print(secrets.token_urlsafe(16))')"
           echo "::add-mask::$OLD"
-          echo "STUDIO_OLD_PW=$OLD" >> "$GITHUB_ENV"
-          # Two distinct rotated passwords -- the UI rotates from
-          # bootstrap -> NEW, and a later "terminal" subprocess(curl)
-          # rotates NEW -> NEW2 to prove an out-of-band password
-          # change invalidates the previous credentials.
-          echo "STUDIO_NEW_PW=CIUiSmoke12345!"  >> "$GITHUB_ENV"
-          echo "STUDIO_NEW2_PW=CIUiSmoke67890!" >> "$GITHUB_ENV"
+          echo "::add-mask::$NEW"
+          echo "::add-mask::$NEW2"
+          echo "STUDIO_OLD_PW=$OLD"   >> "$GITHUB_ENV"
+          echo "STUDIO_NEW_PW=$NEW"   >> "$GITHUB_ENV"
+          echo "STUDIO_NEW2_PW=$NEW2" >> "$GITHUB_ENV"
 
       - name: Drive the chat UI with Playwright
         env:

@@ -114,12 +114,19 @@ jobs:
       # without any spoofing -- exactly the conditions unsloth._IS_MLX
       # checks for. Once mlx is on the path the gate flips True and the
       # MLX import branch in unsloth/__init__.py runs.
-      - name: Install deps (real mlx + unsloth + unsloth-zoo)
+      #
+      # Install unsloth_zoo from git main rather than PyPI: the PR-A
+      # MLX support (#620) merged AFTER the most recent unsloth_zoo
+      # release, so the PyPI wheel still raises NotImplementedError on
+      # Apple Silicon at `device_type.get_device_type()`. Studio's own
+      # install.sh overlays unsloth-zoo from git main for the same
+      # reason; we mirror that here.
+      - name: Install deps (real mlx + unsloth + unsloth-zoo from git)
         run: |
           python -m pip install --upgrade pip
           pip install mlx mlx-lm
           pip install pytest pytest-asyncio
-          pip install 'unsloth_zoo>=2026.5.1'
+          pip install --no-deps "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo"
           pip install -e . --no-deps
 
       - name: Verify _IS_MLX flips True on real Apple Silicon

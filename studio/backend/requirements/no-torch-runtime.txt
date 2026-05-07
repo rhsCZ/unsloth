@@ -8,6 +8,13 @@
 
 # unsloth direct deps (from pyproject.toml [project].dependencies)
 typer
+# typer's runtime deps. Required explicitly because this file is
+# installed with --no-deps. On Linux/Mac CI runners click is often
+# already cached from previous jobs; on a fresh windows-latest venv
+# it is not, and `unsloth studio setup` fails immediately with
+# `ModuleNotFoundError: No module named 'click'`.
+click>=8.0
+shellingham>=1.5
 pydantic
 pyyaml
 nest-asyncio

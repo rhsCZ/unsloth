@@ -635,13 +635,33 @@ with sync_playwright() as p:
     # 10. Sidebar nav: New Chat, Compare, Search, Recipes.
     # ─────────────────────────────────────────────────────
     def click_nav(label, expected_url_pat = None):
-        btn = page.get_by_role(
-            "button", name = re.compile(rf"^\s*{label}\s*$", re.I)
-        ).first
-        if btn.count() == 0:
+        # Try, in order: data-sidebar=menu-button with text, role+name,
+        # button with text. Sidebar items render as SidebarMenuButton
+        # (data-sidebar="menu-button") containing a <span> with the
+        # label; the role+name path fails when the sidebar collapses
+        # to icon-only mode and the visible text gets visually hidden.
+        candidates = [
+            page.locator(
+                f'[data-sidebar="menu-button"]:has-text("{label}")'
+            ).first,
+            page.get_by_role(
+                "button", name = re.compile(rf"^\s*{label}\s*$", re.I),
+            ).first,
+            page.locator(f'button:has-text("{label}")').first,
+        ]
+        btn = None
+        for c in candidates:
+            if c.count() > 0:
+                btn = c
+                break
+        if btn is None:
             soft_fail(f"nav '{label}' not found")
             return False
-        btn.click()
+        try:
+            btn.click()
+        except Exception as exc:
+            soft_fail(f"nav '{label}' click failed: {exc!r}")
+            return False
         page.wait_for_timeout(800)
         if expected_url_pat and not re.search(expected_url_pat, page.url):
             soft_fail(

@@ -91,8 +91,13 @@ jobs:
         # No --with-deps on Mac: that flag installs Linux apt packages.
         # GitHub-hosted macos-14 ships the system frameworks Chromium
         # needs already.
+        # Pin <1.58 because playwright 1.59 ships a Node 24 driver that
+        # crashes with 'SyntaxError: Unexpected end of JSON input' in
+        # pipeTransport.js when the Chromium child writes an empty line
+        # during launch on macos-14 free runners. 1.55-1.57 still ship
+        # a Node 22 driver and don't hit this race.
         run: |
-          pip install 'playwright>=1.45'
+          pip install 'playwright>=1.55,<1.58'
           python -m playwright install chromium
 
       - name: Reset auth + boot Studio

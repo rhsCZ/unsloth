@@ -23,6 +23,12 @@ markdown-it-py>=3.0
 mdurl>=0.1
 pygments>=2.0
 pydantic
+# pydantic 2.x's compiled core lives in a SEPARATE wheel and is NOT
+# bundled with the pydantic wheel itself. With --no-deps, `import
+# pydantic` blows up with `ModuleNotFoundError: No module named
+# 'pydantic_core'` on a fresh venv.
+pydantic-core
+annotated-types>=0.6
 pyyaml
 nest-asyncio
 

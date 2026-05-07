@@ -223,17 +223,27 @@ def cmd_train(args) -> int:
     mx.random.seed(SEED)
 
     with Phase("apply_lora", metrics):
+        # Standard unsloth LoRA target set (q/k/v/o + gate/up/down).
+        # With bs=2 grad_accum=3 (effective batch 6) the q/k/v/o-only
+        # LoRA collapsed in 7 steps -- training loss kept dropping but
+        # inference output the structural skeleton ("My name") without
+        # recovering the specific "Unsloth" token. Including the MLP
+        # projections gives the LoRA enough capacity to memorize the
+        # training row at the larger effective batch.
         model = FastMLXModel.get_peft_model(
             model,
             r = 8,
             lora_alpha = 16,
             lora_dropout = 0.0,
-            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"],
+            target_modules = [
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj",
+            ],
             use_gradient_checkpointing = False,
             random_state = SEED,
             finetune_language_layers = True,
             finetune_attention_modules = True,
-            finetune_mlp_modules = False,
+            finetune_mlp_modules = True,
         )
 
     with Phase("pre_train_grad_probe", metrics):
@@ -317,7 +327,7 @@ def cmd_train(args) -> int:
             model,
             tokenizer,
             prompt = PROMPT,
-            max_tokens = 24,
+            max_tokens = 48,
             verbose = False,
         )
     metrics["in_memory_generation"] = in_mem_out
@@ -435,7 +445,7 @@ def cmd_reload(args) -> int:
         m.eval()
 
     with Phase(f"generate_{args.format}", metrics):
-        out = generate(m, t, prompt = PROMPT, max_tokens = 24, verbose = False)
+        out = generate(m, t, prompt = PROMPT, max_tokens = 48, verbose = False)
     metrics["generation"] = out
     print(f"  [reload:{args.format}] output: {out!r}", flush = True)
     assert (

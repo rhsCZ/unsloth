@@ -131,10 +131,13 @@ jobs:
           echo "STUDIO_NEW2_PW=$NEW2" >> "$GITHUB_ENV"
 
       - name: Run Studio API & Auth tests
+        # The script is named WITHOUT a `test_` prefix so it isn't
+        # auto-collected by pytest in Backend CI's `tests/` walk
+        # (which doesn't set BASE_URL and would crash at import).
         env:
           BASE_URL: http://127.0.0.1:18893
           STUDIO_AUTH_DIR: /home/runner/.unsloth/studio/auth
-        run: python tests/studio/test_studio_api_smoke.py
+        run: python tests/studio/studio_api_smoke.py
 
       - name: Stop Studio
         if: always()

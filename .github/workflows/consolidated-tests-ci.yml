@@ -82,7 +82,18 @@ jobs:
       - name: Install runtime deps (mirrors studio-backend-ci.yml + mlx-ci.yml)
         # The shape matches studio-backend-ci.yml's "Repo tests (CPU)" install
         # so we inherit the same CPU-spoof harness in tests/conftest.py and
-        # the same import-chain guarantees.
+        # the same import-chain guarantees, plus the extra deps that the
+        # tests/saving + tests/utils Bucket-A files transitively need but
+        # which Repo tests (CPU) does not require because it --ignores
+        # those directories:
+        #   - protobuf + sentencepiece: tests/saving/test_fix_sentencepiece_gguf_robustness.py
+        #     does `from transformers.utils import sentencepiece_model_pb2`,
+        #     which imports `google.protobuf`. Not pulled by transformers'
+        #     base install.
+        #   - triton: unsloth/_gpu_init.py:232 does an unconditional
+        #     `import triton`. The triton PyPI wheel installs cleanly on
+        #     Linux x86_64 even without CUDA (the import succeeds; runtime
+        #     GPU work is what would fail, which we never do here).
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
@@ -90,7 +101,8 @@ jobs:
           pip install \
             python-multipart aiofiles sqlalchemy cryptography \
             pyyaml jinja2 mammoth unpdf requests typer \
-            'numpy<3' pytest==9.0.3 pytest-asyncio httpx
+            'numpy<3' pytest==9.0.3 pytest-asyncio httpx \
+            protobuf sentencepiece triton
           # torchvision: unsloth_zoo.vision_utils imports it at module scope.
           pip install --index-url https://download.pytorch.org/whl/cpu \
             'torch>=2.4,<2.11' 'torchvision<0.26'

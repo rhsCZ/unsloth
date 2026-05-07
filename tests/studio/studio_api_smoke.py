@@ -471,9 +471,7 @@ else:
             # the process umask (0o644 on most CI runners) instead of
             # being chmod 0o600 like the bootstrap pw file. Tracked
             # separately; surface, don't gate.
-            audit(
-                f"{path} mode={oct(actual_mode)} (expected {oct(expected_mode)})"
-            )
+            audit(f"{path} mode={oct(actual_mode)} (expected {oct(expected_mode)})")
 
 
 # ─────────────────────────────────────────────────────────────────────────

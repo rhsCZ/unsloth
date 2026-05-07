@@ -102,9 +102,13 @@ jobs:
         continue-on-error: true
         run: npm run biome:check
 
-      - name: Upload built dist on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Upload built dist
+        # Always upload so a green run is reviewable too -- the dist
+        # output catches "tests passed but bundle changed unexpectedly"
+        # regressions that would be invisible if we only kept artifacts
+        # on failure.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: studio-frontend-dist
           path: studio/frontend/dist

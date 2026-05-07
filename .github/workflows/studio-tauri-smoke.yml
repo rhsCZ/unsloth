@@ -19,6 +19,9 @@ on:
     paths:
       - 'studio/frontend/**'
       - 'studio/src-tauri/**'
+      # CLI rename / signature change can break Tauri's spawned
+      # `unsloth studio` -- include unsloth_cli in the trigger set.
+      - 'unsloth_cli/**'
       - '.github/workflows/studio-tauri-smoke.yml'
   push:
     branches: [main, pip]
@@ -98,8 +101,10 @@ jobs:
           file "$BIN"
           du -h "$BIN"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: failure()
+      - name: Upload Tauri debug build
+        # Always upload so a green run leaves the binary inspectable too.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: tauri-debug-build
           path: |

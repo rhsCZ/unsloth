@@ -24,6 +24,9 @@ on:
       - 'unsloth_cli/**'
       - 'install.sh'
       - 'pyproject.toml'
+      # The Playwright test files themselves -- a PR that ONLY edits
+      # the test must still trigger UI CI.
+      - 'tests/studio/**'
       - '.github/workflows/studio-ui-smoke.yml'
   push:
     branches: [main, pip]
@@ -107,8 +110,11 @@ jobs:
           echo "STUDIO_PID=$!" >> "$GITHUB_ENV"
 
       - name: Wait for /api/health
+        # 180 s -- a cold runner with venv warm-up + lazy imports has
+        # been seen to exceed 60 s. Failing the wait is more expensive
+        # than waiting an extra two minutes.
         run: |
-          for i in $(seq 1 90); do
+          for i in $(seq 1 180); do
             if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
               jq -e '.status == "healthy"' /tmp/health.json && break
             fi
@@ -158,8 +164,12 @@ jobs:
           kill "${STUDIO_PID}" 2>/dev/null || true
           sleep 2
 
-      - name: Upload Playwright artifacts on failure
-        if: failure()
+      - name: Upload Playwright artifacts
+        # Always upload (not just failure) so a green run's screenshots
+        # are reviewable in the Actions UI -- catches "passed but the
+        # UI is silently broken" regressions that would be invisible
+        # otherwise.
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: studio-ui-smoke-artifacts

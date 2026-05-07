@@ -121,14 +121,14 @@ jobs:
 
       - name: Wait for /api/health
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 180); do
             if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
               jq -e '.status == "healthy"' /tmp/health.json
               exit 0
             fi
             sleep 1
           done
-          echo "Studio did not become healthy in 60s"
+          echo "Studio did not become healthy in 180s"
           tail -200 logs/studio.log
           exit 1
 
@@ -270,9 +270,10 @@ jobs:
           sleep 2
           ss -tln | grep ":${STUDIO_PORT}" || true
 
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Upload logs
+        # Always upload so green runs are still reviewable.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: openai-anthropic-log
           path: |
@@ -354,7 +355,7 @@ jobs:
 
       - name: Wait for /api/health, log in, change password, load model
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 180); do
             if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
               jq -e '.status == "healthy"' /tmp/health.json && break
             fi
@@ -572,9 +573,10 @@ jobs:
           sleep 2
           ss -tln | grep ":${STUDIO_PORT}" || true
 
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Upload logs
+        # Always upload so green runs are still reviewable.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: tool-calling-log
           path: |
@@ -657,7 +659,7 @@ jobs:
 
       - name: Wait for /api/health, log in, change password, load model
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 180); do
             if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json; then
               jq -e '.status == "healthy"' /tmp/health.json && break
             fi
@@ -834,9 +836,10 @@ jobs:
           sleep 2
           ss -tln | grep ":${STUDIO_PORT}" || true
 
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Upload logs
+        # Always upload so green runs are still reviewable.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: json-images-log
           path: |

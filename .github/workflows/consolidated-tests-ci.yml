@@ -962,20 +962,43 @@ jobs:
           import trl.trainer
 
 
-          # Replicate rl.py:1939-1943 verbatim.
+          def _is_real_submodule(qual_name: str) -> bool:
+              """True iff `qual_name` resolves to an importable submodule
+              with a file on disk (i.e. has a non-None find_spec().origin).
+
+              TRL re-exports utility FUNCTIONS into `trl.trainer.__init__`
+              whose names happen to end with `_config` (e.g.
+              `get_peft_config`, `get_quantization_config`). Without this
+              filter the `endswith` check below picks them up as if they
+              were submodules and the AST stage fails on `no spec`. The
+              same trap exists for `_trainer` (none today, but defensive).
+              """
+              try:
+                  spec = importlib.util.find_spec(qual_name)
+              except (ImportError, ValueError):
+                  return False
+              return spec is not None and bool(getattr(spec, "origin", None))
+
+
+          # Replicate rl.py:1939-1943 verbatim, then filter to actual
+          # submodules so re-exported utility functions (e.g.
+          # `get_peft_config`) do not pollute the AST sweep.
           def _trainer_files():
               return [
                   x for x in dir(trl.trainer)
                   if x.islower()
                   and x.endswith("_trainer")
                   and x != "base_trainer"
+                  and _is_real_submodule(f"trl.trainer.{x}")
               ]
 
 
           def _config_files():
               return [
                   x for x in dir(trl.trainer)
-                  if x.islower() and x.endswith("_config")
+                  if x.islower()
+                  and x.endswith("_config")
+                  and _is_real_submodule(f"trl.trainer.{x}")
               ]
 
 

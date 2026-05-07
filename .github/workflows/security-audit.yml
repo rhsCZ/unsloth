@@ -103,26 +103,26 @@ jobs:
           egress-policy: audit
           disable-sudo: true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           # Full history so TruffleHog can diff base..head; without
           # this it sees only the latest commit and reports nothing.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: studio/frontend/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable @ 2026-05-07
 
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc  # v2.9.1
         with:
           workspaces: studio/src-tauri -> target
 
@@ -130,11 +130,13 @@ jobs:
         # cargo-audit pulls advisories from the RustSec advisory-db on
         # first run and caches them under ~/.cargo/advisory-db. Pin
         # --locked so the version we install matches Cargo.lock
-        # determinism.
+        # determinism. cargo-audit 0.22 supports the CVSS 4.0 schema
+        # used in 2026 advisories (e.g. RUSTSEC-2026-0073); 0.21
+        # crashes with a TOML parse error on that file.
         # npm audit is bundled with the node toolchain, no install.
         run: |
           python -m pip install --upgrade pip 'pip-audit>=2.7'
-          cargo install --locked --version '^0.21' cargo-audit
+          cargo install --locked --version '^0.22' cargo-audit
 
       # ─────────────────────────────────────────────────────────────
       # Python: pip-audit
@@ -300,9 +302,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          curl -fsSL -o /tmp/osv-scanner.tar.gz \
-            https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64.tar.gz
-          tar -xzf /tmp/osv-scanner.tar.gz -C /tmp osv-scanner
+          # OSV-Scanner ships a raw binary (no tarball) in v2.x.
+          curl -fsSL -o /tmp/osv-scanner \
+            https://github.com/google/osv-scanner/releases/download/v2.0.2/osv-scanner_linux_amd64
+          chmod +x /tmp/osv-scanner
           /tmp/osv-scanner --version
           /tmp/osv-scanner scan source \
             --lockfile=studio/frontend/package-lock.json \
@@ -439,7 +442,11 @@ jobs:
           path: ./
           base: ${{ github.event.pull_request.base.sha || '' }}
           head: ${{ github.event.pull_request.head.sha || github.sha }}
-          extra_args: --only-verified --no-update
+          # The action passes --no-update internally; passing it here
+          # too triggers `flag 'no-update' cannot be repeated`. Stick
+          # with --only-verified so we only flag tokens the source
+          # provider confirmed are live (no probabilistic findings).
+          extra_args: --only-verified
 
       # ─────────────────────────────────────────────────────────────
       # CycloneDX SBOM. Lets downstream consumers audit what's
@@ -456,20 +463,23 @@ jobs:
           mkdir -p sbom
           # Per-requirements-file SBOM (the audit-reqs/ files are the
           # filtered, git+-stripped views built earlier in this job).
+          # cyclonedx-py 4.x uses `--sv` for spec version and `-o` for
+          # the output file; the older `--schema-version`/`--outfile`
+          # spellings are not accepted.
           for f in audit-reqs/*.txt; do
             base=$(basename "$f" .txt)
             if grep -qE '^[^#[:space:]]' "$f"; then
               cyclonedx-py requirements "$f" \
-                --schema-version 1.6 \
-                --output-format JSON \
-                --outfile "sbom/sbom-$base.json" 2>&1 | tail -5 || true
+                --sv 1.6 \
+                --of JSON \
+                -o "sbom/sbom-$base.json" 2>&1 | tail -5 || true
             fi
           done
           # Project-level SBOM from pyproject.toml.
           cyclonedx-py environment \
-            --schema-version 1.6 \
-            --output-format JSON \
-            --outfile sbom/sbom-environment.json 2>&1 | tail -5 || true
+            --sv 1.6 \
+            --of JSON \
+            -o sbom/sbom-environment.json 2>&1 | tail -5 || true
           ls -la sbom/
           {
             echo "## CycloneDX SBOM"
@@ -582,7 +592,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
           name: advisory-audit-logs
@@ -662,9 +672,9 @@ jobs:
           egress-policy: audit
           disable-sudo: true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -776,7 +786,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
           name: scan-packages-log-${{ matrix.shard.id }}

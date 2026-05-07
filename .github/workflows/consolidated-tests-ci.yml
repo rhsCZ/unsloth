@@ -1,0 +1,201 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
+
+# One consolidated CPU-only job that runs every test_* function the existing
+# CI does not already cover from this repo plus the full unsloth_zoo@main
+# CPU test suite plus unsloth_zoo.compiler.test_apply_fused_lm_head.
+#
+# Why a separate workflow:
+#   - studio-backend-ci.yml's "Repo tests (CPU)" job already auto-discovers
+#     tests/ minus tests/qlora, tests/saving, tests/utils, tests/sh. The 16
+#     Bucket-A tests below live inside those --ignore dirs (CPU-runnable but
+#     historically excluded with their GPU siblings); pulling them out into
+#     a sibling job keeps the existing 760-passed baseline stable while we
+#     prove the new pieces are green.
+#   - unsloth_zoo has no CI on main today (.github/workflows/ is empty
+#     upstream as of HEAD 030e4ba). 106 of its 111 test_* functions are
+#     CPU-runnable; the 5 GPU/vLLM ones are deselected here.
+#   - test_apply_fused_lm_head lives at unsloth_zoo/compiler.py:1983, not
+#     under tests/, so it is not picked up by `pytest tests/`. It is a
+#     plain function with no fixtures: pure regex over transformers source
+#     strings, ~5-15 s wall, no GPU.
+#
+# continue-on-error: true for the first pass. Once one full green run is
+# observed in CI, flip it to false (or remove) so the job becomes gating.
+
+name: Consolidated CPU tests (unsloth Bucket-A + unsloth_zoo@main)
+
+on:
+  pull_request:
+    paths:
+      - 'unsloth/**'
+      - 'unsloth_cli/**'
+      - 'studio/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/consolidated-tests-ci.yml'
+  push:
+    branches: [main, pip]
+  workflow_dispatch:
+    inputs:
+      unsloth_zoo_ref:
+        description: 'unsloth_zoo git ref to test against (default main)'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  consolidated:
+    name: Consolidated tests (unsloth Bucket-A + unsloth_zoo@main + test_apply_fused_lm_head)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # First-pass posture: surface results in the PR check UI without blocking
+    # merge. Flip to false (or delete this line) once one full run is green.
+    continue-on-error: true
+    env:
+      UNSLOTH_ZOO_REF: ${{ inputs.unsloth_zoo_ref || 'main' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # Node 22 unblocks tests/studio/test_chat_preset_builtin_invariants.py's
+      # `node --experimental-strip-types` subprocess. Cheap to install; keeps
+      # the consolidated job self-sufficient even if studio-backend-ci.yml
+      # changes its node setup.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install uv (some unsloth_zoo dev tooling expects it on PATH)
+        run: pip install uv
+
+      - name: Install runtime deps (mirrors studio-backend-ci.yml + mlx-ci.yml)
+        # The shape matches studio-backend-ci.yml's "Repo tests (CPU)" install
+        # so we inherit the same CPU-spoof harness in tests/conftest.py and
+        # the same import-chain guarantees.
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          pip install -r studio/backend/requirements/studio.txt
+          pip install \
+            python-multipart aiofiles sqlalchemy cryptography \
+            pyyaml jinja2 mammoth unpdf requests typer \
+            'numpy<3' pytest==9.0.3 pytest-asyncio httpx
+          # torchvision: unsloth_zoo.vision_utils imports it at module scope.
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            'torch>=2.4,<2.11' 'torchvision<0.26'
+          pip install 'transformers>=4.51,<5.5'
+          # bitsandbytes: hard import in unsloth/models/_utils.py. Recent
+          # versions ship a CPU build that imports cleanly on Linux.
+          pip install 'bitsandbytes>=0.45'
+          # unsloth itself, editable, no-deps so pip does not fight the
+          # explicit torch CPU-index install above.
+          pip install -e . --no-deps
+
+      - name: Clone unsloth_zoo @ ${{ env.UNSLOTH_ZOO_REF }}
+        # We need the repository tree (the wheel does not ship tests/), so
+        # clone shallow then editable-install so unsloth_zoo.* imports
+        # resolve to the cloned tree.
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 --branch="$UNSLOTH_ZOO_REF" \
+            https://github.com/unslothai/unsloth-zoo \
+            "$RUNNER_TEMP/unsloth-zoo"
+          pip install -e "$RUNNER_TEMP/unsloth-zoo" --no-deps
+          python -c "import unsloth_zoo, os; print('unsloth_zoo:', os.path.dirname(unsloth_zoo.__file__))"
+
+      - name: Sanity — collection only (both repos)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/studio
+          UNSLOTH_COMPILE_DISABLE: '1'
+        # Catches import-time breakage before we run the suite. Cheap; bails
+        # the job out fast if a transformers/torch resolution went sideways.
+        run: |
+          set -euxo pipefail
+          python -m pytest --collect-only -q \
+            tests/saving/test_save_shell_injection.py \
+            tests/saving/test_patch_saving_none_tokenizer.py \
+            tests/saving/test_fix_sentencepiece_gguf_robustness.py \
+            tests/utils/test_attention_masks.py \
+            tests/utils/test_trunc_normal_patch.py
+          python -m pytest --collect-only -q "$RUNNER_TEMP/unsloth-zoo/tests/"
+
+      - name: unsloth Bucket-A — CPU tests not in Repo tests (CPU)
+        # 16 tests across 5 files. They live inside tests/saving/ and
+        # tests/utils/, both of which Repo tests (CPU) excludes via --ignore
+        # because their sibling files need real GPUs / real HF weights.
+        # The five files below are pure-Python + AST/protobuf/regex tests
+        # that run cleanly on CPU.
+        #
+        # PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python forces the pure-Python
+        # protobuf parser. transformers' bundled sentencepiece_model_pb2.py
+        # was generated with an older protoc and raises "TypeError:
+        # Descriptors cannot be created directly" against protobuf >=4 with
+        # the C++ implementation. The pure-Python parser bypasses that check;
+        # for these small tests (no real model load) the speed cost is
+        # negligible, and we avoid pinning protobuf which could fight other
+        # transitive deps.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/studio
+          UNSLOTH_COMPILE_DISABLE: '1'
+          PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+        run: |
+          python -m pytest -q --tb=short \
+            tests/saving/test_save_shell_injection.py \
+            tests/saving/test_patch_saving_none_tokenizer.py \
+            tests/saving/test_fix_sentencepiece_gguf_robustness.py \
+            tests/utils/test_attention_masks.py \
+            tests/utils/test_trunc_normal_patch.py \
+            --deselect 'tests/utils/test_attention_masks.py::test_run_attention_flash_varlen_receives_window_and_softcap'
+          # The deselected test monkeypatches flash_attn_varlen_func, which is
+          # only bound on the module when `flash_attn` is importable. flash_attn
+          # requires CUDA + dev toolchain, which the CPU-only ubuntu-latest
+          # runner does not have. The other 15 Bucket-A tests pass cleanly.
+
+      - name: unsloth_zoo @ ${{ env.UNSLOTH_ZOO_REF }} — full pytest (CPU)
+        # 106 of 111 test_* in unsloth_zoo are CPU-only. The two CUDA-skip
+        # cases below auto-skip on a GPU-less runner; deselect them
+        # explicitly so the no-CUDA outcome is "deselected", not "skipped",
+        # making intent visible in the report.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/studio
+          UNSLOTH_COMPILE_DISABLE: '1'
+        working-directory: ${{ runner.temp }}/unsloth-zoo
+        run: |
+          python -m pytest -q --tb=short tests/ \
+            --deselect tests/test_unsloth_zoo_lora_merge.py::test_active_merge_device_returns_string_on_cuda_host \
+            --deselect tests/test_unsloth_zoo_lora_merge.py::test_merge_lora_moves_cpu_inputs_to_active_device
+
+      - name: unsloth_zoo — test_apply_fused_lm_head (lives in compiler.py)
+        # Not under tests/, so pytest's default discovery does not pick it
+        # up. Pure Python regex over transformers source strings; no GPU,
+        # no model download. Wall ~5-15 s, dominated by transformers import.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/studio
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python -c "from unsloth_zoo.compiler import test_apply_fused_lm_head; test_apply_fused_lm_head(); print('OK: test_apply_fused_lm_head')"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "::group::Versions"
+          python -c "import sys, platform; print(sys.version); print(platform.platform())"
+          python -c "import torch; print('torch', torch.__version__, 'cuda?', torch.cuda.is_available())"
+          python -c "import transformers; print('transformers', transformers.__version__)"
+          python -c "import unsloth_zoo, os; print('unsloth_zoo', getattr(unsloth_zoo, '__version__', '?'), 'at', os.path.dirname(unsloth_zoo.__file__))"
+          echo "::endgroup::"
+          echo "Consolidated job done. Coverage:"
+          echo "  - 16 unsloth Bucket-A tests under tests/saving/ + tests/utils/"
+          echo "  - unsloth_zoo @ ${UNSLOTH_ZOO_REF} pytest tests/ (5 GPU cases deselected)"
+          echo "  - unsloth_zoo.compiler.test_apply_fused_lm_head"

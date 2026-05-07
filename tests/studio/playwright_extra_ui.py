@@ -209,7 +209,13 @@ with sync_playwright() as p:
             else:
                 cmp_composer.click()
                 cmp_composer.fill("Reply with: A")
-                page.locator('button[aria-label="Send message"]').first.click()
+                # Prefer Enter on the textarea: the shared composer's
+                # onKeyDown handler maps plain Enter to send(). The
+                # send button is rendered via TooltipIconButton +
+                # ComposerPrimitive.Send and its aria-label was
+                # added late, so older builds match nothing for
+                # button[aria-label="Send message"] in compare mode.
+                cmp_composer.press("Enter")
                 # Wait for at least 2 NEW assistant bubbles (one per pane).
                 try:
                     page.wait_for_function(
@@ -228,7 +234,7 @@ with sync_playwright() as p:
 
                 # Send a second prompt -> 4 total new bubbles.
                 cmp_composer.fill("Reply with: B")
-                page.locator('button[aria-label="Send message"]').first.click()
+                cmp_composer.press("Enter")
                 try:
                     page.wait_for_function(
                         """(want) => {

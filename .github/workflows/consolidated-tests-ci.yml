@@ -69,6 +69,13 @@ jobs:
       PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
       PYTHONPATH: ${{ github.workspace }}/studio
       UNSLOTH_COMPILE_DISABLE: '1'
+      # unsloth_zoo/__init__.py:314 raises ImportError unless UNSLOTH_IS_PRESENT
+      # is set — normally it is set by unsloth.__init__ when unsloth is imported
+      # first. In this job we sometimes import unsloth_zoo.* (e.g.
+      # unsloth_zoo.saving_utils, unsloth_zoo.temporary_patches) without going
+      # through `import unsloth` first; pin the env var to 1 so unsloth_zoo's
+      # bootstrap accepts it. Setting it has no effect on unsloth itself.
+      UNSLOTH_IS_PRESENT: '1'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 

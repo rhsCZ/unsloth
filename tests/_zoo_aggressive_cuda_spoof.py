@@ -100,7 +100,8 @@ def apply() -> None:
     # set; do NOT route through torch.set_rng_state / get_rng_state -- those
     # operate on the CPU RNG directly and are independent of the cuda surface.
     import torch as _t
-    _empty_rng_state = _t.empty(0, dtype=_t.uint8)
+
+    _empty_rng_state = _t.empty(0, dtype = _t.uint8)
     torch.cuda.get_rng_state = lambda *a, **k: _empty_rng_state.clone()  # type: ignore[assignment]
     torch.cuda.set_rng_state = lambda *a, **k: None  # type: ignore[assignment]
     torch.cuda.get_rng_state_all = lambda *a, **k: [_empty_rng_state.clone()]  # type: ignore[attr-defined]
@@ -112,19 +113,27 @@ def apply() -> None:
     # ----- Stream / Event no-op classes -----------------------------------
     class _NoopStream:
         def __init__(self, *a, **k): ...
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def synchronize(self, *a, **k): ...
         def wait_stream(self, *a, **k): ...
-        def query(self): return True
+        def query(self):
+            return True
 
     class _NoopEvent:
         def __init__(self, *a, **k): ...
         def record(self, *a, **k): ...
         def wait(self, *a, **k): ...
-        def query(self): return True
+        def query(self):
+            return True
+
         def synchronize(self, *a, **k): ...
-        def elapsed_time(self, *a, **k): return 0.0
+        def elapsed_time(self, *a, **k):
+            return 0.0
 
     torch.cuda.Stream = _NoopStream  # type: ignore[assignment]
     torch.cuda.Event = _NoopEvent  # type: ignore[assignment]
@@ -136,15 +145,21 @@ def apply() -> None:
     # `torch.empty(..., pin_memory=True)` and friends raise on a CPU-only
     # build. Strip the kwarg — pin_memory has no meaning here.
     for _name in (
-        "empty", "zeros", "ones",
-        "empty_like", "zeros_like", "ones_like",
-        "rand", "randn", "randint",
+        "empty",
+        "zeros",
+        "ones",
+        "empty_like",
+        "zeros_like",
+        "ones_like",
+        "rand",
+        "randn",
+        "randint",
     ):
         _orig = getattr(torch, _name, None)
         if _orig is None:
             continue
 
-        def _wrap(*args: Any, _orig=_orig, **kwargs: Any):
+        def _wrap(*args: Any, _orig = _orig, **kwargs: Any):
             kwargs.pop("pin_memory", None)
             return _orig(*args, **kwargs)
 
@@ -164,16 +179,28 @@ def apply() -> None:
         import torch.cuda.amp  # type: ignore
     except Exception:
         cuda_amp = types.ModuleType("torch.cuda.amp")
+
         class _StubScaler:
             def __init__(self, *a, **k): ...
-            def scale(self, x): return x
-            def step(self, opt): opt.step()
+            def scale(self, x):
+                return x
+
+            def step(self, opt):
+                opt.step()
+
             def update(self, *a, **k): ...
             def unscale_(self, *a, **k): ...
-            def get_scale(self): return 1.0
-            def is_enabled(self): return False
-            def state_dict(self): return {}
+            def get_scale(self):
+                return 1.0
+
+            def is_enabled(self):
+                return False
+
+            def state_dict(self):
+                return {}
+
             def load_state_dict(self, *a, **k): ...
+
         cuda_amp.GradScaler = _StubScaler  # type: ignore[attr-defined]
         sys.modules.setdefault("torch.cuda.amp", cuda_amp)
         torch.cuda.amp = cuda_amp  # type: ignore[attr-defined]

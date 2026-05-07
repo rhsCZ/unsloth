@@ -185,6 +185,21 @@ with sync_playwright() as p:
         lambda m: console_errors.append(m.text) if m.type == "error" else None,
     )
 
+    # Per-turn HTTP-status capture: if a /v1/chat/completions request
+    # 4xx-rejects mid-test the symptom is a hung wait_for_function and
+    # a "FAIL: 1 non-benign pageerror events" line; this listener
+    # surfaces the underlying status codes so a flake is debuggable
+    # straight from the CI log without artifact spelunking.
+    chat_completions_responses: list[tuple[int, str]] = []
+    page.on(
+        "response",
+        lambda r: (
+            chat_completions_responses.append((r.status, r.url))
+            if "/v1/chat/completions" in r.url
+            else None
+        ),
+    )
+
     def shoot(name):
         _n[0] += 1
         page.screenshot(
@@ -402,53 +417,83 @@ with sync_playwright() as p:
         "What is 2+2? Reply with the digit only.",
     ]
 
-    def _nonempty_bubble_count():
+    def _bubble_count():
+        """Total number of [data-role='assistant'] elements (empty or not)."""
         return page.evaluate("""() => {
-            const els = document.querySelectorAll('[data-role="assistant"]');
-            let n = 0;
-            for (const el of els) {
-                if ((el.innerText || '').trim().length > 0) n++;
-            }
-            return n;
+            return document.querySelectorAll('[data-role="assistant"]').length;
         }""")
 
     def send_and_wait(prompt, idx):
-        # Wait until the previous turn's generation has fully stopped.
-        # If the Stop button is still attached, the prior turn is still
-        # streaming and we must NOT fire the next request -- doing so
-        # races against the assistant-ui composer's send-while-running
-        # gate and produces malformed messages on the wire (422 against
-        # /v1/chat/completions). 0 detach == the button never appeared,
-        # which is fine; we accept it.
+        # 1. Wait until the previous turn has fully stopped: Send
+        #    button is attached AND Stop button is detached. The
+        #    assistant-ui composer hot-swaps these inside a single
+        #    DOM slot; relying on Stop's detached state alone is
+        #    racy (the slot can briefly show neither during
+        #    transition).
         page.wait_for_selector(
             'button[aria-label="Send message"]',
             state = "attached",
             timeout = TURN_TIMEOUT_MS,
         )
-        baseline = _nonempty_bubble_count()
+        try:
+            page.wait_for_selector(
+                'button[aria-label="Stop generating"]',
+                state = "detached",
+                timeout = 5_000,
+            )
+        except Exception:
+            # Stop button still hanging on -- that's the prior turn
+            # mid-stream. Wait it out at the full per-turn budget.
+            page.wait_for_selector(
+                'button[aria-label="Stop generating"]',
+                state = "detached",
+                timeout = TURN_TIMEOUT_MS,
+            )
+
+        # 2. Snapshot total bubble count BEFORE send. We then wait
+        #    for total count to grow by exactly 1 (proves the new
+        #    placeholder rendered) and for the Stop button to come
+        #    + go (proves the new turn ran end-to-end). We do NOT
+        #    require the new bubble's text to be non-empty: an
+        #    empty assistant response is a legitimate model output,
+        #    not a test failure. The earlier "non-empty count >=
+        #    baseline + 1" predicate broke when any prior turn
+        #    streamed empty (which gemma-3-270m DOES on simple
+        #    prompts at temperature 0), because that empty bubble
+        #    became permanently "stuck" below the moving threshold.
+        bubbles_before = _bubble_count()
         composer.click()
         composer.fill(prompt)
         page.locator('button[aria-label="Send message"]').click()
-        # Wait for ONE more non-empty bubble than the baseline. This
-        # is more robust than asserting an absolute count of `idx`,
-        # which mis-counts if the chat already had assistant text
-        # before this turn (e.g. a "model loaded" hint or a streaming
-        # placeholder mid-generation from the prior turn).
+
+        # 3. Wait for the new placeholder bubble to render. This
+        #    confirms the click was actionable AND the request
+        #    issued (assistant-ui only mounts the placeholder once
+        #    the runtime accepts the message).
         page.wait_for_function(
-            """(target) => {
-                const els = document.querySelectorAll('[data-role="assistant"]');
-                let n = 0;
-                for (const el of els) {
-                    if ((el.innerText || '').trim().length > 0) n++;
-                }
-                return n >= target;
+            """(want) => {
+                return document.querySelectorAll(
+                    '[data-role="assistant"]'
+                ).length >= want;
             }""",
-            arg = baseline + 1,
+            arg = bubbles_before + 1,
             timeout = TURN_TIMEOUT_MS,
         )
-        # Hard-wait for streaming to end so the NEXT turn's send isn't
-        # racing the prior turn's tail. Take a screenshot if it doesn't
-        # detach in time so we can debug post-mortem.
+
+        # 4. Wait for streaming to FINISH for this specific turn.
+        #    We wait for Stop button to APPEAR (proves streaming
+        #    started) with a short budget; if it never appears,
+        #    that's fine -- gemma-3-270m can finish before the
+        #    Stop button paints. Either way we then wait for it
+        #    to be detached at the full per-turn budget.
+        try:
+            page.wait_for_selector(
+                'button[aria-label="Stop generating"]',
+                state = "attached",
+                timeout = 3_000,
+            )
+        except Exception:
+            pass
         try:
             page.wait_for_selector(
                 'button[aria-label="Stop generating"]',
@@ -469,6 +514,17 @@ with sync_playwright() as p:
     if len(texts) < len(prompts):
         fail(f"expected >= {len(prompts)} assistant bubbles, got {len(texts)}")
     info(f"five turn lengths = {[len(t) for t in texts[:5]]}")
+    # Surface /v1/chat/completions HTTP status distribution so a flake
+    # is debuggable from the CI log directly. A 4xx during a chat
+    # turn is almost always the upstream cause of a hung
+    # wait_for_function on a downstream turn.
+    if chat_completions_responses:
+        statuses = [code for code, _ in chat_completions_responses]
+        bad = [code for code in statuses if code >= 400]
+        info(
+            f"/v1/chat/completions: {len(statuses)} request(s); "
+            f"statuses={statuses}; 4xx/5xx={len(bad)}"
+        )
 
     # ─────────────────────────────────────────────────────
     # 5. Regenerate the last assistant turn.

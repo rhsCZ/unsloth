@@ -1131,8 +1131,7 @@ with sync_playwright() as p:
         "At least one non-system message is required",
     )
     real_errors = [
-        e for e in page_errors
-        if not any(pat in e for pat in BENIGN_PATTERNS)
+        e for e in page_errors if not any(pat in e for pat in BENIGN_PATTERNS)
     ]
     if page_errors:
         info(

@@ -257,11 +257,30 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     step("change-password through UI (Setup your account)")
     page.goto(f"{BASE}/change-password")
-    page.locator("#new-password").wait_for(state = "visible", timeout = 60_000)
-    shoot("01-change-password-initial")
-    page.fill("#new-password", NEW)
-    page.fill("#confirm-password", NEW)
-    shoot("02-change-password-filled")
+    # Wait for the network to settle before touching the form. Without
+    # this, on macos-14 free runners under --single-process Chromium,
+    # the page sometimes redirects mid-test (the bootstrap state poll
+    # finishes after wait_for() returns, the React router decides
+    # we're "already authenticated" or "no longer must-change", and
+    # rerenders without #new-password). Letting the network idle first
+    # gives the bootstrap dispatch a chance to settle BEFORE we
+    # commit to the form path. Run 25497245250 / job 74820324136
+    # showed this exact sequence: wait_for() returned then
+    # page.fill('#new-password') timed out 60s later because the
+    # form had been replaced.
+    try:
+        page.wait_for_load_state("networkidle", timeout = 30_000)
+    except Exception:
+        pass  # best-effort -- proceed even if network never idles
+    pw_field = page.locator("#new-password")
+    pw_field.wait_for(state = "visible", timeout = 60_000)
+    # NOTE: do NOT call shoot() between wait_for and fill -- the
+    # screenshot's font-load wait gives the React form a chance to
+    # detach if any background state-poll fires. Take screenshots
+    # AFTER the form is committed instead.
+    pw_field.fill(NEW, timeout = 60_000)
+    page.fill("#confirm-password", NEW, timeout = 60_000)
+    shoot("01-change-password-filled")
     page.locator('button[type="submit"]').click()
 
     # ─────────────────────────────────────────────────────

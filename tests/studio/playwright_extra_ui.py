@@ -182,9 +182,17 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     step("setup: change-password + model load")
     page.goto(f"{BASE}/change-password")
-    page.locator("#new-password").wait_for(state = "visible", timeout = 60_000)
-    page.fill("#new-password", NEW)
-    page.fill("#confirm-password", NEW)
+    # See playwright_chat_ui.py -- wait for networkidle before
+    # touching the form to dodge the bootstrap-poll-induced
+    # rerender on slow macos-14 runners.
+    try:
+        page.wait_for_load_state("networkidle", timeout = 30_000)
+    except Exception:
+        pass
+    pw_field = page.locator("#new-password")
+    pw_field.wait_for(state = "visible", timeout = 60_000)
+    pw_field.fill(NEW, timeout = 60_000)
+    page.fill("#confirm-password", NEW, timeout = 60_000)
     page.locator('button[type="submit"]').click()
     composer = page.locator('textarea[aria-label="Message input"]')
     composer.wait_for(state = "visible", timeout = 60_000)

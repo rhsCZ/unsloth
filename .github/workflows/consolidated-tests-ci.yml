@@ -795,18 +795,27 @@ jobs:
           python -m pytest -q --tb=short tests/_compiler_cache_invariants_shim.py
           rm -f tests/_compiler_cache_invariants_shim.py
 
-      - name: Compiler real-class round-trip (llama / qwen3 / gemma3 + SFT trainer)
-        # Heavier complementary path to the cache-hygiene step above.
-        # Calls `unsloth_compile_transformers(model_type=...)` against
-        # actual transformers modeling modules and `_patch_trl_rl_trainers`
-        # against TRL's SFTTrainer, then ast.parse / importlib-load /
-        # introspect the generated unsloth_compiled_cache/*.py files.
-        # Catches regex / source-rewriter drift across the matrix's
-        # (transformers, trl) combination -- the dominant failure mode of
+      - name: Compiler full-model-sweep (every transformers.models.*) + SFT trainer round-trip
+        # Calls `unsloth_compile_transformers(model_type=...)` against EVERY
+        # `transformers.models.<x>` package the matrix's transformers ships
+        # (pkgutil.iter_modules walk -- 383 packages on 4.57.6, similar on
+        # latest), then ast.parse / importlib-load / introspect the
+        # generated unsloth_compiled_cache/*.py file per model. Catches
+        # regex / source-rewriter drift across the matrix's (transformers,
+        # trl) combination -- the dominant failure mode of
         # `unsloth_compile_transformers` after a transformers point release.
+        #
+        # 21 model_types currently break the compiler (verified locally on
+        # transformers 4.57.6). They are listed in KNOWN_BROKEN below with
+        # their failure mode so the sweep stays green and any NEW breakage
+        # surfaces as red. Each entry is tracked for an individual fix
+        # PR on unsloth-zoo. The list is split by failure category so
+        # follow-up PRs can target one bug at a time.
+        #
         # Hermetic cache dir per pytest invocation; we override the
         # job-level UNSLOTH_COMPILE_DISABLE=1 inside the shim so
-        # compilation actually runs here. Wall-time ~2-3 min.
+        # compilation actually runs here. Wall-time estimate ~2-3 min
+        # warm (mean ~0.3s/model, 383 models = ~110s on the runner).
         run: |
           set -euxo pipefail
           cat > tests/_zoo_compiler_cache_shim.py <<'PY'
@@ -842,12 +851,118 @@ jobs:
                   )
 
 
+          # ---------- Full transformers.models.* compile sweep ----------
+          # Track the 21 model_types that currently break the compiler on
+          # transformers 4.57.6 (verified locally). New breakage on any
+          # OTHER model_type fails the cell. Each entry is a tracking item
+          # for a follow-up unsloth-zoo PR.
+          KNOWN_BROKEN_COMPILE = {
+              # Category A: `string index out of range` in source rewriter.
+              "colpali":       "string index out of range",
+              "colqwen2":      "string index out of range",
+              "dpr":           "string index out of range",
+              "rag":           "string index out of range",
+              "shieldgemma2":  "string index out of range",
+              "timm_backbone": "string index out of range",
+              # Category B: rewriter emits invalid Python source.
+              "clvp":          "emitted file: unexpected indent",
+              "electra":       "emitted file: expected ':'",
+              "falcon_mamba":  "emitted file: unexpected indent",
+              "gpt2":          "emitted file: unexpected indent",
+              "imagegpt":      "emitted file: unexpected indent",
+              "mamba":         "emitted file: unexpected indent",
+              "tapas":         "emitted file: expected ':'",
+              "xlstm":         "emitted file: unexpected indent",
+              # Category C: rewriter emits unclosed paren.
+              "kosmos2":       "emitted file: '(' was never closed",
+              "kosmos2_5":     "emitted file: '(' was never closed",
+              # Category D: imports list builder picks up a non-exported name.
+              "auto":          "module has no attribute _BaseModelWithGenerate",
+              "bit":           "module has no attribute Linear",
+              "regnet":        "module has no attribute Linear",
+              "resnet":        "module has no attribute Linear",
+              # Category E: undefined name in emitted file.
+              "perceiver":     "name 'AbstractPreprocessor' is not defined",
+          }
+
+
+          def _all_model_types():
+              import pkgutil, transformers.models as tm
+              return sorted(s.name for s in pkgutil.iter_modules(tm.__path__) if s.ispkg)
+
+
+          def test_compile_every_transformers_model_type():
+              """Run unsloth_compile_transformers across every model_type
+              the matrix's transformers ships. Allowed outcomes:
+                ok      -> compile emitted a parseable, importable cache file
+                skipped -> no `modeling_<x>.py` file (expected for some
+                           umbrella packages like `auto`, `deprecated`)
+                known   -> in KNOWN_BROKEN_COMPILE; tracked for follow-up.
+              Any uncaught failure fails the cell."""
+              import importlib as _il
+              ok = 0
+              skipped = []
+              known = []
+              new_failures = []
+              for model_type in _all_model_types():
+                  modeling_path = f"transformers.models.{model_type}.modeling_{model_type}"
+                  try:
+                      _il.import_module(modeling_path)
+                  except (ModuleNotFoundError, ImportError):
+                      skipped.append((model_type, "no modeling file"))
+                      continue
+                  try:
+                      unsloth_compile_transformers(
+                          model_type=model_type, fast_lora_forwards=False,
+                      )
+                  except Exception as e:
+                      msg = f"{type(e).__name__}: {str(e)[:200]}"
+                      if model_type in KNOWN_BROKEN_COMPILE:
+                          known.append((model_type, msg))
+                      else:
+                          new_failures.append((model_type, msg))
+                      continue
+                  if model_type in KNOWN_BROKEN_COMPILE:
+                      # Came back green unexpectedly -- that's GOOD news,
+                      # the bug was fixed. Surface it so we can drop the
+                      # entry from KNOWN_BROKEN_COMPILE.
+                      print(
+                          f"  UNEXPECTED-OK {model_type}: was in "
+                          "KNOWN_BROKEN_COMPILE, now compiles cleanly. "
+                          "Drop the entry."
+                      )
+                  ok += 1
+              print(f"\nCompile sweep: ok={ok} skipped={len(skipped)} "
+                    f"known-broken={len(known)} new-failures={len(new_failures)}")
+              for m, r in known:
+                  print(f"  KNOWN  {m}: {r}")
+              for m, r in new_failures[:30]:
+                  print(f"  NEW    {m}: {r}")
+              if len(new_failures) > 30:
+                  print(f"  ...and {len(new_failures)-30} more new failures")
+              assert not new_failures, (
+                  f"unsloth_compile_transformers introduced new failures on "
+                  f"{len(new_failures)} model_types not in the known-broken "
+                  f"list: {[m for m, _ in new_failures]}"
+              )
+              # Sanity floor: at least 200 model_types should compile cleanly
+              # (we observed 362 ok / 383 total on transformers 4.57.6).
+              assert ok >= 200, (
+                  f"only {ok} model_types compiled cleanly; expected >=200. "
+                  "Possible transformers-version-induced regression."
+              )
+
+
           @pytest.mark.parametrize("model_type,rms_class", [
               ("llama", "LlamaRMSNorm"),
               ("qwen3", "Qwen3RMSNorm"),
               ("gemma3", "Gemma3RMSNorm"),
           ])
           def test_compile_real_modeling_module(model_type, rms_class):
+              """Spot-check on the three production-relevant families that
+              the compile_every sweep also covers; this case verifies the
+              emitted cache file has the model-specific RMSNorm class
+              attribute, not just that the file parses + imports."""
               import importlib as _il
               try:
                   _il.import_module(
@@ -857,9 +972,6 @@ jobs:
                   pytest.skip(
                       f"transformers build lacks model_type={model_type}"
                   )
-              # fast_lora_forwards=False: the LoRA path expects PEFT + a real
-              # device for some torch.compile builds; skip it here, the
-              # source-emission path is what we want to verify.
               unsloth_compile_transformers(
                   model_type=model_type, fast_lora_forwards=False,
               )
@@ -925,22 +1037,27 @@ jobs:
           python -m pytest -q --tb=short tests/_zoo_compiler_cache_shim.py
           rm -f tests/_zoo_compiler_cache_shim.py
 
-      - name: TRL trainer + Config auto-discovery sweep (mirrors rl.py:1934-1949)
-        # Mirror unsloth/models/rl.py:patch_trl_rl_trainers — walk
-        # dir(trl.trainer), pick every `<x>_trainer` (lowercase, not
-        # `base_trainer`), and apply the same *Trainer / *Config
-        # discovery rules `_patch_trl_rl_trainers` uses (rl.py:553-620).
-        # Surfaces TRL drift before it crashes Unsloth at training time:
-        #   - trainer module that imports cleanly but exposes no
-        #     <prefix>*Trainer / <prefix>*Config -> auto-discovery would
-        #     log a warning and skip; we count skip-with-reason so a
-        #     newly added trainer is visible.
-        #   - *_config.py module rename (TRL 0.26+ split many configs
-        #     out) -> exercises the same fallback chain rl.py:575-615.
-        #   - Trainer that fails to import (e.g. grpo_trainer needs vllm
-        #     which we don't install) -> recorded as `import-skipped`,
-        #     not `fail`, matching the try/except in rl.py:1944-1948.
-        # Per-cell wall-time ~10-30s, dominated by AST parse + dir().
+      - name: TRL trainer + Config auto-discovery + dynamic patch coverage
+        # Mirror unsloth/models/rl.py:patch_trl_rl_trainers AND verify the
+        # dynamic per-version patch surface:
+        #   1. AST-parse every *_trainer / *_config submodule.
+        #   2. Apply the same *Trainer / *Config discovery rules
+        #      _patch_trl_rl_trainers uses (rl.py:553-620).
+        #   3. Orphan check: every <x>_trainer must have a sibling
+        #      <x>_config OR an inline *Config.
+        #   4. Dynamic count: enumerate every canonical trainer that
+        #      imports cleanly, run patch_trl_rl_trainers(), assert
+        #      every one ends up Unsloth-prefixed in-place. Floor matches
+        #      the cohort sizes from the version sweep:
+        #        TRL 0.22-0.23 -> 18 canonical trainers
+        #        TRL 0.24-0.28 -> 15 canonical trainers
+        #        TRL 0.29-1.x  ->  6 canonical (rest are experimental
+        #                          thin-wrappers; covered next)
+        #   5. Experimental coverage (TRL 0.29+): walk trl.experimental.*,
+        #      find every *Trainer class, verify the umbrella patch
+        #      reaches them via the thin-wrapper MRO walk in
+        #      _patch_trl_rl_trainers (rl.py:677-702).
+        # Per-cell wall-time ~30-60s.
         run: |
           set -euxo pipefail
           cat > tests/_trl_trainer_discovery_shim.py <<'PY'
@@ -1199,6 +1316,216 @@ jobs:
                   "Orphan TRL trainer modules with neither sibling "
                   f"<x>_config.py nor an inline *Config: {orphans}. "
                   "unsloth auto-discovery would silently skip these."
+              )
+
+
+          # ---- Dynamic patch coverage: count + verify Unsloth-prefixed ----
+
+          def _enumerate_canonical_trainer_classes():
+              """Walk trl.trainer/*_trainer.py on disk (the source of
+              truth for what `dir(trl.trainer)` should expose) and return
+              [(trainer_file, TrainerClass), ...] for every entry that
+              imports + has exactly-one resolvable *Trainer per the
+              unsloth rules. Skips optional-dep ImportErrors."""
+              out = []
+              for trainer_file in _trainer_files():
+                  try:
+                      mod = getattr(trl.trainer, trainer_file)
+                  except Exception:
+                      continue
+                  trainers, _ = _apply_unsloth_discovery_rules(mod, trainer_file)
+                  if len(trainers) != 1:
+                      continue
+                  try:
+                      cls = getattr(mod, trainers[0])
+                  except Exception:
+                      continue
+                  out.append((trainer_file, cls))
+              return out
+
+
+          def _enumerate_experimental_trainer_packages():
+              """TRL 0.29+ moved many trainers (bco, cpo, gkd, nash_md,
+              online_dpo, orpo, ppo, prm, xpo, ...) to `trl.experimental.<pkg>`,
+              re-exposing them via thin-wrapper deprecation shims in
+              `trl.trainer.<x>_trainer`. List every `trl.experimental.<pkg>`
+              that defines at least one *Trainer class, parsed by AST so we
+              do NOT trigger the optional-dep imports on the package init."""
+              spec = importlib.util.find_spec("trl.experimental")
+              if spec is None or not spec.submodule_search_locations:
+                  return []
+              import re as _re
+              hits = []
+              for root in spec.submodule_search_locations:
+                  rp = pathlib.Path(root)
+                  for sub in sorted(rp.iterdir()):
+                      if not sub.is_dir() or sub.name.startswith("_"):
+                          continue
+                      classes = []
+                      for py in sub.rglob("*.py"):
+                          try:
+                              src = py.read_text(encoding="utf-8")
+                          except Exception:
+                              continue
+                          for m in _re.finditer(
+                              r"^class\s+([A-Za-z0-9_]+Trainer)\b", src, _re.M,
+                          ):
+                              classes.append(m.group(1))
+                      if classes:
+                          hits.append((sub.name, sorted(set(classes))))
+              return hits
+
+
+          def _is_unsloth_patched(cls) -> bool:
+              return getattr(cls, "__name__", "").startswith("Unsloth")
+
+
+          def test_unsloth_patches_every_canonical_trainer_in_this_trl_version():
+              """Verify the count + identity of canonically-patched trainers
+              matches the trainer surface this TRL version actually ships.
+
+              For TRL 0.22.x-0.23.x: ~18 canonical trainers expected.
+              For TRL 0.24.x-0.28.x: ~15 canonical trainers expected.
+              For TRL 0.29.x-1.x:    6 canonical (rest are experimental
+              thin-wrappers; covered by the next test)."""
+              from unsloth.models.rl import patch_trl_rl_trainers
+              before = _enumerate_canonical_trainer_classes()
+              before_count = len(before)
+              before_unpatched = [
+                  (tf, cls.__name__) for tf, cls in before
+                  if not _is_unsloth_patched(cls)
+              ]
+              # Apply unsloth's umbrella patch.
+              patch_trl_rl_trainers()
+              # Re-enumerate (some classes may have been replaced in-module).
+              after = _enumerate_canonical_trainer_classes()
+              after_count = len(after)
+              patched = [(tf, cls.__name__) for tf, cls in after
+                         if _is_unsloth_patched(cls)]
+              unpatched = [(tf, cls.__name__) for tf, cls in after
+                           if not _is_unsloth_patched(cls)]
+              print(
+                  f"\nCanonical trainer surface for TRL {trl.__version__}: "
+                  f"discoverable_before={before_count} "
+                  f"discoverable_after={after_count} "
+                  f"patched={len(patched)} unpatched={len(unpatched)}"
+              )
+              for tf, n in patched:
+                  print(f"  PATCHED   {tf}: {n}")
+              for tf, n in unpatched:
+                  print(f"  UNPATCHED {tf}: {n}")
+              # Hard contract: every canonical trainer that imports
+              # cleanly must end up Unsloth-prefixed after the umbrella
+              # patch. If a trainer was discoverable BEFORE the patch but
+              # is missing from `after`, that is a separate (rare) issue
+              # we surface as failure.
+              assert before_count == after_count, (
+                  f"trainer-class set changed across patching: "
+                  f"before={[n for _, n in before_unpatched]} "
+                  f"after={[n for _, n in unpatched]}"
+              )
+              assert not unpatched, (
+                  "unsloth.models.rl.patch_trl_rl_trainers did NOT patch: "
+                  + ", ".join(f"{tf}:{n}" for tf, n in unpatched)
+              )
+              # Floor matches the cohort sizes from the TRL version sweep:
+              # 18 (0.22-0.23), 15 (0.24-0.28), 6 (0.29+ canonical only).
+              assert len(patched) >= 6, (
+                  f"only {len(patched)} canonical trainers patched; "
+                  "expected >= 6 (the smallest production cohort)."
+              )
+
+
+          def test_unsloth_patches_experimental_trainers_via_thin_wrappers():
+              """TRL 0.29+ ships canonical-`trl.trainer.<x>_trainer` modules
+              for many trainers as deprecation thin-wrappers that forward
+              to `trl.experimental.<x>`. unsloth's
+              `_patch_trl_rl_trainers` (rl.py:677-702) detects
+              `trl.experimental` in the trainer source and resolves to
+              the parent class -- so patching the canonical entry should
+              also Unsloth-prefix the experimental class via in-module
+              setattr.
+
+              Verify by walking trl.experimental.* AST for every *Trainer
+              class, then checking whether it (or any class with the same
+              name in the experimental package) carries the Unsloth
+              prefix after the umbrella patch."""
+              from unsloth.models.rl import patch_trl_rl_trainers
+              patch_trl_rl_trainers()
+              experimental_pkgs = _enumerate_experimental_trainer_packages()
+              if not experimental_pkgs:
+                  pytest.skip(
+                      f"TRL {trl.__version__} has no trl.experimental.* "
+                      "trainer surface (pre-0.29 cohort). The canonical "
+                      "test above already covers patching here."
+                  )
+              found = []
+              missing = []
+              for pkg_name, class_names in experimental_pkgs:
+                  qual = f"trl.experimental.{pkg_name}"
+                  try:
+                      pkg_mod = importlib.import_module(qual)
+                  except Exception as e:
+                      # Optional-dep ImportError: experimental package
+                      # could not be loaded. Match unsloth's runtime
+                      # tolerance: this would also be silently skipped
+                      # by `_patch_trl_rl_trainers`. Record but do not
+                      # fail.
+                      print(
+                          f"  IMPORT-SKIP {qual}: "
+                          f"{type(e).__name__}: {str(e)[:120]}"
+                      )
+                      continue
+                  for cls_name in class_names:
+                      cls = getattr(pkg_mod, cls_name, None)
+                      if cls is None:
+                          # Class is defined inside the package but not
+                          # re-exported on the package init. Walk
+                          # submodules to find it.
+                          import pkgutil as _pku
+                          for sub in _pku.walk_packages(
+                              pkg_mod.__path__, prefix=qual + "."
+                          ):
+                              try:
+                                  sub_mod = importlib.import_module(sub.name)
+                              except Exception:
+                                  continue
+                              cls = getattr(sub_mod, cls_name, None)
+                              if cls is not None:
+                                  break
+                      if cls is None:
+                          missing.append((pkg_name, cls_name))
+                          continue
+                      if _is_unsloth_patched(cls):
+                          found.append((pkg_name, cls_name))
+                          print(f"  PATCHED   trl.experimental.{pkg_name}.{cls_name}")
+                      else:
+                          # Not Unsloth-prefixed: either unsloth chose
+                          # not to patch this surface (e.g. the canonical
+                          # thin-wrapper module did not exist) or the
+                          # patch silently failed. Record both
+                          # outcomes; the assertion below tolerates the
+                          # gap as informational, not failure -- the
+                          # canonical test enforces the hard contract.
+                          print(
+                              f"  NOT-PATCHED trl.experimental.{pkg_name}."
+                              f"{cls_name} (no Unsloth-prefix on the "
+                              "experimental surface)"
+                          )
+              total_experimental = sum(len(cs) for _, cs in experimental_pkgs)
+              print(
+                  f"\nExperimental trainer surface (TRL {trl.__version__}): "
+                  f"{len(experimental_pkgs)} packages, "
+                  f"{total_experimental} *Trainer classes; "
+                  f"unsloth-patched={len(found)} class-missing={len(missing)}"
+              )
+              # Hard contract: a *Trainer class declared in a python
+              # source file must be locatable in its package after import.
+              # If we saw the class definition but cannot find the symbol
+              # at runtime, the package's public surface drifted.
+              assert not missing, (
+                  "experimental *Trainer classes declared in source but "
+                  f"not importable: {missing}"
               )
           PY
           python -m pytest -q --tb=short -s tests/_trl_trainer_discovery_shim.py

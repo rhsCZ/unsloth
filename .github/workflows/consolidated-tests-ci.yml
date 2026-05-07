@@ -20,8 +20,15 @@
 #     plain function with no fixtures: pure regex over transformers source
 #     strings, ~5-15 s wall, no GPU.
 #
-# continue-on-error: true for the first pass. Once one full green run is
-# observed in CI, flip it to false (or remove) so the job becomes gating.
+# Strict mode: every test step is gating (no `continue-on-error`). The
+# upstream patch fixes that previously caused per-cell red have landed:
+#   - unslothai/unsloth#5319 (patch_fast_lora import, patch_sft_trainer
+#     Union, openenv OSError graceful skip).
+#   - unslothai/unsloth-zoo#628 (MoE coverage canary so old transformers
+#     skips legitimately while real discovery regressions still fail).
+# After those merges every observed cell failure was one of these two
+# things; if they regress we want a red cell, not a green-with-fail-prints
+# cell.
 
 name: Consolidated CPU tests (unsloth Bucket-A + unsloth_zoo@main)
 
@@ -61,8 +68,12 @@ jobs:
     #      drift signal)
     #   3. transformers + TRL pinned by pyproject.toml's dependency entries
     #      (resolved dynamically at job time via tomllib)
-    # fail-fast: false so each cell runs independently. continue-on-error
-    # at the job level keeps the PR unblocked while we observe the matrix.
+    # fail-fast: false so each cell runs independently and a transformers /
+    # TRL drift signal in one cell does not cancel the others. No
+    # job-level or per-step `continue-on-error` -- real test failures now
+    # fail the cell. Patches with legitimate CPU-runner preconditions
+    # (real CUDA dispatcher, runtime args) are explicitly skipped via
+    # NEEDS_PRECONDITION in the runtime check shim below.
     strategy:
       fail-fast: false
       matrix:
@@ -82,14 +93,11 @@ jobs:
     name: "Consolidated CPU (${{ matrix.combo.label }})"
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    # NOTE: previously had a job-level `continue-on-error: true` so cells
-    # reported SUCCESS even when individual steps failed. That made the
-    # PR check UI lie. The job-level flag is removed; per-step
-    # `continue-on-error: true` remains so a single failed step does not
-    # cascade and skip the rest of the ledger. Real failures now show up
-    # as a red cell on the PR. Patches with known preconditions are now
-    # explicitly skipped via NEEDS_PRECONDITION in the runtime check
-    # shim, not silenced via blanket continue-on-error.
+    # No job-level or per-step `continue-on-error`. Earlier iterations
+    # masked real test failures behind green check icons; that lie is
+    # gone. A failing test step fails the cell. NEEDS_PRECONDITION in
+    # the runtime check shim handles patches that legitimately cannot
+    # run on a CPU-only runner (real CUDA dispatcher, runtime args).
     env:
       UNSLOTH_ZOO_REF: ${{ inputs.unsloth_zoo_ref || 'main' }}
       MATRIX_TRANSFORMERS_SPEC: ${{ matrix.combo.transformers_spec }}
@@ -237,7 +245,6 @@ jobs:
         # the job out fast if a transformers/torch resolution went sideways.
         # Inherits PYTHONPATH / UNSLOTH_COMPILE_DISABLE / PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
         # from the job-level env block.
-        continue-on-error: true
         run: |
           set -euxo pipefail
           python -m pytest --collect-only -q \
@@ -254,7 +261,6 @@ jobs:
         # because their sibling files need real GPUs / real HF weights.
         # The five files below are pure-Python + AST/protobuf/regex tests
         # that run cleanly on CPU. Env inherited from the job block.
-        continue-on-error: true
         run: |
           python -m pytest -q --tb=short \
             tests/saving/test_save_shell_injection.py \
@@ -273,7 +279,6 @@ jobs:
         # cases below auto-skip on a GPU-less runner; deselect them
         # explicitly so the no-CUDA outcome is "deselected", not "skipped",
         # making intent visible in the report. Env inherited from job block.
-        continue-on-error: true
         working-directory: ${{ runner.temp }}/unsloth-zoo
         run: |
           python -m pytest -q --tb=short tests/ \
@@ -291,7 +296,6 @@ jobs:
         # spoof is required because unsloth_zoo/temporary_patches/gpt_oss.py
         # at module load reads torch.cuda.memory.mem_get_info(0), which
         # bare `is_available = True` doesn't cover. Env inherited.
-        continue-on-error: true
         run: |
           set -euxo pipefail
           cat > tests/_zoo_apply_fused_lm_head_shim.py <<'PY'
@@ -316,7 +320,6 @@ jobs:
         # they reference still exists in the installed `trl`. Catches API
         # drift (renamed / removed TRL classes) without running training.
         # Pre-fetches latest pip transformers in case TRL pinned an older one.
-        continue-on-error: true
         run: |
           set -euxo pipefail
           # Use the matrix-resolved transformers + trl versions already
@@ -350,7 +353,6 @@ jobs:
         # MLP patching as the path that breaks first when transformers ships
         # an MLP class rename; this step is the canary against whatever
         # transformers version the matrix cell selected.
-        continue-on-error: true
         working-directory: ${{ runner.temp }}/unsloth-zoo
         run: |
           set -euxo pipefail
@@ -378,7 +380,6 @@ jobs:
           PY
 
       - name: Static checks — unsloth_zoo/hf_utils.py syntax + import-graph
-        continue-on-error: true
         working-directory: ${{ runner.temp }}/unsloth-zoo
         run: |
           set -euxo pipefail
@@ -403,7 +404,6 @@ jobs:
         # NameError: name 'fast_lora_forward' is not defined). The shim
         # reports the full ledger but only fails when one of the two
         # `required` helpers is absent.
-        continue-on-error: true
         run: |
           set -euxo pipefail
           cat > tests/_runtime_patch_check_shim.py <<'PY'
@@ -505,6 +505,20 @@ jobs:
               print(f"required patch_* helpers seen: {sorted(seen_required)}")
               missing = REQUIRED - seen_required
               assert not missing, f"required patch_* helpers MISSING: {sorted(missing)}"
+              # Strict: any zero-arg patch that raises is a real
+              # regression now that #5319 has landed (the three previously
+              # known-broken patches are fixed; legitimate
+              # CPU-precondition skips are recorded in NEEDS_PRECONDITION
+              # above, not in `fail`). Print all failures and re-raise
+              # them as one assertion message.
+              if fail:
+                  raise AssertionError(
+                      f"zero-arg patch_* invocation failures (ok={ok}, "
+                      f"fail={len(fail)}, skipped={len(skipped)}):\n  "
+                      + "\n  ".join(
+                          f"{m}.{n} -> {ec}: {msg}" for m, n, ec, msg in fail
+                      )
+                  )
           PY
           python -m pytest -q --tb=short tests/_runtime_patch_check_shim.py -s
           rm -f tests/_runtime_patch_check_shim.py
@@ -513,7 +527,6 @@ jobs:
         # Same shim pattern: pytest picks up tests/conftest.py before importing
         # unsloth_zoo.tiled_mlp, so the GPU-spoof harness covers
         # unsloth_zoo.temporary_patches.gpt_oss's mem_get_info call.
-        continue-on-error: true
         run: |
           set -euxo pipefail
           cat > tests/_tiled_mlp_check_shim.py <<'PY'
@@ -546,24 +559,47 @@ jobs:
                   return x
 
           def test_patch_tiled_mlp_numerical_equivalence():
+              # `patch_mlp(target_arctic=True)` sets `chunk_size = max(1, H)`
+              # and shards the SEQUENCE dim with `n_shards = max(1, S //
+              # chunk_size)`. Pick S > H so the tiled path actually runs
+              # multi-shard (n_shards = 192 // 64 = 3, plus a remainder
+              # shard) rather than degenerating to n_shards = 1 which is
+              # bit-exact and only confirms patching installed something.
+              # If the tiled implementation is correct, multi-shard output
+              # must still match the un-tiled reference within FP32 noise.
               torch.manual_seed(0)
               m = _FakeModel().eval()
-              x = torch.randn(2, 4, 64)
+              hidden = 64
+              # 192 = 3 * hidden, so divmod(192, 64) = (3, 0) -> 3 shards,
+              # no remainder; gives a clean multi-shard verification.
+              x = torch.randn(2, 192, hidden)
               with torch.no_grad():
                   y_before = m(x).clone()
               patch_mlp(m.layers[0]["mlp"])
               patch_tiled_mlp(m)
+              # Sanity-check we are actually exercising the multi-shard
+              # path: poke chunk_size by re-deriving it the same way
+              # `tiled_forward_arctic_size` does.
+              S = x.shape[1]
+              chunk = max(1, hidden)
+              n_shards_expected = max(1, S // chunk)
+              assert n_shards_expected > 1, (
+                  "tiled MLP shim is not exercising multi-shard: "
+                  f"S={S}, chunk={chunk}, n_shards={n_shards_expected}"
+              )
               with torch.no_grad():
                   y_after = m(x).clone()
               err = (y_before - y_after).abs().max().item()
-              print(f"patch_tiled_mlp output diff = {err:.3e}")
+              print(
+                  f"patch_tiled_mlp multi-shard (n_shards={n_shards_expected}) "
+                  f"output diff = {err:.3e}"
+              )
               assert err < 1e-3, f"tiled MLP output drifted: {err}"
           PY
           python -m pytest -q --tb=short tests/_tiled_mlp_check_shim.py -s
           rm -f tests/_tiled_mlp_check_shim.py
 
       - name: llama.cpp install + `llama-cli --help` smoke
-        continue-on-error: true
         # The user asked to confirm llama.cpp installs and the CLI runs.
         # Studio uses prebuilt llama.cpp binaries via studio/install_llama_prebuilt.py;
         # we mirror that flow here at a smaller scale: pull the upstream prebuilt

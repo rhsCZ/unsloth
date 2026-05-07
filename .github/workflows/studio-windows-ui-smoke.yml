@@ -110,21 +110,55 @@ jobs:
 
       - name: Assert install.ps1 used the Windows llama.cpp prebuilt
         run: |
-          # Windows install must take the prebuilt path. The CPU
-          # asset name is llama-bNNNN-bin-win-cpu-x64.zip on
-          # windows-latest (no GPU). Source-build fallback here
-          # is a Studio bug -- we ship Windows prebuilts.
+          # install.ps1's setup.ps1 child writes "prebuilt installed
+          # and validated" to its own console host -- that output
+          # does NOT come back through this parent step's stdout
+          # pipeline (no matter how aggressively we redirect: *>&1,
+          # tee, etc.). Verify the install via the filesystem
+          # instead. setup.ps1 writes UNSLOTH_PREBUILT_INFO.json
+          # next to the install dir on success, and lays the
+          # binaries under build/bin/Release/ on Windows.
+          STUDIO_HOME=~/.unsloth/studio
+          LLAMA_DIR=~/.unsloth/llama.cpp
+          INFO="$LLAMA_DIR/UNSLOTH_PREBUILT_INFO.json"
+          BIN="$LLAMA_DIR/build/bin/Release/llama-server.exe"
+          # Source-build fallback grep stays as a fast bail-out.
           if grep -q "falling back to source build" logs/install.log; then
-            echo "::error::install.ps1 fell back to source-build llama.cpp on Windows. Studio must install the prebuilt llama-bNNNN-bin-win-cpu-x64 on Windows."
+            echo "::error::install.ps1 fell back to source-build llama.cpp on Windows."
             grep -E "llama-prebuilt|llama.cpp" logs/install.log | tail -60
             exit 1
           fi
-          if ! grep -qE "prebuilt installed and validated|prebuilt up to date and validated|bin-win-cpu-x64|bin-win-cuda-" logs/install.log; then
-            echo "::error::no Windows prebuilt llama.cpp marker in install.log."
-            grep -E "llama-prebuilt|llama.cpp" logs/install.log | tail -60
+          if [ ! -f "$INFO" ]; then
+            echo "::error::no UNSLOTH_PREBUILT_INFO.json at $INFO; setup.ps1 didn't install the prebuilt."
+            ls -la "$LLAMA_DIR" || true
             exit 1
           fi
-          echo "install.ps1 installed the Windows prebuilt llama.cpp"
+          if [ ! -f "$BIN" ]; then
+            echo "::error::no llama-server.exe at $BIN; prebuilt extraction incomplete."
+            ls -la "$LLAMA_DIR/build/bin" || true
+            ls -la "$LLAMA_DIR/build/bin/Release" || true
+            exit 1
+          fi
+          echo "install.ps1 installed the Windows prebuilt llama.cpp:"
+          cat "$INFO"
+
+      - name: Add Studio shim to GITHUB_PATH
+        # install.ps1 puts unsloth.exe at $StudioHome\bin\unsloth.exe
+        # and adds that dir to the User PATH via the Windows registry.
+        # Registry-level PATH updates don't propagate to a running
+        # Git Bash session, so the next step's `unsloth ...` invocation
+        # would hit "command not found". Re-export the shim dir to
+        # GITHUB_PATH so every subsequent step in this job sees it.
+        run: |
+          SHIM_DIR=~/.unsloth/studio/bin
+          if [ ! -f "$SHIM_DIR/unsloth.exe" ]; then
+            echo "::error::unsloth.exe shim not found at $SHIM_DIR"
+            ls -la ~/.unsloth/studio/ || true
+            exit 1
+          fi
+          # GITHUB_PATH wants Windows-style paths; convert via cygpath.
+          cygpath -w "$SHIM_DIR" >> "$GITHUB_PATH"
+          echo "Added Studio shim dir to PATH: $(cygpath -w "$SHIM_DIR")"
 
       - name: Patch Studio venv with full typer / pydantic dep trees
         # Belt-and-suspenders: install.ps1's --no-deps install of

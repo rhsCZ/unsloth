@@ -92,11 +92,42 @@ jobs:
 
       - name: Assert install.ps1 used the Windows llama.cpp prebuilt
         run: |
+          # Filesystem-based check (setup.ps1's stream output isn't
+          # captured back through this parent step's pipeline; see
+          # studio-windows-ui-smoke.yml for full explanation).
+          LLAMA_DIR=~/.unsloth/llama.cpp
+          INFO="$LLAMA_DIR/UNSLOTH_PREBUILT_INFO.json"
+          BIN="$LLAMA_DIR/build/bin/Release/llama-server.exe"
           if grep -q "falling back to source build" logs/install.log; then
-            echo "::error::install.ps1 fell back to source-build llama.cpp on Windows. Studio must install the prebuilt llama-bNNNN-bin-win-cpu-x64 on Windows."
+            echo "::error::install.ps1 fell back to source-build llama.cpp on Windows."
             grep -E "llama-prebuilt|llama.cpp" logs/install.log | tail -60
             exit 1
           fi
+          if [ ! -f "$INFO" ]; then
+            echo "::error::no UNSLOTH_PREBUILT_INFO.json at $INFO."
+            ls -la "$LLAMA_DIR" || true
+            exit 1
+          fi
+          if [ ! -f "$BIN" ]; then
+            echo "::error::no llama-server.exe at $BIN."
+            ls -la "$LLAMA_DIR/build/bin" || true
+            exit 1
+          fi
+          echo "install.ps1 installed the Windows prebuilt llama.cpp:"
+          cat "$INFO"
+
+      - name: Add Studio shim to GITHUB_PATH
+        # install.ps1's User-PATH update doesn't propagate to a
+        # running Git Bash session; export the shim dir so the
+        # next `unsloth ...` invocation finds it.
+        run: |
+          SHIM_DIR=~/.unsloth/studio/bin
+          if [ ! -f "$SHIM_DIR/unsloth.exe" ]; then
+            echo "::error::unsloth.exe shim not found at $SHIM_DIR"
+            ls -la ~/.unsloth/studio/ || true
+            exit 1
+          fi
+          cygpath -w "$SHIM_DIR" >> "$GITHUB_PATH"
 
       - name: Patch Studio venv with full typer / pydantic dep trees
         # Belt-and-suspenders: install.ps1's --no-deps install of

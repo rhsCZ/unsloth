@@ -282,63 +282,67 @@ def main() -> int:
     import tempfile
     from pathlib import Path
 
-    workdir = Path(tempfile.mkdtemp(prefix="unsloth_mlx_export_"))
-    print(f"\nExport round-trip workdir: {workdir}", flush=True)
+    workdir = Path(tempfile.mkdtemp(prefix = "unsloth_mlx_export_"))
+    print(f"\nExport round-trip workdir: {workdir}", flush = True)
 
     lora_dir = workdir / "lora"
     merged_dir = workdir / "merged_16bit"
     gguf_dir = workdir / "gguf"
 
-    print("\n[export] Saving LoRA adapters...", flush=True)
+    print("\n[export] Saving LoRA adapters...", flush = True)
     model.save_pretrained_merged(
-        str(lora_dir), tokenizer=tokenizer, save_method="lora",
+        str(lora_dir),
+        tokenizer = tokenizer,
+        save_method = "lora",
     )
-    assert (lora_dir / "adapters.safetensors").exists(), (
-        f"adapters.safetensors missing in {lora_dir}"
+    assert (
+        lora_dir / "adapters.safetensors"
+    ).exists(), f"adapters.safetensors missing in {lora_dir}"
+    assert (
+        lora_dir / "adapter_config.json"
+    ).exists(), f"adapter_config.json missing in {lora_dir}"
+    print(
+        f"  lora dir contents: {sorted(p.name for p in lora_dir.iterdir())}", flush = True
     )
-    assert (lora_dir / "adapter_config.json").exists(), (
-        f"adapter_config.json missing in {lora_dir}"
-    )
-    print(f"  lora dir contents: {sorted(p.name for p in lora_dir.iterdir())}",
-          flush=True)
 
-    print("\n[export] Saving merged_16bit...", flush=True)
+    print("\n[export] Saving merged_16bit...", flush = True)
     model.save_pretrained_merged(
-        str(merged_dir), tokenizer=tokenizer, save_method="merged_16bit",
+        str(merged_dir),
+        tokenizer = tokenizer,
+        save_method = "merged_16bit",
     )
-    assert any(merged_dir.glob("*.safetensors")), (
-        f"merged dir {merged_dir} has no .safetensors weights"
-    )
+    assert any(
+        merged_dir.glob("*.safetensors")
+    ), f"merged dir {merged_dir} has no .safetensors weights"
     print(
         f"  merged dir contents: {sorted(p.name for p in merged_dir.iterdir())}",
-        flush=True,
+        flush = True,
     )
 
     # GGUF is heavier (clones + cmake-builds llama.cpp). Run last so a
     # GGUF infra failure doesn't mask the LoRA / merged_16bit checks.
-    print("\n[export] Saving GGUF (builds llama.cpp via cmake)...", flush=True)
+    print("\n[export] Saving GGUF (builds llama.cpp via cmake)...", flush = True)
     gguf_save_error: str | None = None
     try:
         # not_quantized = bf16 GGUF, skips the llama-quantize step. We
         # only care that the round-trip works, not the quant fidelity.
         model.save_pretrained_gguf(
             str(gguf_dir),
-            tokenizer=tokenizer,
-            quantization_method="not_quantized",
+            tokenizer = tokenizer,
+            quantization_method = "not_quantized",
         )
         gguf_files = sorted(gguf_dir.glob("*.gguf"))
         assert gguf_files, f"no .gguf produced in {gguf_dir}"
         print(
             f"  gguf dir contents: {sorted(p.name for p in gguf_dir.iterdir())}",
-            flush=True,
+            flush = True,
         )
     except Exception as _e:
         gguf_save_error = f"{type(_e).__name__}: {_e}"
-        print(f"  GGUF save FAILED: {gguf_save_error}", flush=True)
+        print(f"  GGUF save FAILED: {gguf_save_error}", flush = True)
 
     # Drop trained model + trainer to free memory before reloading.
-    print("\n[export] Dropping in-memory model before reload tests...",
-          flush=True)
+    print("\n[export] Dropping in-memory model before reload tests...", flush = True)
     del trainer, model
     gc.collect()
     mx.clear_cache()
@@ -349,24 +353,24 @@ def main() -> int:
             pass
 
     def _reload_and_generate(label: str, save_dir: Path) -> str:
-        print(f"\n[reload:{label}] FastMLXModel.from_pretrained({save_dir})",
-              flush=True)
+        print(
+            f"\n[reload:{label}] FastMLXModel.from_pretrained({save_dir})", flush = True
+        )
         mx.random.seed(SEED)
         m, t = FastMLXModel.from_pretrained(
             str(save_dir),
-            load_in_4bit=False,
-            dtype="float16",
-            text_only=True,
-            max_seq_length=128,
-            random_state=SEED,
-            token=hf_token,
+            load_in_4bit = False,
+            dtype = "float16",
+            text_only = True,
+            max_seq_length = 128,
+            random_state = SEED,
+            token = hf_token,
         )
         m.eval()
-        out = generate(m, t, prompt=prompt, max_tokens=24, verbose=False)
-        print(f"  [reload:{label}] output: {out!r}", flush=True)
+        out = generate(m, t, prompt = prompt, max_tokens = 24, verbose = False)
+        print(f"  [reload:{label}] output: {out!r}", flush = True)
         assert "Unsloth" in out, (
-            f"reloaded {label!r} produced gibberish for prompt {prompt!r}: "
-            f"{out!r}"
+            f"reloaded {label!r} produced gibberish for prompt {prompt!r}: " f"{out!r}"
         )
         del m, t
         gc.collect()
@@ -388,9 +392,7 @@ def main() -> int:
         llama_cli = next((c for c in candidates if c.exists()), None)
         gguf_files = sorted(gguf_dir.glob("*.gguf"))
         if llama_cli is None:
-            gguf_save_error = (
-                f"llama-cli not found after build; checked {candidates}"
-            )
+            gguf_save_error = f"llama-cli not found after build; checked {candidates}"
         elif not gguf_files:
             gguf_save_error = f"no .gguf files in {gguf_dir}"
         else:
@@ -398,25 +400,34 @@ def main() -> int:
             print(
                 f"\n[reload:gguf] {llama_cli} -m {gguf_path.name} "
                 f"-p {prompt!r} -n 24",
-                flush=True,
+                flush = True,
             )
             try:
                 proc = subprocess.run(
                     [
                         str(llama_cli),
-                        "-m", str(gguf_path),
-                        "-p", prompt,
-                        "-n", "24",
-                        "--temp", "0",
-                        "--seed", str(SEED),
+                        "-m",
+                        str(gguf_path),
+                        "-p",
+                        prompt,
+                        "-n",
+                        "24",
+                        "--temp",
+                        "0",
+                        "--seed",
+                        str(SEED),
                         "-no-cnv",  # disable conversation/chat mode
                         "--no-warmup",
                     ],
-                    capture_output=True, text=True, timeout=180,
+                    capture_output = True,
+                    text = True,
+                    timeout = 180,
                 )
                 gguf_reload_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-                print(f"  [reload:gguf] llama-cli stdout (head):\n{proc.stdout[:600]}",
-                      flush=True)
+                print(
+                    f"  [reload:gguf] llama-cli stdout (head):\n{proc.stdout[:600]}",
+                    flush = True,
+                )
                 if proc.returncode != 0:
                     gguf_save_error = (
                         f"llama-cli exit {proc.returncode}; "
@@ -438,7 +449,7 @@ def main() -> int:
 
     # Cleanup
     try:
-        shutil.rmtree(workdir, ignore_errors=True)
+        shutil.rmtree(workdir, ignore_errors = True)
     except Exception:
         pass
 
@@ -447,7 +458,7 @@ def main() -> int:
         f"  lora   reload: {lora_reload_out!r}\n"
         f"  merged reload: {merged_reload_out!r}\n"
         f"  gguf   reload: stdout-head ok, contained 'Unsloth'",
-        flush=True,
+        flush = True,
     )
     return 0
 

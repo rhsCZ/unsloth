@@ -105,14 +105,18 @@ jobs:
       - name: Clone unsloth_zoo @ ${{ env.UNSLOTH_ZOO_REF }}
         # We need the repository tree (the wheel does not ship tests/), so
         # clone shallow then editable-install so unsloth_zoo.* imports
-        # resolve to the cloned tree.
+        # resolve to the cloned tree. We use `pip show` for the location
+        # check rather than `import unsloth_zoo` because the latter calls
+        # device_type.get_device_type() at module load and raises on a
+        # GPU-less runner; pytest steps below route through the existing
+        # tests/conftest.py spoof which handles that.
         run: |
           set -euxo pipefail
           git clone --depth=1 --branch="$UNSLOTH_ZOO_REF" \
             https://github.com/unslothai/unsloth-zoo \
             "$RUNNER_TEMP/unsloth-zoo"
           pip install -e "$RUNNER_TEMP/unsloth-zoo" --no-deps
-          python -c "import unsloth_zoo, os; print('unsloth_zoo:', os.path.dirname(unsloth_zoo.__file__))"
+          pip show unsloth_zoo | head -3
 
       - name: Sanity — collection only (both repos)
         env:
@@ -180,11 +184,26 @@ jobs:
         # Not under tests/, so pytest's default discovery does not pick it
         # up. Pure Python regex over transformers source strings; no GPU,
         # no model download. Wall ~5-15 s, dominated by transformers import.
+        #
+        # The CUDA-spoof prelude mirrors tests/conftest.py:84-141: GH-hosted
+        # ubuntu-latest runners are GPU-less, and unsloth_zoo's __init__.py
+        # calls device_type.get_device_type() at module load, which raises
+        # NotImplementedError without an accelerator. We patch
+        # torch.cuda.is_available before the unsloth_zoo import so the
+        # cached @functools.cache-decorated get_device_type() captures
+        # "cuda" and the import chain finishes. The function under test
+        # is pure regex; spoofed CUDA presence has no effect on it.
         env:
           PYTHONPATH: ${{ github.workspace }}/studio
           UNSLOTH_COMPILE_DISABLE: '1'
         run: |
-          python -c "from unsloth_zoo.compiler import test_apply_fused_lm_head; test_apply_fused_lm_head(); print('OK: test_apply_fused_lm_head')"
+          python <<'PY'
+          import torch
+          torch.cuda.is_available = lambda: True
+          from unsloth_zoo.compiler import test_apply_fused_lm_head
+          test_apply_fused_lm_head()
+          print("OK: test_apply_fused_lm_head")
+          PY
 
       - name: Summary
         if: always()
@@ -193,7 +212,10 @@ jobs:
           python -c "import sys, platform; print(sys.version); print(platform.platform())"
           python -c "import torch; print('torch', torch.__version__, 'cuda?', torch.cuda.is_available())"
           python -c "import transformers; print('transformers', transformers.__version__)"
-          python -c "import unsloth_zoo, os; print('unsloth_zoo', getattr(unsloth_zoo, '__version__', '?'), 'at', os.path.dirname(unsloth_zoo.__file__))"
+          # `pip show` instead of `import unsloth_zoo` — its __init__ raises
+          # without an accelerator and the spoof harness only kicks in under
+          # pytest. Cheap and accurate.
+          pip show unsloth_zoo | head -3
           echo "::endgroup::"
           echo "Consolidated job done. Coverage:"
           echo "  - 16 unsloth Bucket-A tests under tests/saving/ + tests/utils/"

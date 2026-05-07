@@ -1,17 +1,27 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-# Focused PR gate for the MLX dispatch surface. Runs the three test files
-# documented in tests/studio/README.md against a Linux+CPU runner with
-# hardware probes spoofed (no Apple Silicon, no real GPU, no real MLX
-# install required):
+# Focused PR gate for the MLX dispatch surface. Two jobs:
 #
-#   - test_hardware_dispatch_matrix.py    parametrized 7-profile matrix
-#                                         + 2 dispatch-priority canaries
-#   - test_is_mlx_dispatch_gate.py        AST + runtime guard on
-#                                         unsloth._IS_MLX
-#   - test_mlx_training_worker_behaviors.py  AST contract checks on
-#                                            studio/backend/core/training/worker.py
+#   1. mlx-dispatch (Linux+CPU)
+#      Runs the three test files documented in tests/studio/README.md with
+#      hardware probes spoofed (no Apple Silicon, no real GPU, no real MLX
+#      install required):
+#        - test_hardware_dispatch_matrix.py    parametrized 7-profile matrix
+#                                              + 2 dispatch-priority canaries
+#        - test_is_mlx_dispatch_gate.py        AST + runtime guard on
+#                                              unsloth._IS_MLX
+#        - test_mlx_training_worker_behaviors.py  AST contract checks on
+#                                                 studio/backend/core/training/worker.py
+#
+#   2. mlx-real-apple-silicon (macOS-14, M1)
+#      Runs the SAME tests on a real Apple Silicon runner with a real mlx
+#      install. macos-14 is GitHub-hosted standard (3 vCPU / 7GB / M1) and
+#      is FREE for public repositories per the GitHub Actions billing
+#      docs, so adding this job costs zero minutes. Catches the residual
+#      gap the spoofed Linux job cannot: real `import mlx`, real
+#      `_IS_MLX = True` activation, real `unsloth_zoo.mlx_loader`
+#      submodule load, and a sanity import of every PR-A MLX module.
 #
 # Surfaces "MLX dispatch broke" as its own check in the PR UI rather than
 # burying it inside the broader Backend CI. The Backend CI Repo tests
@@ -78,6 +88,72 @@ jobs:
           pip install -e . --no-deps
 
       - name: MLX dispatch tests (3 files, ~36 tests, hardware spoofed)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/studio
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python -m pytest -v --tb=short \
+            tests/studio/test_hardware_dispatch_matrix.py \
+            tests/studio/test_is_mlx_dispatch_gate.py \
+            tests/studio/test_mlx_training_worker_behaviors.py
+
+  mlx-real-apple-silicon:
+    name: MLX real Apple Silicon (macos-14, M1)
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # Real mlx install. The GitHub-hosted macos-14 runner is M1 / arm64
+      # so platform.system() == 'Darwin' and platform.machine() == 'arm64'
+      # without any spoofing -- exactly the conditions unsloth._IS_MLX
+      # checks for. Once mlx is on the path the gate flips True and the
+      # MLX import branch in unsloth/__init__.py runs.
+      - name: Install deps (real mlx + unsloth + unsloth-zoo)
+        run: |
+          python -m pip install --upgrade pip
+          pip install mlx mlx-lm
+          pip install pytest pytest-asyncio
+          pip install 'unsloth_zoo>=2026.5.1'
+          pip install -e . --no-deps
+
+      - name: Verify _IS_MLX flips True on real Apple Silicon
+        run: |
+          python -c "
+          import platform
+          assert platform.system() == 'Darwin', platform.system()
+          assert platform.machine() == 'arm64', platform.machine()
+          import unsloth
+          assert unsloth._IS_MLX is True, f'expected _IS_MLX=True on real Apple Silicon, got {unsloth._IS_MLX}'
+          print('OK: _IS_MLX activated on real Apple Silicon')
+          "
+
+      - name: Smoke-import every MLX-only unsloth_zoo module
+        run: |
+          python -c "
+          import importlib
+          for name in [
+              'unsloth_zoo.mlx_loader',
+              'unsloth_zoo.mlx_trainer',
+              'unsloth_zoo.mlx_compile',
+              'unsloth_zoo.mlx_utils',
+              'unsloth_zoo.mlx_cce',
+              'unsloth_zoo.gated_delta_vjp',
+          ]:
+              importlib.import_module(name)
+              print('OK:', name)
+          from unsloth_zoo.mlx_loader import FastMLXModel
+          from unsloth_zoo.mlx_trainer import MLXTrainer, MLXTrainingConfig
+          assert hasattr(FastMLXModel, 'from_pretrained')
+          print('OK: FastMLXModel + MLXTrainer surface present')
+          "
+
+      - name: MLX dispatch tests on real Apple Silicon (spoofs still apply)
         env:
           PYTHONPATH: ${{ github.workspace }}/studio
           UNSLOTH_COMPILE_DISABLE: '1'

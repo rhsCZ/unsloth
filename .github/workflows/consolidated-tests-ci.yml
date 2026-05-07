@@ -642,7 +642,7 @@ jobs:
               return compiler
 
 
-          def test_higher_precision_softmax_basic(tmp_path, monkeypatch):
+          def test_higher_precision_softmax_basic_and_idempotent(tmp_path, monkeypatch):
               c = _isolate_cache(tmp_path, monkeypatch)
               src = (
                   "y = nn.functional.softmax(x, dim=-1)\n"
@@ -651,11 +651,10 @@ jobs:
               out = c.higher_precision_softmax(src)
               assert "dtype = torch.float32).to(x.dtype)" in out
               assert "dtype = torch.float32).to(a.dtype)" in out
-              # NOTE: idempotency is NOT a property of the current rewriter
-              # (issue: regex doesn't gate on existing `.to(<var>.dtype)`
-              # suffix, so a second pass appends another cast). Tracked in
-              # a follow-up PR; once it lands, restore the
-              # `assert c.higher_precision_softmax(out) == out` line.
+              # Idempotency landed in unslothai/unsloth-zoo#631
+              # (negative-lookahead on `.to(<var>.dtype)` so a second
+              # pass does not append another cast).
+              assert c.higher_precision_softmax(out) == out
 
 
           def test_fix_rotary_dtype_no_op_without_env(tmp_path, monkeypatch):

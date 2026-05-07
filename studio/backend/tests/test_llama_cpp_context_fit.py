@@ -212,8 +212,7 @@ def _drive(
                     break
             if not matched:
                 effective_ctx = min(FALLBACK_CTX, effective_ctx)
-                # Mirror llama_cpp.py: after dropping ctx to FALLBACK_CTX,
-                # re-check whether the model fits with the smaller KV cache.
+                # Mirror llama_cpp.py: re-check fit at FALLBACK_CTX.
                 if effective_ctx > 0:
                     for n_gpus in range(1, len(ranked) + 1):
                         subset = ranked[:n_gpus]
@@ -392,12 +391,7 @@ class TestFittableAutoPickRegressions:
 
 
 # ---------------------------------------------------------------------------
-# Issue #5106 / Discord "RAM not VRAM" regression: a model whose weights
-# occupy ~92-94% of free VRAM must still pin to GPU. Before the threshold
-# bump from 0.90 to 0.95 this case fell through to ``--fit on`` without
-# ``-ngl``, and the unsloth llama.cpp fork's fit logic (default
-# ``--fit-target 1024``) ended up offloading layers to CPU even though the
-# model would have loaded comfortably with all layers on GPU.
+# #5106 regression: 91-95% utilization must still pin GPU.
 # ---------------------------------------------------------------------------
 
 
@@ -405,14 +399,8 @@ class TestTightFitPinsToGPU:
     """Models that fit at 91-95% of free VRAM must use the GPU."""
 
     def test_rtx_4090_qwen_24gb_class(self):
-        # noahterbest's reproducer in unslothai/unsloth#5106:
-        #   "GGUF size: 20.8 GB, est. KV cache: 0.1 GB, context: 4096,
-        #    GPUs free: [(0, 22805)], selected: None, fit: True"
-        # With ctx=4096, the model + KV occupies ~94% of free VRAM. The
-        # remaining ~1.4 GiB headroom is enough for the CUDA context and
-        # compute buffers on a 4090, so Studio should pin the GPU and
-        # offload all layers via ``-ngl -1`` instead of relying on the
-        # fork's fit logic.
+        # noahterbest's #5106 log: 20.8 GB model on 22805 MiB free
+        # GPU, ctx=4096 -> ~94% utilization, ~1.4 GiB headroom.
         plan = _drive(
             n_ctx = 0,
             model_gib = 20.8,
@@ -424,9 +412,7 @@ class TestTightFitPinsToGPU:
         assert plan["gpu_indices"] == [0]
 
     def test_explicit_ctx_at_94_pct_pins_to_gpu(self):
-        # Same shape as above, but the user explicitly chose a context
-        # length. The explicit-ctx branch goes through ``_select_gpus``
-        # which must agree with the auto-ctx branch on the headroom rule.
+        # Explicit-ctx branch must agree with auto-ctx on headroom.
         plan = _drive(
             n_ctx = 4096,
             model_gib = 20.8,
@@ -438,9 +424,7 @@ class TestTightFitPinsToGPU:
         assert plan["gpu_indices"] == [0]
 
     def test_genuine_overflow_still_uses_fit(self):
-        # Above the 95% pin threshold the fork's ``--fit on`` is still
-        # the right answer; we don't want the threshold bump to mask a
-        # truly oversized model as "fits".
+        # Beyond 95% must still defer to --fit on.
         plan = _drive(
             n_ctx = 4096,
             model_gib = 23,
@@ -468,10 +452,7 @@ def test_identical_decision_across_platforms(platform_tag):
 
 
 # ---------------------------------------------------------------------------
-# _classify_gpu_offload: detect silent CPU fallback (issue #5106 / Discord
-# "RAM not VRAM"). When Studio detected GPUs and intended to use them, but
-# llama-server allocated only CPU model buffers, the prebuilt's GPU
-# backend failed to load -- usually missing cudart64_X.dll on Windows.
+# _classify_gpu_offload: detect silent CPU fallback (#5106).
 # ---------------------------------------------------------------------------
 
 

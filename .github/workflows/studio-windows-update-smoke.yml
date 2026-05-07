@@ -79,7 +79,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           New-Item -ItemType Directory -Force -Path logs | Out-Null
-          & ./install.ps1 --local --no-torch 2>&1 | Tee-Object -FilePath logs/install.log
+          # *>&1 captures Write-Host (Information stream) output;
+          # plain 2>&1 does not. setup.ps1 emits "prebuilt installed
+          # and validated" via Write-Host, and we grep for that.
+          $ProgressPreference = 'SilentlyContinue'
+          & ./install.ps1 --local --no-torch *>&1 | Tee-Object -FilePath logs/install.log
 
       - name: Assert install.ps1 used the Windows llama.cpp prebuilt
         run: |

@@ -97,7 +97,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           New-Item -ItemType Directory -Force -Path logs | Out-Null
-          & ./install.ps1 --local --no-torch 2>&1 | Tee-Object -FilePath logs/install.log
+          # *>&1 redirects ALL PowerShell streams (stdout, stderr,
+          # warning, verbose, debug, information) into the success
+          # stream so Tee-Object captures everything. install.ps1
+          # and setup.ps1 emit step/substep markers via Write-Host
+          # which lands on the Information stream (PS 5+); without
+          # the wildcard redirect, those markers (including
+          # "prebuilt installed and validated") never reach
+          # logs/install.log and the post-step grep asserter fails.
+          $ProgressPreference = 'SilentlyContinue'
+          & ./install.ps1 --local --no-torch *>&1 | Tee-Object -FilePath logs/install.log
 
       - name: Assert install.ps1 used the Windows llama.cpp prebuilt
         run: |

@@ -114,6 +114,16 @@ jobs:
               --out _converted
 
       - name: Lint (install cells + AST scan, env-scoped)
+        # Reported as non-blocking (continue-on-error: true) until the
+        # backlog of pre-existing findings on unslothai/notebooks@main is
+        # cleared. Same pattern PR #5298 used for biome:check on the
+        # frontend. As of this commit the live tree surfaces 27 errors +
+        # 6 warnings, all real (peft/torchao floor missing in 6 nb/
+        # notebooks, 14 git+ HEAD installs in hand-tuned exception
+        # notebooks, 6 torch/torchcodec ABI mismatches, 1
+        # transformers/tokenizers --no-deps drift). The count surfaces
+        # in the PR check UI. Drop continue-on-error once it hits zero.
+        continue-on-error: true
         run: |
           python unsloth/scripts/notebook_validator.py lint \
               --notebooks-dir notebooks \

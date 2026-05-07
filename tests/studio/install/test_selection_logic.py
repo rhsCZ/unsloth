@@ -1840,13 +1840,8 @@ class TestWindowsCudaAttempts:
         assert result[1].name == "cudart-llama-bin-win-cuda-12.4-x64.zip"
 
     def test_cudart_runtime_archive_is_paired(self, monkeypatch):
-        # Regression for unslothai/unsloth#5106. Upstream ships
-        # llama-...-bin-win-cuda-X.Y-x64.zip (binaries + ggml DLLs) AND
-        # cudart-llama-bin-win-cuda-X.Y-x64.zip (cudart64_X.dll +
-        # cublas64_X.dll + cublasLt64_X.dll) in the same release. Both
-        # are required for the prebuilt to actually load CUDA at runtime
-        # without a system CUDA toolkit. The pairing must surface on
-        # AssetChoice.runtime_url so install_from_archives downloads it.
+        # #5106: cudart bundle must surface on runtime_url so
+        # install_from_archives downloads it.
         mock_windows_runtime(monkeypatch, ["cuda13", "cuda12"])
         host = make_host(system = "Windows", machine = "AMD64", driver_cuda_version = (13, 1))
         assets = {
@@ -1868,10 +1863,7 @@ class TestWindowsCudaAttempts:
         assert result[1].runtime_name == "cudart-llama-bin-win-cuda-12.4-x64.zip"
 
     def test_no_runtime_archive_when_cudart_absent(self, monkeypatch):
-        # If upstream stops shipping the cudart bundle (or this is an
-        # older release tag that pre-dates the split), the install must
-        # still proceed -- the user falls back to a system CUDA toolkit
-        # but at least the install doesn't fail.
+        # Older releases without the cudart split must still install.
         mock_windows_runtime(monkeypatch, ["cuda12"])
         host = make_host(system = "Windows", machine = "AMD64", driver_cuda_version = (12, 4))
         assets = {
@@ -1883,11 +1875,7 @@ class TestWindowsCudaAttempts:
         assert result[0].runtime_name is None
 
     def test_cudart_only_assets_do_not_self_pair(self, monkeypatch):
-        # Backwards-compat: the legacy "cudart-only naming" path
-        # (test_current_upstream_names_are_supported) must keep working,
-        # and must NOT set runtime_url to its own URL. Self-pairing would
-        # cause install_from_archives to download the same archive
-        # twice or hit copy_globs's ambiguous-layout guard.
+        # Legacy cudart-only naming path must not self-pair.
         mock_windows_runtime(monkeypatch, ["cuda13", "cuda12"])
         host = make_host(system = "Windows", machine = "AMD64", driver_cuda_version = (13, 1))
         assets = self._upstream("13.1", "12.4", current_names = True)
@@ -1904,10 +1892,7 @@ class TestWindowsCudaAttempts:
 
 
 class TestApplyApprovedHashesRuntimePair:
-    """When a published bundle pairs a cudart runtime archive with the
-    main archive, apply_approved_hashes must resolve and pin the runtime
-    archive's checksum too. If no runtime hash is in the manifest, drop
-    the pairing rather than installing without checksum coverage."""
+    """Runtime archive must inherit a manifest hash, or be dropped."""
 
     TAG = "b8508"
 
@@ -1952,8 +1937,7 @@ class TestApplyApprovedHashesRuntimePair:
         assert result[0].runtime_name == "cudart-llama-bin-win-cuda-13.1-x64.zip"
 
     def test_runtime_pair_dropped_when_hash_missing(self):
-        # Manifest hashes the main archive but not the runtime archive.
-        # Drop the pairing rather than installing an unverified runtime.
+        # Drop the pair rather than install an unverified runtime.
         attempt = self._runtime_paired_attempt()
         checksums = ApprovedReleaseChecksums(
             repo = "unslothai/llama.cpp",

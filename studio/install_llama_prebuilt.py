@@ -205,15 +205,9 @@ class AssetChoice:
     name: str
     url: str
     source_label: str
-    # Optional paired runtime archive that ships separately from the main
-    # binary archive. Used on Windows CUDA where upstream publishes
-    # ``llama-...-bin-win-cuda-X.Y-x64.zip`` (binaries + ggml DLLs) and a
-    # separate ``cudart-llama-bin-win-cuda-X.Y-x64.zip`` (cudart64_X.dll,
-    # cublas64_X.dll, cublasLt64_X.dll) — the upstream release notes
-    # explicitly require both. When set, ``install_from_archives``
-    # downloads and overlays the runtime archive on top of the main one
-    # so the prebuilt binary can find its CUDA runtime DLLs without the
-    # user having a matching system CUDA toolkit installed.
+    # Paired runtime archive (Windows CUDA cudart bundle). When set,
+    # install_from_archives also downloads it and overlays its DLLs on
+    # top of the main install. See unslothai/unsloth#5106.
     runtime_name: str | None = None
     runtime_url: str | None = None
     runtime_sha256: str | None = None
@@ -2889,17 +2883,10 @@ def windows_cuda_attempts(
                 + ",".join(windows_cuda_upstream_asset_names(llama_tag, runtime))
             )
             continue
-        # Pair the cudart runtime bundle when upstream ships it alongside
-        # the main archive. ggml-org's release notes flag this as
-        # required: the main zip ships only the ggml DLLs and binaries,
-        # while cudart-llama-bin-win-cuda-X.Y-x64.zip ships
-        # cudart64_X.dll + cublas64_X.dll + cublasLt64_X.dll. Without
-        # the cudart pair, the prebuilt loads only when the user has a
-        # version-matched system CUDA toolkit on PATH (the Windows
-        # "GPU detected but model on RAM" symptom in unslothai/unsloth#5106).
-        # We only pair when the main archive is the binary archive --
-        # not when we accidentally selected the cudart archive itself
-        # (legacy alias path).
+        # Pair the cudart bundle when upstream ships it. Without this
+        # the binary needs a system CUDA toolkit on PATH at runtime
+        # (#5106). Only pair when the selected main archive is the
+        # binary archive, not the cudart archive itself.
         runtime_archive_name: str | None = None
         runtime_archive_url: str | None = None
         if selected_name.startswith(f"llama-"):
@@ -2979,9 +2966,7 @@ def published_windows_cuda_attempts(
             asset_url = release.assets.get(artifact.asset_name)
             if not asset_url:
                 continue
-            # See windows_cuda_attempts for the rationale: pair the
-            # cudart-llama runtime archive when published alongside
-            # the main binary asset.
+            # See windows_cuda_attempts: pair the cudart bundle.
             runtime_archive_name: str | None = None
             runtime_archive_url: str | None = None
             if artifact.asset_name.startswith("llama-"):
@@ -4039,19 +4024,10 @@ def install_from_archives(
 
     try:
         extract_archive(main_archive, extract_dir)
-        # Download and extract the paired runtime archive into its own
-        # temp dir (Windows CUDA cudart bundle: cudart64_X.dll,
-        # cublas64_X.dll, cublasLt64_X.dll). We extract separately rather
-        # than into the same dir to avoid copy_globs's "ambiguous archive
-        # layout" guard tripping on shared filenames like LICENSE.txt
-        # that appear in both bundles. After extraction we run copy_globs
-        # against each source dir in turn, so the cudart DLLs end up
-        # alongside llama-server.exe in install_dir/build/bin/Release.
-        # Without this overlay, llama-server.exe's LoadLibrary calls
-        # can't resolve cudart64_X.dll / cublas64_X.dll unless the user
-        # has a version-matched system CUDA toolkit on PATH -- the root
-        # cause of the Windows "GPU detected, model on RAM" reports in
-        # unslothai/unsloth#5106.
+        # Download the paired runtime archive into its own temp dir to
+        # avoid copy_globs's ambiguous-layout guard on shared names
+        # like LICENSE.txt. Two passes of copy_globs land both archives
+        # in the same overlay dir. Fixes #5106.
         if choice.runtime_url and choice.runtime_name:
             runtime_archive = work_dir / choice.runtime_name
             log(
@@ -4074,10 +4050,9 @@ def install_from_archives(
             source_dir, overlay_dir, runtime_patterns_for_choice(choice), required = True
         )
         if runtime_extract_dir is not None:
-            # Pull the runtime DLLs into the same overlay dir as the
-            # main binary. The runtime archive isn't required to contain
-            # everything matching runtime_patterns_for_choice; it
-            # contributes a subset (the CUDA DLLs).
+            # The runtime archive only contributes the CUDA DLLs --
+            # not all runtime_patterns_for_choice entries -- so
+            # required=False.
             copy_globs(
                 runtime_extract_dir,
                 overlay_dir,
@@ -4801,11 +4776,9 @@ def apply_approved_hashes(
             missing_assets.append(attempt.name)
             continue
         attempt.expected_sha256 = approved.sha256
-        # Resolve the paired runtime archive's checksum too. If the
-        # manifest doesn't list the runtime archive (older releases or
-        # OSS forks that don't track cudart hashes) we drop the pairing
-        # rather than installing without checksum coverage -- preserves
-        # the supply-chain guarantee that anything we extract was vetted.
+        # Resolve the paired runtime archive's hash too. Drop the pair
+        # if the manifest does not list it -- never install an
+        # unverified archive.
         if attempt.runtime_name and attempt.runtime_url:
             runtime_approved = checksums.artifacts.get(attempt.runtime_name)
             if runtime_approved is None:

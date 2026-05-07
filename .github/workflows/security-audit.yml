@@ -409,7 +409,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: Trivy (filesystem CVE + IaC misconfig)
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -444,7 +444,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: TruffleHog (secrets in diff)
         continue-on-error: true
-        uses: trufflesecurity/trufflehog@v3.83.5
+        uses: trufflesecurity/trufflehog@v3.95.2
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha || '' }}

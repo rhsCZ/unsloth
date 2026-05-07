@@ -85,18 +85,21 @@ MODEL_NAME = "unsloth/gemma-3-270m-it"
 # Determinism + telemetry helpers
 # ---------------------------------------------------------------------------
 
+
 def _seed_everything() -> None:
     _random.seed(SEED)
     np.random.seed(SEED)
     import mlx.core as mx
+
     mx.random.seed(SEED)
 
 
 def _peak_gpu_gb() -> float:
     import mlx.core as mx
+
     if mx.metal.is_available():
         try:
-            return float(mx.metal.get_peak_memory()) / (1024 ** 3)
+            return float(mx.metal.get_peak_memory()) / (1024**3)
         except Exception:
             return 0.0
     return 0.0
@@ -107,8 +110,8 @@ def _peak_rss_gb() -> float:
     bytes; Linux returns kilobytes."""
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
-        return float(rss) / (1024 ** 3)
-    return float(rss) / (1024 ** 2)
+        return float(rss) / (1024**3)
+    return float(rss) / (1024**2)
 
 
 class Phase:
@@ -121,7 +124,7 @@ class Phase:
 
     def __enter__(self):
         self._t0 = time.perf_counter()
-        print(f"\n=== phase:{self.name} START ===", flush=True)
+        print(f"\n=== phase:{self.name} START ===", flush = True)
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -138,7 +141,7 @@ class Phase:
         print(
             f"=== phase:{self.name} {status} elapsed={elapsed:.2f}s "
             f"peak_gpu={peak_gpu:.2f}GB peak_rss={peak_rss:.2f}GB ===",
-            flush=True,
+            flush = True,
         )
         return False  # don't swallow exceptions
 
@@ -157,17 +160,17 @@ def _compute_loss_and_grad_norm(model, tokenizer, text: str) -> tuple[float, flo
     if len(ids) < 2:
         raise RuntimeError(f"text too short to compute loss: {len(ids)} tokens")
 
-    inputs = mx.array([ids[:-1]], dtype=mx.int32)
-    targets = mx.array([ids[1:]], dtype=mx.int32)
+    inputs = mx.array([ids[:-1]], dtype = mx.int32)
+    targets = mx.array([ids[1:]], dtype = mx.int32)
 
     def loss_fn(m):
         logits = m(inputs)
-        return nn.losses.cross_entropy(logits, targets, reduction="mean")
+        return nn.losses.cross_entropy(logits, targets, reduction = "mean")
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
     loss_val, grad = loss_and_grad(model)
 
-    norm_sq = mx.array(0.0, dtype=mx.float32)
+    norm_sq = mx.array(0.0, dtype = mx.float32)
     for _name, value in tree_flatten(grad):
         v = value.astype(mx.float32)
         norm_sq = norm_sq + mx.sum(v * v)
@@ -175,14 +178,15 @@ def _compute_loss_and_grad_norm(model, tokenizer, text: str) -> tuple[float, flo
 
 
 def _write_metrics(path: Path, metrics: dict) -> None:
-    path.write_text(json.dumps(metrics, indent=2, default=str))
-    print(f"\n[metrics] wrote {path}", flush=True)
-    print(json.dumps(metrics, indent=2, default=str), flush=True)
+    path.write_text(json.dumps(metrics, indent = 2, default = str))
+    print(f"\n[metrics] wrote {path}", flush = True)
+    print(json.dumps(metrics, indent = 2, default = str), flush = True)
 
 
 # ---------------------------------------------------------------------------
 # `train` subcommand
 # ---------------------------------------------------------------------------
+
 
 def cmd_train(args) -> int:
     _seed_everything()
@@ -195,7 +199,7 @@ def cmd_train(args) -> int:
         "phases": {},
     }
     workdir = Path(args.workdir).resolve()
-    workdir.mkdir(parents=True, exist_ok=True)
+    workdir.mkdir(parents = True, exist_ok = True)
 
     import mlx.core as mx
     from unsloth_zoo.mlx_loader import FastMLXModel
@@ -206,13 +210,13 @@ def cmd_train(args) -> int:
     with Phase("load_base", metrics):
         model, tokenizer = FastMLXModel.from_pretrained(
             MODEL_NAME,
-            load_in_4bit=False,
-            dtype="float16",
-            text_only=True,
-            max_seq_length=128,
-            random_state=SEED,
-            token=hf_token,
-            trust_remote_code=False,
+            load_in_4bit = False,
+            dtype = "float16",
+            text_only = True,
+            max_seq_length = 128,
+            random_state = SEED,
+            token = hf_token,
+            trust_remote_code = False,
         )
     metrics["base_src_path"] = str(getattr(model, "_src_path", "") or "")
 
@@ -221,15 +225,15 @@ def cmd_train(args) -> int:
     with Phase("apply_lora", metrics):
         model = FastMLXModel.get_peft_model(
             model,
-            r=8,
-            lora_alpha=16,
-            lora_dropout=0.0,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-            use_gradient_checkpointing=False,
-            random_state=SEED,
-            finetune_language_layers=True,
-            finetune_attention_modules=True,
-            finetune_mlp_modules=False,
+            r = 8,
+            lora_alpha = 16,
+            lora_dropout = 0.0,
+            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"],
+            use_gradient_checkpointing = False,
+            random_state = SEED,
+            finetune_language_layers = True,
+            finetune_attention_modules = True,
+            finetune_mlp_modules = False,
         )
 
     with Phase("pre_train_grad_probe", metrics):
@@ -241,31 +245,31 @@ def cmd_train(args) -> int:
     losses_per_step: list[float] = []
     with Phase("train", metrics):
         config = MLXTrainingConfig(
-            per_device_train_batch_size=2,
-            gradient_accumulation_steps=3,
-            max_steps=7,
-            learning_rate=1e-3,
-            warmup_steps=0,
-            lr_scheduler_type="constant",
-            optim="adamw",
-            weight_decay=0.0,
-            max_grad_norm=1.0,
-            logging_steps=1,
-            max_seq_length=64,
-            seed=SEED,
-            use_cce=False,
-            compile=False,
-            gradient_checkpointing=False,
-            output_dir=str(workdir / "trainer_outputs"),
-            save_steps=0,
-            eval_steps=0,
-            dataset_text_field="text",
+            per_device_train_batch_size = 2,
+            gradient_accumulation_steps = 3,
+            max_steps = 7,
+            learning_rate = 1e-3,
+            warmup_steps = 0,
+            lr_scheduler_type = "constant",
+            optim = "adamw",
+            weight_decay = 0.0,
+            max_grad_norm = 1.0,
+            logging_steps = 1,
+            max_seq_length = 64,
+            seed = SEED,
+            use_cce = False,
+            compile = False,
+            gradient_checkpointing = False,
+            output_dir = str(workdir / "trainer_outputs"),
+            save_steps = 0,
+            eval_steps = 0,
+            dataset_text_field = "text",
         )
         trainer = MLXTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            train_dataset=[{"text": TRAIN_TEXT}] * 64,
-            args=config,
+            model = model,
+            tokenizer = tokenizer,
+            train_dataset = [{"text": TRAIN_TEXT}] * 64,
+            args = config,
         )
 
         def _on_step(step, total, loss, lr, tok_s, peak_gb, elapsed, num_tokens):
@@ -273,7 +277,7 @@ def cmd_train(args) -> int:
             print(
                 f"  step {step}/{total}  loss={loss:.4f}  lr={lr:.2e}  "
                 f"tok/s={tok_s:.0f}  peak={peak_gb:.2f}GB",
-                flush=True,
+                flush = True,
             )
 
         trainer.add_step_callback(_on_step)
@@ -282,17 +286,22 @@ def cmd_train(args) -> int:
     metrics["train_summary"] = {
         k: train_result[k]
         for k in (
-            "train_loss", "train_runtime", "train_steps", "trained_tokens",
-            "train_samples_per_second", "compile_enabled", "patch_mode",
+            "train_loss",
+            "train_runtime",
+            "train_steps",
+            "trained_tokens",
+            "train_samples_per_second",
+            "compile_enabled",
+            "patch_mode",
         )
         if k in train_result
     }
     assert len(losses_per_step) == 7, f"expected 7 logged steps, got {losses_per_step}"
     for i, l in enumerate(losses_per_step):
         assert math.isfinite(l) and 0 < l < 50, f"step {i+1} loss bad: {l}"
-    assert losses_per_step[-1] < losses_per_step[0] * 1.1, (
-        f"loss diverged: {losses_per_step[0]} -> {losses_per_step[-1]}"
-    )
+    assert (
+        losses_per_step[-1] < losses_per_step[0] * 1.1
+    ), f"loss diverged: {losses_per_step[0]} -> {losses_per_step[-1]}"
 
     with Phase("post_train_grad_probe", metrics):
         post_loss, post_norm = _compute_loss_and_grad_norm(model, tokenizer, TRAIN_TEXT)
@@ -305,19 +314,25 @@ def cmd_train(args) -> int:
     with Phase("inference_in_memory", metrics):
         model.eval()
         in_mem_out = generate(
-            model, tokenizer, prompt=PROMPT, max_tokens=24, verbose=False,
+            model,
+            tokenizer,
+            prompt = PROMPT,
+            max_tokens = 24,
+            verbose = False,
         )
     metrics["in_memory_generation"] = in_mem_out
-    assert EXPECT_IN_OUTPUT in in_mem_out, (
-        f"in-memory generation gibberish: {in_mem_out!r}"
-    )
+    assert (
+        EXPECT_IN_OUTPUT in in_mem_out
+    ), f"in-memory generation gibberish: {in_mem_out!r}"
 
     # Save LoRA. unsloth-zoo#627 fixed FastMLXModel.from_pretrained(lora_dir)
     # so the cold-start reload below works on the saved adapter dir directly.
     lora_dir = workdir / "lora"
     with Phase("save_lora", metrics):
         model.save_pretrained_merged(
-            str(lora_dir), tokenizer=tokenizer, save_method="lora",
+            str(lora_dir),
+            tokenizer = tokenizer,
+            save_method = "lora",
         )
     metrics["lora_dir"] = str(lora_dir)
     assert (lora_dir / "adapters.safetensors").exists()
@@ -327,7 +342,9 @@ def cmd_train(args) -> int:
     merged_dir = workdir / "merged_16bit"
     with Phase("save_merged_16bit", metrics):
         model.save_pretrained_merged(
-            str(merged_dir), tokenizer=tokenizer, save_method="merged_16bit",
+            str(merged_dir),
+            tokenizer = tokenizer,
+            save_method = "merged_16bit",
         )
     metrics["merged_dir"] = str(merged_dir)
     assert any(merged_dir.glob("*.safetensors"))
@@ -349,8 +366,8 @@ def cmd_train(args) -> int:
         try:
             model.save_pretrained_gguf(
                 str(gguf_dir),
-                tokenizer=tokenizer,
-                quantization_method="not_quantized",
+                tokenizer = tokenizer,
+                quantization_method = "not_quantized",
             )
             gguf_files = sorted(gguf_dir.glob("*.gguf"))
             if not gguf_files:
@@ -368,7 +385,7 @@ def cmd_train(args) -> int:
                 )
             else:
                 metrics["gguf_skip_reason"] = err_text
-            print(f"  GGUF SKIPPED: {metrics['gguf_skip_reason']}", flush=True)
+            print(f"  GGUF SKIPPED: {metrics['gguf_skip_reason']}", flush = True)
 
     metrics["final_peak_gpu_gb"] = round(_peak_gpu_gb(), 3)
     metrics["final_peak_rss_gb"] = round(_peak_rss_gb(), 3)
@@ -380,6 +397,7 @@ def cmd_train(args) -> int:
 # ---------------------------------------------------------------------------
 # `reload` subcommand (fresh process per format)
 # ---------------------------------------------------------------------------
+
 
 def cmd_reload(args) -> int:
     _seed_everything()
@@ -407,22 +425,22 @@ def cmd_reload(args) -> int:
         mx.random.seed(SEED)
         m, t = FastMLXModel.from_pretrained(
             str(save_dir),
-            load_in_4bit=False,
-            dtype="float16",
-            text_only=True,
-            max_seq_length=128,
-            random_state=SEED,
-            token=hf_token,
+            load_in_4bit = False,
+            dtype = "float16",
+            text_only = True,
+            max_seq_length = 128,
+            random_state = SEED,
+            token = hf_token,
         )
         m.eval()
 
     with Phase(f"generate_{args.format}", metrics):
-        out = generate(m, t, prompt=PROMPT, max_tokens=24, verbose=False)
+        out = generate(m, t, prompt = PROMPT, max_tokens = 24, verbose = False)
     metrics["generation"] = out
-    print(f"  [reload:{args.format}] output: {out!r}", flush=True)
-    assert EXPECT_IN_OUTPUT in out, (
-        f"reload {args.format!r} produced gibberish for {PROMPT!r}: {out!r}"
-    )
+    print(f"  [reload:{args.format}] output: {out!r}", flush = True)
+    assert (
+        EXPECT_IN_OUTPUT in out
+    ), f"reload {args.format!r} produced gibberish for {PROMPT!r}: {out!r}"
 
     metrics["final_peak_gpu_gb"] = round(_peak_gpu_gb(), 3)
     metrics["final_peak_rss_gb"] = round(_peak_rss_gb(), 3)
@@ -448,29 +466,36 @@ def _reload_gguf(save_dir: Path, metrics: dict) -> int:
         proc = subprocess.run(
             [
                 str(llama_cli),
-                "-m", str(gguf_path),
-                "-p", PROMPT,
-                "-n", "24",
-                "--temp", "0",
-                "--seed", str(SEED),
+                "-m",
+                str(gguf_path),
+                "-p",
+                PROMPT,
+                "-n",
+                "24",
+                "--temp",
+                "0",
+                "--seed",
+                str(SEED),
                 "-no-cnv",
                 "--no-warmup",
             ],
-            capture_output=True, text=True, timeout=300,
+            capture_output = True,
+            text = True,
+            timeout = 300,
         )
 
     metrics["llama_cli_returncode"] = proc.returncode
     metrics["generation"] = (proc.stdout or "")[:1500]
     metrics["stderr_head"] = (proc.stderr or "")[:600]
 
-    print(f"  [reload:gguf] stdout (head):\n{proc.stdout[:800]}", flush=True)
+    print(f"  [reload:gguf] stdout (head):\n{proc.stdout[:800]}", flush = True)
     if proc.returncode != 0:
         raise SystemExit(
             f"llama-cli exit {proc.returncode}; stderr head: {proc.stderr[:400]}"
         )
-    assert EXPECT_IN_OUTPUT in (proc.stdout or ""), (
-        f"GGUF reload gibberish for {PROMPT!r}: {proc.stdout[:400]!r}"
-    )
+    assert EXPECT_IN_OUTPUT in (
+        proc.stdout or ""
+    ), f"GGUF reload gibberish for {PROMPT!r}: {proc.stdout[:400]!r}"
 
     metrics["final_peak_rss_gb"] = round(_peak_rss_gb(), 3)
     _write_metrics(save_dir.parent / "gguf_reload_metrics.json", metrics)
@@ -481,18 +506,21 @@ def _reload_gguf(save_dir: Path, metrics: dict) -> int:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest = "cmd", required = True)
 
     p_train = sub.add_parser("train")
-    p_train.add_argument("--workdir", required=True)
+    p_train.add_argument("--workdir", required = True)
 
     p_reload = sub.add_parser("reload")
     p_reload.add_argument(
-        "--format", required=True, choices=["lora", "merged", "gguf"],
+        "--format",
+        required = True,
+        choices = ["lora", "merged", "gguf"],
     )
-    p_reload.add_argument("--dir", required=True)
+    p_reload.add_argument("--dir", required = True)
 
     args = parser.parse_args()
     if args.cmd == "train":

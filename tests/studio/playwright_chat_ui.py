@@ -635,18 +635,23 @@ with sync_playwright() as p:
     # 10. Sidebar nav: New Chat, Compare, Search, Recipes.
     # ─────────────────────────────────────────────────────
     def click_nav(label, expected_url_pat = None):
-        # Try, in order: data-sidebar=menu-button with text, role+name,
-        # button with text. Sidebar items render as SidebarMenuButton
-        # (data-sidebar="menu-button") containing a <span> with the
-        # label; the role+name path fails when the sidebar collapses
-        # to icon-only mode and the visible text gets visually hidden.
+        # Resolve the sidebar nav button. The plain
+        # get_by_role("button", name=...) lookup works on Linux
+        # Chromium because the accessible-name algorithm there picks
+        # up `tooltip={label}` from SidebarMenuButton, but on macOS
+        # Chromium the tooltip-derived name is sometimes empty when
+        # the sidebar collapses to icon-only mode. Fall back through
+        # progressively more permissive locators so the test stays
+        # green on both platforms.
         candidates = [
-            page.locator(f'[data-sidebar="menu-button"]:has-text("{label}")').first,
             page.get_by_role(
-                "button",
-                name = re.compile(rf"^\s*{label}\s*$", re.I),
+                "button", name = re.compile(rf"^\s*{label}\s*$", re.I)
             ).first,
             page.locator(f'button:has-text("{label}")').first,
+            page.locator(f'a:has-text("{label}")').first,
+            page.locator(
+                f'[data-sidebar="menu-button"]:has-text("{label}")'
+            ).first,
         ]
         btn = None
         for c in candidates:
@@ -657,10 +662,10 @@ with sync_playwright() as p:
             soft_fail(f"nav '{label}' not found")
             return False
         try:
-            btn.click()
-        except Exception as exc:
-            soft_fail(f"nav '{label}' click failed: {exc!r}")
-            return False
+            btn.scroll_into_view_if_needed(timeout = 2000)
+        except Exception:
+            pass
+        btn.click()
         page.wait_for_timeout(800)
         if expected_url_pat and not re.search(expected_url_pat, page.url):
             soft_fail(

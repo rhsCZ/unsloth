@@ -241,6 +241,13 @@ jobs:
       - name: Studio prebuilt llama.cpp install + GGUF inference (Mac M1)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # install_llama_prebuilt.py hits the GitHub releases API to
+          # resolve the asset URL. Anonymous calls share the runner-IP
+          # rate-limit bucket and 403 quickly -- pass the workflow's
+          # automatic GITHUB_TOKEN to bump us to the 5000/hr authenticated
+          # bucket.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           INSTALL_DIR="$HOME/.unsloth-studio-prebuilt-test/llama.cpp"

@@ -14,7 +14,7 @@
 #        with temperature=0 and a fixed seed. Asserts the four-turn
 #        conversation is deterministic across two runs.
 #
-#   2. tool calling tests
+#   2. Tool calling Tests
 #        Qwen3.5-2B UD-IQ3_XXS (~890 MiB). OpenAI function calling,
 #        server-side tools (python, terminal, web_search) via
 #        enable_tools / enabled_tools, and enable_thinking on/off.
@@ -281,10 +281,10 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────
-  # Job 2: tool calling tests
+  # Job 2: Tool calling Tests
   # ─────────────────────────────────────────────────────────────────────
   tool-calling:
-    name: tool calling tests
+    name: Tool calling Tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

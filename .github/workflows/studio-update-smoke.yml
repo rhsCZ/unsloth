@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   update-idempotency:
-    name: install.sh + `unsloth studio update --local`
+    name: Studio Updating Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

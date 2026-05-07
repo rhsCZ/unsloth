@@ -91,11 +91,13 @@ jobs:
         # No --with-deps on Mac: that flag installs Linux apt packages.
         # GitHub-hosted macos-14 ships the system frameworks Chromium
         # needs already.
-        # Pin <1.58 because playwright 1.59 ships a Node 24 driver that
-        # crashes with 'SyntaxError: Unexpected end of JSON input' in
-        # pipeTransport.js when the Chromium child writes an empty line
-        # during launch on macos-14 free runners. 1.55-1.57 still ship
-        # a Node 22 driver and don't hit this race.
+        # Pinned <1.58 because all 1.55-1.58 drivers ship Node 24 on
+        # macos-14 and intermittently hit 'SyntaxError: Unexpected end
+        # of JSON input' in pipeTransport.js when the Chromium child
+        # transiently flushes an empty buffer. The crash is racy and
+        # only triggers on a fraction of runs; the retry wrapper in
+        # "Drive the chat UI with Playwright" is what actually keeps
+        # the job green when the race fires.
         run: |
           pip install 'playwright>=1.55,<1.58'
           python -m playwright install chromium
@@ -139,9 +141,58 @@ jobs:
           # available to llama.cpp from CI; gemma-3-270m turn latency
           # has been observed to crowd the 180s default. Triple it.
           STUDIO_UI_TURN_TIMEOUT_MS: '540000'
+        # Retry up to 3 times to absorb the racy Playwright Node 24
+        # pipeTransport.js 'Unexpected end of JSON input' crash that
+        # fires intermittently on macos-14 free runners (Chromium
+        # browser process dies mid-test → driver Node process can't
+        # parse the truncated JSON-RPC line and exits). The retry
+        # FULLY resets Studio (kill, reset-password, reboot, wait
+        # /api/health, re-export bootstrap pw) before re-running the
+        # script so the change-password flow finds a fresh bootstrap.
+        # A real test failure (assertion / timeout) does NOT match the
+        # JSON pattern so it bypasses retry and surfaces immediately.
         run: |
           mkdir -p logs/playwright
-          python tests/studio/playwright_chat_ui.py
+          attempt=1
+          max_attempts=3
+          while : ; do
+            set +e
+            python tests/studio/playwright_chat_ui.py 2>&1 | tee logs/playwright_attempt_${attempt}.log
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if grep -q "Unexpected end of JSON input" logs/playwright_attempt_${attempt}.log \
+               && [ "$attempt" -lt "$max_attempts" ]; then
+              echo "::warning::Playwright pipeTransport JSON crash on attempt ${attempt}; resetting Studio and retrying..."
+              kill "${STUDIO_PID}" 2>/dev/null || true
+              sleep 2
+              unsloth studio reset-password
+              UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p "$STUDIO_PORT" \
+                > "logs/studio_retry_${attempt}.log" 2>&1 &
+              STUDIO_PID=$!
+              echo "STUDIO_PID=$STUDIO_PID" >> "$GITHUB_ENV"
+              for i in $(seq 1 180); do
+                if curl -fs "http://127.0.0.1:${STUDIO_PORT}/api/health" > /tmp/health.json \
+                   && jq -e '.status == "healthy"' /tmp/health.json >/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              STUDIO_OLD_PW=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+              STUDIO_NEW_PW="CIUi-$(python -c 'import secrets; print(secrets.token_urlsafe(16))')"
+              STUDIO_NEW2_PW="CIUi-$(python -c 'import secrets; print(secrets.token_urlsafe(16))')"
+              echo "::add-mask::$STUDIO_OLD_PW"
+              echo "::add-mask::$STUDIO_NEW_PW"
+              echo "::add-mask::$STUDIO_NEW2_PW"
+              export STUDIO_OLD_PW STUDIO_NEW_PW STUDIO_NEW2_PW
+              attempt=$((attempt + 1))
+              sleep 3
+              continue
+            fi
+            exit "$rc"
+          done
 
       - name: Stop Studio (chat-ui ends with Shutdown click; this is belt-and-suspenders)
         if: always()
@@ -187,9 +238,48 @@ jobs:
           STUDIO_UI_TURN_TIMEOUT_MS: '540000'
           GGUF_REPO: ${{ env.GGUF_REPO }}
           GGUF_VARIANT: ${{ env.GGUF_VARIANT }}
+        # Same pipeTransport JSON-crash retry shape as "Drive the chat
+        # UI with Playwright" -- see comment there.
         run: |
           mkdir -p logs/playwright_extra
-          python tests/studio/playwright_extra_ui.py
+          attempt=1
+          max_attempts=3
+          while : ; do
+            set +e
+            python tests/studio/playwright_extra_ui.py 2>&1 | tee logs/playwright_extra_attempt_${attempt}.log
+            rc=${PIPESTATUS[0]}
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            if grep -q "Unexpected end of JSON input" logs/playwright_extra_attempt_${attempt}.log \
+               && [ "$attempt" -lt "$max_attempts" ]; then
+              echo "::warning::Playwright pipeTransport JSON crash on attempt ${attempt}; resetting Studio and retrying..."
+              kill "${STUDIO_EXTRA_PID}" 2>/dev/null || true
+              sleep 2
+              unsloth studio reset-password
+              UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p 18897 \
+                > "logs/studio_extra_retry_${attempt}.log" 2>&1 &
+              STUDIO_EXTRA_PID=$!
+              echo "STUDIO_EXTRA_PID=$STUDIO_EXTRA_PID" >> "$GITHUB_ENV"
+              for i in $(seq 1 180); do
+                if curl -fs "http://127.0.0.1:18897/api/health" > /tmp/health2.json \
+                   && jq -e '.status == "healthy"' /tmp/health2.json >/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              STUDIO_OLD_PW=$(cat ~/.unsloth/studio/auth/.bootstrap_password)
+              STUDIO_NEW_PW="CIUiExtra-$(python -c 'import secrets; print(secrets.token_urlsafe(16))')"
+              echo "::add-mask::$STUDIO_OLD_PW"
+              echo "::add-mask::$STUDIO_NEW_PW"
+              export STUDIO_OLD_PW STUDIO_NEW_PW
+              attempt=$((attempt + 1))
+              sleep 3
+              continue
+            fi
+            exit "$rc"
+          done
 
       - name: Stop second Studio
         if: always()

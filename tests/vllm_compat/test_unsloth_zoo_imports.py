@@ -145,9 +145,9 @@ def test_rl_replacements_imports_without_vllm():
 def test_empty_model_imports_without_vllm():
     sys.modules.pop("unsloth_zoo.empty_model", None)
     em = importlib.import_module("unsloth_zoo.empty_model")
-    assert "vllm" not in sys.modules, (
-        "unsloth_zoo.empty_model imported vllm transitively; expected to be vllm-free"
-    )
+    assert (
+        "vllm" not in sys.modules
+    ), "unsloth_zoo.empty_model imported vllm transitively; expected to be vllm-free"
     # Public function the GRPO + fast_inference path relies on:
     assert (
         hasattr(em, "create_empty_causal_lm")
@@ -198,6 +198,6 @@ def test_vllm_lora_worker_manager_imports():
 def test_vllm_utils_imports():
     sys.modules.pop("unsloth_zoo.vllm_utils", None)
     mod = importlib.import_module("unsloth_zoo.vllm_utils")
-    assert callable(getattr(mod, "patch_vllm", None)), (
-        "unsloth_zoo.vllm_utils must expose patch_vllm()"
-    )
+    assert callable(
+        getattr(mod, "patch_vllm", None)
+    ), "unsloth_zoo.vllm_utils must expose patch_vllm()"

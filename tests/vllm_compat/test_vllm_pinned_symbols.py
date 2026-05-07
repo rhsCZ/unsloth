@@ -117,21 +117,21 @@ def test_vllm_lora_request_hard_imports(tag: str):
     vllm_lora_worker_manager."""
     src = _fetch_text("vllm-project/vllm", tag, "vllm/lora/request.py")
     assert src is not None, f"vllm/lora/request.py missing in {tag}"
-    assert _has_def(src, "LoRARequest", "class"), (
-        f"vllm/lora/request.py:LoRARequest missing in {tag} (unsloth-zoo HARD-imports it)"
-    )
+    assert _has_def(
+        src, "LoRARequest", "class"
+    ), f"vllm/lora/request.py:LoRARequest missing in {tag} (unsloth-zoo HARD-imports it)"
 
     src_utils = _fetch_text("vllm-project/vllm", tag, "vllm/lora/utils.py")
     assert src_utils is not None, f"vllm/lora/utils.py missing in {tag}"
-    assert _has_def(src_utils, "get_adapter_absolute_path", "func"), (
-        f"vllm/lora/utils.py:get_adapter_absolute_path missing in {tag}"
-    )
+    assert _has_def(
+        src_utils, "get_adapter_absolute_path", "func"
+    ), f"vllm/lora/utils.py:get_adapter_absolute_path missing in {tag}"
 
     src_peft = _fetch_text("vllm-project/vllm", tag, "vllm/lora/peft_helper.py")
     assert src_peft is not None, f"vllm/lora/peft_helper.py missing in {tag}"
-    assert _has_def(src_peft, "PEFTHelper", "class"), (
-        f"vllm/lora/peft_helper.py:PEFTHelper missing in {tag}"
-    )
+    assert _has_def(
+        src_peft, "PEFTHelper", "class"
+    ), f"vllm/lora/peft_helper.py:PEFTHelper missing in {tag}"
 
 
 @pytest.mark.parametrize("tag", VLLM_TAGS)
@@ -230,9 +230,9 @@ def test_vllm_worker_lora_manager_class(tag: str):
             f"{tag}: vllm/lora/worker_manager.py and "
             f"vllm/v1/worker/lora_model_runner_mixin.py both missing"
         )
-    assert _has_def(src, "WorkerLoRAManager", "class") or "WorkerLoRAManager" in src, (
-        f"{tag}: vllm.lora.worker_manager.WorkerLoRAManager not in source"
-    )
+    assert (
+        _has_def(src, "WorkerLoRAManager", "class") or "WorkerLoRAManager" in src
+    ), f"{tag}: vllm.lora.worker_manager.WorkerLoRAManager not in source"
 
 
 @pytest.mark.parametrize("tag", VLLM_TAGS)
@@ -249,9 +249,9 @@ def test_lora_request_no_removed_kwargs(tag: str):
     assert src is not None
     has_dir = bool(re.search(r"\blora_dir\b", src))
     has_path = bool(re.search(r"\blora_path\b", src))
-    assert has_dir or has_path, (
-        f"{tag}: vllm.lora.request has neither lora_dir nor lora_path"
-    )
+    assert (
+        has_dir or has_path
+    ), f"{tag}: vllm.lora.request has neither lora_dir nor lora_path"
 
 
 # -------------------------------------------------------------------------

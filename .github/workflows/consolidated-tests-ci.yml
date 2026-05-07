@@ -30,7 +30,7 @@
 # things; if they regress we want a red cell, not a green-with-fail-prints
 # cell.
 
-name: Consolidated CPU tests (unsloth Bucket-A + unsloth_zoo@main)
+name: Core
 
 on:
   pull_request:
@@ -79,18 +79,18 @@ jobs:
       matrix:
         combo:
           - id: t4576-trl0latest
-            label: "T 4.57.6 + TRL <1"
+            label: "HF=4.57.6 + TRL<1"
             transformers_spec: "transformers==4.57.6"
             trl_spec: "trl>=0.18.2,<1.0.0"
           - id: tlatest5-trl1latest
-            label: "T latest 5.x + TRL latest 1.x"
+            label: "HF=latest + TRL=latest"
             transformers_spec: "transformers>=5,<6"
             trl_spec: "trl>=1,<2"
           - id: pyproject
-            label: "pyproject.toml pins (dynamic)"
+            label: "HF=default + TRL=default"
             transformers_spec: "__from_pyproject__"
             trl_spec: "__from_pyproject__"
-    name: "Consolidated CPU (${{ matrix.combo.label }})"
+    name: "Core (${{ matrix.combo.label }})"
     runs-on: ubuntu-latest
     timeout-minutes: 35
     # No job-level or per-step `continue-on-error`. Earlier iterations

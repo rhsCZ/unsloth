@@ -215,7 +215,12 @@ jobs:
                       Pillow safetensors tqdm packaging psutil
           # Converter deps (nbformat for notebook_to_python.py).
           pip install 'nbformat>=5.10' 'nbconvert>=7.16'
-          pip install --no-deps unsloth_zoo unsloth
+          # Install unsloth from the LOCAL checkout (the PR head), not PyPI.
+          # The PR-time CI must validate the code in this PR; PyPI unsloth
+          # may lag the in-repo CPU-torch fallback in unsloth/kernels/utils.py
+          # (lines 162-170) that handles missing torch._C._cuda_getCurrentRawStream.
+          pip install --no-deps unsloth_zoo
+          pip install --no-deps -e ./unsloth
 
       - name: Convert notebooks for AST scan
         # Same upstream-conversion-error tolerance as the static job.

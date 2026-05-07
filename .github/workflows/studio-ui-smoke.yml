@@ -211,16 +211,14 @@ jobs:
 
               # ─────────────────────────────────────────────────────
               # 1. Login form (password already rotated by CI step).
+              # auth-form.tsx hard-codes the username to
+              # HIDDEN_LOGIN_USERNAME = "unsloth", so the form has only
+              # a `#password` field -- no username input to fill.
               # ─────────────────────────────────────────────────────
               step("login form sign-in")
               page.goto(f"{BASE}/login")
-              # Username field is `username` or `#username`; password is
-              # `password` or `#password`. Try a few common patterns.
-              uname = page.locator("input[name='username'], #username").first
-              pword = page.locator("input[name='password'], #password").first
-              uname.wait_for(state = "visible", timeout = 30_000)
+              pword = page.locator("#password").first
               pword.wait_for(state = "visible", timeout = 30_000)
-              uname.fill("unsloth")
               pword.fill(NEW)
               shoot("login-filled")
               page.locator('button[type="submit"]').click()

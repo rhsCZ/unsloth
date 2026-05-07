@@ -626,7 +626,18 @@ jobs:
           sudo apt-get install -y -qq build-essential cmake git curl \
             libgomp1 libssl-dev libcurl4-openssl-dev
           python <<'PY'
-          import os, shutil, subprocess, sys
+          import os, shutil, subprocess, sys, pathlib
+          # Apply the same CPU spoof the pytest shims use BEFORE any
+          # unsloth_zoo import: unsloth_zoo/__init__.py calls
+          # device_type.get_device_type() at module load and raises
+          # `NotImplementedError: Unsloth cannot find any torch
+          # accelerator` on a GPU-less runner. The spoof flips
+          # torch.cuda.is_available() to True so the device probe takes
+          # the cuda branch; we never actually run CUDA tensor ops in
+          # this step (just clone+cmake+--help on the binaries).
+          sys.path.insert(0, str(pathlib.Path("tests").resolve()))
+          import _zoo_aggressive_cuda_spoof as _spoof
+          _spoof.apply()
           from unsloth_zoo.llama_cpp import (
               install_llama_cpp,
               LLAMA_CPP_DEFAULT_DIR,

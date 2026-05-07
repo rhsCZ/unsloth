@@ -858,31 +858,39 @@ jobs:
           # for a follow-up unsloth-zoo PR.
           KNOWN_BROKEN_COMPILE = {
               # Category A: `string index out of range` in source rewriter.
-              "colpali":       "string index out of range",
-              "colqwen2":      "string index out of range",
-              "dpr":           "string index out of range",
-              "rag":           "string index out of range",
-              "shieldgemma2":  "string index out of range",
-              "timm_backbone": "string index out of range",
+              "colpali":         "string index out of range",
+              "colqwen2":        "string index out of range",
+              "colmodernvbert":  "string index out of range",
+              "dpr":             "string index out of range",
+              "gemma4_assistant":"string index out of range",
+              "rag":             "string index out of range",
+              "shieldgemma2":    "string index out of range",
+              "timm_backbone":   "string index out of range",
               # Category B: rewriter emits invalid Python source.
-              "clvp":          "emitted file: unexpected indent",
-              "electra":       "emitted file: expected ':'",
-              "falcon_mamba":  "emitted file: unexpected indent",
-              "gpt2":          "emitted file: unexpected indent",
-              "imagegpt":      "emitted file: unexpected indent",
-              "mamba":         "emitted file: unexpected indent",
-              "tapas":         "emitted file: expected ':'",
-              "xlstm":         "emitted file: unexpected indent",
+              "clvp":            "emitted file: unexpected indent",
+              "electra":         "emitted file: expected ':'",
+              "falcon_mamba":    "emitted file: unexpected indent",
+              "gpt2":            "emitted file: unexpected indent",
+              "imagegpt":        "emitted file: unexpected indent",
+              "mamba":           "emitted file: unexpected indent",
+              "tapas":           "emitted file: expected ':'",
+              "xlstm":           "emitted file: unexpected indent",
+              # Category B-2: emit unterminated string literal (latest tf).
+              "audioflamingo3":  "emitted file: unterminated string literal",
+              "musicflamingo":   "emitted file: unterminated string literal",
+              "voxtral":         "emitted file: unterminated string literal",
+              "voxtral_realtime":"emitted file: unterminated string literal",
               # Category C: rewriter emits unclosed paren.
-              "kosmos2":       "emitted file: '(' was never closed",
-              "kosmos2_5":     "emitted file: '(' was never closed",
+              "kosmos2":         "emitted file: '(' was never closed",
+              "kosmos2_5":       "emitted file: '(' was never closed",
               # Category D: imports list builder picks up a non-exported name.
-              "auto":          "module has no attribute _BaseModelWithGenerate",
-              "bit":           "module has no attribute Linear",
-              "regnet":        "module has no attribute Linear",
-              "resnet":        "module has no attribute Linear",
+              "auto":            "module has no attribute _BaseModelWithGenerate",
+              "bit":             "module has no attribute Linear",
+              "regnet":          "module has no attribute Linear",
+              "resnet":          "module has no attribute Linear",
               # Category E: undefined name in emitted file.
-              "perceiver":     "name 'AbstractPreprocessor' is not defined",
+              "perceiver":       "name 'AbstractPreprocessor' is not defined",
+              "sam3_lite_text":  "name 'Sam3LiteTextLayerScaledResidual' is not defined",
           }
 
 

@@ -116,7 +116,7 @@ jobs:
             https://github.com/unslothai/unsloth-zoo \
             "$RUNNER_TEMP/unsloth-zoo"
           pip install -e "$RUNNER_TEMP/unsloth-zoo" --no-deps
-          pip show unsloth_zoo | head -3
+          pip show unsloth_zoo
 
       - name: Sanity — collection only (both repos)
         env:
@@ -215,7 +215,7 @@ jobs:
           # `pip show` instead of `import unsloth_zoo` — its __init__ raises
           # without an accelerator and the spoof harness only kicks in under
           # pytest. Cheap and accurate.
-          pip show unsloth_zoo | head -3
+          pip show unsloth_zoo
           echo "::endgroup::"
           echo "Consolidated job done. Coverage:"
           echo "  - 16 unsloth Bucket-A tests under tests/saving/ + tests/utils/"

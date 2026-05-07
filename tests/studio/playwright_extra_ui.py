@@ -136,7 +136,11 @@ with sync_playwright() as p:
         })();
     """)
     page = ctx.new_page()
-    page.set_default_timeout(30_000)
+    # See playwright_chat_ui.py -- 60s default for macos-14 free
+    # runner with --single-process Chromium. The extra-UI script is
+    # the SECOND Studio boot of the job, so the runner is even
+    # warmer (slower disk cache, contended Chromium state).
+    page.set_default_timeout(60_000)
     page_errors = []
 
     # Filter out known-benign React errors that fire when the Compare
@@ -178,7 +182,7 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     step("setup: change-password + model load")
     page.goto(f"{BASE}/change-password")
-    page.locator("#new-password").wait_for(state = "visible", timeout = 30_000)
+    page.locator("#new-password").wait_for(state = "visible", timeout = 60_000)
     page.fill("#new-password", NEW)
     page.fill("#confirm-password", NEW)
     page.locator('button[type="submit"]').click()
@@ -285,7 +289,7 @@ with sync_playwright() as p:
                             ).length >= want;
                         }""",
                         arg = ok_count_before + 2,
-                        timeout = 30_000,
+                        timeout = 60_000,
                     )
                     info("OK Compare: 2 new assistant bubbles after first prompt")
                 except Exception as exc:
@@ -308,7 +312,7 @@ with sync_playwright() as p:
                             ).length >= want;
                         }""",
                         arg = ok_count_before + 4,
-                        timeout = 30_000,
+                        timeout = 60_000,
                     )
                     info(
                         "OK Compare: 4 total new assistant bubbles after second prompt"
@@ -323,7 +327,7 @@ with sync_playwright() as p:
     # Back to single chat for subsequent steps.
     page.goto(f"{BASE}/chat")
     composer = page.locator('textarea[aria-label="Message input"]')
-    composer.wait_for(state = "visible", timeout = 30_000)
+    composer.wait_for(state = "visible", timeout = 60_000)
 
     # ─────────────────────────────────────────────────────
     # 2. Recipes editor.
@@ -447,7 +451,7 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     step("Settings dialog: cycle through tabs")
     page.goto(f"{BASE}/chat")
-    composer.wait_for(state = "visible", timeout = 30_000)
+    composer.wait_for(state = "visible", timeout = 60_000)
     page.keyboard.press("Control+,")  # global shortcut
     page.wait_for_timeout(800)
     settings = page.get_by_role("dialog").first

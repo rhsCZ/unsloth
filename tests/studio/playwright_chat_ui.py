@@ -195,7 +195,14 @@ with sync_playwright() as p:
         })();
     """)
     page = ctx.new_page()
-    page.set_default_timeout(30_000)
+    # 60s default (was 30s) -- macos-14 free runner under
+    # --single-process Chromium is slow enough that page renders /
+    # webfonts / lazy-loaded routes routinely crowd 30s. Run
+    # 25494926834 hit Page.screenshot timeout AND
+    # locator.wait_for("#new-password") timeout under the old 30s
+    # default. 60s is conservative without bloating real-failure
+    # detection.
+    page.set_default_timeout(60_000)
     page_errors = []
     page.on("pageerror", lambda e: page_errors.append(str(e)))
     console_errors = []
@@ -250,7 +257,7 @@ with sync_playwright() as p:
     # ─────────────────────────────────────────────────────
     step("change-password through UI (Setup your account)")
     page.goto(f"{BASE}/change-password")
-    page.locator("#new-password").wait_for(state = "visible", timeout = 30_000)
+    page.locator("#new-password").wait_for(state = "visible", timeout = 60_000)
     shoot("01-change-password-initial")
     page.fill("#new-password", NEW)
     page.fill("#confirm-password", NEW)
@@ -849,7 +856,7 @@ with sync_playwright() as p:
     shoot("14-recipes")
     # Back to chat for subsequent steps.
     page.goto(f"{BASE}/chat")
-    composer.wait_for(state = "visible", timeout = 30_000)
+    composer.wait_for(state = "visible", timeout = 60_000)
 
     # ─────────────────────────────────────────────────────
     # 11. API / Developer tab via account menu -> opens the
@@ -919,7 +926,7 @@ with sync_playwright() as p:
     # Back to chat.
     page.goto(f"{BASE}/chat")
     composer = page.locator('textarea[aria-label="Message input"]')
-    composer.wait_for(state = "visible", timeout = 30_000)
+    composer.wait_for(state = "visible", timeout = 60_000)
 
     # ─────────────────────────────────────────────────────
     # 11c. Recents: the chat sidebar lists previous threads. We
@@ -990,7 +997,7 @@ with sync_playwright() as p:
     # Back to chat.
     page.goto(f"{BASE}/chat")
     composer = page.locator('textarea[aria-label="Message input"]')
-    composer.wait_for(state = "visible", timeout = 30_000)
+    composer.wait_for(state = "visible", timeout = 60_000)
 
     # ─────────────────────────────────────────────────────
     # 12. Image attachment UI (upload widget reachable). The
@@ -1140,7 +1147,7 @@ with sync_playwright() as p:
     # was invalidated by the CLI rotation above).
     page.goto(f"{BASE}/login")
     pw_field = page.locator("#password")
-    pw_field.wait_for(state = "visible", timeout = 30_000)
+    pw_field.wait_for(state = "visible", timeout = 60_000)
     pw_field.fill(NEW2)
     page.locator('button[type="submit"]').click()
     composer = page.locator('textarea[aria-label="Message input"]')

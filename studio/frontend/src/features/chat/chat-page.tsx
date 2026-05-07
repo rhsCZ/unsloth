@@ -21,7 +21,7 @@ import { isTauri } from "@/lib/api-base";
 import { cn } from "@/lib/utils";
 import { GuidedTour, useGuidedTourController } from "@/features/tour";
 import { useSidebar } from "@/components/ui/sidebar";
-import { CloudIcon, Settings05Icon } from "@hugeicons/core-free-icons";
+import { CloudIcon, CustomizeIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Tooltip, TooltipContent } from "@/components/ui/tooltip";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
@@ -276,10 +276,10 @@ function CompareShell({
         >
           {children}
         </div>
-        <div className="shrink-0 bg-background px-5 pb-2 pt-1">
-          <div className="mx-auto w-full max-w-[44rem]">{composer}</div>
-          <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
-            LLMs can make mistakes. Double-check all responses.
+        <div className="shrink-0 bg-background pl-5 pr-5 md:pr-[30px] pb-2 pt-1">
+          <div className="mx-auto w-full max-w-[48rem]">{composer}</div>
+          <p className="composer-footer-note">
+            LLMs can make mistakes. Double-check responses.
           </p>
         </div>
       </div>
@@ -1115,13 +1115,21 @@ export function ChatPage(): ReactElement {
                         .getState()
                         .openDialog("connections")
                     }
-                    className="flex h-[34px] w-[34px] items-center justify-center rounded-[8px] text-[#383835] transition-colors hover:bg-[#ececec] hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-[#c7c7c4] dark:hover:bg-[#2e3035] dark:hover:text-white"
+                    className="flex h-[34px] w-[34px] items-center justify-center rounded-[12px] text-nav-fg transition-colors hover:bg-nav-surface-hover hover:text-black dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     aria-label="Open API providers"
                   >
-                    <HugeiconsIcon icon={CloudIcon} className="size-5" />
+                    <HugeiconsIcon
+                      icon={CloudIcon}
+                      strokeWidth={1.75}
+                      className="size-icon"
+                    />
                   </button>
                 </TooltipPrimitive.Trigger>
-                <TooltipContent side="bottom" sideOffset={6}>
+                <TooltipContent
+                  side="bottom"
+                  sideOffset={6}
+                  className="tooltip-compact"
+                >
                   API providers
                 </TooltipContent>
               </Tooltip>
@@ -1132,14 +1140,22 @@ export function ChatPage(): ReactElement {
                   <button
                     type="button"
                     onClick={() => setSettingsOpen(true)}
-                    className="flex h-[34px] w-[34px] items-center justify-center rounded-[8px] text-[#383835] dark:text-[#c7c7c4] transition-colors hover:bg-[#ececec] dark:hover:bg-[#2e3035] hover:text-black dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex h-[34px] w-[34px] items-center justify-center rounded-[12px] text-nav-fg transition-colors hover:bg-nav-surface-hover hover:text-black dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     aria-label="Open configuration"
                     data-tour="chat-settings"
                   >
-                    <HugeiconsIcon icon={Settings05Icon} className="size-5" />
+                    <HugeiconsIcon
+                      icon={CustomizeIcon}
+                      strokeWidth={1.75}
+                      className="size-icon"
+                    />
                   </button>
                 </TooltipPrimitive.Trigger>
-                <TooltipContent side="bottom" sideOffset={6}>
+                <TooltipContent
+                  side="bottom"
+                  sideOffset={6}
+                  className="tooltip-compact"
+                >
                   Open configuration
                 </TooltipContent>
               </Tooltip>

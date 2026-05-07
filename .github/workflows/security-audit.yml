@@ -80,9 +80,28 @@ jobs:
   advisory-audit:
     name: advisory audit (pip + npm + cargo)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
+      # step-security/harden-runner installs an eBPF-based egress
+      # firewall on the runner. In `audit` mode it logs every outbound
+      # connection without blocking; in `block` mode it rejects
+      # anything outside `allowed-endpoints`. We run audit-only
+      # initially: the next time this job hits a real PyPI advisory or
+      # an attacker-funded archive in pip-scan-packages, the audit log
+      # tells us exactly which hosts were dialed and we promote the
+      # allowlist to block. Would have *contained* the litellm exfil
+      # even if scan_packages had missed the .pth payload.
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+          disable-sudo: true
+
       - uses: actions/checkout@v4
+        with:
+          # Full history so TruffleHog can diff base..head; without
+          # this it sees only the latest commit and reports nothing.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -381,6 +400,198 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ─────────────────────────────────────────────────────────────
+      # Trivy filesystem CVE + IaC misconfig scan. Trivy's advisory
+      # feed is a different superset than OSV (NVD + GHSA + RustSec +
+      # GitLab + Aqua DB) and *also* catches IaC misconfigs in our
+      # Dockerfiles, k8s yaml, Tauri config, and shell scripts. Adds
+      # ~30 seconds; runs on the same runner so no extra setup cost.
+      # ─────────────────────────────────────────────────────────────
+      - name: Trivy (filesystem CVE + IaC misconfig)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          ignore-unfixed: false
+          severity: HIGH,CRITICAL
+          format: table
+          output: logs-trivy.txt
+          exit-code: '0'
+          # IaC scan covers Dockerfile, k8s yaml, Tauri config,
+          # GitHub workflows, shell scripts, etc. Runs alongside the
+          # vulnerability scan on the same scan-ref.
+          scanners: vuln,misconfig,secret
+
+      - name: Trivy summary
+        if: always()
+        continue-on-error: true
+        run: |
+          {
+            echo "## Trivy (CVEs + IaC misconfigs + secrets)"
+            echo
+            echo '```'
+            tail -200 logs-trivy.txt 2>/dev/null || echo '(no Trivy output)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────
+      # TruffleHog secret-leak scan on the PR diff. Catches API keys
+      # / tokens / cred files committed accidentally. --only-verified
+      # filters out probabilistic findings, so we only flag tokens
+      # that the source provider confirmed are live. On push to main
+      # / pip we scan the full repo; on PR we scan base..head.
+      # ─────────────────────────────────────────────────────────────
+      - name: TruffleHog (secrets in diff)
+        continue-on-error: true
+        uses: trufflesecurity/trufflehog@v3.83.5
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha || '' }}
+          head: ${{ github.event.pull_request.head.sha || github.sha }}
+          extra_args: --only-verified --no-update
+
+      # ─────────────────────────────────────────────────────────────
+      # CycloneDX SBOM. Lets downstream consumers audit what's
+      # actually shipped in unsloth wheels and the Studio backend
+      # runtime. Generates one JSON file per requirements input plus
+      # a combined SBOM keyed off pyproject.toml; uploads as a build
+      # artifact (and a future step can attest it via SLSA).
+      # ─────────────────────────────────────────────────────────────
+      - name: Generate CycloneDX SBOM
+        continue-on-error: true
+        run: |
+          set +e
+          python -m pip install --quiet 'cyclonedx-bom>=4.6'
+          mkdir -p sbom
+          # Per-requirements-file SBOM (the audit-reqs/ files are the
+          # filtered, git+-stripped views built earlier in this job).
+          for f in audit-reqs/*.txt; do
+            base=$(basename "$f" .txt)
+            if grep -qE '^[^#[:space:]]' "$f"; then
+              cyclonedx-py requirements "$f" \
+                --schema-version 1.6 \
+                --output-format JSON \
+                --outfile "sbom/sbom-$base.json" 2>&1 | tail -5 || true
+            fi
+          done
+          # Project-level SBOM from pyproject.toml.
+          cyclonedx-py environment \
+            --schema-version 1.6 \
+            --output-format JSON \
+            --outfile sbom/sbom-environment.json 2>&1 | tail -5 || true
+          ls -la sbom/
+          {
+            echo "## CycloneDX SBOM"
+            echo
+            echo "Generated SBOM files:"
+            ls sbom/ | sed 's/^/- sbom\//'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────
+      # GitHub Actions pinning verifier. tj-actions/changed-files
+      # was compromised in March 2025; anyone using `@v4` (a mutable
+      # ref) auto-shipped the malicious version. Catch every
+      # non-SHA-pinned `uses:` across the workflows tree. Warn-only
+      # initially so the existing baseline doesn't block PRs.
+      # ─────────────────────────────────────────────────────────────
+      - name: GitHub Actions pinning verifier
+        continue-on-error: true
+        run: |
+          python <<'PY' | tee logs-actions-pinning.txt
+          import re
+          from pathlib import Path
+          # SHA pin = 40 hex chars after @
+          SHA_PIN = re.compile(r"@[0-9a-f]{40}\b")
+          # First-party / GitHub-published actions get a softer pass
+          # (still recommended to pin; not a security gate).
+          FIRST_PARTY = re.compile(r"^\s*-\s*uses:\s*(actions|github)/[^@]+@")
+          USES = re.compile(r"^\s*-\s*uses:\s*([^@\s]+)@(\S+)")
+          unpinned_third = []
+          unpinned_first = []
+          for f in sorted(Path(".github/workflows").glob("*.yml")):
+              for i, line in enumerate(f.read_text().splitlines(), 1):
+                  m = USES.match(line)
+                  if not m:
+                      continue
+                  name, ref = m.group(1), m.group(2)
+                  if SHA_PIN.search(line):
+                      continue
+                  bucket = unpinned_first if FIRST_PARTY.match(line) else unpinned_third
+                  bucket.append((str(f), i, name, ref))
+          print("::group::Action pinning status")
+          print(f"third-party actions on mutable refs: {len(unpinned_third)}")
+          for f, i, n, r in unpinned_third:
+              print(f"  HIGH  {f}:{i}: {n}@{r}")
+          print()
+          print(f"first-party (actions/* | github/*) on mutable refs: {len(unpinned_first)}")
+          for f, i, n, r in unpinned_first[:30]:
+              print(f"  WARN  {f}:{i}: {n}@{r}")
+          if len(unpinned_first) > 30:
+              print(f"  ... and {len(unpinned_first) - 30} more")
+          print()
+          print("Recommendation: pin third-party actions to a 40-char SHA.")
+          print("Dependabot's github-actions ecosystem will auto-bump them.")
+          print("::endgroup::")
+          PY
+          {
+            echo "## GitHub Actions pinning verifier"
+            echo
+            echo '```'
+            cat logs-actions-pinning.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─────────────────────────────────────────────────────────────
+      # Hash-pin verifier. `==` pinning protects against version
+      # drift but not against a re-uploaded malicious wheel at the
+      # same version (PyPI lets a yanked release be re-published with
+      # different bytes for ~5 minutes via `--filename` collision).
+      # `pip install --require-hashes` rejects any download whose
+      # SHA-256 doesn't match. Inspector step that reports how many
+      # specs would gain from a hash pin -- conversion is a roadmap
+      # item (needs pip-tools / uv pip compile --generate-hashes).
+      # ─────────────────────────────────────────────────────────────
+      - name: Hash-pin verifier (Python requirements)
+        continue-on-error: true
+        run: |
+          python <<'PY' | tee logs-hash-verifier.txt
+          import re
+          from pathlib import Path
+          PINNED = re.compile(r"^\s*[A-Za-z0-9_.\-]+\s*==\s*[^,;]+\s*$")
+          HASH_LINE = re.compile(r"--hash=sha256:[0-9a-f]{64}")
+          total_pinned = 0
+          with_hash = 0
+          for f in sorted(Path("studio/backend/requirements").glob("*.txt")):
+              text = f.read_text()
+              for raw in text.splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or line.startswith("-"):
+                      continue
+                  spec = line.split("#", 1)[0].strip().split(";", 1)[0]
+                  if PINNED.match(spec):
+                      total_pinned += 1
+                      if HASH_LINE.search(raw):
+                          with_hash += 1
+          print(f"::group::Hash-pin status")
+          print(f"  exact == pins:       {total_pinned}")
+          print(f"  with --hash=sha256:  {with_hash}")
+          print(f"  without --hash:      {total_pinned - with_hash}")
+          print()
+          print("Roadmap: convert to hash-locked installs via")
+          print("`uv pip compile --generate-hashes` and `pip install --require-hashes`.")
+          print("Hash-locked installs would have refused a republished")
+          print("malicious litellm 1.82.7 wheel even at the same version.")
+          print("::endgroup::")
+          PY
+          {
+            echo "## Hash-pin verifier"
+            echo
+            echo '```'
+            cat logs-hash-verifier.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -393,7 +604,11 @@ jobs:
             logs-osv-scanner.txt
             logs-semgrep.txt
             logs-pin-verifier.txt
+            logs-trivy.txt
+            logs-actions-pinning.txt
+            logs-hash-verifier.txt
             audit-reqs/
+            sbom/
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────
@@ -448,6 +663,16 @@ jobs:
             id: extras
             files: 'extras'
     steps:
+      # Egress audit on every shard. Each shard pulls hundreds of
+      # PyPI archives -- if a malicious wheel ever phones home from
+      # within the scanner sandbox (it shouldn't; we never execute
+      # the archive), harden-runner's audit log records the host.
+      - name: Harden runner (egress audit)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+          disable-sudo: true
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

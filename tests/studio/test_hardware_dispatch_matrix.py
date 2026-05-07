@@ -296,7 +296,9 @@ def spoof_hardware(monkeypatch):
             # restore the original on teardown (mutating the list in
             # place would survive the test).
             monkeypatch.setattr(
-                sys, "meta_path", [blocker, *sys.meta_path],
+                sys,
+                "meta_path",
+                [blocker, *sys.meta_path],
             )
 
     return _apply

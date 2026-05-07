@@ -957,6 +957,27 @@ class LlamaCppBackend:
             return []
 
     @staticmethod
+    def _windows_pip_nvidia_dll_dirs(prefix: str) -> list[str]:
+        """Return DLL dirs from pip-installed nvidia wheels under
+        ``<prefix>/Lib/site-packages/nvidia/`` so llama-server.exe can
+        load cudart64_X.dll / cublas64_X.dll without a system CUDA
+        toolkit. Mirrors the Linux nvidia/cu*/lib LD_LIBRARY_PATH
+        block. Wheel layouts vary, so we cover the two seen patterns:
+        ``nvidia/<pkg>/bin`` and ``nvidia/<pkg>/Library/bin``."""
+        import glob as _glob
+
+        nvidia_root = os.path.join(prefix, "Lib", "site-packages", "nvidia")
+        out: list[str] = []
+        for pattern in (
+            os.path.join(nvidia_root, "*", "bin"),
+            os.path.join(nvidia_root, "*", "Library", "bin"),
+        ):
+            for nv_dir in _glob.glob(pattern):
+                if os.path.isdir(nv_dir):
+                    out.append(nv_dir)
+        return out
+
+    @staticmethod
     def _select_gpus(
         model_size_bytes: int,
         gpus: list[tuple[int, int]],
@@ -2319,9 +2340,14 @@ class LlamaCppBackend:
             binary_dir = str(Path(binary).parent)
 
             if sys.platform == "win32":
-                # On Windows, CUDA DLLs (cublas64_12.dll, cudart64_12.dll, etc.)
-                # must be on PATH. Add CUDA_PATH\bin if available.
+                # CUDA DLLs (cudart64_X.dll, cublas64_X.dll, etc.) must
+                # be on PATH. Order: binary_dir, torch's pip-installed
+                # nvidia wheels, then a system CUDA toolkit. Pip wheels
+                # are the canonical source per Studio's install design
+                # (mirrors the Linux LD_LIBRARY_PATH block below) and
+                # CUDA_PATH covers users with a system toolkit. #5106.
                 path_dirs = [binary_dir]
+                path_dirs.extend(self._windows_pip_nvidia_dll_dirs(sys.prefix))
                 cuda_path = os.environ.get("CUDA_PATH", "")
                 if cuda_path:
                     cuda_bin = os.path.join(cuda_path, "bin")

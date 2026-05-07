@@ -81,7 +81,20 @@ def runtime_warn(m: str) -> None:
 
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless = True)
+    # Chromium stability args -- same set as playwright_chat_ui.py.
+    # Without these Chromium dies in the first seconds on macos-14
+    # free runners and pipeTransport.js throws
+    # 'SyntaxError: Unexpected end of JSON input'.
+    _CHROMIUM_STABILITY_ARGS = [
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--single-process",
+    ]
+    browser = p.chromium.launch(
+        headless = True,
+        args = _CHROMIUM_STABILITY_ARGS,
+    )
     ctx = browser.new_context(
         viewport = {"width": 1280, "height": 900},
         reduced_motion = "reduce",

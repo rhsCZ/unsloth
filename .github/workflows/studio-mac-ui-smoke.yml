@@ -93,14 +93,46 @@ jobs:
         # needs already.
         # Pinned <1.58 because all 1.55-1.58 drivers ship Node 24 on
         # macos-14 and intermittently hit 'SyntaxError: Unexpected end
-        # of JSON input' in pipeTransport.js when the Chromium child
-        # transiently flushes an empty buffer. The crash is racy and
-        # only triggers on a fraction of runs; the retry wrapper in
-        # "Drive the chat UI with Playwright" is what actually keeps
-        # the job green when the race fires.
+        # of JSON input' in pipeTransport.js. Run 25491698868 showed
+        # the crash hitting 100% of three retry attempts -- not a
+        # rare race but a hard reproduction. Belt-and-suspenders fix:
+        # the test scripts pass --single-process to Chromium (see
+        # tests/studio/playwright_chat_ui.py) AND we patch
+        # pipeTransport.js below to swallow JSON parse errors instead
+        # of crashing the driver Node process. Both together let the
+        # in-script retry recover from any residual flakes.
         run: |
           pip install 'playwright>=1.55,<1.58'
           python -m playwright install chromium
+
+      - name: Patch Playwright pipeTransport.js to tolerate malformed JSON
+        # In Playwright 1.55-1.58, pipeTransport.js does
+        # `JSON.parse(message)` with no try/catch; when Chromium dies
+        # mid-write the partial buffer crashes the driver Node
+        # process and the test script exits with 'Connection closed
+        # while reading from the driver'. Newer Playwright versions
+        # added a try/catch upstream. Backport that here.
+        run: |
+          python - <<'PY'
+          import os, re, sys
+          import playwright
+          driver_dir = os.path.join(os.path.dirname(playwright.__file__), "driver", "package", "lib", "server")
+          path = os.path.join(driver_dir, "pipeTransport.js")
+          src = open(path).read()
+          # Wrap both `this.onmessage.call(null, JSON.parse(...))` sites in try/catch.
+          patched = re.sub(
+              r"this\.onmessage\.call\(null, JSON\.parse\((message2?)\)\);",
+              r"try { this.onmessage.call(null, JSON.parse(\1)); } "
+              r"catch (e) { /* swallow malformed JSON from a crashing browser */ }",
+              src,
+          )
+          if patched == src:
+              # Already patched, or upstream changed -- either way, don't fail the build.
+              print(f"pipeTransport.js: no JSON.parse calls matched at {path}; skipping.")
+          else:
+              open(path, "w").write(patched)
+              print(f"pipeTransport.js: patched JSON.parse calls in {path}")
+          PY
 
       - name: Reset auth + boot Studio
         run: |

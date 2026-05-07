@@ -118,7 +118,26 @@ def parse_rgb(s):
 
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless = True)
+    # Chromium stability args for macos-14 free runners. Without these
+    # Chromium browser process dies in the first few seconds (during
+    # change-password page load) and the driver Node process can't
+    # parse the truncated stdout JSON-RPC line, throwing
+    # 'SyntaxError: Unexpected end of JSON input' in pipeTransport.js
+    # — see runs 25491698868 / 25489049059. --disable-dev-shm-usage and
+    # --no-sandbox are the standard set; --disable-gpu forces software
+    # rendering on the headless runner; --single-process keeps the
+    # renderer in the same process as the browser, eliminating the
+    # browser↔renderer IPC pipe that was the actual crash site.
+    _CHROMIUM_STABILITY_ARGS = [
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--single-process",
+    ]
+    browser = p.chromium.launch(
+        headless = True,
+        args = _CHROMIUM_STABILITY_ARGS,
+    )
     ctx = browser.new_context(
         viewport = {"width": 1280, "height": 900},
         # Reduces motion so the theme toggle's view-transition

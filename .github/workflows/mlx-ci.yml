@@ -153,7 +153,12 @@ jobs:
             'httpx==0.28.1'
           pip install --index-url https://download.pytorch.org/whl/cpu \
             'torch==2.10.0'
-          pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo"
+          # Pin to the unslothai/unsloth-zoo#627 branch until that PR
+          # merges -- it carries the GGUF NotImplementedError + LoRA
+          # local_path fixes that the export round-trip phase below
+          # depends on. Flip back to bare `unsloth-zoo @ git+...` once
+          # #627 lands on main.
+          pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo@fix/mlx-export-roundtrip-on-apple-silicon"
           pip install -e . --no-deps
 
       # Real Apple Silicon sanity: confirm _IS_MLX activates on real
@@ -207,16 +212,74 @@ jobs:
             tests/studio/test_mlx_training_worker_behaviors.py
 
       # Real MLX training + inference smoke test. Trains
-      # unsloth/gemma-3-270m-it for 7 deterministic LoRA steps on a
-      # single repeated row ("<<HELLO!!>> My name is Unsloth!"),
-      # captures per-step losses and pre/post-training grad norms,
-      # then completes "<<HELLO!!>> My name is " and asserts the
-      # generation contains "Unsloth". This is the only place in CI
-      # that exercises the real MLX backward pass + optimizer step +
-      # inference path end to end.
-      - name: Real MLX training + inference smoke test
+      # unsloth/gemma-3-270m-it for 7 deterministic LoRA steps
+      # (batch_size=2, gradient_accumulation_steps=3) on a single
+      # repeated row ("<<HELLO!!>> My name is Unsloth!"), then saves
+      # the trained model in 3 export formats. The `train` subcommand
+      # captures per-phase timing + peak GPU + peak RSS into
+      # train_metrics.json so we can detect regressions across CI runs.
+      - name: MLX export round-trip — TRAIN + SAVE 3 formats
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           UNSLOTH_COMPILE_DISABLE: '1'
         run: |
-          python tests/studio/run_real_mlx_smoke.py
+          mkdir -p mlx_workdir
+          python tests/studio/run_real_mlx_smoke.py train \
+            --workdir "$PWD/mlx_workdir"
+
+      # Each reload step runs in a FRESH Python process to confirm
+      # the cold-start path users would hit in production also works
+      # (not just the in-memory continuation of a still-running
+      # trainer). FastMLXModel.from_pretrained gets called from
+      # scratch; mx.random is re-seeded; per-step timing + peak
+      # memory are emitted to {format}_reload_metrics.json next to
+      # the saved dir.
+      - name: MLX export round-trip — RELOAD LoRA (fresh process)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python tests/studio/run_real_mlx_smoke.py reload \
+            --format lora \
+            --dir "$PWD/mlx_workdir/lora"
+
+      - name: MLX export round-trip — RELOAD merged_16bit (fresh process)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          UNSLOTH_COMPILE_DISABLE: '1'
+        run: |
+          python tests/studio/run_real_mlx_smoke.py reload \
+            --format merged \
+            --dir "$PWD/mlx_workdir/merged_16bit"
+
+      # GGUF reload uses the llama-cli binary that save_pretrained_gguf
+      # built. Skipped if save_pretrained_gguf raised on this host
+      # (see train_metrics.json:gguf_supported / gguf_skip_reason).
+      - name: MLX export round-trip — RELOAD GGUF via llama-cli (fresh process)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if python -c "import json,sys; m=json.load(open('mlx_workdir/train_metrics.json')); sys.exit(0 if m.get('gguf_supported') else 1)"; then
+            python tests/studio/run_real_mlx_smoke.py reload \
+              --format gguf \
+              --dir "$PWD/mlx_workdir/gguf"
+          else
+            echo "::warning::GGUF export was skipped during train phase"
+            python -c "import json; m=json.load(open('mlx_workdir/train_metrics.json')); print('gguf_skip_reason:', m.get('gguf_skip_reason'))"
+            exit 1
+          fi
+
+      # Print all metrics JSON files so regressions are visible in the
+      # job log. always() so we get telemetry even if a reload step
+      # asserted gibberish.
+      - name: MLX export round-trip — aggregate metrics
+        if: always()
+        run: |
+          for f in mlx_workdir/train_metrics.json \
+                   mlx_workdir/lora_reload_metrics.json \
+                   mlx_workdir/merged_reload_metrics.json \
+                   mlx_workdir/gguf_reload_metrics.json; do
+            echo "=== $f ==="
+            cat "$f" 2>/dev/null || echo "(missing)"
+            echo
+          done

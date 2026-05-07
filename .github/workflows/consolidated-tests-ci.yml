@@ -599,52 +599,91 @@ jobs:
           python -m pytest -q --tb=short tests/_tiled_mlp_check_shim.py -s
           rm -f tests/_tiled_mlp_check_shim.py
 
-      - name: llama.cpp install + `llama-cli --help` smoke
-        # The user asked to confirm llama.cpp installs and the CLI runs.
-        # Studio uses prebuilt llama.cpp binaries via studio/install_llama_prebuilt.py;
-        # we mirror that flow here at a smaller scale: pull the upstream prebuilt
-        # release tarball for ubuntu-latest x86_64 and run `llama-cli --help`
-        # to confirm the binary is intact and runnable.
+      - name: llama.cpp install via unsloth_zoo.llama_cpp + `llama-cli --help` smoke
+        # Exercise the canonical `unsloth_zoo.llama_cpp.install_llama_cpp`
+        # flow that GGUF export uses at runtime: clone ggml-org/llama.cpp
+        # into ~/.unsloth/llama.cpp, build the LLAMA_CPP_TARGETS list
+        # (llama-quantize, llama-cli, llama-mtmd-cli, llama-gguf-split,
+        # llama-server) via cmake, then run `llama-cli --help`.
+        #
+        # This replaces the previous "download upstream prebuilt zip"
+        # approach, which silently exited 0 with the message
+        # "no ubuntu-x64 prebuilt asset" when ggml-org's release-asset
+        # naming drifted (the regex `bin-ubuntu-x64.*\.zip$` no longer
+        # matched their current asset names). The build path is the same
+        # one Unsloth users hit in production via `model.save_pretrained_gguf`.
+        #
+        # Wall-time budget: ~3-5 min cold, dominated by cmake build of
+        # 5 targets on the runner's 4 cores. Apt-package install is
+        # handled by `install_llama_cpp` itself via its
+        # `check_build_requirements` -> `install_package` chain.
         run: |
           set -euxo pipefail
-          # Try the prebuilt download path Studio uses on Linux.
-          # ggml-org/llama.cpp releases ship `llama-bXXXX-bin-ubuntu-x64.zip`.
-          DEST="$RUNNER_TEMP/llama-cpp"
-          mkdir -p "$DEST"
-          # Pin to whatever Studio's installer would resolve; for the smoke
-          # we just take the latest release.
-          URL=$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest \
-                | python -c "import sys,json,re; d=json.load(sys.stdin); \
-                              urls=[a['browser_download_url'] for a in d['assets'] \
-                                    if re.search(r'bin-ubuntu-x64.*\.zip$', a['name'])]; \
-                              print(urls[0] if urls else '', end='')")
-          if [ -z "$URL" ]; then
-            echo "::warning::no ubuntu-x64 prebuilt asset on the latest llama.cpp release; skipping smoke"
-            exit 0
-          fi
-          echo "Downloading $URL"
-          curl -fsSL -o "$DEST/llama.zip" "$URL"
-          (cd "$DEST" && unzip -q llama.zip)
-          # Find the llama-cli binary inside the extracted tree.
-          CLI=$(find "$DEST" -type f -name 'llama-cli' -perm -u+x | head -1)
-          if [ -z "$CLI" ]; then
-            echo "::warning::llama-cli not found in extracted prebuilt; layout drifted"
-            ls -R "$DEST" | head -50
-            exit 0
-          fi
-          # Some prebuilds need libgomp1 / libcurl4 / libssl - install just in case.
+          # libssl-dev / libcurl4-openssl-dev are needed by llama.cpp's
+          # cmake build for HTTPS support; install up-front so the
+          # `install_llama_cpp` requirement-check is a no-op.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libgomp1 libcurl4 libssl3 || true
-          chmod +x "$CLI"
-          # `--help` exits non-zero on some llama-cli builds; tolerate it as
-          # long as the help text contains the expected sentinel.
-          if "$CLI" --help 2>&1 | grep -q -E 'usage|--help|-m,|--model'; then
-            echo "OK: llama-cli --help responded"
-          else
-            echo "::error::llama-cli --help did not produce recognizable output"
-            "$CLI" --help 2>&1 | head -20 || true
-            exit 1
-          fi
+          sudo apt-get install -y -qq build-essential cmake git curl \
+            libgomp1 libssl-dev libcurl4-openssl-dev
+          python <<'PY'
+          import os, shutil, subprocess, sys
+          from unsloth_zoo.llama_cpp import (
+              install_llama_cpp,
+              LLAMA_CPP_DEFAULT_DIR,
+              LLAMA_CPP_TARGETS,
+          )
+          print(f"Unsloth llama.cpp default dir: {LLAMA_CPP_DEFAULT_DIR}")
+          print(f"Build targets: {LLAMA_CPP_TARGETS}")
+          # install_llama_cpp returns (quantizer_path, converter_script_path).
+          # The quantizer's directory is the `llama.cpp` install root, which
+          # also holds llama-cli after build/bin/llama-* gets copied up
+          # (llama_cpp.py:867-871).
+          quantizer, converter = install_llama_cpp(print_output=True)
+          assert quantizer and os.path.exists(quantizer), (
+              f"install_llama_cpp returned quantizer={quantizer!r} but file missing"
+          )
+          assert converter and os.path.isfile(converter), (
+              f"install_llama_cpp returned converter={converter!r} but missing"
+          )
+          install_root = os.path.dirname(quantizer)
+          cli = os.path.join(install_root, "llama-cli")
+          assert os.path.exists(cli), (
+              f"llama-cli not found at {cli!r} after build. Build root contents: "
+              f"{sorted(p for p in os.listdir(install_root) if p.startswith('llama-'))[:20]}"
+          )
+          assert os.access(cli, os.X_OK), f"{cli!r} not executable"
+          # `llama-cli --help` exits non-zero on some builds; the contract
+          # is that recognizable help text appears on stdout/stderr.
+          proc = subprocess.run(
+              [cli, "--help"], capture_output=True, text=True, timeout=30,
+          )
+          combined = (proc.stdout or "") + (proc.stderr or "")
+          print("--- llama-cli --help (first 30 lines) ---")
+          print("\n".join(combined.splitlines()[:30]))
+          assert any(
+              tok in combined.lower()
+              for tok in ("usage", "--help", "--model", "-m,")
+          ), (
+              f"llama-cli --help produced no recognizable help text. "
+              f"exit={proc.returncode}\nstdout: {proc.stdout[:400]!r}\n"
+              f"stderr: {proc.stderr[:400]!r}"
+          )
+          # Also exercise the quantizer the way GGUF export does: --help
+          # round-trip on the binary that does the actual heavy lifting.
+          q = subprocess.run(
+              [quantizer, "--help"], capture_output=True, text=True, timeout=15,
+          )
+          q_combined = (q.stdout or "") + (q.stderr or "")
+          assert "usage" in q_combined.lower() or "type" in q_combined.lower(), (
+              f"llama-quantize --help produced no help text. "
+              f"exit={q.returncode}\nstdout: {q.stdout[:400]!r}\n"
+              f"stderr: {q.stderr[:400]!r}"
+          )
+          print(
+              f"\nOK: install_llama_cpp produced a working llama-cli at {cli} "
+              f"and llama-quantize at {quantizer}."
+          )
+          PY
 
       - name: Summary
         if: always()

@@ -1848,18 +1848,12 @@ class TestWindowsCudaAttempts:
         # without a system CUDA toolkit. The pairing must surface on
         # AssetChoice.runtime_url so install_from_archives downloads it.
         mock_windows_runtime(monkeypatch, ["cuda13", "cuda12"])
-        host = make_host(
-            system = "Windows", machine = "AMD64", driver_cuda_version = (13, 1)
-        )
+        host = make_host(system = "Windows", machine = "AMD64", driver_cuda_version = (13, 1))
         assets = {
-            f"llama-{self.TAG}-bin-win-cuda-13.1-x64.zip":
-                f"https://example.com/llama-{self.TAG}-bin-win-cuda-13.1-x64.zip",
-            "cudart-llama-bin-win-cuda-13.1-x64.zip":
-                "https://example.com/cudart-llama-bin-win-cuda-13.1-x64.zip",
-            f"llama-{self.TAG}-bin-win-cuda-12.4-x64.zip":
-                f"https://example.com/llama-{self.TAG}-bin-win-cuda-12.4-x64.zip",
-            "cudart-llama-bin-win-cuda-12.4-x64.zip":
-                "https://example.com/cudart-llama-bin-win-cuda-12.4-x64.zip",
+            f"llama-{self.TAG}-bin-win-cuda-13.1-x64.zip": f"https://example.com/llama-{self.TAG}-bin-win-cuda-13.1-x64.zip",
+            "cudart-llama-bin-win-cuda-13.1-x64.zip": "https://example.com/cudart-llama-bin-win-cuda-13.1-x64.zip",
+            f"llama-{self.TAG}-bin-win-cuda-12.4-x64.zip": f"https://example.com/llama-{self.TAG}-bin-win-cuda-12.4-x64.zip",
+            "cudart-llama-bin-win-cuda-12.4-x64.zip": "https://example.com/cudart-llama-bin-win-cuda-12.4-x64.zip",
         }
         result = windows_cuda_attempts(host, self.TAG, assets, None)
         assert len(result) == 2
@@ -1879,12 +1873,9 @@ class TestWindowsCudaAttempts:
         # still proceed -- the user falls back to a system CUDA toolkit
         # but at least the install doesn't fail.
         mock_windows_runtime(monkeypatch, ["cuda12"])
-        host = make_host(
-            system = "Windows", machine = "AMD64", driver_cuda_version = (12, 4)
-        )
+        host = make_host(system = "Windows", machine = "AMD64", driver_cuda_version = (12, 4))
         assets = {
-            f"llama-{self.TAG}-bin-win-cuda-12.4-x64.zip":
-                f"https://example.com/llama-{self.TAG}-bin-win-cuda-12.4-x64.zip",
+            f"llama-{self.TAG}-bin-win-cuda-12.4-x64.zip": f"https://example.com/llama-{self.TAG}-bin-win-cuda-12.4-x64.zip",
         }
         result = windows_cuda_attempts(host, self.TAG, assets, None)
         assert len(result) == 1
@@ -1898,9 +1889,7 @@ class TestWindowsCudaAttempts:
         # cause install_from_archives to download the same archive
         # twice or hit copy_globs's ambiguous-layout guard.
         mock_windows_runtime(monkeypatch, ["cuda13", "cuda12"])
-        host = make_host(
-            system = "Windows", machine = "AMD64", driver_cuda_version = (13, 1)
-        )
+        host = make_host(system = "Windows", machine = "AMD64", driver_cuda_version = (13, 1))
         assets = self._upstream("13.1", "12.4", current_names = True)
         result = windows_cuda_attempts(host, self.TAG, assets, None)
         assert len(result) == 2
@@ -1960,9 +1949,7 @@ class TestApplyApprovedHashesRuntimePair:
         assert len(result) == 1
         assert result[0].expected_sha256 == "0" * 64
         assert result[0].runtime_sha256 == "1" * 64
-        assert (
-            result[0].runtime_name == "cudart-llama-bin-win-cuda-13.1-x64.zip"
-        )
+        assert result[0].runtime_name == "cudart-llama-bin-win-cuda-13.1-x64.zip"
 
     def test_runtime_pair_dropped_when_hash_missing(self):
         # Manifest hashes the main archive but not the runtime archive.

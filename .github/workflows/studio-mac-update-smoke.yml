@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
+
+# Mac counterpart to studio-update-smoke.yml. Verifies that on a real
+# Apple Silicon (macos-14, M1) runner:
+#
+#   1. install.sh --local --no-torch installs Studio AND auto-fetches
+#      the prebuilt llama.cpp Mac binary (llama-bNNNN-bin-macos-arm64
+#      from ggml-org/llama.cpp). Hitting the source-build fallback is
+#      treated as an Unsloth bug -- Studio must always pick the
+#      prebuilt on Mac.
+#   2. unsloth studio update --local is idempotent. Two consecutive
+#      runs both report "prebuilt up to date and validated", no
+#      source-build fallback.
+#   3. The installed Studio still boots and /api/health returns
+#      healthy after the update path.
+
+name: Mac Studio Update CI
+
+on:
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'studio/setup.sh'
+      - 'studio/install_python_stack.py'
+      - 'studio/install_llama_prebuilt.py'
+      - 'studio/backend/requirements/**'
+      - 'unsloth_cli/commands/studio.py'
+      - 'pyproject.toml'
+      - '.github/workflows/studio-mac-update-smoke.yml'
+  push:
+    branches: [main, pip]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-idempotency:
+    name: Studio Updating Tests
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: studio/frontend/package-lock.json
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Studio (--local, --no-torch)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          set -o pipefail
+          bash install.sh --local --no-torch 2>&1 | tee logs/install.log
+
+      - name: Assert install.sh used the Mac llama.cpp prebuilt
+        run: |
+          # Mac install must take the prebuilt path. Source-build
+          # fallback here is an Unsloth bug.
+          if grep -q "falling back to source build" logs/install.log; then
+            echo "::error::install.sh fell back to source-build llama.cpp on Mac. Studio must install the prebuilt llama-bNNNN-bin-macos-arm64 on Apple Silicon."
+            grep -E "llama-prebuilt|llama.cpp" logs/install.log | tail -60
+            exit 1
+          fi
+          if ! grep -qE "prebuilt installed and validated|prebuilt up to date and validated|bin-macos-arm64" logs/install.log; then
+            echo "::error::no Mac prebuilt llama.cpp marker in install.log."
+            grep -E "llama-prebuilt|llama.cpp" logs/install.log | tail -60
+            exit 1
+          fi
+          echo "install.sh installed the Mac prebuilt llama.cpp"
+
+      - name: First update should be a no-op (prebuilt already validated)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          unsloth studio update --local 2>&1 | tee logs/update.log
+          if grep -q "falling back to source build" logs/update.log; then
+            echo "::error::studio update fell back to source-build llama.cpp on Mac."
+            grep -E "llama-prebuilt|llama.cpp" logs/update.log | tail -60
+            exit 1
+          fi
+          if ! grep -qE "prebuilt up to date and validated|prebuilt installed and validated" logs/update.log; then
+            echo "::error::no prebuilt up-to-date marker in update.log."
+            grep -E "llama-prebuilt|llama.cpp" logs/update.log | tail -60
+            exit 1
+          fi
+          echo "update path took the prebuilt fast path"
+
+      - name: Second update must also be a no-op
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          unsloth studio update --local 2>&1 | tee logs/update2.log
+          grep -q "falling back to source build" logs/update2.log && {
+              echo "::error::second update fell back to source build on Mac"
+              tail -60 logs/update2.log; exit 1; } || true
+          grep -qE "prebuilt up to date and validated|prebuilt installed and validated" logs/update2.log
+          echo "second update was clean"
+
+      - name: Boot Studio briefly to confirm the install is still usable
+        run: |
+          mkdir -p logs
+          UNSLOTH_API_ONLY=1 unsloth studio -H 127.0.0.1 -p 18891 \
+            > logs/studio.log 2>&1 &
+          PID=$!
+          HEALTHY=""
+          for i in $(seq 1 60); do
+            if curl -fs http://127.0.0.1:18891/api/health > /tmp/health.json; then
+              if python3 -c "import json,sys; d=json.load(open('/tmp/health.json')); sys.exit(0 if d.get('status')=='healthy' else 1)"; then
+                HEALTHY=1
+                break
+              fi
+            fi
+            sleep 1
+          done
+          if [ -z "$HEALTHY" ]; then
+            echo "Studio failed to come up after \`update\`"
+            tail -200 logs/studio.log
+            kill "$PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$PID" 2>/dev/null || true
+          echo "post-update Studio /api/health OK"
+
+      - name: Upload update logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: mac-studio-update-log
+          path: |
+            logs/install.log
+            logs/update.log
+            logs/update2.log
+            logs/studio.log
+          retention-days: 7

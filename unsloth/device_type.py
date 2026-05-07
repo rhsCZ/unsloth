@@ -22,19 +22,35 @@ __all__ = [
     "ALLOW_BITSANDBYTES",
 ]
 
-import torch
 import functools
 import inspect
+import importlib.util
+import os
+import platform
 from unsloth_zoo.utils import Version
+
+_IS_MLX = (
+    os.environ.get("UNSLOTH_FORCE_GPU_PATH", "0") != "1"
+    and platform.system() == "Darwin"
+    and platform.machine() == "arm64"
+    and importlib.util.find_spec("mlx") is not None
+)
+
+if not _IS_MLX:
+    import torch
 
 
 @functools.cache
 def is_hip():
+    if _IS_MLX:
+        return False
     return bool(getattr(getattr(torch, "version", None), "hip", None))
 
 
 @functools.cache
 def get_device_type():
+    if _IS_MLX:
+        return "mlx"
     if hasattr(torch, "cuda") and torch.cuda.is_available():
         if is_hip():
             return "hip"

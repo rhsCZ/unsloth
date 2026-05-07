@@ -8,6 +8,10 @@ This module contains functions for applying chat templates to datasets
 and generating dataset info summaries.
 """
 
+import importlib.util
+import os
+import platform
+
 from .format_detection import detect_dataset_format, detect_multimodal_dataset, detect_custom_format_heuristic
 from .model_mappings import MODEL_TO_TEMPLATE_MAPPER
 from loggers import get_logger
@@ -28,6 +32,33 @@ DEFAULT_ALPACA_TEMPLATE = """Below is an instruction that describes a task, pair
 {}"""
 
 
+def _is_mlx_runtime() -> bool:
+    return (
+        os.environ.get("UNSLOTH_FORCE_GPU_PATH", "0") != "1"
+        and platform.system() == "Darwin"
+        and platform.machine() == "arm64"
+        and importlib.util.find_spec("mlx") is not None
+    )
+
+
+def _fallback_apply_chat_template(convo) -> str:
+    parts = []
+    for message in convo or []:
+        role = message.get("role") or message.get("from") or "user"
+        content = message.get("content")
+        if content is None:
+            content = message.get("value", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                str(part.get("text", part))
+                if isinstance(part, dict) else str(part)
+                for part in content
+                if not (isinstance(part, dict) and part.get("type") == "image")
+            )
+        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
+    return "\n".join(parts)
+
+
 def get_tokenizer_chat_template(tokenizer, model_name):
     """
     Gets appropriate chat template for tokenizer based on model.
@@ -40,6 +71,9 @@ def get_tokenizer_chat_template(tokenizer, model_name):
     Returns:
         tokenizer: Tokenizer with appropriate chat template applied
     """
+    if _is_mlx_runtime():
+        return tokenizer
+
     try:
         from unsloth.chat_templates import get_chat_template
     except ImportError:
@@ -252,7 +286,10 @@ def apply_chat_template_to_dataset(
 
         # Set alpaca chat template on tokenizer for saving (if not already set)
         # This ensures the template is saved with the model for inference
-        if not (hasattr(tokenizer, 'chat_template') and tokenizer.chat_template):
+        if (
+            not _is_mlx_runtime()
+            and not (hasattr(tokenizer, 'chat_template') and tokenizer.chat_template)
+        ):
             try:
                 from unsloth.chat_templates import get_chat_template
                 tokenizer = get_chat_template(tokenizer, chat_template = "alpaca")
@@ -330,17 +367,32 @@ def apply_chat_template_to_dataset(
         if model_name:
             tokenizer = get_tokenizer_chat_template(tokenizer, model_name)
 
+        is_mlx_runtime = _is_mlx_runtime()
+
         def _format_chatml(examples):
             convos = examples[chat_column]
             texts = []
 
             for convo in convos:
                 try:
-                    text = tokenizer.apply_chat_template(
-                        convo,
-                        tokenize = False,
-                        add_generation_prompt = False
-                    )
+                    if is_mlx_runtime:
+                        if (
+                            hasattr(tokenizer, "apply_chat_template")
+                            and getattr(tokenizer, "chat_template", None)
+                        ):
+                            text = tokenizer.apply_chat_template(
+                                convo,
+                                tokenize = False,
+                                add_generation_prompt = False
+                            )
+                        else:
+                            text = _fallback_apply_chat_template(convo)
+                    else:
+                        text = tokenizer.apply_chat_template(
+                            convo,
+                            tokenize = False,
+                            add_generation_prompt = False
+                        )
 
                     if remove_bos_prefix:
                         text = text.removeprefix('<bos>')

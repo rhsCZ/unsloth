@@ -160,14 +160,12 @@ else:
 # INTEL GPU Specific Logic
 if DEVICE_TYPE == "xpu":
     _gpu_getCurrentRawStream = torch._C._xpu_getCurrentRawStream
-# NVIDIA GPU Default Logic
-elif hasattr(torch._C, "_cuda_getCurrentRawStream"):
-    _gpu_getCurrentRawStream = torch._C._cuda_getCurrentRawStream
-else:
-    # CPU-only torch wheel (no compiled CUDA backend). _get_tensor_stream
-    # is only invoked during real GPU work, so a no-op binding is safe.
+elif DEVICE_TYPE == "mlx":
     def _gpu_getCurrentRawStream(_index = 0):
         return 0
+# NVIDIA GPU Default Logic
+else:
+    _gpu_getCurrentRawStream = torch._C._cuda_getCurrentRawStream
 
 
 c_void_p = ctypes.c_void_p
@@ -206,6 +204,11 @@ if DEVICE_TYPE == "xpu":
         XPU_STREAMS = ()
         WEIGHT_BUFFERS = []
         ABSMAX_BUFFERS = []
+elif DEVICE_TYPE == "mlx":
+    CUDA_STREAMS = ()
+    XPU_STREAMS = ()
+    WEIGHT_BUFFERS = []
+    ABSMAX_BUFFERS = []
 else:
     # NVIDIA GPU Default Logic
     if DEVICE_COUNT > 0:

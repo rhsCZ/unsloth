@@ -417,6 +417,55 @@ def _normalize_mlx_studio_scheduler(value):
     return raw
 
 
+def _resolve_local_dataset_files(file_paths: list) -> list[str]:
+    """Resolve local dataset paths without importing the GPU trainer."""
+    from utils.paths import resolve_dataset_path
+
+    all_files: list[str] = []
+    for dataset_file in file_paths or []:
+        file_path = (
+            dataset_file
+            if os.path.isabs(dataset_file)
+            else str(resolve_dataset_path(dataset_file))
+        )
+        file_path_obj = Path(file_path)
+
+        if file_path_obj.is_dir():
+            parquet_dir = (
+                file_path_obj / "parquet-files"
+                if (file_path_obj / "parquet-files").exists()
+                else file_path_obj
+            )
+            parquet_files = sorted(parquet_dir.glob("*.parquet"))
+            if parquet_files:
+                all_files.extend(str(p) for p in parquet_files)
+                continue
+
+            candidates: list[Path] = []
+            for ext in (".json", ".jsonl", ".csv", ".parquet"):
+                candidates.extend(sorted(file_path_obj.glob(f"*{ext}")))
+            if candidates:
+                all_files.extend(str(c) for c in candidates)
+                continue
+
+            raise ValueError(f"No supported data files in directory: {file_path_obj}")
+
+        all_files.append(str(file_path_obj))
+
+    return all_files
+
+
+def _local_dataset_loader_for_files(files: list[str]) -> str:
+    first_ext = Path(files[0]).suffix.lower()
+    if first_ext in (".json", ".jsonl"):
+        return "json"
+    if first_ext == ".csv":
+        return "csv"
+    if first_ext == ".parquet":
+        return "parquet"
+    raise ValueError(f"Unsupported dataset format: {files[0]}")
+
+
 def _run_mlx_training(event_queue, stop_queue, config):
     """Self-contained MLX training path for Apple Silicon.
 
@@ -572,7 +621,6 @@ def _run_mlx_training(event_queue, stop_queue, config):
         return ds
 
     def _load_local(file_paths):
-        from core.training.trainer import UnslothTrainer
         from datasets import load_from_disk
 
         if len(file_paths) == 1:
@@ -581,10 +629,10 @@ def _run_mlx_training(event_queue, stop_queue, config):
                 (p / "dataset_info.json").exists() or (p / "state.json").exists()
             ):
                 return load_from_disk(str(p))
-        all_files = UnslothTrainer._resolve_local_files(file_paths)
+        all_files = _resolve_local_dataset_files(file_paths)
         if not all_files:
             raise ValueError("No local dataset files found")
-        loader = UnslothTrainer._loader_for_files(all_files)
+        loader = _local_dataset_loader_for_files(all_files)
         return load_dataset(loader, data_files = all_files, split = "train")
 
     if hf_dataset:

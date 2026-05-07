@@ -82,9 +82,14 @@ jobs:
     name: "Consolidated CPU (${{ matrix.combo.label }})"
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    # First-pass posture: surface results in the PR check UI without blocking
-    # merge. Flip to false (or delete this line) once every cell is green.
-    continue-on-error: true
+    # NOTE: previously had a job-level `continue-on-error: true` so cells
+    # reported SUCCESS even when individual steps failed. That made the
+    # PR check UI lie. The job-level flag is removed; per-step
+    # `continue-on-error: true` remains so a single failed step does not
+    # cascade and skip the rest of the ledger. Real failures now show up
+    # as a red cell on the PR. Patches with known preconditions are now
+    # explicitly skipped via NEEDS_PRECONDITION in the runtime check
+    # shim, not silenced via blanket continue-on-error.
     env:
       UNSLOTH_ZOO_REF: ${{ inputs.unsloth_zoo_ref || 'main' }}
       MATRIX_TRANSFORMERS_SPEC: ${{ matrix.combo.transformers_spec }}
@@ -434,9 +439,26 @@ jobs:
               "patch_unsloth_smart_gradient_checkpointing",
               "patch_gradient_accumulation_fix",
           }
+          # Patches whose signature looks zero-arg (`()` or all-defaulted)
+          # but which actually require either runtime args or real CUDA.
+          # Calling these in isolation is meaningless, so skip the
+          # invocation. Symbol presence (REQUIRED above) is still verified.
+          #   patch_linear_scaling / patch_llama_rope_scaling: defaults are
+          #     None placeholders; the bodies start with
+          #     `assert <param> is not None`.
+          #   patch_unsloth_smart_gradient_checkpointing: legitimately
+          #     allocates CUDA tensors via aten::empty.memory_format inside
+          #     initialize_unsloth_gradient_checkpointing(); the
+          #     torch.cuda.* spoof can't intercept that at the dispatcher
+          #     level.
+          NEEDS_PRECONDITION = {
+              "patch_linear_scaling",
+              "patch_llama_rope_scaling",
+              "patch_unsloth_smart_gradient_checkpointing",
+          }
 
           def test_zero_arg_patch_invocations():
-              ok, fail, args, miss_imports = 0, [], [], {}
+              ok, fail, args, skipped, miss_imports = 0, [], [], [], {}
               seen_required = set()
               for mod_name in MODULES:
                   try:
@@ -459,6 +481,10 @@ jobs:
                           need = []
                       if need:
                           args.append((mod_name, name, need)); continue
+                      if name in NEEDS_PRECONDITION:
+                          skipped.append(f"{mod_name}.{name}")
+                          print(f"  SKIP {mod_name}.{name} (needs precondition / CUDA)")
+                          continue
                       try:
                           fn()
                           ok += 1
@@ -466,10 +492,12 @@ jobs:
                       except Exception as e:
                           fail.append((mod_name, name, type(e).__name__, str(e)[:200]))
                           print(f"  FAIL {mod_name}.{name} -> {type(e).__name__}: {str(e)[:200]}")
-              print(f"\nzero-arg patch_*: ok={ok} fail={len(fail)}")
+              print(f"\nzero-arg patch_*: ok={ok} fail={len(fail)} skipped={len(skipped)}")
               print(f"arg-required patch_* (skipped, listed for review): {len(args)}")
               for m, n, r in args:
                   print(f"    needs={r}: {m}.{n}")
+              if skipped:
+                  print(f"explicitly skipped (needs precondition / CUDA): {skipped}")
               if miss_imports:
                   print("\nmodules failed to import (skipped):")
                   for k, v in miss_imports.items():

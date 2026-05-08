@@ -73,6 +73,51 @@ jobs:
           # then fatal-errors with "Cache folder path is retrieved
           # for pip but doesn't exist on disk".
 
+      - name: Pre-install Windows tweaks (npm 11 + Defender exclusions)
+        shell: pwsh
+        # Two surgical fixes against measured Windows-only install
+        # waste (vs Mac/Linux on the same SHA):
+        #
+        # (1) npm. setup.ps1 line 1109-1145 requires Node 22.12+ (or
+        #     20.19+ / 23+) AND npm >=11 because Vite 8 needs both.
+        #     actions/setup-node@v4 with `node-version: '22'` lands
+        #     Node 22.22.2 + the npm 10.9.7 it bundles, so the npm
+        #     check fails and setup.ps1 falls through to the
+        #     "winget install Node.js LTS" branch -- a ~35 s reinstall
+        #     of Node we don't need. `npm install -g npm@^11` updates
+        #     the bundled npm in-place in ~5 s, which makes setup.ps1
+        #     short-circuit on the existing Node.
+        #
+        # (2) Defender. windows-latest's real-time scan opens / hashes
+        #     every file Studio writes during install (Vite output =
+        #     thousands of small chunks, uv pip = wheel-extraction =
+        #     thousands of small files). The latency dominates the
+        #     200 s frontend build and the 90 s deps install. Adding
+        #     ExclusionPath entries for the directories the install
+        #     writes to drops per-file open latency from ~ms to ~us.
+        #     Add-MpPreference needs admin; the runneradmin user has
+        #     it, but wrap in try/catch so a permission flake leaves
+        #     the install otherwise unaffected.
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "npm version before upgrade: $(npm -v)"
+          npm install -g 'npm@^11' 2>&1 | Out-Host
+          Write-Host "npm version after upgrade: $(npm -v)"
+          foreach ($p in @(
+            "$env:USERPROFILE\.unsloth",
+            "$env:USERPROFILE\AppData\Local\uv",
+            "$env:GITHUB_WORKSPACE\studio\frontend\node_modules",
+            "$env:GITHUB_WORKSPACE\studio\frontend\dist"
+          )) {
+            try {
+              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Defender exclusion skipped ($($_.Exception.Message)): $p"
+            }
+          }
+
       - name: Install Studio (--local, --no-torch)
         shell: pwsh
         env:

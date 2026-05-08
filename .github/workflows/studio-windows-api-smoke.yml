@@ -78,6 +78,32 @@ jobs:
           HF_HUB_ENABLE_HF_TRANSFER=1 \
             hf download "$GGUF_REPO" "$GGUF_FILE"
 
+      - name: Pre-install Windows tweaks (npm 11 + Defender exclusions)
+        shell: pwsh
+        # See studio-windows-update-smoke.yml for the full rationale.
+        # tl;dr: setup.ps1 needs npm >=11 to skip a 35 s winget Node
+        # reinstall, and Defender's real-time scan dominates the
+        # frontend / uv-pip-extract steps.
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "npm version before upgrade: $(npm -v)"
+          npm install -g 'npm@^11' 2>&1 | Out-Host
+          Write-Host "npm version after upgrade: $(npm -v)"
+          foreach ($p in @(
+            "$env:USERPROFILE\.unsloth",
+            "$env:USERPROFILE\AppData\Local\uv",
+            "$env:GITHUB_WORKSPACE\studio\frontend\node_modules",
+            "$env:GITHUB_WORKSPACE\studio\frontend\dist"
+          )) {
+            try {
+              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Defender exclusion skipped ($($_.Exception.Message)): $p"
+            }
+          }
+
       - name: Install Studio (--local, --no-torch)
         shell: pwsh
         env:

@@ -20,21 +20,24 @@ __all__ = [
     "DEVICE_COUNT",
     "ALLOW_PREQUANTIZED_MODELS",
     "ALLOW_BITSANDBYTES",
+    "is_mlx_available",
 ]
 
 import functools
 import inspect
-import importlib.util
 import os
-import platform
 from unsloth_zoo.utils import Version
 
-_IS_MLX = (
-    os.environ.get("UNSLOTH_FORCE_GPU_PATH", "0") != "1"
-    and platform.system() == "Darwin"
-    and platform.machine() == "arm64"
-    and importlib.util.find_spec("mlx") is not None
-)
+
+def is_mlx_available():
+    try:
+        from unsloth_zoo.mlx.runtime import is_mlx_available as _is_mlx_available
+    except ImportError:
+        return False
+    return _is_mlx_available()
+
+
+_IS_MLX = is_mlx_available()
 
 if not _IS_MLX:
     import torch
@@ -80,6 +83,8 @@ DEVICE_TYPE: str = get_device_type()
 DEVICE_TYPE_TORCH = DEVICE_TYPE
 if DEVICE_TYPE_TORCH == "hip":
     DEVICE_TYPE_TORCH = "cuda"
+elif DEVICE_TYPE_TORCH == "mlx":
+    DEVICE_TYPE_TORCH = "mps"
 
 
 @functools.cache

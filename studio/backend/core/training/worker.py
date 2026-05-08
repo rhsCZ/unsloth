@@ -417,8 +417,8 @@ def _normalize_mlx_studio_scheduler(value):
     return raw
 
 
-def _resolve_local_dataset_files(file_paths: list) -> list[str]:
-    """Resolve local dataset paths without importing the GPU trainer."""
+def _resolve_mlx_local_dataset_files(file_paths: list) -> list[str]:
+    """Resolve Studio local dataset uploads without importing the GPU trainer."""
     from utils.paths import resolve_dataset_path
 
     all_files: list[str] = []
@@ -455,7 +455,7 @@ def _resolve_local_dataset_files(file_paths: list) -> list[str]:
     return all_files
 
 
-def _local_dataset_loader_for_files(files: list[str]) -> str:
+def _mlx_local_dataset_loader_for_files(files: list[str]) -> str:
     first_ext = Path(files[0]).suffix.lower()
     if first_ext in (".json", ".jsonl"):
         return "json"
@@ -491,8 +491,8 @@ def _run_mlx_training(event_queue, stop_queue, config):
     import mlx.core as mx
 
     try:
-        from unsloth_zoo.mlx_loader import FastMLXModel
-        from unsloth_zoo.mlx_trainer import (
+        from unsloth_zoo.mlx.loader import FastMLXModel
+        from unsloth_zoo.mlx.trainer import (
             MLXTrainer,
             MLXTrainingConfig,
             train_on_responses_only,
@@ -500,7 +500,7 @@ def _run_mlx_training(event_queue, stop_queue, config):
     except ImportError as e:
         raise ImportError(
             "Unsloth: MLX training requires unsloth-zoo with the MLX modules "
-            "(unsloth_zoo.mlx_loader / unsloth_zoo.mlx_trainer). Reinstall via "
+            "(unsloth_zoo.mlx.loader / unsloth_zoo.mlx.trainer). Reinstall via "
             "install.sh on Apple Silicon."
         ) from e
     from datasets import load_dataset
@@ -629,10 +629,10 @@ def _run_mlx_training(event_queue, stop_queue, config):
                 (p / "dataset_info.json").exists() or (p / "state.json").exists()
             ):
                 return load_from_disk(str(p))
-        all_files = _resolve_local_dataset_files(file_paths)
+        all_files = _resolve_mlx_local_dataset_files(file_paths)
         if not all_files:
             raise ValueError("No local dataset files found")
-        loader = _local_dataset_loader_for_files(all_files)
+        loader = _mlx_local_dataset_loader_for_files(all_files)
         return load_dataset(loader, data_files = all_files, split = "train")
 
     if hf_dataset:

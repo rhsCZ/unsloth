@@ -200,8 +200,56 @@ with sync_playwright() as p:
     pw_field.fill(NEW, timeout = 60_000)
     page.fill("#confirm-password", NEW, timeout = 60_000)
     page.locator('button[type="submit"]').click()
+    # Same defense-in-depth as playwright_chat_ui.py: settle network,
+    # then wait_for with one recovery cycle. The post-submit React
+    # re-render can either leave the composer suspending or crash the
+    # renderer outright under --single-process Chromium on macos-14.
+    try:
+        page.wait_for_load_state("networkidle", timeout = 30_000)
+    except Exception:
+        pass
     composer = page.locator('textarea[aria-label="Message input"]')
-    composer.wait_for(state = "visible", timeout = 60_000)
+    last_err: Exception | None = None
+    for _attempt in range(2):
+        try:
+            composer.wait_for(state = "visible", timeout = 60_000)
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = "<page closed>"
+            print(
+                f"[extra-ui]   composer.wait_for attempt {_attempt + 1} failed: "
+                f"{type(e).__name__}: {str(e)[:200]}; page.url={cur_url}; "
+                f"page_errors={len(page_errors)}",
+                flush = True,
+            )
+            try:
+                shoot(f"01-composer-wait-attempt-{_attempt + 1}-fail")
+            except Exception:
+                pass
+            if _attempt == 0:
+                try:
+                    if page.is_closed():
+                        page = ctx.new_page()
+                        page.set_default_timeout(60_000)
+                    page.goto(BASE, wait_until = "domcontentloaded", timeout = 60_000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout = 30_000)
+                    except Exception:
+                        pass
+                    composer = page.locator('textarea[aria-label="Message input"]')
+                except Exception as recover_err:
+                    print(
+                        f"[extra-ui]   recovery navigation failed: "
+                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
+                        flush = True,
+                    )
+    if last_err is not None:
+        raise last_err
     shoot("01-chat-loaded")
 
     token = page.evaluate("() => localStorage.getItem('unsloth_auth_token')")

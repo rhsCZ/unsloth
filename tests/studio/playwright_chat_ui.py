@@ -296,8 +296,74 @@ with sync_playwright() as p:
     # 2. Chat surface mounts, default model surface is visible.
     # ─────────────────────────────────────────────────────
     step("wait for composer to mount")
+    # The change-password POST resolves async and the React router
+    # rebuilds the tree (login form -> chat shell) on success. On
+    # macos-14 free runners under --single-process Chromium, the
+    # rebuild is heavy enough under software rendering that one of
+    # two things happens if we race straight into wait_for():
+    #   (a) the composer textarea is still suspending and we burn
+    #       the 60s ceiling waiting for it to mount, or
+    #   (b) the renderer crashes mid-mount, which under
+    #       --single-process takes the entire context down (next
+    #       Playwright call returns TargetClosedError).
+    # Defend against both: settle network first, then attempt
+    # wait_for with one recovery cycle on failure.
+    try:
+        page.wait_for_load_state("networkidle", timeout = 30_000)
+    except Exception:
+        pass  # best-effort -- proceed even if network never idles
+
     composer = page.locator('textarea[aria-label="Message input"]')
-    composer.wait_for(state = "visible", timeout = 60_000)
+    last_err: Exception | None = None
+    for _attempt in range(2):
+        try:
+            composer.wait_for(state = "visible", timeout = 60_000)
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = "<page closed>"
+            print(
+                f"[ui]   composer.wait_for attempt {_attempt + 1} failed: "
+                f"{type(e).__name__}: {str(e)[:200]}; page.url={cur_url}; "
+                f"page_errors={len(page_errors)} console_errors={len(console_errors)}",
+                flush = True,
+            )
+            if console_errors:
+                print(f"[ui]   first console.error: {console_errors[0][:200]!r}", flush = True)
+            if page_errors:
+                print(f"[ui]   first pageerror:    {page_errors[0][:200]!r}", flush = True)
+            try:
+                shoot(f"03-composer-wait-attempt-{_attempt + 1}-fail")
+            except Exception:
+                pass
+            if _attempt == 0:
+                # Recovery: re-navigate. If the page died (renderer
+                # gone under --single-process) we open a fresh page in
+                # the same context so the auth state in localStorage
+                # survives; otherwise we re-goto the same URL to force
+                # a clean re-render.
+                try:
+                    if page.is_closed():
+                        page = ctx.new_page()
+                        page.set_default_timeout(60_000)
+                    page.goto(BASE, wait_until = "domcontentloaded", timeout = 60_000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout = 30_000)
+                    except Exception:
+                        pass
+                    composer = page.locator('textarea[aria-label="Message input"]')
+                except Exception as recover_err:
+                    print(
+                        f"[ui]   recovery navigation failed: "
+                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
+                        flush = True,
+                    )
+    if last_err is not None:
+        raise last_err
     shoot("03-chat-loaded")
 
     # Pull the auth token now -- /api/models/list and

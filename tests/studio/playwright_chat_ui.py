@@ -286,7 +286,9 @@ with sync_playwright() as p:
     form_err: Exception | None = None
     for _form_attempt in range(3):
         try:
-            page.goto(f"{BASE}/change-password", wait_until = "domcontentloaded", timeout = 60_000)
+            page.goto(
+                f"{BASE}/change-password", wait_until = "domcontentloaded", timeout = 60_000
+            )
             try:
                 page.wait_for_load_state("networkidle", timeout = 30_000)
             except Exception:
@@ -316,9 +318,14 @@ with sync_playwright() as p:
                 flush = True,
             )
             if console_errors:
-                print(f"[ui]   first console.error: {console_errors[0][:200]!r}", flush = True)
+                print(
+                    f"[ui]   first console.error: {console_errors[0][:200]!r}",
+                    flush = True,
+                )
             if page_errors:
-                print(f"[ui]   first pageerror:    {page_errors[0][:200]!r}", flush = True)
+                print(
+                    f"[ui]   first pageerror:    {page_errors[0][:200]!r}", flush = True
+                )
             try:
                 shoot(f"01-change-password-attempt-{_form_attempt + 1}-fail")
             except Exception:

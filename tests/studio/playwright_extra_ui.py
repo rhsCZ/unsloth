@@ -194,7 +194,9 @@ with sync_playwright() as p:
     form_err: Exception | None = None
     for _form_attempt in range(3):
         try:
-            page.goto(f"{BASE}/change-password", wait_until = "domcontentloaded", timeout = 60_000)
+            page.goto(
+                f"{BASE}/change-password", wait_until = "domcontentloaded", timeout = 60_000
+            )
             try:
                 page.wait_for_load_state("networkidle", timeout = 30_000)
             except Exception:

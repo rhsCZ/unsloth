@@ -1958,6 +1958,93 @@ jobs:
           python -m pytest -q --tb=short -s tests/_moe_coverage_shim.py
           rm -f tests/_moe_coverage_shim.py
 
+      - name: Summary
+        if: always()
+        run: |
+          echo "::group::Versions"
+          python -c "import sys, platform; print(sys.version); print(platform.platform())"
+          python -c "import torch; print('torch', torch.__version__, 'cuda?', torch.cuda.is_available())"
+          python -c "import transformers; print('transformers', transformers.__version__)"
+          # `pip show` instead of `import unsloth_zoo` — its __init__ raises
+          # without an accelerator and the spoof harness only kicks in under
+          # pytest. Cheap and accurate.
+          pip show unsloth_zoo
+          echo "::endgroup::"
+          echo "Consolidated job done. Coverage:"
+          echo "  - 16 unsloth Bucket-A tests under tests/saving/ + tests/utils/"
+          echo "  - unsloth_zoo @ ${UNSLOTH_ZOO_REF} pytest tests/ (5 GPU cases deselected)"
+          echo "  - unsloth_zoo.compiler.test_apply_fused_lm_head"
+
+  llama-cpp-smoke:
+    # Standalone llama.cpp build + smoke. Earlier this lived inside every
+    # consolidated matrix cell and re-cmake'd llama.cpp ~5 min per cell --
+    # 3 cells x 275 s = ~14 min of duplicated CPU on every PR for an
+    # artefact that has nothing to do with the (transformers, TRL) combo.
+    # `install_llama_cpp` clones ggml-org/llama.cpp at a pinned commit and
+    # builds the LLAMA_CPP_TARGETS list; the result is independent of the
+    # HF stack version. Run once, gate the PR.
+    name: llama.cpp build + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      UNSLOTH_ZOO_REF: ${{ inputs.unsloth_zoo_ref || 'main' }}
+      # Same env contract the matrix cells use: protobuf python parser
+      # (transformers' bundled *_pb2.py needs it), studio on PYTHONPATH,
+      # compile-disable + UNSLOTH_IS_PRESENT so unsloth_zoo's __init__
+      # bootstrap accepts a pure-import.
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+      PYTHONPATH: ${{ github.workspace }}/studio
+      UNSLOTH_COMPILE_DISABLE: '1'
+      UNSLOTH_IS_PRESENT: '1'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install runtime deps for unsloth_zoo.llama_cpp
+        # unsloth_zoo's `__init__` imports `temporary_patches`, which
+        # in turn pulls per-architecture submodules (gemma3n, gemma4,
+        # qwen3_*_moe, glm4_moe, deepseek_v3_moe, pixtral, ministral,
+        # mxfp4, bitsandbytes, flex_attention_bwd) -- many of those
+        # transitively touch transformers and peft / accelerate. Mirror
+        # the matrix job's install minus the heavy bits that have no
+        # bearing on `install_llama_cpp` itself: studio.txt's FastAPI
+        # stack, bitsandbytes (CUDA-only build dependency), triton,
+        # mammoth/unpdf (PDF tools), datasets, sqlalchemy/cryptography,
+        # pytest (we run no tests). The remaining pin shape matches
+        # studio-backend-ci.yml's "Repo tests (CPU)" baseline.
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          # Match the matrix job's torch path so unsloth_zoo's
+          # `import torch` resolves to the same CPU build.
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            'torch>=2.4,<2.11' 'torchvision<0.26'
+          pip install \
+            'numpy<3' protobuf sentencepiece \
+            requests tqdm psutil packaging safetensors \
+            'peft>=0.18,<0.20' 'accelerate>=0.34,<2'
+          # transformers + trl come from pyproject.toml's pinned line
+          # so this job stays in sync with whatever the consolidated
+          # `__from_pyproject__` matrix cell is using.
+          pip install transformers trl
+          pip install -e . --no-deps
+
+      - name: Clone unsloth_zoo @ ${{ env.UNSLOTH_ZOO_REF }}
+        # Same shallow clone as the matrix job; we install editable so
+        # `unsloth_zoo.llama_cpp` resolves to the cloned tree (and any
+        # main-branch fixes flow into the smoke without a release).
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 --branch="$UNSLOTH_ZOO_REF" \
+            https://github.com/unslothai/unsloth-zoo \
+            "$RUNNER_TEMP/unsloth-zoo"
+          pip install -e "$RUNNER_TEMP/unsloth-zoo" --no-deps
+          pip show unsloth_zoo
+
       - name: llama.cpp install via unsloth_zoo.llama_cpp + `llama-cli --help` smoke
         # Exercise the canonical `unsloth_zoo.llama_cpp.install_llama_cpp`
         # flow that GGUF export uses at runtime: clone ggml-org/llama.cpp
@@ -2054,20 +2141,3 @@ jobs:
               f"and llama-quantize at {quantizer}."
           )
           PY
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "::group::Versions"
-          python -c "import sys, platform; print(sys.version); print(platform.platform())"
-          python -c "import torch; print('torch', torch.__version__, 'cuda?', torch.cuda.is_available())"
-          python -c "import transformers; print('transformers', transformers.__version__)"
-          # `pip show` instead of `import unsloth_zoo` — its __init__ raises
-          # without an accelerator and the spoof harness only kicks in under
-          # pytest. Cheap and accurate.
-          pip show unsloth_zoo
-          echo "::endgroup::"
-          echo "Consolidated job done. Coverage:"
-          echo "  - 16 unsloth Bucket-A tests under tests/saving/ + tests/utils/"
-          echo "  - unsloth_zoo @ ${UNSLOTH_ZOO_REF} pytest tests/ (5 GPU cases deselected)"
-          echo "  - unsloth_zoo.compiler.test_apply_fused_lm_head"

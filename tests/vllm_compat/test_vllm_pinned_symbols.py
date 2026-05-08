@@ -65,6 +65,14 @@ VLLM_TAGS = [
     "v0.13.0",
     "v0.14.0",
     "v0.15.0",
+    "v0.16.0",
+    "v0.17.1",
+    "v0.18.1",
+    "v0.19.1",
+    "v0.20.1",
+    # `main` catches symbol drift that hasn't shipped to PyPI yet,
+    # giving us a few-day lead on a release that would break us.
+    "main",
 ]
 
 

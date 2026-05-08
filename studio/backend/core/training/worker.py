@@ -780,6 +780,7 @@ def _run_mlx_training(event_queue, stop_queue, config):
             lr_scheduler_type = lr_scheduler_type,
             optim = optim_name,
             weight_decay = float(config.get("weight_decay", 0.001) or 0.001),
+            max_grad_norm = float(config.get("max_grad_norm", 0.0) or 0.0),
             logging_steps = 1,
             max_seq_length = max_seq_length,
             seed = config.get("random_seed", 3407),
@@ -868,7 +869,10 @@ def _run_mlx_training(event_queue, stop_queue, config):
     # ── 9. Real-time progress callback ──
     _send("status", status_message = f"Training {model_name}...")
 
-    def _on_step(step, total, loss, lr, tok_s, peak_gb, elapsed, num_tokens):
+    def _on_step(
+        step, total, loss, lr, tok_s, peak_gb, elapsed, num_tokens,
+        grad_norm = None,
+    ):
         eta = (elapsed / step * (total - step)) if step > 0 else 0
         _send(
             "progress",
@@ -879,7 +883,7 @@ def _run_mlx_training(event_queue, stop_queue, config):
             total_steps = total,
             elapsed_seconds = elapsed,
             eta_seconds = max(0, eta),
-            grad_norm = None,
+            grad_norm = grad_norm,
             num_tokens = num_tokens,
             eval_loss = None,
             status_message = None,
@@ -894,6 +898,7 @@ def _run_mlx_training(event_queue, stop_queue, config):
                         "train/tokens_per_sec": tok_s,
                         "train/peak_gb": peak_gb,
                         "train/num_tokens": num_tokens,
+                        **({"train/grad_norm": grad_norm} if grad_norm is not None else {}),
                     },
                     step = step,
                 )
@@ -905,6 +910,8 @@ def _run_mlx_training(event_queue, stop_queue, config):
                 tb_writer.add_scalar("train/learning_rate", lr, step)
                 tb_writer.add_scalar("train/tokens_per_sec", tok_s, step)
                 tb_writer.add_scalar("train/peak_gb", peak_gb, step)
+                if grad_norm is not None:
+                    tb_writer.add_scalar("train/grad_norm", grad_norm, step)
             except Exception:
                 pass
 

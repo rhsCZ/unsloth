@@ -73,6 +73,30 @@ jobs:
           # then fatal-errors with "Cache folder path is retrieved
           # for pip but doesn't exist on disk".
 
+      # Caches around install.ps1 -- restore the heavy artefacts the
+      # installer would otherwise rebuild from scratch every run.
+      # Keys hash every input file that would meaningfully change
+      # the produced artefact, so a stale cache cannot mask a real
+      # dependency change.
+      - name: Cache Studio venv (~/.unsloth/studio/unsloth_studio)
+        id: cache-studio-venv
+        uses: actions/cache@v4
+        with:
+          path: ~/.unsloth/studio/unsloth_studio
+          key: ${{ runner.os }}-studio-venv-v1-${{ hashFiles('pyproject.toml', 'studio/backend/requirements/**', 'install.ps1', 'studio/setup.ps1', 'studio/install_python_stack.py') }}
+      - name: Cache prebuilt llama.cpp (~/.unsloth/llama.cpp)
+        id: cache-llama-prebuilt
+        uses: actions/cache@v4
+        with:
+          path: ~/.unsloth/llama.cpp
+          key: ${{ runner.os }}-llama-cpp-prebuilt-v1-${{ hashFiles('studio/install_llama_prebuilt.py') }}
+      - name: Cache frontend dist (studio/frontend/dist)
+        id: cache-frontend-dist
+        uses: actions/cache@v4
+        with:
+          path: studio/frontend/dist
+          key: ${{ runner.os }}-studio-frontend-dist-v1-${{ hashFiles('studio/frontend/package-lock.json', 'studio/frontend/src/**', 'studio/frontend/index.html', 'studio/frontend/vite.config.*', 'studio/frontend/tsconfig*.json', 'studio/frontend/components.json') }}
+
       - name: Install Studio (--local, --no-torch)
         shell: pwsh
         env:

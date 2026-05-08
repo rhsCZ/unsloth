@@ -478,10 +478,7 @@ jobs:
               "stream":      False,
               "temperature": 0.0,
               "seed":        SEED,
-              # tool_choice='required' constrains the grammar so the
-              # model emits the JSON tool_call envelope directly; 96 is
-              # plenty for `{"city":"Paris"}` plus the wrapping fields.
-              "max_tokens":  96,
+              "max_tokens":  120,
           })
           assert status == 200, f"tool call status {status}: {data}"
           choice = data["choices"][0]
@@ -496,8 +493,6 @@ jobs:
           # 123 * 456 = 56088. The agentic loop streams SSE; we
           # accumulate the assistant text and look for the answer. We
           # accept "56088" or "56,088" since the model may format it.
-          # 320 tokens covers the tool_call + tool result + brief
-          # natural-language answer; 600 was 2x what the model needs.
           content = post_sse("/v1/chat/completions", {
               "messages":      [{"role": "user", "content": "What is 123 * 456? Use the python tool to compute it and tell me the number."}],
               "enable_tools":  True,
@@ -505,20 +500,29 @@ jobs:
               "session_id":    "ci-tool-calling-py",
               "temperature":   0.0,
               "seed":          SEED,
-              "max_tokens":    320,
+              "max_tokens":    600,
           })
           assert "56088" in content or "56,088" in content, (
               f"expected 56088 in python-tool answer, got: {content!r}"
           )
           print(f"[tools] PASS python tool ({len(content)} chars)")
 
-          # NOTE: the dedicated "Server-side bash (terminal) tool" axis
-          # was dropped in favour of the python axis above. Both share
-          # the same server-side agentic-loop wiring (only the registry
-          # entry differs); the python axis is the canonical proof.
-          # Saves one SSE round (~30 s on macos, ~12 s on linux/windows).
+          # ── 3. Server-side bash (terminal) tool ──────────────────────
+          content = post_sse("/v1/chat/completions", {
+              "messages":      [{"role": "user", "content": "Use the terminal tool to run `echo hello-bash-tool` and tell me the exact output."}],
+              "enable_tools":  True,
+              "enabled_tools": ["terminal"],
+              "session_id":    "ci-tool-calling-bash",
+              "temperature":   0.0,
+              "seed":          SEED,
+              "max_tokens":    600,
+          })
+          assert "hello-bash-tool" in content, (
+              f"expected 'hello-bash-tool' in terminal-tool answer, got: {content!r}"
+          )
+          print(f"[tools] PASS bash/terminal tool ({len(content)} chars)")
 
-          # ── 3. Server-side web_search tool ───────────────────────────
+          # ── 4. Server-side web_search tool ───────────────────────────
           # DuckDuckGo is flaky from CI runners and small Qwen3.5-2B
           # may not actually search. Only assert that the SSE stream
           # opens and yields any data; HTTP / parser failures already
@@ -531,13 +535,13 @@ jobs:
                   "session_id":    "ci-tool-calling-web",
                   "temperature":   0.0,
                   "seed":          SEED,
-                  "max_tokens":    192,
+                  "max_tokens":    400,
               })
               print(f"[tools] PASS web_search stream ({len(content)} chars)")
           except Exception as exc:
               print(f"[tools] WARN web_search probe failed (non-blocking): {exc}")
 
-          # ── 4. Thinking on / off ─────────────────────────────────────
+          # ── 5. Thinking on / off ─────────────────────────────────────
           # Studio strips think blocks from message.content for tools-mode
           # responses, so we toggle plain chat (no enable_tools) and look
           # at the surfaced reasoning_content / message.thinking field.
@@ -548,10 +552,7 @@ jobs:
                   "enable_thinking": enable,
                   "temperature":     0.0,
                   "seed":            SEED,
-                  # 17 is small; 160 tokens is plenty of room for either
-                  # "Yes, 17 is prime" + brief reasoning or a short
-                  # <think>...</think>+answer. 300 was overkill.
-                  "max_tokens":      160,
+                  "max_tokens":      300,
               })
               assert status == 200
               msg = data["choices"][0]["message"]

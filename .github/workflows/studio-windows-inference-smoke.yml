@@ -609,10 +609,7 @@ jobs:
               "stream":      False,
               "temperature": TEMP,
               "seed":        SEED,
-              # tool_choice='required' constrains the grammar so the
-              # model emits the JSON tool_call envelope directly; 128
-              # is plenty for `{"city":"Paris"}` plus the wrapping.
-              "max_tokens":  128,
+              "max_tokens":  600,
           })
           assert status == 200, f"tool call status {status}: {data}"
           choice = data["choices"][0]
@@ -632,8 +629,6 @@ jobs:
               )
 
           # ── 2. Server-side python tool ───────────────────────────────
-          # 320 tokens covers tool_call + result + brief answer; 600
-          # was 2x what the model needs.
           content = post_sse("/v1/chat/completions", {
               "messages":      [{"role": "user", "content": "What is 123 * 456? Use the python tool to compute it and tell me the number."}],
               "enable_tools":  True,
@@ -641,7 +636,7 @@ jobs:
               "session_id":    "ci-tool-calling-py",
               "temperature":   TEMP,
               "seed":          SEED,
-              "max_tokens":    320,
+              "max_tokens":    600,
           })
           if "56088" in content or "56,088" in content:
               print(f"[tools] PASS python tool ({len(content)} chars, found 56088)")
@@ -652,13 +647,30 @@ jobs:
                   f"model didn't return 56088 -- model output drift"
               )
 
-          # NOTE: the dedicated "Server-side bash (terminal) tool" axis
-          # was dropped in favour of the python axis above. Both share
-          # the same server-side agentic-loop wiring (only the registry
-          # entry differs); the python axis is the canonical proof.
-          # Saves one SSE round (~12 s on windows-latest).
+          # ── 3. Server-side bash (terminal) tool ──────────────────────
+          # On Windows the terminal tool resolves to the system shell
+          # (cmd.exe wrapper) and `echo hello-bash-tool` works the same
+          # way it does on POSIX. The model still has to choose to
+          # invoke the tool; assert non-empty SSE if it doesn't.
+          content = post_sse("/v1/chat/completions", {
+              "messages":      [{"role": "user", "content": "Use the terminal tool to run `echo hello-bash-tool` and tell me the exact output."}],
+              "enable_tools":  True,
+              "enabled_tools": ["terminal"],
+              "session_id":    "ci-tool-calling-bash",
+              "temperature":   TEMP,
+              "seed":          SEED,
+              "max_tokens":    600,
+          })
+          if "hello-bash-tool" in content:
+              print(f"[tools] PASS terminal tool ({len(content)} chars)")
+          else:
+              assert content, "terminal tool: SSE stream empty"
+              print(
+                  f"[tools] WARN terminal tool: SSE OK ({len(content)} chars) but "
+                  f"model didn't echo 'hello-bash-tool' -- model output drift"
+              )
 
-          # ── 3. Server-side web_search tool ───────────────────────────
+          # ── 4. Server-side web_search tool ───────────────────────────
           # DuckDuckGo can be flaky from CI runners; only assert that
           # the SSE stream opens and yields any data.
           try:
@@ -669,13 +681,13 @@ jobs:
                   "session_id":    "ci-tool-calling-web",
                   "temperature":   TEMP,
                   "seed":          SEED,
-                  "max_tokens":    192,
+                  "max_tokens":    400,
               })
               print(f"[tools] PASS web_search stream ({len(content)} chars)")
           except Exception as exc:
               print(f"[tools] WARN web_search probe failed (non-blocking): {exc}")
 
-          # ── 4. Thinking on / off ─────────────────────────────────────
+          # ── 5. Thinking on / off ─────────────────────────────────────
           def thinking_call(enable):
               status, data = post("/v1/chat/completions", {
                   "messages":        [{"role": "user", "content": "Briefly: is 17 prime?"}],
@@ -683,10 +695,7 @@ jobs:
                   "enable_thinking": enable,
                   "temperature":     TEMP,
                   "seed":            SEED,
-                  # 17 is small; 160 tokens is plenty for either "Yes"
-                  # + brief reasoning or a short <think>...</think> +
-                  # answer. 300 was overkill.
-                  "max_tokens":      160,
+                  "max_tokens":      300,
               })
               assert status == 200
               msg = data["choices"][0]["message"]

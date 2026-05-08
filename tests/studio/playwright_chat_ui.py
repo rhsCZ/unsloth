@@ -985,7 +985,7 @@ with sync_playwright() as p:
     deadline = time.monotonic() + 30
     clicked_recent = False
     try:
-        threads.first.wait_for(state="visible", timeout=5_000)
+        threads.first.wait_for(state = "visible", timeout = 5_000)
     except Exception as _wait_err:
         info(f"WARN no recent-thread testid surfaced within 5s: {_wait_err!s}")
     n_threads = threads.count()
@@ -995,20 +995,23 @@ with sync_playwright() as p:
         try:
             t = (threads.nth(i).text_content() or "").strip()
             threads.nth(i).scroll_into_view_if_needed()
-            threads.nth(i).click(timeout=5_000)
+            threads.nth(i).click(timeout = 5_000)
             page.wait_for_timeout(500)
             shoot("15d-recent-clicked")
             info(f"OK clicked recent entry: {t[:60]!r}")
             # Strict check: after clicking the Recents entry, the
             # thread we land on must include at least one of our
             # prompts in its rendered messages.
-            turns_text = page.evaluate("""() => {
+            turns_text = page.evaluate(
+                """() => {
                 const els = document.querySelectorAll(
                     '[data-role="user"], [data-role="assistant"]'
                 );
                 return Array.from(els).map(e => (e.innerText || '')
                     .toLowerCase()).join(' ');
-            }""", None)
+            }""",
+                None,
+            )
             clicked_recent = True
             if any(k in turns_text for k in PROMPT_KEYWORDS):
                 info("OK landed on a thread that includes our prompts")

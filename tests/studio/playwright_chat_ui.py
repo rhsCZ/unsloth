@@ -964,64 +964,69 @@ with sync_playwright() as p:
     # thread-history loader / route param plumbing.
     # ─────────────────────────────────────────────────────
     step("Recents: click previous chat in sidebar")
-    # The sidebar lists threads as buttons / links. Match anything
-    # under the sidebar with non-empty text other than the nav
-    # entries we already verified (New Chat / Compare / Search /
-    # Recipes / Account).
-    EXCLUDE = re.compile(
-        r"^(New Chat|Compare|Search|Recipes|Settings|Account|"
-        r"Light Mode|Dark Mode|Developer|Help|Shutdown)$",
-        re.I,
-    )
-    candidates = page.locator(
-        "aside a, aside button, [data-sidebar='sidebar'] a, "
-        "[data-sidebar='sidebar'] button"
-    )
-    count_c = candidates.count()
-    clicked_recent = False
     # We sent the prompts ["Reply with exactly: hello", "What is 1+1?",
     # "Reply with exactly: world", ...] above. The thread title that
     # gets persisted is typically a snippet of the first user message
     # (Studio summarises after a few turns). We accept either a literal
     # word from one of our prompts OR a short Studio-summary heuristic.
     PROMPT_KEYWORDS = ("hello", "world", "tree", "yes", "1+1", "2+2")
-    for i in range(count_c):
+    # Use the structural data-testid the frontend renders on each
+    # chat-history entry (studio/frontend/src/features/chat/thread-
+    # sidebar.tsx). The previous text-filtered selector
+    #   "aside a, aside button, [data-sidebar='sidebar'] a, ..."
+    # matched coalesced sidebar nav text like 'unslothBETA',
+    # 'UUnslothUnsloth' which the EXCLUDE regex didn't strip; the
+    # test then clicked nav links, lost its frame, hit per-locator
+    # timeouts and burned 13-23 minutes per platform on this single
+    # step (run 25537467494 macui = 23m9s, winui = 13m6s, linui = 13m5s).
+    # Belt-and-suspenders: bound the whole step at 30s so a misbehaving
+    # selector can never blow up wallclock the way the old loop did.
+    threads = page.locator('[data-testid="recent-thread"]')
+    deadline = time.monotonic() + 30
+    clicked_recent = False
+    try:
+        threads.first.wait_for(state="visible", timeout=5_000)
+    except Exception as _wait_err:
+        info(f"WARN no recent-thread testid surfaced within 5s: {_wait_err!s}")
+    n_threads = threads.count()
+    for i in range(min(n_threads, 5)):
+        if time.monotonic() > deadline:
+            break
         try:
-            t = (candidates.nth(i).text_content() or "").strip()
-            if not t or EXCLUDE.match(t):
-                continue
-            # Heuristic: thread titles are typically the first
-            # user message snippet or a short summary.
-            if 3 <= len(t) <= 80:
-                candidates.nth(i).scroll_into_view_if_needed()
-                candidates.nth(i).click()
-                page.wait_for_timeout(1500)
-                shoot("15d-recent-clicked")
-                info(f"OK clicked recent entry: {t[:60]!r}")
-                clicked_recent = True
-                # Strict check: after clicking the Recents entry, the
-                # thread we land on must include at least one of our
-                # prompts in its rendered messages. Otherwise we
-                # navigated to a thread that wasn't ours.
-                turns_text = page.evaluate("""() => {
-                    const els = document.querySelectorAll(
-                        '[data-role="user"], [data-role="assistant"]'
-                    );
-                    return Array.from(els).map(e => (e.innerText || '')
-                        .toLowerCase()).join(' ');
-                }""")
-                if any(k in turns_text for k in PROMPT_KEYWORDS):
-                    info("OK landed on a thread that includes our prompts")
-                else:
-                    soft_fail(
-                        "Recents-clicked thread doesn't contain any of our "
-                        f"sent prompts; turns_text={turns_text[:120]!r}"
-                    )
+            t = (threads.nth(i).text_content() or "").strip()
+            threads.nth(i).scroll_into_view_if_needed()
+            threads.nth(i).click(timeout=5_000)
+            page.wait_for_timeout(500)
+            shoot("15d-recent-clicked")
+            info(f"OK clicked recent entry: {t[:60]!r}")
+            # Strict check: after clicking the Recents entry, the
+            # thread we land on must include at least one of our
+            # prompts in its rendered messages.
+            turns_text = page.evaluate("""() => {
+                const els = document.querySelectorAll(
+                    '[data-role="user"], [data-role="assistant"]'
+                );
+                return Array.from(els).map(e => (e.innerText || '')
+                    .toLowerCase()).join(' ');
+            }""", None)
+            clicked_recent = True
+            if any(k in turns_text for k in PROMPT_KEYWORDS):
+                info("OK landed on a thread that includes our prompts")
                 break
-        except Exception:
+            else:
+                soft_fail(
+                    "Recents-clicked thread doesn't contain any of our "
+                    f"sent prompts; turns_text={turns_text[:120]!r}"
+                )
+                break
+        except Exception as _click_err:
+            info(f"recent-thread click {i} failed: {_click_err!s}")
             continue
     if not clicked_recent:
-        soft_fail("no Recents entry was clickable")
+        soft_fail(
+            f"no Recents entry was clickable within 30s deadline "
+            f"(n_threads={n_threads})"
+        )
     # Back to chat.
     page.goto(f"{BASE}/chat")
     composer = page.locator('textarea[aria-label="Message input"]')

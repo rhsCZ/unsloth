@@ -912,7 +912,7 @@ export function ChatProvidersSettings({
                     </p>
                     {availableModels.length > 0 ? (
                       <div className="space-y-3 rounded-[8px] border border-border/70 bg-background/50 p-3">
-                        <div className="grid grid-cols-[auto_minmax(220px,330px)_auto] items-center gap-3 max-sm:grid-cols-1">
+                        <div className="grid grid-cols-[112px_minmax(220px,330px)_auto] items-center gap-3 max-sm:grid-cols-1">
                           <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
                             {availableModelsLabel}
                           </span>
@@ -1003,7 +1003,7 @@ export function ChatProvidersSettings({
                   </div>
                 ) : availableModels.length === 0 ? null : (
                   <div className="space-y-3 px-4 py-4">
-                    <div className="grid grid-cols-[auto_minmax(220px,330px)_auto] items-center gap-3 max-sm:grid-cols-1">
+                    <div className="grid grid-cols-[112px_minmax(220px,330px)_auto] items-center gap-3 max-sm:grid-cols-1">
                       <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
                         {availableModelsLabel}
                       </span>

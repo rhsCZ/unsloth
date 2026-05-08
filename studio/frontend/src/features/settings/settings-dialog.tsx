@@ -175,7 +175,7 @@ export function SettingsDialog() {
             >
               <HugeiconsIcon icon={Cancel01Icon} className="size-4" />
             </button>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-6">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-6 [scrollbar-gutter:stable]">
               {renderTab(activeTab)}
             </div>
           </main>

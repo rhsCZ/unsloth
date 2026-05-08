@@ -97,9 +97,9 @@ def test_grpo_trainer_class_canonical_path(tag: str):
         f"{tag}: trl/trainer/grpo_trainer.py missing — "
         f"unsloth.models.rl._patch_trl_rl_trainers('grpo_trainer') breaks"
     )
-    assert has_def(src, "GRPOTrainer", "class"), (
-        f"{tag}: trl.trainer.grpo_trainer.GRPOTrainer not defined as a class"
-    )
+    assert has_def(
+        src, "GRPOTrainer", "class"
+    ), f"{tag}: trl.trainer.grpo_trainer.GRPOTrainer not defined as a class"
 
 
 @pytest.mark.parametrize("tag", TRL_TAGS)
@@ -211,9 +211,7 @@ def test_trl_experimental_openenv_gated(tag: str):
         pytest.skip(f"{tag}: trl.experimental.openenv not present (OK)")
     # Module exists -> at minimum, `utils` submodule must be importable
     # because unsloth patches via `import trl.experimental.openenv.utils`.
-    utils_src = fetch_text(
-        "huggingface/trl", tag, "trl/experimental/openenv/utils.py"
-    )
+    utils_src = fetch_text("huggingface/trl", tag, "trl/experimental/openenv/utils.py")
     assert utils_src is not None, (
         f"{tag}: trl.experimental.openenv exists but utils.py missing; "
         f"unsloth/models/rl_replacements.py:1765 imports openenv.utils explicitly"
@@ -273,7 +271,7 @@ def test_trl_version_parseable(tag: str):
             src,
             re.MULTILINE,
         )
-        and re.search(r'^\s*__version__\s*=\s*version\s*\(', src, re.MULTILINE)
+        and re.search(r"^\s*__version__\s*=\s*version\s*\(", src, re.MULTILINE)
     )
     assert has_literal or has_subimport or has_metadata, (
         f"{tag}: trl.__version__ not exported via any known mechanism; "

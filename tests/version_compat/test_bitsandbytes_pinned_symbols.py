@@ -47,12 +47,10 @@ def test_bnb_functional_4bit(tag: str):
         "bitsandbytes/functional.py",
         "bitsandbytes/functional/__init__.py",
     ]
-    hit = first_match(
-        "bitsandbytes-foundation/bitsandbytes", tag, candidates
-    )
-    assert hit is not None, (
-        f"{tag}: bitsandbytes/functional[.py|/__init__.py] both missing"
-    )
+    hit = first_match("bitsandbytes-foundation/bitsandbytes", tag, candidates)
+    assert (
+        hit is not None
+    ), f"{tag}: bitsandbytes/functional[.py|/__init__.py] both missing"
     _, src = hit
     needed = ("dequantize_4bit", "quantize_4bit")
     missing = [n for n in needed if not has_def(src, n, "func") and n not in src]

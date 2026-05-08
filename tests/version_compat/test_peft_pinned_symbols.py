@@ -87,9 +87,7 @@ def test_peft_lora_config_class(tag: str):
         src = fetch_text("huggingface/peft", tag, p)
         if src is not None and has_def(src, "LoraConfig", "class"):
             found_in.append(p)
-    assert found_in, (
-        f"{tag}: peft.tuners.lora.LoraConfig not in any of {candidates}"
-    )
+    assert found_in, f"{tag}: peft.tuners.lora.LoraConfig not in any of {candidates}"
 
 
 # -------------------------------------------------------------------------
@@ -111,9 +109,7 @@ def test_get_peft_model_function(tag: str):
         src = fetch_text("huggingface/peft", tag, p)
         if src is not None and has_def(src, "get_peft_model", "func"):
             return
-    pytest.fail(
-        f"{tag}: def get_peft_model(...) not found in any of {candidates}"
-    )
+    pytest.fail(f"{tag}: def get_peft_model(...) not found in any of {candidates}")
 
 
 # -------------------------------------------------------------------------

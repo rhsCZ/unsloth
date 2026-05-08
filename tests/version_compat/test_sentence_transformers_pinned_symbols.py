@@ -50,10 +50,10 @@ ST_TAGS = [
 
 @pytest.mark.parametrize("tag", ST_TAGS)
 def test_st_top_level_exports(tag: str):
-    src = fetch_text("UKPLab/sentence-transformers", tag, "sentence_transformers/__init__.py")
-    assert src is not None, (
-        f"{tag}: sentence_transformers/__init__.py missing"
+    src = fetch_text(
+        "UKPLab/sentence-transformers", tag, "sentence_transformers/__init__.py"
     )
+    assert src is not None, f"{tag}: sentence_transformers/__init__.py missing"
     needed = ("SentenceTransformer", "SentenceTransformerTrainer")
     missing = [n for n in needed if n not in src]
     assert not missing, (
@@ -192,9 +192,9 @@ def test_st_util_helpers(tag: str):
         "sentence_transformers/util/__init__.py",
     ]
     hit = first_match("UKPLab/sentence-transformers", tag, candidates)
-    assert hit is not None, (
-        f"{tag}: sentence_transformers/util[.py|/__init__.py] both missing"
-    )
+    assert (
+        hit is not None
+    ), f"{tag}: sentence_transformers/util[.py|/__init__.py] both missing"
     _path, src = hit
     for fn in ("import_from_string", "load_dir_path"):
         defined_here = has_def(src, fn, "func")

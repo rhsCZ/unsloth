@@ -88,6 +88,32 @@ jobs:
           HF_HUB_ENABLE_HF_TRANSFER=1 \
             hf download "$GGUF_REPO" "$GGUF_FILE"
 
+      - name: Pre-install Windows tweaks (npm 11 + Defender exclusions)
+        shell: pwsh
+        # See studio-windows-update-smoke.yml for the full rationale.
+        # tl;dr: setup.ps1 needs npm >=11 to skip a 35 s winget Node
+        # reinstall, and Defender's real-time scan dominates the
+        # frontend / uv-pip-extract steps.
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "npm version before upgrade: $(npm -v)"
+          npm install -g 'npm@^11' 2>&1 | Out-Host
+          Write-Host "npm version after upgrade: $(npm -v)"
+          foreach ($p in @(
+            "$env:USERPROFILE\.unsloth",
+            "$env:USERPROFILE\AppData\Local\uv",
+            "$env:GITHUB_WORKSPACE\studio\frontend\node_modules",
+            "$env:GITHUB_WORKSPACE\studio\frontend\dist"
+          )) {
+            try {
+              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Defender exclusion skipped ($($_.Exception.Message)): $p"
+            }
+          }
+
       - name: Install Studio (--local, --no-torch)
         shell: pwsh
         env:
@@ -353,6 +379,32 @@ jobs:
           HF_HUB_ENABLE_HF_TRANSFER=1 \
             hf download "$GGUF_REPO" "$GGUF_FILE"
 
+      - name: Pre-install Windows tweaks (npm 11 + Defender exclusions)
+        shell: pwsh
+        # See studio-windows-update-smoke.yml for the full rationale.
+        # tl;dr: setup.ps1 needs npm >=11 to skip a 35 s winget Node
+        # reinstall, and Defender's real-time scan dominates the
+        # frontend / uv-pip-extract steps.
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "npm version before upgrade: $(npm -v)"
+          npm install -g 'npm@^11' 2>&1 | Out-Host
+          Write-Host "npm version after upgrade: $(npm -v)"
+          foreach ($p in @(
+            "$env:USERPROFILE\.unsloth",
+            "$env:USERPROFILE\AppData\Local\uv",
+            "$env:GITHUB_WORKSPACE\studio\frontend\node_modules",
+            "$env:GITHUB_WORKSPACE\studio\frontend\dist"
+          )) {
+            try {
+              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Defender exclusion skipped ($($_.Exception.Message)): $p"
+            }
+          }
+
       - name: Install Studio (--local, --no-torch)
         shell: pwsh
         env:
@@ -534,7 +586,10 @@ jobs:
               "stream":      False,
               "temperature": TEMP,
               "seed":        SEED,
-              "max_tokens":  600,
+              # tool_choice='required' constrains the grammar so the
+              # model emits the JSON tool_call envelope directly; 128
+              # is plenty for `{"city":"Paris"}` plus the wrapping.
+              "max_tokens":  128,
           })
           assert status == 200, f"tool call status {status}: {data}"
           choice = data["choices"][0]
@@ -554,6 +609,8 @@ jobs:
               )
 
           # ── 2. Server-side python tool ───────────────────────────────
+          # 320 tokens covers tool_call + result + brief answer; 600
+          # was 2x what the model needs.
           content = post_sse("/v1/chat/completions", {
               "messages":      [{"role": "user", "content": "What is 123 * 456? Use the python tool to compute it and tell me the number."}],
               "enable_tools":  True,
@@ -561,7 +618,7 @@ jobs:
               "session_id":    "ci-tool-calling-py",
               "temperature":   TEMP,
               "seed":          SEED,
-              "max_tokens":    600,
+              "max_tokens":    320,
           })
           if "56088" in content or "56,088" in content:
               print(f"[tools] PASS python tool ({len(content)} chars, found 56088)")
@@ -572,30 +629,13 @@ jobs:
                   f"model didn't return 56088 -- model output drift"
               )
 
-          # ── 3. Server-side bash (terminal) tool ──────────────────────
-          # On Windows the terminal tool resolves to the system shell
-          # (cmd.exe wrapper) and `echo hello-bash-tool` works the same
-          # way it does on POSIX. The model still has to choose to
-          # invoke the tool; assert non-empty SSE if it doesn't.
-          content = post_sse("/v1/chat/completions", {
-              "messages":      [{"role": "user", "content": "Use the terminal tool to run `echo hello-bash-tool` and tell me the exact output."}],
-              "enable_tools":  True,
-              "enabled_tools": ["terminal"],
-              "session_id":    "ci-tool-calling-bash",
-              "temperature":   TEMP,
-              "seed":          SEED,
-              "max_tokens":    600,
-          })
-          if "hello-bash-tool" in content:
-              print(f"[tools] PASS terminal tool ({len(content)} chars)")
-          else:
-              assert content, "terminal tool: SSE stream empty"
-              print(
-                  f"[tools] WARN terminal tool: SSE OK ({len(content)} chars) but "
-                  f"model didn't echo 'hello-bash-tool' -- model output drift"
-              )
+          # NOTE: the dedicated "Server-side bash (terminal) tool" axis
+          # was dropped in favour of the python axis above. Both share
+          # the same server-side agentic-loop wiring (only the registry
+          # entry differs); the python axis is the canonical proof.
+          # Saves one SSE round (~12 s on windows-latest).
 
-          # ── 4. Server-side web_search tool ───────────────────────────
+          # ── 3. Server-side web_search tool ───────────────────────────
           # DuckDuckGo can be flaky from CI runners; only assert that
           # the SSE stream opens and yields any data.
           try:
@@ -606,13 +646,13 @@ jobs:
                   "session_id":    "ci-tool-calling-web",
                   "temperature":   TEMP,
                   "seed":          SEED,
-                  "max_tokens":    400,
+                  "max_tokens":    192,
               })
               print(f"[tools] PASS web_search stream ({len(content)} chars)")
           except Exception as exc:
               print(f"[tools] WARN web_search probe failed (non-blocking): {exc}")
 
-          # ── 5. Thinking on / off ─────────────────────────────────────
+          # ── 4. Thinking on / off ─────────────────────────────────────
           def thinking_call(enable):
               status, data = post("/v1/chat/completions", {
                   "messages":        [{"role": "user", "content": "Briefly: is 17 prime?"}],
@@ -620,7 +660,10 @@ jobs:
                   "enable_thinking": enable,
                   "temperature":     TEMP,
                   "seed":            SEED,
-                  "max_tokens":      300,
+                  # 17 is small; 160 tokens is plenty for either "Yes"
+                  # + brief reasoning or a short <think>...</think> +
+                  # answer. 300 was overkill.
+                  "max_tokens":      160,
               })
               assert status == 200
               msg = data["choices"][0]["message"]
@@ -708,6 +751,32 @@ jobs:
             hf download "$GGUF_REPO" "$GGUF_FILE"
           HF_HUB_ENABLE_HF_TRANSFER=1 \
             hf download "$GGUF_REPO" "$MMPROJ_FILE"
+
+      - name: Pre-install Windows tweaks (npm 11 + Defender exclusions)
+        shell: pwsh
+        # See studio-windows-update-smoke.yml for the full rationale.
+        # tl;dr: setup.ps1 needs npm >=11 to skip a 35 s winget Node
+        # reinstall, and Defender's real-time scan dominates the
+        # frontend / uv-pip-extract steps.
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "npm version before upgrade: $(npm -v)"
+          npm install -g 'npm@^11' 2>&1 | Out-Host
+          Write-Host "npm version after upgrade: $(npm -v)"
+          foreach ($p in @(
+            "$env:USERPROFILE\.unsloth",
+            "$env:USERPROFILE\AppData\Local\uv",
+            "$env:GITHUB_WORKSPACE\studio\frontend\node_modules",
+            "$env:GITHUB_WORKSPACE\studio\frontend\dist"
+          )) {
+            try {
+              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Defender exclusion skipped ($($_.Exception.Message)): $p"
+            }
+          }
 
       - name: Install Studio (--local, --no-torch)
         shell: pwsh

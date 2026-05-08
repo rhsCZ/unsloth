@@ -342,15 +342,19 @@ jobs:
       run:
         shell: bash
     env:
+      # Tool calling is the highest-volume GGUF in this workflow
+      # (Qwen3.5-2B at Q4_K_XL = ~1.28 GiB). The previous HF_HOME
+      # cache stored xet chunks + blobs + snapshots = ~4.7 GiB --
+      # 3.7x file-size inflation, dominating the post-step upload
+      # (211 s on first run; subsequent runs hit the cache, but the
+      # one-time cost recurs every time the cache key bumps). Use
+      # main's `--local-dir gguf-cache` pattern: cache the flat .gguf
+      # only, pass an absolute path to Studio's /api/inference/load.
+      # The OpenAI/Anth and JSON+images jobs still cover the
+      # gguf_variant resolution path.
       GGUF_REPO: unsloth/Qwen3.5-2B-GGUF
-      # Mirror the Mac job's variant choice (UD-Q4_K_XL). On the
-      # CPU-only windows-latest runner the smaller IQ3_XXS quant
-      # behaves OK, but keeping parity with the Mac job means one HF
-      # asset shared across runners.
-      GGUF_VARIANT: UD-Q4_K_XL
       GGUF_FILE: Qwen3.5-2B-UD-Q4_K_XL.gguf
       STUDIO_PORT: '18898'
-      HF_HOME: ${{ github.workspace }}/hf-cache
       # Force UTF-8 for stdio (Windows defaults to cp1252; hf
       # download / Studio CLI print "✓" checkmarks and crash
       # otherwise).
@@ -369,20 +373,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Cache HF_HOME for ${{ env.GGUF_REPO }}
-        id: cache-hf
+      - name: Cache GGUF model file
+        id: cache-gguf
         uses: actions/cache@v4
         with:
-          path: hf-cache
-          key: ${{ runner.os }}-hf-${{ env.GGUF_REPO }}-${{ env.GGUF_VARIANT }}-v1
+          path: gguf-cache
+          key: ${{ runner.os }}-gguf-${{ env.GGUF_REPO }}-${{ env.GGUF_FILE }}-v1
 
-      - name: Prime HF_HOME with the GGUF
-        if: steps.cache-hf.outputs.cache-hit != 'true'
+      - name: Download GGUF if cache miss
+        if: steps.cache-gguf.outputs.cache-hit != 'true'
         run: |
           python -m pip install --upgrade huggingface_hub hf_transfer
-          mkdir -p hf-cache
+          mkdir -p gguf-cache
           HF_HUB_ENABLE_HF_TRANSFER=1 \
-            hf download "$GGUF_REPO" "$GGUF_FILE"
+            hf download "$GGUF_REPO" "$GGUF_FILE" --local-dir gguf-cache
 
       - name: Pre-install Windows tweaks (npm 11 + Defender exclusions)
         shell: pwsh
@@ -506,10 +510,19 @@ jobs:
             -H 'content-type: application/json' \
             -d "{\"username\":\"unsloth\",\"password\":\"$NEW\"}" | jq -r .access_token)
           echo "API_KEY=$TOKEN" >> "$GITHUB_ENV"
+          # GITHUB_WORKSPACE on windows-latest is a Windows path with
+          # backslashes ("D:\a\unsloth\unsloth"). Bash handles it as a
+          # raw string, but we cannot embed `\a` etc. in JSON without
+          # JSON-string-escaping every backslash. Replace `\` with `/`
+          # via bash parameter expansion -- pathlib.Path on Windows
+          # accepts forward slashes natively, so Studio's loader sees
+          # a normal path.
+          GGUF_PATH="${GITHUB_WORKSPACE//\\//}/gguf-cache/${GGUF_FILE}"
+          ls -lh "$GGUF_PATH"
           curl -fs -X POST "http://127.0.0.1:${STUDIO_PORT}/api/inference/load" \
             -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
             --max-time 600 \
-            -d "{\"model_path\":\"$GGUF_REPO\",\"gguf_variant\":\"$GGUF_VARIANT\",\"is_lora\":false,\"max_seq_length\":2048}" \
+            -d "{\"model_path\":\"$GGUF_PATH\",\"is_lora\":false,\"max_seq_length\":2048}" \
             | jq '{status, display_name}'
 
       - name: Tool calling, server-side tools, thinking on/off

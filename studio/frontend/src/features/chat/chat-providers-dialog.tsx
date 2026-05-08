@@ -30,6 +30,7 @@ import {
   Wifi02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { Eye, EyeOff } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -136,6 +137,7 @@ export function ChatProvidersSettings({
   const [page, setPage] = useState<"list" | "form">("list");
   const [providerType, setProviderType] = useState<string>("");
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
   const [editingProviderId, setEditingProviderId] = useState<string | null>(
     null,
@@ -292,6 +294,7 @@ export function ChatProvidersSettings({
   function resetForm() {
     setEditingProviderId(null);
     setApiKey("");
+    setShowApiKey(false);
     setBaseUrlDraft("");
     setAvailableModels([]);
     setSelectedModelIds([]);
@@ -575,6 +578,7 @@ export function ChatProvidersSettings({
     setProviderType(provider.providerType);
     setCustomProviderName(provider.name || "Custom");
     setApiKey(getExternalProviderApiKey(provider.id));
+    setShowApiKey(false);
     setBaseUrlDraft(provider.baseUrl);
     setModelSearchQuery("");
     if (provider.providerType === CUSTOM_PROVIDER_TYPE) {
@@ -764,14 +768,29 @@ export function ChatProvidersSettings({
                     Stored locally.
                   </p>
                 </div>
-                <Input
-                  id="provider-api-key"
-                  type="password"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  placeholder="Enter API key"
-                  className="h-9 text-sm"
-                />
+                <div className="relative min-w-0">
+                  <Input
+                    id="provider-api-key"
+                    type={showApiKey ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder="Enter API key"
+                    className="h-9 pr-9 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey((visible) => !visible)}
+                    className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                    aria-pressed={showApiKey}
+                  >
+                    {showApiKey ? (
+                      <Eye className="size-3.5" />
+                    ) : (
+                      <EyeOff className="size-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               {isCustomProvider ? (

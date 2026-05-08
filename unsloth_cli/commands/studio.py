@@ -1009,8 +1009,10 @@ def _run_setup_script(*, verbose: bool = False) -> None:
         script_pwsh_literal = str(script).replace("'", "''")
         powershell_args.extend(
             [
-                "-ExecutionPolicy", "Bypass",
-                "-Command", f"& '{script_pwsh_literal}' *>&1",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                f"& '{script_pwsh_literal}' *>&1",
             ]
         )
         result = subprocess.run(

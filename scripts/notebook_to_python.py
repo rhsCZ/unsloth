@@ -29,11 +29,19 @@ def needs_fstring(cmd: str) -> bool:
 
 def github_blob_to_raw(url: str) -> str:
     """Convert GitHub blob URL to raw URL."""
-    # https://github.com/user/repo/blob/branch/path -> https://raw.githubusercontent.com/user/repo/branch/path
-    if "github.com" in url and "/blob/" in url:
-        url = url.replace("github.com", "raw.githubusercontent.com")
-        url = url.replace("/blob/", "/")
-    return url
+    # https://github.com/user/repo/blob/branch/path
+    #   -> https://raw.githubusercontent.com/user/repo/branch/path
+    # Compare the parsed host exactly (not as a substring) so a URL
+    # like https://attacker.example.com/github.com/blob/... does NOT
+    # get rewritten to a github raw URL. Closes CodeQL alert
+    # py/incomplete-url-substring-sanitization.
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc != "github.com" or "/blob/" not in parsed.path:
+        return url
+    new_path = parsed.path.replace("/blob/", "/", 1)
+    return urllib.parse.urlunparse(
+        parsed._replace(netloc = "raw.githubusercontent.com", path = new_path)
+    )
 
 
 def download_notebook(url: str) -> tuple[str, str]:

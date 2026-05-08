@@ -89,8 +89,14 @@ with sync_playwright() as p:
         "--disable-dev-shm-usage",
         "--no-sandbox",
         "--disable-gpu",
-        "--single-process",
     ]
+    # --single-process is darwin-only -- on windows-latest it
+    # collapses the renderer-isolation safety net and any in-flight
+    # crash (e.g. React redirect after change-password) takes the
+    # whole browser context down. Same rationale as
+    # playwright_chat_ui.py.
+    if sys.platform == "darwin":
+        _CHROMIUM_STABILITY_ARGS.append("--single-process")
     browser = p.chromium.launch(
         headless = True,
         args = _CHROMIUM_STABILITY_ARGS,

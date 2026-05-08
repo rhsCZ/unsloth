@@ -132,8 +132,17 @@ with sync_playwright() as p:
         "--disable-dev-shm-usage",
         "--no-sandbox",
         "--disable-gpu",
-        "--single-process",
     ]
+    # --single-process is a macos-14 free-runner workaround. On
+    # windows-latest it is strictly destabilising: any renderer
+    # crash (including the React redirect after change-password)
+    # takes the entire browser context down, surfacing as
+    # TargetClosedError on the next Locator.wait_for. Run
+    # 25522501202 / job 74909947457 had the page die right after
+    # POST /api/auth/change-password 200 with this flag enabled.
+    # Linux passes either way today, so we only opt in on darwin.
+    if sys.platform == "darwin":
+        _CHROMIUM_STABILITY_ARGS.append("--single-process")
     browser = p.chromium.launch(
         headless = True,
         args = _CHROMIUM_STABILITY_ARGS,

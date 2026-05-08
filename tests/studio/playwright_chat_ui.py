@@ -265,7 +265,6 @@ with sync_playwright() as p:
     # first-run experience.
     # ─────────────────────────────────────────────────────
     step("change-password through UI (Setup your account)")
-    page.goto(f"{BASE}/change-password")
     # Wait for the network to settle before touching the form. Without
     # this, on macos-14 free runners under --single-process Chromium,
     # the page sometimes redirects mid-test (the bootstrap state poll
@@ -276,21 +275,69 @@ with sync_playwright() as p:
     # commit to the form path. Run 25497245250 / job 74820324136
     # showed this exact sequence: wait_for() returned then
     # page.fill('#new-password') timed out 60s later because the
-    # form had been replaced.
-    try:
-        page.wait_for_load_state("networkidle", timeout = 30_000)
-    except Exception:
-        pass  # best-effort -- proceed even if network never idles
-    pw_field = page.locator("#new-password")
-    pw_field.wait_for(state = "visible", timeout = 60_000)
-    # NOTE: do NOT call shoot() between wait_for and fill -- the
-    # screenshot's font-load wait gives the React form a chance to
-    # detach if any background state-poll fires. Take screenshots
-    # AFTER the form is committed instead.
-    pw_field.fill(NEW, timeout = 60_000)
-    page.fill("#confirm-password", NEW, timeout = 60_000)
-    shoot("01-change-password-filled")
-    page.locator('button[type="submit"]').click()
+    # form had been replaced. Run 25578374480 / job 75091072289
+    # showed the same race a step deeper: pw_field.fill('#new-password')
+    # succeeded then page.fill('#confirm-password') hit a 60s timeout
+    # because a re-render between the two locators detached the
+    # second input. We wrap the whole goto/wait/fill/submit sequence
+    # in a 3-attempt retry, with a fresh page or hard reload between
+    # attempts so a re-render in the middle of one try doesn't poison
+    # the next.
+    form_err: Exception | None = None
+    for _form_attempt in range(3):
+        try:
+            page.goto(f"{BASE}/change-password", wait_until = "domcontentloaded", timeout = 60_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout = 30_000)
+            except Exception:
+                pass  # best-effort -- proceed even if network never idles
+            pw_field = page.locator("#new-password")
+            pw_field.wait_for(state = "visible", timeout = 60_000)
+            # NOTE: do NOT call shoot() between wait_for and fill -- the
+            # screenshot's font-load wait gives the React form a chance to
+            # detach if any background state-poll fires. Take screenshots
+            # AFTER the form is committed instead.
+            pw_field.fill(NEW, timeout = 60_000)
+            page.fill("#confirm-password", NEW, timeout = 60_000)
+            shoot("01-change-password-filled")
+            page.locator('button[type="submit"]').click()
+            form_err = None
+            break
+        except Exception as e:
+            form_err = e
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = "<page closed>"
+            print(
+                f"[ui]   change-password form attempt {_form_attempt + 1} failed: "
+                f"{type(e).__name__}: {str(e)[:200]}; page.url={cur_url}; "
+                f"page_errors={len(page_errors)} console_errors={len(console_errors)}",
+                flush = True,
+            )
+            if console_errors:
+                print(f"[ui]   first console.error: {console_errors[0][:200]!r}", flush = True)
+            if page_errors:
+                print(f"[ui]   first pageerror:    {page_errors[0][:200]!r}", flush = True)
+            try:
+                shoot(f"01-change-password-attempt-{_form_attempt + 1}-fail")
+            except Exception:
+                pass
+            if _form_attempt < 2:
+                # Recovery: replace the page if it died, otherwise the
+                # next loop iteration's page.goto() handles the reload.
+                try:
+                    if page.is_closed():
+                        page = ctx.new_page()
+                        page.set_default_timeout(60_000)
+                except Exception as recover_err:
+                    print(
+                        f"[ui]   recovery failed: "
+                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
+                        flush = True,
+                    )
+    if form_err is not None:
+        raise form_err
 
     # ─────────────────────────────────────────────────────
     # 2. Chat surface mounts, default model surface is visible.

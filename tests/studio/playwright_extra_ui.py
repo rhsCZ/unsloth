@@ -187,19 +187,50 @@ with sync_playwright() as p:
     # Setup: change-password through the UI + model load.
     # ─────────────────────────────────────────────────────
     step("setup: change-password + model load")
-    page.goto(f"{BASE}/change-password")
-    # See playwright_chat_ui.py -- wait for networkidle before
-    # touching the form to dodge the bootstrap-poll-induced
-    # rerender on slow macos-14 runners.
-    try:
-        page.wait_for_load_state("networkidle", timeout = 30_000)
-    except Exception:
-        pass
-    pw_field = page.locator("#new-password")
-    pw_field.wait_for(state = "visible", timeout = 60_000)
-    pw_field.fill(NEW, timeout = 60_000)
-    page.fill("#confirm-password", NEW, timeout = 60_000)
-    page.locator('button[type="submit"]').click()
+    # 3-attempt retry mirrors playwright_chat_ui.py: form re-renders
+    # mid-fill on macos-14 free runners detach #new-password OR
+    # #confirm-password between locator and fill, hitting 60s timeouts.
+    # Each retry re-navigates with a fresh page if the old one died.
+    form_err: Exception | None = None
+    for _form_attempt in range(3):
+        try:
+            page.goto(f"{BASE}/change-password", wait_until = "domcontentloaded", timeout = 60_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout = 30_000)
+            except Exception:
+                pass
+            pw_field = page.locator("#new-password")
+            pw_field.wait_for(state = "visible", timeout = 60_000)
+            pw_field.fill(NEW, timeout = 60_000)
+            page.fill("#confirm-password", NEW, timeout = 60_000)
+            page.locator('button[type="submit"]').click()
+            form_err = None
+            break
+        except Exception as e:
+            form_err = e
+            try:
+                cur_url = page.url
+            except Exception:
+                cur_url = "<page closed>"
+            print(
+                f"[extra-ui]   change-password form attempt {_form_attempt + 1} failed: "
+                f"{type(e).__name__}: {str(e)[:200]}; page.url={cur_url}; "
+                f"page_errors={len(page_errors)}",
+                flush = True,
+            )
+            if _form_attempt < 2:
+                try:
+                    if page.is_closed():
+                        page = ctx.new_page()
+                        page.set_default_timeout(60_000)
+                except Exception as recover_err:
+                    print(
+                        f"[extra-ui]   recovery failed: "
+                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
+                        flush = True,
+                    )
+    if form_err is not None:
+        raise form_err
     # Same defense-in-depth as playwright_chat_ui.py: settle network,
     # then wait_for with one recovery cycle. The post-submit React
     # re-render can either leave the composer suspending or crash the

@@ -153,12 +153,7 @@ jobs:
             'httpx==0.28.1'
           pip install --index-url https://download.pytorch.org/whl/cpu \
             'torch==2.10.0'
-          # Pin to the unslothai/unsloth-zoo#627 branch until that PR
-          # merges -- it carries the GGUF NotImplementedError + LoRA
-          # local_path fixes that the export round-trip phase below
-          # depends on. Flip back to bare `unsloth-zoo @ git+...` once
-          # #627 lands on main.
-          pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo@fix/mlx-export-roundtrip-on-apple-silicon"
+          pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo"
           pip install -e . --no-deps
 
       # Real Apple Silicon sanity: confirm _IS_MLX activates on real

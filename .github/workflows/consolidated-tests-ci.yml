@@ -852,10 +852,12 @@ jobs:
 
 
           # ---------- Full transformers.models.* compile sweep ----------
-          # Track the 21 model_types that currently break the compiler on
-          # transformers 4.57.6 (verified locally). New breakage on any
-          # OTHER model_type fails the cell. Each entry is a tracking item
-          # for a follow-up unsloth-zoo PR.
+          # Track the model_types that currently break the compiler on
+          # transformers >=5,<6. After unsloth-zoo#632 landed, transformers
+          # 4.57.6 has zero failures across all model_types; the 27 entries
+          # below are the residual failures on the tf 5.x line. New breakage
+          # on any OTHER model_type fails the cell. Each entry is a
+          # tracking item for a follow-up unsloth-zoo PR.
           KNOWN_BROKEN_COMPILE = {
               # Category A: `string index out of range` in source rewriter.
               "colpali":         "string index out of range",
@@ -868,7 +870,6 @@ jobs:
               "timm_backbone":   "string index out of range",
               # Category B: rewriter emits invalid Python source.
               "clvp":            "emitted file: unexpected indent",
-              "electra":         "emitted file: expected ':'",
               "falcon_mamba":    "emitted file: unexpected indent",
               "gpt2":            "emitted file: unexpected indent",
               "imagegpt":        "emitted file: unexpected indent",

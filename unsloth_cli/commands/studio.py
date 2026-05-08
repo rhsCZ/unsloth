@@ -998,7 +998,21 @@ def _run_setup_script(*, verbose: bool = False) -> None:
             powershell_args.extend(
                 ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden"]
             )
-        powershell_args.extend(["-ExecutionPolicy", "Bypass", "-File", str(script)])
+        # Use -Command + `*>&1` instead of -File so setup.ps1's
+        # Write-Host output (PowerShell Information stream / #6) is
+        # merged into the success stream and reaches the parent's
+        # stdout. With -File, Information stream output is dropped
+        # whenever stdout is a pipe, which is exactly the situation
+        # CI hits with `unsloth studio update --local 2>&1 | tee
+        # logs/update.log`. Single-quote escaping handles paths that
+        # contain apostrophes.
+        script_pwsh_literal = str(script).replace("'", "''")
+        powershell_args.extend(
+            [
+                "-ExecutionPolicy", "Bypass",
+                "-Command", f"& '{script_pwsh_literal}' *>&1",
+            ]
+        )
         result = subprocess.run(
             powershell_args,
             env = env,

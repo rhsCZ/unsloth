@@ -103,6 +103,17 @@ jobs:
           Write-Host "npm version before upgrade: $(npm -v)"
           npm install -g 'npm@^11' 2>&1 | Out-Host
           Write-Host "npm version after upgrade: $(npm -v)"
+          # NOTE: do NOT pre-create these directories before adding the
+          # exclusion -- creating an empty studio/frontend/dist trips
+          # setup.ps1 line 1281-1296's mtime-based "is the frontend
+          # stale?" check into "up to date, skip rebuild", because the
+          # newly-created dist's mtime is younger than every source
+          # file. Studio then boots with an empty dist and 500s on
+          # GET / with FileNotFoundError: dist\index.html. See run
+          # 25546676715 / job 74984469728.
+          # Add-MpPreference accepts paths that do not yet exist; the
+          # exclusion is registered and applies when the path
+          # materialises.
           foreach ($p in @(
             "$env:USERPROFILE\.unsloth",
             "$env:USERPROFILE\AppData\Local\uv",
@@ -110,7 +121,6 @@ jobs:
             "$env:GITHUB_WORKSPACE\studio\frontend\dist"
           )) {
             try {
-              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
               Add-MpPreference -ExclusionPath $p -ErrorAction Stop
               Write-Host "Defender exclusion added: $p"
             } catch {

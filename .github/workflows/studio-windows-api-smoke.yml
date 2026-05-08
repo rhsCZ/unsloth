@@ -89,6 +89,12 @@ jobs:
           Write-Host "npm version before upgrade: $(npm -v)"
           npm install -g 'npm@^11' 2>&1 | Out-Host
           Write-Host "npm version after upgrade: $(npm -v)"
+          # NOTE: do NOT pre-create these directories. See
+          # studio-windows-update-smoke.yml for the full rationale --
+          # creating an empty studio/frontend/dist trips setup.ps1's
+          # mtime-based staleness check into "frontend up to date, skip
+          # rebuild" and Studio boots with an empty dist directory.
+          # Add-MpPreference accepts paths that do not yet exist.
           foreach ($p in @(
             "$env:USERPROFILE\.unsloth",
             "$env:USERPROFILE\AppData\Local\uv",
@@ -96,7 +102,6 @@ jobs:
             "$env:GITHUB_WORKSPACE\studio\frontend\dist"
           )) {
             try {
-              if (-not (Test-Path $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
               Add-MpPreference -ExclusionPath $p -ErrorAction Stop
               Write-Host "Defender exclusion added: $p"
             } catch {

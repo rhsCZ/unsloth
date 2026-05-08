@@ -55,6 +55,21 @@ COLAB_PIP_FREEZE_URL = (
 )
 COLAB_FALLBACK_FILE = DATA_DIR / "colab_pip_freeze.gpu.txt"
 
+# Oracle files we snapshot from googlecolab/backend-info. The diff
+# subcommand fetches each, compares against the committed snapshot,
+# and surfaces NEW / REMOVED / CHANGED entries so upstream Colab base
+# image rotations land in CI within ~24h instead of when a notebook
+# breaks. Every rule in this validator that resolves against the
+# Colab preinstall (R-INST-002/003/004/005) gets earlier signal.
+COLAB_ORACLE_FILES: dict[str, str] = {
+    "pip-freeze.gpu.txt": "colab_pip_freeze.gpu.txt",
+    "apt-list-gpu.txt":   "colab_apt_list.gpu.txt",
+    "os-info-gpu.txt":    "colab_os_info.gpu.txt",
+}
+COLAB_ORACLE_BASE_URL = (
+    "https://raw.githubusercontent.com/googlecolab/backend-info/main/"
+)
+
 # ----- Compat tables. PRs add rows as new releases land. ----- #
 
 # torch.minor -> set of compatible torchcodec.minor strings.
@@ -1086,6 +1101,130 @@ def cmd_refresh_colab(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_pip_lines(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z0-9._-]+)\s*==\s*(.+?)\s*(;.*)?$", line)
+        if m:
+            out[m.group(1).lower()] = m.group(2)
+    return out
+
+
+def _parse_apt_lines(text: str) -> dict[str, str]:
+    """`pkg/release,now ver arch [installed[,automatic]]` -> {pkg: ver}."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line == "Listing...":
+            continue
+        m = re.match(r"^([^/\s]+)/\S+\s+(\S+)\s+\S+\s+\[installed", line)
+        if m:
+            out[m.group(1).lower()] = m.group(2)
+    return out
+
+
+def _parse_os_lines(text: str) -> dict[str, str]:
+    """Free-form `<tool> <version>` lines. Skip comments. The key is the
+    first token lower-cased; the value is the rest of the line."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            out[parts[0].lower()] = parts[1]
+        else:
+            out[parts[0].lower()] = ""
+    return out
+
+
+_COLAB_ORACLE_PARSERS = {
+    "pip-freeze.gpu.txt": _parse_pip_lines,
+    "apt-list-gpu.txt":   _parse_apt_lines,
+    "os-info-gpu.txt":    _parse_os_lines,
+}
+
+
+def _diff_oracle(
+    upstream: dict[str, str], snapshot: dict[str, str]
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str, str]]]:
+    """Return (new, removed, changed). new/removed are (key, value);
+    changed is (key, old, new)."""
+    new = sorted((k, upstream[k]) for k in upstream.keys() - snapshot.keys())
+    removed = sorted((k, snapshot[k]) for k in snapshot.keys() - upstream.keys())
+    changed = sorted(
+        (k, snapshot[k], upstream[k])
+        for k in upstream.keys() & snapshot.keys()
+        if upstream[k] != snapshot[k]
+    )
+    return new, removed, changed
+
+
+def cmd_colab_diff(args: argparse.Namespace) -> int:
+    """Fetch every Colab oracle file in COLAB_ORACLE_FILES, diff against
+    the committed snapshot, and print NEW / REMOVED / CHANGED. Advisory
+    by default (rc=0); --strict promotes any diff to rc=1 so the daily
+    cron can fail loudly when upstream rotates."""
+    snapshot_dir = pathlib.Path(args.snapshot_dir).resolve()
+    any_diff = False
+    for upstream_name, snapshot_name in COLAB_ORACLE_FILES.items():
+        url = COLAB_ORACLE_BASE_URL + upstream_name
+        snap_path = snapshot_dir / snapshot_name
+        try:
+            with urllib.request.urlopen(url, timeout = 15) as r:
+                upstream_text = r.read().decode("utf-8", errors = "replace")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            print(f"::warning::colab-diff: could not fetch {url}: {e}")
+            continue
+        if not snap_path.exists():
+            print(f"::warning::colab-diff: no committed snapshot at {snap_path}; skipping")
+            continue
+        snapshot_text = snap_path.read_text(encoding = "utf-8", errors = "replace")
+        parser = _COLAB_ORACLE_PARSERS[upstream_name]
+        upstream = parser(upstream_text)
+        snapshot = parser(snapshot_text)
+        new, removed, changed = _diff_oracle(upstream, snapshot)
+        n = len(new) + len(removed) + len(changed)
+        print(
+            f"\n=== {upstream_name}: "
+            f"upstream={len(upstream)} snapshot={len(snapshot)} "
+            f"diff={n} (new={len(new)} removed={len(removed)} changed={len(changed)}) ==="
+        )
+        if not n:
+            print("  no drift")
+            continue
+        any_diff = True
+        for k, v in new[:50]:
+            print(f"  NEW      {k}=={v}")
+        if len(new) > 50:
+            print(f"  ...and {len(new) - 50} more new entries")
+        for k, v in removed[:50]:
+            print(f"  REMOVED  {k} (was {v})")
+        if len(removed) > 50:
+            print(f"  ...and {len(removed) - 50} more removed entries")
+        for k, old, ver in changed[:80]:
+            print(f"  CHANGED  {k}: {old} -> {ver}")
+        if len(changed) > 80:
+            print(f"  ...and {len(changed) - 80} more changed entries")
+    if any_diff and args.strict:
+        print(
+            "\n::error::Colab oracle drifted from committed snapshot; "
+            "refresh scripts/data/colab_*.txt to acknowledge.",
+            file = sys.stderr,
+        )
+        return 1
+    if any_diff:
+        print(
+            "\n::notice::Colab oracle drifted; "
+            "refresh scripts/data/colab_*.txt at your convenience."
+        )
+    return 0
+
+
 # ----- Helpers ----- #
 
 
@@ -1132,6 +1271,13 @@ def main(argv: list[str] | None = None) -> int:
     pa = sub.add_parser("refresh-colab")
     pa.add_argument("--out", default = str(COLAB_FALLBACK_FILE))
 
+    pa = sub.add_parser("colab-diff")
+    pa.add_argument("--snapshot-dir", default = str(DATA_DIR))
+    pa.add_argument(
+        "--strict", action = "store_true",
+        help = "exit 1 on any drift (default: advisory; exit 0)",
+    )
+
     args = p.parse_args(argv)
     return {
         "drift": cmd_drift,
@@ -1141,6 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
         "api": cmd_api,
         "all": cmd_all,
         "refresh-colab": cmd_refresh_colab,
+        "colab-diff": cmd_colab_diff,
     }[args.cmd](args)
 
 

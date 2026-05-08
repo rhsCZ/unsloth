@@ -101,6 +101,18 @@ jobs:
               --out unsloth/scripts/data/colab_pip_freeze.gpu.txt \
             || echo "::warning::refresh-colab failed; using committed snapshot"
 
+      - name: Diff Colab oracle vs committed snapshots (advisory)
+        # Pulls pip-freeze.gpu.txt + apt-list-gpu.txt + os-info-gpu.txt
+        # from googlecolab/backend-info and prints NEW / REMOVED /
+        # CHANGED entries against scripts/data/colab_*.txt. Non-blocking
+        # on PRs; the daily cron job below runs the same step with
+        # --strict so upstream rotations surface within ~24h.
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          python unsloth/scripts/notebook_validator.py colab-diff \
+              --snapshot-dir unsloth/scripts/data
+
       - name: Drift check (re-run update_all_notebooks.py + git diff)
         working-directory: ${{ github.workspace }}
         # Reported as non-blocking until the upstream `unslothai/notebooks`
@@ -169,6 +181,14 @@ jobs:
         run: |
           python unsloth/scripts/notebook_validator.py refresh-colab \
               --out unsloth/scripts/data/colab_pip_freeze.gpu.txt
+      - name: Diff Colab oracle vs committed snapshots (--strict on cron)
+        # Cron-only escalation of the advisory PR-time check. Fails if
+        # any of pip-freeze.gpu.txt / apt-list-gpu.txt / os-info-gpu.txt
+        # has drifted from scripts/data/colab_*.txt; refresh the
+        # snapshots in this repo to acknowledge.
+        run: |
+          python unsloth/scripts/notebook_validator.py colab-diff \
+              --snapshot-dir unsloth/scripts/data --strict
       - name: Lint with live PyPI metadata
         run: |
           python unsloth/scripts/notebook_validator.py lint \

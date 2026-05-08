@@ -333,9 +333,14 @@ with sync_playwright() as p:
                 flush = True,
             )
             if console_errors:
-                print(f"[ui]   first console.error: {console_errors[0][:200]!r}", flush = True)
+                print(
+                    f"[ui]   first console.error: {console_errors[0][:200]!r}",
+                    flush = True,
+                )
             if page_errors:
-                print(f"[ui]   first pageerror:    {page_errors[0][:200]!r}", flush = True)
+                print(
+                    f"[ui]   first pageerror:    {page_errors[0][:200]!r}", flush = True
+                )
             try:
                 shoot(f"03-composer-wait-attempt-{_attempt + 1}-fail")
             except Exception:

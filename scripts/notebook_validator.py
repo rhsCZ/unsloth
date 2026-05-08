@@ -63,8 +63,8 @@ COLAB_FALLBACK_FILE = DATA_DIR / "colab_pip_freeze.gpu.txt"
 # Colab preinstall (R-INST-002/003/004/005) gets earlier signal.
 COLAB_ORACLE_FILES: dict[str, str] = {
     "pip-freeze.gpu.txt": "colab_pip_freeze.gpu.txt",
-    "apt-list-gpu.txt":   "colab_apt_list.gpu.txt",
-    "os-info-gpu.txt":    "colab_os_info.gpu.txt",
+    "apt-list-gpu.txt": "colab_apt_list.gpu.txt",
+    "os-info-gpu.txt": "colab_os_info.gpu.txt",
 }
 COLAB_ORACLE_BASE_URL = (
     "https://raw.githubusercontent.com/googlecolab/backend-info/main/"
@@ -1144,8 +1144,8 @@ def _parse_os_lines(text: str) -> dict[str, str]:
 
 _COLAB_ORACLE_PARSERS = {
     "pip-freeze.gpu.txt": _parse_pip_lines,
-    "apt-list-gpu.txt":   _parse_apt_lines,
-    "os-info-gpu.txt":    _parse_os_lines,
+    "apt-list-gpu.txt": _parse_apt_lines,
+    "os-info-gpu.txt": _parse_os_lines,
 }
 
 
@@ -1181,7 +1181,9 @@ def cmd_colab_diff(args: argparse.Namespace) -> int:
             print(f"::warning::colab-diff: could not fetch {url}: {e}")
             continue
         if not snap_path.exists():
-            print(f"::warning::colab-diff: no committed snapshot at {snap_path}; skipping")
+            print(
+                f"::warning::colab-diff: no committed snapshot at {snap_path}; skipping"
+            )
             continue
         snapshot_text = snap_path.read_text(encoding = "utf-8", errors = "replace")
         parser = _COLAB_ORACLE_PARSERS[upstream_name]
@@ -1274,7 +1276,8 @@ def main(argv: list[str] | None = None) -> int:
     pa = sub.add_parser("colab-diff")
     pa.add_argument("--snapshot-dir", default = str(DATA_DIR))
     pa.add_argument(
-        "--strict", action = "store_true",
+        "--strict",
+        action = "store_true",
         help = "exit 1 on any drift (default: advisory; exit 0)",
     )
 

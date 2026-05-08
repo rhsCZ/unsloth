@@ -1162,15 +1162,15 @@ export function ChatProvidersSettings({
                     key={provider.id}
                     className="group grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-border/60 border-b px-3 py-3 transition-colors last:border-b-0 hover:bg-muted/35 max-sm:grid-cols-1"
                   >
-                    <div className="flex min-w-0 gap-3">
-                      <div className="flex size-9 shrink-0 items-center justify-center rounded-[9px] border border-border/70 bg-background/80">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border/70 bg-background/80">
                         <ApiProviderLogo
                           providerType={provider.providerType}
-                          className="size-6"
+                          className="size-5"
                           title={provider.name}
                         />
                       </div>
-                      <div className="min-w-0 pt-0.5">
+                      <div className="min-w-0 pt-px">
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="truncate text-sm font-medium text-foreground">
                             {provider.name}

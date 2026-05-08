@@ -183,9 +183,19 @@ jobs:
             > logs/studio.log 2>&1 &
           PID=$!
           HEALTHY=""
+          # Use jq (a Git Bash builtin) instead of `python -c
+          # open('/tmp/health.json')` to read the saved health
+          # response. Bash on windows-latest is MSYS Git Bash, which
+          # resolves `/tmp/...` against the MSYS root, while the
+          # python interpreter is Windows-native and resolves it
+          # against the current drive's root. The two paths don't
+          # agree, so python never finds the file curl just wrote.
+          # jq reads through MSYS, so the path matches. Mirrors what
+          # studio-windows-api-smoke.yml and the other Windows smoke
+          # workflows already do.
           for i in $(seq 1 60); do
             if curl -fs http://127.0.0.1:18891/api/health > /tmp/health.json; then
-              if python -c "import json,sys; d=json.load(open('/tmp/health.json')); sys.exit(0 if d.get('status')=='healthy' else 1)"; then
+              if jq -e '.status == "healthy"' /tmp/health.json >/dev/null; then
                 HEALTHY=1
                 break
               fi

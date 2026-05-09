@@ -48,6 +48,20 @@ import urllib.error
 from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
+# Shared robustness helpers live next to this script. Tests run as
+# plain `python tests/studio/playwright_chat_ui.py` (not via pytest /
+# import), so prepend the dir to sys.path before importing.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _playwright_robust import (  # noqa: E402
+    chromium_launch_args,
+    click_and_wait_for_response,
+    install_view_transition_killer,
+    is_benign_console_error,
+    is_benign_page_error,
+    recover_or_replace_page,
+    wait_for_health,
+)
+
 BASE = os.environ["BASE_URL"]
 OLD = os.environ["STUDIO_OLD_PW"]
 NEW = os.environ["STUDIO_NEW_PW"]
@@ -118,34 +132,24 @@ def parse_rgb(s):
 
 
 with sync_playwright() as p:
-    # Chromium stability args for macos-14 free runners. Without these
-    # Chromium browser process dies in the first few seconds (during
-    # change-password page load) and the driver Node process can't
-    # parse the truncated stdout JSON-RPC line, throwing
-    # 'SyntaxError: Unexpected end of JSON input' in pipeTransport.js
-    # — see runs 25491698868 / 25489049059. --disable-dev-shm-usage and
-    # --no-sandbox are the standard set; --disable-gpu forces software
-    # rendering on the headless runner; --single-process keeps the
-    # renderer in the same process as the browser, eliminating the
-    # browser↔renderer IPC pipe that was the actual crash site.
-    _CHROMIUM_STABILITY_ARGS = [
-        "--disable-dev-shm-usage",
-        "--no-sandbox",
-        "--disable-gpu",
-    ]
-    # --single-process is a macos-14 free-runner workaround. On
-    # windows-latest it is strictly destabilising: any renderer
-    # crash (including the React redirect after change-password)
-    # takes the entire browser context down, surfacing as
-    # TargetClosedError on the next Locator.wait_for. Run
-    # 25522501202 / job 74909947457 had the page die right after
-    # POST /api/auth/change-password 200 with this flag enabled.
-    # Linux passes either way today, so we only opt in on darwin.
-    if sys.platform == "darwin":
-        _CHROMIUM_STABILITY_ARGS.append("--single-process")
+    # Pre-flight: bash-side wait_for already gated on /api/health
+    # before launching us, but the macos-14 free runner has been
+    # observed to surface a 200 /api/health while the auth DB is
+    # still finishing its migration. A second 30s probe inside the
+    # script catches that gap before we sink 60s into a change-
+    # password timeout. Diagnostic only -- the workflow's own wait
+    # is the authoritative gate, so we don't fail on miss.
+    wait_for_health(BASE, timeout = 30.0, info = info)
+    # Chromium launch args: see `tests/studio/_playwright_robust.py`.
+    # Bundles the macos-14 stability set (--single-process for the
+    # pipeTransport.js JSON-RPC crash) + new throttling kill set
+    # (--disable-background-timer-throttling and friends) that
+    # prevent Chromium from deprioritising the headless context's
+    # CPU/timers when it thinks the window is backgrounded -- which
+    # CI runners routinely flag.
     browser = p.chromium.launch(
         headless = True,
-        args = _CHROMIUM_STABILITY_ARGS,
+        args = chromium_launch_args(),
     )
     ctx = browser.new_context(
         viewport = {"width": 1280, "height": 900},
@@ -155,54 +159,13 @@ with sync_playwright() as p:
         # state where Playwright's actionability check fails).
         reduced_motion = "reduce",
     )
-    # Hard-disable CSS view-transitions in case the app doesn't
-    # honour prefers-reduced-motion. We inject a tiny stylesheet
-    # that nukes the ::view-transition pseudo-elements + restores
-    # pointer events on the html element. Equivalent to the user
-    # having browser-level reduced-motion.
-    ctx.add_init_script("""
-        (function () {
-            try {
-                // Nuke view-transition pseudo-elements completely +
-                // monkey-patch document.startViewTransition so the
-                // theme toggle's animated reveal never runs in CI.
-                // Without this, the post-transition html element keeps
-                // intercepting pointer events on later clicks (sidebar
-                // nav, account menu, etc.) -- Playwright surfaces this
-                // as "<html> intercepts pointer events".
-                const css = `
-                    ::view-transition,
-                    ::view-transition-group(*),
-                    ::view-transition-image-pair(*),
-                    ::view-transition-old(*),
-                    ::view-transition-new(*) {
-                        display: none !important;
-                        animation: none !important;
-                        opacity: 0 !important;
-                    }
-                    html, body { pointer-events: auto !important; }
-                `;
-                const style = document.createElement("style");
-                style.id = "playwright-no-view-transition";
-                style.textContent = css;
-                (document.head || document.documentElement).appendChild(style);
-                // Replace startViewTransition with an immediate-call
-                // shim so the callback runs synchronously without the
-                // animation pipeline ever capturing the html element.
-                if (typeof document.startViewTransition === "function") {
-                    document.startViewTransition = function (cb) {
-                        try { if (cb) cb(); } catch (e) {}
-                        return {
-                            ready: Promise.resolve(),
-                            finished: Promise.resolve(),
-                            updateCallbackDone: Promise.resolve(),
-                            skipTransition: () => {},
-                        };
-                    };
-                }
-            } catch (e) { /* noop */ }
-        })();
-    """)
+    # Hard-disable CSS view-transitions: see _playwright_robust.py
+    # for the underlying init script. Necessary because Studio's theme
+    # toggle + sidebar collapse run their own startViewTransition()
+    # which can leave the <html> element intercepting pointer events
+    # for a beat after each route swap -- Playwright surfaces this as
+    # "<html> intercepts pointer events" on the next click.
+    install_view_transition_killer(ctx)
     page = ctx.new_page()
     # 60s default (was 30s) -- macos-14 free runner under
     # --single-process Chromium is slow enough that page renders /
@@ -214,11 +177,22 @@ with sync_playwright() as p:
     page.set_default_timeout(60_000)
     page_errors = []
     page.on("pageerror", lambda e: page_errors.append(str(e)))
-    console_errors = []
-    page.on(
-        "console",
-        lambda m: console_errors.append(m.text) if m.type == "error" else None,
-    )
+    console_errors: list[str] = []
+    # Filtered console.error log -- excludes BENIGN_CONSOLE_ERROR_PATTERNS
+    # so the diagnostic dumps + final summary count only signals worth
+    # reading. Raw firehose is still surfaced via len(console_errors)
+    # vs len(filtered).
+
+    def _on_console(m):
+        if m.type != "error":
+            return
+        try:
+            text = m.text
+        except Exception:
+            return
+        console_errors.append(text)
+
+    page.on("console", _on_console)
 
     # Per-turn HTTP-status capture: if a /v1/chat/completions request
     # 4xx-rejects mid-test the symptom is a hung wait_for_function and
@@ -314,33 +288,19 @@ with sync_playwright() as p:
             # IMMEDIATELY in this attempt rather than at the next
             # composer.wait_for, so the next retry-iteration starts
             # fresh with a known-bad starting state.
-            try:
-                with page.expect_response(
-                    lambda r: "/api/auth/change-password" in r.url
-                    and r.request.method == "POST",
-                    timeout = 30_000,
-                ) as resp_info:
-                    page.locator('button[type="submit"]').click()
-                resp = resp_info.value
-                if resp.status >= 400:
-                    raise AssertionError(
-                        f"change-password POST returned {resp.status}; "
-                        f"see console_errors={console_errors[:1]!r}"
-                    )
-            except Exception as _post_err:
-                # Fall back to fire-and-forget click + networkidle wait
-                # below. The retry loop will catch a later failure if
-                # auth didn't actually persist.
-                print(
-                    f"[ui]   change-password POST wait failed "
-                    f"({type(_post_err).__name__}: {str(_post_err)[:150]}); "
-                    f"falling back to fire-and-forget click",
-                    flush = True,
+            status, _ = click_and_wait_for_response(
+                page,
+                url_substr = "/api/auth/change-password",
+                method = "POST",
+                do_click = lambda: page.locator('button[type="submit"]').click(),
+                timeout_ms = 30_000,
+                info = lambda m: print(f"[ui]   {m}", flush = True),
+            )
+            if status is not None and status >= 400:
+                raise AssertionError(
+                    f"change-password POST returned {status}; "
+                    f"see console_errors={console_errors[:1]!r}"
                 )
-                try:
-                    page.locator('button[type="submit"]').click()
-                except Exception:
-                    pass
             form_err = None
             break
         except Exception as e:
@@ -371,16 +331,12 @@ with sync_playwright() as p:
             if _form_attempt < 2:
                 # Recovery: replace the page if it died, otherwise the
                 # next loop iteration's page.goto() handles the reload.
-                try:
-                    if page.is_closed():
-                        page = ctx.new_page()
-                        page.set_default_timeout(60_000)
-                except Exception as recover_err:
-                    print(
-                        f"[ui]   recovery failed: "
-                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
-                        flush = True,
-                    )
+                page = recover_or_replace_page(
+                    page,
+                    ctx,
+                    default_timeout_ms = 60_000,
+                    info = lambda m: print(f"[ui]   recovery: {m}", flush = True),
+                )
     if form_err is not None:
         raise form_err
 
@@ -443,22 +399,15 @@ with sync_playwright() as p:
                 # the same context so the auth state in localStorage
                 # survives; otherwise we re-goto the same URL to force
                 # a clean re-render.
-                try:
-                    if page.is_closed():
-                        page = ctx.new_page()
-                        page.set_default_timeout(60_000)
-                    page.goto(BASE, wait_until = "domcontentloaded", timeout = 60_000)
-                    try:
-                        page.wait_for_load_state("networkidle", timeout = 30_000)
-                    except Exception:
-                        pass
-                    composer = page.locator('textarea[aria-label="Message input"]')
-                except Exception as recover_err:
-                    print(
-                        f"[ui]   recovery navigation failed: "
-                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
-                        flush = True,
-                    )
+                page = recover_or_replace_page(
+                    page,
+                    ctx,
+                    default_timeout_ms = 60_000,
+                    goto_url = BASE,
+                    settle_networkidle = True,
+                    info = lambda m: print(f"[ui]   recovery: {m}", flush = True),
+                )
+                composer = page.locator('textarea[aria-label="Message input"]')
     if last_err is not None:
         raise last_err
     shoot("03-chat-loaded")
@@ -1418,15 +1367,11 @@ with sync_playwright() as p:
     #   - "Failed to fetch" / "NetworkError" after the Shutdown click:
     #     the server is intentionally dead by then; any in-flight
     #     fetch fails by design.
-    BENIGN_PATTERNS = (
-        "Request failed (422)",
-        "Failed to fetch",
-        "NetworkError",
-        "Load failed",
-        "At least one non-system message is required",
-    )
-    real_errors = [
-        e for e in page_errors if not any(pat in e for pat in BENIGN_PATTERNS)
+    # The full list lives in `_playwright_robust.BENIGN_PAGE_ERROR_PATTERNS`
+    # so playwright_extra_ui.py shares the same gate.
+    real_errors = [e for e in page_errors if not is_benign_page_error(e)]
+    real_console_errors = [
+        e for e in console_errors if not is_benign_console_error(e)
     ]
     if page_errors:
         info(
@@ -1435,7 +1380,10 @@ with sync_playwright() as p:
         )
     if real_errors:
         fail(f"{len(real_errors)} non-benign pageerror events")
-    info(f"console.error events: {len(console_errors)}")
+    info(
+        f"console.error events: {len(console_errors)} total "
+        f"({len(real_console_errors)} non-benign)"
+    )
 
     info("PASS comprehensive UI flow")
     browser.close()

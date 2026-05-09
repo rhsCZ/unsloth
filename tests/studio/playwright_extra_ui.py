@@ -33,6 +33,19 @@ import urllib.request
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
+# Shared robustness helpers live next to this script. Tests run as
+# plain `python tests/studio/playwright_extra_ui.py` (not via pytest /
+# import), so prepend the dir to sys.path before importing.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _playwright_robust import (  # noqa: E402
+    chromium_launch_args,
+    click_and_wait_for_response,
+    install_view_transition_killer,
+    is_benign_page_error,
+    recover_or_replace_page,
+    wait_for_health,
+)
+
 BASE = os.environ["BASE_URL"]
 OLD = os.environ["STUDIO_OLD_PW"]
 NEW = os.environ.get("STUDIO_NEW_PW", "ExtraUi-NEW-2026!")
@@ -81,66 +94,22 @@ def runtime_warn(m: str) -> None:
 
 
 with sync_playwright() as p:
-    # Chromium stability args -- same set as playwright_chat_ui.py.
-    # Without these Chromium dies in the first seconds on macos-14
-    # free runners and pipeTransport.js throws
-    # 'SyntaxError: Unexpected end of JSON input'.
-    _CHROMIUM_STABILITY_ARGS = [
-        "--disable-dev-shm-usage",
-        "--no-sandbox",
-        "--disable-gpu",
-    ]
-    # --single-process is darwin-only -- on windows-latest it
-    # collapses the renderer-isolation safety net and any in-flight
-    # crash (e.g. React redirect after change-password) takes the
-    # whole browser context down. Same rationale as
-    # playwright_chat_ui.py.
-    if sys.platform == "darwin":
-        _CHROMIUM_STABILITY_ARGS.append("--single-process")
+    # Health pre-flight (best-effort). Same rationale as in
+    # playwright_chat_ui.py: bash-side health wait can succeed before
+    # the auth DB has finished migrating on macos-14 free runners.
+    wait_for_health(BASE, timeout = 30.0, info = info)
+    # Chromium launch args: see `tests/studio/_playwright_robust.py`.
+    # Bundles macos-14 stability + new throttling-kill flags shared
+    # with playwright_chat_ui.py.
     browser = p.chromium.launch(
         headless = True,
-        args = _CHROMIUM_STABILITY_ARGS,
+        args = chromium_launch_args(),
     )
     ctx = browser.new_context(
         viewport = {"width": 1280, "height": 900},
         reduced_motion = "reduce",
     )
-    ctx.add_init_script("""
-        (function () {
-            try {
-                // Same shim as playwright_chat_ui.py: nuke view-
-                // transition pseudo-elements + monkey-patch
-                // startViewTransition so the html element never gets
-                // captured (which Playwright surfaces as "<html>
-                // intercepts pointer events" on later clicks).
-                const style = document.createElement("style");
-                style.textContent = `
-                    ::view-transition,
-                    ::view-transition-group(*),
-                    ::view-transition-image-pair(*),
-                    ::view-transition-old(*),
-                    ::view-transition-new(*) {
-                        display: none !important;
-                        animation: none !important;
-                        opacity: 0 !important;
-                    }
-                    html, body { pointer-events: auto !important; }
-                `;
-                (document.head || document.documentElement).appendChild(style);
-                if (typeof document.startViewTransition === "function") {
-                    document.startViewTransition = function (cb) {
-                        try { if (cb) cb(); } catch (e) {}
-                        return {
-                            ready: Promise.resolve(),
-                            finished: Promise.resolve(),
-                            updateCallbackDone: Promise.resolve(),
-                            skipTransition: () => {},
-                        };
-                    };
-                }
-            } catch (e) {}
-        })();
-    """)
+    install_view_transition_killer(ctx)
     page = ctx.new_page()
     # See playwright_chat_ui.py -- 60s default for macos-14 free
     # runner with --single-process Chromium. The extra-UI script is
@@ -153,15 +122,12 @@ with sync_playwright() as p:
     # flow's second prompt races the first prompt's SSE stream, or when
     # /export's lazy-loaded sections haven't finished mounting before
     # the error boundary trips. Both are timing artefacts on slow CI
-    # runners (macos-14 free), not Studio bugs.
-    _BENIGN_PAGEERROR_PATTERNS = (
-        "At least one non-system message is required",
-        "An internal error occurred",
-    )
-
+    # runners (macos-14 free), not Studio bugs. The base list lives in
+    # `_playwright_robust.BENIGN_PAGE_ERROR_PATTERNS` so the chat_ui
+    # test shares it.
     def _on_pageerror(e):
         msg = str(e)
-        if any(pat in msg for pat in _BENIGN_PAGEERROR_PATTERNS):
+        if is_benign_page_error(msg):
             info(f"WARN ignoring benign pageerror: {msg!r}")
             return
         page_errors.append(msg)
@@ -205,7 +171,24 @@ with sync_playwright() as p:
             pw_field.wait_for(state = "visible", timeout = 60_000)
             pw_field.fill(NEW, timeout = 60_000)
             page.fill("#confirm-password", NEW, timeout = 60_000)
-            page.locator('button[type="submit"]').click()
+            # Click submit AND wait for the POST response together --
+            # surfaces a server-side reject (or net::ERR_NO_BUFFER_SPACE
+            # buffer-fail on macos-14) immediately rather than discovering
+            # it 60s later via a downstream composer.wait_for. Same shape
+            # as playwright_chat_ui.py's change-password block.
+            status, _ = click_and_wait_for_response(
+                page,
+                url_substr = "/api/auth/change-password",
+                method = "POST",
+                do_click = lambda: page.locator('button[type="submit"]').click(),
+                timeout_ms = 30_000,
+                info = lambda m: print(f"[ui-extra]   {m}", flush = True),
+            )
+            if status is not None and status >= 400:
+                raise AssertionError(
+                    f"change-password POST returned {status}; "
+                    f"see page_errors={page_errors[:1]!r}"
+                )
             form_err = None
             break
         except Exception as e:
@@ -221,16 +204,12 @@ with sync_playwright() as p:
                 flush = True,
             )
             if _form_attempt < 2:
-                try:
-                    if page.is_closed():
-                        page = ctx.new_page()
-                        page.set_default_timeout(60_000)
-                except Exception as recover_err:
-                    print(
-                        f"[extra-ui]   recovery failed: "
-                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
-                        flush = True,
-                    )
+                page = recover_or_replace_page(
+                    page,
+                    ctx,
+                    default_timeout_ms = 60_000,
+                    info = lambda m: print(f"[extra-ui]   recovery: {m}", flush = True),
+                )
     if form_err is not None:
         raise form_err
     # Same defense-in-depth as playwright_chat_ui.py: settle network,
@@ -265,22 +244,15 @@ with sync_playwright() as p:
             except Exception:
                 pass
             if _attempt == 0:
-                try:
-                    if page.is_closed():
-                        page = ctx.new_page()
-                        page.set_default_timeout(60_000)
-                    page.goto(BASE, wait_until = "domcontentloaded", timeout = 60_000)
-                    try:
-                        page.wait_for_load_state("networkidle", timeout = 30_000)
-                    except Exception:
-                        pass
-                    composer = page.locator('textarea[aria-label="Message input"]')
-                except Exception as recover_err:
-                    print(
-                        f"[extra-ui]   recovery navigation failed: "
-                        f"{type(recover_err).__name__}: {str(recover_err)[:200]}",
-                        flush = True,
-                    )
+                page = recover_or_replace_page(
+                    page,
+                    ctx,
+                    default_timeout_ms = 60_000,
+                    goto_url = BASE,
+                    settle_networkidle = True,
+                    info = lambda m: print(f"[extra-ui]   recovery: {m}", flush = True),
+                )
+                composer = page.locator('textarea[aria-label="Message input"]')
     if last_err is not None:
         raise last_err
     shoot("01-chat-loaded")

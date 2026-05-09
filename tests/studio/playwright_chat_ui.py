@@ -1370,9 +1370,7 @@ with sync_playwright() as p:
     # The full list lives in `_playwright_robust.BENIGN_PAGE_ERROR_PATTERNS`
     # so playwright_extra_ui.py shares the same gate.
     real_errors = [e for e in page_errors if not is_benign_page_error(e)]
-    real_console_errors = [
-        e for e in console_errors if not is_benign_console_error(e)
-    ]
+    real_console_errors = [e for e in console_errors if not is_benign_console_error(e)]
     if page_errors:
         info(
             f"WARN page errors: {len(page_errors)} total "

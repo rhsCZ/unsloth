@@ -181,9 +181,9 @@ def test_bnb_quantstate_from_dict(tag: str):
     if hit is None:
         pytest.skip(f"{tag}: functional missing")
     _, src = hit
-    assert has_def(src, "QuantState", "class"), (
-        f"{tag}: bnb.functional.QuantState missing"
-    )
+    assert has_def(
+        src, "QuantState", "class"
+    ), f"{tag}: bnb.functional.QuantState missing"
     assert "from_dict" in src, (
         f"{tag}: QuantState.from_dict missing; "
         f"unsloth-zoo monkey-patch silently no-ops"
@@ -212,9 +212,7 @@ def test_bnb_nn_linear8bitlt(tag: str):
     ]
     for p in candidates:
         src = fetch_text("bitsandbytes-foundation/bitsandbytes", tag, p)
-        if src and (
-            has_def(src, "Linear8bitLt", "class") or "Linear8bitLt" in src
-        ):
+        if src and (has_def(src, "Linear8bitLt", "class") or "Linear8bitLt" in src):
             return
     pytest.fail(
         f"{tag}: bnb.nn.Linear8bitLt missing in {candidates}; "
@@ -232,9 +230,9 @@ def test_bnb_optim_optimizer2state(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: bitsandbytes/optim/optimizer.py missing")
-    assert has_def(src, "Optimizer2State", "class"), (
-        f"{tag}: bnb.optim.optimizer.Optimizer2State missing"
-    )
+    assert has_def(
+        src, "Optimizer2State", "class"
+    ), f"{tag}: bnb.optim.optimizer.Optimizer2State missing"
 
 
 @pytest.mark.parametrize("tag", BNB_TAGS)
@@ -246,9 +244,9 @@ def test_bnb_utils_pack_unpack(tag: str):
     if src is None:
         pytest.skip(f"{tag}: bitsandbytes/utils.py missing")
     for name in ("pack_dict_to_tensor", "unpack_tensor_to_dict"):
-        assert has_def(src, name, "func") or name in src, (
-            f"{tag}: bnb.utils.{name} missing"
-        )
+        assert (
+            has_def(src, name, "func") or name in src
+        ), f"{tag}: bnb.utils.{name} missing"
 
 
 @pytest.mark.parametrize("tag", BNB_TAGS)
@@ -276,9 +274,7 @@ def test_bnb_autograd_functions_matmul_4bit(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: bitsandbytes/autograd/_functions.py missing")
-    assert "matmul_4bit" in src, (
-        f"{tag}: bnb.autograd._functions.matmul_4bit missing"
-    )
+    assert "matmul_4bit" in src, f"{tag}: bnb.autograd._functions.matmul_4bit missing"
 
 
 @pytest.mark.parametrize("tag", BNB_TAGS)

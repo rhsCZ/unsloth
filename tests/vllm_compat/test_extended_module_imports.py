@@ -82,6 +82,7 @@ def _torch_distributed_safe(monkeypatch):
     """unsloth_zoo modules occasionally probe torch.distributed."""
     try:
         import torch.distributed as dist
+
         monkeypatch.setattr(dist, "is_available", lambda: True, raising = False)
         monkeypatch.setattr(dist, "is_initialized", lambda: False, raising = False)
         monkeypatch.setattr(dist, "get_world_size", lambda *a, **k: 1, raising = False)
@@ -158,6 +159,7 @@ def test_unsloth_is_mlx_false_under_spoof():
     box (real Apple Silicon is the ONLY environment _IS_MLX activates)."""
     sys.modules.pop("unsloth", None)
     import unsloth
+
     assert unsloth._IS_MLX is False, (
         f"_IS_MLX activated on a non-Apple-Silicon runner under CUDA spoof; "
         f"the MLX gate logic in unsloth/__init__.py is too lax"
@@ -223,6 +225,7 @@ def test_unsloth_core_module_imports_under_spoof(modname: str):
 def test_fast_model_class_surface_under_spoof():
     sys.modules.pop("unsloth", None)
     import unsloth
+
     found_at_least_one = False
     for cls_name in ("FastLanguageModel", "FastVisionModel", "FastModel"):
         cls = getattr(unsloth, cls_name, None)
@@ -265,21 +268,19 @@ def test_unsloth_rl_replacements_dispatch_populated():
         pytest.skip(f"env issue importing rl_replacements: {e!s}")
     funcs = getattr(rl, "RL_FUNCTIONS", None)
     if funcs is None:
-        pytest.skip(
-            "RL_FUNCTIONS attribute not present (architecture changed; check)"
-        )
-    assert isinstance(funcs, dict), (
-        f"RL_FUNCTIONS expected dict, got {type(funcs).__name__}"
-    )
+        pytest.skip("RL_FUNCTIONS attribute not present (architecture changed; check)")
+    assert isinstance(
+        funcs, dict
+    ), f"RL_FUNCTIONS expected dict, got {type(funcs).__name__}"
     # The trainer types unsloth-zoo dispatches against MUST be keys.
     for key in ("grpo_trainer", "sft_trainer", "dpo_trainer"):
         assert key in funcs, (
             f"RL_FUNCTIONS missing dispatch key '{key}'; "
             f"unsloth_zoo source rewrites silently no-op"
         )
-        assert isinstance(funcs[key], list) and len(funcs[key]) > 0, (
-            f"RL_FUNCTIONS[{key!r}] is empty list; rewrites no-op"
-        )
+        assert (
+            isinstance(funcs[key], list) and len(funcs[key]) > 0
+        ), f"RL_FUNCTIONS[{key!r}] is empty list; rewrites no-op"
 
 
 # -------------------------------------------------------------------------
@@ -311,6 +312,7 @@ def test_zoo_compiler_apply_fused_lm_head_callable():
 def test_fast_model_from_pretrained_kwargs_under_spoof():
     sys.modules.pop("unsloth", None)
     import unsloth
+
     cls = getattr(unsloth, "FastLanguageModel", None) or getattr(
         unsloth, "FastModel", None
     )

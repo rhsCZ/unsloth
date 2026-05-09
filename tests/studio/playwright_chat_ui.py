@@ -302,7 +302,45 @@ with sync_playwright() as p:
             pw_field.fill(NEW, timeout = 60_000)
             page.fill("#confirm-password", NEW, timeout = 60_000)
             shoot("01-change-password-filled")
-            page.locator('button[type="submit"]').click()
+            # Click submit AND wait for the POST /api/auth/change-password
+            # response in the same step. macos-14 free runners under
+            # --single-process Chromium occasionally hit
+            # net::ERR_NO_BUFFER_SPACE when the renderer requests a
+            # resource (run 25586583024 / job 75116256117 had the
+            # change-password POST silently buffer-fail and the page
+            # stayed on /change-password; even after my page.goto(BASE)
+            # recovery the auth state never persisted). Tying the
+            # click to the response wait surfaces the buffer-error
+            # IMMEDIATELY in this attempt rather than at the next
+            # composer.wait_for, so the next retry-iteration starts
+            # fresh with a known-bad starting state.
+            try:
+                with page.expect_response(
+                    lambda r: "/api/auth/change-password" in r.url
+                    and r.request.method == "POST",
+                    timeout = 30_000,
+                ) as resp_info:
+                    page.locator('button[type="submit"]').click()
+                resp = resp_info.value
+                if resp.status >= 400:
+                    raise AssertionError(
+                        f"change-password POST returned {resp.status}; "
+                        f"see console_errors={console_errors[:1]!r}"
+                    )
+            except Exception as _post_err:
+                # Fall back to fire-and-forget click + networkidle wait
+                # below. The retry loop will catch a later failure if
+                # auth didn't actually persist.
+                print(
+                    f"[ui]   change-password POST wait failed "
+                    f"({type(_post_err).__name__}: {str(_post_err)[:150]}); "
+                    f"falling back to fire-and-forget click",
+                    flush = True,
+                )
+                try:
+                    page.locator('button[type="submit"]').click()
+                except Exception:
+                    pass
             form_err = None
             break
         except Exception as e:

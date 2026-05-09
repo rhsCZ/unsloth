@@ -154,7 +154,10 @@ jobs:
           UNSLOTH_COMPILE_DISABLE: '1'
         # --ignore: GPU-bound directories (qlora/saving need real weights;
         #   tests/sh is the shell suite the next step handles; tests/utils
-        #   is a helpers folder).
+        #   is a helpers folder); tests/vllm_compat + tests/version_compat
+        #   are dedicated multi-version drift canaries with their own job
+        #   in version-compat-ci.yml that installs the heavier dep set
+        #   (torchcodec, full transformers/peft/bnb pins) those tests need.
         # State-sensitive hardware-spoofing files run in isolation in the
         # next step because they mutate hardware.py module globals.
         # -m: honour markers from tests/python/conftest.py (`server` =
@@ -175,6 +178,8 @@ jobs:
             --ignore=tests/sh \
             --ignore=tests/studio/test_hardware_dispatch_matrix.py \
             --ignore=tests/studio/test_is_mlx_dispatch_gate.py \
+            --ignore=tests/vllm_compat \
+            --ignore=tests/version_compat \
             -m 'not server and not e2e' \
             --deselect tests/test_model_registry.py::test_model_registration \
             --deselect tests/test_model_registry.py::test_all_model_registration \

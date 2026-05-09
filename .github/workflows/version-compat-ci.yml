@@ -210,7 +210,17 @@ jobs:
           python -m pip install --upgrade pip
           # CPU torch (vllm/peft/st all depend on it).
           pip install --index-url https://download.pytorch.org/whl/cpu \
-            'torch>=2.4,<2.11' 'torchvision<0.26'
+            'torch>=2.4,<2.11' 'torchvision<0.26' 'torchcodec<0.10'
+          # torchcodec is a hard requirement on transformers 5.x:
+          # transformers/audio_utils.py:55 does
+          #   `importlib.metadata.version("torchcodec")` UNCONDITIONALLY,
+          # which raises PackageNotFoundError on a CPU runner that
+          # otherwise has no audio path -- and that error trickles up
+          # through every `import unsloth_zoo.<module>` because
+          # unsloth-zoo's vision_utils transitively pulls
+          # transformers.processing_utils (-> audio_utils). The 0.10
+          # cap mirrors the torch 2.10 / torchvision 0.26 ABI window
+          # we already pin above.
           # Ladder of supported floor versions per pyproject.toml.
           pip install \
             'transformers>=4.56,<5.6' 'trl>=0.22,<0.26' \

@@ -45,18 +45,23 @@ def fetch_text(repo: str, ref: str, path: str) -> str | None:
 
 def has_def(src: str, name: str, kind: str = "any") -> bool:
     """Heuristic AST-equivalent grep for `class Name`, `def name`,
-    or `Name = ...` at module scope. We avoid a full ast.parse so a
-    single non-importable line (e.g. `# type: ignore` after an
-    unresolved alias) doesn't false-fail us."""
+    or `Name = ...` — at any indent level. We avoid a full ast.parse
+    so a single non-importable line (e.g. `# type: ignore` after an
+    unresolved alias) doesn't false-fail us. Indented matches are
+    accepted because most class methods we want to verify live four
+    spaces in (and tests should pass for `class.method` definitions
+    just as much as for module-level `def`)."""
     if kind in ("any", "class") and re.search(
-        rf"^class\s+{re.escape(name)}\b", src, re.MULTILINE
+        rf"^\s*class\s+{re.escape(name)}\b", src, re.MULTILINE
     ):
         return True
     if kind in ("any", "func") and re.search(
-        rf"^(?:async\s+)?def\s+{re.escape(name)}\b", src, re.MULTILINE
+        rf"^\s*(?:async\s+)?def\s+{re.escape(name)}\b", src, re.MULTILINE
     ):
         return True
-    if kind == "any" and re.search(rf"^{re.escape(name)}\s*[:=]", src, re.MULTILINE):
+    if kind == "any" and re.search(
+        rf"^\s*{re.escape(name)}\s*[:=]", src, re.MULTILINE
+    ):
         return True
     return False
 

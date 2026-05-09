@@ -68,9 +68,9 @@ def test_trainer_class_importable_path(tag: str):
     or src/transformers/trainer/__init__.py."""
     candidates = ["src/transformers/trainer.py", "src/transformers/trainer/__init__.py"]
     hit = first_match("huggingface/transformers", tag, candidates)
-    assert hit is not None, (
-        f"{tag}: src/transformers/trainer[.py|/__init__.py] both missing"
-    )
+    assert (
+        hit is not None
+    ), f"{tag}: src/transformers/trainer[.py|/__init__.py] both missing"
     _, src = hit
     assert has_def(src, "Trainer", "class"), f"{tag}: class Trainer missing"
 
@@ -84,9 +84,7 @@ def test_trainer_compute_loss_num_items_in_batch_param(tag: str):
     assert hit is not None
     _, src = hit
     # Find the compute_loss signature - it's a class method, indented.
-    m = re.search(
-        r"^\s*def compute_loss\(([^)]*)\)", src, re.MULTILINE | re.DOTALL
-    )
+    m = re.search(r"^\s*def compute_loss\(([^)]*)\)", src, re.MULTILINE | re.DOTALL)
     if m is None:
         pytest.fail(f"{tag}: Trainer.compute_loss not found in source")
     assert "num_items_in_batch" in m.group(1), (
@@ -130,9 +128,9 @@ def test_trainer_get_batch_samples_returns_num_items(tag: str):
     _, src = hit
     if not has_def(src, "get_batch_samples", "func"):
         pytest.skip(f"{tag}: get_batch_samples not yet on Trainer")
-    assert "num_items_in_batch" in src, (
-        f"{tag}: Trainer.get_batch_samples / num_items_in_batch contract missing"
-    )
+    assert (
+        "num_items_in_batch" in src
+    ), f"{tag}: Trainer.get_batch_samples / num_items_in_batch contract missing"
 
 
 @pytest.mark.parametrize("tag", TRANSFORMERS_TAGS)
@@ -167,7 +165,9 @@ def test_modeling_utils_exposes_checkpoint(tag: str):
     """unsloth-zoo#549: transformers 5.2+ uses `transformers.modeling_utils.checkpoint`
     (alias for torch.utils.checkpoint.checkpoint). Patch must replace
     the transformers reference, not just torch's."""
-    src = fetch_text("huggingface/transformers", tag, "src/transformers/modeling_utils.py")
+    src = fetch_text(
+        "huggingface/transformers", tag, "src/transformers/modeling_utils.py"
+    )
     if src is None:
         pytest.skip(f"{tag}: modeling_utils.py missing")
     # Either a direct import or local rebinding.
@@ -190,13 +190,13 @@ def test_modeling_utils_exposes_checkpoint(tag: str):
 def test_pushtohubmixin_create_repo_status(tag: str):
     """unsloth-zoo#393: transformers 5.x removed PushToHubMixin._create_repo.
     On 4.x present, on 5.x absent. Snapshot which side."""
-    src = fetch_text("huggingface/transformers", tag, "src/transformers/modeling_utils.py")
+    src = fetch_text(
+        "huggingface/transformers", tag, "src/transformers/modeling_utils.py"
+    )
     if src is None:
         pytest.skip(f"{tag}: modeling_utils.py missing")
     # Just record the presence; either is OK as long as we know.
-    has_create = bool(
-        re.search(r"def _create_repo\b", src) or "_create_repo" in src
-    )
+    has_create = bool(re.search(r"def _create_repo\b", src) or "_create_repo" in src)
     # Informational only — both branches are tracked.
     _ = has_create
 
@@ -213,9 +213,9 @@ def test_integrations_bitsandbytes_module_present(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: integrations/bitsandbytes.py missing (legacy layout)")
-    assert "Linear4bit" in src or "linear" in src.lower(), (
-        f"{tag}: integrations/bitsandbytes.py has no Linear4bit reference"
-    )
+    assert (
+        "Linear4bit" in src or "linear" in src.lower()
+    ), f"{tag}: integrations/bitsandbytes.py has no Linear4bit reference"
 
 
 @pytest.mark.parametrize("tag", TRANSFORMERS_TAGS)
@@ -224,7 +224,9 @@ def test_quantizers_should_convert_module_signature(tag: str):
     quantizers_utils.should_convert_module(full_name, patterns).
     Snapshot whether function exists and its substring-match form."""
     src = fetch_text(
-        "huggingface/transformers", tag, "src/transformers/quantizers/quantizers_utils.py"
+        "huggingface/transformers",
+        tag,
+        "src/transformers/quantizers/quantizers_utils.py",
     )
     if src is None:
         pytest.skip(f"{tag}: quantizers/quantizers_utils.py missing")
@@ -233,7 +235,7 @@ def test_quantizers_should_convert_module_signature(tag: str):
     # The bug we want to catch: substring matching uses `.{key}.` in
     # `.{full_name}.` form. Patch only fires when this substring is
     # in source AND mismatch behaviour exists.
-    has_dot_form = ".{key}." in src or "f'.{key}.'" in src or "f\".{key}.\"" in src
+    has_dot_form = ".{key}." in src or "f'.{key}.'" in src or 'f".{key}."' in src
     # Informational only.
     _ = has_dot_form
 
@@ -258,9 +260,9 @@ def test_fp8linear_init_param_names(tag: str):
         pytest.skip(f"{tag}: FP8Linear not yet defined")
     has_bias_kw = re.search(r"def __init__\([^)]*\bbias\b", src) is not None
     has_has_bias_kw = re.search(r"def __init__\([^)]*\bhas_bias\b", src) is not None
-    assert has_bias_kw or has_has_bias_kw, (
-        f"{tag}: FP8Linear.__init__ has neither `bias` nor `has_bias` param"
-    )
+    assert (
+        has_bias_kw or has_has_bias_kw
+    ), f"{tag}: FP8Linear.__init__ has neither `bias` nor `has_bias` param"
 
 
 # =========================================================================
@@ -277,10 +279,7 @@ def test_processing_utils_unpack_importable(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: processing_utils.py missing")
-    has_unpack = bool(
-        re.search(r"^Unpack\b\s*=", src, re.MULTILINE)
-        or "Unpack" in src
-    )
+    has_unpack = bool(re.search(r"^Unpack\b\s*=", src, re.MULTILINE) or "Unpack" in src)
     assert has_unpack, (
         f"{tag}: transformers.processing_utils.Unpack missing; "
         f"unsloth-zoo#583/584 import guard breaks"
@@ -301,9 +300,9 @@ def test_gemma3_attention_forward_present(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: modeling_gemma3.py missing")
-    assert has_def(src, "Gemma3Attention", "class"), (
-        f"{tag}: class Gemma3Attention missing"
-    )
+    assert has_def(
+        src, "Gemma3Attention", "class"
+    ), f"{tag}: class Gemma3Attention missing"
 
 
 @pytest.mark.parametrize("tag", TRANSFORMERS_TAGS)
@@ -315,9 +314,7 @@ def test_gpt_oss_model_forward_present(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: modeling_gpt_oss.py missing (legacy)")
-    assert has_def(src, "GptOssModel", "class"), (
-        f"{tag}: class GptOssModel missing"
-    )
+    assert has_def(src, "GptOssModel", "class"), f"{tag}: class GptOssModel missing"
 
 
 # =========================================================================
@@ -391,9 +388,9 @@ def test_apply_chat_template_signature_present(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: tokenization_utils_base.py missing")
-    assert has_def(src, "apply_chat_template", "func"), (
-        f"{tag}: apply_chat_template missing in tokenization_utils_base.py"
-    )
+    assert has_def(
+        src, "apply_chat_template", "func"
+    ), f"{tag}: apply_chat_template missing in tokenization_utils_base.py"
 
 
 # =========================================================================
@@ -413,9 +410,9 @@ def test_modeling_attn_mask_utils_symbols(tag: str):
     )
     if src is None:
         pytest.skip(f"{tag}: modeling_attn_mask_utils.py missing")
-    assert has_def(src, "AttentionMaskConverter", "class"), (
-        f"{tag}: AttentionMaskConverter missing"
-    )
+    assert has_def(
+        src, "AttentionMaskConverter", "class"
+    ), f"{tag}: AttentionMaskConverter missing"
     # _prepare_4d_attention_mask_for_sdpa is a function we hard-import.
     assert (
         has_def(src, "_prepare_4d_attention_mask_for_sdpa", "func")
@@ -430,9 +427,9 @@ def test_cache_utils_classes(tag: str):
         pytest.skip(f"{tag}: cache_utils.py missing")
     needed = ("Cache", "DynamicCache")
     for cls in needed:
-        assert has_def(src, cls, "class"), (
-            f"{tag}: transformers.cache_utils.{cls} missing"
-        )
+        assert has_def(
+            src, cls, "class"
+        ), f"{tag}: transformers.cache_utils.{cls} missing"
 
 
 @pytest.mark.parametrize("tag", TRANSFORMERS_TAGS)

@@ -259,9 +259,7 @@ def test_peft_lora_model_create_and_replace(tag: str):
     src = fetch_text("huggingface/peft", tag, "src/peft/tuners/lora/model.py")
     if src is None:
         pytest.skip(f"{tag}: src/peft/tuners/lora/model.py missing")
-    assert has_def(src, "LoraModel", "class"), (
-        f"{tag}: class LoraModel missing"
-    )
+    assert has_def(src, "LoraModel", "class"), f"{tag}: class LoraModel missing"
     assert has_def(src, "_create_and_replace", "func"), (
         f"{tag}: LoraModel._create_and_replace missing; "
         f"unsloth/models/loader.py:1535-1601 monkey-patch breaks (unsloth#4807)"
@@ -284,11 +282,12 @@ def test_peft_transformers_weight_conversion_module(tag: str):
     ]
     hit = first_match("huggingface/peft", tag, candidates)
     if hit is None:
-        pytest.skip(
-            f"{tag}: transformers_weight_conversion not present (legacy peft)"
-        )
+        pytest.skip(f"{tag}: transformers_weight_conversion not present (legacy peft)")
     _, src = hit
-    assert has_def(src, "build_peft_weight_mapping", "func") or "build_peft_weight_mapping" in src, (
+    assert (
+        has_def(src, "build_peft_weight_mapping", "func")
+        or "build_peft_weight_mapping" in src
+    ), (
         f"{tag}: build_peft_weight_mapping missing in transformers_weight_conversion; "
         f"unsloth/import_fixes.py:1375-1456 wrap breaks (unsloth#5167)"
     )
@@ -307,11 +306,14 @@ def test_peft_integrations_dequantize_module_weight(tag: str):
         "src/peft/utils/integrations/__init__.py",
     ]
     hit = first_match("huggingface/peft", tag, candidates)
-    assert hit is not None, (
-        f"{tag}: src/peft/utils/integrations[.py|/__init__.py] both missing"
-    )
+    assert (
+        hit is not None
+    ), f"{tag}: src/peft/utils/integrations[.py|/__init__.py] both missing"
     _, src = hit
-    assert has_def(src, "dequantize_module_weight", "func") or "dequantize_module_weight" in src, (
+    assert (
+        has_def(src, "dequantize_module_weight", "func")
+        or "dequantize_module_weight" in src
+    ), (
         f"{tag}: peft.utils.integrations.dequantize_module_weight missing; "
         f"unsloth-zoo vllm_utils.py:2701, unsloth/_utils.py:1550, "
         f"saving_utils.py:270 ImportError"
@@ -382,9 +384,9 @@ def test_peft_peft_model_from_pretrained_signature(tag: str):
     assert src is not None, f"{tag}: src/peft/peft_model.py missing"
     # We expect `def from_pretrained` in PeftModel class. Just check
     # the method name exists; full kwarg list is too brittle.
-    assert has_def(src, "from_pretrained", "func"), (
-        f"{tag}: PeftModel.from_pretrained missing in peft_model.py"
-    )
+    assert has_def(
+        src, "from_pretrained", "func"
+    ), f"{tag}: PeftModel.from_pretrained missing in peft_model.py"
 
 
 # -------------------------------------------------------------------------
@@ -409,6 +411,6 @@ def test_peft_version_parseable(tag: str):
         )
         and re.search(r"^\s*__version__\s*=\s*version\s*\(", src, re.MULTILINE)
     )
-    assert has_literal or has_subimport or has_metadata, (
-        f"{tag}: peft.__version__ not exported via any known mechanism"
-    )
+    assert (
+        has_literal or has_subimport or has_metadata
+    ), f"{tag}: peft.__version__ not exported via any known mechanism"

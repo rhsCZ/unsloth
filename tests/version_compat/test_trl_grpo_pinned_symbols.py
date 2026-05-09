@@ -79,7 +79,7 @@ TRL_TAGS = [
     "v0.28.0",
     "v0.29.0",
     "v0.29.1",
-    "v1.0.0",   # anchor
+    "v1.0.0",  # anchor
     "v1.1.0",
     "v1.2.0",
     "v1.3.0",
@@ -346,9 +346,9 @@ def test_trl_sft_trainer_module_internals(tag: str):
         f"{tag}: trl/trainer/sft_trainer.py missing; "
         f"unsloth/tokenizer_utils.py:1538 wildcard import fails"
     )
-    assert has_def(src, "SFTTrainer", "class"), (
-        f"{tag}: class SFTTrainer missing in sft_trainer.py"
-    )
+    assert has_def(
+        src, "SFTTrainer", "class"
+    ), f"{tag}: class SFTTrainer missing in sft_trainer.py"
     # neftune_post_forward_hook: optional (TRL removed it in some
     # versions); soft-imported in tokenizer_utils.py:1542. Don't fail.
     if "neftune_post_forward_hook" not in src:
@@ -368,9 +368,9 @@ def test_trl_dpo_trainer_module_exists(tag: str):
         f"{tag}: trl/trainer/dpo_trainer.py missing; "
         f"unsloth-zoo/temporary_patches/misc.py:1376 import fails"
     )
-    assert has_def(src, "DPOTrainer", "class"), (
-        f"{tag}: class DPOTrainer missing in dpo_trainer.py"
-    )
+    assert has_def(
+        src, "DPOTrainer", "class"
+    ), f"{tag}: class DPOTrainer missing in dpo_trainer.py"
 
 
 # -------------------------------------------------------------------------
@@ -414,6 +414,7 @@ def test_trl_models_utils_disable_gradient_checkpointing(tag: str):
         # Strip leading 'v' and parse.
         try:
             from packaging.version import Version
+
             require = Version(tag.lstrip("v")) >= Version("1.0.0")
         except Exception:
             require = False
@@ -466,9 +467,7 @@ def test_trl_import_utils_available_pattern(tag: str):
 
 @pytest.mark.parametrize("tag", TRL_TAGS)
 def test_trl_openenv_utils_generators(tag: str):
-    src = fetch_text(
-        "huggingface/trl", tag, "trl/experimental/openenv/utils.py"
-    )
+    src = fetch_text("huggingface/trl", tag, "trl/experimental/openenv/utils.py")
     if src is None:
         pytest.skip(f"{tag}: openenv.utils not present (gated optional)")
     legacy = "generate_rollout_completions" in src
@@ -592,9 +591,7 @@ def test_trl_sft_trainer_class(tag: str):
     which is also fine."""
     src = fetch_text("huggingface/trl", tag, "trl/trainer/sft_trainer.py")
     assert src is not None
-    assert has_def(src, "SFTTrainer", "class"), (
-        f"{tag}: class SFTTrainer missing"
-    )
+    assert has_def(src, "SFTTrainer", "class"), f"{tag}: class SFTTrainer missing"
 
 
 # -------------------------------------------------------------------------
@@ -619,9 +616,9 @@ def test_trl_dpo_trainer_methods(tag: str):
     src = fetch_text("huggingface/trl", tag, "trl/trainer/dpo_trainer.py")
     assert src is not None
     # The DPO class itself must always exist.
-    assert has_def(src, "DPOTrainer", "class"), (
-        f"{tag}: class DPOTrainer missing in dpo_trainer.py"
-    )
+    assert has_def(
+        src, "DPOTrainer", "class"
+    ), f"{tag}: class DPOTrainer missing in dpo_trainer.py"
     # Informational only -- pass either way:
     for method in (
         "concatenated_inputs",

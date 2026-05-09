@@ -59,9 +59,7 @@ def has_def(src: str, name: str, kind: str = "any") -> bool:
         rf"^\s*(?:async\s+)?def\s+{re.escape(name)}\b", src, re.MULTILINE
     ):
         return True
-    if kind == "any" and re.search(
-        rf"^\s*{re.escape(name)}\s*[:=]", src, re.MULTILINE
-    ):
+    if kind == "any" and re.search(rf"^\s*{re.escape(name)}\s*[:=]", src, re.MULTILINE):
         return True
     return False
 

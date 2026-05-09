@@ -230,8 +230,16 @@ jobs:
           PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
         run: |
           cd unsloth
+          # tests/vllm_compat/test_unsloth_zoo_imports.py: narrow vllm/grpo
+          #   import gates (5 tests).
+          # tests/vllm_compat/test_extended_module_imports.py: full sweep
+          #   of unsloth_zoo + unsloth.models.* modules + RL dispatch
+          #   table population + FastModel API surface under spoof
+          #   (~30 tests). Catches transformers / peft / bnb symbol pin
+          #   drift at module-top BEFORE any runtime call.
           PYTHONPATH=. python -m pytest \
             tests/vllm_compat/test_unsloth_zoo_imports.py \
+            tests/vllm_compat/test_extended_module_imports.py \
             -v --tb=short
 
   # Daily-only: same suites but with --strict on importable upstream

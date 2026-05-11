@@ -191,6 +191,7 @@ def _export_details(output_path: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     try:
         from utils.paths.storage_roots import exports_root
+
         rel = os.path.relpath(output_path, exports_root())
         if rel.startswith(".."):
             rel = os.path.basename(output_path)

@@ -7,6 +7,7 @@ Export API routes: checkpoint discovery and model export operations.
 
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -188,10 +189,23 @@ def _export_details(output_path: Optional[str]) -> Optional[Dict[str, Any]]:
     frontend reads to populate the Export Complete screen. Returns None
     when the export had no local component (Hub-only push) so the
     Pydantic field stays absent rather than ``{"output_path": null}``.
+
+    The returned ``output_path`` is the path RELATIVE to the configured
+    exports root, so the response no longer leaks the absolute install
+    location (e.g. ``/mnt/disks/.../studio/exports/foo`` -> ``foo``).
     """
     if not output_path:
         return None
-    return {"output_path": output_path}
+    try:
+        from utils.paths.storage_roots import exports_root  # local import to avoid cycle
+        rel = os.path.relpath(output_path, exports_root())
+        # If the path is outside exports_root (defensive), keep the basename only.
+        if rel.startswith(".."):
+            rel = os.path.basename(output_path)
+        return {"output_path": rel}
+    except Exception:
+        # Last-resort fallback: basename only - never the full prefix.
+        return {"output_path": os.path.basename(output_path)}
 
 
 @router.post("/export/merged", response_model = ExportOperationResponse)

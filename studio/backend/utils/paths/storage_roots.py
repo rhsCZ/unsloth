@@ -276,21 +276,69 @@ def _clean_relative_path(
     return Path(*parts) if parts else Path()
 
 
+def _assert_contained(resolved: Path, root: Path) -> None:
+    """Reject paths whose post-resolve real location escapes ``root``.
+
+    Catches absolute inputs, ``..`` traversal, and symlinks pointing outside
+    the root. Raises ValueError on escape.
+    """
+    try:
+        resolved_real = Path(os.path.realpath(resolved))
+        root_real = Path(os.path.realpath(root))
+    except OSError as exc:
+        raise ValueError(f"path resolution failed: {exc}") from exc
+    try:
+        resolved_real.relative_to(root_real)
+    except ValueError as exc:
+        raise ValueError(
+            f"path escapes root: {resolved!s} -> {resolved_real!s} "
+            f"is not under {root_real!s}"
+        ) from exc
+
+
 def resolve_under_root(
     path_value: str | None,
     *,
     root: Path,
     strip_prefixes: tuple[str, ...] = (),
 ) -> Path:
+    """Resolve ``path_value`` so the result is provably under ``root``.
+
+    Policy:
+    - Empty / None -> the root itself.
+    - Null bytes -> rejected.
+    - ``..`` segments -> rejected (no traversal).
+    - Absolute paths -> accepted ONLY if already inside ``root`` (after
+      realpath). This lets internal code that has already resolved a
+      stored absolute path re-enter the resolver idempotently, while
+      blocking the export-time exploit where a user supplies
+      ``/tmp/EVIL``. The pydantic validator on user-facing schemas
+      (``ExportCommonOptions.save_directory``) rejects absolute inputs
+      outright at request-parse time as defense-in-depth.
+    """
     if not path_value or not str(path_value).strip():
         return root
 
-    path = Path(str(path_value).strip()).expanduser()
+    raw = str(path_value).strip()
+    if "\x00" in raw:
+        raise ValueError("path may not contain null bytes")
+
+    path = Path(raw).expanduser()
+    if ".." in path.parts:
+        raise ValueError(
+            f"path may not contain '..' segments: {raw!r}"
+        )
+
     if path.is_absolute():
+        # Internal callers may pass already-resolved absolute paths.
+        # Accept only when contained under root; reject escapes.
+        _assert_contained(path, root)
         return path
 
-    cleaned = _clean_relative_path(str(path), strip_prefixes = strip_prefixes)
-    return root / cleaned
+    cleaned = _clean_relative_path(raw, strip_prefixes = strip_prefixes)
+    candidate = root / cleaned
+    _assert_contained(candidate, root)
+    return candidate
 
 
 def resolve_output_dir(path_value: str | None = None) -> Path:
@@ -318,9 +366,26 @@ def resolve_tensorboard_dir(path_value: str | None = None) -> Path:
 
 
 def resolve_dataset_path(path_value: str) -> Path:
-    path = Path(path_value).expanduser()
+    raw = str(path_value or "").strip()
+    if "\x00" in raw:
+        raise ValueError("dataset path may not contain null bytes")
+    path = Path(raw).expanduser()
+    if ".." in path.parts:
+        raise ValueError(
+            f"dataset path may not contain '..' segments: {raw!r}"
+        )
     if path.is_absolute():
-        return path
+        # Accept absolute inputs only when contained under one of the
+        # dataset roots; reject all other absolute paths.
+        for root_fn in (datasets_root, dataset_uploads_root, recipe_datasets_root):
+            try:
+                _assert_contained(path, root_fn())
+                return path
+            except ValueError:
+                continue
+        raise ValueError(
+            f"dataset path must be relative or under a dataset root: {raw!r}"
+        )
 
     parts = [part for part in Path(path_value).parts if part not in ("", ".")]
     if parts[:2] == ["assets", "datasets"]:

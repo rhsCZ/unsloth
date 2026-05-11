@@ -63,7 +63,8 @@ def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
         # Refuse to delete anything outside the configured outputs root.
         logger.warning(
             "Skipping checkpoint cleanup - %s is not under outputs_root %s",
-            out_real, out_root_real,
+            out_real,
+            out_root_real,
         )
         return
     removed = 0
@@ -73,7 +74,7 @@ def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
         name = entry.name
         if not name.startswith("checkpoint-"):
             continue
-        tail = name[len("checkpoint-"):]
+        tail = name[len("checkpoint-") :]
         if not tail.isdigit():
             continue
         try:
@@ -83,8 +84,10 @@ def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
             logger.warning("Could not remove %s: %s", entry, exc)
     logger.info(
         "Cancelled-run cleanup removed %d checkpoint dir(s) under %s",
-        removed, out,
+        removed,
+        out,
     )
+
 
 _CTX = mp.get_context("spawn")
 

@@ -34,13 +34,10 @@ def _parse_lr(v: Any) -> float:
     try:
         lr = float(v)
     except (TypeError, ValueError):
-        raise ValueError(
-            f"learning_rate must be parseable as float (got {v!r})"
-        )
+        raise ValueError(f"learning_rate must be parseable as float (got {v!r})")
     if not (lr > 0.0):
         raise ValueError(
-            f"learning_rate must be > 0 (got {lr!r}); "
-            "typical range is 1e-6 .. 1e-3"
+            f"learning_rate must be > 0 (got {lr!r}); " "typical range is 1e-6 .. 1e-3"
         )
     if lr >= _MAX_LR_VALUE:
         raise ValueError(
@@ -149,9 +146,7 @@ class TrainingStartRequest(BaseModel):
         if v is None:
             return 1
         if v < 1 or v > _MAX_EPOCHS:
-            raise ValueError(
-                f"num_epochs must be in [1, {_MAX_EPOCHS}] (got {v!r})"
-            )
+            raise ValueError(f"num_epochs must be in [1, {_MAX_EPOCHS}] (got {v!r})")
         return v
 
     @field_validator("max_steps")
@@ -205,9 +200,7 @@ class TrainingStartRequest(BaseModel):
         if v is None:
             return 100
         if v < 0 or v > _MAX_STEPS:
-            raise ValueError(
-                f"save_steps must be in [0, {_MAX_STEPS}] (got {v!r})"
-            )
+            raise ValueError(f"save_steps must be in [0, {_MAX_STEPS}] (got {v!r})")
         return v
 
     @field_validator("weight_decay")

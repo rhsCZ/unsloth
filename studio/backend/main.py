@@ -357,6 +357,7 @@ async def _recipes_redirect(rest: str = ""):
     target = "/data-recipes" + (("/" + rest) if rest else "")
     return _RedirectResponse(url = target, status_code = 308)
 
+
 # CORS middleware
 _api_only = os.environ.get("UNSLOTH_API_ONLY") == "1"
 _cors_origins = ["*"]
@@ -430,10 +431,14 @@ async def health_check(request: Request):
         return minimal
     try:
         from auth.authentication import get_current_subject as _gcs
+
         # Manually invoke the dependency machinery; if it fails, fall
         # back to minimal.
         from fastapi.security import HTTPAuthorizationCredentials
-        creds = HTTPAuthorizationCredentials(scheme = "Bearer", credentials = auth.split(" ", 1)[1])
+
+        creds = HTTPAuthorizationCredentials(
+            scheme = "Bearer", credentials = auth.split(" ", 1)[1]
+        )
         subject = _gcs(creds)  # type: ignore[arg-type]
         if not subject:
             return minimal
@@ -589,7 +594,10 @@ def _inject_bootstrap(html_bytes: bytes, app: FastAPI) -> bytes:
     # follow-up; without it, change-password from the UI requires the
     # user to read the bootstrap password from .bootstrap_password.
     if os.environ.get("UNSLOTH_STUDIO_INJECT_BOOTSTRAP", "").lower() not in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     ):
         return html_bytes
 

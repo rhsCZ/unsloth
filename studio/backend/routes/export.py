@@ -197,7 +197,10 @@ def _export_details(output_path: Optional[str]) -> Optional[Dict[str, Any]]:
     if not output_path:
         return None
     try:
-        from utils.paths.storage_roots import exports_root  # local import to avoid cycle
+        from utils.paths.storage_roots import (
+            exports_root,
+        )  # local import to avoid cycle
+
         rel = os.path.relpath(output_path, exports_root())
         # If the path is outside exports_root (defensive), keep the basename only.
         if rel.startswith(".."):

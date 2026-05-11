@@ -337,7 +337,12 @@ def _sandbox_preexec():
             pass
         # 7a. Address space cap (8 GB by default).
         try:
-            as_bytes = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_AS_GB", "8")) * 1024 * 1024 * 1024
+            as_bytes = (
+                int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_AS_GB", "8"))
+                * 1024
+                * 1024
+                * 1024
+            )
             _resource.setrlimit(_resource.RLIMIT_AS, (as_bytes, as_bytes))
         except (ValueError, OSError, AttributeError):
             pass
@@ -1187,19 +1192,19 @@ def _check_signal_escape_patterns(code: str):
     )
     # Cloud-metadata / link-local / loopback-to-known-metadata.
     _METADATA_HOST_LITERALS = {
-        "169.254.169.254",        # AWS / standard
-        "fd00:ec2::254",          # AWS IPv6 IMDS
+        "169.254.169.254",  # AWS / standard
+        "fd00:ec2::254",  # AWS IPv6 IMDS
         "metadata.google.internal",
         "metadata",
         "metadata.tencentyun.com",
-        "100.100.100.200",        # Alibaba ECS
+        "100.100.100.200",  # Alibaba ECS
         "100.100.100.110",
-        "169.254.170.2",          # ECS task metadata
+        "169.254.170.2",  # ECS task metadata
         "169.254.170.23",
     }
     _METADATA_HOST_PREFIXES = (
         "169.254.",
-        "100.64.",                # CGNAT (often used internally)
+        "100.64.",  # CGNAT (often used internally)
     )
     _SENSITIVE_FILE_PREFIXES = (
         "/etc/passwd",
@@ -1371,7 +1376,12 @@ def _check_code_safety(code: str) -> str | None:
             item.get("description", "") for item in info.get("sensitive_file_reads", [])
         ]
         all_reasons = [
-            r for r in reasons + shell_reasons + exception_reasons + network_reasons + file_reasons
+            r
+            for r in reasons
+            + shell_reasons
+            + exception_reasons
+            + network_reasons
+            + file_reasons
             if r
         ]
         if all_reasons:

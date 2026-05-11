@@ -325,9 +325,7 @@ def resolve_under_root(
 
     path = Path(raw).expanduser()
     if ".." in path.parts:
-        raise ValueError(
-            f"path may not contain '..' segments: {raw!r}"
-        )
+        raise ValueError(f"path may not contain '..' segments: {raw!r}")
 
     if path.is_absolute():
         # Internal callers may pass already-resolved absolute paths.
@@ -371,9 +369,7 @@ def resolve_dataset_path(path_value: str) -> Path:
         raise ValueError("dataset path may not contain null bytes")
     path = Path(raw).expanduser()
     if ".." in path.parts:
-        raise ValueError(
-            f"dataset path may not contain '..' segments: {raw!r}"
-        )
+        raise ValueError(f"dataset path may not contain '..' segments: {raw!r}")
     if path.is_absolute():
         # Accept absolute inputs only when contained under one of the
         # dataset roots; reject all other absolute paths.

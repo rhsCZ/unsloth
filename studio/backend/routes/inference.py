@@ -1764,7 +1764,8 @@ async def openai_chat_completions(
                 )
             except Exception:
                 raise HTTPException(
-                    status_code = 400, detail = "Failed to process image.",
+                    status_code = 400,
+                    detail = "Failed to process image.",
                 )
 
         # Build message list with system prompt prepended

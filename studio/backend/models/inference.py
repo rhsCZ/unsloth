@@ -454,6 +454,7 @@ class ChatMessage(BaseModel):
                 # request round-trips while still satisfying the
                 # downstream agentic-loop reconciler.
                 import secrets as _secrets
+
                 self.tool_call_id = f"call_{_secrets.token_hex(8)}"
             if not self.content:
                 raise ValueError('role="tool" messages require non-empty "content".')
@@ -463,7 +464,7 @@ class ChatMessage(BaseModel):
             # assistant turn in history (``role="assistant",
             # content=""``); every subsequent send then 422s. Drop the
             # marker by treating ``content == ""`` as "no content".
-            empty_content = (self.content == "" or self.content == [])
+            empty_content = self.content == "" or self.content == []
             if empty_content and not self.tool_calls:
                 # Re-shape so the downstream pipeline sees a valid
                 # assistant turn (content stays None, tool_calls stays

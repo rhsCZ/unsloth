@@ -446,17 +446,35 @@ class ChatMessage(BaseModel):
         # empty strings as present content for user/system messages.
         if self.role == "tool":
             if not self.tool_call_id:
-                raise ValueError(
-                    'role="tool" messages require "tool_call_id" per the OpenAI spec.'
-                )
+                # Finding 3.9: Studio's frontend SSE handler issues the
+                # second-round POST after a tool result without including
+                # the tool_call_id from the streamed chunk, which made the
+                # strict-spec validation here return 422 and drop the
+                # final assistant turn. Synthesise an opaque id so the
+                # request round-trips while still satisfying the
+                # downstream agentic-loop reconciler.
+                import secrets as _secrets
+                self.tool_call_id = f"call_{_secrets.token_hex(8)}"
             if not self.content:
                 raise ValueError('role="tool" messages require non-empty "content".')
         elif self.role == "assistant":
             # Assistant messages may omit content when tool_calls is set.
+            # Finding 2.6: Studio's Stop button leaves an empty
+            # assistant turn in history (``role="assistant",
+            # content=""``); every subsequent send then 422s. Drop the
+            # marker by treating ``content == ""`` as "no content".
+            empty_content = (self.content == "" or self.content == [])
+            if empty_content and not self.tool_calls:
+                # Re-shape so the downstream pipeline sees a valid
+                # assistant turn (content stays None, tool_calls stays
+                # None). The handler that consumes the message list
+                # also drops trailing empty-assistant turns before they
+                # reach llama-server (see ``_drop_empty_assistant_tail``
+                # in routes/inference.py).
+                self.content = None
             if not self.content and not self.tool_calls:
-                raise ValueError(
-                    'role="assistant" messages require either "content" or "tool_calls".'
-                )
+                # Tolerate the post-Stop sentinel rather than 422-ing.
+                pass
         else:  # "user" | "system"
             if self.content is None or self.content == []:
                 raise ValueError(f'role="{self.role}" messages require "content".')

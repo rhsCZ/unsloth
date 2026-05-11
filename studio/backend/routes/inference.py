@@ -1743,7 +1743,7 @@ async def openai_chat_completions(
             try:
                 import base64 as _b64
                 from io import BytesIO as _BytesIO
-                from PIL import Image as _Image
+                from PIL import Image as _Image, UnidentifiedImageError as _UIE
 
                 raw = _b64.b64decode(image_b64)
                 # Normalize to RGB so PNG encoding succeeds regardless of
@@ -1754,9 +1754,17 @@ async def openai_chat_completions(
                 buf = _BytesIO()
                 img.save(buf, format = "PNG")
                 image_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
-            except Exception as e:
+            except _UIE:
+                # Closes finding 3.5: previously the error body interpolated
+                # repr(BytesIO) which leaked the Python class name and a heap
+                # address. Return a generic message instead.
                 raise HTTPException(
-                    status_code = 400, detail = f"Failed to process image: {e}"
+                    status_code = 400,
+                    detail = "Unsupported or corrupt image format.",
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code = 400, detail = "Failed to process image.",
                 )
 
         # Build message list with system prompt prepended
@@ -3426,10 +3434,13 @@ def _normalize_anthropic_openai_images(
                 buf = io.BytesIO()
                 img.save(buf, format = "PNG")
                 png_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            except Exception as e:
+            except Exception:
+                # finding 3.5: do NOT interpolate the exception repr -
+                # PIL passes the BytesIO instance into its message,
+                # leaking the Python class + heap address.
                 raise HTTPException(
                     status_code = 400,
-                    detail = f"Failed to process image: {e}",
+                    detail = "Failed to process image.",
                 )
             part["image_url"] = {"url": f"data:image/png;base64,{png_b64}"}
 
@@ -4221,10 +4232,11 @@ def _openai_messages_for_passthrough(payload) -> list[dict]:
         buf = _BytesIO()
         img.save(buf, format = "PNG")
         png_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
-    except Exception as e:
+    except Exception:
+        # finding 3.5: generic message, no exception-repr interpolation.
         raise HTTPException(
             status_code = 400,
-            detail = f"Failed to process image: {e}",
+            detail = "Failed to process image.",
         )
 
     data_url = f"data:image/png;base64,{png_b64}"

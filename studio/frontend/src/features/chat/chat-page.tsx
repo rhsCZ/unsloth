@@ -2,15 +2,24 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import {
+  type DeletedModelRef,
   type LoraModelOption,
   type ModelOption,
   ModelSelector,
 } from "@/components/assistant-ui/model-selector";
 import { Thread } from "@/components/assistant-ui/thread";
+import { NativeModelChip } from "@/features/native-intents/components/native-model-chip";
+import { NativeModelDropOverlay } from "@/features/native-intents/components/native-model-drop-overlay";
+import { useChooseNativeModel } from "@/features/native-intents/use-native-dialogs";
+import { useNativeModelDrop } from "@/features/native-intents/use-native-drop";
+import { useNativePathLeasesSupported } from "@/features/native-intents/use-native-readiness";
+import { useNativeIntentStore } from "@/features/native-intents/store";
+import type { NativeIntent } from "@/features/native-intents/types";
+import { isTauri } from "@/lib/api-base";
 import { cn } from "@/lib/utils";
 import { GuidedTour, useGuidedTourController } from "@/features/tour";
 import { useSidebar } from "@/components/ui/sidebar";
-import { Settings05Icon } from "@hugeicons/core-free-icons";
+import { CustomizeIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Tooltip, TooltipContent } from "@/components/ui/tooltip";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
@@ -129,6 +138,17 @@ type CompareModelSelection = {
   ggufVariant?: string;
 };
 
+function modelMatchesDeleted(
+  model: { id: string; ggufVariant?: string | null },
+  deletedModel?: DeletedModelRef,
+): boolean {
+  if (!deletedModel || model.id !== deletedModel.id) return false;
+  return (
+    deletedModel.ggufVariant == null ||
+    (model.ggufVariant ?? null) === deletedModel.ggufVariant
+  );
+}
+
 /**
  * Detect if this is a LoRA base-vs-fine-tuned compare.
  * Returns true when the loaded checkpoint is a LoRA — in that case
@@ -147,11 +167,15 @@ const CompareContent = memo(function CompareContent({
   models,
   loraModels,
   onFoldersChange,
+  onModelsChange,
+  deleteDisabled,
 }: {
   pairId: string;
   models: ModelOption[];
   loraModels: LoraModelOption[];
   onFoldersChange?: () => void;
+  onModelsChange?: (deletedModel?: DeletedModelRef) => void;
+  deleteDisabled?: boolean;
 }): ReactElement {
   const isLoraCompare = useIsLoraCompare();
 
@@ -163,6 +187,8 @@ const CompareContent = memo(function CompareContent({
       models={models}
       loraModels={loraModels}
       onFoldersChange={onFoldersChange}
+      onModelsChange={onModelsChange}
+      deleteDisabled={deleteDisabled}
     />
   );
 });
@@ -246,10 +272,10 @@ function CompareShell({
         >
           {children}
         </div>
-        <div className="shrink-0 bg-background px-5 pb-2 pt-1">
-          <div className="mx-auto w-full max-w-[44rem]">{composer}</div>
-          <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
-            LLMs can make mistakes. Double-check all responses.
+        <div className="shrink-0 bg-background pl-5 pr-5 md:pr-[30px] pb-2 pt-1">
+          <div className="mx-auto w-full max-w-[48rem]">{composer}</div>
+          <p className="composer-footer-note">
+            LLMs can make mistakes. Double-check responses.
           </p>
         </div>
       </div>
@@ -331,6 +357,8 @@ function GeneralCompareHeader({
   value,
   onValueChange,
   onFoldersChange,
+  onModelsChange,
+  deleteDisabled,
   side,
 }: {
   models: ModelOption[];
@@ -341,6 +369,8 @@ function GeneralCompareHeader({
     meta: { isLora: boolean; ggufVariant?: string },
   ) => void;
   onFoldersChange?: () => void;
+  onModelsChange?: (deletedModel?: DeletedModelRef) => void;
+  deleteDisabled?: boolean;
   side: "left" | "right";
 }): ReactElement {
   return (
@@ -356,6 +386,8 @@ function GeneralCompareHeader({
         value={value}
         onValueChange={onValueChange}
         onFoldersChange={onFoldersChange}
+        onModelsChange={onModelsChange}
+        deleteDisabled={deleteDisabled}
         variant="ghost"
         className="max-w-[80%] !h-[34px]"
       />
@@ -369,11 +401,15 @@ const GeneralCompareContent = memo(function GeneralCompareContent({
   models,
   loraModels,
   onFoldersChange,
+  onModelsChange,
+  deleteDisabled,
 }: {
   pairId: string;
   models: ModelOption[];
   loraModels: LoraModelOption[];
   onFoldersChange?: () => void;
+  onModelsChange?: (deletedModel?: DeletedModelRef) => void;
+  deleteDisabled?: boolean;
 }): ReactElement {
   const handlesRef = useRef<Record<string, CompareHandle>>({});
   const [model1ThreadId, setModel1ThreadId] = useState<string>();
@@ -390,6 +426,19 @@ const GeneralCompareContent = memo(function GeneralCompareContent({
     id: "",
     isLora: false,
   });
+
+  const handleModelsChange = useCallback(
+    (deletedModel?: DeletedModelRef) => {
+      if (modelMatchesDeleted(model1, deletedModel)) {
+        setModel1({ id: "", isLora: false });
+      }
+      if (modelMatchesDeleted(model2, deletedModel)) {
+        setModel2({ id: "", isLora: false });
+      }
+      onModelsChange?.(deletedModel);
+    },
+    [model1, model2, onModelsChange],
+  );
 
   useEffect(() => {
     let isActive = true;
@@ -446,6 +495,8 @@ const GeneralCompareContent = memo(function GeneralCompareContent({
                 })
               }
               onFoldersChange={onFoldersChange}
+              onModelsChange={handleModelsChange}
+              deleteDisabled={deleteDisabled}
             />
           }
         />
@@ -469,6 +520,8 @@ const GeneralCompareContent = memo(function GeneralCompareContent({
                 })
               }
               onFoldersChange={onFoldersChange}
+              onModelsChange={handleModelsChange}
+              deleteDisabled={deleteDisabled}
             />
           }
         />
@@ -529,7 +582,11 @@ export function ChatPage(): ReactElement {
   const modelsFromStore = useChatRuntimeStore((state) => state.models);
   const lorasFromStore = useChatRuntimeStore((state) => state.loras);
   const modelsError = useChatRuntimeStore((state) => state.modelsError);
+  const modelLoading = useChatRuntimeStore((state) => state.modelLoading);
   const activeThreadId = useChatRuntimeStore((state) => state.activeThreadId);
+  const modelOperationInProgress = useChatRuntimeStore(
+    (state) => state.modelLoading,
+  );
   const {
     refresh,
     selectModel,
@@ -539,6 +596,8 @@ export function ChatPage(): ReactElement {
     loadProgress,
     loadToastDismissed,
   } = useChatModelRuntime();
+  const pendingNativeModelIntent = useNativeIntentStore((state) => state.pendingModelIntent);
+  const nativePathLeasesSupported = useNativePathLeasesSupported();
   const refreshRef = useRef(refresh);
   const selectModelRef = useRef(selectModel);
 
@@ -569,6 +628,60 @@ export function ChatPage(): ReactElement {
     }
     return { mode: "single" };
   }, [search.thread, search.compare, search.new, activeThreadId]);
+
+  const hasActiveModel = Boolean(inferenceParams.checkpoint);
+  const loadNativeModelIntent = useCallback(
+    async (intent: NativeIntent, loadingDescription: string) => {
+      const label = intent.path.displayLabel || intent.displayLabel || "Local GGUF model";
+      await selectModel({
+        id: label,
+        nativePathToken: intent.path.token,
+        isDownloaded: true,
+        loadingDescription,
+        forceReload: true,
+        throwOnError: true,
+      });
+      useNativeIntentStore.getState().clearModelIntent(intent.id);
+    },
+    [selectModel],
+  );
+  const handleNativeModelDropAutoLoad = useCallback(
+    (intent: NativeIntent) =>
+      loadNativeModelIntent(
+        intent,
+        hasActiveModel
+          ? "Replacing with dropped local GGUF model."
+          : "Loading dropped local GGUF model.",
+      ),
+    [hasActiveModel, loadNativeModelIntent],
+  );
+  const handleNativeModelPickerAutoLoad = useCallback(
+    (intent: NativeIntent) =>
+      loadNativeModelIntent(intent, "Loading chosen local GGUF model."),
+    [loadNativeModelIntent],
+  );
+  const canAutoLoadPickedNativeModel = useCallback(() => {
+    const store = useChatRuntimeStore.getState();
+    return (
+      view.mode === "single" &&
+      nativePathLeasesSupported &&
+      !loadingModel &&
+      !modelLoading &&
+      !store.modelLoading &&
+      !store.params.checkpoint
+    );
+  }, [loadingModel, modelLoading, nativePathLeasesSupported, view.mode]);
+  const chooseNativeModel = useChooseNativeModel({
+    shouldAutoLoad: canAutoLoadPickedNativeModel,
+    onAutoLoad: handleNativeModelPickerAutoLoad,
+  });
+  const nativeModelDropState = useNativeModelDrop({
+    enabled: view.mode === "single",
+    nativePathLeasesSupported,
+    hasActiveModel,
+    isModelLoading: Boolean(loadingModel) || modelLoading,
+    onAutoLoad: handleNativeModelDropAutoLoad,
+  });
 
   const handleCheckpointChange = useCallback(
     (
@@ -734,6 +847,21 @@ export function ChatPage(): ReactElement {
       .catch(() => {});
   }, [navigate]);
 
+  const refreshModelLists = useCallback((deletedModel?: DeletedModelRef) => {
+    const { checkpoint } = useChatRuntimeStore.getState().params;
+    const activeGgufVariant = useChatRuntimeStore.getState().activeGgufVariant;
+    if (
+      modelMatchesDeleted(
+        { id: checkpoint, ggufVariant: activeGgufVariant },
+        deletedModel,
+      )
+    ) {
+      useChatRuntimeStore.getState().clearCheckpoint();
+    }
+    void refresh();
+    refreshLocalModels();
+  }, [refresh, refreshLocalModels]);
+
   const loraModels = useMemo<LoraModelOption[]>(() => {
     const fromLoras = lorasFromStore.map((lora) => ({
       id: lora.id,
@@ -859,6 +987,7 @@ export function ChatPage(): ReactElement {
     <div className="flex min-h-0 min-w-0 flex-1 basis-0 bg-background overflow-hidden">
       <GuidedTour {...tour.tourProps} />
       <div className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden">
+        <NativeModelDropOverlay state={nativeModelDropState} />
         <div
           className={cn(
             "absolute top-0 left-0 right-[10px] z-30 flex h-[48px] shrink-0 items-start pt-[11px] pr-2 bg-background",
@@ -877,6 +1006,9 @@ export function ChatPage(): ReactElement {
                 onValueChange={handleCheckpointChange}
                 onEject={handleEject}
                 onFoldersChange={refreshLocalModels}
+                onPickLocalModel={isTauri ? chooseNativeModel : undefined}
+                onModelsChange={refreshModelLists}
+                deleteDisabled={modelOperationInProgress}
                 variant="ghost"
                 open={modelSelectorOpen}
                 onOpenChange={handleModelSelectorOpenChange}
@@ -885,6 +1017,13 @@ export function ChatPage(): ReactElement {
                 className="max-w-[62vw] !pr-3 sm:max-w-none !h-[34px]"
               />
             )}
+            {pendingNativeModelIntent && view.mode !== "compare" ? (
+              <NativeModelChip
+                intent={pendingNativeModelIntent}
+                nativeReadsDisabled={!nativePathLeasesSupported}
+                onLoad={(selection) => selectModel(selection)}
+              />
+            ) : null}
             {loadingModel && loadToastDismissed ? (
               <ModelLoadInlineStatus
                 label={
@@ -934,14 +1073,22 @@ export function ChatPage(): ReactElement {
                   <button
                     type="button"
                     onClick={() => setSettingsOpen(true)}
-                    className="flex h-[34px] w-[34px] items-center justify-center rounded-[8px] text-[#383835] dark:text-[#c7c7c4] transition-colors hover:bg-[#ececec] dark:hover:bg-[#2e3035] hover:text-black dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex h-[34px] w-[34px] items-center justify-center rounded-[12px] text-nav-fg transition-colors hover:bg-nav-surface-hover hover:text-black dark:hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     aria-label="Open configuration"
                     data-tour="chat-settings"
                   >
-                    <HugeiconsIcon icon={Settings05Icon} className="size-5" />
+                    <HugeiconsIcon
+                      icon={CustomizeIcon}
+                      strokeWidth={1.75}
+                      className="size-icon"
+                    />
                   </button>
                 </TooltipPrimitive.Trigger>
-                <TooltipContent side="bottom" sideOffset={6}>
+                <TooltipContent
+                  side="bottom"
+                  sideOffset={6}
+                  className="tooltip-compact"
+                >
                   Open configuration
                 </TooltipContent>
               </Tooltip>
@@ -962,6 +1109,8 @@ export function ChatPage(): ReactElement {
             models={models}
             loraModels={loraModels}
             onFoldersChange={refreshLocalModels}
+            onModelsChange={refreshModelLists}
+            deleteDisabled={modelOperationInProgress}
           />
         )}
       </div>

@@ -235,6 +235,128 @@ logger = LogConfig.setup_logging(
 
 app.add_middleware(LoggingMiddleware)
 
+
+# ---------------------------------------------------------------------------
+# Security headers middleware
+#
+# Adds CSP / X-Frame-Options / X-Content-Type-Options / Referrer-Policy
+# / Permissions-Policy to every response. Closes the missing-headers gap
+# called out under "Missing CSP" / "Missing X-Frame-Options" in the
+# audit (LOW). Frontend assets are loaded from same-origin; web-search
+# favicons load from *.gstatic.com.
+# ---------------------------------------------------------------------------
+from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
+from starlette.requests import Request as _StarletteRequest  # noqa: E402
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: _StarletteRequest, call_next):
+        response = await call_next(request)
+        # Be careful with CSP on the OpenAI-compat /v1 endpoints - those
+        # return JSON, the headers are still safe. We allow 'unsafe-inline'
+        # on style-src because Studio's bundled CSS uses inline styles.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            (
+                "default-src 'self'; "
+                "img-src 'self' data: blob: https://t0.gstatic.com "
+                "https://t1.gstatic.com https://t2.gstatic.com "
+                "https://t3.gstatic.com; "
+                "connect-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "font-src 'self' data:; "
+                "frame-ancestors 'none'; "
+                "form-action 'self'; "
+                "base-uri 'self'"
+            ),
+        )
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+        )
+        # Strip server fingerprint added by uvicorn (finding 4.15).
+        response.headers["server"] = "unsloth-studio"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Body-size middleware (closes finding 2.8 - no upload size limit).
+#
+# /v1/chat/completions accepts base64-encoded attachments inside the JSON
+# message body, bypassing the per-file 50 MB cap that already exists for
+# Data Recipes. Uvicorn/Starlette have no enforced cap by default, so the
+# probe was able to attach a 50 MB plain-text file. Without a cap an
+# attacker can send arbitrarily large JSON to OOM the server.
+#
+# Default cap: 100 MB (env-tunable). Applies to write-bearing methods on
+# the inference / dataset / data-recipe / training paths. Skips the
+# generic GET / OPTIONS surface to keep liveness probes lightweight.
+# ---------------------------------------------------------------------------
+import json as _json_for_413  # noqa: E402
+from starlette.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+
+_MAX_BODY_BYTES = int(os.environ.get("UNSLOTH_STUDIO_MAX_BODY_MB", "100")) * 1024 * 1024
+_BODY_PROTECTED_PREFIXES = (
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/api/inference",
+    "/api/data-recipe",
+    "/api/datasets",
+    "/api/train",
+    "/api/export",
+)
+
+
+class MaxBodyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: _StarletteRequest, call_next):
+        method = request.method.upper()
+        path = request.url.path
+        if method in ("POST", "PUT", "PATCH") and any(
+            path.startswith(p) for p in _BODY_PROTECTED_PREFIXES
+        ):
+            cl = request.headers.get("content-length")
+            if cl:
+                try:
+                    declared = int(cl)
+                except ValueError:
+                    declared = None
+                if declared is not None and declared > _MAX_BODY_BYTES:
+                    return _JSONResponse(
+                        status_code = 413,
+                        content = {
+                            "detail": (
+                                f"Request body too large "
+                                f"({declared:,} bytes; max {_MAX_BODY_BYTES:,})."
+                            )
+                        },
+                    )
+        return await call_next(request)
+
+
+app.add_middleware(MaxBodyMiddleware)
+
+
+# Friendly redirect for finding 4.17 (`/recipes` 404). Sidebar nav uses
+# the correct `/data-recipes`, but users typing `/recipes` directly hit
+# the SPA catch-all and see "Not Found". Mount a tiny redirect router so
+# the URL works either way.
+from starlette.responses import RedirectResponse as _RedirectResponse  # noqa: E402
+
+
+@app.get("/recipes", include_in_schema = False)
+@app.get("/recipes/{rest:path}", include_in_schema = False)
+async def _recipes_redirect(rest: str = ""):
+    target = "/data-recipes" + (("/" + rest) if rest else "")
+    return _RedirectResponse(url = target, status_code = 308)
+
 # CORS middleware
 _api_only = os.environ.get("UNSLOTH_API_ONLY") == "1"
 _cors_origins = ["*"]
@@ -286,23 +408,48 @@ app.include_router(
 
 
 @app.get("/api/health")
-async def health_check():
-    """Health check endpoint"""
-    platform_map = {"darwin": "mac", "win32": "windows", "linux": "linux"}
-    device_type = platform_map.get(sys.platform, sys.platform)
+async def health_check(request: Request):
+    """Health check endpoint.
 
-    return {
+    Returns a minimal ``{"status":"healthy"}`` to unauthenticated callers
+    so the endpoint stays usable as a liveness probe but no longer leaks
+    the Studio version, device type, or ``studio_root_id`` to anyone
+    hitting `-H 0.0.0.0` (finding 4.14). Callers presenting a valid
+    Bearer token receive the full diagnostic payload that internal
+    launchers rely on (studio_root_id is needed for sibling-Studio
+    detection on a shared port).
+    """
+    minimal = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
+    }
+    # Best-effort token sniff without forcing authentication on the
+    # endpoint - keeps load-balancer liveness probes working.
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return minimal
+    try:
+        from auth.authentication import get_current_subject as _gcs
+        # Manually invoke the dependency machinery; if it fails, fall
+        # back to minimal.
+        from fastapi.security import HTTPAuthorizationCredentials
+        creds = HTTPAuthorizationCredentials(scheme = "Bearer", credentials = auth.split(" ", 1)[1])
+        subject = _gcs(creds)  # type: ignore[arg-type]
+        if not subject:
+            return minimal
+    except Exception:
+        return minimal
+
+    platform_map = {"darwin": "mac", "win32": "windows", "linux": "linux"}
+    device_type = platform_map.get(sys.platform, sys.platform)
+    return {
+        **minimal,
         "service": "Unsloth UI Backend",
         "version": UNSLOTH_VERSION,
         "device_type": device_type,
         "chat_only": _hw_module.CHAT_ONLY,
         "desktop_protocol_version": 1,
         "supports_desktop_auth": True,
-        # why: launchers compare against an install-time hash so a sibling
-        # Studio on the same port is rejected; hex digest avoids leaking the
-        # raw install path on -H 0.0.0.0.
         "studio_root_id": _studio_root_id(),
         "native_path_leases_supported": native_path_leases_supported(),
     }
@@ -430,6 +577,21 @@ def _inject_bootstrap(html_bytes: bytes, app: FastAPI) -> bytes:
     the HTML is served clean — no credentials leak.
     """
     import json as _json
+
+    # SECURITY: Inject the plaintext bootstrap password into the HTML
+    # only when explicitly opted in via UNSLOTH_STUDIO_INJECT_BOOTSTRAP.
+    # The previous default ("inject whenever requires_password_change is
+    # true") leaked the password to any LAN-side caller on -H 0.0.0.0
+    # and to any browser extension / page script (finding 2.2). The
+    # right UX is: show the bootstrap password in the launcher's stdout
+    # / the .bootstrap_password file and let the user type it into a
+    # visible "current password" field. That visible field is a frontend
+    # follow-up; without it, change-password from the UI requires the
+    # user to read the bootstrap password from .bootstrap_password.
+    if os.environ.get("UNSLOTH_STUDIO_INJECT_BOOTSTRAP", "").lower() not in (
+        "1", "true", "yes", "on",
+    ):
+        return html_bytes
 
     if not storage.requires_password_change(storage.DEFAULT_ADMIN_USERNAME):
         return html_bytes

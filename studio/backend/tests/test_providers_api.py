@@ -38,6 +38,14 @@ BASE_URL = os.getenv("STUDIO_TEST_URL", "http://localhost:8000")
 USERNAME = os.getenv("STUDIO_TEST_USER", "unsloth")
 PASSWORD = os.getenv("STUDIO_TEST_PASSWORD", "")
 
+# These tests require a live Studio server reachable at BASE_URL with a known
+# bootstrap password. Skip the whole module when that environment is missing
+# (e.g. on CI runners) so pytest discovery does not error out.
+pytestmark = pytest.mark.skipif(
+    not PASSWORD,
+    reason = "Integration test requires a running Studio server; set STUDIO_TEST_PASSWORD to enable.",
+)
+
 # Map provider_type → (env var name, model to use for inference test)
 _PROVIDER_CONFIGS: dict[str, tuple[str, str]] = {
     "openai": ("OPENAI_API_KEY", "gpt-4o-mini"),

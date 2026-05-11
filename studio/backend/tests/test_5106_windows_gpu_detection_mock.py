@@ -48,41 +48,68 @@ _BACKEND_DIR = str(Path(__file__).resolve().parent.parent)
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-# Stub heavy deps the rest of the studio backend pulls in so this
-# test can run on the same matrix as test_llama_cpp_windows_nvidia_path.
-_loggers_stub = _types.ModuleType("loggers")
-_loggers_stub.get_logger = lambda name: __import__("logging").getLogger(name)
-sys.modules.setdefault("loggers", _loggers_stub)
-sys.modules.setdefault("structlog", _types.ModuleType("structlog"))
-
-_httpx_stub = _types.ModuleType("httpx")
-for _exc_name in (
-    "ConnectError",
-    "TimeoutException",
-    "ReadTimeout",
-    "ReadError",
-    "RemoteProtocolError",
-    "CloseError",
-):
-    setattr(_httpx_stub, _exc_name, type(_exc_name, (Exception,), {}))
+# Stub heavy deps the rest of the studio backend pulls in IFF they
+# are not installed in this environment. ``sys.modules.setdefault``
+# alone is not enough: pytest collects test files alphabetically, so
+# this file (``test_5106_*``) is imported before any other test
+# imports real ``httpx`` / ``structlog`` / ``loggers``. Unconditionally
+# installing a stub there would shadow the real httpx for every
+# subsequent test in the directory (test_anthropic_messages.py,
+# test_training_*, etc) and break their `from httpx import HTTPError,
+# Response` imports. Guard each stub with ``find_spec`` so we only
+# fall back to the stub when the real module truly is missing.
+import importlib.util as _importlib_util  # noqa: E402
 
 
-class _FakeTimeout:
-    def __init__(self, *a, **kw):
-        pass
+def _maybe_stub(name: str, builder):
+    if _importlib_util.find_spec(name) is None:
+        sys.modules[name] = builder()
 
 
-_httpx_stub.Timeout = _FakeTimeout
-_httpx_stub.Client = type(
-    "Client",
-    (),
-    {
-        "__init__": lambda self, **kw: None,
-        "__enter__": lambda self: self,
-        "__exit__": lambda self, *a: None,
-    },
-)
-sys.modules.setdefault("httpx", _httpx_stub)
+def _build_loggers_stub():
+    m = _types.ModuleType("loggers")
+    m.get_logger = lambda name: __import__("logging").getLogger(name)
+    return m
+
+
+def _build_structlog_stub():
+    return _types.ModuleType("structlog")
+
+
+def _build_httpx_stub():
+    m = _types.ModuleType("httpx")
+    for _exc_name in (
+        "ConnectError",
+        "TimeoutException",
+        "ReadTimeout",
+        "ReadError",
+        "RemoteProtocolError",
+        "CloseError",
+        "HTTPError",
+    ):
+        setattr(m, _exc_name, type(_exc_name, (Exception,), {}))
+    m.Response = type("Response", (), {})
+
+    class _FakeTimeout:
+        def __init__(self, *a, **kw):
+            pass
+
+    m.Timeout = _FakeTimeout
+    m.Client = type(
+        "Client",
+        (),
+        {
+            "__init__": lambda self, **kw: None,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: None,
+        },
+    )
+    return m
+
+
+_maybe_stub("loggers", _build_loggers_stub)
+_maybe_stub("structlog", _build_structlog_stub)
+_maybe_stub("httpx", _build_httpx_stub)
 
 from core.inference.llama_cpp import LlamaCppBackend  # noqa: E402
 

@@ -1140,8 +1140,21 @@ export function ChatProvidersSettings({
 
       <section className="flex max-w-[760px] flex-col gap-2">
         <div className="overflow-hidden rounded-[10px] border border-border/70 bg-muted/[0.12]">
+          <button
+            type="button"
+            onClick={openAddProvider}
+            className="group/add flex w-full items-center justify-between gap-3 border-border/60 border-b px-3 py-2.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/25 focus-visible:ring-inset"
+          >
+            <span className="flex min-w-0 items-center gap-2 rounded-full border border-border bg-background/50 px-3 py-1.5 transition-colors group-hover/add:border-emerald-500/25 group-hover/add:text-emerald-700 dark:group-hover/add:text-emerald-300">
+              <HugeiconsIcon icon={PlusSignIcon} className="size-4 shrink-0" />
+              <span>Add Provider</span>
+            </span>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground/90">
+              {providers.length} providers · {totalModels} models
+            </span>
+          </button>
           {providers.length === 0 ? (
-            <div className="flex items-center justify-between gap-4 px-3 py-4 max-sm:flex-col max-sm:items-start">
+            <div className="px-3 py-4">
               <div className="flex min-w-0 flex-col gap-0.5">
                 <span className="text-sm font-medium text-foreground">
                   No providers yet
@@ -1153,22 +1166,6 @@ export function ChatProvidersSettings({
             </div>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={openAddProvider}
-                className="group/add flex w-full items-center justify-between gap-3 border-border/60 border-b px-3 py-2.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/25 focus-visible:ring-inset"
-              >
-                <span className="flex min-w-0 items-center gap-2 rounded-full border border-border bg-background/50 px-3 py-1.5 transition-colors group-hover/add:border-emerald-500/25 group-hover/add:text-emerald-700 dark:group-hover/add:text-emerald-300">
-                  <HugeiconsIcon
-                    icon={PlusSignIcon}
-                    className="size-4 shrink-0"
-                  />
-                  <span>Add Provider</span>
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-muted-foreground/90">
-                  {providers.length} providers · {totalModels} models
-                </span>
-              </button>
               {providers.map((provider) => {
                 const registryEntry = registryByType.get(provider.providerType);
                 const detail =

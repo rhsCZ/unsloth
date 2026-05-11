@@ -37,7 +37,15 @@ class AuthStatusResponse(BaseModel):
     initialized: bool = Field(
         ..., description = "True if the auth database contains a login user"
     )
-    default_username: str = Field(..., description = "Default seeded admin username")
+    default_username: Optional[str] = Field(
+        None,
+        description = (
+            "Default seeded admin username. Returned as None to "
+            "unauthenticated callers so /api/auth/status no longer "
+            "leaks the admin name (finding 3.3). The frontend hardcodes "
+            "the admin name so this is safe to omit."
+        ),
+    )
     requires_password_change: bool = Field(
         ...,
         description = "True if the seeded admin must still change the default password",

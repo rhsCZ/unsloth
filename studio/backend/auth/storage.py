@@ -480,6 +480,49 @@ def save_refresh_token(
         conn.close()
 
 
+def consume_refresh_token(token: str) -> Optional[Tuple[str, bool]]:
+    """Atomically validate-and-delete a refresh token.
+
+    Used by the /api/auth/refresh handler so each refresh token can only
+    be used once (token rotation). The handler then mints a new refresh
+    token with :func:`auth.authentication.create_refresh_token`. Closes
+    finding 3.2 (refresh token previously reusable indefinitely).
+
+    Returns (username, is_desktop) on success, or None if the token does
+    not exist (already consumed, never issued, or revoked) or is expired.
+    """
+    token_hash = _hash_token(token)
+    conn = get_connection()
+    try:
+        # Clean up any expired tokens while we're here.
+        conn.execute(
+            "DELETE FROM refresh_tokens WHERE expires_at < ?",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        cur = conn.execute(
+            """
+            SELECT id, username, expires_at, is_desktop FROM refresh_tokens
+            WHERE token_hash = ?
+            """,
+            (token_hash,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.commit()
+            return None
+        expires_at = datetime.fromisoformat(row["expires_at"])
+        if datetime.now(timezone.utc) > expires_at:
+            conn.execute("DELETE FROM refresh_tokens WHERE id = ?", (row["id"],))
+            conn.commit()
+            return None
+        # Atomically remove so the token cannot be replayed.
+        conn.execute("DELETE FROM refresh_tokens WHERE id = ?", (row["id"],))
+        conn.commit()
+        return row["username"], bool(row["is_desktop"])
+    finally:
+        conn.close()
+
+
 def verify_refresh_token(token: str) -> Optional[Tuple[str, bool]]:
     """
     Verify a refresh token and return the username plus desktop marker.

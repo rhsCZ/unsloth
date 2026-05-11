@@ -26,10 +26,14 @@ name: Version Compat CI
 
 on:
   pull_request:
+    # Trigger on any unsloth source change, not just the three previously
+    # named files. The symbol-existence tests verify that EVERY pinned
+    # upstream reference in unsloth still resolves; a new
+    # `from peft.foo import Bar` added in unsloth/kernels/whatever.py
+    # is just as much a compat regression risk as one added in
+    # unsloth/models/rl.py.
     paths:
-      - 'unsloth/models/rl.py'
-      - 'unsloth/models/rl_replacements.py'
-      - 'unsloth/models/sentence_transformer.py'
+      - 'unsloth/**'
       - 'tests/vllm_compat/**'
       - 'tests/version_compat/**'
       - 'pyproject.toml'

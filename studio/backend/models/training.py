@@ -9,9 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing import Any, Optional, List, Dict, Literal
 
 
-# Bounds shared between the public schema and any validator.
-# Tuned to span the realistic range a single GPU can handle (B200 = 180 GB)
-# while still rejecting the values the audit hit (-1, 0, 1e9, 'abc', 'two').
+# Bounds tuned to span what a single GPU can handle while rejecting
+# obvious garbage (-1, 0, 1e9, 'abc').
 _MAX_BATCH_SIZE = 1024
 _MAX_GRAD_ACCUM = 4096
 _MAX_STEPS = 1_000_000
@@ -21,12 +20,7 @@ _MAX_LR_VALUE = 1.0
 
 
 def _parse_lr(v: Any) -> float:
-    """Accept str ("2e-4") or numeric, return float bounded (0, _MAX_LR_VALUE).
-
-    Closes 2.7 (LR accepted -1 / 0 / 1e9 / 'abc') and 3.15 (non-numeric
-    silently coerced to 0). Raises ValueError so pydantic returns 422
-    with a clear message.
-    """
+    """Parse and bound learning_rate to (0, _MAX_LR_VALUE)."""
     if v is None:
         raise ValueError("learning_rate is required")
     if isinstance(v, bool):
@@ -102,18 +96,11 @@ class TrainingStartRequest(BaseModel):
             values.setdefault("train_split", values.pop("split"))
         return values
 
-    # ------------------------------------------------------------------
-    # Hyperparameter bounds (closes findings 2.7, 3.14, 3.15).
-    # The frontend should still validate inline for UX, but the server
-    # is now the source of truth - bad values produce 422 with a clear
-    # message naming the offending field.
-    # ------------------------------------------------------------------
+    # Hyperparameter bounds; bad values produce 422 naming the field.
     @field_validator("learning_rate", mode = "before")
     @classmethod
     def _check_learning_rate(cls, v):
-        # Parse + bound here, then return as the original schema type
-        # (str) so existing call sites (which int / float themselves)
-        # are unaffected.
+        # Return as str so existing call sites (which float() themselves) work.
         lr = _parse_lr(v)
         return str(lr)
 

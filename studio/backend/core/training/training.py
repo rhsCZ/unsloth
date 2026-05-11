@@ -41,14 +41,8 @@ logger = get_logger(__name__)
 
 
 def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
-    """Remove ``checkpoint-*`` subdirs after a cancelled training run.
-
-    Safety: only delete directories whose realpath is under the
-    configured outputs root, AND that match the ``checkpoint-<int>``
-    naming pattern emitted by HF Trainer / TRL. Anything else is left
-    alone so user-supplied artifacts in adjacent paths are never
-    touched.
-    """
+    """Remove ``checkpoint-<int>`` subdirs after a cancelled run.
+    Only paths whose realpath is under outputs_root are touched."""
     out = Path(output_dir)
     if not out.exists():
         return
@@ -383,11 +377,7 @@ class TrainingBackend:
         if self._pump_thread is not None and self._pump_thread.is_alive():
             self._pump_thread.join(timeout = 8.0)
 
-        # Reclaim disk for cancelled runs. The HF trainer writes
-        # ``checkpoint-<step>`` directories under ``output_dir`` every
-        # ``save_steps``; without cleanup these survive the cancel and
-        # accumulate (the probe showed +67 MB stuck after a 200-step
-        # cancel). Only purge on an explicit user cancel - stop-and-save
+        # Drop checkpoint-* dirs on explicit cancel only; stop-and-save
         # keeps its artifacts.
         if cancelled and output_dir:
             try:

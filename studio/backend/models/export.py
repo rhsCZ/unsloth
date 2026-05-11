@@ -12,12 +12,7 @@ from typing import List, Optional, Literal, Dict, Any
 
 
 def _validate_save_directory(value: str) -> str:
-    """Reject save_directory values that escape the configured export root.
-
-    Mirrors :func:`studio.backend.utils.paths.storage_roots.resolve_under_root`
-    so the rejection happens at request-parse time with a clear 422 instead of
-    at handler invocation time with an opaque 500.
-    """
+    """Reject save_directory values that escape the export root."""
     if value is None:
         raise ValueError("save_directory is required")
     raw = str(value).strip()

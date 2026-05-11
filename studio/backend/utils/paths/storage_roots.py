@@ -277,11 +277,7 @@ def _clean_relative_path(
 
 
 def _assert_contained(resolved: Path, root: Path) -> None:
-    """Reject paths whose post-resolve real location escapes ``root``.
-
-    Catches absolute inputs, ``..`` traversal, and symlinks pointing outside
-    the root. Raises ValueError on escape.
-    """
+    """Raise ValueError if ``resolved`` realpaths outside ``root``."""
     try:
         resolved_real = Path(os.path.realpath(resolved))
         root_real = Path(os.path.realpath(root))
@@ -304,17 +300,10 @@ def resolve_under_root(
 ) -> Path:
     """Resolve ``path_value`` so the result is provably under ``root``.
 
-    Policy:
-    - Empty / None -> the root itself.
-    - Null bytes -> rejected.
-    - ``..`` segments -> rejected (no traversal).
-    - Absolute paths -> accepted ONLY if already inside ``root`` (after
-      realpath). This lets internal code that has already resolved a
-      stored absolute path re-enter the resolver idempotently, while
-      blocking the export-time exploit where a user supplies
-      ``/tmp/EVIL``. The pydantic validator on user-facing schemas
-      (``ExportCommonOptions.save_directory``) rejects absolute inputs
-      outright at request-parse time as defense-in-depth.
+    Empty/None returns ``root``. Null bytes and ``..`` segments are
+    rejected. Absolute paths are accepted only when already contained
+    under ``root`` (lets pre-resolved internal paths re-enter
+    idempotently); user-facing schemas reject absolutes outright.
     """
     if not path_value or not str(path_value).strip():
         return root
@@ -328,8 +317,6 @@ def resolve_under_root(
         raise ValueError(f"path may not contain '..' segments: {raw!r}")
 
     if path.is_absolute():
-        # Internal callers may pass already-resolved absolute paths.
-        # Accept only when contained under root; reject escapes.
         _assert_contained(path, root)
         return path
 
@@ -371,8 +358,6 @@ def resolve_dataset_path(path_value: str) -> Path:
     if ".." in path.parts:
         raise ValueError(f"dataset path may not contain '..' segments: {raw!r}")
     if path.is_absolute():
-        # Accept absolute inputs only when contained under one of the
-        # dataset roots; reject all other absolute paths.
         for root_fn in (datasets_root, dataset_uploads_root, recipe_datasets_root):
             try:
                 _assert_contained(path, root_fn())

@@ -36,17 +36,8 @@ from auth.authentication import (
 router = APIRouter()
 
 
-# ---------------------------------------------------------------------------
-# Login rate limiter (in-memory, per-IP).
-#
-# Tracks the last N failed-attempt timestamps per source IP. When the
-# window count exceeds the threshold, raise 429 with Retry-After.
-# Successful logins clear the bucket for that IP.
-#
-# This is intentionally a simple in-memory limiter; for a multi-process
-# deployment the right home would be a shared store. Single Studio
-# process is the common case for desktop / single-tenant local use.
-# ---------------------------------------------------------------------------
+# In-memory per-IP login rate limiter. Single-process / desktop use;
+# a multi-process deployment would want a shared store.
 _LOGIN_BUCKETS: dict[str, deque] = {}
 _LOGIN_BUCKETS_LOCK = threading.Lock()
 _LOGIN_WINDOW_SECONDS = 60.0
@@ -93,18 +84,8 @@ def _clear_login_bucket(ip: str) -> None:
 
 @router.get("/status", response_model = AuthStatusResponse)
 async def auth_status() -> AuthStatusResponse:
-    """
-    Check whether auth has already been initialized.
-
-    - initialized = False -> frontend should wait for the seeded admin bootstrap.
-    - initialized = True  -> frontend should show login or force the first password change.
-
-    Note: ``default_username`` is intentionally returned as ``None`` to
-    unauthenticated callers. The frontend hardcodes the admin name; the
-    previous behaviour leaked the admin name to anyone hitting this
-    endpoint and combined with the absent rate-limit (now fixed) made
-    brute-force trivial.
-    """
+    """Check whether auth has been initialized. ``default_username`` is
+    returned as ``None`` so it is not leaked to unauthenticated callers."""
     return AuthStatusResponse(
         initialized = storage.is_initialized(),
         default_username = None,
@@ -118,13 +99,7 @@ async def auth_status() -> AuthStatusResponse:
 
 @router.post("/login", response_model = Token)
 async def login(payload: AuthLoginRequest, request: Request) -> Token:
-    """
-    Login with username/password and receive access + refresh tokens.
-
-    Rate-limited per source IP: after :data:`_LOGIN_MAX_FAILS` failures
-    inside :data:`_LOGIN_WINDOW_SECONDS`, further attempts return 429
-    with a ``Retry-After`` header until the window expires.
-    """
+    """Login with username/password. Rate-limited per source IP."""
     ip = _client_key(request)
     blocked_for = _login_blocked(ip)
     if blocked_for > 0:
@@ -169,22 +144,13 @@ async def logout(
     request: Request,
     current_subject: str = Depends(get_current_subject_allow_password_change),
 ) -> Response:
-    """Invalidate ALL refresh tokens for the authenticated subject.
-
-    Closes finding 2.3 (POST /api/auth/logout previously returned 405,
-    leaving no way to invalidate refresh tokens beyond a password
-    change). The access token itself is not blacklisted (JWTs are
-    stateless; they expire by their ``exp`` claim within 1 hour), so the
-    client should also clear local state immediately.
-    """
+    """Invalidate all refresh tokens for the authenticated subject. The
+    access token expires on its own (JWTs are stateless), so the client
+    should also clear local state immediately."""
     try:
         storage.revoke_user_refresh_tokens(current_subject)
     except Exception:
-        # Best-effort - logout should always succeed from the client's
-        # perspective even if the persistence layer hiccups.
         pass
-    # Defensive: clear any cached bootstrap password from process state
-    # so a subsequent change-password / restart doesn't re-leak it.
     try:
         request.app.state.bootstrap_password = None
     except AttributeError:
@@ -212,17 +178,9 @@ async def desktop_login(payload: DesktopLoginRequest) -> Token:
 
 @router.post("/refresh", response_model = Token)
 async def refresh(payload: RefreshTokenRequest) -> Token:
-    """
-    Exchange a valid refresh token for a NEW access + refresh token pair.
-
-    Refresh tokens are now single-use: the supplied token is atomically
-    consumed (deleted) and a fresh one is issued. Re-submitting the
-    consumed token returns 401 (closing finding 3.2 - refresh token
-    previously usable indefinitely). If a refresh-token-reuse event
-    fires (consumed token already gone), no token family invalidation
-    happens here because the consume_refresh_token call already returned
-    None - we cannot identify the user behind a revoked hash.
-    """
+    """Exchange a valid refresh token for a new access + refresh pair.
+    Refresh tokens are single-use: the supplied token is atomically
+    consumed and a fresh one issued."""
     consumed = storage.consume_refresh_token(payload.refresh_token)
     if consumed is None:
         raise HTTPException(
@@ -271,9 +229,6 @@ async def change_password(
 
     storage.update_password(current_subject, payload.new_password)
     storage.revoke_user_refresh_tokens(current_subject)
-    # Drop the process-cached bootstrap password so _inject_bootstrap
-    # cannot re-serve it after a server-side cache slip (defense-in-depth
-    # for finding 2.2).
     try:
         request.app.state.bootstrap_password = None
     except AttributeError:

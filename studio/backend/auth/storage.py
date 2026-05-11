@@ -481,20 +481,11 @@ def save_refresh_token(
 
 
 def consume_refresh_token(token: str) -> Optional[Tuple[str, bool]]:
-    """Atomically validate-and-delete a refresh token.
-
-    Used by the /api/auth/refresh handler so each refresh token can only
-    be used once (token rotation). The handler then mints a new refresh
-    token with :func:`auth.authentication.create_refresh_token`. Closes
-    finding 3.2 (refresh token previously reusable indefinitely).
-
-    Returns (username, is_desktop) on success, or None if the token does
-    not exist (already consumed, never issued, or revoked) or is expired.
-    """
+    """Atomically validate-and-delete a refresh token (single-use rotation).
+    Returns ``(username, is_desktop)`` or ``None`` if missing/expired."""
     token_hash = _hash_token(token)
     conn = get_connection()
     try:
-        # Clean up any expired tokens while we're here.
         conn.execute(
             "DELETE FROM refresh_tokens WHERE expires_at < ?",
             (datetime.now(timezone.utc).isoformat(),),
@@ -515,7 +506,6 @@ def consume_refresh_token(token: str) -> Optional[Tuple[str, bool]]:
             conn.execute("DELETE FROM refresh_tokens WHERE id = ?", (row["id"],))
             conn.commit()
             return None
-        # Atomically remove so the token cannot be replayed.
         conn.execute("DELETE FROM refresh_tokens WHERE id = ?", (row["id"],))
         conn.commit()
         return row["username"], bool(row["is_desktop"])

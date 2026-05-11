@@ -1755,9 +1755,6 @@ async def openai_chat_completions(
                 img.save(buf, format = "PNG")
                 image_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
             except _UIE:
-                # Closes finding 3.5: previously the error body interpolated
-                # repr(BytesIO) which leaked the Python class name and a heap
-                # address. Return a generic message instead.
                 raise HTTPException(
                     status_code = 400,
                     detail = "Unsupported or corrupt image format.",
@@ -3436,9 +3433,6 @@ def _normalize_anthropic_openai_images(
                 img.save(buf, format = "PNG")
                 png_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
             except Exception:
-                # finding 3.5: do NOT interpolate the exception repr -
-                # PIL passes the BytesIO instance into its message,
-                # leaking the Python class + heap address.
                 raise HTTPException(
                     status_code = 400,
                     detail = "Failed to process image.",
@@ -4234,7 +4228,6 @@ def _openai_messages_for_passthrough(payload) -> list[dict]:
         img.save(buf, format = "PNG")
         png_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:
-        # finding 3.5: generic message, no exception-repr interpolation.
         raise HTTPException(
             status_code = 400,
             detail = "Failed to process image.",

@@ -349,11 +349,8 @@ def run_server(
             if not silent:
                 print(f"[WARNING] Frontend not found at {frontend_path}")
 
-    # Create the uvicorn server and expose it for signal handlers.
-    # server_header=False suppresses uvicorn's built-in "Server: uvicorn"
-    # response header (finding 4.15 - technology fingerprinting). The
-    # SecurityHeadersMiddleware sets a generic "Server: unsloth-studio"
-    # via response.headers.
+    # Disable uvicorn's "Server: uvicorn" header; SecurityHeadersMiddleware
+    # sets a generic "Server: unsloth-studio" instead.
     config = uvicorn.Config(
         app,
         host = host,

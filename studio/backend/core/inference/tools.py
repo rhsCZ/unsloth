@@ -243,47 +243,17 @@ def _build_safe_env(workdir: str) -> dict[str, str]:
 
 
 def _sandbox_preexec():
-    """Pre-exec hook for every sandboxed subprocess (bash + python paths).
+    """Pre-exec hook for sandboxed subprocesses. Each step is best-effort.
 
-    Sequence (each step is best-effort, failures are swallowed so the
-    sandbox still launches on kernels / configurations that lack a
-    feature):
-
-    1. ``os.setsid()`` -> child becomes its own session leader; the
-       supervisor uses ``os.killpg(getpgid(...))`` so grandchildren die
-       too (closes the timeout-leak that left bash backgrounded children
-       alive after ``proc.kill()``).
-    2. ``os.umask(0o077)`` -> files the child writes default to 0o600.
-    3. ``PR_SET_NO_NEW_PRIVS`` -> sudo/su/pkexec are kernel-blocked.
-    4. ``PR_SET_PDEATHSIG = SIGKILL`` -> orphaned children die when
-       Studio exits.
-    5. ``unshare(CLONE_NEWNET)`` -> best-effort private network namespace
-       so the child has only ``lo``. Blocks AWS IMDS (169.254.169.254),
-       RFC1918, link-local, and all outbound. Requires unprivileged user
-       namespaces (kernel.unprivileged_userns_clone=1). Falls through
-       silently when denied so the sandbox still runs on locked-down
-       hosts; ``_BLOCKED_COMMANDS`` (curl/wget/nc/ssh/...) and the AST
-       network-call denylist are the defense-in-depth fallback.
-    6. ``setrlimit(RLIMIT_NPROC, (256, 256))`` -> caps the per-real-UID
-       process count. The existing comment notes this is per-UID rather
-       than per-process-tree, so a misbehaving session can starve other
-       sessions of new processes - but that is still strictly better
-       than the prior fork-bomb-the-host behaviour. Tune via
-       ``UNSLOTH_STUDIO_SANDBOX_NPROC`` if it pinches.
-    7. ``setrlimit(RLIMIT_AS / RLIMIT_CPU / RLIMIT_NOFILE)`` -> guard
-       against memory bombs and runaway loops.
-
-    All modules and handles are resolved at import time (module level) so
-    this function does not trigger Python imports in the forked child,
-    avoiding potential deadlocks in multi-threaded servers.
+    setsid + killpg cleanup, restrictive umask, NO_NEW_PRIVS, PDEATHSIG,
+    private netns (blocks IMDS/RFC1918/egress), and RLIMIT caps. All
+    modules resolved at import time so no imports run in the forked child.
     """
-    # 1. Become process-group leader so we can killpg the whole tree.
     try:
         os.setsid()
     except OSError:
         pass
 
-    # 2. Restrictive umask for files the child writes.
     try:
         os.umask(0o077)
     except OSError:
@@ -291,51 +261,34 @@ def _sandbox_preexec():
 
     if _libc is not None:
         try:
-            # 3. PR_SET_NO_NEW_PRIVS = 38, arg2 = 1 (enable)
-            _libc.prctl(38, 1, 0, 0, 0)
+            _libc.prctl(38, 1, 0, 0, 0)  # PR_SET_NO_NEW_PRIVS
         except (OSError, AttributeError):
             pass
 
         try:
-            # 4. PR_SET_PDEATHSIG = 1, arg2 = SIGKILL (9)
-            _libc.prctl(1, 9, 0, 0, 0)
+            _libc.prctl(1, 9, 0, 0, 0)  # PR_SET_PDEATHSIG = SIGKILL
         except (OSError, AttributeError):
             pass
 
         try:
-            # 5. unshare(CLONE_NEWNET=0x40000000) - best-effort private netns.
-            CLONE_NEWNET = 0x40000000
-            rc = _libc.unshare(CLONE_NEWNET)
-            if rc != 0:
-                # Permission denied or unsupported - silently continue;
-                # the blocklist + AST checks remain the fallback.
-                pass
+            _libc.unshare(0x40000000)  # CLONE_NEWNET
         except (OSError, AttributeError):
             pass
 
     if _resource is not None:
-        # 6. Cap per-real-UID process count.
-        # NOTE: Linux's RLIMIT_NPROC counts LWPs (kernel threads), not
-        # processes. Studio + llama-server already run several hundred
-        # LWPs as ``ubuntu``, so a low cap (256) starves legitimate bash
-        # forks ("bash: fork: retry: Resource temporarily unavailable").
-        # The default 10000 is well above the normal LWP count but stops
-        # true fork bombs (which spawn millions) before they take down
-        # the host. Pair with the setsid + killpg cleanup at timeout to
-        # tear down any survivors. Tune via UNSLOTH_STUDIO_SANDBOX_NPROC.
+        # RLIMIT_NPROC counts per-real-UID LWPs, not processes. 10000 is
+        # well above Studio's normal LWP count but stops true fork bombs.
         try:
             nproc = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_NPROC", "10000"))
             _resource.setrlimit(_resource.RLIMIT_NPROC, (nproc, nproc))
         except (ValueError, OSError, AttributeError):
             pass
-        # File size: 100 MB (preserved from original).
         try:
             _resource.setrlimit(
                 _resource.RLIMIT_FSIZE, (100 * 1024 * 1024, 100 * 1024 * 1024)
             )
         except (ValueError, OSError):
             pass
-        # 7a. Address space cap (8 GB by default).
         try:
             as_bytes = (
                 int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_AS_GB", "8"))
@@ -346,13 +299,11 @@ def _sandbox_preexec():
             _resource.setrlimit(_resource.RLIMIT_AS, (as_bytes, as_bytes))
         except (ValueError, OSError, AttributeError):
             pass
-        # 7b. CPU time cap (300 s by default - same as the supervisor timeout).
         try:
             cpu_s = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_CPU_S", "300"))
             _resource.setrlimit(_resource.RLIMIT_CPU, (cpu_s, cpu_s))
         except (ValueError, OSError, AttributeError):
             pass
-        # 7c. Open files cap.
         try:
             _resource.setrlimit(_resource.RLIMIT_NOFILE, (1024, 1024))
         except (ValueError, OSError, AttributeError):
@@ -379,37 +330,24 @@ _SESSION_ID_RE = re.compile(r"\A[A-Za-z0-9_\-]{1,64}\Z")
 
 
 def _get_workdir(session_id: str | None = None) -> str:
-    """Return (and lazily create) a persistent working directory for tool execution.
-
-    Each session directory is created with mode 0o700 so other UIDs
-    cannot read it. The sandbox root itself is also tightened to 0o700
-    on every call (cheap, idempotent, defensive). ``session_id`` is
-    matched against a strict regex; non-matching values bucket into a
-    shared ``_invalid`` dir rather than synthesising a partially-
-    sanitised name that could collide with a real session.
-    """
+    """Return a per-session sandbox dir at mode 0o700. Non-matching
+    session_ids bucket into ``_invalid`` to avoid collisions."""
     global _workdirs
     key = session_id or "_default"
     if key not in _workdirs or not os.path.isdir(_workdirs[key]):
         home = os.path.expanduser("~")
         sandbox_root = os.path.join(home, "studio_sandbox")
         if session_id and _SESSION_ID_RE.match(session_id):
-            safe_id = session_id
-            workdir = os.path.join(sandbox_root, safe_id)
-            # Belt + suspenders: realpath must land under realpath(sandbox_root).
+            workdir = os.path.join(sandbox_root, session_id)
             if not os.path.realpath(workdir).startswith(
                 os.path.realpath(sandbox_root) + os.sep
             ):
                 workdir = os.path.join(sandbox_root, "_invalid")
         elif session_id:
-            # Non-matching session_id (contains slashes, "..", null, etc.)
             workdir = os.path.join(sandbox_root, "_invalid")
         else:
             workdir = os.path.join(sandbox_root, "_default")
         os.makedirs(workdir, exist_ok = True)
-        # Restrict so other local UIDs cannot read this session's files.
-        # The sandbox-root parent is also chmodded so previously-loose
-        # 0o775 directories tighten on next process boot.
         try:
             os.chmod(sandbox_root, 0o700)
         except OSError:
@@ -1066,12 +1004,8 @@ def _check_signal_escape_patterns(code: str):
                         isinstance(shell_node, ast.Constant)
                         and shell_node.value is False
                     )
-                    # Always flag dynamic args to ANY shell-exec primitive.
-                    # The previous gate let
-                    # ``subprocess.Popen([chr(115)+...], shell=False)`` slip
-                    # through (shell_safe=True and shell_func is not in
-                    # _STRING_SHELL_FUNCS). Now any non-literal arg to
-                    # a function in _SHELL_EXEC_FUNCS is flagged.
+                    # Flag dynamic args to any shell-exec primitive
+                    # (catches chr(...) string-concat bypasses).
                     if (
                         shell_func in _STRING_SHELL_FUNCS
                         or shell_func in _SHELL_EXEC_FUNCS
@@ -1150,21 +1084,8 @@ def _check_signal_escape_patterns(code: str):
     if visitor.imports_signal and not signal_tampering:
         warnings.append("Code imports 'signal' module - review manually for safety")
 
-    # ------------------------------------------------------------------
-    # Narrow-band IO denylist. The goal is to keep ALL legitimate tool
-    # use cases working (web_search, public-internet fetches, file
-    # reads in user-space) while blocking the precise high-impact
-    # attack surfaces:
-    #
-    #   1. Cloud-metadata IPs (AWS / GCP / Alibaba / Azure IMDS).
-    #   2. Static reads of identity / credential system files
-    #      (/etc/passwd, /etc/shadow, /etc/sudoers, /proc/*/environ).
-    #
-    # All other network calls (public DNS / public IPs) and file reads
-    # (any user dir, model output dir, /tmp, /etc/os-release, etc.) are
-    # allowed - tool-calling models legitimately read files and fetch
-    # URLs supplied by the user.
-    # ------------------------------------------------------------------
+    # Narrow IO denylist: block cloud-metadata IPs and identity-file
+    # reads only; allow all other network and file IO.
     network_calls: list[dict] = []
     sensitive_file_reads: list[dict] = []
     _NETWORK_FQ_PREFIXES = (
@@ -1238,10 +1159,8 @@ def _check_signal_escape_patterns(code: str):
                 parts.insert(0, cur.id)
             fq = ".".join(parts) if parts else ""
 
-            # Two-step pattern: any ``.connect((host, port))`` call where
-            # the literal host is a metadata IP. This catches the
-            # ``s = socket.socket(); s.connect(("169.254.169.254", 80))``
-            # shape the FQ-prefix check below misses.
+            # Catch ``sock.connect(("169.254.169.254", 80))`` shape
+            # that the FQ-prefix check below misses.
             if (
                 isinstance(node.func, ast.Attribute)
                 and node.func.attr == "connect"
@@ -1268,9 +1187,7 @@ def _check_signal_escape_patterns(code: str):
                     )
 
             if fq and any(fq.startswith(p) for p in _NETWORK_FQ_PREFIXES):
-                # Try to read the host literal if present. ONLY block when
-                # the literal host is a known metadata address. Dynamic /
-                # public hosts go through (legitimate tool use).
+                # Only block literal metadata hosts; allow dynamic/public.
                 host_arg = None
                 url_arg = None
                 if node.args:
@@ -1281,7 +1198,6 @@ def _check_signal_escape_patterns(code: str):
                         e0 = a0.elts[0]
                         if isinstance(e0, ast.Constant) and isinstance(e0.value, str):
                             host_arg = e0.value
-                # Extract host from a URL literal if present.
                 if url_arg and host_arg is None:
                     m = re.match(r"^\w+://([^/:?#]+)", url_arg)
                     if m:
@@ -1298,7 +1214,7 @@ def _check_signal_escape_patterns(code: str):
                         }
                     )
 
-            # Static reads of identity / cred files.
+            # Block static reads of identity / credential files.
             is_open_call = (
                 (isinstance(node.func, ast.Name) and node.func.id == "open")
                 or fq in ("io.open", "pathlib.Path.open")
@@ -1394,14 +1310,8 @@ def _check_code_safety(code: str) -> str | None:
 
 
 def _kill_process_tree(proc) -> None:
-    """SIGKILL the whole process group, then fall back to single-pid kill.
-
-    Pairs with the ``os.setsid()`` in :func:`_sandbox_preexec` so that
-    bash-backgrounded children, Python ``os.fork()`` survivors, and any
-    other grandchildren die with the supervised parent. Without this,
-    ``proc.kill()`` only signals the immediate pid and lets the rest of
-    the process group continue (the original fork-bomb risk).
-    """
+    """SIGKILL the whole process group (set up via setsid in
+    _sandbox_preexec), falling back to single-pid kill."""
     if proc.poll() is not None:
         return
     try:

@@ -178,8 +178,12 @@ def test_may12_ioc_caught_by_scan_archive():
         str(FIXTURES / "malicious_wheel.whl"),
         "malicious_fixture",
     )
+    # Substring search inside Finding.evidence (the scanner-emitted match
+    # text), NOT a URL being sanitized. CodeQL py/incomplete-url-substring-
+    # sanitization is suppressed here: we are verifying the scanner WROTE
+    # the IOC name into its evidence, the inverse of an attack surface.
     hit = any(
-        "git-tanstack.com" in (f.evidence or "")
+        "git-tanstack.com" in (f.evidence or "")  # lgtm[py/incomplete-url-substring-sanitization]
         or "transformers.pyz" in (f.evidence or "")
         or "may12" in (f.check or "").lower()
         for f in findings

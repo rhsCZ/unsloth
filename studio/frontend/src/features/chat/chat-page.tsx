@@ -42,7 +42,12 @@ import { ChatSettingsPanel } from "./chat-settings-sheet";
 import { ContextUsageBar } from "./components/context-usage-bar";
 import { ModelLoadInlineStatus } from "./components/model-load-status";
 import { db } from "./db";
-import { buildExternalModelId, isExternalModelId } from "./external-providers";
+import {
+  buildExternalModelId,
+  isExternalModelId,
+  parseExternalModelId,
+} from "./external-providers";
+import { getProviderCapabilities } from "./provider-capabilities";
 import { useChatModelRuntime } from "./hooks/use-chat-model-runtime";
 import {
   clearTrainingCompareHandoff,
@@ -616,6 +621,14 @@ export function ChatPage(): ReactElement {
     () => isExternalModelId(inferenceParams.checkpoint),
     [inferenceParams.checkpoint],
   );
+  const activeProviderCapabilities = useMemo(() => {
+    const selection = parseExternalModelId(inferenceParams.checkpoint);
+    if (!selection) return null;
+    const provider = externalProviders.find(
+      (p) => p.id === selection.providerId,
+    );
+    return getProviderCapabilities(provider?.providerType);
+  }, [externalProviders, inferenceParams.checkpoint]);
   const canCompare = useMemo(() => {
     return Boolean(inferenceParams.checkpoint) && !isExternalModel;
   }, [inferenceParams.checkpoint, isExternalModel]);
@@ -1188,6 +1201,7 @@ export function ChatPage(): ReactElement {
         params={inferenceParams}
         onParamsChange={setInferenceParams}
         isExternalModel={isExternalModel}
+        providerCapabilities={activeProviderCapabilities}
         onReloadModel={() => {
           const state = useChatRuntimeStore.getState();
           if (state.params.checkpoint) {

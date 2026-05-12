@@ -26,6 +26,7 @@ import {
   loadExternalProviders,
   parseExternalModelId,
 } from "../external-providers";
+import { getProviderCapabilities } from "../provider-capabilities";
 import { useChatRuntimeStore } from "../stores/chat-runtime-store";
 import { isMultimodalResponse } from "../types/api";
 import type { ChatModelSummary } from "../types/runtime";
@@ -847,6 +848,9 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
           externalProvider?.providerType === "custom"
             ? "openai"
             : externalProvider?.providerType;
+        const externalCapabilities = getProviderCapabilities(
+          externalProvider?.providerType,
+        );
         const buildRequestPayload = async (forceRefreshPublicKey = false) => {
           if (externalSelection && externalProvider) {
             return {
@@ -856,7 +860,14 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               temperature: params.temperature,
               top_p: params.topP,
               max_tokens: params.maxTokens,
-              presence_penalty: params.presencePenalty,
+              // Only forward sampling knobs the provider actually accepts; the
+              // backend's external-provider proxy is param-permissive and would
+              // surface a 400 from providers that reject unknown fields (e.g.
+              // OpenAI rejects top_k, Anthropic/DeepSeek reject presence_penalty).
+              ...(externalCapabilities?.topK ? { top_k: params.topK } : {}),
+              ...(externalCapabilities?.presencePenalty
+                ? { presence_penalty: params.presencePenalty }
+                : {}),
               provider_id: externalProvider.id,
               provider_type: externalBackendProviderType,
               external_model: externalSelection.modelId,

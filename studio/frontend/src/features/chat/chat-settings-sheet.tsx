@@ -80,6 +80,7 @@ import {
   toPresetParams,
   type Preset,
 } from "./presets/preset-policy";
+import type { ProviderCapabilities } from "./provider-capabilities";
 import type { InferenceParams } from "./types/runtime";
 
 export { defaultInferenceParams, type Preset } from "./presets/preset-policy";
@@ -506,6 +507,12 @@ interface ChatSettingsPanelProps {
   params: InferenceParams;
   onParamsChange: (params: InferenceParams) => void;
   isExternalModel?: boolean;
+  /**
+   * Sampling-param capability set for the active external provider, or `null`
+   * for local models (in which case every knob is rendered). Drives the
+   * per-param visibility in the sampling section.
+   */
+  providerCapabilities?: ProviderCapabilities | null;
   onReloadModel?: () => void;
 }
 
@@ -515,8 +522,19 @@ export function ChatSettingsPanel({
   params,
   onParamsChange,
   isExternalModel = false,
+  providerCapabilities = null,
   onReloadModel,
 }: ChatSettingsPanelProps) {
+  // For non-external (local) models we show every knob — providerCapabilities
+  // is only consulted when `isExternalModel` is true. An external model with an
+  // unknown provider falls back to the OpenAI-compat shape via
+  // getProviderCapabilities, so these flags never undercount support.
+  const showTopK = !isExternalModel || Boolean(providerCapabilities?.topK);
+  const showMinP = !isExternalModel || Boolean(providerCapabilities?.minP);
+  const showRepetitionPenalty =
+    !isExternalModel || Boolean(providerCapabilities?.repetitionPenalty);
+  const showPresencePenalty =
+    !isExternalModel || Boolean(providerCapabilities?.presencePenalty);
   const isMobile = useIsMobile();
   const isGguf = useChatRuntimeStore((s) => s.activeGgufVariant) != null;
   const hasModelContent =
@@ -1153,51 +1171,55 @@ export function ChatSettingsPanel({
               displayValue={params.topP === 1 ? "Off" : undefined}
               info="Nucleus sampling. Restricts choices to the smallest set of tokens whose cumulative probability reaches this threshold. 1.0 = off."
             />
-            {!isExternalModel ? (
-              <>
-                <ParamSlider
-                  label="Top K"
-                  value={params.topK}
-                  min={0}
-                  max={100}
-                  step={1}
-                  onChange={set("topK")}
-                  displayValue={params.topK === 0 ? "Off" : undefined}
-                  info="Limits sampling to the K most likely tokens at each step. 0 = off."
-                />
-                <ParamSlider
-                  label="Min P"
-                  value={params.minP}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  onChange={set("minP")}
-                  info="Drops tokens whose probability is below this fraction of the top token's probability. Filters unlikely candidates."
-                />
-                <ParamSlider
-                  label="Repetition Penalty"
-                  value={params.repetitionPenalty}
-                  min={1}
-                  max={2}
-                  step={0.05}
-                  onChange={set("repetitionPenalty")}
-                  displayValue={
-                    params.repetitionPenalty === 1 ? "Off" : undefined
-                  }
-                  info="Down-weights tokens that have already appeared, reducing repetition. 1.0 = off; higher values penalize more strongly."
-                />
-              </>
+            {showTopK ? (
+              <ParamSlider
+                label="Top K"
+                value={params.topK}
+                min={0}
+                max={100}
+                step={1}
+                onChange={set("topK")}
+                displayValue={params.topK === 0 ? "Off" : undefined}
+                info="Limits sampling to the K most likely tokens at each step. 0 = off."
+              />
             ) : null}
-            <ParamSlider
-              label="Presence Penalty"
-              value={params.presencePenalty}
-              min={0}
-              max={2}
-              step={0.1}
-              onChange={set("presencePenalty")}
-              displayValue={params.presencePenalty === 0 ? "Off" : undefined}
-              info="Penalizes any token that has already appeared at least once, encouraging the model to introduce new topics. 0 = off."
-            />
+            {showMinP ? (
+              <ParamSlider
+                label="Min P"
+                value={params.minP}
+                min={0}
+                max={1}
+                step={0.01}
+                onChange={set("minP")}
+                info="Drops tokens whose probability is below this fraction of the top token's probability. Filters unlikely candidates."
+              />
+            ) : null}
+            {showRepetitionPenalty ? (
+              <ParamSlider
+                label="Repetition Penalty"
+                value={params.repetitionPenalty}
+                min={1}
+                max={2}
+                step={0.05}
+                onChange={set("repetitionPenalty")}
+                displayValue={
+                  params.repetitionPenalty === 1 ? "Off" : undefined
+                }
+                info="Down-weights tokens that have already appeared, reducing repetition. 1.0 = off; higher values penalize more strongly."
+              />
+            ) : null}
+            {showPresencePenalty ? (
+              <ParamSlider
+                label="Presence Penalty"
+                value={params.presencePenalty}
+                min={0}
+                max={2}
+                step={0.1}
+                onChange={set("presencePenalty")}
+                displayValue={params.presencePenalty === 0 ? "Off" : undefined}
+                info="Penalizes any token that has already appeared at least once, encouraging the model to introduce new topics. 0 = off."
+              />
+            ) : null}
             {!isExternalModel && !isGguf && (
               <ParamSlider
                 label="Max Seq Length"

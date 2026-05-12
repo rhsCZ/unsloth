@@ -133,6 +133,32 @@ def test_blocked_npm_versions_complete():
     # Anchor a known entry: the rpa-tool 0.9.5 version is in the published list.
     assert "0.9.5" in table["@uipath/rpa-tool"]
 
+    # Aikido (May-12 wave): @mistralai/* npm scope (separate from PyPI mistralai).
+    assert table["@mistralai/mistralai"] == {"2.2.2", "2.2.3", "2.2.4"}
+    assert table["@mistralai/mistralai-gcp"] == {"1.7.1", "1.7.2", "1.7.3"}
+    assert table["@mistralai/mistralai-azure"] == {"1.7.1", "1.7.2", "1.7.3"}
+
+    # Aikido: @tallyui/* (10 packages x 3 versions).
+    tallyui = [k for k in table if k.startswith("@tallyui/")]
+    assert len(tallyui) == 10, f"expected 10 @tallyui/*, got {sorted(tallyui)}"
+
+    # Aikido: @beproduct/nestjs-auth covers the 0.1.2 .. 0.1.19 range (18 versions).
+    assert table["@beproduct/nestjs-auth"] == {f"0.1.{i}" for i in range(2, 20)}
+
+    # Aikido: unscoped infostealer packages (10 total).
+    for unscoped in (
+        "safe-action", "ts-dna", "cross-stitch", "cmux-agent-mcp",
+        "agentwork-cli", "git-branch-selector", "wot-api", "git-git-git",
+        "nextmove-mcp", "ml-toolkit-ts",
+    ):
+        assert unscoped in table, f"missing unscoped malicious pkg: {unscoped}"
+
+    # Aikido: payload SHA-256 hashes wired into KNOWN_IOC_STRINGS.
+    ioc = snp.KNOWN_IOC_STRINGS
+    assert "ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c" in ioc
+    assert "2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96" in ioc
+    assert "bun run tanstack_runner.js" in ioc
+
 
 @pytest.mark.skipif(
     not _BLOCKED_AVAILABLE,

@@ -102,6 +102,10 @@ NPM_IOC_STRINGS: tuple[str, ...] = (
     "transformers.pyz",
     "/tmp/transformers.pyz",
     "With Love TeamPCP",
+    # Aikido (May-12 wave): payload SHA-256 hashes + Bun marker.
+    "ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c",
+    "2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96",
+    "bun run tanstack_runner.js",
     "We've been online over 2 hours",
 )
 
@@ -245,6 +249,66 @@ BLOCKED_NPM_VERSIONS: dict[str, set[str]] = {
     "@uipath/functions-tool": {"1.0.1"},
     "@uipath/access-policy-sdk": {"0.3.1"},
     "@uipath/platform-tool": {"1.0.1"},
+    # Mini Shai-Hulud May-12 wave: @mistralai/* (npm) — separate from PyPI mistralai
+    # (https://www.aikido.dev/blog/mini-shai-hulud-is-back-tanstack-compromised).
+    "@mistralai/mistralai":                      {"2.2.2", "2.2.3", "2.2.4"},
+    "@mistralai/mistralai-gcp":                  {"1.7.1", "1.7.2", "1.7.3"},
+    "@mistralai/mistralai-azure":                {"1.7.1", "1.7.2", "1.7.3"},
+
+    # Mini Shai-Hulud May-12 wave: @tallyui/* (30 entries, 10 packages)
+    # (Aikido enumeration).
+    "@tallyui/components":                       {"1.0.1", "1.0.2", "1.0.3"},
+    "@tallyui/connector-medusa":                 {"1.0.1", "1.0.2", "1.0.3"},
+    "@tallyui/connector-shopify":                {"1.0.1", "1.0.2", "1.0.3"},
+    "@tallyui/connector-vendure":                {"1.0.1", "1.0.2", "1.0.3"},
+    "@tallyui/connector-woocommerce":            {"1.0.1", "1.0.2", "1.0.3"},
+    "@tallyui/core":                             {"0.2.1", "0.2.2", "0.2.3"},
+    "@tallyui/database":                         {"1.0.1", "1.0.2", "1.0.3"},
+    "@tallyui/pos":                              {"0.1.1", "0.1.2", "0.1.3"},
+    "@tallyui/storage-sqlite":                   {"0.2.1", "0.2.2", "0.2.3"},
+    "@tallyui/theme":                            {"0.2.1", "0.2.2", "0.2.3"},
+
+    # Mini Shai-Hulud May-12 wave: @beproduct/nestjs-auth (18 versions)
+    # (Aikido enumeration).
+    "@beproduct/nestjs-auth":                    {"0.1.2", "0.1.3", "0.1.4", "0.1.5", "0.1.6", "0.1.7", "0.1.8", "0.1.9", "0.1.10", "0.1.11", "0.1.12", "0.1.13", "0.1.14", "0.1.15", "0.1.16", "0.1.17", "0.1.18", "0.1.19"},
+
+    # Mini Shai-Hulud May-12 wave: @draftlab/* + @draftauth/*
+    # (Aikido enumeration).
+    "@draftauth/client":                         {"0.2.1", "0.2.2"},
+    "@draftauth/core":                           {"0.13.1", "0.13.2"},
+    "@draftlab/auth":                            {"0.24.1", "0.24.2"},
+    "@draftlab/auth-router":                     {"0.5.1", "0.5.2"},
+    "@draftlab/db":                              {"0.16.1"},
+
+    # Mini Shai-Hulud May-12 wave: @taskflow-corp/cli + @tolka/cli
+    # (Aikido enumeration).
+    "@taskflow-corp/cli":                        {"0.1.24", "0.1.25", "0.1.26", "0.1.27", "0.1.28", "0.1.29"},
+    "@tolka/cli":                                {"1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"},
+
+    # Mini Shai-Hulud May-12 wave: @ml-toolkit-ts/* + @mesadev/* + @dirigible-ai/sdk + @supersurkhet/*
+    # (Aikido enumeration).
+    "@dirigible-ai/sdk":                         {"0.6.2", "0.6.3"},
+    "@mesadev/rest":                             {"0.28.3"},
+    "@mesadev/saguaro":                          {"0.4.22"},
+    "@mesadev/sdk":                              {"0.28.3"},
+    "@ml-toolkit-ts/preprocessing":              {"1.0.2", "1.0.3"},
+    "@ml-toolkit-ts/xgboost":                    {"1.0.3", "1.0.4"},
+    "@supersurkhet/cli":                         {"0.0.2", "0.0.3", "0.0.4", "0.0.5", "0.0.6", "0.0.7"},
+    "@supersurkhet/sdk":                         {"0.0.2", "0.0.3", "0.0.4", "0.0.5", "0.0.6", "0.0.7"},
+
+    # Mini Shai-Hulud May-12 wave: Unscoped packages (10 entries)
+    # (Aikido enumeration).
+    "safe-action":                               {"0.8.3", "0.8.4"},
+    "ts-dna":                                    {"3.0.1", "3.0.2", "3.0.3", "3.0.4"},
+    "cross-stitch":                              {"1.1.3", "1.1.4", "1.1.5", "1.1.6"},
+    "cmux-agent-mcp":                            {"0.1.3", "0.1.4", "0.1.5", "0.1.6", "0.1.7", "0.1.8"},
+    "agentwork-cli":                             {"0.1.4", "0.1.5"},
+    "git-branch-selector":                       {"1.3.3", "1.3.4", "1.3.5", "1.3.6", "1.3.7"},
+    "wot-api":                                   {"0.8.1", "0.8.2", "0.8.3", "0.8.4"},
+    "git-git-git":                               {"1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12"},
+    "nextmove-mcp":                              {"0.1.3", "0.1.4", "0.1.5", "0.1.6", "0.1.7"},
+    "ml-toolkit-ts":                             {"1.0.4", "1.0.5"},
+
 }
 
 CARGO_IOC_STRINGS: tuple[str, ...] = (

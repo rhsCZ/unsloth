@@ -316,18 +316,56 @@ if code in (400, 422):
 else:
     fail(f"/api/auth/refresh without body returned {code} (expected 400/422)")
 
-# Login burst with wrong password must keep returning 401, NOT 429.
-# Documents that no rate-limit / brute-force lockout exists today.
-# When/if we add one, this assertion updates in the same PR.
-all_401 = True
-for i in range(5):
-    code, _ = login("definitely-wrong-password")
-    if code != 401:
-        all_401 = False
-        fail(f"login burst attempt {i+1} returned {code} (expected 401)")
+# Login burst with wrong password: the rate-limit middleware added in
+# the security-hardening pass should keep emitting 401 until the
+# per-IP bucket fills (default _LOGIN_MAX_FAILS=5 wrongs in 60s), then
+# switch to 429 with a Retry-After header. There is no explicit
+# "reset the bucket" hook for tests, and the smoke runs after the
+# bootstrap-rotation block has already failed one login with the OLD
+# bootstrap password, so we cannot assume an empty bucket here --
+# instead we assert the observable invariant: at least one 401, an
+# eventual transition to 429, and Retry-After on the 429.
+def _login_with_headers(password: str) -> tuple[int, str | None]:
+    """Variant of ``login`` that returns ``(status, retry_after)`` rather
+    than ``(status, token)``. Used by the burst probe to confirm the
+    rate-limit response carries a Retry-After header."""
+    url = f"{BASE}/api/auth/login"
+    data = json.dumps({"username": "unsloth", "password": password}).encode()
+    req = urllib.request.Request(
+        url,
+        data = data,
+        method = "POST",
+        headers = {"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout = 10) as r:
+            return r.status, r.headers.get("Retry-After")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Retry-After") if exc.headers else None
+
+
+codes = []
+retry_after = None
+for i in range(8):
+    code, ra = _login_with_headers("definitely-wrong-password")
+    codes.append(code)
+    if code == 429:
+        retry_after = ra
         break
-if all_401:
-    ok("login burst (5x wrong pw) -> 401 each (no rate-limit, documented)")
+    if code != 401:
+        fail(f"login burst attempt {i+1} returned {code} (expected 401 or 429)")
+        break
+
+if 401 not in codes:
+    fail(f"login burst never returned 401 before rate-limit (codes={codes})")
+elif 429 not in codes:
+    fail(f"login burst never rate-limited after {len(codes)} wrongs (codes={codes})")
+elif retry_after is None:
+    fail("429 response missing Retry-After header")
+else:
+    ok(
+        f"login burst -> 401x{codes.count(401)} then 429 with Retry-After={retry_after}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────

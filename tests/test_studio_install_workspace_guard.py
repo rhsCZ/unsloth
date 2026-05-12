@@ -593,12 +593,20 @@ def test_install_ps1_bakes_studio_root_id_into_launcher():
 def test_health_endpoint_exposes_studio_root_id_not_raw_path():
     """studio/backend/main.py /api/health must expose studio_root_id (a
     hex digest) and NOT the raw studio_root path. Studio supports
-    `-H 0.0.0.0`; an unauthenticated /api/health that returns the raw
-    install path leaks username, home dir, workspace name, etc."""
+    `-H 0.0.0.0`; a /api/health that returns the raw install path
+    leaks username, home dir, workspace name, etc."""
     main_py = REPO_ROOT / "studio" / "backend" / "main.py"
     src = main_py.read_text()
     health_idx = src.index('@app.get("/api/health")')
-    health_block = src[health_idx : health_idx + 1500]
+    # Slice from the decorator to the NEXT top-level `@app.` (or end of
+    # file). Avoids hard-coding a byte window that silently slides past
+    # the body when the function grows -- which is what happened when
+    # the unauthenticated short-circuit + await dependency arms were
+    # added on top of the original ~30-line handler.
+    next_app_idx = src.find("\n@app.", health_idx + 1)
+    if next_app_idx == -1:
+        next_app_idx = len(src)
+    health_block = src[health_idx:next_app_idx]
     assert (
         '"studio_root_id"' in health_block
     ), "/api/health must expose studio_root_id (hex digest)"

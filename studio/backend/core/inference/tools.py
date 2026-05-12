@@ -1363,9 +1363,15 @@ def _check_signal_escape_patterns(code: str):
                 return True
             if kw.arg == "data":
                 v = kw.value
-                if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "open":
+                if (
+                    isinstance(v, ast.Call)
+                    and isinstance(v.func, ast.Name)
+                    and v.func.id == "open"
+                ):
                     return True
-                if isinstance(v, ast.Constant) and isinstance(v.value, (bytes, bytearray)):
+                if isinstance(v, ast.Constant) and isinstance(
+                    v.value, (bytes, bytearray)
+                ):
                     return True
         return False
 
@@ -1398,9 +1404,7 @@ def _check_signal_escape_patterns(code: str):
                     {
                         "type": "upload_blocked",
                         "line": getattr(node, "lineno", -1),
-                        "description": (
-                            "Blocked: file upload disallowed in sandbox"
-                        ),
+                        "description": ("Blocked: file upload disallowed in sandbox"),
                     }
                 )
 

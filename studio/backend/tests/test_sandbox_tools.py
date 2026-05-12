@@ -118,10 +118,12 @@ class TestTrustedHostAllowlist:
         ],
     )
     def test_trusted_host_passes(self, url):
-        _ok(f'import requests; requests.get({url!r})')
+        _ok(f"import requests; requests.get({url!r})")
 
     def test_wikipedia_subdomain_passes(self):
-        _ok('import urllib.request; urllib.request.urlopen("https://m.en.wikipedia.org/wiki/Foo")')
+        _ok(
+            'import urllib.request; urllib.request.urlopen("https://m.en.wikipedia.org/wiki/Foo")'
+        )
 
     def test_hf_co_short_form_passes(self):
         _ok('import requests; requests.get("https://hf.co/unsloth/Qwen3.5-4B-GGUF")')
@@ -158,9 +160,7 @@ class TestUntrustedHostBlock:
         # Documented limit of AST analysis: dynamic URL is allowed at
         # parse time. Defense-in-depth is the bash blocklist plus the
         # metadata-host check which still fires on .connect((LITERAL,...)).
-        _ok(
-            'import requests; url = "https://example.com/"; requests.get(url)'
-        )
+        _ok('import requests; url = "https://example.com/"; requests.get(url)')
 
 
 # =====================================================================
@@ -202,7 +202,7 @@ class TestUploadDenylist:
     def test_requests_post_files_blocked(self):
         _blocked(
             (
-                'import requests\n'
+                "import requests\n"
                 'requests.post("https://huggingface.co/api/repos/upload", '
                 'files={"f": open("x.bin", "rb")})'
             ),
@@ -212,7 +212,7 @@ class TestUploadDenylist:
     def test_requests_put_data_bytes_blocked(self):
         _blocked(
             (
-                'import requests\n'
+                "import requests\n"
                 'requests.put("https://huggingface.co/api/repos/upload", '
                 'data=b"\\x00\\x01\\x02")'
             ),
@@ -222,7 +222,7 @@ class TestUploadDenylist:
     def test_requests_post_data_open_handle_blocked(self):
         _blocked(
             (
-                'import requests\n'
+                "import requests\n"
                 'requests.post("https://huggingface.co/api/repos/upload", '
                 'data=open("x.bin", "rb"))'
             ),
@@ -232,7 +232,7 @@ class TestUploadDenylist:
     def test_httpx_post_files_blocked(self):
         _blocked(
             (
-                'import httpx\n'
+                "import httpx\n"
                 'httpx.post("https://huggingface.co/api/repos/upload", '
                 'files={"f": open("x.bin", "rb")})'
             ),
@@ -242,7 +242,7 @@ class TestUploadDenylist:
     def test_hf_api_upload_file_blocked(self):
         _blocked(
             (
-                'from huggingface_hub import HfApi\n'
+                "from huggingface_hub import HfApi\n"
                 'HfApi().upload_file(path_or_fileobj="x.bin", '
                 'path_in_repo="x.bin", repo_id="foo/bar")'
             ),
@@ -252,7 +252,7 @@ class TestUploadDenylist:
     def test_hf_module_upload_folder_blocked(self):
         _blocked(
             (
-                'import huggingface_hub\n'
+                "import huggingface_hub\n"
                 'huggingface_hub.upload_folder(folder_path="./", repo_id="foo/bar")'
             ),
             expect_phrase = "Blocked: file upload disallowed in sandbox",
@@ -261,8 +261,8 @@ class TestUploadDenylist:
     def test_hf_create_commit_method_blocked(self):
         _blocked(
             (
-                'import huggingface_hub\n'
-                'api = huggingface_hub.HfApi()\n'
+                "import huggingface_hub\n"
+                "api = huggingface_hub.HfApi()\n"
                 'api.create_commit(repo_id="foo/bar", operations=[])'
             ),
             expect_phrase = "Blocked: file upload disallowed in sandbox",
@@ -272,7 +272,7 @@ class TestUploadDenylist:
         # POST with json= to a trusted host is fine -- it is not an
         # upload shape.
         _ok(
-            'import requests\n'
+            "import requests\n"
             'requests.post("https://api.weather.gov/lookup", json={"k": "v"})'
         )
 

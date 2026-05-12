@@ -284,7 +284,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: _StarletteRequest, call_next):
         response = await call_next(request)
-        nonce = response.headers.pop(_CSP_SCRIPT_NONCE_HEADER, None)
+        nonce = response.headers.get(_CSP_SCRIPT_NONCE_HEADER)
+        if nonce is not None:
+            del response.headers[_CSP_SCRIPT_NONCE_HEADER]
         response.headers.setdefault("Content-Security-Policy", _build_csp(nonce))
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")

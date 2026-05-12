@@ -525,7 +525,6 @@ BLOCKED_NPM_VERSIONS: dict[str, set[str]] = {
     "git-git-git": {"1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12"},
     "nextmove-mcp": {"0.1.3", "0.1.4", "0.1.5", "0.1.6", "0.1.7"},
     "ml-toolkit-ts": {"1.0.4", "1.0.5"},
-
     # Cross-ecosystem Mini Shai-Hulud (Apr-30 wave): npm counterpart of
     # PyPI lightning 2.6.2/2.6.3. Same threat actor (TeamPCP) per Semgrep,
     # Aikido, OX Security, Resecurity. Safe version: 7.0.3 and earlier.

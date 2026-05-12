@@ -209,9 +209,7 @@ def test_scan_packages_pip_download_failure_propagates(tmp_path):
     """
     script = REPO_ROOT / "scripts" / "scan_packages.py"
     assert script.is_file(), script
-    unresolvable = (
-        "pkg-that-does-not-exist-0123456789-fork-c-silentfail==0.0.0"
-    )
+    unresolvable = "pkg-that-does-not-exist-0123456789-fork-c-silentfail==0.0.0"
     proc = subprocess.run(
         [sys.executable, str(script), unresolvable],
         cwd = str(tmp_path),

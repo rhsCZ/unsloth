@@ -71,6 +71,7 @@ def _atomic_write_bytes(path: pathlib.Path, data: bytes) -> None:
             pass
         raise
 
+
 HERE = pathlib.Path(__file__).resolve().parent
 DATA_DIR = HERE / "data"
 PYPI_CACHE_DIR = DATA_DIR / "pypi_cache"

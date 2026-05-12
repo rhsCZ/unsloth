@@ -39,6 +39,7 @@ def _atomic_write_text(path: Path, data: str, encoding: str = "utf-8") -> None:
             pass
         raise
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_INFO_PATH = (
     REPO_ROOT / "studio" / "backend" / "utils" / "_studio_release_build.py"
@@ -206,9 +207,7 @@ def stamp(require_release: bool) -> int:
         print("dev")
         return 0
 
-    _atomic_write_text(
-        BUILD_INFO_PATH, build_info_source(version), encoding = "utf-8"
-    )
+    _atomic_write_text(BUILD_INFO_PATH, build_info_source(version), encoding = "utf-8")
     print(f"Stamping Studio release version {version} from {source}", file = sys.stderr)
     print(version)
     return 0

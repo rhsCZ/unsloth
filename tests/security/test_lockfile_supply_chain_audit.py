@@ -201,9 +201,12 @@ def test_skip_env_var_with_short_value_rejected(tmp_path):
     env_bad = {**os.environ, "UNSLOTH_LOCKFILE_AUDIT_SKIP": "1"}
     proc_bad = subprocess.run(
         [
-            sys.executable, str(SCRIPT),
-            "--root", str(tmp_path),
-            "--npm-lockfile", str(fixture),
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(tmp_path),
+            "--npm-lockfile",
+            str(fixture),
         ],
         capture_output = True,
         text = True,
@@ -226,9 +229,12 @@ def test_skip_env_var_with_short_value_rejected(tmp_path):
     env_ok = {**os.environ, "UNSLOTH_LOCKFILE_AUDIT_SKIP": "ticket-5397"}
     proc_ok = subprocess.run(
         [
-            sys.executable, str(SCRIPT),
-            "--root", str(tmp_path),
-            "--npm-lockfile", str(fixture),
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(tmp_path),
+            "--npm-lockfile",
+            str(fixture),
         ],
         capture_output = True,
         text = True,
@@ -248,9 +254,12 @@ def test_skip_env_var_with_short_value_rejected(tmp_path):
         env_b = {**os.environ, "UNSLOTH_LOCKFILE_AUDIT_SKIP": bad_val}
         p = subprocess.run(
             [
-                sys.executable, str(SCRIPT),
-                "--root", str(tmp_path),
-                "--npm-lockfile", str(fixture),
+                sys.executable,
+                str(SCRIPT),
+                "--root",
+                str(tmp_path),
+                "--npm-lockfile",
+                str(fixture),
             ],
             capture_output = True,
             text = True,
@@ -258,10 +267,9 @@ def test_skip_env_var_with_short_value_rejected(tmp_path):
             env = env_b,
         )
         c = p.stdout + p.stderr
-        assert "::warning::" in c and "REQUIRES" in c, (
-            f"value {bad_val!r} should have been rejected; got:\n{c}"
-        )
+        assert (
+            "::warning::" in c and "REQUIRES" in c
+        ), f"value {bad_val!r} should have been rejected; got:\n{c}"
         assert "[lockfile-audit] npm:" in c, (
-            f"value {bad_val!r} should have fallen through to run audit; "
-            f"got:\n{c}"
+            f"value {bad_val!r} should have fallen through to run audit; " f"got:\n{c}"
         )

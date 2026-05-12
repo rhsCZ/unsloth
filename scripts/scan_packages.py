@@ -1174,9 +1174,9 @@ def check_workflow_file(content: str, filename: str, package: str) -> list[Findi
 # wheel cannot exhaust memory or fill the temp dir before content
 # scanning even starts. Keep these constants in sync with the npm side;
 # we duplicate rather than import to keep `scan_packages.py` standalone.
-HARD_MAX_FILE_BYTES = 64 * 1024 * 1024     # 64 MiB per member
-HARD_MAX_TOTAL_BYTES = 512 * 1024 * 1024   # 512 MiB cumulative
-HARD_MAX_MEMBERS = 50_000                  # entries per archive
+HARD_MAX_FILE_BYTES = 64 * 1024 * 1024  # 64 MiB per member
+HARD_MAX_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MiB cumulative
+HARD_MAX_MEMBERS = 50_000  # entries per archive
 
 
 def _refuse_unsafe_member_name(name: str) -> str | None:
@@ -1503,8 +1503,7 @@ def download_packages(
             )
             if proc.returncode != 0:
                 msg = (
-                    f"pip download (with deps) failed: "
-                    f"{proc.stderr.strip()[:500]}"
+                    f"pip download (with deps) failed: " f"{proc.stderr.strip()[:500]}"
                 )
                 print(f"  [ERROR] {msg}", file = sys.stderr)
                 download_errors.append(msg)
@@ -2168,7 +2167,9 @@ def main() -> int:
     download_errors: list[str] = []
     try:
         downloaded, download_errors = download_packages(
-            specs, tmpdir, with_deps = args.with_deps,
+            specs,
+            tmpdir,
+            with_deps = args.with_deps,
         )
         print(f"  Downloaded {len(downloaded)} archive(s).")
 
@@ -2210,8 +2211,7 @@ def main() -> int:
         for err in download_errors:
             print(f"  [ERROR] {err}", file = sys.stderr)
         print(
-            "  Refusing to report 'all clean' on a partial scan; "
-            "exiting 2.",
+            "  Refusing to report 'all clean' on a partial scan; " "exiting 2.",
             file = sys.stderr,
         )
         return 2

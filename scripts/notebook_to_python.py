@@ -103,9 +103,7 @@ def replace_colab_paths(source: str) -> str:
     return source
 
 
-def _emit_shell_command(
-    indent: str, full_cmd: str, *, allow_shell: bool
-) -> list[str]:
+def _emit_shell_command(indent: str, full_cmd: str, *, allow_shell: bool) -> list[str]:
     """Render a `!cmd` notebook line as one or more Python statements.
 
     When the command body is f-string-interpolated, contains shell
@@ -135,27 +133,19 @@ def _emit_shell_command(
                 "Cell uses shell metacharacters / interpolation but "
                 "--no-allow-shell was set; refusing to emit shell=True"
             )
-        warn = (
-            f"{indent}# WARNING: shell=True; reviewed for hostile input"
-        )
+        warn = f"{indent}# WARNING: shell=True; reviewed for hostile input"
         f_prefix = "f" if needs_f else ""
         if multiline:
             escaped_cmd = full_cmd.replace('"""', r"\"\"\"")
             if escaped_cmd.rstrip().endswith('"'):
                 escaped_cmd = escaped_cmd.rstrip() + " "
-            stmt = (
-                f'{indent}subprocess.run({f_prefix}"""{escaped_cmd}""", shell=True)'
-            )
+            stmt = f'{indent}subprocess.run({f_prefix}"""{escaped_cmd}""", shell=True)'
         else:
-            stmt = (
-                f"{indent}subprocess.run({f_prefix}{full_cmd!r}, shell=True)"
-            )
+            stmt = f"{indent}subprocess.run({f_prefix}{full_cmd!r}, shell=True)"
         return [warn, stmt]
 
     # Shell-safe argv form.
-    return [
-        f"{indent}subprocess.run(shlex.split({full_cmd!r}), shell=False)"
-    ]
+    return [f"{indent}subprocess.run(shlex.split({full_cmd!r}), shell=False)"]
 
 
 def convert_cell_to_python(source: str, *, allow_shell: bool = True) -> str:
@@ -197,7 +187,7 @@ def convert_cell_to_python(source: str, *, allow_shell: bool = True) -> str:
             full_cmd = "\n".join(cmd_lines)
 
             result.extend(
-                _emit_shell_command(indent, full_cmd, allow_shell=allow_shell)
+                _emit_shell_command(indent, full_cmd, allow_shell = allow_shell)
             )
 
         # %cd path -> os.chdir(path)
@@ -270,7 +260,7 @@ def convert_notebook(
             continue
 
         if cell.cell_type == "code":
-            converted = convert_cell_to_python(source, allow_shell=allow_shell)
+            converted = convert_cell_to_python(source, allow_shell = allow_shell)
             converted = replace_colab_paths(converted)
             lines.append(converted)
             lines.append("")
@@ -334,7 +324,7 @@ def convert_notebook_to_script(
         output_path = output_filename
 
     # Convert
-    script = convert_notebook(content, source_name, allow_shell=allow_shell)
+    script = convert_notebook(content, source_name, allow_shell = allow_shell)
 
     # Write output
     with open(output_path, "w", encoding = "utf-8") as f:
@@ -380,7 +370,7 @@ Examples:
         action = "store_true",
         default = True,
         help = "Allow emitting subprocess.run(..., shell=True) for cells "
-               "that use shell metacharacters or interpolation (default).",
+        "that use shell metacharacters or interpolation (default).",
     )
     parser.add_argument(
         "--no-allow-shell",

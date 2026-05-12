@@ -23,8 +23,10 @@ def _run(base: Path, head: Path, *, timeout: int = 30) -> subprocess.CompletedPr
         [
             sys.executable,
             str(SCRIPT),
-            "--base", str(base),
-            "--head", str(head),
+            "--base",
+            str(base),
+            "--head",
+            str(head),
         ],
         capture_output = True,
         text = True,
@@ -70,15 +72,17 @@ def _v2_lockfile(packages: dict, dependencies: dict) -> dict:
 
 def test_no_new_install_scripts_exit_0(tmp_path: Path):
     """If base == head, nothing new can have been added."""
-    same = _v3_lockfile({
-        "": {"name": "unsloth-theme", "version": "0.0.0"},
-        "node_modules/node-gyp": {
-            "version": "10.0.1",
-            "resolved": "https://registry.npmjs.org/node-gyp/-/node-gyp-10.0.1.tgz",
-            "integrity": "sha512-fake",
-            "hasInstallScript": True,
-        },
-    })
+    same = _v3_lockfile(
+        {
+            "": {"name": "unsloth-theme", "version": "0.0.0"},
+            "node_modules/node-gyp": {
+                "version": "10.0.1",
+                "resolved": "https://registry.npmjs.org/node-gyp/-/node-gyp-10.0.1.tgz",
+                "integrity": "sha512-fake",
+                "hasInstallScript": True,
+            },
+        }
+    )
     base = _write(tmp_path / "base.json", same)
     head = _write(tmp_path / "head.json", same)
     result = _run(base, head)
@@ -108,9 +112,9 @@ def test_new_dep_with_postinstall_exits_1(tmp_path: Path):
     base = _write(tmp_path / "base.json", _v3_lockfile(base_pkgs))
     head = _write(tmp_path / "head.json", _v3_lockfile(head_pkgs))
     result = _run(base, head)
-    assert result.returncode == 1, (
-        f"expected exit 1, got {result.returncode}; stderr:\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 1
+    ), f"expected exit 1, got {result.returncode}; stderr:\n{result.stderr}"
     assert "evil-postinstall" in result.stderr
     assert "1.0.0" in result.stderr
 

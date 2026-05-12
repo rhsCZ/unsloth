@@ -197,9 +197,7 @@ def _fetch_registry_scripts(name: str, version: str) -> dict[str, str] | None:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def diff_new_install_scripts(
-    base_lock: dict, head_lock: dict
-) -> list[Finding]:
+def diff_new_install_scripts(base_lock: dict, head_lock: dict) -> list[Finding]:
     base = _collect_install_script_entries(base_lock)
     head = _collect_install_script_entries(head_lock)
     findings: list[Finding] = []
@@ -208,7 +206,9 @@ def diff_new_install_scripts(
             continue  # pre-existing install-script dep; not in scope
         name = head[key]
         # key is "name@version"; rsplit("@", 1) handles scoped names.
-        version = key[len(name) + 1 :] if key.startswith(name + "@") else "<unversioned>"
+        version = (
+            key[len(name) + 1 :] if key.startswith(name + "@") else "<unversioned>"
+        )
         scripts = _fetch_registry_scripts(name, version)
         if scripts:
             detail = "; ".join(f"{h}={cmd!r}" for h, cmd in scripts.items())

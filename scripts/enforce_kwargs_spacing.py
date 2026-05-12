@@ -23,9 +23,9 @@ def _atomic_write_text(path: Path, data: str, encoding: str) -> None:
     content or the fully new content -- never a truncated source file.
     """
     dirpath = str(path.parent) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix = ".kwargs_fix.", dir = dirpath)
+    fd, tmp_path = tempfile.mkstemp(prefix=".kwargs_fix.", dir=dirpath)
     try:
-        with os.fdopen(fd, "w", encoding = encoding) as handle:
+        with os.fdopen(fd, "w", encoding=encoding) as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())

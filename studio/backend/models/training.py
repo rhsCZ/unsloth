@@ -11,12 +11,17 @@ from typing import Any, Optional, List, Dict, Literal
 
 # Bounds tuned to span what a single GPU can handle while rejecting
 # obvious garbage (-1, 0, 1e9, 'abc').
-_MAX_BATCH_SIZE = 1024
+_MAX_BATCH_SIZE = 4096
 _MAX_GRAD_ACCUM = 4096
 _MAX_STEPS = 1_000_000
 _MAX_EPOCHS = 1000
-_MAX_SEQ_LENGTH = 131_072  # 128k - any larger is single-host infeasible
+# 2M tokens covers long-context experiments; sharded host RAM
+# saturates long before this, so the validator stays a sanity check
+# rather than a hard guarantee.
+_MAX_SEQ_LENGTH = 2_000_000
 _MAX_LR_VALUE = 1.0
+_MAX_LORA_R = 16_384
+_MAX_LORA_ALPHA = 32_768
 
 
 def _parse_lr(v: Any) -> float:
@@ -210,8 +215,8 @@ class TrainingStartRequest(BaseModel):
     def _check_lora_r(cls, v: int) -> int:
         if v is None:
             return 16
-        if v < 1 or v > 512:
-            raise ValueError(f"lora_r must be in [1, 512] (got {v!r})")
+        if v < 1 or v > _MAX_LORA_R:
+            raise ValueError(f"lora_r must be in [1, {_MAX_LORA_R}] (got {v!r})")
         return v
 
     @field_validator("lora_alpha")
@@ -219,8 +224,10 @@ class TrainingStartRequest(BaseModel):
     def _check_lora_alpha(cls, v: int) -> int:
         if v is None:
             return 16
-        if v < 1 or v > 1024:
-            raise ValueError(f"lora_alpha must be in [1, 1024] (got {v!r})")
+        if v < 1 or v > _MAX_LORA_ALPHA:
+            raise ValueError(
+                f"lora_alpha must be in [1, {_MAX_LORA_ALPHA}] (got {v!r})"
+            )
         return v
 
     @field_validator("lora_dropout")

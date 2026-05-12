@@ -24,6 +24,19 @@ export interface ProviderCapabilities {
   presencePenalty: boolean;
 }
 
+/**
+ * Output-token cap for any external provider request. Picked to stay below the
+ * tightest declared limit across the providers we ship (Anthropic Claude Opus
+ * tops out at 128k, GPT-5.x ~128k, Gemini 2.5 ~65k, DeepSeek 8k) while staying
+ * well above what a typical chat reply needs. The local-model path is not
+ * subject to this — local backends honour whatever the loaded context allows.
+ *
+ * If a user's stored maxTokens (e.g. carried over from a prior local-model
+ * session with a 128k+ context) exceeds this, chat-adapter clamps the
+ * outbound request so the provider does not 400 on it.
+ */
+export const EXTERNAL_MAX_OUTPUT_TOKENS = 32768;
+
 const OPENAI_COMPAT_BASE: ProviderCapabilities = {
   topK: false,
   minP: false,

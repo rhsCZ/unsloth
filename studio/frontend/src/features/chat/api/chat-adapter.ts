@@ -26,7 +26,10 @@ import {
   loadExternalProviders,
   parseExternalModelId,
 } from "../external-providers";
-import { getProviderCapabilities } from "../provider-capabilities";
+import {
+  EXTERNAL_MAX_OUTPUT_TOKENS,
+  getProviderCapabilities,
+} from "../provider-capabilities";
 import { useChatRuntimeStore } from "../stores/chat-runtime-store";
 import { isMultimodalResponse } from "../types/api";
 import type { ChatModelSummary } from "../types/runtime";
@@ -859,7 +862,10 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               stream: true,
               temperature: params.temperature,
               top_p: params.topP,
-              max_tokens: params.maxTokens,
+              // Clamp to the cross-provider output cap so a maxTokens value
+              // carried over from a local-model session does not blow past
+              // provider limits (e.g. Claude Opus 400s on >128k).
+              max_tokens: Math.min(params.maxTokens, EXTERNAL_MAX_OUTPUT_TOKENS),
               // Only forward sampling knobs the provider actually accepts; the
               // backend's external-provider proxy is param-permissive and would
               // surface a 400 from providers that reject unknown fields (e.g.

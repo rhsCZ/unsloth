@@ -80,7 +80,10 @@ import {
   toPresetParams,
   type Preset,
 } from "./presets/preset-policy";
-import type { ProviderCapabilities } from "./provider-capabilities";
+import {
+  EXTERNAL_MAX_OUTPUT_TOKENS,
+  type ProviderCapabilities,
+} from "./provider-capabilities";
 import type { InferenceParams } from "./types/runtime";
 
 export { defaultInferenceParams, type Preset } from "./presets/preset-policy";
@@ -1237,7 +1240,7 @@ export function ChatSettingsPanel({
               min={64}
               max={
                 isExternalModel
-                  ? 32768
+                  ? EXTERNAL_MAX_OUTPUT_TOKENS
                   : isGguf && ggufContextLength
                     ? ggufContextLength
                     : 32768

@@ -1169,33 +1169,154 @@ def check_workflow_file(content: str, filename: str, package: str) -> list[Findi
 # Archive handling
 # ---------------------------------------------------------------------------
 
+# Tarbomb caps, mirrored from scripts/scan_npm_packages.py::safe_extract.
+# Refuses zip-of-death / tar-of-death archives so a hostile sdist or
+# wheel cannot exhaust memory or fill the temp dir before content
+# scanning even starts. Keep these constants in sync with the npm side;
+# we duplicate rather than import to keep `scan_packages.py` standalone.
+HARD_MAX_FILE_BYTES = 64 * 1024 * 1024     # 64 MiB per member
+HARD_MAX_TOTAL_BYTES = 512 * 1024 * 1024   # 512 MiB cumulative
+HARD_MAX_MEMBERS = 50_000                  # entries per archive
+
+
+def _refuse_unsafe_member_name(name: str) -> str | None:
+    """Return a refusal reason for a member name, or None if safe.
+
+    Mirrors `scan_npm_packages.py::safe_extract` semantics: no absolute
+    paths, no `..` traversal segments. The caller is responsible for
+    checking the resolved path lands inside the extract root, but for
+    iter_archive_files we never write to disk so the name-shape check
+    plus the in-memory size cap is sufficient.
+    """
+    if name.startswith("/") or ".." in Path(name).parts:
+        return f"unsafe member name {name!r}"
+    return None
+
 
 def iter_archive_files(archive_path: str):
-    """Yield (filename, text_content) for every file in a wheel/sdist."""
+    """Yield (filename, text_content) for every file in a wheel/sdist.
+
+    Streams members with size + count caps applied at the member level
+    so a tarbomb / zipbomb cannot blow up the scanner's memory budget.
+    On cap breach we emit a `[WARN]` log and short-circuit the archive.
+    """
     path = Path(archive_path)
 
     if path.suffix == ".whl" or path.suffix == ".zip":
+        total = 0
+        count = 0
         with zipfile.ZipFile(path) as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
+                count += 1
+                if count > HARD_MAX_MEMBERS:
+                    print(
+                        f"  [WARN] {path.name}: refused; member count "
+                        f"{count} exceeds cap {HARD_MAX_MEMBERS}",
+                        file = sys.stderr,
+                    )
+                    return
+                reason = _refuse_unsafe_member_name(info.filename)
+                if reason is not None:
+                    print(
+                        f"  [WARN] {path.name}: refused member ({reason})",
+                        file = sys.stderr,
+                    )
+                    continue
+                # Declared (uncompressed) size cap.
+                if info.file_size > HARD_MAX_FILE_BYTES:
+                    print(
+                        f"  [WARN] {path.name}: skipped {info.filename!r} "
+                        f"(declared {info.file_size} > cap {HARD_MAX_FILE_BYTES})",
+                        file = sys.stderr,
+                    )
+                    continue
+                if total + info.file_size > HARD_MAX_TOTAL_BYTES:
+                    print(
+                        f"  [WARN] {path.name}: cumulative bytes cap "
+                        f"{HARD_MAX_TOTAL_BYTES} hit at {info.filename!r}",
+                        file = sys.stderr,
+                    )
+                    return
                 try:
                     data = zf.read(info.filename)
+                    total += len(data)
                     text = data.decode("utf-8", errors = "replace")
                     yield info.filename, text
                 except Exception:
                     continue
 
     elif path.name.endswith((".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar")):
-        with tarfile.open(path) as tf:
-            for member in tf.getmembers():
+        total = 0
+        count = 0
+        # Streaming open so we never read the whole archive into memory.
+        with tarfile.open(path, mode = "r|*") as tf:
+            for member in tf:
+                count += 1
+                if count > HARD_MAX_MEMBERS:
+                    print(
+                        f"  [WARN] {path.name}: refused; member count "
+                        f"{count} exceeds cap {HARD_MAX_MEMBERS}",
+                        file = sys.stderr,
+                    )
+                    return
+                # Refuse symlinks / hardlinks / devices outright -- the
+                # scanner never writes them anyway, but tar parsers
+                # have historically dereferenced them on extract.
+                if member.issym() or member.islnk():
+                    print(
+                        f"  [WARN] {path.name}: refused link member "
+                        f"{member.name!r}",
+                        file = sys.stderr,
+                    )
+                    continue
+                if member.isdev() or member.isfifo():
+                    print(
+                        f"  [WARN] {path.name}: refused special member "
+                        f"{member.name!r}",
+                        file = sys.stderr,
+                    )
+                    continue
                 if not member.isfile():
                     continue
+                reason = _refuse_unsafe_member_name(member.name)
+                if reason is not None:
+                    print(
+                        f"  [WARN] {path.name}: refused member ({reason})",
+                        file = sys.stderr,
+                    )
+                    continue
+                declared = max(member.size, 0)
+                if declared > HARD_MAX_FILE_BYTES:
+                    print(
+                        f"  [WARN] {path.name}: skipped {member.name!r} "
+                        f"(declared {declared} > cap {HARD_MAX_FILE_BYTES})",
+                        file = sys.stderr,
+                    )
+                    continue
+                if total + declared > HARD_MAX_TOTAL_BYTES:
+                    print(
+                        f"  [WARN] {path.name}: cumulative bytes cap "
+                        f"{HARD_MAX_TOTAL_BYTES} hit at {member.name!r}",
+                        file = sys.stderr,
+                    )
+                    return
                 try:
                     f = tf.extractfile(member)
                     if f is None:
                         continue
-                    data = f.read()
+                    # Bound the read so a tar header that lies about
+                    # size cannot OOM us.
+                    data = f.read(HARD_MAX_FILE_BYTES + 1)
+                    if len(data) > HARD_MAX_FILE_BYTES:
+                        print(
+                            f"  [WARN] {path.name}: body of "
+                            f"{member.name!r} exceeded declared cap",
+                            file = sys.stderr,
+                        )
+                        continue
+                    total += len(data)
                     text = data.decode("utf-8", errors = "replace")
                     yield member.name, text
                 except Exception:
@@ -1273,6 +1394,44 @@ def _check_blocked_pypi_versions(
     return safe, findings
 
 
+def _pip_download_env() -> dict[str, str]:
+    """Return a scrubbed environment for invoking `pip download`.
+
+    Hostile shells / CI configs can override the index with PIP_INDEX_URL,
+    PIP_EXTRA_INDEX_URL, or a user `pip.conf`. We strip every PIP_*
+    override and route the resolver explicitly at PyPI. PIP_CONFIG_FILE
+    is forced to /dev/null so a stray ~/.pip/pip.conf with an
+    extra-index-url cannot bypass the pin.
+    """
+    env = {**os.environ}
+    # Drop any user override.
+    for key in [k for k in env if k.startswith("PIP_")]:
+        env.pop(key, None)
+    env["PIP_INDEX_URL"] = "https://pypi.org/simple"
+    env["PIP_EXTRA_INDEX_URL"] = ""
+    env["PIP_CONFIG_FILE"] = "/dev/null"
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    return env
+
+
+# Pip resolver flags shared by both download branches. Pinning the
+# index URL on the CLI is belt + braces with the env scrub above.
+# `--no-build-isolation` is deliberately NOT set; we never invoke
+# setup.py at all because of `--only-binary :all:`.
+_PIP_DOWNLOAD_PIN_FLAGS = [
+    "--index-url",
+    "https://pypi.org/simple",
+    "--only-binary",
+    ":all:",
+]
+
+
+# Strip any character that could escape `dest` via `os.path.join`. This
+# is the last line of defence before `pkg_dir = os.path.join(dest, ...)`
+# so a spec like `../../etc/foo==1.0` cannot land outside the temp tree.
+_RE_PKG_NAME_SANITIZE = re.compile(r"[^A-Za-z0-9._-]")
+
+
 def download_packages(
     specs: list[str],
     dest: str,
@@ -1289,17 +1448,20 @@ def download_packages(
     with --no-deps.
     """
     results = []
+    env = _pip_download_env()
 
     if with_deps:
         # Single pip download call for all specs + their transitive deps.
-        # --no-build-isolation and --no-binary :none: are NOT used --
-        # pip download only fetches wheels/sdists, never executes them.
+        # `--only-binary :all:` refuses sdists so we never execute a
+        # setup.py just to learn dependency metadata; combined with the
+        # scrubbed env, pip is wired hard at pypi.org.
         os.makedirs(dest, exist_ok = True)
         cmd = [
             sys.executable,
             "-m",
             "pip",
             "download",
+            *_PIP_DOWNLOAD_PIN_FLAGS,
             "--dest",
             dest,
         ] + specs
@@ -1309,6 +1471,7 @@ def download_packages(
                 capture_output = True,
                 text = True,
                 timeout = 600,  # transitive resolution can be slow
+                env = env,
             )
             if proc.returncode != 0:
                 print(
@@ -1327,9 +1490,11 @@ def download_packages(
                 results.append((pkg_name, fpath))
     else:
         for spec in specs:
-            pkg_dir = os.path.join(
-                dest, spec.split("==")[0].split(">=")[0].split("<=")[0].split("[")[0]
-            )
+            raw_name = _extract_pkg_name(spec)
+            # Sanitize before joining into `dest` so a hostile spec
+            # cannot path-traverse out of the destination directory.
+            safe_name = _RE_PKG_NAME_SANITIZE.sub("_", raw_name) or "_pkg"
+            pkg_dir = os.path.join(dest, safe_name)
             os.makedirs(pkg_dir, exist_ok = True)
             cmd = [
                 sys.executable,
@@ -1337,6 +1502,7 @@ def download_packages(
                 "pip",
                 "download",
                 "--no-deps",
+                *_PIP_DOWNLOAD_PIN_FLAGS,
                 "--dest",
                 pkg_dir,
                 spec,
@@ -1347,6 +1513,7 @@ def download_packages(
                     capture_output = True,
                     text = True,
                     timeout = 120,
+                    env = env,
                 )
                 if proc.returncode != 0:
                     print(
@@ -1677,6 +1844,13 @@ def update_req_file(filepath: str, updates: dict[int, str]) -> None:
     """Apply line-level updates to a requirements file.
 
     updates: {line_num (1-indexed): new_line_text}
+
+    Writes atomically: stage in a sibling tmp file on the same
+    filesystem, fsync, then `os.replace` over the original. A SIGKILL
+    or power loss mid-write therefore either leaves the original
+    intact or leaves the fully new file -- never a half-written
+    requirements file (which would silently re-introduce a malicious
+    pin).
     """
     with open(filepath) as f:
         lines = f.readlines()
@@ -1688,8 +1862,24 @@ def update_req_file(filepath: str, updates: dict[int, str]) -> None:
             ending = "\n" if lines[idx].endswith("\n") else ""
             lines[idx] = new_text + ending
 
-    with open(filepath, "w") as f:
-        f.writelines(lines)
+    dirpath = os.path.dirname(os.path.abspath(filepath)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        prefix = ".req_fix.",
+        dir = dirpath,
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.writelines(lines)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, filepath)
+    except Exception:
+        # Best effort cleanup; the destination was never touched.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _run_fix(

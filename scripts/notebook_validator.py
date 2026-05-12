@@ -40,11 +40,36 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Iterable, Iterator
+
+
+def _atomic_write_bytes(path: pathlib.Path, data: bytes) -> None:
+    """Atomic write helper. See `scripts/scan_packages.py::update_req_file`.
+
+    A crash between `mkstemp` and `os.replace` leaves the prior file
+    untouched, so a half-downloaded PyPI metadata cache file cannot
+    poison subsequent runs of the validator.
+    """
+    path.parent.mkdir(parents = True, exist_ok = True)
+    dirpath = str(path.parent) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix = ".nb_val.", dir = dirpath)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 HERE = pathlib.Path(__file__).resolve().parent
 DATA_DIR = HERE / "data"
@@ -388,7 +413,7 @@ def pypi_metadata(name: str, version: str) -> dict[str, Any] | None:
             data = json.loads(r.read())
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
         return None
-    path.write_text(json.dumps(data))
+    _atomic_write_bytes(path, json.dumps(data).encode("utf-8"))
     return data
 
 
@@ -1096,7 +1121,7 @@ def cmd_refresh_colab(args: argparse.Namespace) -> int:
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
         print(f"FAIL: could not fetch {COLAB_PIP_FREEZE_URL}: {e}", file = sys.stderr)
         return 2
-    out.write_bytes(data)
+    _atomic_write_bytes(out, data)
     print(f"wrote {len(data)} bytes to {out}")
     return 0
 

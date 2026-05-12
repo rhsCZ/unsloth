@@ -284,6 +284,9 @@ async def list_provider_models(
         allowlist = info.get("model_id_allowlist")
         if allowlist is not None:
             models = [m for m in models if allowlist.match(m.get("id", ""))]
+        denylist = info.get("model_id_denylist")
+        if denylist is not None:
+            models = [m for m in models if not denylist.search(m.get("id", ""))]
         return [
             ProviderModelInfo(
                 id = m.get("id", ""),

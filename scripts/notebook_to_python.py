@@ -394,6 +394,14 @@ Examples:
     # Create output directory if needed
     os.makedirs(args.output_dir, exist_ok = True)
 
+    # SF2: track per-notebook failures so a CI invocation that converts
+    # 10 notebooks but silently fails on 3 is no longer reported as
+    # success. Each failure is collected and the loop continues so the
+    # caller sees the full set; final exit status is 1 if anything
+    # failed.
+    failures: list[tuple[str, str]] = []
+    ok = 0
+    total = len(args.notebooks)
     for source in args.notebooks:
         try:
             convert_notebook_to_script(
@@ -401,8 +409,16 @@ Examples:
                 output_dir = args.output_dir if args.output_dir != "." else None,
                 allow_shell = args.allow_shell,
             )
+            ok += 1
         except Exception as e:
             print(f"ERROR converting {source}: {e}")
+            failures.append((source, f"{type(e).__name__}: {e}"))
+
+    print(
+        f"converted {ok}/{total}, {len(failures)} failed",
+        file = sys.stderr if failures else sys.stdout,
+    )
+    sys.exit(1 if failures else 0)
 
 
 if __name__ == "__main__":

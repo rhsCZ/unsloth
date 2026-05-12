@@ -1326,26 +1326,48 @@ def iter_archive_files(archive_path: str):
 
 
 def scan_archive(archive_path: str, package: str) -> list[Finding]:
-    """Scan all files in an archive for malicious patterns."""
-    findings = []
-    for filename, content in iter_archive_files(archive_path):
-        lower = filename.lower()
-        if lower.endswith(".pth"):
-            findings.extend(check_pth_file(content, filename, package))
-        elif lower.endswith(".py"):
-            findings.extend(check_py_file(content, filename, package))
-        elif lower.endswith((".js", ".mjs", ".cjs", ".ts")):
-            # Lightning 2.6.x hid its real payload in a 14.8 MB
-            # router_runtime.js inside a Python wheel. Without this
-            # branch we'd have only seen the small Python loader.
-            findings.extend(check_js_file(content, filename, package))
-        elif lower.endswith((".sh", ".bash")):
-            findings.extend(check_shell_file(content, filename, package))
-        elif "/.github/workflows/" in lower and lower.endswith((".yml", ".yaml")):
-            # Shai-Hulud / ForceMemo plant their own GHA workflow.
-            # A workflow file inside a *PyPI package* is on its own
-            # already a yellow flag; pattern-match the worm signatures.
-            findings.extend(check_workflow_file(content, filename, package))
+    """Scan all files in an archive for malicious patterns.
+
+    A corrupted archive container (truncated wheel, bad gzip header,
+    etc.) used to be silently skipped by an ``except Exception: continue``
+    inside ``iter_archive_files``. Per the silent-failure hardening
+    (SF1) it now emits a CRITICAL ``archive_corrupted`` finding so the
+    main loop counts and surfaces it rather than reporting "0 findings".
+    """
+    findings: list[Finding] = []
+    try:
+        for filename, content in iter_archive_files(archive_path):
+            lower = filename.lower()
+            if lower.endswith(".pth"):
+                findings.extend(check_pth_file(content, filename, package))
+            elif lower.endswith(".py"):
+                findings.extend(check_py_file(content, filename, package))
+            elif lower.endswith((".js", ".mjs", ".cjs", ".ts")):
+                # Lightning 2.6.x hid its real payload in a 14.8 MB
+                # router_runtime.js inside a Python wheel. Without this
+                # branch we'd have only seen the small Python loader.
+                findings.extend(check_js_file(content, filename, package))
+            elif lower.endswith((".sh", ".bash")):
+                findings.extend(check_shell_file(content, filename, package))
+            elif "/.github/workflows/" in lower and lower.endswith((".yml", ".yaml")):
+                # Shai-Hulud / ForceMemo plant their own GHA workflow.
+                # A workflow file inside a *PyPI package* is on its own
+                # already a yellow flag; pattern-match the worm signatures.
+                findings.extend(check_workflow_file(content, filename, package))
+    except (zipfile.BadZipFile, tarfile.TarError, EOFError, OSError) as exc:
+        # The archive cannot be opened or is structurally broken. A
+        # benign wheel/sdist always opens; a malformed one is either a
+        # transport corruption (treat as scan failure) or a deliberate
+        # attempt to bypass scanners that swallow archive errors.
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                os.path.basename(archive_path),
+                "archive_corrupted",
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+        )
     return findings
 
 
@@ -1437,17 +1459,23 @@ def download_packages(
     dest: str,
     *,
     with_deps: bool = False,
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], list[str]]:
     """Download packages to dest using pip download. NEVER installs.
 
-    Returns list of (spec_or_name, filepath) for every downloaded archive.
+    Returns ``(results, download_errors)`` where ``results`` is a list of
+    ``(spec_or_name, filepath)`` for every downloaded archive and
+    ``download_errors`` is a list of one-line transport-failure summaries.
+    A non-empty ``download_errors`` MUST cause the caller to exit non-zero
+    even if no findings were produced; a silent ``0 findings, scan
+    incomplete`` is the bug class this return-shape was widened to fix.
 
     When with_deps=True, downloads the full transitive dependency tree
     in a single pip invocation (all archives land in one flat dir).
     When with_deps=False (default), downloads each spec individually
     with --no-deps.
     """
-    results = []
+    results: list[tuple[str, str]] = []
+    download_errors: list[str] = []
     env = _pip_download_env()
 
     if with_deps:
@@ -1474,12 +1502,16 @@ def download_packages(
                 env = env,
             )
             if proc.returncode != 0:
-                print(
-                    f"  [ERROR] pip download (with deps) failed: {proc.stderr.strip()[:500]}",
-                    file = sys.stderr,
+                msg = (
+                    f"pip download (with deps) failed: "
+                    f"{proc.stderr.strip()[:500]}"
                 )
+                print(f"  [ERROR] {msg}", file = sys.stderr)
+                download_errors.append(msg)
         except subprocess.TimeoutExpired:
-            print(f"  [ERROR] pip download (with deps) timed out", file = sys.stderr)
+            msg = "pip download (with deps) timed out"
+            print(f"  [ERROR] {msg}", file = sys.stderr)
+            download_errors.append(msg)
 
         # Collect every archive that landed in dest
         for fname in sorted(os.listdir(dest)):
@@ -1516,13 +1548,17 @@ def download_packages(
                     env = env,
                 )
                 if proc.returncode != 0:
-                    print(
-                        f"  [ERROR] pip download failed for {spec}: {proc.stderr.strip()}",
-                        file = sys.stderr,
+                    msg = (
+                        f"pip download failed for {spec}: "
+                        f"{proc.stderr.strip()[:500]}"
                     )
+                    print(f"  [ERROR] {msg}", file = sys.stderr)
+                    download_errors.append(msg)
                     continue
             except subprocess.TimeoutExpired:
-                print(f"  [ERROR] pip download timed out for {spec}", file = sys.stderr)
+                msg = f"pip download timed out for {spec}"
+                print(f"  [ERROR] {msg}", file = sys.stderr)
+                download_errors.append(msg)
                 continue
 
             # Find downloaded file(s)
@@ -1530,7 +1566,7 @@ def download_packages(
                 fpath = os.path.join(pkg_dir, fname)
                 if os.path.isfile(fpath):
                     results.append((spec, fpath))
-    return results
+    return results, download_errors
 
 
 # ---------------------------------------------------------------------------
@@ -2129,8 +2165,11 @@ def main() -> int:
 
     tmpdir = tempfile.mkdtemp(prefix = "pth_scan_")
     atexit.register(lambda d = tmpdir: shutil.rmtree(d, ignore_errors = True))
+    download_errors: list[str] = []
     try:
-        downloaded = download_packages(specs, tmpdir, with_deps = args.with_deps)
+        downloaded, download_errors = download_packages(
+            specs, tmpdir, with_deps = args.with_deps,
+        )
         print(f"  Downloaded {len(downloaded)} archive(s).")
 
         for spec, archive_path in downloaded:
@@ -2155,6 +2194,27 @@ def main() -> int:
                 f"\n  --fix: Searching for safe versions of {len(critical_pkgs)} CRITICAL package(s)..."
             )
             _run_fix(critical_pkgs, entries, args.max_search)
+
+    # Surface any pip-download failures BEFORE the scan-result exit code so
+    # an empty / partial download cannot mask itself as "0 findings, all
+    # clean". This is item (4) of the silent-failure hardening: an
+    # unresolvable spec or PyPI timeout used to print to stderr and exit 0.
+    if download_errors:
+        print(
+            f"\n  {'=' * 72}\n"
+            f"  SCAN INCOMPLETE: {len(download_errors)} pip download "
+            f"failure(s):\n"
+            f"  {'=' * 72}",
+            file = sys.stderr,
+        )
+        for err in download_errors:
+            print(f"  [ERROR] {err}", file = sys.stderr)
+        print(
+            "  Refusing to report 'all clean' on a partial scan; "
+            "exiting 2.",
+            file = sys.stderr,
+        )
+        return 2
 
     # Exit code: 1 if any CRITICAL or HIGH
     if any(f.severity in (CRITICAL, HIGH) for f in all_findings):

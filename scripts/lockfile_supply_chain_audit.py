@@ -44,8 +44,10 @@ studio/src-tauri/Cargo.lock:
 Exit codes
 ==========
 
-  0  no findings, or an opt-out env var (UNSLOTH_LOCKFILE_AUDIT_SKIP=1)
-     is set
+  0  no findings, or an opt-out env var (UNSLOTH_LOCKFILE_AUDIT_SKIP)
+     is set to a justification string (>=5 chars, not '1'/'true'/etc).
+     A value like '1' or 'true' is now REJECTED loudly and the audit
+     runs normally
   1  one or more findings; stderr lists them with file path and line
      number where derivable
   2  internal error (missing dependency, malformed JSON, etc.)
@@ -514,13 +516,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if os.environ.get("UNSLOTH_LOCKFILE_AUDIT_SKIP") == "1":
-        print(
-            "[lockfile-audit] UNSLOTH_LOCKFILE_AUDIT_SKIP=1; "
-            "audit skipped (expected only for local triage)",
-            flush = True,
-        )
-        return 0
+    # SF4: require a real justification (e.g. JIRA ticket id) for the
+    # skip env var. Treat the trivially-set values ("1", "true", "yes",
+    # "on", empty) as INVALID -- they look like accidental flips and
+    # silently bypassed the supply-chain audit. A valid value is a
+    # non-empty string >=5 chars after stripping that does not match
+    # any of the boolean-shaped tokens above. An invalid value emits a
+    # loud GitHub Actions warning to stderr and FALLS THROUGH to run
+    # the audit normally (fail-safe). A valid value emits a warning
+    # naming the reason and skips with rc=0 (compat).
+    _skip_raw = os.environ.get("UNSLOTH_LOCKFILE_AUDIT_SKIP")
+    if _skip_raw is not None:
+        _skip = _skip_raw.strip()
+        _invalid_tokens = {"", "1", "0", "true", "false", "yes", "no", "on", "off"}
+        if _skip.lower() in _invalid_tokens or len(_skip) < 5:
+            print(
+                "::warning::Lockfile audit skip REQUIRES a justification "
+                f"value (>=5 chars, not '{_skip_raw}'). Proceeding with "
+                "audit. Use e.g. UNSLOTH_LOCKFILE_AUDIT_SKIP=ticket-1234.",
+                file = sys.stderr,
+                flush = True,
+            )
+        else:
+            print(
+                f"::warning::Lockfile audit skipped: reason='{_skip}'",
+                file = sys.stderr,
+                flush = True,
+            )
+            return 0
 
     root = Path(args.root).resolve()
     npm_paths = [root / p for p in (args.npm_lockfile or DEFAULT_NPM_LOCKFILES)]

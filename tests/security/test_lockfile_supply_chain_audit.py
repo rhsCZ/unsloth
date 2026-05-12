@@ -7,6 +7,7 @@ as a subprocess against the fixture lockfiles plus an inline
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -181,3 +182,86 @@ def test_audit_cargo_lockfile_direct_call(tmp_path):
     findings = lsa.audit_cargo_lockfile(lockfile)
     kinds = {f.kind for f in findings}
     assert "non-registry-cargo-source" in kinds
+
+
+# ---------------------------------------------------------------------------
+# SF4: skip env var requires a justification value.
+# ---------------------------------------------------------------------------
+
+
+def test_skip_env_var_with_short_value_rejected(tmp_path):
+    """`UNSLOTH_LOCKFILE_AUDIT_SKIP=1` used to silently bypass the
+    audit. Per SF4 it must instead emit a `::warning::` to stderr and
+    fall through to run the audit. A real justification value
+    (>=5 chars, not a boolean shape) is still honored.
+    """
+    fixture = FIXTURES / "clean_lockfile.json"
+
+    # Case 1 -- "1" rejected, audit RUNS.
+    env_bad = {**os.environ, "UNSLOTH_LOCKFILE_AUDIT_SKIP": "1"}
+    proc_bad = subprocess.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--root", str(tmp_path),
+            "--npm-lockfile", str(fixture),
+        ],
+        capture_output = True,
+        text = True,
+        timeout = 30,
+        env = env_bad,
+    )
+    combined_bad = proc_bad.stdout + proc_bad.stderr
+    assert "::warning::" in combined_bad, combined_bad
+    assert "REQUIRES a justification" in combined_bad, combined_bad
+    # Audit actually ran (saw the per-file banner).
+    assert "[lockfile-audit] npm:" in combined_bad, combined_bad
+    # Fixture is clean, so exit 0 -- but the audit was performed.
+    assert proc_bad.returncode == 0, (
+        f"expected rc 0 on clean fixture, got {proc_bad.returncode}\n"
+        f"--- stdout ---\n{proc_bad.stdout}\n"
+        f"--- stderr ---\n{proc_bad.stderr}"
+    )
+
+    # Case 2 -- a real-looking justification accepted, audit skipped.
+    env_ok = {**os.environ, "UNSLOTH_LOCKFILE_AUDIT_SKIP": "ticket-5397"}
+    proc_ok = subprocess.run(
+        [
+            sys.executable, str(SCRIPT),
+            "--root", str(tmp_path),
+            "--npm-lockfile", str(fixture),
+        ],
+        capture_output = True,
+        text = True,
+        timeout = 30,
+        env = env_ok,
+    )
+    combined_ok = proc_ok.stdout + proc_ok.stderr
+    assert proc_ok.returncode == 0
+    assert "::warning::" in combined_ok
+    assert "skipped" in combined_ok.lower()
+    assert "ticket-5397" in combined_ok
+    # Skip path means the audit body never ran (no "npm:" banner).
+    assert "[lockfile-audit] npm:" not in combined_ok, combined_ok
+
+    # Case 3 -- the booleanish tokens are ALL rejected.
+    for bad_val in ("true", "yes", "on", "0", ""):
+        env_b = {**os.environ, "UNSLOTH_LOCKFILE_AUDIT_SKIP": bad_val}
+        p = subprocess.run(
+            [
+                sys.executable, str(SCRIPT),
+                "--root", str(tmp_path),
+                "--npm-lockfile", str(fixture),
+            ],
+            capture_output = True,
+            text = True,
+            timeout = 30,
+            env = env_b,
+        )
+        c = p.stdout + p.stderr
+        assert "::warning::" in c and "REQUIRES" in c, (
+            f"value {bad_val!r} should have been rejected; got:\n{c}"
+        )
+        assert "[lockfile-audit] npm:" in c, (
+            f"value {bad_val!r} should have fallen through to run audit; "
+            f"got:\n{c}"
+        )

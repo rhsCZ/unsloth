@@ -188,3 +188,68 @@ def test_may12_ioc_caught_by_scan_archive():
         "RE_MAY12_IOC integration missing; findings = "
         f"{[(f.severity, f.check, f.evidence[:80]) for f in findings]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Silent-failure-class hardening (Fork C).
+# ---------------------------------------------------------------------------
+
+
+def test_scan_packages_pip_download_failure_propagates(tmp_path):
+    """A pip download failure must NOT be silently swallowed into a
+    `0 findings, exit 0` report. Item (4) of the silent-failure
+    hardening: an obviously unresolvable spec is fed to the scanner
+    as a subprocess; the orchestrator must exit 2 (scan incomplete)
+    and the stderr must carry the SCAN INCOMPLETE banner.
+
+    The spec name is deliberately long + random-looking so it cannot
+    accidentally resolve on any real package index. We do not rely on
+    network reachability: even an offline runner will get a clean
+    "could not resolve" failure from pip.
+    """
+    script = REPO_ROOT / "scripts" / "scan_packages.py"
+    assert script.is_file(), script
+    unresolvable = (
+        "pkg-that-does-not-exist-0123456789-fork-c-silentfail==0.0.0"
+    )
+    proc = subprocess.run(
+        [sys.executable, str(script), unresolvable],
+        cwd = str(tmp_path),
+        capture_output = True,
+        text = True,
+        timeout = 180,
+    )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 2, (
+        f"expected exit 2 (download failure -> scan incomplete), got "
+        f"{proc.returncode}\n--- stdout ---\n{proc.stdout}\n"
+        f"--- stderr ---\n{proc.stderr}"
+    )
+    assert "SCAN INCOMPLETE" in combined or "pip download failed" in combined
+
+
+def test_archive_corruption_produces_critical_finding(tmp_path):
+    """SF1: a corrupted wheel (truncated bytes) used to be silently
+    skipped by `except Exception: continue` inside iter_archive_files.
+    It must now yield a CRITICAL `archive_corrupted` finding.
+    """
+    bad = tmp_path / "broken-0.0.1-py3-none-any.whl"
+    bad.write_bytes(b"X")  # 1-byte "wheel" -- not a valid zip container
+    findings = sp.scan_archive(str(bad), "broken_fixture")
+    assert findings, "scan_archive returned 0 findings on corrupt wheel"
+    corrupted = [f for f in findings if f.check == "archive_corrupted"]
+    assert corrupted, (
+        "no archive_corrupted finding; got "
+        f"{[(f.severity, f.check) for f in findings]}"
+    )
+    assert all(f.severity == sp.CRITICAL for f in corrupted)
+
+    # Same check for a corrupted tarball.
+    bad_tar = tmp_path / "broken-0.0.1.tar.gz"
+    bad_tar.write_bytes(b"not-a-real-gzip-stream")
+    findings_tar = sp.scan_archive(str(bad_tar), "broken_fixture")
+    corrupted_tar = [f for f in findings_tar if f.check == "archive_corrupted"]
+    assert corrupted_tar, (
+        "no archive_corrupted finding on corrupt tarball; got "
+        f"{[(f.severity, f.check) for f in findings_tar]}"
+    )

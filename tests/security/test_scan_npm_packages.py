@@ -147,9 +147,16 @@ def test_blocked_npm_versions_complete():
 
     # Aikido: unscoped infostealer packages (10 total).
     for unscoped in (
-        "safe-action", "ts-dna", "cross-stitch", "cmux-agent-mcp",
-        "agentwork-cli", "git-branch-selector", "wot-api", "git-git-git",
-        "nextmove-mcp", "ml-toolkit-ts",
+        "safe-action",
+        "ts-dna",
+        "cross-stitch",
+        "cmux-agent-mcp",
+        "agentwork-cli",
+        "git-branch-selector",
+        "wot-api",
+        "git-git-git",
+        "nextmove-mcp",
+        "ml-toolkit-ts",
     ):
         assert unscoped in table, f"missing unscoped malicious pkg: {unscoped}"
 

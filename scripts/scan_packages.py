@@ -65,6 +65,15 @@ MEDIUM = "MEDIUM"
 
 SEVERITY_ORDER = {CRITICAL: 0, HIGH: 1, MEDIUM: 2}
 
+# Hard pin-blocks for publicly confirmed malicious PyPI versions.
+# Source: Socket.dev 2026-05-12 disclosure (Mini Shai-Hulud May-12 wave) and
+# earlier Semgrep / Endor reports for the `lightning` entries.
+BLOCKED_PYPI_VERSIONS: dict[str, set[str]] = {
+    "guardrails-ai": {"0.10.1"},
+    "mistralai":     {"2.4.6"},
+    "lightning":     {"2.6.2", "2.6.3"},
+}
+
 # ---------------------------------------------------------------------------
 # Pattern definitions
 # ---------------------------------------------------------------------------
@@ -336,6 +345,15 @@ RE_TOKEN_REGEX = re.compile(
     r"|\bglpat-[0-9A-Za-z_-]{20,}",  # GitLab PAT
 )
 
+# Mini Shai-Hulud May-12 2026 wave indicators. The dropper artifact name
+# `transformers.pyz` is high-confidence (no legit PyPI package ships a `.pyz`
+# named after `transformers`); the host + slogans are CRITICAL.
+RE_MAY12_IOC = re.compile(
+    r"(git-tanstack\.com|/tmp/transformers\.pyz|transformers\.pyz"
+    r"|With Love TeamPCP|We've been online over 2 hours)",
+    re.IGNORECASE,
+)
+
 # JavaScript-side obfuscation. The npm chalk/debug compromise and the
 # Lightning router_runtime.js use the same minifier-style hex-var name
 # pattern; a bundle full of `_0x1f2e3d` identifiers is a near-universal
@@ -529,6 +547,7 @@ def check_py_file(content: str, filename: str, package: str) -> list[Finding]:
     has_openssl_cli = bool(RE_OPENSSL_CLI.search(content))
     has_temp_exec = bool(RE_TEMP_EXEC.search(content))
     has_c2_polling = bool(RE_C2_POLLING.search(content))
+    has_may12_ioc = bool(RE_MAY12_IOC.search(content))
 
     # ---------------------------------------------------------------
     # CRITICAL: combination patterns that strongly indicate malice
@@ -569,6 +588,18 @@ def check_py_file(content: str, filename: str, package: str) -> list[Finding]:
                 filename,
                 "Writes to /tmp and executes (staged dropper)",
                 _extract_evidence(content, RE_TEMP_EXEC),
+            )
+        )
+
+    # May-12 Shai-Hulud IOC string in Python source.
+    if has_may12_ioc:
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "May-12 Shai-Hulud IOC string present in Python file",
+                _extract_evidence(content, RE_MAY12_IOC),
             )
         )
 
@@ -1071,6 +1102,16 @@ def check_shell_file(content: str, filename: str, package: str) -> list[Finding]
                 _extract_evidence(content, RE_WORKFLOW_INJECT),
             )
         )
+    if RE_MAY12_IOC.search(content):
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "May-12 Shai-Hulud IOC string present in shell script",
+                _extract_evidence(content, RE_MAY12_IOC),
+            )
+        )
     return findings
 
 
@@ -1109,6 +1150,16 @@ def check_workflow_file(content: str, filename: str, package: str) -> list[Findi
                 filename,
                 "Workflow pipes remote code into a shell (curl|sh dropper)",
                 _extract_evidence(content, RE_SHELL_DROPPER),
+            )
+        )
+    if RE_MAY12_IOC.search(content):
+        findings.append(
+            Finding(
+                CRITICAL,
+                package,
+                filename,
+                "May-12 Shai-Hulud IOC string present in workflow file",
+                _extract_evidence(content, RE_MAY12_IOC),
             )
         )
     return findings
@@ -1180,6 +1231,46 @@ def scan_archive(archive_path: str, package: str) -> list[Finding]:
 # ---------------------------------------------------------------------------
 # Download packages
 # ---------------------------------------------------------------------------
+
+
+_RE_PYPI_SPEC_VERSION = re.compile(r"==\s*([A-Za-z0-9_.\-+!]+)")
+
+
+def _check_blocked_pypi_versions(
+    specs: list[str],
+) -> tuple[list[str], list[Finding]]:
+    """Filter ``specs`` against ``BLOCKED_PYPI_VERSIONS``.
+
+    Returns ``(safe_specs, findings)``. Each blocked spec emits a CRITICAL
+    ``Finding`` and is removed from the returned spec list so the caller
+    never fetches the malicious tarball. Specs without an ``==X.Y.Z`` pin
+    pass through unchanged -- pip will resolve them at download time and
+    the existing scanners will catch the payload via the IOC regexes.
+    """
+    safe: list[str] = []
+    findings: list[Finding] = []
+    for spec in specs:
+        name = _extract_pkg_name(spec).lower()
+        blocked = BLOCKED_PYPI_VERSIONS.get(name, set())
+        if not blocked:
+            safe.append(spec)
+            continue
+        m = _RE_PYPI_SPEC_VERSION.search(spec)
+        version = m.group(1) if m else None
+        if version is not None and version in blocked:
+            findings.append(
+                Finding(
+                    CRITICAL,
+                    f"{name}=={version}",
+                    "<spec>",
+                    "blocked-known-malicious",
+                    f"{name}=={version} is on the BLOCKED_PYPI_VERSIONS list",
+                )
+            )
+            # Drop the spec; do not download.
+            continue
+        safe.append(spec)
+    return safe, findings
 
 
 def download_packages(
@@ -1841,6 +1932,10 @@ def main() -> int:
     print(f"  Scanning {len(specs)} package(s){mode_label}...")
 
     all_findings: list[Finding] = []
+
+    # Hard pin-block: refuse to download known-malicious PyPI versions.
+    specs, blocked_findings = _check_blocked_pypi_versions(specs)
+    all_findings.extend(blocked_findings)
 
     tmpdir = tempfile.mkdtemp(prefix = "pth_scan_")
     atexit.register(lambda d = tmpdir: shutil.rmtree(d, ignore_errors = True))

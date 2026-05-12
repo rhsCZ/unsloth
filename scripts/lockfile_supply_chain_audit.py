@@ -95,7 +95,66 @@ NPM_IOC_STRINGS: tuple[str, ...] = (
     "getsession.org/file/",
     # Campaign markers; the worm tarballs print this to stdout on run.
     "A Mini Shai-Hulud has Appeared",
+    # Mini Shai-Hulud May-12 2026 wave.
+    "git-tanstack.com",
+    "transformers.pyz",
+    "/tmp/transformers.pyz",
+    "With Love TeamPCP",
+    "We've been online over 2 hours",
 )
+
+# Hard pin-blocks for publicly confirmed malicious versions.
+# keep in sync with scripts/scan_npm_packages.py
+BLOCKED_NPM_VERSIONS: dict[str, set[str]] = {
+    # GHSA-g7cv-rxg3-hmpx -- TanStack May-11 2026 (84 versions).
+    "@tanstack/arktype-adapter":        {"1.166.12", "1.166.15"},
+    "@tanstack/eslint-plugin-router":   {"1.161.9",  "1.161.12"},
+    "@tanstack/eslint-plugin-start":    {"0.0.4",    "0.0.7"},
+    "@tanstack/history":                {"1.161.9",  "1.161.12"},
+    "@tanstack/nitro-v2-vite-plugin":   {"1.154.12", "1.154.15"},
+    "@tanstack/react-router":           {"1.169.5",  "1.169.8"},
+    "@tanstack/react-router-devtools":  {"1.166.16", "1.166.19"},
+    "@tanstack/react-router-ssr-query": {"1.166.15", "1.166.18"},
+    "@tanstack/react-start":            {"1.167.68", "1.167.71"},
+    "@tanstack/react-start-client":     {"1.166.51", "1.166.54"},
+    "@tanstack/react-start-rsc":        {"0.0.47",   "0.0.50"},
+    "@tanstack/react-start-server":     {"1.166.55", "1.166.58"},
+    "@tanstack/router-cli":             {"1.166.46", "1.166.49"},
+    "@tanstack/router-core":            {"1.169.5",  "1.169.8"},
+    "@tanstack/router-devtools":        {"1.166.16", "1.166.19"},
+    "@tanstack/router-devtools-core":   {"1.167.6",  "1.167.9"},
+    "@tanstack/router-generator":       {"1.166.45", "1.166.48"},
+    "@tanstack/router-plugin":          {"1.167.38", "1.167.41"},
+    "@tanstack/router-ssr-query-core":  {"1.168.3",  "1.168.6"},
+    "@tanstack/router-utils":           {"1.161.11", "1.161.14"},
+    "@tanstack/router-vite-plugin":     {"1.166.53", "1.166.56"},
+    "@tanstack/solid-router":           {"1.169.5",  "1.169.8"},
+    "@tanstack/solid-router-devtools":  {"1.166.16", "1.166.19"},
+    "@tanstack/solid-router-ssr-query": {"1.166.15", "1.166.18"},
+    "@tanstack/solid-start":            {"1.167.65", "1.167.68"},
+    "@tanstack/solid-start-client":     {"1.166.50", "1.166.53"},
+    "@tanstack/solid-start-server":     {"1.166.54", "1.166.57"},
+    "@tanstack/start-client-core":      {"1.168.5",  "1.168.8"},
+    "@tanstack/start-fn-stubs":         {"1.161.9",  "1.161.12"},
+    "@tanstack/start-plugin-core":      {"1.169.23", "1.169.26"},
+    "@tanstack/start-server-core":      {"1.167.33", "1.167.36"},
+    "@tanstack/start-static-server-functions": {"1.166.44", "1.166.47"},
+    "@tanstack/start-storage-context":  {"1.166.38", "1.166.41"},
+    "@tanstack/valibot-adapter":        {"1.166.12", "1.166.15"},
+    "@tanstack/virtual-file-routes":    {"1.161.10", "1.161.13"},
+    "@tanstack/vue-router":             {"1.169.5",  "1.169.8"},
+    "@tanstack/vue-router-devtools":    {"1.166.16", "1.166.19"},
+    "@tanstack/vue-router-ssr-query":   {"1.166.15", "1.166.18"},
+    "@tanstack/vue-start":              {"1.167.61", "1.167.64"},
+    "@tanstack/vue-start-client":       {"1.166.46", "1.166.49"},
+    "@tanstack/vue-start-server":       {"1.166.50", "1.166.53"},
+    "@tanstack/zod-adapter":            {"1.166.12", "1.166.15"},
+    # Mini Shai-Hulud May-12 wave.
+    "@opensearch-project/opensearch":   {"3.5.3", "3.6.2", "3.7.0", "3.8.0"},
+    "@squawk/mcp":                      {"0.9.5"},
+    "@squawk/weather":                  {"0.5.10"},
+    "@squawk/flightplan":                {"0.5.6"},
+}
 
 CARGO_IOC_STRINGS: tuple[str, ...] = (
     # Reserved for future cargo-side incidents. Empty by default --
@@ -262,7 +321,25 @@ def audit_npm_lockfile(path: Path) -> list[Finding]:
                 )
             )
 
-    # 3. Known IOC strings: scan the raw file body so we hit fields the
+        # 3. Blocked malicious version list.
+        nm_prefix = "node_modules/"
+        pkg_name = key[len(nm_prefix):] if key.startswith(nm_prefix) else key
+        version = entry.get("version")
+        blocked = BLOCKED_NPM_VERSIONS.get(pkg_name, set())
+        if version and version in blocked:
+            findings.append(
+                Finding(
+                    path = str(path),
+                    package = key,
+                    kind = "blocked-known-malicious",
+                    detail = (
+                        f"{pkg_name}@{version} is on the "
+                        "BLOCKED_NPM_VERSIONS list"
+                    ),
+                )
+            )
+
+    # 4. Known IOC strings: scan the raw file body so we hit fields the
     #    structural pass above doesn't enumerate (scripts, optional
     #    dependencies, etc.). Cheap and complete.
     for ioc in NPM_IOC_STRINGS:

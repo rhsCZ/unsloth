@@ -40,12 +40,17 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "display_name": "Anthropic",
         "base_url": "https://api.anthropic.com/v1",
         "default_models": [
+            "claude-opus-4-7",
             "claude-opus-4-5",
             "claude-sonnet-4-5",
             "claude-haiku-4-5",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
         ],
+        # Anthropic /v1/models returns dated snapshot ids alongside the
+        # canonical names (e.g. claude-3-5-sonnet-20241022). Hide the
+        # YYYYMMDD-suffixed variants from the picker — same intent as the
+        # OpenAI denylist, just a different date format (no dashes between
+        # year/month/day).
+        "model_id_denylist": re.compile(r"-\d{8}$"),
         "supports_streaming": True,
         "supports_vision": True,
         "supports_tool_calling": False,

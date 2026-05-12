@@ -39,7 +39,15 @@ const ALL_SUPPORTED: ProviderCapabilities = {
 };
 
 const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
-  openai: OPENAI_COMPAT_BASE,
+  // OpenAI's flagship models (gpt-5.x) now require /v1/responses, and the
+  // Responses API drops presence/frequency penalty from the contract — see
+  // backend external_provider._stream_openai_responses for the proxy.
+  openai: {
+    topK: false,
+    minP: false,
+    repetitionPenalty: false,
+    presencePenalty: false,
+  },
   // Anthropic's Messages API accepts top_k but not presence/frequency penalty.
   anthropic: {
     topK: true,

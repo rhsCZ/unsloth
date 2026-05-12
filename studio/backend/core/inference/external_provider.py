@@ -88,6 +88,18 @@ class ExternalProviderClient:
                 yield line
             return
 
+        # OpenAI moved their flagship models (gpt-5.x) off /v1/chat/completions
+        # — those endpoints return 404 with "This is not a chat model" for the
+        # new families. Route all OpenAI traffic through /v1/responses instead;
+        # we translate the Responses SSE back into Chat Completions chunks so
+        # the frontend stays endpoint-agnostic.
+        if self.provider_type == "openai":
+            async for line in self._stream_openai_responses(
+                messages, model, temperature, top_p, max_tokens
+            ):
+                yield line
+            return
+
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -368,6 +380,226 @@ class ExternalProviderClient:
                 except GeneratorExit:
                     await response.aclose()  # set PoolByteStream._closed=True FIRST
                     await lines_gen.aclose()  # now safe — aclose() is a no-op
+                    raise
+                finally:
+                    await response.aclose()
+                    await lines_gen.aclose()
+
+        except httpx.ConnectError as exc:
+            logger.error("Connection error to %s: %s", self.provider_type, exc)
+            yield _error_sse_line(
+                502,
+                f"Failed to connect to {self.provider_type}: {exc}",
+                self.provider_type,
+            )
+        except httpx.ReadTimeout as exc:
+            logger.error("Read timeout from %s: %s", self.provider_type, exc)
+            yield _error_sse_line(
+                504,
+                f"Timeout waiting for {self.provider_type} response",
+                self.provider_type,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("HTTP error from %s: %s", self.provider_type, exc)
+            yield _error_sse_line(
+                502,
+                f"Error communicating with {self.provider_type}: {exc}",
+                self.provider_type,
+            )
+
+    async def _stream_openai_responses(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        top_p: float,
+        max_tokens: Optional[int],
+    ) -> AsyncGenerator[str, None]:
+        """
+        Call OpenAI's /v1/responses endpoint and translate its SSE stream back
+        into OpenAI Chat Completions chunk format.
+
+        The Responses API uses a different request shape (``input`` instead of
+        ``messages``, ``instructions`` for system prompts, ``max_output_tokens``
+        for the budget) and emits event-typed SSE frames (e.g.
+        ``response.output_text.delta``) rather than chat-completion chunks.
+        ``presence_penalty`` / ``top_k`` are not part of the Responses contract
+        and are dropped here intentionally.
+        """
+        import json as _json
+
+        # Split system messages out into a single `instructions` string and
+        # translate user/assistant messages into the Responses input shape.
+        instructions_parts: list[str] = []
+        input_items: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content", "")
+
+            if role == "system":
+                if isinstance(content, str):
+                    if content:
+                        instructions_parts.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if part.get("type") == "text" and part.get("text"):
+                            instructions_parts.append(part["text"])
+                continue
+
+            if isinstance(content, str):
+                input_items.append({"role": role, "content": content})
+                continue
+
+            if isinstance(content, list):
+                translated_parts: list[dict[str, Any]] = []
+                for part in content:
+                    part_type = part.get("type")
+                    if part_type == "text":
+                        translated_parts.append(
+                            {"type": "input_text", "text": part.get("text", "")}
+                        )
+                    elif part_type == "image_url":
+                        url = part.get("image_url", {}).get("url", "")
+                        if url:
+                            # Responses takes image_url as a flat string (both
+                            # https:// URLs and data: URLs are accepted).
+                            translated_parts.append(
+                                {"type": "input_image", "image_url": url}
+                            )
+                if translated_parts:
+                    input_items.append({"role": role, "content": translated_parts})
+
+        body: dict[str, Any] = {
+            "model": model,
+            "input": input_items,
+            "stream": True,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        if instructions_parts:
+            body["instructions"] = "\n\n".join(instructions_parts)
+        if max_tokens is not None:
+            body["max_output_tokens"] = max_tokens
+
+        url = f"{self.base_url}/responses"
+        completion_id = f"chatcmpl-openai-{model.replace('/', '-')}"
+
+        logger.info("Proxying OpenAI Responses API to %s (model=%s)", url, model)
+
+        try:
+            async with _http_client.stream(
+                "POST",
+                url,
+                json = body,
+                headers = self._auth_headers(),
+                timeout = self._timeout,
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    error_text = error_body.decode("utf-8", errors = "replace")
+                    logger.error(
+                        "OpenAI Responses returned %d: %s",
+                        response.status_code,
+                        error_text[:500],
+                    )
+                    yield _error_sse_line(
+                        response.status_code, error_text, self.provider_type
+                    )
+                    return
+
+                # NOTE: same manual __anext__ loop as stream_chat_completion —
+                # see comment there for the GeneratorExit / aclose ordering.
+                lines_gen = response.aiter_lines().__aiter__()
+                done_emitted = False
+                try:
+                    while True:
+                        try:
+                            line = await lines_gen.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        if not line or line.startswith("event:"):
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+
+                        data_str = line[len("data:") :].strip()
+                        if not data_str:
+                            continue
+                        if data_str == "[DONE]":
+                            if not done_emitted:
+                                yield "data: [DONE]"
+                                done_emitted = True
+                            break
+
+                        try:
+                            event = _json.loads(data_str)
+                        except _json.JSONDecodeError:
+                            continue
+
+                        event_type = event.get("type")
+
+                        if event_type == "response.output_text.delta":
+                            delta_text = event.get("delta", "")
+                            if delta_text:
+                                chunk = {
+                                    "id": completion_id,
+                                    "object": "chat.completion.chunk",
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {"content": delta_text},
+                                            "finish_reason": None,
+                                        }
+                                    ],
+                                }
+                                yield f"data: {_json.dumps(chunk)}"
+
+                        elif event_type == "response.completed":
+                            chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {},
+                                        "finish_reason": "stop",
+                                    }
+                                ],
+                            }
+                            yield f"data: {_json.dumps(chunk)}"
+
+                        elif event_type == "response.incomplete":
+                            chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {},
+                                        "finish_reason": "length",
+                                    }
+                                ],
+                            }
+                            yield f"data: {_json.dumps(chunk)}"
+
+                        elif event_type in ("response.failed", "error"):
+                            # Surface the failure to the client; let the
+                            # outer route emit [DONE] as part of its cleanup.
+                            error_payload = event.get("response", {}).get(
+                                "error", {}
+                            ) or {
+                                "message": event.get("message", "Unknown error"),
+                                "code": event.get("code"),
+                            }
+                            yield _error_sse_line(
+                                502,
+                                _json.dumps(error_payload),
+                                self.provider_type,
+                            )
+                            break
+                except GeneratorExit:
+                    await response.aclose()
+                    await lines_gen.aclose()
                     raise
                 finally:
                     await response.aclose()

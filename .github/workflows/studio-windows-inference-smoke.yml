@@ -105,12 +105,8 @@ jobs:
         # Only write a fresh cache entry when we actually rebuilt the
         # directory (Prime ran and succeeded). Skipping when Prime is
         # skipped avoids "already exists" save warnings on the happy path.
-        # continue-on-error: a save-side flake (upload timeout, 5xx from
-        # the cache backend) is strictly recoverable -- next run just
-        # re-downloads -- so it should not fail the job.
         if: always() && steps.prime-hf.outcome == 'success'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
-        continue-on-error: true
         with:
           path: hf-cache
           key: ${{ runner.os }}-hf-${{ env.GGUF_REPO }}-${{ env.GGUF_VARIANT }}-v1
@@ -423,11 +419,8 @@ jobs:
             hf download "$GGUF_REPO" "$GGUF_FILE" --local-dir gguf-cache
 
       - name: Save GGUF model cache
-        # continue-on-error: see the matching block in the tool-calling job
-        # above for the full rationale. A save-side flake is recoverable.
         if: always() && steps.download-gguf.outcome == 'success'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
-        continue-on-error: true
         with:
           path: gguf-cache
           key: ${{ runner.os }}-gguf-${{ env.GGUF_REPO }}-${{ env.GGUF_FILE }}-v1
@@ -839,11 +832,8 @@ jobs:
             hf download "$GGUF_REPO" "$MMPROJ_FILE"
 
       - name: Save HF_HOME cache for ${{ env.GGUF_REPO }} (model + mmproj)
-        # continue-on-error: see the matching block in the tool-calling job
-        # above for the full rationale. A save-side flake is recoverable.
         if: always() && steps.prime-hf.outcome == 'success'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
-        continue-on-error: true
         with:
           path: hf-cache
           key: ${{ runner.os }}-hf-${{ env.GGUF_REPO }}-${{ env.GGUF_VARIANT }}-${{ env.MMPROJ_FILE }}-v1

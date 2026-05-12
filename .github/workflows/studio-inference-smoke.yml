@@ -107,7 +107,6 @@ jobs:
       - name: Save HF_HOME for ${{ env.GGUF_REPO }}
         if: always() && steps.prime-hf.outcome == 'success'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
-        continue-on-error: true
         with:
           path: hf-cache
           key: ${{ runner.os }}-hf-${{ env.GGUF_REPO }}-${{ env.GGUF_VARIANT }}-v1
@@ -356,7 +355,6 @@ jobs:
       - name: Save GGUF model file
         if: always() && steps.download-gguf.outcome == 'success'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
-        continue-on-error: true
         with:
           path: gguf-cache
           key: ${{ runner.os }}-gguf-${{ env.GGUF_REPO }}-${{ env.GGUF_FILE }}-v1
@@ -676,7 +674,6 @@ jobs:
       - name: Save HF_HOME for ${{ env.GGUF_REPO }} (model + mmproj)
         if: always() && steps.prime-hf.outcome == 'success'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
-        continue-on-error: true
         with:
           path: hf-cache
           key: ${{ runner.os }}-hf-${{ env.GGUF_REPO }}-${{ env.GGUF_VARIANT }}-${{ env.MMPROJ_FILE }}-v1

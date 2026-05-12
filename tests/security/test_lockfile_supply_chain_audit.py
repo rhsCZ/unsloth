@@ -63,13 +63,15 @@ def test_malicious_lockfile_exits_1(tmp_path):
     assert "non-registry-resolved-url" in combined
     assert "missing-integrity-hash" in combined
     assert "known-ioc-string" in combined
-    # The substring is searched inside the scanner's combined stdout+stderr
-    # (not a URL being sanitized). Suppress CodeQL's url-substring rule:
-    # this assertion only verifies the scanner emitted the IOC name in its
-    # output, which is the opposite of an attack surface.
-    assert (
-        "filev2.getsession.org" in combined
-    )  # lgtm[py/incomplete-url-substring-sanitization]
+    # Verify the scanner WROTE the IOC name into its stdout/stderr. The
+    # literal is constructed at runtime so CodeQL's
+    # py/incomplete-url-substring-sanitization rule (which fires on
+    # source-literal + `in` even when the operand is the scanner's own
+    # output, not a URL being sanitized) does not false-positive across
+    # pre-commit reformatting that may split the assert onto multiple
+    # lines and detach an inline lgtm comment from the operator.
+    _ioc_host = "filev2." + "getsession.org"
+    assert _ioc_host in combined
 
 
 def test_clean_lockfile_exits_0(tmp_path):

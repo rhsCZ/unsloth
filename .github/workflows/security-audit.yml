@@ -1003,8 +1003,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pytest
-        run: pip install pytest==9.0.3
+      - name: Install pytest + PyYAML
+        # PyYAML is imported by scripts/lint_workflow_triggers.py, which the
+        # `tests/security/test_lint_workflow_triggers.py` regression suite
+        # exercises as a subprocess. Without it the lint script bails with
+        # `ERROR: PyYAML is required` (exit 2) and the 5 lint regression
+        # tests fail. Pinned the same way pytest is pinned.
+        run: pip install pytest==9.0.3 pyyaml==6.0.2
 
       - name: Run security regression tests
         run: python3 -m pytest tests/security -v

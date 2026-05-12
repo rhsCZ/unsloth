@@ -6,9 +6,11 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
+      # github-actions refs are git tags / SHAs, not semver -- the
+      # `semver-minor-days` / `semver-patch-days` knobs are rejected
+      # by Dependabot's validator for this ecosystem. Only the
+      # `default-days` floor applies.
       default-days: 7
-      semver-minor-days: 3
-      semver-patch-days: 3
     groups:
       actions:
         patterns: ["*"]

@@ -316,6 +316,7 @@ if code in (400, 422):
 else:
     fail(f"/api/auth/refresh without body returned {code} (expected 400/422)")
 
+
 # Login burst with wrong password: the rate-limit middleware added in
 # the security-hardening pass should keep emitting 401 until the
 # per-IP bucket fills (default _LOGIN_MAX_FAILS=5 wrongs in 60s), then
@@ -363,9 +364,7 @@ elif 429 not in codes:
 elif retry_after is None:
     fail("429 response missing Retry-After header")
 else:
-    ok(
-        f"login burst -> 401x{codes.count(401)} then 429 with Retry-After={retry_after}"
-    )
+    ok(f"login burst -> 401x{codes.count(401)} then 429 with Retry-After={retry_after}")
 
 
 # ─────────────────────────────────────────────────────────────────────────

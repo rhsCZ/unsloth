@@ -17,7 +17,11 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth.authentication import get_current_subject
-from core.inference.key_exchange import get_public_key_pem, decrypt_api_key
+from core.inference.key_exchange import (
+    decrypt_api_key,
+    get_public_key_fingerprint,
+    get_public_key_pem,
+)
 from core.inference.providers import (
     get_base_url,
     get_provider_info,
@@ -48,8 +52,18 @@ router = APIRouter()
 async def get_public_key(
     current_subject: str = Depends(get_current_subject),
 ):
-    """Return the RSA public key PEM for client-side API key encryption."""
-    return {"public_key": get_public_key_pem()}
+    """Return the RSA public key PEM for client-side API key encryption.
+
+    The ``fingerprint`` field is a short SHA256 of the PEM and is meant
+    purely for diagnostics — a mismatch between what the frontend
+    captured at encrypt time and what the server reports here is a
+    clear signal that the keypair rotated mid-flight (e.g. the server
+    re-ran ``init_key_pair`` for any reason).
+    """
+    return {
+        "public_key": get_public_key_pem(),
+        "fingerprint": get_public_key_fingerprint(),
+    }
 
 
 # ── Provider registry (static) ───────────────────────────────────
@@ -189,7 +203,7 @@ async def test_provider(
     try:
         api_key = decrypt_api_key(payload.encrypted_api_key)
     except Exception as exc:
-        logger.warning("Failed to decrypt API key: %s", exc)
+        logger.warning("Failed to decrypt API key (%s): %s", type(exc).__name__, exc)
         raise HTTPException(
             status_code = 400,
             detail = "Failed to decrypt API key. The public key may have changed — try refreshing the page.",
@@ -254,7 +268,7 @@ async def list_provider_models(
     try:
         api_key = decrypt_api_key(payload.encrypted_api_key)
     except Exception as exc:
-        logger.warning("Failed to decrypt API key: %s", exc)
+        logger.warning("Failed to decrypt API key (%s): %s", type(exc).__name__, exc)
         raise HTTPException(
             status_code = 400,
             detail = "Failed to decrypt API key. The public key may have changed — try refreshing the page.",

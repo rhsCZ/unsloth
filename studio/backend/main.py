@@ -303,11 +303,14 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 
 # Cap upload body size on inference/dataset/training POSTs to prevent
-# OOM via large base64-encoded attachments. Default 100 MB, env-tunable.
+# OOM via large base64-encoded attachments. Default 500 MB, env-tunable
+# via UNSLOTH_STUDIO_MAX_BODY_MB. 500 MB comfortably handles vision +
+# audio + multi-recipe-batch payloads while still rejecting obvious
+# OOM probes.
 import json as _json_for_413  # noqa: E402
 
 
-_MAX_BODY_BYTES = int(os.environ.get("UNSLOTH_STUDIO_MAX_BODY_MB", "100")) * 1024 * 1024
+_MAX_BODY_BYTES = int(os.environ.get("UNSLOTH_STUDIO_MAX_BODY_MB", "500")) * 1024 * 1024
 _BODY_PROTECTED_PREFIXES = (
     "/v1/chat/completions",
     "/v1/completions",

@@ -57,9 +57,12 @@ jobs:
         run: python3 scripts/lockfile_supply_chain_audit.py
 
       - name: Build frontend
+        # --ignore-scripts: refuse to execute preinstall / install / postinstall
+        # hooks on any resolved tarball. The wheel-smoke job runs `vite build`
+        # which does not depend on lifecycle scripts.
         run: |
           cd studio/frontend
-          npm ci --no-fund --no-audit
+          npm ci --no-fund --no-audit --ignore-scripts
           npm run build
 
       - name: Build wheel + sdist

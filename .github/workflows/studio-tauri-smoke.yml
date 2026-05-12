@@ -61,7 +61,10 @@ jobs:
           workspaces: studio/src-tauri -> target
 
       - name: Install pinned Tauri CLI (matches release-desktop.yml)
-        run: npm install --save-dev --prefix studio @tauri-apps/cli@2.10.1
+        # --ignore-scripts: refuse lifecycle scripts on the resolved tarball.
+        # @tauri-apps/cli selects its native binary via optional-deps
+        # @tauri-apps/cli-* (os/cpu fields), no postinstall is required.
+        run: npm install --save-dev --prefix studio @tauri-apps/cli@2.10.1 --ignore-scripts --no-fund --no-audit
 
       - name: Verify pinned Tauri CLI version
         run: |
@@ -74,8 +77,11 @@ jobs:
 
       - name: Frontend build (npm ci, vite)
         working-directory: studio/frontend
+        # --ignore-scripts: defence-in-depth on top of the lockfile audit
+        # above. Studio's frontend is React + Vite; `vite build` produces
+        # a working dist without lifecycle hooks.
         run: |
-          npm ci --no-fund --no-audit
+          npm ci --no-fund --no-audit --ignore-scripts
           npm run build
           test -f dist/index.html
 

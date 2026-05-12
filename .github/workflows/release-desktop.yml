@@ -9,10 +9,18 @@ on:
         default: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    # TODO: split into a "build (no secrets)" + "publish (secrets)" job pair
+    # with actions/upload-artifact handoff so the matrix build cannot
+    # publish a Release on its own. The current matrix runs across
+    # Linux/macOS/Windows in a single job, so the split needs artefact
+    # collection across the OS matrix and is out of scope for this
+    # hardening pass.
+    permissions:
+      contents: write  # tauri-apps/tauri-action creates / uploads a GitHub Release
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -39,6 +47,17 @@ jobs:
 
 
     steps:
+      # harden-runner in audit mode: surfaces every egress destination in
+      # the runner log so the allowlist for a future `egress-policy: block`
+      # promotion can be derived from observed traffic. Audit mode is
+      # cross-platform (Linux / macOS / Windows runners); blocking mode is
+      # currently Linux-only, so we deliberately stay in audit until the
+      # macOS + Windows codesign paths have been observed.
+      - name: Harden runner (audit)
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       # ── Linux dependencies ──
@@ -55,7 +74,13 @@ jobs:
           node-version: 24
 
       - name: Install pinned Tauri CLI
-        run: npm install --save-dev --prefix studio @tauri-apps/cli@2.10.1
+        # --ignore-scripts: refuse to execute lifecycle scripts (preinstall /
+        # install / postinstall) on the resolved tarball or any of its deps.
+        # @tauri-apps/cli selects its native binary via the optional-deps
+        # @tauri-apps/cli-* mechanism (os/cpu fields), no postinstall is
+        # required for the right binary to be wired up; `npx tauri --version`
+        # below verifies the binary is reachable.
+        run: npm install --save-dev --prefix studio @tauri-apps/cli@2.10.1 --ignore-scripts --no-fund --no-audit
 
       - name: Verify pinned Tauri CLI
         shell: bash
@@ -69,7 +94,10 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: studio/frontend
-        run: npm install
+        # --ignore-scripts: defence-in-depth against a compromised tarball
+        # running install hooks. Studio's frontend is React + Vite; no dep
+        # requires lifecycle scripts to build a working `vite build`.
+        run: npm install --ignore-scripts --no-fund --no-audit
 
       - name: Verify backend package is published
         shell: bash
@@ -93,7 +121,7 @@ jobs:
 
       # ── Rust ──
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable @ 2026-03-27
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 

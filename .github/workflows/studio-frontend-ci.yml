@@ -67,7 +67,12 @@ jobs:
         run: python3 scripts/lockfile_supply_chain_audit.py
 
       - name: Lockfile must agree with package.json (npm ci is strict)
-        run: npm ci --no-fund --no-audit
+        # --ignore-scripts: refuse to execute preinstall / install / postinstall
+        # hooks on any resolved tarball. Belt and braces against a compromised
+        # dep slipping past the lockfile-supply-chain-audit step above. Studio's
+        # frontend is React + Vite -- `vite build` and `tsc` below do not need
+        # lifecycle hooks to produce a working bundle.
+        run: npm ci --no-fund --no-audit --ignore-scripts
 
       - name: npm ci must not have modified the working tree
         working-directory: ${{ github.workspace }}

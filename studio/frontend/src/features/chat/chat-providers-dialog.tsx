@@ -199,17 +199,17 @@ export function ChatProvidersSettings({
   useEffect(() => {
     if (!providerType || editingProviderId) return;
     const entry = registryByType.get(providerType);
-    if (entry?.model_list_mode === "curated") {
-      setAvailableModels([...entry.default_models]);
-      setSelectedModelIds([]);
-      setManualModelIds("");
-      setModelSearchQuery("");
-    } else if (entry) {
-      setAvailableModels([]);
-      setSelectedModelIds([]);
-      setManualModelIds("");
-      setModelSearchQuery("");
-    }
+    if (!entry) return;
+    // Seed the registry's default_models for every provider — curated and
+    // remote alike. For remote-mode providers, loadModels() will replace
+    // this with the union of defaults + the live /models response once the
+    // user clicks "Load Models"; until then (or if the call fails — e.g.
+    // decryption issues during key rotation) the seeded list ensures
+    // curated picks like claude-haiku-4-5 are always reachable.
+    setAvailableModels([...entry.default_models]);
+    setSelectedModelIds([]);
+    setManualModelIds("");
+    setModelSearchQuery("");
   }, [providerType, editingProviderId, registryByType]);
 
   const totalModels = useMemo(
@@ -385,9 +385,17 @@ export function ChatProvidersSettings({
         apiKey: apiKey.trim(),
         baseUrl,
       });
+      const registryDefaults =
+        registryByType.get(providerType)?.default_models ?? [];
+      // Union of registry defaults + fetched models, defaults first so any
+      // curated picks (e.g. claude-haiku-4-5) always show even when the
+      // provider's /models endpoint omits them.
       const modelIds = [
         ...new Set(
-          models.map((model) => model.id.trim()).filter((id) => id.length > 0),
+          [
+            ...registryDefaults,
+            ...models.map((model) => model.id.trim()),
+          ].filter((id) => id.length > 0),
         ),
       ];
       setAvailableModels(modelIds);

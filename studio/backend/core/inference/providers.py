@@ -33,6 +33,8 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         # never want to surface in the chat UI. Filtering here so backend
         # is the single source of truth.
         "model_id_allowlist": re.compile(r"^(gpt-5\.[345]|gpt-4\.5|o3)(?:[-.]|$)"),
+        # Hide dated snapshots
+        "model_id_denylist": re.compile(r"-\d{4}-\d{2}-\d{2}$"),
     },
     "anthropic": {
         "display_name": "Anthropic",

@@ -75,11 +75,14 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     repetitionPenalty: false,
     presencePenalty: false,
   },
-  // Anthropic's Messages API accepts top_k but not presence/frequency penalty.
+  // Anthropic's Messages API rejects presence/frequency penalty, and top_k
+  // is now deprecated across the Claude 4.x line (Opus / Sonnet / Haiku 4.x
+  // 400 with "top_k is deprecated for this model"). It was always optional
+  // on the older 3.x line, so we just drop it for every Anthropic call.
   anthropic: {
     temperature: true,
     topP: true,
-    topK: true,
+    topK: false,
     minP: false,
     repetitionPenalty: false,
     presencePenalty: false,

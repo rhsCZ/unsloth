@@ -276,8 +276,13 @@ class ExternalProviderClient:
             # Anthropic rejects requests that set both temperature and top_p
             "stream": True,
         }
-        if top_k is not None and top_k > 0:
-            body["top_k"] = top_k
+        # top_k is deprecated on Claude 4.x (Opus / Sonnet / Haiku 4.x return
+        # 400 with `top_k is deprecated for this model`). It was always
+        # optional on the older 3.x line too, so we just stop forwarding it
+        # for every Anthropic call rather than maintaining a per-model gate.
+        # ``top_k`` is still accepted on the method signature for API
+        # symmetry with the other stream methods.
+        del top_k
         if system:
             body["system"] = system
 

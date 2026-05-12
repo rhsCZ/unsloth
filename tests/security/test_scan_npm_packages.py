@@ -117,7 +117,21 @@ def test_blocked_npm_versions_complete():
         "3.8.0",
     }
     squawk = [k for k in table if k.startswith("@squawk/")]
-    assert len(squawk) == 3, f"expected 3 @squawk/* entries, got {sorted(squawk)}"
+    assert len(squawk) >= 22, (
+        f"expected at least 22 @squawk/* entries (full safedep.io enumeration), "
+        f"got {len(squawk)}: {sorted(squawk)}"
+    )
+    # @squawk/mcp must cover the full malicious range 0.9.1 .. 0.9.5
+    # (safedep.io enumeration; we initially had only 0.9.5).
+    assert {"0.9.1", "0.9.2", "0.9.3", "0.9.4", "0.9.5"} <= table["@squawk/mcp"]
+
+    uipath = [k for k in table if k.startswith("@uipath/")]
+    assert len(uipath) >= 64, (
+        f"expected at least 64 @uipath/* entries (Aikido enumeration), "
+        f"got {len(uipath)}: {sorted(uipath)}"
+    )
+    # Anchor a known entry: the rpa-tool 0.9.5 version is in the published list.
+    assert "0.9.5" in table["@uipath/rpa-tool"]
 
 
 @pytest.mark.skipif(

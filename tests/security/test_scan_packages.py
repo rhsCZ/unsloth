@@ -183,7 +183,8 @@ def test_may12_ioc_caught_by_scan_archive():
     # sanitization is suppressed here: we are verifying the scanner WROTE
     # the IOC name into its evidence, the inverse of an attack surface.
     hit = any(
-        "git-tanstack.com" in (f.evidence or "")  # lgtm[py/incomplete-url-substring-sanitization]
+        "git-tanstack.com"
+        in (f.evidence or "")  # lgtm[py/incomplete-url-substring-sanitization]
         or "transformers.pyz" in (f.evidence or "")
         or "may12" in (f.check or "").lower()
         for f in findings

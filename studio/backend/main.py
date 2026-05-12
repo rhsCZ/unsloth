@@ -103,7 +103,7 @@ if os.getenv("ENVIRONMENT_TYPE", "production") == "production":
     # warnings.filterwarnings("ignore", category=DeprecationWarning)
     # warnings.filterwarnings("ignore", module="triton.*")
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -410,10 +410,15 @@ async def health_check(request: Request):
         creds = HTTPAuthorizationCredentials(
             scheme = "Bearer", credentials = auth.split(" ", 1)[1]
         )
-        subject = _gcs(creds)  # type: ignore[arg-type]
-        if not subject:
-            return minimal
+        # ``get_current_subject`` is async; calling without ``await`` returns
+        # a truthy coroutine and bypasses the check, exposing the full
+        # diagnostic payload to anyone presenting a Bearer header.
+        subject = await _gcs(creds)
+    except HTTPException:
+        return minimal
     except Exception:
+        return minimal
+    if not subject:
         return minimal
 
     platform_map = {"darwin": "mac", "win32": "windows", "linux": "linux"}

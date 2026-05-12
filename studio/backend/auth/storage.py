@@ -482,32 +482,34 @@ def save_refresh_token(
 
 def consume_refresh_token(token: str) -> Optional[Tuple[str, bool]]:
     """Atomically validate-and-delete a refresh token (single-use rotation).
-    Returns ``(username, is_desktop)`` or ``None`` if missing/expired."""
+    Returns ``(username, is_desktop)`` or ``None`` if missing/expired.
+
+    Uses ``DELETE ... RETURNING`` so the validate and the delete land in a
+    single statement under SQLite's per-database write lock. A previous
+    SELECT-then-DELETE-WHERE-id pair was racy: two concurrent /api/auth/refresh
+    requests could both win the SELECT before either DELETE ran, letting the
+    same refresh token be consumed twice.
+    """
     token_hash = _hash_token(token)
+    now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
     try:
         conn.execute(
             "DELETE FROM refresh_tokens WHERE expires_at < ?",
-            (datetime.now(timezone.utc).isoformat(),),
+            (now,),
         )
         cur = conn.execute(
             """
-            SELECT id, username, expires_at, is_desktop FROM refresh_tokens
-            WHERE token_hash = ?
+            DELETE FROM refresh_tokens
+            WHERE token_hash = ? AND expires_at >= ?
+            RETURNING username, is_desktop
             """,
-            (token_hash,),
+            (token_hash, now),
         )
         row = cur.fetchone()
-        if row is None:
-            conn.commit()
-            return None
-        expires_at = datetime.fromisoformat(row["expires_at"])
-        if datetime.now(timezone.utc) > expires_at:
-            conn.execute("DELETE FROM refresh_tokens WHERE id = ?", (row["id"],))
-            conn.commit()
-            return None
-        conn.execute("DELETE FROM refresh_tokens WHERE id = ?", (row["id"],))
         conn.commit()
+        if row is None:
+            return None
         return row["username"], bool(row["is_desktop"])
     finally:
         conn.close()

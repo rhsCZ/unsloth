@@ -46,6 +46,7 @@ def main_module():
     """Import ``main`` lazily so ``ASGI`` middleware classes are reusable
     without forcing the global ``main.app`` initialisation on collect-time."""
     import main as _main  # noqa: F401
+
     return _main
 
 
@@ -203,9 +204,7 @@ class TestSecurityHeadersMiddleware:
         assert "camera=()" in r.headers["permissions-policy"]
         assert r.headers["server"] == "unsloth-studio"
 
-    def test_internal_nonce_header_is_spliced_into_csp_and_stripped(
-        self, main_module
-    ):
+    def test_internal_nonce_header_is_spliced_into_csp_and_stripped(self, main_module):
         nonce = "test-nonce-abc"
         app = _make_csp_app(main_module, attach_nonce = nonce)
         c = TestClient(app)
@@ -236,17 +235,20 @@ def health_app(tmp_path, monkeypatch):
     ``main.health_check``. Uses an isolated auth db so the test can mint
     real JWTs through the same code path the real server uses."""
     from auth import storage
+
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "auth.db")
     monkeypatch.setattr(storage, "_BOOTSTRAP_PW_PATH", tmp_path / ".bootstrap_password")
     monkeypatch.setattr(storage, "_bootstrap_password", None)
 
     import main as _main
+
     app = FastAPI()
     # Re-register the route on a fresh app rather than mounting main.app
     # (which carries the full router stack and would slow tests down).
     app.add_api_route("/api/health", _main.health_check, methods = ["GET"])
 
     import secrets as _secrets
+
     storage.create_initial_user(
         username = storage.DEFAULT_ADMIN_USERNAME,
         password = "human-password-123",

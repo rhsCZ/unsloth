@@ -270,10 +270,15 @@ def _sandbox_preexec():
         except (OSError, AttributeError):
             pass
 
-        try:
-            _libc.unshare(0x40000000)  # CLONE_NEWNET
-        except (OSError, AttributeError):
-            pass
+        # NOTE: ``unshare(CLONE_NEWNET)`` was removed because where
+        # unprivileged user namespaces are enabled it silently kills
+        # every outbound request from sandboxed code -- including
+        # legitimate requests.get("https://huggingface.co"),
+        # requests.get("https://en.wikipedia.org"), etc. -- not just
+        # cloud-metadata IPs. The AST-level metadata-host denylist plus
+        # the new trusted-host allowlist now carry the network policy,
+        # and the bash blocklist (curl / wget / nc / ssh / scp / ...)
+        # still blocks shell-level egress.
 
     if _resource is not None:
         # RLIMIT_NPROC counts per-real-UID LWPs, not processes. 10000 is
@@ -300,7 +305,10 @@ def _sandbox_preexec():
         except (ValueError, OSError, AttributeError):
             pass
         try:
-            cpu_s = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_CPU_S", "300"))
+            # 600s default (10 min) so long agentic chains that span
+            # multiple tool calls have headroom; override with
+            # UNSLOTH_STUDIO_SANDBOX_CPU_S.
+            cpu_s = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_CPU_S", "600"))
             _resource.setrlimit(_resource.RLIMIT_CPU, (cpu_s, cpu_s))
         except (ValueError, OSError, AttributeError):
             pass
@@ -1084,8 +1092,22 @@ def _check_signal_escape_patterns(code: str):
     if visitor.imports_signal and not signal_tampering:
         warnings.append("Code imports 'signal' module - review manually for safety")
 
-    # Narrow IO denylist: block cloud-metadata IPs and identity-file
-    # reads only; allow all other network and file IO.
+    # Network policy for sandboxed Python:
+    #   1. Cloud-metadata / link-local / private-metadata hosts are
+    #      blocked outright.
+    #   2. Hosts in the trusted-public allowlist are explicitly OK
+    #      (Wikipedia, Google search, HuggingFace, GitHub raw, arXiv,
+    #      StackOverflow, MDN, pypi, ...).
+    #   3. Everything else with a string-literal host is blocked at
+    #      AST time with a short, LLM-readable message so the model
+    #      can pick an allowed source instead of getting a wall of text.
+    #   4. Dynamic hosts (``requests.get(url_var)`` where ``url_var``
+    #      is computed at runtime) cannot be decided statically and are
+    #      let through; the bash blocklist (curl / wget / nc / ssh / ...)
+    #      remains the defense against shell-level egress.
+    #
+    # Uploads (``requests.post(url, files=...)``, multipart bodies,
+    # HuggingFace upload helpers, ...) are blocked regardless of host.
     network_calls: list[dict] = []
     sensitive_file_reads: list[dict] = []
     _NETWORK_FQ_PREFIXES = (
@@ -1107,9 +1129,42 @@ def _check_signal_escape_patterns(code: str):
         "http.client.HTTPSConnection",
         "httpx.get",
         "httpx.post",
+        "httpx.put",
+        "httpx.patch",
+        "httpx.delete",
+        "httpx.request",
         "httpx.Client",
         "httpx.AsyncClient",
         "aiohttp.ClientSession",
+    )
+    _UPLOAD_HTTP_METHODS = (
+        "requests.post",
+        "requests.put",
+        "requests.patch",
+        "requests.delete",
+        "requests.request",
+        "httpx.post",
+        "httpx.put",
+        "httpx.patch",
+        "httpx.delete",
+        "httpx.request",
+        "urllib.request.urlopen",
+        "urllib.request.Request",
+    )
+    # Module-level HuggingFace upload helpers + HfApi method names.
+    _UPLOAD_HF_FQ = (
+        "huggingface_hub.upload_file",
+        "huggingface_hub.upload_folder",
+        "huggingface_hub.upload_large_folder",
+        "huggingface_hub.create_commit",
+    )
+    _UPLOAD_HF_METHODS = frozenset(
+        {
+            "upload_file",
+            "upload_folder",
+            "upload_large_folder",
+            "create_commit",
+        }
     )
     # Cloud-metadata / link-local / loopback-to-known-metadata.
     _METADATA_HOST_LITERALS = {
@@ -1127,6 +1182,133 @@ def _check_signal_escape_patterns(code: str):
         "169.254.",
         "100.64.",  # CGNAT (often used internally)
     )
+    # Trusted informational public hosts that sandboxed Python may
+    # reach. Keep this list explicit and auditable (~100 entries) --
+    # exact hosts are safer than broad suffixes. See _TRUSTED_PUBLIC_HOST_SUFFIXES
+    # for the narrow suffix families (Wikipedia, Stack Exchange, HF
+    # CDN, GitHub content) where the whole subdomain tree is intended.
+    _TRUSTED_PUBLIC_HOST_LITERALS = frozenset(
+        {
+            # search
+            "www.google.com",
+            "google.com",
+            "www.bing.com",
+            "bing.com",
+            "duckduckgo.com",
+            "html.duckduckgo.com",
+            # encyclopedic / reference
+            "wikipedia.org",
+            "www.wikipedia.org",
+            "wikimedia.org",
+            "www.wikimedia.org",
+            "wikidata.org",
+            "www.wikidata.org",
+            "commons.wikimedia.org",
+            "www.britannica.com",
+            "openlibrary.org",
+            "www.openstreetmap.org",
+            # ML / dev / data
+            "huggingface.co",
+            "hf.co",
+            "github.com",
+            "api.github.com",
+            "raw.githubusercontent.com",
+            "gist.github.com",
+            "docs.github.com",
+            "pypi.org",
+            "files.pythonhosted.org",
+            "www.npmjs.com",
+            "registry.npmjs.org",
+            "crates.io",
+            "static.crates.io",
+            # docs
+            "docs.python.org",
+            "python.org",
+            "www.python.org",
+            "developer.mozilla.org",
+            "developer.apple.com",
+            "learn.microsoft.com",
+            "docs.docker.com",
+            "pytorch.org",
+            "docs.pytorch.org",
+            "tensorflow.org",
+            "www.tensorflow.org",
+            "numpy.org",
+            "pandas.pydata.org",
+            "scipy.org",
+            "scikit-learn.org",
+            "matplotlib.org",
+            "fastapi.tiangolo.com",
+            "starlette.io",
+            # academic
+            "arxiv.org",
+            "export.arxiv.org",
+            "scholar.google.com",
+            "openreview.net",
+            "semanticscholar.org",
+            "www.semanticscholar.org",
+            "biorxiv.org",
+            "www.biorxiv.org",
+            "medrxiv.org",
+            "www.medrxiv.org",
+            "pubmed.ncbi.nlm.nih.gov",
+            "www.ncbi.nlm.nih.gov",
+            # Q&A / community
+            "stackoverflow.com",
+            "stackexchange.com",
+            "askubuntu.com",
+            "superuser.com",
+            "serverfault.com",
+            # standards
+            "www.w3.org",
+            "tools.ietf.org",
+            "datatracker.ietf.org",
+            "www.rfc-editor.org",
+            # reputable news
+            "www.bbc.com",
+            "www.bbc.co.uk",
+            "www.reuters.com",
+            "apnews.com",
+            "www.nature.com",
+            "www.science.org",
+            # government / open data
+            "data.gov",
+            "catalog.data.gov",
+            "www.census.gov",
+            "www.nasa.gov",
+            "data.nasa.gov",
+            "www.cdc.gov",
+            "www.nih.gov",
+            "www.who.int",
+            # weather / time
+            "api.weather.gov",
+            "worldtimeapi.org",
+        }
+    )
+    _TRUSTED_PUBLIC_HOST_SUFFIXES = (
+        # All language Wikipedia / Wikimedia properties.
+        ".wikipedia.org",
+        ".wikimedia.org",
+        ".wiktionary.org",
+        ".wikibooks.org",
+        ".wikiquote.org",
+        ".wikisource.org",
+        ".wikiversity.org",
+        ".wikivoyage.org",
+        # Stack Exchange family.
+        ".stackexchange.com",
+        # HuggingFace download CDN.
+        ".hf.co",
+        ".huggingface.co",
+        # GitHub user content / pages.
+        ".githubusercontent.com",
+        ".github.io",
+        # arXiv mirrors.
+        ".arxiv.org",
+        # ReadTheDocs (mass docs host).
+        ".readthedocs.io",
+        ".readthedocs.org",
+    )
     _SENSITIVE_FILE_PREFIXES = (
         "/etc/passwd",
         "/etc/shadow",
@@ -1138,14 +1320,62 @@ def _check_signal_escape_patterns(code: str):
         r"^/proc/(?:self|\d+)/(?:environ|cmdline|task/\d+/environ)$"
     )
 
-    def _is_metadata_host(host: str) -> bool:
+    def _normalize_host(host: str) -> str:
         if not host:
+            return ""
+        h = host.strip().lower().rstrip(".")
+        if "@" in h:
+            h = h.split("@", 1)[1]
+        if h.startswith("[") and "]" in h:
+            h = h[1 : h.index("]")]
+        elif h.count(":") == 1:
+            h = h.split(":", 1)[0]
+        return h
+
+    def _is_metadata_host(host: str) -> bool:
+        h = _normalize_host(host)
+        if not h:
             return False
-        if host in _METADATA_HOST_LITERALS:
+        if h in _METADATA_HOST_LITERALS:
             return True
-        if any(host.startswith(p) for p in _METADATA_HOST_PREFIXES):
+        if any(h.startswith(p) for p in _METADATA_HOST_PREFIXES):
             return True
         return False
+
+    def _is_trusted_host(host: str) -> bool:
+        h = _normalize_host(host)
+        if not h:
+            return False
+        if h in _TRUSTED_PUBLIC_HOST_LITERALS:
+            return True
+        return any(h.endswith(s) for s in _TRUSTED_PUBLIC_HOST_SUFFIXES)
+
+    def _call_is_upload_shape(node: ast.Call, fq: str) -> bool:
+        """``requests.post(url, files=...)`` / ``httpx.put(url, data=open(...))``
+        / ``urllib.request.urlopen(req, data=bytes_lit)`` etc. Conservative:
+        only matches statically obvious upload shapes."""
+        if fq in _UPLOAD_HF_FQ:
+            return True
+        if fq not in _UPLOAD_HTTP_METHODS:
+            return False
+        for kw in node.keywords or []:
+            if kw.arg == "files":
+                return True
+            if kw.arg == "data":
+                v = kw.value
+                if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "open":
+                    return True
+                if isinstance(v, ast.Constant) and isinstance(v.value, (bytes, bytearray)):
+                    return True
+        return False
+
+    def _method_call_is_hf_upload(node: ast.Call) -> bool:
+        """Match ``something.upload_file(...)`` / ``HfApi().upload_folder(...)``
+        regardless of the receiver."""
+        return (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in _UPLOAD_HF_METHODS
+        )
 
     class NetworkAndIoVisitor(ast.NodeVisitor):
         def visit_Call(self, node):
@@ -1158,6 +1388,21 @@ def _check_signal_escape_patterns(code: str):
             if isinstance(cur, ast.Name):
                 parts.insert(0, cur.id)
             fq = ".".join(parts) if parts else ""
+
+            # ``HfApi().upload_file(...)`` / ``hf_api.upload_folder(...)``
+            # / ``some_obj.create_commit(...)`` -- block regardless of
+            # qualified name since the model usually constructs the
+            # client receiver inline.
+            if _method_call_is_hf_upload(node):
+                network_calls.append(
+                    {
+                        "type": "upload_blocked",
+                        "line": getattr(node, "lineno", -1),
+                        "description": (
+                            "Blocked: file upload disallowed in sandbox"
+                        ),
+                    }
+                )
 
             # Catch ``sock.connect(("169.254.169.254", 80))`` shape
             # that the FQ-prefix check below misses.
@@ -1174,20 +1419,41 @@ def _check_signal_escape_patterns(code: str):
                         host_lit = e0.value
                 elif isinstance(a0, ast.Constant) and isinstance(a0.value, str):
                     host_lit = a0.value
-                if host_lit and _is_metadata_host(host_lit):
+                if host_lit:
+                    if _is_metadata_host(host_lit):
+                        network_calls.append(
+                            {
+                                "type": "metadata_host_blocked",
+                                "line": getattr(node, "lineno", -1),
+                                "description": "Blocked: cloud-metadata host",
+                            }
+                        )
+                    elif not _is_trusted_host(host_lit):
+                        network_calls.append(
+                            {
+                                "type": "untrusted_host_blocked",
+                                "line": getattr(node, "lineno", -1),
+                                "description": (
+                                    "Blocked: host not in sandbox allowlist; "
+                                    "use an allowed informational source"
+                                ),
+                            }
+                        )
+
+            if fq and any(fq.startswith(p) for p in _NETWORK_FQ_PREFIXES):
+                # 1) Upload-shape check (host-independent).
+                if _call_is_upload_shape(node, fq):
                     network_calls.append(
                         {
-                            "type": "metadata_host_blocked",
+                            "type": "upload_blocked",
                             "line": getattr(node, "lineno", -1),
                             "description": (
-                                f".connect(({host_lit!r}, ...)) targets cloud-metadata; "
-                                "sandboxed code may not call link-local / metadata IPs"
+                                "Blocked: file upload disallowed in sandbox"
                             ),
                         }
                     )
 
-            if fq and any(fq.startswith(p) for p in _NETWORK_FQ_PREFIXES):
-                # Only block literal metadata hosts; allow dynamic/public.
+                # 2) Extract literal host (URL string or (host, port) tuple).
                 host_arg = None
                 url_arg = None
                 if node.args:
@@ -1199,20 +1465,30 @@ def _check_signal_escape_patterns(code: str):
                         if isinstance(e0, ast.Constant) and isinstance(e0.value, str):
                             host_arg = e0.value
                 if url_arg and host_arg is None:
-                    m = re.match(r"^\w+://([^/:?#]+)", url_arg)
+                    m = re.match(r"^\w+://([^/?#]+)", url_arg)
                     if m:
                         host_arg = m.group(1)
-                if host_arg and _is_metadata_host(host_arg):
-                    network_calls.append(
-                        {
-                            "type": "metadata_host_blocked",
-                            "line": getattr(node, "lineno", -1),
-                            "description": (
-                                f"{fq}({host_arg!r}) targets cloud-metadata; "
-                                "sandboxed code may not call link-local / metadata IPs"
-                            ),
-                        }
-                    )
+
+                if host_arg:
+                    if _is_metadata_host(host_arg):
+                        network_calls.append(
+                            {
+                                "type": "metadata_host_blocked",
+                                "line": getattr(node, "lineno", -1),
+                                "description": "Blocked: cloud-metadata host",
+                            }
+                        )
+                    elif not _is_trusted_host(host_arg):
+                        network_calls.append(
+                            {
+                                "type": "untrusted_host_blocked",
+                                "line": getattr(node, "lineno", -1),
+                                "description": (
+                                    "Blocked: host not in sandbox allowlist; "
+                                    "use an allowed informational source"
+                                ),
+                            }
+                        )
 
             # Block static reads of identity / credential files.
             is_open_call = (

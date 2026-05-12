@@ -860,8 +860,14 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               model: externalSelection.modelId,
               messages: outboundMessages,
               stream: true,
-              temperature: params.temperature,
-              top_p: params.topP,
+              // Reasoning-class models (OpenAI gpt-5.x / o3) reject temperature
+              // and top_p; only forward when the active provider supports them.
+              ...(externalCapabilities?.temperature !== false
+                ? { temperature: params.temperature }
+                : {}),
+              ...(externalCapabilities?.topP !== false
+                ? { top_p: params.topP }
+                : {}),
               // Clamp to the cross-provider output cap so a maxTokens value
               // carried over from a local-model session does not blow past
               // provider limits (e.g. Claude Opus 400s on >128k).

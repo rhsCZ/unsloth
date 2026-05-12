@@ -469,12 +469,20 @@ class ExternalProviderClient:
                 if translated_parts:
                     input_items.append({"role": role, "content": translated_parts})
 
+        # NOTE: gpt-5.x / o3 / gpt-4.5 are reasoning-class models. They reject
+        # temperature and top_p with `Unsupported parameter` 400s on
+        # /v1/responses (and on /v1/chat/completions for the same families).
+        # The PROVIDER_REGISTRY['openai'] model_id_allowlist already scopes
+        # the picker to those families, so we never need to send sampling
+        # knobs here. ``reasoning.effort`` defaults to "medium" server-side
+        # if omitted — surface it in a future commit if a knob is wanted.
+        del temperature, top_p  # explicit drop — params are accepted for
+        # API symmetry with the other stream methods but not forwarded.
+
         body: dict[str, Any] = {
             "model": model,
             "input": input_items,
             "stream": True,
-            "temperature": temperature,
-            "top_p": top_p,
         }
         if instructions_parts:
             body["instructions"] = "\n\n".join(instructions_parts)

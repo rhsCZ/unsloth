@@ -190,8 +190,9 @@ export interface OpenAIChatCompletionsRequest {
   model: string;
   messages: OpenAIChatMessage[];
   stream: boolean;
-  temperature: number;
-  top_p: number;
+  /** Reasoning-class OpenAI models reject these — caller may omit. */
+  temperature?: number;
+  top_p?: number;
   max_tokens: number;
   top_k?: number;
   min_p?: number;

@@ -532,6 +532,9 @@ export function ChatSettingsPanel({
   // is only consulted when `isExternalModel` is true. An external model with an
   // unknown provider falls back to the OpenAI-compat shape via
   // getProviderCapabilities, so these flags never undercount support.
+  const showTemperature =
+    !isExternalModel || Boolean(providerCapabilities?.temperature);
+  const showTopP = !isExternalModel || Boolean(providerCapabilities?.topP);
   const showTopK = !isExternalModel || Boolean(providerCapabilities?.topK);
   const showMinP = !isExternalModel || Boolean(providerCapabilities?.minP);
   const showRepetitionPenalty =
@@ -1155,25 +1158,29 @@ export function ChatSettingsPanel({
 
         <CollapsibleSection label="Sampling" defaultOpen={true}>
           <div className="flex flex-col gap-5 pt-1">
-            <ParamSlider
-              label="Temperature"
-              value={params.temperature}
-              min={0}
-              max={2}
-              step={0.01}
-              onChange={set("temperature")}
-              info="Controls randomness. Lower values make output focused and deterministic; higher values increase variety and creativity."
-            />
-            <ParamSlider
-              label="Top P"
-              value={params.topP}
-              min={0}
-              max={1}
-              step={0.05}
-              onChange={set("topP")}
-              displayValue={params.topP === 1 ? "Off" : undefined}
-              info="Nucleus sampling. Restricts choices to the smallest set of tokens whose cumulative probability reaches this threshold. 1.0 = off."
-            />
+            {showTemperature ? (
+              <ParamSlider
+                label="Temperature"
+                value={params.temperature}
+                min={0}
+                max={2}
+                step={0.01}
+                onChange={set("temperature")}
+                info="Controls randomness. Lower values make output focused and deterministic; higher values increase variety and creativity."
+              />
+            ) : null}
+            {showTopP ? (
+              <ParamSlider
+                label="Top P"
+                value={params.topP}
+                min={0}
+                max={1}
+                step={0.05}
+                onChange={set("topP")}
+                displayValue={params.topP === 1 ? "Off" : undefined}
+                info="Nucleus sampling. Restricts choices to the smallest set of tokens whose cumulative probability reaches this threshold. 1.0 = off."
+              />
+            ) : null}
             {showTopK ? (
               <ParamSlider
                 label="Top K"

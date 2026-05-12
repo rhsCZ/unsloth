@@ -97,12 +97,13 @@ def test_responses_request_body_uses_input_and_instructions(monkeypatch):
     assert body["model"] == "gpt-5.5"
     assert body["instructions"] == "You are concise."
     assert body["input"] == [{"role": "user", "content": "Hi"}]
-    assert body["temperature"] == 0.5
-    assert body["top_p"] == 0.9
     assert body["max_output_tokens"] == 512
     assert body["stream"] is True
-    # Responses API does not accept these — frontend caps + backend path both
-    # strip them; make sure we never silently forward them.
+    # Responses API on reasoning-class models (gpt-5.x / o3 / gpt-4.5 — the
+    # only OpenAI ids the registry allowlist exposes) rejects these as
+    # `Unsupported parameter`. Make sure we never silently forward them.
+    assert "temperature" not in body
+    assert "top_p" not in body
     assert "presence_penalty" not in body
     assert "frequency_penalty" not in body
     assert "top_k" not in body

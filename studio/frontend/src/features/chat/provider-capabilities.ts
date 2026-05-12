@@ -14,6 +14,13 @@
  */
 
 export interface ProviderCapabilities {
+  /**
+   * Temperature sampling. Reasoning-class models (OpenAI's gpt-5.x / o3 via
+   * /v1/responses) reject this with `Unsupported parameter`.
+   */
+  temperature: boolean;
+  /** Nucleus (top_p) sampling. Same restriction as `temperature` on OpenAI. */
+  topP: boolean;
   /** top-k token sampling (only Anthropic on the providers we ship). */
   topK: boolean;
   /** min-p token cutoff (no SaaS provider currently exposes this). */
@@ -38,6 +45,8 @@ export interface ProviderCapabilities {
 export const EXTERNAL_MAX_OUTPUT_TOKENS = 32768;
 
 const OPENAI_COMPAT_BASE: ProviderCapabilities = {
+  temperature: true,
+  topP: true,
   topK: false,
   minP: false,
   repetitionPenalty: false,
@@ -45,6 +54,8 @@ const OPENAI_COMPAT_BASE: ProviderCapabilities = {
 };
 
 const ALL_SUPPORTED: ProviderCapabilities = {
+  temperature: true,
+  topP: true,
   topK: true,
   minP: true,
   repetitionPenalty: true,
@@ -52,10 +63,13 @@ const ALL_SUPPORTED: ProviderCapabilities = {
 };
 
 const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
-  // OpenAI's flagship models (gpt-5.x) now require /v1/responses, and the
-  // Responses API drops presence/frequency penalty from the contract — see
-  // backend external_provider._stream_openai_responses for the proxy.
+  // OpenAI's flagship models (gpt-5.x / o3 / gpt-4.5) are reasoning-class
+  // models served via /v1/responses, which rejects temperature, top_p, and
+  // presence/frequency penalty. See backend
+  // external_provider._stream_openai_responses for the proxy.
   openai: {
+    temperature: false,
+    topP: false,
     topK: false,
     minP: false,
     repetitionPenalty: false,
@@ -63,6 +77,8 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
   },
   // Anthropic's Messages API accepts top_k but not presence/frequency penalty.
   anthropic: {
+    temperature: true,
+    topP: true,
     topK: true,
     minP: false,
     repetitionPenalty: false,
@@ -72,6 +88,8 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
   gemini: OPENAI_COMPAT_BASE,
   // DeepSeek deprecated presence/frequency penalty in their current docs.
   deepseek: {
+    temperature: true,
+    topP: true,
     topK: false,
     minP: false,
     repetitionPenalty: false,

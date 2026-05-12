@@ -964,3 +964,108 @@ jobs:
 
       - name: Run security regression tests
         run: python3 -m pytest tests/security -v
+
+  # ─────────────────────────────────────────────────────────────────────
+  # npm provenance + new install-script diff. Catches the two npm
+  # supply-chain levers we don't yet gate on:
+  #
+  #   1. `npm audit signatures` validates the registry-signed
+  #      provenance of every tarball laid down in node_modules. Pulled
+  #      from the public npm transparency log; surfaces unsigned or
+  #      mis-signed deps. Informational for now (continue-on-error)
+  #      while the baseline settles.
+  #
+  #   2. `check_new_install_scripts.py` diffs the PR's lockfile
+  #      against the base ref and refuses any newly-added dep that
+  #      ships a postinstall hook. Every recent npm supply-chain
+  #      compromise leveraged a postinstall as the execution lever, so
+  #      blocking new ones at PR time is a small, high-signal gate.
+  # ─────────────────────────────────────────────────────────────────────
+  npm-provenance-and-install-scripts:
+    name: npm provenance + new install-script diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner (egress block)
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: audit
+          disable-sudo: true
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            registry.npmjs.org:443
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Need the base commit accessible for `git show
+          # <base-sha>:studio/frontend/package-lock.json` below.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: studio/frontend/package-lock.json
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Studio frontend deps (--ignore-scripts)
+        # `npm audit signatures` requires node_modules to be populated.
+        # `--ignore-scripts` is mandatory: this is exactly the lever the
+        # new-install-script gate below protects against, and we must
+        # not run any third-party hook to set up the audit.
+        working-directory: studio/frontend
+        run: npm ci --ignore-scripts
+
+      - name: npm audit signatures (informational)
+        # Surfaces unsigned / mis-signed packages from the npm
+        # transparency log. continue-on-error during baseline-build
+        # phase; promote to hard gate once the lockfile is fully
+        # signed (most major maintainers signed by mid-2025).
+        working-directory: studio/frontend
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          LOG=logs-audit-signatures.txt
+          npm audit signatures 2>&1 | tee "$LOG"
+          {
+            echo "## npm audit signatures"
+            echo
+            echo '```'
+            tail -200 "$LOG"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Extract base-ref lockfile (PR triggers only)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git show "$BASE_SHA:studio/frontend/package-lock.json" \
+            > /tmp/base-package-lock.json
+
+      - name: Diff for newly-added install-script deps
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/check_new_install_scripts.py \
+            --base /tmp/base-package-lock.json \
+            --head studio/frontend/package-lock.json
+
+      - name: Skip install-script diff (non-PR trigger)
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Not a pull_request event; install-script diff requires a base ref."
+          echo "This step is intentionally a no-op outside PR triggers."
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: npm-audit-signatures-log
+          path: studio/frontend/logs-audit-signatures.txt
+          if-no-files-found: ignore
+          retention-days: 30

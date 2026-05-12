@@ -5,6 +5,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
     groups:
       actions:
         patterns: ["*"]
@@ -16,6 +20,10 @@ updates:
     directory: "/studio/frontend"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
     groups:
       bun-frontend:
         patterns: ["*"]
@@ -27,6 +35,10 @@ updates:
     directory: "/studio/backend/core/data_recipe/oxc-validator"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
     groups:
       npm-oxc-validator:
         patterns: ["*"]
@@ -41,6 +53,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       python:
         patterns: ["*"]
@@ -52,6 +66,10 @@ updates:
     directory: "/studio/src-tauri"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
     groups:
       cargo-tauri:
         patterns: ["*"]
@@ -62,12 +80,19 @@ updates:
   # bun owns version updates for /studio/frontend (above); GitHub
   # fires npm-package advisories under npm_and_yarn, so this entry
   # catches and groups them. limit: 0 suppresses version-update
-  # PRs, security updates flow through regardless.
+  # PRs, security updates flow through regardless. The cooldown
+  # below applies to those security PRs: even when the advisory
+  # arrives we wait the standard window so we never ingest a
+  # tarball that was hot-published less than 3 days ago.
   - package-ecosystem: "npm"
     directory: "/studio/frontend"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
     groups:
       npm-frontend-security:
         applies-to: security-updates

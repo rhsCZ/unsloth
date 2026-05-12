@@ -676,32 +676,27 @@ export function ChatProvidersSettings({
 
   if (page === "form") {
     return (
-      <div className="flex min-h-0 flex-col gap-5">
-        <header className="flex items-start gap-3 pr-8">
+      <div className="-mt-3 flex min-h-0 flex-col gap-2">
+        <header className="flex items-center gap-2 pr-8">
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="mt-0.5 size-8 rounded-[8px]"
+            className="size-8 rounded-[8px]"
             onClick={closeForm}
             aria-label="Back to providers"
             title="Back to providers"
           >
             <HugeiconsIcon icon={ArrowLeft02Icon} className="size-4" />
           </Button>
-          <div className="flex min-w-0 flex-col gap-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                Providers
-              </span>
-              <span className="size-1 rounded-full bg-muted-foreground/35" />
-              <span className="truncate text-xs font-medium text-muted-foreground">
-                {editingProviderId ? "Edit" : "New"}
-              </span>
-            </div>
-            <h1 className="font-heading text-lg font-semibold">
-              {editingProviderId ? "Edit provider" : "Add provider"}
-            </h1>
+          <div className="flex min-w-0 items-center gap-2 leading-none">
+            <span className="text-xs font-medium text-muted-foreground">
+              Cloud
+            </span>
+            <span className="size-1 rounded-full bg-muted-foreground/35" />
+            <span className="truncate text-xs font-medium text-muted-foreground">
+              {editingProviderId ? "Edit" : "New"}
+            </span>
           </div>
         </header>
 
@@ -1140,9 +1135,9 @@ export function ChatProvidersSettings({
     <div className="flex min-h-0 flex-col gap-6">
       <header className="flex flex-col gap-1 pr-8">
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="font-heading text-lg font-semibold">Providers</h1>
+          <h1 className="font-heading text-lg font-semibold">Cloud</h1>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Manage external model providers for chat through the Studio proxy.
+            Manage cloud provider connections for chat through the Studio proxy.
           </p>
         </div>
       </header>
@@ -1289,7 +1284,7 @@ export function ChatProvidersDialog({
         className="flex max-h-[90dvh] w-[96vw] flex-col gap-0 overflow-y-auto p-8 sm:max-w-none md:max-w-[44rem]"
       >
         <DialogHeader className="sr-only">
-          <DialogTitle>Providers</DialogTitle>
+          <DialogTitle>Cloud</DialogTitle>
           <DialogDescription>
             Manage external model providers for chat.
           </DialogDescription>

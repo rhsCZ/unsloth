@@ -111,7 +111,10 @@ def test_blocked_npm_versions_complete():
     )
     assert "@opensearch-project/opensearch" in table
     assert table["@opensearch-project/opensearch"] == {
-        "3.5.3", "3.6.2", "3.7.0", "3.8.0",
+        "3.5.3",
+        "3.6.2",
+        "3.7.0",
+        "3.8.0",
     }
     squawk = [k for k in table if k.startswith("@squawk/")]
     assert len(squawk) == 3, f"expected 3 @squawk/* entries, got {sorted(squawk)}"
@@ -152,7 +155,8 @@ def _extract_pkg_with_ioc(ioc: str, tmp_path: Path) -> Path:
     root = tmp_path / f"pkg_{abs(hash(ioc)) % 10**8}"
     (root / "package").mkdir(parents = True)
     (root / "package" / "package.json").write_text(
-        json.dumps(pkg_json), encoding = "utf-8",
+        json.dumps(pkg_json),
+        encoding = "utf-8",
     )
     return root
 

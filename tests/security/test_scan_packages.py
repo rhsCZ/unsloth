@@ -88,10 +88,7 @@ def test_fixture_bytes_are_deterministic(tmp_path):
 
 
 def _critical_or_high(findings) -> list:
-    return [
-        f for f in findings
-        if f.severity in (sp.CRITICAL, sp.HIGH)
-    ]
+    return [f for f in findings if f.severity in (sp.CRITICAL, sp.HIGH)]
 
 
 def test_malicious_wheel_triggers_critical():
@@ -121,9 +118,9 @@ def test_clean_wheel_no_findings():
         str(FIXTURES / "clean_wheel.whl"),
         "clean_fixture",
     )
-    assert findings == [], (
-        f"unexpected findings on clean wheel: {[str(f) for f in findings]}"
-    )
+    assert (
+        findings == []
+    ), f"unexpected findings on clean wheel: {[str(f) for f in findings]}"
 
 
 # ---------------------------------------------------------------------------

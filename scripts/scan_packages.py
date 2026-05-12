@@ -70,8 +70,8 @@ SEVERITY_ORDER = {CRITICAL: 0, HIGH: 1, MEDIUM: 2}
 # earlier Semgrep / Endor reports for the `lightning` entries.
 BLOCKED_PYPI_VERSIONS: dict[str, set[str]] = {
     "guardrails-ai": {"0.10.1"},
-    "mistralai":     {"2.4.6"},
-    "lightning":     {"2.6.2", "2.6.3"},
+    "mistralai": {"2.4.6"},
+    "lightning": {"2.6.2", "2.6.3"},
 }
 
 # ---------------------------------------------------------------------------

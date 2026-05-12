@@ -34,7 +34,10 @@ def _run_auditor(
     for p in cargo_lockfiles or []:
         cmd.extend(["--cargo-lockfile", str(p)])
     return subprocess.run(
-        cmd, capture_output = True, text = True, timeout = timeout,
+        cmd,
+        capture_output = True,
+        text = True,
+        timeout = timeout,
     )
 
 
@@ -128,9 +131,10 @@ def test_lockfile_auditor_blocked_versions_match_scanner():
     comment until the next PR factors them into a shared module).
     """
     from scripts import scan_npm_packages as snp
-    assert lsa.BLOCKED_NPM_VERSIONS == snp.BLOCKED_NPM_VERSIONS, (
-        "auditor and scanner BLOCKED_NPM_VERSIONS tables drifted"
-    )
+
+    assert (
+        lsa.BLOCKED_NPM_VERSIONS == snp.BLOCKED_NPM_VERSIONS
+    ), "auditor and scanner BLOCKED_NPM_VERSIONS tables drifted"
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +142,7 @@ def test_lockfile_auditor_blocked_versions_match_scanner():
 # ---------------------------------------------------------------------------
 
 
-_MALICIOUS_CARGO_LOCK = '''\
+_MALICIOUS_CARGO_LOCK = """\
 version = 3
 
 [[package]]
@@ -151,7 +155,7 @@ name = "honest-crate"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0000000000000000000000000000000000000000000000000000000000000000"
-'''
+"""
 
 
 def test_malicious_cargo_lockfile_refused(tmp_path):

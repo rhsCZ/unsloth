@@ -9,11 +9,18 @@ Anthropic uses native Messages API with translation in this client.
 """
 
 import logging
+import re
 from typing import Any, AsyncGenerator, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Claude 4.7 (Opus/Sonnet/Haiku) deprecated top_k and returns 400
+# "top_k is deprecated for this model" when it is set. 3.x and 4.5/4.6
+# still accept it. Match the 4-7 line specifically so we keep the knob
+# live on every other Claude generation.
+_ANTHROPIC_TOP_K_DEPRECATED = re.compile(r"^claude-(?:opus|sonnet|haiku)-4-7(?:[-.]|$)")
 
 # Shared client reused across all requests for HTTP connection pooling.
 # Auth headers and timeouts are passed per-request, so a single client
@@ -276,13 +283,15 @@ class ExternalProviderClient:
             # Anthropic rejects requests that set both temperature and top_p
             "stream": True,
         }
-        # top_k is deprecated on Claude 4.x (Opus / Sonnet / Haiku 4.x return
-        # 400 with `top_k is deprecated for this model`). It was always
-        # optional on the older 3.x line too, so we just stop forwarding it
-        # for every Anthropic call rather than maintaining a per-model gate.
-        # ``top_k`` is still accepted on the method signature for API
-        # symmetry with the other stream methods.
-        del top_k
+        # top_k is deprecated on Claude 4.7 (Opus/Sonnet/Haiku) — the API
+        # returns 400 "top_k is deprecated for this model" when it is set.
+        # 3.x and 4.5/4.6 still accept it, so gate strictly on the 4.7 ids.
+        if (
+            top_k is not None
+            and top_k > 0
+            and not _ANTHROPIC_TOP_K_DEPRECATED.match(model)
+        ):
+            body["top_k"] = top_k
         if system:
             body["system"] = system
 

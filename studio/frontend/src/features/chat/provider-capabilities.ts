@@ -75,14 +75,17 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     repetitionPenalty: false,
     presencePenalty: false,
   },
-  // Anthropic's Messages API rejects presence/frequency penalty, and top_k
-  // is now deprecated across the Claude 4.x line (Opus / Sonnet / Haiku 4.x
-  // 400 with "top_k is deprecated for this model"). It was always optional
-  // on the older 3.x line, so we just drop it for every Anthropic call.
+  // Anthropic's Messages API accepts top_k on 3.x and 4.5/4.6, but Claude
+  // 4.7 (Opus/Sonnet/Haiku) deprecated it and returns 400 if it is set.
+  // We surface top_k in the panel for all Anthropic providers and let the
+  // backend strip it per-model — see _stream_anthropic in
+  // studio/backend/core/inference/external_provider.py.
+  // Presence/frequency penalty is not part of the Messages API on any
+  // Claude generation.
   anthropic: {
     temperature: true,
     topP: true,
-    topK: false,
+    topK: true,
     minP: false,
     repetitionPenalty: false,
     presencePenalty: false,

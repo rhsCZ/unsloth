@@ -144,6 +144,11 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "auth_prefix": "Bearer ",
         "notes": "Moonshot API key. China: use base URL https://api.moonshot.cn/v1",
         "model_id_allowlist": re.compile(r"^kimi-k2\.[56]$"),
+        # Both k2.6 and k2.5 are reasoning-class. The API rejects custom
+        # sampling: "invalid temperature: only 1 is allowed for this model"
+        # (and the same shape for top_p). Strip both fields from the
+        # outbound body so the server falls back to its required defaults.
+        "body_omit": ("temperature", "top_p"),
     },
     "qwen": {
         "display_name": "Qwen",

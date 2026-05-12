@@ -97,15 +97,30 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "display_name": "Mistral AI",
         "base_url": "https://api.mistral.ai/v1",
         "default_models": [
-            "mistral-large-2512",
-            "mistral-small-2506",
             "codestral-latest",
+            "devstral-latest",
+            "devstral-medium-latest",
+            "magistral-medium-latest",
+            "ministral-14b-latest",
+            "ministral-3b-latest",
+            "ministral-8b-latest",
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "mistral-small-latest",
+            "mistral-tiny-latest",
+            "mistral-vibe-cli-latest",
         ],
         "supports_streaming": True,
         "supports_vision": True,
         "supports_tool_calling": True,
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
+        "model_id_allowlist": re.compile(
+            r"^(codestral-latest|devstral-latest|devstral-medium-latest|"
+            r"magistral-medium-latest|ministral-(?:14b|3b|8b)-latest|"
+            r"mistral-(?:large|medium|small|tiny)-latest|"
+            r"mistral-vibe-cli-latest)$"
+        ),
     },
     "kimi": {
         "display_name": "Kimi",

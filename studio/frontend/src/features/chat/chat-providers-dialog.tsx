@@ -305,6 +305,11 @@ export function ChatProvidersSettings({
 
   function openAddProvider() {
     resetForm();
+    const entry = providerType ? registryByType.get(providerType) : null;
+    if (entry) {
+      // Keep first-open behavior consistent with provider re-selection.
+      setAvailableModels([...entry.default_models]);
+    }
     setPage("form");
   }
 

@@ -1023,7 +1023,7 @@ export function ChatProvidersSettings({
                         onChange={(event) =>
                           setManualModelIds(event.target.value)
                         }
-                        placeholder={curatedManualPlaceholder}
+                        placeholder={"model-id-1\nmodel-id-2"}
                         rows={5}
                         className="min-h-[100px] resize-y font-mono text-sm"
                       />

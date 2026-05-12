@@ -305,6 +305,10 @@ KNOWN_IOC_STRINGS: dict[str, tuple[str, str]] = {
         CRITICAL,
         "TanStack-wave Bun prepare-script dropper invocation",
     ),
+    "@tanstack/setup": (
+        CRITICAL,
+        "TanStack-wave optional-dep dropper carrier (no legit pkg of this name)",
+    ),
 }
 
 # Hard pin-blocks for publicly confirmed malicious versions.
@@ -521,6 +525,11 @@ BLOCKED_NPM_VERSIONS: dict[str, set[str]] = {
     "git-git-git": {"1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12"},
     "nextmove-mcp": {"0.1.3", "0.1.4", "0.1.5", "0.1.6", "0.1.7"},
     "ml-toolkit-ts": {"1.0.4", "1.0.5"},
+
+    # Cross-ecosystem Mini Shai-Hulud (Apr-30 wave): npm counterpart of
+    # PyPI lightning 2.6.2/2.6.3. Same threat actor (TeamPCP) per Semgrep,
+    # Aikido, OX Security, Resecurity. Safe version: 7.0.3 and earlier.
+    "intercom-client": {"7.0.4"},
 }
 
 # Cloud / k8s / CI credential surfaces. A bare substring match here

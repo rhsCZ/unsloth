@@ -85,10 +85,12 @@ def _clear_login_bucket(ip: str) -> None:
 @router.get("/status", response_model = AuthStatusResponse)
 async def auth_status() -> AuthStatusResponse:
     """Check whether auth has been initialized. ``default_username`` is
-    returned as ``None`` so it is not leaked to unauthenticated callers."""
+    returned as the fixed admin name 'unsloth' so the React login form
+    can pre-fill the field on first boot; the bootstrap password
+    (not the username) is what protects access."""
     return AuthStatusResponse(
         initialized = storage.is_initialized(),
-        default_username = None,
+        default_username = storage.DEFAULT_ADMIN_USERNAME,
         requires_password_change = storage.requires_password_change(
             storage.DEFAULT_ADMIN_USERNAME
         )

@@ -37,9 +37,13 @@ class AuthStatusResponse(BaseModel):
     initialized: bool = Field(
         ..., description = "True if the auth database contains a login user"
     )
-    default_username: Optional[str] = Field(
-        None,
-        description = "Default admin username, omitted for unauthenticated callers.",
+    default_username: str = Field(
+        "unsloth",
+        description = (
+            "Default admin username. Pinned to 'unsloth' so the React login "
+            "form can pre-fill the field on first boot; the bootstrap "
+            "password is what protects access, not the username."
+        ),
     )
     requires_password_change: bool = Field(
         ...,

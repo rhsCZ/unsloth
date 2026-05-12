@@ -249,27 +249,43 @@ from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.requests import Request as _StarletteRequest  # noqa: E402
 
 
+_CSP_SCRIPT_NONCE_HEADER = "x-internal-script-nonce"
+
+
+def _build_csp(script_nonce: "str | None" = None) -> str:
+    script_src = "script-src 'self'"
+    if script_nonce:
+        script_src += f" 'nonce-{script_nonce}'"
+    return (
+        "default-src 'self'; "
+        "img-src 'self' data: blob: https://t0.gstatic.com "
+        "https://t1.gstatic.com https://t2.gstatic.com "
+        "https://t3.gstatic.com; "
+        "connect-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        f"{script_src}; "
+        "font-src 'self' data:; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "base-uri 'self'"
+    )
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Set baseline security headers on every response."""
+    """Set baseline security headers on every response.
+
+    The CSP defaults to ``script-src 'self'``. When a downstream handler
+    needs to emit one inline ``<script>`` (currently only the opt-in
+    ``_inject_bootstrap`` path), it attaches the nonce via the internal
+    header :data:`_CSP_SCRIPT_NONCE_HEADER`; we splice ``'nonce-XXX'`` into
+    the CSP for that response and strip the header before sending so the
+    nonce never leaves the server.
+    """
 
     async def dispatch(self, request: _StarletteRequest, call_next):
         response = await call_next(request)
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            (
-                "default-src 'self'; "
-                "img-src 'self' data: blob: https://t0.gstatic.com "
-                "https://t1.gstatic.com https://t2.gstatic.com "
-                "https://t3.gstatic.com; "
-                "connect-src 'self'; "
-                "style-src 'self' 'unsafe-inline'; "
-                "script-src 'self' 'unsafe-inline'; "
-                "font-src 'self' data:; "
-                "frame-ancestors 'none'; "
-                "form-action 'self'; "
-                "base-uri 'self'"
-            ),
-        )
+        nonce = response.headers.pop(_CSP_SCRIPT_NONCE_HEADER, None)
+        response.headers.setdefault("Content-Security-Policy", _build_csp(nonce))
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -287,7 +303,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 # Cap upload body size on inference/dataset/training POSTs to prevent
 # OOM via large base64-encoded attachments. Default 100 MB, env-tunable.
 import json as _json_for_413  # noqa: E402
-from starlette.responses import JSONResponse as _JSONResponse  # noqa: E402
 
 
 _MAX_BODY_BYTES = int(os.environ.get("UNSLOTH_STUDIO_MAX_BODY_MB", "100")) * 1024 * 1024
@@ -302,33 +317,126 @@ _BODY_PROTECTED_PREFIXES = (
 )
 
 
-class MaxBodyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: _StarletteRequest, call_next):
-        method = request.method.upper()
-        path = request.url.path
-        if method in ("POST", "PUT", "PATCH") and any(
-            path.startswith(p) for p in _BODY_PROTECTED_PREFIXES
+async def _send_413(send, total_bytes: int) -> None:
+    """Send a 413 JSON response over a raw ASGI ``send`` channel."""
+    payload = _json_for_413.dumps(
+        {
+            "detail": (
+                f"Request body too large "
+                f"({total_bytes:,} bytes; max {_MAX_BODY_BYTES:,})."
+            )
+        },
+    ).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(payload)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": payload, "more_body": False})
+
+
+class MaxBodyMiddleware:
+    """Reject oversized request bodies on protected POST/PUT/PATCH prefixes.
+
+    The previous BaseHTTPMiddleware version only checked the declared
+    ``Content-Length`` header; clients that omit it or send chunked
+    transfer-encoding bypassed the cap and could still drive an OOM via
+    the downstream JSON / file readers. This rewrite is a raw ASGI
+    middleware:
+
+    1. If ``Content-Length`` is declared and exceeds the cap, reply 413
+       immediately (same as before).
+    2. Otherwise the middleware buffers the request body itself, counting
+       bytes as ``http.request`` frames arrive. Once the running total
+       exceeds ``_MAX_BODY_BYTES`` the request is rejected with 413
+       before the FastAPI handler ever runs. The bounded buffer
+       (``_MAX_BODY_BYTES + 1`` worst case) is then replayed to
+       downstream as a single ``http.request`` so route code that calls
+       ``request.json()`` / ``await request.body()`` works unchanged.
+
+    Non-protected prefixes, non-mutating methods, and non-HTTP scopes
+    bypass the cap as before.
+    """
+
+    def __init__(self, app, max_bytes: int, protected_prefixes: tuple):
+        self.app = app
+        self.max_bytes = max_bytes
+        self.protected_prefixes = protected_prefixes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "").upper()
+        path = scope.get("path", "")
+        if method not in ("POST", "PUT", "PATCH") or not any(
+            path.startswith(p) for p in self.protected_prefixes
         ):
-            cl = request.headers.get("content-length")
-            if cl:
+            await self.app(scope, receive, send)
+            return
+
+        declared = None
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
                 try:
-                    declared = int(cl)
-                except ValueError:
+                    declared = int(value.decode("latin-1"))
+                except (ValueError, UnicodeDecodeError):
                     declared = None
-                if declared is not None and declared > _MAX_BODY_BYTES:
-                    return _JSONResponse(
-                        status_code = 413,
-                        content = {
-                            "detail": (
-                                f"Request body too large "
-                                f"({declared:,} bytes; max {_MAX_BODY_BYTES:,})."
-                            )
-                        },
-                    )
-        return await call_next(request)
+                break
+        if declared is not None and declared > self.max_bytes:
+            await _send_413(send, declared)
+            return
+
+        # Drain the body up to max_bytes + 1, counting as we go.
+        chunks: list = []
+        total = 0
+        while True:
+            msg = await receive()
+            mtype = msg.get("type")
+            if mtype == "http.disconnect":
+                # Client gave up mid-upload; bail without invoking downstream.
+                return
+            if mtype != "http.request":
+                # Unexpected ASGI message; forward as-is to downstream is unsafe
+                # because we are mid-stream — drop and abort.
+                return
+            body = msg.get("body", b"") or b""
+            if body:
+                total += len(body)
+                if total > self.max_bytes:
+                    await _send_413(send, total)
+                    return
+                chunks.append(body)
+            if not msg.get("more_body", False):
+                break
+
+        replayed = {"sent": False}
+
+        async def replay_receive():
+            if not replayed["sent"]:
+                replayed["sent"] = True
+                return {
+                    "type": "http.request",
+                    "body": b"".join(chunks),
+                    "more_body": False,
+                }
+            # Subsequent receive() calls after the body — fall through to
+            # the real channel so http.disconnect etc still propagate.
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
 
 
-app.add_middleware(MaxBodyMiddleware)
+app.add_middleware(
+    MaxBodyMiddleware,
+    max_bytes = _MAX_BODY_BYTES,
+    protected_prefixes = _BODY_PROTECTED_PREFIXES,
+)
 
 
 # /recipes -> /data-recipes redirect so the bare URL works either way.
@@ -550,14 +658,21 @@ def _strip_crossorigin(html_bytes: bytes) -> bytes:
     return html.encode("utf-8")
 
 
-def _inject_bootstrap(html_bytes: bytes, app: FastAPI) -> bytes:
+def _inject_bootstrap(html_bytes: bytes, app: FastAPI):
     """Inject bootstrap credentials into HTML when password change is required.
 
     The script tag is only injected while the default admin account still
     has ``must_change_password=True``.  Once the user changes the password
     the HTML is served clean — no credentials leak.
+
+    Returns ``(html_bytes, script_nonce_or_None)``. When a nonce is
+    returned, callers MUST attach it via the internal CSP nonce header so
+    :class:`SecurityHeadersMiddleware` can splice ``'nonce-XXX'`` into the
+    ``script-src`` directive for this one response. Without that the
+    inline ``<script>`` is blocked by the default ``script-src 'self'``.
     """
     import json as _json
+    import secrets as _secrets
 
     # Opt-in only: the inject default leaked the plaintext bootstrap
     # password to any LAN caller / browser extension. Users now read
@@ -568,14 +683,14 @@ def _inject_bootstrap(html_bytes: bytes, app: FastAPI) -> bytes:
         "yes",
         "on",
     ):
-        return html_bytes
+        return html_bytes, None
 
     if not storage.requires_password_change(storage.DEFAULT_ADMIN_USERNAME):
-        return html_bytes
+        return html_bytes, None
 
     bootstrap_pw = getattr(app.state, "bootstrap_password", None)
     if not bootstrap_pw:
-        return html_bytes
+        return html_bytes, None
 
     payload = _json.dumps(
         {
@@ -583,10 +698,11 @@ def _inject_bootstrap(html_bytes: bytes, app: FastAPI) -> bytes:
             "password": bootstrap_pw,
         }
     )
-    tag = f"<script>window.__UNSLOTH_BOOTSTRAP__={payload}</script>"
+    nonce = _secrets.token_urlsafe(16)
+    tag = f'<script nonce="{nonce}">window.__UNSLOTH_BOOTSTRAP__={payload}</script>'
     html = html_bytes.decode("utf-8")
     html = html.replace("</head>", f"{tag}</head>", 1)
-    return html.encode("utf-8")
+    return html.encode("utf-8"), nonce
 
 
 def setup_frontend(app: FastAPI, build_path: Path):
@@ -599,16 +715,22 @@ def setup_frontend(app: FastAPI, build_path: Path):
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory = assets_dir), name = "assets")
 
-    @app.get("/")
-    async def serve_root():
+    def _build_index_response() -> Response:
         content = (build_path / "index.html").read_bytes()
         content = _strip_crossorigin(content)
-        content = _inject_bootstrap(content, app)
+        content, nonce = _inject_bootstrap(content, app)
+        headers = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+        if nonce:
+            headers[_CSP_SCRIPT_NONCE_HEADER] = nonce
         return Response(
             content = content,
             media_type = "text/html",
-            headers = {"Cache-Control": "no-cache, no-store, must-revalidate"},
+            headers = headers,
         )
+
+    @app.get("/")
+    async def serve_root():
+        return _build_index_response()
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
@@ -625,13 +747,6 @@ def setup_frontend(app: FastAPI, build_path: Path):
             return FileResponse(file_path)
 
         # Serve index.html as bytes — avoids Content-Length mismatch
-        content = (build_path / "index.html").read_bytes()
-        content = _strip_crossorigin(content)
-        content = _inject_bootstrap(content, app)
-        return Response(
-            content = content,
-            media_type = "text/html",
-            headers = {"Cache-Control": "no-cache, no-store, must-revalidate"},
-        )
+        return _build_index_response()
 
     return True

@@ -281,6 +281,9 @@ async def list_provider_models(
 
     try:
         models = await client.list_models()
+        allowlist = info.get("model_id_allowlist")
+        if allowlist is not None:
+            models = [m for m in models if allowlist.match(m.get("id", ""))]
         return [
             ProviderModelInfo(
                 id = m.get("id", ""),

@@ -67,6 +67,7 @@ class ExternalProviderClient:
         top_p: float = 0.95,
         max_tokens: Optional[int] = None,
         presence_penalty: float = 0.0,
+        top_k: Optional[int] = None,
         stream: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
@@ -74,10 +75,15 @@ class ExternalProviderClient:
 
         For OpenAI-compatible providers, lines are forwarded verbatim.
         For Anthropic, the native Messages API SSE is translated to OpenAI format.
+
+        ``top_k`` and ``presence_penalty`` are forwarded only when the caller
+        supplies a value the provider accepts — the frontend's
+        provider-capability map already filters these per provider, so we
+        treat them as opt-in here.
         """
         if not self._is_openai_compatible():
             async for line in self._stream_anthropic(
-                messages, model, temperature, top_p, max_tokens
+                messages, model, temperature, top_p, max_tokens, top_k
             ):
                 yield line
             return
@@ -180,6 +186,7 @@ class ExternalProviderClient:
         temperature: float,
         top_p: float,
         max_tokens: Optional[int],
+        top_k: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Call the Anthropic Messages API and translate its SSE to OpenAI format.
@@ -257,6 +264,8 @@ class ExternalProviderClient:
             # Anthropic rejects requests that set both temperature and top_p
             "stream": True,
         }
+        if top_k is not None and top_k > 0:
+            body["top_k"] = top_k
         if system:
             body["system"] = system
 

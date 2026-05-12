@@ -8,6 +8,7 @@ All providers expose OpenAI-compatible /v1/chat/completions endpoints
 with Bearer token authentication and SSE streaming support.
 """
 
+import re
 from typing import Any
 
 PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
@@ -15,18 +16,23 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "display_name": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "default_models": [
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "o3-mini",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3",
+            "o3",
         ],
         "supports_streaming": True,
         "supports_vision": True,
         "supports_tool_calling": True,
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
+        # Keep the model picker scoped to the current generation. The remote
+        # /v1/models listing returns dozens of historical snapshots, fine-tunes
+        # and non-chat models (embeddings, TTS, image, moderation) that we
+        # never want to surface in the chat UI. Filtering here so backend
+        # is the single source of truth.
+        "model_id_allowlist": re.compile(r"^(gpt-5\.[345]|gpt-4\.5|o3)(?:[-.]|$)"),
     },
     "anthropic": {
         "display_name": "Anthropic",

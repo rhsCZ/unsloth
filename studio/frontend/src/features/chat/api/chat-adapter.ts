@@ -132,6 +132,58 @@ function estimateTokenCount(text: string): number | undefined {
   return Math.max(1, Math.round(trimmed.length / 4));
 }
 
+/**
+ * Normalize a streamed `delta.content` to a plain text string.
+ *
+ * OpenAI Chat Completions originally typed `delta.content` as a string, but
+ * a number of providers now emit it as an array of structured content parts.
+ * Concatenating that with `cumulativeText += delta` would stringify each
+ * part as `[object Object]` — this function is the guard against that.
+ *
+ * Handled part shapes:
+ *   { type: "text" | "output_text", text | content: "..." }   → text body
+ *   { type: "thinking" | "reasoning", thinking | text: "..." } → wrapped as
+ *       inline `<think>...</think>` so the downstream parser
+ *       (`parseAssistantContent`) lifts it into a reasoning part the same way
+ *       it does for providers that emit thinking inline. Without this wrap,
+ *       Mistral magistral and similar reasoning-part providers would lose
+ *       their thinking panel.
+ *
+ * Unknown part types are skipped — better to drop a stray field than to
+ * stringify an object and pollute the rendered chat with `[object Object]`.
+ */
+function extractDeltaText(delta: unknown): string {
+  if (typeof delta === "string") return delta;
+  if (!Array.isArray(delta)) return "";
+  let out = "";
+  for (const part of delta) {
+    if (typeof part === "string") {
+      out += part;
+      continue;
+    }
+    if (!part || typeof part !== "object") continue;
+    const obj = part as {
+      type?: string;
+      text?: string;
+      content?: string;
+      thinking?: string;
+    };
+    if (obj.type === "text" || obj.type === "output_text") {
+      if (typeof obj.text === "string") out += obj.text;
+      else if (typeof obj.content === "string") out += obj.content;
+    } else if (obj.type === "thinking" || obj.type === "reasoning") {
+      const thinking =
+        typeof obj.thinking === "string"
+          ? obj.thinking
+          : typeof obj.text === "string"
+            ? obj.text
+            : "";
+      if (thinking) out += `<think>${thinking}</think>`;
+    }
+  }
+  return out;
+}
+
 function buildTiming(
   streamStartTime: number,
   totalChunks: number,
@@ -1010,7 +1062,12 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               }
 
               totalChunks += 1;
-              const delta = chunk.choices?.[0]?.delta?.content;
+              const rawDelta = chunk.choices?.[0]?.delta?.content;
+              // Providers like Mistral's magistral return delta.content as an
+              // array of structured parts; normalize to text (with thinking
+              // parts re-wrapped as inline <think> tags) so the rest of the
+              // accumulator stays string-based.
+              const delta = extractDeltaText(rawDelta);
               if (!delta) {
                 continue;
               }

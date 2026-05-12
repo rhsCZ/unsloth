@@ -78,8 +78,11 @@ jobs:
       # known flake where it logs "Cache hit for: <key>" and then exits
       # non-zero without actually extracting the archive (see
       # actions/cache#1621 and github community discussion #163260).
-      # continue-on-error masks that failure; the Prime step below
-      # re-downloads from HF, and the Save step re-uploads on the way out.
+      # continue-on-error on restore masks that failure so the Prime step
+      # below can re-download from HF and the job keeps running. Save then
+      # populates the cache key on a real miss only; cache keys are
+      # immutable, so a corrupted cached entry persists until the -v1
+      # suffix below is bumped.
       - name: Restore HF_HOME cache for ${{ env.GGUF_REPO }}
         id: cache-hf
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5

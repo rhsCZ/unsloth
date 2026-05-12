@@ -5,6 +5,7 @@ Guards against future regressions that would re-introduce GHSA-g7cv-rxg3-hmpx
   * pull_request_target (fork PR runs in base context).
   * Shared cache keys between PR-triggered workflows and the publish workflow.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -21,8 +22,8 @@ SCRIPT = REPO_ROOT / "scripts" / "lint_workflow_triggers.py"
 def _run(workflows_dir: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--workflows-dir", str(workflows_dir)],
-        capture_output=True,
-        text=True,
+        capture_output = True,
+        text = True,
     )
 
 
@@ -30,9 +31,9 @@ def test_lint_passes_on_current_workflows():
     """The live `.github/workflows/` tree must pass the lint."""
     live = REPO_ROOT / ".github" / "workflows"
     proc = _run(live)
-    assert proc.returncode == 0, (
-        f"live tree failed lint:\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    )
+    assert (
+        proc.returncode == 0
+    ), f"live tree failed lint:\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 
 
 def test_lint_rejects_pull_request_target(tmp_path):

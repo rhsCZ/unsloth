@@ -931,6 +931,50 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────
+  # Workflow-trigger lint. Refuses two patterns that together powered the
+  # TanStack GHSA-g7cv-rxg3-hmpx supply-chain compromise:
+  #
+  #   1. `pull_request_target` -- runs a fork's workflow YAML against
+  #      the base repository's secrets. There is no safe use of this
+  #      trigger for a public open-source project.
+  #
+  #   2. Shared cache keys between PR-triggered workflows and the
+  #      publish workflow. A fork PR can poison the cache; the publish
+  #      workflow then restores the poisoned cache on next run.
+  #
+  # Cheap pure-Python lint, runs in seconds. Fail-closed.
+  # ─────────────────────────────────────────────────────────────────────
+  workflow-trigger-lint:
+    name: workflow-trigger lint (pull_request_target / cache-poisoning)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner (egress block)
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450  # v2.19.1
+        with:
+          egress-policy: block
+          disable-sudo: true
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            files.pythonhosted.org:443
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Lint workflow triggers + cache keys
+        run: python3 scripts/lint_workflow_triggers.py
+
+  # ─────────────────────────────────────────────────────────────────────
   # Regression tests: pin scanner IOC tables and pre-install fixtures.
   # Hard gate (no continue-on-error) so future drift in the IOC tables
   # or scanner exit semantics fails this PR at review time.

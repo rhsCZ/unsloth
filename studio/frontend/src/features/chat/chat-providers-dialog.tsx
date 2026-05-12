@@ -938,9 +938,7 @@ export function ChatProvidersSettings({
                 ) : isCuratedModelList ? (
                   <div className="space-y-3 px-4 py-4">
                     <p className="text-xs leading-relaxed text-muted-foreground">
-                      This provider lists a huge number of models. Studio does
-                      not download the full catalog. Pick suggestions below
-                      and/or enter exact model IDs.
+                      Select from suggestions below or enter exact model IDs.
                     </p>
                     {availableModels.length > 0 ? (
                       <div className="space-y-3 rounded-[8px] border border-border/70 bg-background/50 p-3">
@@ -967,7 +965,7 @@ export function ChatProvidersSettings({
                               className="h-8 px-2 text-xs font-medium text-foreground/80 hover:bg-muted/45"
                               onClick={selectAllModels}
                             >
-                              Select all suggestions
+                              Select all
                             </Button>
                             <Button
                               type="button"
@@ -983,16 +981,16 @@ export function ChatProvidersSettings({
                             </Button>
                           </div>
                         </div>
-                        <ul className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                        <ul className="max-h-56 overflow-y-auto rounded-[8px] border border-border/70 bg-background/50">
                           {filteredAvailableModels.length === 0 ? (
-                            <li className="py-3 text-xs text-muted-foreground">
+                            <li className="px-3 py-3 text-xs text-muted-foreground">
                               No matching models
                             </li>
                           ) : (
                             filteredAvailableModels.map((model, index) => (
                               <li
                                 key={model}
-                                className="flex cursor-pointer items-center gap-2.5 rounded-[6px] px-1 py-1 hover:bg-muted/35"
+                                className="flex cursor-pointer items-center gap-2.5 border-border/60 border-b px-3 py-2 last:border-b-0 hover:bg-muted/35"
                                 onClick={() => toggleModel(model)}
                               >
                                 <Checkbox
@@ -1025,9 +1023,7 @@ export function ChatProvidersSettings({
                         onChange={(event) =>
                           setManualModelIds(event.target.value)
                         }
-                        placeholder={
-                          "openai/gpt-4o-mini\nanthropic/claude-sonnet-4-5\ngoogle/gemini-2.5-flash"
-                        }
+                        placeholder={curatedManualPlaceholder}
                         rows={5}
                         className="min-h-[100px] resize-y font-mono text-sm"
                       />

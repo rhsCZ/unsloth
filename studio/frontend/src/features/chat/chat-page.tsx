@@ -784,6 +784,11 @@ export function ChatPage(): ReactElement {
           checkpoint: value,
         });
         useChatRuntimeStore.setState({
+          activeGgufVariant: null,
+          ggufContextLength: null,
+          ggufMaxContextLength: null,
+          ggufNativeContextLength: null,
+          activeNativePathToken: null,
           supportsReasoning: reasoningCaps.supportsReasoning,
           reasoningAlwaysOn: reasoningCaps.reasoningAlwaysOn,
           reasoningStyle: reasoningCaps.reasoningStyle,

@@ -528,9 +528,20 @@ async def health_check(request: Request):
         "timestamp": datetime.now().isoformat(),
         # Launcher / preflight contract: stable identity + capability bits.
         # Safe to expose unauthenticated -- studio_root_id is a hex digest
-        # of the install path, the desktop flags are non-sensitive booleans.
+        # of the install path, the desktop flags and chat_only are
+        # non-sensitive feature-shape booleans (same category as
+        # ``supports_desktop_auth``).
+        #
+        # chat_only is part of the contract because the SPA's first-load
+        # router needs it to decide whether to redirect /studio + /export
+        # to /chat *before* any bearer is available; the Playwright UI
+        # tests rely on the same signal so they don't have to maintain a
+        # heuristic ("did the URL change after goto?"). Withholding it
+        # broke the Windows + Linux UI smokes and the change-password
+        # bootstrap flow.
         "service": "Unsloth UI Backend",
         "studio_root_id": _studio_root_id(),
+        "chat_only": _hw_module.CHAT_ONLY,
         "desktop_protocol_version": 1,
         "desktop_manageability_version": 1,
         "supports_desktop_auth": True,
@@ -561,13 +572,14 @@ async def health_check(request: Request):
         **minimal,
         # Sensitive diagnostic fields. Gated on a valid bearer because:
         # - version / studio_version reveal patch-level CVE exposure;
-        # - device_type / chat_only reveal training-vs-inference shape;
+        # - device_type reveals the training-vs-inference shape;
         # - desktop_owner reveals which UID/process owns the desktop lease;
         # - native_path_leases_supported reveals filesystem capability.
+        # chat_only is intentionally NOT gated; see the comment on the
+        # ``minimal`` dict above.
         "version": UNSLOTH_VERSION,
         "studio_version": STUDIO_VERSION,
         "device_type": device_type,
-        "chat_only": _hw_module.CHAT_ONLY,
         "native_path_leases_supported": native_path_leases_supported(),
         **({"desktop_owner": owner} if (owner := _desktop_owner()) else {}),
     }

@@ -298,16 +298,14 @@ with sync_playwright() as p:
     composer = page.locator('textarea[aria-label="Message input"]')
     composer.wait_for(state = "visible", timeout = 60_000)
 
-    # Detect chat-only mode: /api/health.chat_only is the source of truth,
-    # but the field is gated behind a valid bearer (along with version /
-    # device_type / desktop_owner) -- unauthenticated callers only see the
-    # launcher contract (status, service, studio_root_id, desktop_*).
-    # Pass the access token we already minted above so the test always
-    # observes chat_only directly rather than guessing from URL behavior.
+    # Detect chat-only mode: /api/health.chat_only is the source of truth.
+    # The field is part of the unauthenticated launcher contract so the
+    # SPA's first-load router can decide whether to redirect /studio +
+    # /export to /chat *before* any bearer exists. Bearered or not, the
+    # field is always present on a healthy backend.
     health_resp = evaluate_fetch(
         page,
         f"{BASE}/api/health",
-        headers = {"Authorization": f"Bearer {token}"},
         timeout_ms = FETCH_TIMEOUT_MS,
     )
     if health_resp.get("error"):
@@ -315,13 +313,14 @@ with sync_playwright() as p:
         sys.exit(1)
     health = health_resp.get("body") or {}
     if "chat_only" not in health:
-        # Older Studio builds (pre-auth gating) returned chat_only in the
-        # minimal payload. Tolerate that by probing /studio: a 3xx to /chat
-        # is the equivalent runtime signal.
-        page.goto(f"{BASE}/studio")
-        page.wait_for_timeout(500)
-        chat_only = "/studio" not in page.url
-        info(f"chat_only inferred from /studio URL: {chat_only}")
+        # Defensive: an older Studio build without the launcher-contract
+        # patch may omit chat_only when called unauthenticated. Default
+        # to non-chat-only and log so the probe is not silently wrong.
+        chat_only = False
+        info(
+            "WARN /api/health did not return chat_only; defaulting to "
+            "chat_only=False (older Studio build)"
+        )
     else:
         chat_only = bool(health.get("chat_only"))
         info(f"chat_only mode: {chat_only}")

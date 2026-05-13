@@ -245,12 +245,13 @@ class TestHealthAuthGate:
         "timestamp",
         "service",
         "studio_root_id",
+        "chat_only",
         "desktop_protocol_version",
         "desktop_manageability_version",
         "supports_desktop_auth",
         "supports_desktop_backend_ownership",
     }
-    GATED_KEYS = ("version", "device_type", "chat_only", "native_path_leases_supported")
+    GATED_KEYS = ("version", "device_type", "native_path_leases_supported")
 
     def test_no_auth_returns_launcher_payload(self, health_app):
         c = TestClient(health_app)

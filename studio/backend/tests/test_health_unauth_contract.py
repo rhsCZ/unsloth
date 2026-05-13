@@ -41,6 +41,7 @@ LAUNCHER_KEYS = {
     "timestamp",
     "service",
     "studio_root_id",
+    "chat_only",
     "desktop_protocol_version",
     "desktop_manageability_version",
     "supports_desktop_auth",
@@ -51,7 +52,6 @@ GATED_KEYS = {
     "version",
     "studio_version",
     "device_type",
-    "chat_only",
     "native_path_leases_supported",
 }
 

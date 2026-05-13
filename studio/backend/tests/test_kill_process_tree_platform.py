@@ -41,17 +41,17 @@ def _spawn_sleep(seconds: int = 60):
         if Path(sleep_bin).exists():
             return subprocess.Popen(
                 [sleep_bin, str(seconds)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                stdout = subprocess.DEVNULL,
+                stderr = subprocess.DEVNULL,
+                start_new_session = True,
             )
     # Fallback: minimal Python sleeper. Adds ~25-40 MB per test which
     # is fine for single-test runs but is the reason we prefer
     # /bin/sleep when available (the suite spawns one per test).
     return subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(%d)" % seconds],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout = subprocess.DEVNULL,
+        stderr = subprocess.DEVNULL,
     )
 
 
@@ -73,7 +73,7 @@ class TestUnixPath:
 
     @pytest.mark.skipif(
         not (hasattr(os, "getpgid") and hasattr(os, "killpg")),
-        reason="No process-group APIs on this platform",
+        reason = "No process-group APIs on this platform",
     )
     def test_kill_terminates_subprocess(self, short_proc):
         assert short_proc.poll() is None
@@ -86,7 +86,7 @@ class TestUnixPath:
 
     @pytest.mark.skipif(
         not (hasattr(os, "getpgid") and hasattr(os, "killpg")),
-        reason="No process-group APIs on this platform",
+        reason = "No process-group APIs on this platform",
     )
     def test_no_raise_on_already_exited(self):
         # poll() already returned non-None: helper must early-return.
@@ -109,16 +109,16 @@ class TestWindowsFallback:
         # Strip the Unix-only attributes so the helper takes the
         # Windows branch.
         if hasattr(os, "getpgid"):
-            monkeypatch.delattr(os, "getpgid", raising=False)
+            monkeypatch.delattr(os, "getpgid", raising = False)
         if hasattr(os, "killpg"):
-            monkeypatch.delattr(os, "killpg", raising=False)
+            monkeypatch.delattr(os, "killpg", raising = False)
         # Also lie about sys.platform so the taskkill fallback runs.
         monkeypatch.setattr(tools_mod.sys, "platform", "win32")
         # taskkill won't exist on Linux; capture its absence as a no-op
         # via subprocess.run rather than failing the test.
         import subprocess as _sp
 
-        with mock.patch.object(_sp, "run", return_value=None):
+        with mock.patch.object(_sp, "run", return_value = None):
             tools_mod._kill_process_tree(short_proc)
         deadline = time.time() + 5.0
         while short_proc.poll() is None and time.time() < deadline:
@@ -135,9 +135,9 @@ class TestWindowsFallback:
         ``hasattr(os, ...)`` first, so this test pins that contract.
         """
         if hasattr(os, "getpgid"):
-            monkeypatch.delattr(os, "getpgid", raising=False)
+            monkeypatch.delattr(os, "getpgid", raising = False)
         if hasattr(os, "killpg"):
-            monkeypatch.delattr(os, "killpg", raising=False)
+            monkeypatch.delattr(os, "killpg", raising = False)
         monkeypatch.setattr(tools_mod.sys, "platform", "win32")
 
         class FakeProc:
@@ -155,6 +155,6 @@ class TestWindowsFallback:
         fp = FakeProc()
         import subprocess as _sp
 
-        with mock.patch.object(_sp, "run", return_value=None):
+        with mock.patch.object(_sp, "run", return_value = None):
             tools_mod._kill_process_tree(fp)  # must not raise
         assert fp.killed

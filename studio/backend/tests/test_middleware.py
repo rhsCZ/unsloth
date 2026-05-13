@@ -264,9 +264,7 @@ class TestHealthAuthGate:
         missing = self.UNAUTH_KEYS - set(body)
         assert not missing, f"unauth /api/health missing {sorted(missing)}"
         for forbidden in self.GATED_KEYS:
-            assert forbidden not in body, (
-                f"unauth /api/health leaked {forbidden!r}"
-            )
+            assert forbidden not in body, f"unauth /api/health leaked {forbidden!r}"
 
     def test_invalid_bearer_returns_launcher_payload(self, health_app):
         # Regression: calling the async dep without await made any
@@ -283,9 +281,9 @@ class TestHealthAuthGate:
         missing = self.UNAUTH_KEYS - set(body)
         assert not missing, f"invalid-bearer /api/health missing {sorted(missing)}"
         for forbidden in self.GATED_KEYS:
-            assert forbidden not in body, (
-                f"invalid-bearer /api/health leaked {forbidden!r}"
-            )
+            assert (
+                forbidden not in body
+            ), f"invalid-bearer /api/health leaked {forbidden!r}"
 
     def test_valid_bearer_returns_full_payload(self, health_app):
         from auth import storage

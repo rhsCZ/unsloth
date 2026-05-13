@@ -451,7 +451,9 @@ class ChatMessage(BaseModel):
                 # See ``_pair_orphan_tool_ids`` in routes/inference.py.
                 import secrets as _secrets
 
-                self.tool_call_id = f"{TOOL_CALL_ID_SYNTH_PREFIX}{_secrets.token_hex(8)}"
+                self.tool_call_id = (
+                    f"{TOOL_CALL_ID_SYNTH_PREFIX}{_secrets.token_hex(8)}"
+                )
             if not self.content:
                 raise ValueError('role="tool" messages require non-empty "content".')
         elif self.role == "assistant":

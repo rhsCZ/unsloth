@@ -124,22 +124,20 @@ class TestUntrustedHostBlock:
         # URL is staged into a local. Before this hardening pass the
         # variable-URL path was treated as opaque and slipped through.
         _blocked(
-            'import requests\n'
-            'url = "https://example.com/"\n'
-            'requests.get(url)',
+            "import requests\n" 'url = "https://example.com/"\n' "requests.get(url)",
             expect_phrase = "Blocked: host not in sandbox allowlist",
         )
         _blocked(
-            'import requests\n'
+            "import requests\n"
             'url = "http://169.254.169.254/latest/meta-data/"\n'
-            'requests.get(url)',
+            "requests.get(url)",
             expect_phrase = "Blocked: cloud-metadata host",
         )
 
     def test_constant_fstring_url_resolved(self):
         # f-string URLs that fold to a constant should still be checked.
         _blocked(
-            'import requests\n'
+            "import requests\n"
             'host = "169.254.169.254"\n'
             'requests.get(f"http://{host}/latest/")',
             expect_phrase = "Blocked: cloud-metadata host",
@@ -151,8 +149,7 @@ class TestUntrustedHostBlock:
         # bash blocklist + cloud-metadata IP block at OS layer cover the
         # rest, but the AST can no longer say "looks fine to me".
         _blocked(
-            'import os, requests\n'
-            'requests.get(os.environ["WEBHOOK"])',
+            "import os, requests\n" 'requests.get(os.environ["WEBHOOK"])',
             expect_phrase = "network call target is computed at runtime",
         )
 
@@ -294,13 +291,13 @@ class TestImportAliasResolution:
 
     def test_from_import_trusted_passes(self):
         _ok(
-            'from urllib.request import urlopen\n'
+            "from urllib.request import urlopen\n"
             'urlopen("https://en.wikipedia.org/wiki/Foo")'
         )
 
     def test_nested_module_alias_blocked(self):
         _blocked(
-            'import urllib.request as ur\n'
+            "import urllib.request as ur\n"
             'ur.urlopen("http://169.254.169.254/latest/")',
             expect_phrase = "Blocked: cloud-metadata host",
         )

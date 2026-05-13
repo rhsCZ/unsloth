@@ -45,14 +45,14 @@ def isolated_storage(tmp_path, monkeypatch):
     yield storage
 
 
-def _make_token(storage, *, is_desktop=False):
+def _make_token(storage, *, is_desktop = False):
     """Insert a fresh, far-future refresh token and return its raw form."""
     import secrets as _secrets
     from datetime import datetime, timedelta, timezone
 
     raw = _secrets.token_urlsafe(32)
-    expires = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
-    storage.save_refresh_token(raw, "unsloth", expires, is_desktop=is_desktop)
+    expires = (datetime.now(timezone.utc) + timedelta(days = 14)).isoformat()
+    storage.save_refresh_token(raw, "unsloth", expires, is_desktop = is_desktop)
     return raw
 
 
@@ -77,7 +77,7 @@ class TestSingleUseRotation:
 
     def test_desktop_flag_round_trips(self, isolated_storage):
         storage = isolated_storage
-        token = _make_token(storage, is_desktop=True)
+        token = _make_token(storage, is_desktop = True)
         assert storage.consume_refresh_token(token) == ("unsloth", True)
 
 
@@ -117,14 +117,14 @@ class TestReturningFallback:
             r = storage.consume_refresh_token(token)
             (winners if r else losers).append(r)
 
-        threads = [threading.Thread(target=attempt) for _ in range(8)]
+        threads = [threading.Thread(target = attempt) for _ in range(8)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        assert len(winners) == 1, (
-            f"expected exactly 1 winner; winners={winners} losers={losers}"
-        )
+        assert (
+            len(winners) == 1
+        ), f"expected exactly 1 winner; winners={winners} losers={losers}"
         assert winners[0] == ("unsloth", False)
         assert all(r is None for r in losers)
 
@@ -136,4 +136,3 @@ class TestReturningSupportedProbe:
         storage._RETURNING_SUPPORTED = None
         result = storage._supports_returning()
         assert isinstance(result, bool)
-

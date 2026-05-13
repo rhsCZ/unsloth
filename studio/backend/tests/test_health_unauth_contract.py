@@ -96,7 +96,7 @@ class TestUnauthHealth:
     def test_invalid_bearer_drops_back_to_unauth(self, fastapi_client):
         client, _ = fastapi_client
         body = client.get(
-            "/api/health", headers={"Authorization": "Bearer not-real"}
+            "/api/health", headers = {"Authorization": "Bearer not-real"}
         ).json()
         leaked = GATED_KEYS & set(body)
         assert not leaked, f"invalid-bearer health leaked {sorted(leaked)}"
@@ -112,7 +112,7 @@ class TestUnauthHealth:
         """
         client, _ = fastapi_client
         body = client.get(
-            "/api/health", headers={"Authorization": "Bearer x.y.z"}
+            "/api/health", headers = {"Authorization": "Bearer x.y.z"}
         ).json()
         # Verify gated fields are NOT leaked when the token cannot be
         # decoded (which would have been the case for the original bug).
@@ -149,9 +149,9 @@ class TestAuthedHealth:
                 seed()
             else:
                 pytest.skip("storage has no ensure_default_admin entrypoint")
-        assert storage.get_user_and_secret(storage.DEFAULT_ADMIN_USERNAME) is not None, (
-            "could not seed default admin"
-        )
+        assert (
+            storage.get_user_and_secret(storage.DEFAULT_ADMIN_USERNAME) is not None
+        ), "could not seed default admin"
         # Clear the must_change_password flag so /api/health's
         # get_current_subject dependency accepts the token. Fresh installs
         # block diagnostic access until the first-boot password change,
@@ -165,9 +165,9 @@ class TestAuthedHealth:
             conn.commit()
         finally:
             conn.close()
-        token = create_access_token(subject=storage.DEFAULT_ADMIN_USERNAME)
+        token = create_access_token(subject = storage.DEFAULT_ADMIN_USERNAME)
         body = client.get(
-            "/api/health", headers={"Authorization": f"Bearer {token}"}
+            "/api/health", headers = {"Authorization": f"Bearer {token}"}
         ).json()
         # Diagnostic keys are present.
         for k in ("version", "device_type"):

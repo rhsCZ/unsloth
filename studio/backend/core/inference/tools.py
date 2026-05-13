@@ -1386,10 +1386,23 @@ def _check_signal_escape_patterns(code: str):
     # egress (``from requests import get; get("http://...")``).
     _NETWORK_FROM_NAMES = frozenset(
         {
-            "get", "post", "put", "delete", "patch", "head", "request",
-            "Session", "urlopen", "urlretrieve", "create_connection",
-            "getaddrinfo", "HTTPConnection", "HTTPSConnection",
-            "Client", "AsyncClient", "ClientSession",
+            "get",
+            "post",
+            "put",
+            "delete",
+            "patch",
+            "head",
+            "request",
+            "Session",
+            "urlopen",
+            "urlretrieve",
+            "create_connection",
+            "getaddrinfo",
+            "HTTPConnection",
+            "HTTPSConnection",
+            "Client",
+            "AsyncClient",
+            "ClientSession",
         }
     )
     # Session/Client method names that perform HTTP egress. A literal
@@ -1463,7 +1476,9 @@ def _check_signal_escape_patterns(code: str):
                     parts: list[str] = []
                     ok = True
                     for piece in value.values:
-                        if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                        if isinstance(piece, ast.Constant) and isinstance(
+                            piece.value, str
+                        ):
                             parts.append(piece.value)
                         elif (
                             isinstance(piece, ast.FormattedValue)
@@ -1509,7 +1524,11 @@ def _check_signal_escape_patterns(code: str):
                     head = cur.id
                     # If head is a session-bound variable, synthesise a
                     # prefixable FQ (e.g. ``"requests.Session.get"``).
-                    if head in self._session_vars and parts and parts[-1] in _SESSION_METHOD_NAMES:
+                    if (
+                        head in self._session_vars
+                        and parts
+                        and parts[-1] in _SESSION_METHOD_NAMES
+                    ):
                         return f"{self._session_vars[head]}.{parts[-1]}"
                     # Map the head through module-alias table.
                     resolved_head = self._module_aliases.get(head, head)
@@ -1628,11 +1647,7 @@ def _check_signal_escape_patterns(code: str):
                                 break
                 # Special case: requests.request(method, url, ...) -- the
                 # URL is the second positional arg, not the first.
-                if (
-                    host_arg is None
-                    and fq.endswith(".request")
-                    and len(node.args) >= 2
-                ):
+                if host_arg is None and fq.endswith(".request") and len(node.args) >= 2:
                     _, host_arg = self._resolve_url_arg(node.args[1])
                 if host_arg is None and node.args:
                     # The argument was opaque (variable, computed, etc.).

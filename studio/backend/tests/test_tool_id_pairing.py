@@ -128,12 +128,12 @@ class TestValidatorSynth:
     def test_validator_emits_synth_prefix(self):
         from models.inference import ChatMessage
 
-        m = ChatMessage(role="tool", content="result")
+        m = ChatMessage(role = "tool", content = "result")
         assert m.tool_call_id is not None
         assert m.tool_call_id.startswith(TOOL_CALL_ID_SYNTH_PREFIX)
 
     def test_validator_keeps_explicit_id(self):
         from models.inference import ChatMessage
 
-        m = ChatMessage(role="tool", tool_call_id="call_real_xyz", content="ok")
+        m = ChatMessage(role = "tool", tool_call_id = "call_real_xyz", content = "ok")
         assert m.tool_call_id == "call_real_xyz"

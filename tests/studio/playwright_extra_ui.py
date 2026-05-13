@@ -539,7 +539,9 @@ with sync_playwright() as p:
             timeout = 30_000,
         )
     except PlaywrightTimeoutError:
-        info("/studio hydration didn't complete in 30s; continuing with whatever rendered")
+        info(
+            "/studio hydration didn't complete in 30s; continuing with whatever rendered"
+        )
     page.wait_for_timeout(500)
     shoot("08-studio")
     if chat_only:

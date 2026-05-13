@@ -134,6 +134,7 @@ export function ChatProvidersSettings({
   providers,
   onProvidersChange,
 }: ChatProvidersSettingsProps) {
+  const providersRef = useRef(providers);
   const [page, setPage] = useState<"list" | "form">("list");
   const [providerType, setProviderType] = useState<string>("");
   const [apiKey, setApiKey] = useState("");
@@ -152,7 +153,6 @@ export function ChatProvidersSettings({
   const [manualModelIds, setManualModelIds] = useState("");
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [customProviderName, setCustomProviderName] = useState("Custom");
-  const providersRef = useRef(providers);
   const reduceMotion = useReducedMotion();
   const isCustomProvider = providerType === CUSTOM_PROVIDER_TYPE;
 
@@ -197,6 +197,10 @@ export function ChatProvidersSettings({
     "h-8 w-full bg-background/55 text-xs placeholder:text-muted-foreground/65 focus-visible:border-border focus-visible:ring-0";
 
   useEffect(() => {
+    providersRef.current = providers;
+  }, [providers]);
+
+  useEffect(() => {
     if (!providerType || editingProviderId) return;
     const entry = registryByType.get(providerType);
     if (!entry) return;
@@ -219,10 +223,6 @@ export function ChatProvidersSettings({
   );
 
   useEffect(() => {
-    providersRef.current = providers;
-  }, [providers]);
-
-  useEffect(() => {
     let isMounted = true;
     const syncFromBackend = async () => {
       setRegistryLoading(true);
@@ -243,9 +243,10 @@ export function ChatProvidersSettings({
           }
           return registryRows[0]?.provider_type ?? "";
         });
-        const existingById = new Map(
-          providersRef.current.map((provider) => [provider.id, provider]),
-        );
+        const existingById = new Map<string, ExternalProviderConfig>();
+        for (const provider of providersRef.current) {
+          existingById.set(provider.id, provider);
+        }
         const syncedProviders: ExternalProviderConfig[] = configRows
           .filter((config) => config.is_enabled)
           .map((config) => {
@@ -263,12 +264,14 @@ export function ChatProvidersSettings({
             const updatedAt = Number.isFinite(Date.parse(config.updated_at))
               ? Date.parse(config.updated_at)
               : Date.now();
+            const existingModels = existing?.models ?? [];
             return {
               id: config.id,
               providerType: uiProviderType,
               name: config.display_name,
               baseUrl: config.base_url ?? "",
-              models: existing?.models ?? [],
+              models: existingModels,
+              availableModels: existing?.availableModels ?? [],
               createdAt: existing?.createdAt ?? createdAt,
               updatedAt,
             };
@@ -404,7 +407,18 @@ export function ChatProvidersSettings({
         ),
       ];
       setAvailableModels(modelIds);
-      setSelectedModelIds([]);
+      setSelectedModelIds((prev) =>
+        prev.filter((id) => modelIds.includes(id)),
+      );
+      if (editingProviderId) {
+        onProvidersChange(
+          providersRef.current.map((provider) =>
+            provider.id === editingProviderId
+              ? { ...provider, availableModels: modelIds }
+              : provider,
+          ),
+        );
+      }
       setModelSearchQuery("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
@@ -477,6 +491,7 @@ export function ChatProvidersSettings({
         name: created.display_name,
         baseUrl: created.base_url ?? "",
         models: modelsToSave,
+        availableModels: manualModels ? [] : availableModels,
         createdAt,
         updatedAt,
       };
@@ -569,6 +584,7 @@ export function ChatProvidersSettings({
                 name: updated.display_name,
                 baseUrl: updated.base_url ?? "",
                 models: modelsToSave,
+                availableModels: manualModels ? [] : availableModels,
                 updatedAt,
               }
             : provider,
@@ -609,7 +625,16 @@ export function ChatProvidersSettings({
       setSelectedModelIds(inDefaults);
       setManualModelIds(custom.join("\n"));
     } else {
-      setAvailableModels([...provider.models]);
+      const shortlist = entry?.default_models ?? [];
+      const cachedCatalog = provider.availableModels ?? [];
+      const mergedModels = [
+        ...new Set(
+          [...shortlist, ...cachedCatalog, ...provider.models]
+            .map((model) => model.trim())
+            .filter((model) => model.length > 0),
+        ),
+      ];
+      setAvailableModels(mergedModels);
       setSelectedModelIds([...provider.models]);
       setManualModelIds("");
     }

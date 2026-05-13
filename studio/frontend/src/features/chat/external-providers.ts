@@ -12,6 +12,8 @@ export interface ExternalProviderConfig {
   baseUrl: string;
   /** Model ids user enabled from `/api/providers/models`. */
   models: string[];
+  /** Cached available model ids from the provider's /models response. */
+  availableModels?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -75,6 +77,9 @@ function normalizeProvider(raw: ExternalProviderConfig): ExternalProviderConfig 
     name: raw.name.trim(),
     baseUrl: raw.baseUrl.trim(),
     models: raw.models
+      .map((model) => model.trim())
+      .filter((model) => model.length > 0),
+    availableModels: (raw.availableModels ?? [])
       .map((model) => model.trim())
       .filter((model) => model.length > 0),
   };

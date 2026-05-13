@@ -163,6 +163,16 @@ function resolveOpenAIReasoningEffortCapabilities(modelId: string): {
   reasoningEffortLevels: ExternalReasoningCapabilities["reasoningEffortLevels"];
 } {
   const normalized = modelId.trim().toLowerCase();
+  if (
+    normalized.startsWith("gpt-5.5-pro") ||
+    normalized.startsWith("gpt-5.4-pro")
+  ) {
+    return {
+      supportsReasoning: true,
+      supportsReasoningOff: false,
+      reasoningEffortLevels: ["medium", "high", "xhigh"],
+    };
+  }
   if (normalized.startsWith("gpt-5.5") || normalized.startsWith("gpt-5.4")) {
     return {
       supportsReasoning: true,
@@ -170,11 +180,18 @@ function resolveOpenAIReasoningEffortCapabilities(modelId: string): {
       reasoningEffortLevels: ["none", "low", "medium", "high", "xhigh"],
     };
   }
-  if (normalized.startsWith("gpt-5.3-codex")) {
+  if (normalized.startsWith("gpt-5.3-chat-latest")) {
     return {
       supportsReasoning: true,
       supportsReasoningOff: false,
-      reasoningEffortLevels: ["low", "medium", "high", "xhigh"],
+      reasoningEffortLevels: ["medium"],
+    };
+  }
+  if (normalized.startsWith("gpt-5.3-codex")) {
+    return {
+      supportsReasoning: true,
+      supportsReasoningOff: true,
+      reasoningEffortLevels: ["none", "low", "medium", "high", "xhigh"],
     };
   }
   if (
@@ -236,17 +253,6 @@ export function getExternalReasoningCapabilities(
 
   const isOpenAIProvider = normalizedProvider === "openai";
   if (!isOpenAIProvider) {
-    return {
-      supportsReasoning: false,
-      reasoningStyle: "enable_thinking",
-      reasoningAlwaysOn: false,
-      supportsReasoningOff: false,
-      reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
-    };
-  }
-
-  // Source-of-truth: gpt-5.3-chat-latest does not expose reasoning controls.
-  if (modelForMatching.startsWith("gpt-5.3-chat-latest")) {
     return {
       supportsReasoning: false,
       reasoningStyle: "enable_thinking",

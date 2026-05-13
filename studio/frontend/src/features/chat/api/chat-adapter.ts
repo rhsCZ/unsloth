@@ -20,7 +20,10 @@ import {
   isProviderKeyRotationError,
 } from "./providers-api";
 import { db } from "../db";
-import type { OpenAIMessageContent } from "../types/api";
+import type {
+  OpenAIChatCompletionsRequest,
+  OpenAIMessageContent,
+} from "../types/api";
 import {
   getExternalProviderApiKey,
   loadExternalProviders,
@@ -28,6 +31,7 @@ import {
 } from "../external-providers";
 import {
   EXTERNAL_MAX_OUTPUT_TOKENS,
+  getExternalReasoningCapabilities,
   getProviderCapabilities,
 } from "../provider-capabilities";
 import { useChatRuntimeStore } from "../stores/chat-runtime-store";
@@ -906,7 +910,44 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
         const externalCapabilities = getProviderCapabilities(
           externalProvider?.providerType,
         );
-        const buildRequestPayload = async (forceRefreshPublicKey = false) => {
+        const externalReasoningCaps: ReturnType<
+          typeof getExternalReasoningCapabilities
+        > =
+          externalSelection && externalProvider
+            ? getExternalReasoningCapabilities(
+                externalProvider.providerType,
+                externalSelection.modelId,
+              )
+            : {
+                supportsReasoning,
+                reasoningStyle,
+                reasoningAlwaysOn: false,
+                supportsReasoningOff: false,
+                reasoningEffortLevels: ["low", "medium", "high"] as const,
+              };
+        type RequestReasoningEffort = Extract<
+          NonNullable<OpenAIChatCompletionsRequest["reasoning_effort"]>,
+          "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+        >;
+        const fallbackExternalEffort =
+          (externalReasoningCaps.reasoningEffortLevels[0] ??
+            "low") as RequestReasoningEffort;
+        const selectedExternalEffort: RequestReasoningEffort =
+          externalReasoningCaps.reasoningEffortLevels.includes(reasoningEffort)
+            ? reasoningEffort
+            : fallbackExternalEffort;
+        const localReasoningEffort =
+          reasoningEffort === "low" || reasoningEffort === "medium" || reasoningEffort === "high"
+            ? reasoningEffort
+            : "low";
+        const externalReasoningEnabled =
+          externalReasoningCaps.reasoningStyle === "reasoning_effort" &&
+          !externalReasoningCaps.supportsReasoningOff
+            ? true
+            : reasoningEnabled;
+        const buildRequestPayload = async (
+          forceRefreshPublicKey = false,
+        ): Promise<OpenAIChatCompletionsRequest> => {
           if (externalSelection && externalProvider) {
             return {
               model: externalSelection.modelId,
@@ -940,6 +981,17 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                 forceRefreshPublicKey,
               ),
               provider_base_url: externalProvider.baseUrl || null,
+              ...(externalReasoningCaps.supportsReasoning
+                ? externalReasoningCaps.reasoningStyle === "reasoning_effort"
+                  ? externalReasoningEnabled
+                    ? { reasoning_effort: selectedExternalEffort }
+                    : externalReasoningCaps.supportsReasoningOff
+                      ? { reasoning_effort: "none" }
+                      : {
+                          reasoning_effort: fallbackExternalEffort,
+                        }
+                  : { enable_thinking: reasoningEnabled }
+                : {}),
             };
           }
 
@@ -961,7 +1013,9 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
             ...(useAdapter === undefined ? {} : { use_adapter: useAdapter }),
             ...(supportsReasoning
               ? reasoningStyle === "reasoning_effort"
-                ? { reasoning_effort: reasoningEffort }
+                ? reasoningEnabled
+                  ? { reasoning_effort: localReasoningEffort }
+                  : {}
                 : { enable_thinking: reasoningEnabled }
               : {}),
             ...(supportsPreserveThinking ? { preserve_thinking: preserveThinking } : {}),

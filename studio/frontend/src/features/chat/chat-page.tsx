@@ -46,7 +46,10 @@ import {
   isExternalModelId,
   parseExternalModelId,
 } from "./external-providers";
-import { getProviderCapabilities } from "./provider-capabilities";
+import {
+  getExternalReasoningCapabilities,
+  getProviderCapabilities,
+} from "./provider-capabilities";
 import { useChatModelRuntime } from "./hooks/use-chat-model-runtime";
 import {
   clearTrainingCompareHandoff,
@@ -628,6 +631,35 @@ export function ChatPage(): ReactElement {
     );
     return getProviderCapabilities(provider?.providerType);
   }, [externalProviders, inferenceParams.checkpoint]);
+  useEffect(() => {
+    const selection = parseExternalModelId(inferenceParams.checkpoint);
+    if (!selection) return;
+    const provider = externalProviders.find((p) => p.id === selection.providerId);
+    const reasoningCaps = getExternalReasoningCapabilities(
+      provider?.providerType,
+      selection.modelId,
+    );
+    const state = useChatRuntimeStore.getState();
+    const preferredEffort = state.reasoningEffort;
+    const effortLevels = reasoningCaps.reasoningEffortLevels;
+    const clampedEffort = effortLevels.includes(preferredEffort)
+      ? preferredEffort
+      : effortLevels[0] ?? "low";
+    useChatRuntimeStore.setState({
+      supportsReasoning: reasoningCaps.supportsReasoning,
+      reasoningAlwaysOn: reasoningCaps.reasoningAlwaysOn,
+      reasoningStyle: reasoningCaps.reasoningStyle,
+      supportsReasoningOff: reasoningCaps.supportsReasoningOff,
+      reasoningEffortLevels: effortLevels,
+      reasoningEffort: clampedEffort,
+      reasoningEnabled: reasoningCaps.supportsReasoning
+        ? reasoningCaps.supportsReasoningOff
+          ? state.reasoningEnabled
+          : true
+        : state.reasoningEnabled,
+      supportsPreserveThinking: false,
+    });
+  }, [externalProviders, inferenceParams.checkpoint]);
   const canCompare = useMemo(() => {
     return Boolean(inferenceParams.checkpoint) && !isExternalModel;
   }, [inferenceParams.checkpoint, isExternalModel]);
@@ -728,9 +760,36 @@ export function ChatPage(): ReactElement {
       )
         return;
       if (meta?.source === "external" || isExternalModelId(value)) {
+        const selectedExternal = parseExternalModelId(value);
+        const selectedProvider = selectedExternal
+          ? externalProviders.find((p) => p.id === selectedExternal.providerId)
+          : null;
+        const reasoningCaps = getExternalReasoningCapabilities(
+          selectedProvider?.providerType,
+          selectedExternal?.modelId,
+        );
+        const preferredEffort = store.reasoningEffort;
+        const effortLevels = reasoningCaps.reasoningEffortLevels;
+        const clampedEffort = effortLevels.includes(preferredEffort)
+          ? preferredEffort
+          : effortLevels[0] ?? "low";
         setInferenceParams({
           ...store.params,
           checkpoint: value,
+        });
+        useChatRuntimeStore.setState({
+          supportsReasoning: reasoningCaps.supportsReasoning,
+          reasoningAlwaysOn: reasoningCaps.reasoningAlwaysOn,
+          reasoningStyle: reasoningCaps.reasoningStyle,
+          supportsReasoningOff: reasoningCaps.supportsReasoningOff,
+          reasoningEffortLevels: effortLevels,
+          reasoningEffort: clampedEffort,
+          reasoningEnabled: reasoningCaps.supportsReasoning
+            ? reasoningCaps.supportsReasoningOff
+              ? store.reasoningEnabled
+              : true
+            : store.reasoningEnabled,
+          supportsPreserveThinking: false,
         });
         return;
       }
@@ -770,7 +829,14 @@ export function ChatPage(): ReactElement {
         });
       })();
     },
-    [activeThreadId, modelsFromStore, selectModel, setInferenceParams, view],
+    [
+      activeThreadId,
+      externalProviders,
+      modelsFromStore,
+      selectModel,
+      setInferenceParams,
+      view,
+    ],
   );
   const handleEject = useCallback(() => {
     void ejectModel();

@@ -75,6 +75,8 @@ class ExternalProviderClient:
         max_tokens: Optional[int] = None,
         presence_penalty: float = 0.0,
         top_k: Optional[int] = None,
+        enable_thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
         stream: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
@@ -102,7 +104,13 @@ class ExternalProviderClient:
         # the frontend stays endpoint-agnostic.
         if self.provider_type == "openai":
             async for line in self._stream_openai_responses(
-                messages, model, temperature, top_p, max_tokens
+                messages,
+                model,
+                temperature,
+                top_p,
+                max_tokens,
+                enable_thinking,
+                reasoning_effort,
             ):
                 yield line
             return
@@ -440,6 +448,8 @@ class ExternalProviderClient:
         temperature: float,
         top_p: float,
         max_tokens: Optional[int],
+        enable_thinking: Optional[bool],
+        reasoning_effort: Optional[str],
     ) -> AsyncGenerator[str, None]:
         """
         Call OpenAI's /v1/responses endpoint and translate its SSE stream back
@@ -510,6 +520,21 @@ class ExternalProviderClient:
             "input": input_items,
             "stream": True,
         }
+        if reasoning_effort in (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        ):
+            body["reasoning"] = {"effort": reasoning_effort}
+            if reasoning_effort != "none":
+                body["reasoning"]["summary"] = "auto"
+        elif enable_thinking is False:
+            body["reasoning"] = {"effort": "none"}
+        elif enable_thinking is True:
+            body["reasoning"] = {"effort": "medium", "summary": "auto"}
         if instructions_parts:
             body["instructions"] = "\n\n".join(instructions_parts)
         if max_tokens is not None:
@@ -545,6 +570,47 @@ class ExternalProviderClient:
                 # see comment there for the GeneratorExit / aclose ordering.
                 lines_gen = response.aiter_lines().__aiter__()
                 done_emitted = False
+                reasoning_open = False
+                reasoning_emitted = False
+
+                def _extract_reasoning_text(payload: Any) -> str:
+                    if payload is None:
+                        return ""
+                    if isinstance(payload, str):
+                        return payload
+                    if isinstance(payload, list):
+                        out: list[str] = []
+                        for item in payload:
+                            text = _extract_reasoning_text(item)
+                            if text:
+                                out.append(text)
+                        return "".join(out)
+                    if isinstance(payload, dict):
+                        # OpenAI responses may carry reasoning summaries in
+                        # different envelope fields across event variants.
+                        for key in ("text", "delta", "content", "summary"):
+                            if key in payload:
+                                text = _extract_reasoning_text(payload.get(key))
+                                if text:
+                                    return text
+                        if payload.get("type") == "summary_text":
+                            return _extract_reasoning_text(payload.get("text"))
+                    return ""
+
+                def _chunk_with_text(text: str) -> str:
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": text},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    return f"data: {_json.dumps(chunk)}"
+
                 try:
                     while True:
                         try:
@@ -575,20 +641,40 @@ class ExternalProviderClient:
                         if event_type == "response.output_text.delta":
                             delta_text = event.get("delta", "")
                             if delta_text:
-                                chunk = {
-                                    "id": completion_id,
-                                    "object": "chat.completion.chunk",
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {"content": delta_text},
-                                            "finish_reason": None,
-                                        }
-                                    ],
-                                }
-                                yield f"data: {_json.dumps(chunk)}"
+                                if reasoning_open:
+                                    yield _chunk_with_text("</think>")
+                                    reasoning_open = False
+                                yield _chunk_with_text(delta_text)
+
+                        elif event_type == "response.output_item.done":
+                            item = event.get("item", {})
+                            if (
+                                isinstance(item, dict)
+                                and item.get("type") == "reasoning"
+                            ):
+                                summary_text = _extract_reasoning_text(
+                                    item.get("summary")
+                                )
+                                if summary_text and not reasoning_emitted:
+                                    if not reasoning_open:
+                                        summary_text = f"<think>{summary_text}"
+                                        reasoning_open = True
+                                    yield _chunk_with_text(summary_text)
+                                    reasoning_emitted = True
+
+                        elif isinstance(event_type, str) and "reasoning" in event_type:
+                            reasoning_delta = _extract_reasoning_text(event)
+                            if reasoning_delta:
+                                if not reasoning_open:
+                                    reasoning_delta = f"<think>{reasoning_delta}"
+                                    reasoning_open = True
+                                yield _chunk_with_text(reasoning_delta)
+                                reasoning_emitted = True
 
                         elif event_type == "response.completed":
+                            if reasoning_open:
+                                yield _chunk_with_text("</think>")
+                                reasoning_open = False
                             chunk = {
                                 "id": completion_id,
                                 "object": "chat.completion.chunk",
@@ -603,6 +689,9 @@ class ExternalProviderClient:
                             yield f"data: {_json.dumps(chunk)}"
 
                         elif event_type == "response.incomplete":
+                            if reasoning_open:
+                                yield _chunk_with_text("</think>")
+                                reasoning_open = False
                             chunk = {
                                 "id": completion_id,
                                 "object": "chat.completion.chunk",

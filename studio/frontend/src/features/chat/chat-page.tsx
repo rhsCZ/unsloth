@@ -645,13 +645,16 @@ export function ChatPage(): ReactElement {
     const clampedEffort = effortLevels.includes(preferredEffort)
       ? preferredEffort
       : effortLevels[0] ?? "low";
+    const nextReasoningEffort = reasoningCaps.supportsReasoning
+      ? clampedEffort
+      : state.reasoningEffort;
     useChatRuntimeStore.setState({
       supportsReasoning: reasoningCaps.supportsReasoning,
       reasoningAlwaysOn: reasoningCaps.reasoningAlwaysOn,
       reasoningStyle: reasoningCaps.reasoningStyle,
       supportsReasoningOff: reasoningCaps.supportsReasoningOff,
       reasoningEffortLevels: effortLevels,
-      reasoningEffort: clampedEffort,
+      reasoningEffort: nextReasoningEffort,
       reasoningEnabled: reasoningCaps.supportsReasoning
         ? reasoningCaps.supportsReasoningOff
           ? state.reasoningEnabled
@@ -773,6 +776,9 @@ export function ChatPage(): ReactElement {
         const clampedEffort = effortLevels.includes(preferredEffort)
           ? preferredEffort
           : effortLevels[0] ?? "low";
+        const nextReasoningEffort = reasoningCaps.supportsReasoning
+          ? clampedEffort
+          : store.reasoningEffort;
         setInferenceParams({
           ...store.params,
           checkpoint: value,
@@ -783,7 +789,7 @@ export function ChatPage(): ReactElement {
           reasoningStyle: reasoningCaps.reasoningStyle,
           supportsReasoningOff: reasoningCaps.supportsReasoningOff,
           reasoningEffortLevels: effortLevels,
-          reasoningEffort: clampedEffort,
+          reasoningEffort: nextReasoningEffort,
           reasoningEnabled: reasoningCaps.supportsReasoning
             ? reasoningCaps.supportsReasoningOff
               ? store.reasoningEnabled

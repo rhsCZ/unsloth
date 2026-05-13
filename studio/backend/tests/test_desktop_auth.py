@@ -228,8 +228,7 @@ def test_desktop_refresh_preserves_desktop_marker():
 
 
 def test_consume_refresh_token_second_call_returns_none():
-    """Single-use rotation: the same refresh token must not validate
-    twice when consumed sequentially."""
+    """Single-use rotation rejects the same token on a second consume."""
     seed_user()
     from datetime import datetime, timedelta, timezone
 
@@ -244,12 +243,7 @@ def test_consume_refresh_token_second_call_returns_none():
 
 
 def test_consume_refresh_token_concurrent_only_one_succeeds(tmp_path, monkeypatch):
-    """Regression for the SELECT-then-DELETE race in
-    ``consume_refresh_token``. The old two-step lookup-then-delete let
-    two parallel /api/auth/refresh requests both observe the row before
-    either DELETE ran, so the same refresh token could be consumed
-    twice. The atomic DELETE ... RETURNING rewrite is exercised here by
-    a 64-thread pile-up against the same hashed token."""
+    """64-thread pile-up against one token; DELETE RETURNING permits one winner."""
     seed_user()
     from concurrent.futures import ThreadPoolExecutor
     from datetime import datetime, timedelta, timezone
@@ -264,10 +258,7 @@ def test_consume_refresh_token_concurrent_only_one_succeeds(tmp_path, monkeypatc
         try:
             return storage.consume_refresh_token(raw)
         except sqlite3.OperationalError:
-            # SQLite under heavy concurrent write pressure on a single
-            # file can briefly raise "database is locked". For this
-            # test that counts as "did not consume" — it is functionally
-            # equivalent to losing the race.
+            # "database is locked" under heavy contention; treat as losing the race.
             return None
 
     with ThreadPoolExecutor(max_workers = workers) as pool:

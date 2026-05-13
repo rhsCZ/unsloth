@@ -36,8 +36,7 @@ from auth.authentication import (
 router = APIRouter()
 
 
-# In-memory per-IP login rate limiter. Single-process / desktop use;
-# a multi-process deployment would want a shared store.
+# In-memory per-IP login rate limiter; multi-process deployment needs a shared store.
 _LOGIN_BUCKETS: dict[str, deque] = {}
 _LOGIN_BUCKETS_LOCK = threading.Lock()
 _LOGIN_WINDOW_SECONDS = 60.0
@@ -52,7 +51,6 @@ def _client_key(request: Request | None) -> str:
 
 
 def _record_login_failure(ip: str) -> int:
-    """Return the failure count within the current window (after recording)."""
     now = time.monotonic()
     with _LOGIN_BUCKETS_LOCK:
         bucket = _LOGIN_BUCKETS.setdefault(ip, deque())
@@ -63,7 +61,7 @@ def _record_login_failure(ip: str) -> int:
 
 
 def _login_blocked(ip: str) -> int:
-    """Return seconds to wait if blocked, else 0."""
+    """Return seconds until the next attempt is allowed, or 0."""
     now = time.monotonic()
     with _LOGIN_BUCKETS_LOCK:
         bucket = _LOGIN_BUCKETS.get(ip)
@@ -72,7 +70,6 @@ def _login_blocked(ip: str) -> int:
         while bucket and now - bucket[0] > _LOGIN_WINDOW_SECONDS:
             bucket.popleft()
         if len(bucket) >= _LOGIN_MAX_FAILS:
-            # Oldest entry expires after _LOGIN_WINDOW_SECONDS from its time.
             return max(1, int(_LOGIN_WINDOW_SECONDS - (now - bucket[0])))
         return 0
 
@@ -84,10 +81,7 @@ def _clear_login_bucket(ip: str) -> None:
 
 @router.get("/status", response_model = AuthStatusResponse)
 async def auth_status() -> AuthStatusResponse:
-    """Check whether auth has been initialized. ``default_username`` is
-    returned as the fixed admin name 'unsloth' so the React login form
-    can pre-fill the field on first boot; the bootstrap password
-    (not the username) is what protects access."""
+    """Auth initialization state; ``default_username`` is exposed for first-boot UI prefill only."""
     return AuthStatusResponse(
         initialized = storage.is_initialized(),
         default_username = storage.DEFAULT_ADMIN_USERNAME,
@@ -146,9 +140,7 @@ async def logout(
     request: Request,
     current_subject: str = Depends(get_current_subject_allow_password_change),
 ) -> Response:
-    """Invalidate all refresh tokens for the authenticated subject. The
-    access token expires on its own (JWTs are stateless), so the client
-    should also clear local state immediately."""
+    """Revoke refresh tokens for the subject; the access token is stateless and expires on its own."""
     try:
         storage.revoke_user_refresh_tokens(current_subject)
     except Exception:
@@ -180,9 +172,7 @@ async def desktop_login(payload: DesktopLoginRequest) -> Token:
 
 @router.post("/refresh", response_model = Token)
 async def refresh(payload: RefreshTokenRequest) -> Token:
-    """Exchange a valid refresh token for a new access + refresh pair.
-    Refresh tokens are single-use: the supplied token is atomically
-    consumed and a fresh one issued."""
+    """Exchange a refresh token for a new access+refresh pair (single-use)."""
     consumed = storage.consume_refresh_token(payload.refresh_token)
     if consumed is None:
         raise HTTPException(

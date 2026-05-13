@@ -39,11 +39,7 @@ class AuthStatusResponse(BaseModel):
     )
     default_username: str = Field(
         "unsloth",
-        description = (
-            "Default admin username. Pinned to 'unsloth' so the React login "
-            "form can pre-fill the field on first boot; the bootstrap "
-            "password is what protects access, not the username."
-        ),
+        description = "Default admin username for first-boot UI prefill.",
     )
     requires_password_change: bool = Field(
         ...,

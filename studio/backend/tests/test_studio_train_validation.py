@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Training hyperparameter cap tests.
-
-PR #5375 (security hardening) added field validators on
-``TrainingStartRequest``; the loosening follow-up here raises four caps:
-
-* ``max_seq_length``: 131_072 -> 2_000_000
-* ``batch_size``:    1_024   -> 4_096
-* ``lora_r``:        512     -> 16_384
-* ``lora_alpha``:    1_024   -> 32_768
-
-These tests pin the at-cap-accepts / over-cap-rejects boundaries so a
-future tighten can't slip through silently and the bot review-comment
-fixes don't get accidentally reverted.
-"""
+"""Pin TrainingStartRequest hyperparameter caps at the at-cap / over-cap boundary."""
 
 import sys
 from pathlib import Path
@@ -35,14 +22,10 @@ from models.training import (
 
 
 def _check_field(field_name: str, value):
-    """Call the validator for ``field_name`` directly through the
-    cached schema. Faster than instantiating the whole
-    TrainingStartRequest, and isolates the boundary we're testing."""
+    """Run the field validator without constructing a full TrainingStartRequest."""
     from models.training import TrainingStartRequest
 
     schema_field = TrainingStartRequest.model_fields[field_name]
-    # Walk the post-validators on the field; the @field_validator
-    # decorator registers them on the model's validator chain.
     return TrainingStartRequest.__pydantic_validator__.validate_assignment(
         TrainingStartRequest.model_construct(),
         field_name,

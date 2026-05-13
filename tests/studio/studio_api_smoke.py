@@ -317,19 +317,11 @@ else:
     fail(f"/api/auth/refresh without body returned {code} (expected 400/422)")
 
 
-# Login burst with wrong password: the rate-limit middleware added in
-# the security-hardening pass should keep emitting 401 until the
-# per-IP bucket fills (default _LOGIN_MAX_FAILS=5 wrongs in 60s), then
-# switch to 429 with a Retry-After header. There is no explicit
-# "reset the bucket" hook for tests, and the smoke runs after the
-# bootstrap-rotation block has already failed one login with the OLD
-# bootstrap password, so we cannot assume an empty bucket here --
-# instead we assert the observable invariant: at least one 401, an
-# eventual transition to 429, and Retry-After on the 429.
+# Wrong-password burst: expect 401 until the per-IP bucket fills, then
+# 429 with Retry-After. Bucket cannot be reset between tests, so we
+# assert the observable invariant rather than a fixed transition index.
 def _login_with_headers(password: str) -> tuple[int, str | None]:
-    """Variant of ``login`` that returns ``(status, retry_after)`` rather
-    than ``(status, token)``. Used by the burst probe to confirm the
-    rate-limit response carries a Retry-After header."""
+    """Like ``login`` but returns ``(status, retry_after_header)``."""
     url = f"{BASE}/api/auth/login"
     data = json.dumps({"username": "unsloth", "password": password}).encode()
     req = urllib.request.Request(

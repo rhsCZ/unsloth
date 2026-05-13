@@ -3471,8 +3471,6 @@ async def anthropic_messages(
         [m.model_dump() for m in payload.messages],
         payload.system,
     )
-    # Drop post-Stop empty-assistant sentinels before they reach the
-    # llama-server passthrough; see _drop_empty_assistant_sentinels.
     openai_messages = _drop_empty_assistant_sentinels(openai_messages)
 
     # Enforce vision guard + re-encode embedded images to PNG so the
@@ -4200,19 +4198,7 @@ async def _anthropic_passthrough_non_streaming(
 
 
 def _drop_empty_assistant_sentinels(messages: list[dict]) -> list[dict]:
-    """Filter post-Stop empty-assistant sentinels out of a passthrough
-    message list.
-
-    The Studio frontend can emit ``{"role":"assistant", "content":""}``
-    when the Stop button interrupts a streaming turn. ``ChatMessage``
-    normalises ``content=""`` to ``content=None`` so the in-process path
-    handles the case (``_extract_content_parts`` silently skips ``None``
-    content), but ``model_dump(exclude_none=True)`` then drops the
-    ``content`` key entirely, leaving a bare ``{"role":"assistant"}`` that
-    llama-server / OpenAI-compat backends reject. Strip these
-    intent-empty assistants before serialising for passthrough; assistant
-    messages that carry only ``tool_calls`` (no content) are preserved.
-    """
+    """Drop bare ``{"role":"assistant"}`` Stop-button sentinels; passthrough backends reject them."""
     out: list[dict] = []
     for m in messages:
         if m.get("role") == "assistant":

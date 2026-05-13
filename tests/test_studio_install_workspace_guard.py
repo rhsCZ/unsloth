@@ -598,11 +598,7 @@ def test_health_endpoint_exposes_studio_root_id_not_raw_path():
     main_py = REPO_ROOT / "studio" / "backend" / "main.py"
     src = main_py.read_text()
     health_idx = src.index('@app.get("/api/health")')
-    # Slice from the decorator to the NEXT top-level `@app.` (or end of
-    # file). Avoids hard-coding a byte window that silently slides past
-    # the body when the function grows -- which is what happened when
-    # the unauthenticated short-circuit + await dependency arms were
-    # added on top of the original ~30-line handler.
+    # Slice up to the next top-level @app. so a growing body stays in scope.
     next_app_idx = src.find("\n@app.", health_idx + 1)
     if next_app_idx == -1:
         next_app_idx = len(src)

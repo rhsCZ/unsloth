@@ -242,15 +242,7 @@ logger = LogConfig.setup_logging(
 app.add_middleware(LoggingMiddleware)
 
 
-# ---------------------------------------------------------------------------
-# Security headers middleware
-#
-# Adds CSP / X-Frame-Options / X-Content-Type-Options / Referrer-Policy
-# / Permissions-Policy to every response. Closes the missing-headers gap
-# called out under "Missing CSP" / "Missing X-Frame-Options" in the
-# audit (LOW). Frontend assets are loaded from same-origin; web-search
-# favicons load from *.gstatic.com.
-# ---------------------------------------------------------------------------
+# Web-search favicons load from *.gstatic.com; everything else is same-origin.
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.requests import Request as _StarletteRequest  # noqa: E402
 
@@ -278,18 +270,11 @@ def _build_csp(script_nonce: "str | None" = None) -> str:
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Set baseline security headers on every response.
-
-    The CSP defaults to ``script-src 'self'``. When a downstream handler
-    needs to emit one inline ``<script>`` (currently only the opt-in
-    ``_inject_bootstrap`` path), it attaches the nonce via the internal
-    header :data:`_CSP_SCRIPT_NONCE_HEADER`; we splice ``'nonce-XXX'`` into
-    the CSP for that response and strip the header before sending so the
-    nonce never leaves the server.
-    """
+    """Set baseline security headers; splice per-response inline-script nonces into CSP."""
 
     async def dispatch(self, request: _StarletteRequest, call_next):
         response = await call_next(request)
+        # Strip the internal nonce hand-off header so it never reaches the client.
         nonce = response.headers.get(_CSP_SCRIPT_NONCE_HEADER)
         if nonce is not None:
             del response.headers[_CSP_SCRIPT_NONCE_HEADER]
@@ -308,11 +293,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
-# Cap upload body size on inference/dataset/training POSTs to prevent
-# OOM via large base64-encoded attachments. Default 500 MB, env-tunable
-# via UNSLOTH_STUDIO_MAX_BODY_MB. 500 MB comfortably handles vision +
-# audio + multi-recipe-batch payloads while still rejecting obvious
-# OOM probes.
+# Cap upload body on protected POSTs; default 500 MB, env-tunable.
 import json as _json_for_413  # noqa: E402
 
 
@@ -329,7 +310,6 @@ _BODY_PROTECTED_PREFIXES = (
 
 
 async def _send_413(send, total_bytes: int) -> None:
-    """Send a 413 JSON response over a raw ASGI ``send`` channel."""
     payload = _json_for_413.dumps(
         {
             "detail": (
@@ -352,27 +332,7 @@ async def _send_413(send, total_bytes: int) -> None:
 
 
 class MaxBodyMiddleware:
-    """Reject oversized request bodies on protected POST/PUT/PATCH prefixes.
-
-    The previous BaseHTTPMiddleware version only checked the declared
-    ``Content-Length`` header; clients that omit it or send chunked
-    transfer-encoding bypassed the cap and could still drive an OOM via
-    the downstream JSON / file readers. This rewrite is a raw ASGI
-    middleware:
-
-    1. If ``Content-Length`` is declared and exceeds the cap, reply 413
-       immediately (same as before).
-    2. Otherwise the middleware buffers the request body itself, counting
-       bytes as ``http.request`` frames arrive. Once the running total
-       exceeds ``_MAX_BODY_BYTES`` the request is rejected with 413
-       before the FastAPI handler ever runs. The bounded buffer
-       (``_MAX_BODY_BYTES + 1`` worst case) is then replayed to
-       downstream as a single ``http.request`` so route code that calls
-       ``request.json()`` / ``await request.body()`` works unchanged.
-
-    Non-protected prefixes, non-mutating methods, and non-HTTP scopes
-    bypass the cap as before.
-    """
+    """Reject oversized bodies on protected POST/PUT/PATCH; raw ASGI so chunked uploads cannot bypass the cap."""
 
     def __init__(self, app, max_bytes: int, protected_prefixes: tuple):
         self.app = app
@@ -403,18 +363,15 @@ class MaxBodyMiddleware:
             await _send_413(send, declared)
             return
 
-        # Drain the body up to max_bytes + 1, counting as we go.
         chunks: list = []
         total = 0
         while True:
             msg = await receive()
             mtype = msg.get("type")
             if mtype == "http.disconnect":
-                # Client gave up mid-upload; bail without invoking downstream.
                 return
             if mtype != "http.request":
-                # Unexpected ASGI message; forward as-is to downstream is unsafe
-                # because we are mid-stream — drop and abort.
+                # Mid-stream unexpected frame: forwarding would corrupt downstream.
                 return
             body = msg.get("body", b"") or b""
             if body:
@@ -436,8 +393,7 @@ class MaxBodyMiddleware:
                     "body": b"".join(chunks),
                     "more_body": False,
                 }
-            # Subsequent receive() calls after the body — fall through to
-            # the real channel so http.disconnect etc still propagate.
+            # After replay, fall through so http.disconnect still propagates.
             return await receive()
 
         await self.app(scope, replay_receive, send)
@@ -450,7 +406,6 @@ app.add_middleware(
 )
 
 
-# /recipes -> /data-recipes redirect so the bare URL works either way.
 from starlette.responses import RedirectResponse as _RedirectResponse  # noqa: E402
 
 
@@ -513,8 +468,7 @@ app.include_router(
 
 @app.get("/api/health")
 async def health_check(request: Request):
-    """Health check. Unauthenticated callers get a minimal liveness
-    payload; authenticated callers get the full diagnostic dict."""
+    """Liveness only; full diagnostic dict gated on a valid bearer."""
     minimal = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -529,9 +483,7 @@ async def health_check(request: Request):
         creds = HTTPAuthorizationCredentials(
             scheme = "Bearer", credentials = auth.split(" ", 1)[1]
         )
-        # ``get_current_subject`` is async; calling without ``await`` returns
-        # a truthy coroutine and bypasses the check, exposing the full
-        # diagnostic payload to anyone presenting a Bearer header.
+        # Must await: a bare coroutine is truthy and would skip the auth check.
         subject = await _gcs(creds)
     except HTTPException:
         return minimal
@@ -683,24 +635,16 @@ def _strip_crossorigin(html_bytes: bytes) -> bytes:
 
 
 def _inject_bootstrap(html_bytes: bytes, app: FastAPI):
-    """Inject bootstrap credentials into HTML when password change is required.
+    """Inject bootstrap credentials when password change is pending.
 
-    The script tag is only injected while the default admin account still
-    has ``must_change_password=True``.  Once the user changes the password
-    the HTML is served clean — no credentials leak.
-
-    Returns ``(html_bytes, script_nonce_or_None)``. When a nonce is
-    returned, callers MUST attach it via the internal CSP nonce header so
-    :class:`SecurityHeadersMiddleware` can splice ``'nonce-XXX'`` into the
-    ``script-src`` directive for this one response. Without that the
-    inline ``<script>`` is blocked by the default ``script-src 'self'``.
+    Returns ``(html_bytes, script_nonce_or_None)``. Callers must forward
+    the nonce via ``_CSP_SCRIPT_NONCE_HEADER`` so the inline script is
+    not blocked by CSP.
     """
     import json as _json
     import secrets as _secrets
 
-    # Opt-in only: the inject default leaked the plaintext bootstrap
-    # password to any LAN caller / browser extension. Users now read
-    # the password from .bootstrap_password and type it in.
+    # Opt-in: default would leak the bootstrap password to LAN callers.
     if os.environ.get("UNSLOTH_STUDIO_INJECT_BOOTSTRAP", "").lower() not in (
         "1",
         "true",

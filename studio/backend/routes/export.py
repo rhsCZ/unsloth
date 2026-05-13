@@ -185,8 +185,7 @@ async def get_export_status(
 
 
 def _export_details(output_path: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Return the export path relative to exports_root so the response
-    does not leak the absolute install location."""
+    """Return the export path relative to exports_root so the install path is not leaked."""
     if not output_path:
         return None
     try:

@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Tests for the sandboxed Python AST policy in
-``studio/backend/core/inference/tools.py``.
-
-Covers:
-
-* The metadata-host denylist (cloud IMDS / link-local) was unchanged
-  by this batch but the wrapper message shortened to "Blocked:
-  cloud-metadata host" so the LLM can recover.
-* The new trusted-host allowlist accepts Wikipedia (any language
-  subdomain), Google, HuggingFace, GitHub raw, arXiv, StackOverflow,
-  MDN, pypi, ReadTheDocs, etc. and rejects unlisted public hosts with
-  a short LLM-readable "Blocked: host not in sandbox allowlist;
-  use an allowed informational source".
-* File upload shapes (``files=...``, ``data=open(...)``, ``data=b"..."``)
-  on requests / httpx / urllib are blocked with
-  "Blocked: file upload disallowed in sandbox" regardless of host;
-  HfApi().upload_file / upload_folder / upload_large_folder / create_commit
-  are blocked by method name.
-* Dynamic hosts (computed URLs) remain unblocked at AST time (documented
-  limit of static analysis).
-* Edge cases that an earlier audit-style validator stumbled on:
-  trailing dot, userinfo @, explicit port, IPv6 brackets.
-"""
+"""Tests for the sandboxed-Python AST policy in core/inference/tools.py."""
 
 import os
 import sys
@@ -46,11 +24,6 @@ def _blocked(code: str, *, expect_phrase: str):
     msg = _check_code_safety(code)
     assert msg is not None, code
     assert expect_phrase in msg, (expect_phrase, msg)
-
-
-# =====================================================================
-# Metadata host denylist (short message)
-# =====================================================================
 
 
 class TestMetadataHostDenylist:
@@ -79,16 +52,10 @@ class TestMetadataHostDenylist:
         )
 
     def test_metadata_link_local_prefix_blocked(self):
-        # Any 169.254.x.x literal -- covers AWS IMDSv2 and ECS task metadata.
         _blocked(
             'import requests; requests.get("http://169.254.170.2/v3/")',
             expect_phrase = "Blocked: cloud-metadata host",
         )
-
-
-# =====================================================================
-# Trusted-host allowlist
-# =====================================================================
 
 
 class TestTrustedHostAllowlist:
@@ -132,11 +99,6 @@ class TestTrustedHostAllowlist:
         _ok('import requests; requests.get("https://unslothai.github.io/")')
 
 
-# =====================================================================
-# Untrusted-host block (the new positive-allowlist enforcement)
-# =====================================================================
-
-
 class TestUntrustedHostBlock:
     def test_example_com_blocked(self):
         _blocked(
@@ -157,33 +119,22 @@ class TestUntrustedHostBlock:
         )
 
     def test_dynamic_url_not_statically_blocked(self):
-        # Documented limit of AST analysis: dynamic URL is allowed at
-        # parse time. Defense-in-depth is the bash blocklist plus the
-        # metadata-host check which still fires on .connect((LITERAL,...)).
+        # Static AST cannot resolve runtime URLs; bash blocklist is the fallback.
         _ok('import requests; url = "https://example.com/"; requests.get(url)')
-
-
-# =====================================================================
-# Host normalization edge cases
-# =====================================================================
 
 
 class TestHostNormalization:
     def test_trailing_dot_treated_same(self):
-        # Trailing dot is the DNS-absolute form; should normalise out.
         _ok('import requests; requests.get("https://wikipedia.org./")')
 
     def test_explicit_port_does_not_unblock_or_misblock(self):
-        # Trusted host with explicit :443 must still pass the allowlist.
         _ok('import requests; requests.get("https://en.wikipedia.org:443/wiki/Foo")')
-        # Untrusted host with port must still block.
         _blocked(
             'import requests; requests.get("https://example.com:8080/")',
             expect_phrase = "Blocked: host not in sandbox allowlist",
         )
 
     def test_userinfo_at_does_not_smuggle_metadata_host(self):
-        # ``https://trusted@169.254.169.254/`` must NOT pass as trusted.
         _blocked(
             'import requests; requests.get("https://wikipedia.org@169.254.169.254/latest/")',
             expect_phrase = "Blocked: cloud-metadata host",
@@ -191,11 +142,6 @@ class TestHostNormalization:
 
     def test_uppercase_host_normalised(self):
         _ok('import requests; requests.get("https://EN.WIKIPEDIA.ORG/wiki/Foo")')
-
-
-# =====================================================================
-# Upload denylist
-# =====================================================================
 
 
 class TestUploadDenylist:
@@ -269,47 +215,27 @@ class TestUploadDenylist:
         )
 
     def test_plain_post_json_not_blocked(self):
-        # POST with json= to a trusted host is fine -- it is not an
-        # upload shape.
         _ok(
             "import requests\n"
             'requests.post("https://api.weather.gov/lookup", json={"k": "v"})'
         )
 
 
-# =====================================================================
-# Sandbox CPU rlimit default (Task 7)
-# =====================================================================
-
-
 class TestSandboxCpuRlimitDefault:
-    """Pin the env-variable default so a future tweak that lowers it
-    back below 600 s without explicit user opt-in is caught."""
+    """Pin the default so a regression below 600s without opt-in is caught."""
 
     def test_default_cpu_s_is_600(self):
         src = (_BACKEND_ROOT / "core" / "inference" / "tools.py").read_text()
-        assert 'UNSLOTH_STUDIO_SANDBOX_CPU_S", "600"' in src, (
-            "Sandbox CPU default must be 600 s. If you intentionally "
-            "lowered it, update this test."
-        )
+        assert 'UNSLOTH_STUDIO_SANDBOX_CPU_S", "600"' in src
 
     def test_clone_newnet_removed(self):
         src = (_BACKEND_ROOT / "core" / "inference" / "tools.py").read_text()
-        # The unshare(CLONE_NEWNET) line is gone; the explanatory comment
-        # remains so future maintainers know why.
         assert "_libc.unshare(0x40000000)" not in src
-        assert "CLONE_NEWNET" in src  # comment retained
-
-
-# =====================================================================
-# Body cap default (Task 3)
-# =====================================================================
+        # Explanatory comment retained.
+        assert "CLONE_NEWNET" in src
 
 
 class TestMaxBodyDefault:
     def test_default_is_500_mb(self):
         src = (_BACKEND_ROOT / "main.py").read_text()
-        assert 'UNSLOTH_STUDIO_MAX_BODY_MB", "500"' in src, (
-            "Body cap default must be 500 MB. Update this test if "
-            "intentionally changed."
-        )
+        assert 'UNSLOTH_STUDIO_MAX_BODY_MB", "500"' in src

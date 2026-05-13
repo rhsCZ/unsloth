@@ -58,7 +58,6 @@ _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
 _MAX_OUTPUT_CHARS = 8000  # truncate long output
 _BLOCKED_COMMANDS_COMMON = frozenset(
     {
-        # filesystem mutation / device control
         "rm",
         "dd",
         "chmod",
@@ -67,12 +66,10 @@ _BLOCKED_COMMANDS_COMMON = frozenset(
         "mount",
         "umount",
         "fdisk",
-        # privilege escalation
         "sudo",
         "su",
         "doas",
         "pkexec",
-        # process control / host control
         "shutdown",
         "reboot",
         "halt",
@@ -81,7 +78,6 @@ _BLOCKED_COMMANDS_COMMON = frozenset(
         "killall",
         "pkill",
         "passwd",
-        # network egress tools (defense in depth even with netns isolation)
         "curl",
         "wget",
         "nc",
@@ -92,7 +88,6 @@ _BLOCKED_COMMANDS_COMMON = frozenset(
         "scp",
         "sftp",
         "rsync",
-        # shell-internal exec primitives
         "eval",
         "source",
     }
@@ -243,11 +238,9 @@ def _build_safe_env(workdir: str) -> dict[str, str]:
 
 
 def _sandbox_preexec():
-    """Pre-exec hook for sandboxed subprocesses. Each step is best-effort.
+    """Best-effort sandbox setup for sandboxed subprocesses.
 
-    setsid + killpg cleanup, restrictive umask, NO_NEW_PRIVS, PDEATHSIG,
-    private netns (blocks IMDS/RFC1918/egress), and RLIMIT caps. All
-    modules resolved at import time so no imports run in the forked child.
+    Modules are resolved at import time so the forked child runs no imports.
     """
     try:
         os.setsid()
@@ -270,19 +263,12 @@ def _sandbox_preexec():
         except (OSError, AttributeError):
             pass
 
-        # NOTE: ``unshare(CLONE_NEWNET)`` was removed because where
-        # unprivileged user namespaces are enabled it silently kills
-        # every outbound request from sandboxed code -- including
-        # legitimate requests.get("https://huggingface.co"),
-        # requests.get("https://en.wikipedia.org"), etc. -- not just
-        # cloud-metadata IPs. The AST-level metadata-host denylist plus
-        # the new trusted-host allowlist now carry the network policy,
-        # and the bash blocklist (curl / wget / nc / ssh / scp / ...)
-        # still blocks shell-level egress.
+        # CLONE_NEWNET intentionally not applied: where userns is enabled it
+        # blocks all egress, including allowlisted hosts. Network policy is
+        # enforced by the AST host check and the bash blocklist.
 
     if _resource is not None:
-        # RLIMIT_NPROC counts per-real-UID LWPs, not processes. 10000 is
-        # well above Studio's normal LWP count but stops true fork bombs.
+        # RLIMIT_NPROC is per-real-UID, so the cap is well above normal usage.
         try:
             nproc = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_NPROC", "10000"))
             _resource.setrlimit(_resource.RLIMIT_NPROC, (nproc, nproc))
@@ -305,9 +291,6 @@ def _sandbox_preexec():
         except (ValueError, OSError, AttributeError):
             pass
         try:
-            # 600s default (10 min) so long agentic chains that span
-            # multiple tool calls have headroom; override with
-            # UNSLOTH_STUDIO_SANDBOX_CPU_S.
             cpu_s = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_CPU_S", "600"))
             _resource.setrlimit(_resource.RLIMIT_CPU, (cpu_s, cpu_s))
         except (ValueError, OSError, AttributeError):
@@ -331,15 +314,12 @@ def _get_shell_cmd(command: str) -> list[str]:
 _workdirs: dict[str, str] = {}
 
 
-# Strict session-id charset. Anything else collapses to ``_invalid`` so
-# cross-session escapes ("..", "/", null bytes, control chars, weird
-# unicode) cannot synthesise a session dir that overlaps another's.
+# Non-matching session_ids collapse to ``_invalid`` to block cross-session escapes.
 _SESSION_ID_RE = re.compile(r"\A[A-Za-z0-9_\-]{1,64}\Z")
 
 
 def _get_workdir(session_id: str | None = None) -> str:
-    """Return a per-session sandbox dir at mode 0o700. Non-matching
-    session_ids bucket into ``_invalid`` to avoid collisions."""
+    """Return a per-session sandbox dir at mode 0o700."""
     global _workdirs
     key = session_id or "_default"
     if key not in _workdirs or not os.path.isdir(_workdirs[key]):
@@ -1012,8 +992,7 @@ def _check_signal_escape_patterns(code: str):
                         isinstance(shell_node, ast.Constant)
                         and shell_node.value is False
                     )
-                    # Flag dynamic args to any shell-exec primitive
-                    # (catches chr(...) string-concat bypasses).
+                    # Dynamic shell-exec args (chr/format/concat bypasses).
                     if (
                         shell_func in _STRING_SHELL_FUNCS
                         or shell_func in _SHELL_EXEC_FUNCS
@@ -1092,22 +1071,9 @@ def _check_signal_escape_patterns(code: str):
     if visitor.imports_signal and not signal_tampering:
         warnings.append("Code imports 'signal' module - review manually for safety")
 
-    # Network policy for sandboxed Python:
-    #   1. Cloud-metadata / link-local / private-metadata hosts are
-    #      blocked outright.
-    #   2. Hosts in the trusted-public allowlist are explicitly OK
-    #      (Wikipedia, Google search, HuggingFace, GitHub raw, arXiv,
-    #      StackOverflow, MDN, pypi, ...).
-    #   3. Everything else with a string-literal host is blocked at
-    #      AST time with a short, LLM-readable message so the model
-    #      can pick an allowed source instead of getting a wall of text.
-    #   4. Dynamic hosts (``requests.get(url_var)`` where ``url_var``
-    #      is computed at runtime) cannot be decided statically and are
-    #      let through; the bash blocklist (curl / wget / nc / ssh / ...)
-    #      remains the defense against shell-level egress.
-    #
-    # Uploads (``requests.post(url, files=...)``, multipart bodies,
-    # HuggingFace upload helpers, ...) are blocked regardless of host.
+    # Static host policy: block metadata hosts and any literal host outside
+    # the trusted allowlist; uploads blocked regardless of host. Dynamic hosts
+    # are caught by the bash blocklist instead.
     network_calls: list[dict] = []
     sensitive_file_reads: list[dict] = []
     _NETWORK_FQ_PREFIXES = (
@@ -1151,7 +1117,6 @@ def _check_signal_escape_patterns(code: str):
         "urllib.request.urlopen",
         "urllib.request.Request",
     )
-    # Module-level HuggingFace upload helpers + HfApi method names.
     _UPLOAD_HF_FQ = (
         "huggingface_hub.upload_file",
         "huggingface_hub.upload_folder",
@@ -1166,27 +1131,23 @@ def _check_signal_escape_patterns(code: str):
             "create_commit",
         }
     )
-    # Cloud-metadata / link-local / loopback-to-known-metadata.
+    # Cloud-metadata / link-local hosts.
     _METADATA_HOST_LITERALS = {
-        "169.254.169.254",  # AWS / standard
-        "fd00:ec2::254",  # AWS IPv6 IMDS
+        "169.254.169.254",
+        "fd00:ec2::254",
         "metadata.google.internal",
         "metadata",
         "metadata.tencentyun.com",
-        "100.100.100.200",  # Alibaba ECS
+        "100.100.100.200",
         "100.100.100.110",
-        "169.254.170.2",  # ECS task metadata
+        "169.254.170.2",
         "169.254.170.23",
     }
     _METADATA_HOST_PREFIXES = (
         "169.254.",
-        "100.64.",  # CGNAT (often used internally)
+        "100.64.",
     )
-    # Trusted informational public hosts that sandboxed Python may
-    # reach. Keep this list explicit and auditable (~100 entries) --
-    # exact hosts are safer than broad suffixes. See _TRUSTED_PUBLIC_HOST_SUFFIXES
-    # for the narrow suffix families (Wikipedia, Stack Exchange, HF
-    # CDN, GitHub content) where the whole subdomain tree is intended.
+    # Allowlist kept explicit so each entry is auditable.
     _TRUSTED_PUBLIC_HOST_LITERALS = frozenset(
         {
             # search
@@ -1286,7 +1247,6 @@ def _check_signal_escape_patterns(code: str):
         }
     )
     _TRUSTED_PUBLIC_HOST_SUFFIXES = (
-        # All language Wikipedia / Wikimedia properties.
         ".wikipedia.org",
         ".wikimedia.org",
         ".wiktionary.org",
@@ -1295,17 +1255,12 @@ def _check_signal_escape_patterns(code: str):
         ".wikisource.org",
         ".wikiversity.org",
         ".wikivoyage.org",
-        # Stack Exchange family.
         ".stackexchange.com",
-        # HuggingFace download CDN.
         ".hf.co",
         ".huggingface.co",
-        # GitHub user content / pages.
         ".githubusercontent.com",
         ".github.io",
-        # arXiv mirrors.
         ".arxiv.org",
-        # ReadTheDocs (mass docs host).
         ".readthedocs.io",
         ".readthedocs.org",
     )
@@ -1315,7 +1270,6 @@ def _check_signal_escape_patterns(code: str):
         "/etc/sudoers",
         "/etc/ssh/",
     )
-    # /proc/<pid>/environ and similar are matched via regex below.
     _SENSITIVE_FILE_RE = re.compile(
         r"^/proc/(?:self|\d+)/(?:environ|cmdline|task/\d+/environ)$"
     )
@@ -1351,9 +1305,7 @@ def _check_signal_escape_patterns(code: str):
         return any(h.endswith(s) for s in _TRUSTED_PUBLIC_HOST_SUFFIXES)
 
     def _call_is_upload_shape(node: ast.Call, fq: str) -> bool:
-        """``requests.post(url, files=...)`` / ``httpx.put(url, data=open(...))``
-        / ``urllib.request.urlopen(req, data=bytes_lit)`` etc. Conservative:
-        only matches statically obvious upload shapes."""
+        """True for statically obvious upload shapes (files=, data=open(), bytes literal)."""
         if fq in _UPLOAD_HF_FQ:
             return True
         if fq not in _UPLOAD_HTTP_METHODS:
@@ -1376,8 +1328,7 @@ def _check_signal_escape_patterns(code: str):
         return False
 
     def _method_call_is_hf_upload(node: ast.Call) -> bool:
-        """Match ``something.upload_file(...)`` / ``HfApi().upload_folder(...)``
-        regardless of the receiver."""
+        """True for HfApi upload method names on any receiver."""
         return (
             isinstance(node.func, ast.Attribute)
             and node.func.attr in _UPLOAD_HF_METHODS
@@ -1385,7 +1336,6 @@ def _check_signal_escape_patterns(code: str):
 
     class NetworkAndIoVisitor(ast.NodeVisitor):
         def visit_Call(self, node):
-            # Fully-qualified attribute path.
             parts: list[str] = []
             cur = node.func
             while isinstance(cur, ast.Attribute):
@@ -1395,10 +1345,6 @@ def _check_signal_escape_patterns(code: str):
                 parts.insert(0, cur.id)
             fq = ".".join(parts) if parts else ""
 
-            # ``HfApi().upload_file(...)`` / ``hf_api.upload_folder(...)``
-            # / ``some_obj.create_commit(...)`` -- block regardless of
-            # qualified name since the model usually constructs the
-            # client receiver inline.
             if _method_call_is_hf_upload(node):
                 network_calls.append(
                     {
@@ -1408,8 +1354,7 @@ def _check_signal_escape_patterns(code: str):
                     }
                 )
 
-            # Catch ``sock.connect(("169.254.169.254", 80))`` shape
-            # that the FQ-prefix check below misses.
+            # Direct sock.connect((host, port)) bypasses the FQ-prefix branch below.
             if (
                 isinstance(node.func, ast.Attribute)
                 and node.func.attr == "connect"
@@ -1494,7 +1439,6 @@ def _check_signal_escape_patterns(code: str):
                             }
                         )
 
-            # Block static reads of identity / credential files.
             is_open_call = (
                 (isinstance(node.func, ast.Name) and node.func.id == "open")
                 or fq in ("io.open", "pathlib.Path.open")
@@ -1590,8 +1534,7 @@ def _check_code_safety(code: str) -> str | None:
 
 
 def _kill_process_tree(proc) -> None:
-    """SIGKILL the whole process group (set up via setsid in
-    _sandbox_preexec), falling back to single-pid kill."""
+    """SIGKILL the setsid process group; fall back to single-pid kill."""
     if proc.poll() is not None:
         return
     try:

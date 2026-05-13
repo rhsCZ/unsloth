@@ -126,18 +126,13 @@ class TestChatMessageToolRoles:
         assert msg.content is None
 
     def test_tool_role_missing_tool_call_id_synthesised(self):
-        # Frontend's second-round tool POST drops the streamed
-        # tool_call_id; the validator now synthesises an opaque id so the
-        # request round-trips. Pin the new shape: id is a call_<hex>
-        # opaque token rather than a 422.
+        # Frontend drops the id on second-round POST; validator synthesises one.
         msg = ChatMessage(role = "tool", content = '{"temperature": 72}')
         assert msg.tool_call_id is not None
         assert msg.tool_call_id.startswith("call_")
         assert len(msg.tool_call_id) >= len("call_") + 8
 
     def test_tool_role_empty_tool_call_id_synthesised(self):
-        # Same path: a falsy ("") tool_call_id is replaced with an
-        # opaque synthesised id rather than rejected.
         msg = ChatMessage(
             role = "tool",
             tool_call_id = "",
@@ -167,12 +162,7 @@ class TestChatMessageToolRoles:
         assert "content" in str(exc_info.value)
 
     def test_assistant_without_content_or_tool_calls_tolerated(self):
-        # The Stop button leaves ``{"role":"assistant", "content":""}``
-        # in the conversation; replays then 422-d before this PR
-        # relaxed the validator. The boundary now tolerates the empty
-        # sentinel (content normalises to None and the passthrough
-        # builder strips it via _drop_empty_assistant_sentinels), so
-        # the request round-trips.
+        # Stop-button leaves an empty assistant turn; tolerate so replay round-trips.
         msg = ChatMessage(role = "assistant")
         assert msg.content is None
         assert msg.tool_calls is None
@@ -492,11 +482,6 @@ class TestFriendlyErrorHttpx:
         )
 
 
-# =====================================================================
-# _drop_empty_assistant_sentinels — empty-assistant filter for the
-# llama-server / OpenAI-compat passthrough path.
-# =====================================================================
-
 from routes.inference import (  # noqa: E402
     _drop_empty_assistant_sentinels,
     _openai_messages_for_passthrough,
@@ -517,8 +502,7 @@ class TestDropEmptyAssistantSentinels:
         ]
 
     def test_drops_assistant_with_no_content_key(self):
-        # ``model_dump(exclude_none=True)`` strips ``content`` entirely
-        # when it is None; the filter must catch this shape too.
+        # exclude_none=True strips the content key entirely; filter must catch this.
         msgs = [
             {"role": "user", "content": "hi"},
             {"role": "assistant"},
@@ -561,8 +545,7 @@ class TestDropEmptyAssistantSentinels:
         assert out == msgs
 
     def test_preserves_user_and_system_with_empty_content(self):
-        # Filter is scoped to role="assistant" only; an empty user/system
-        # message is the validator's problem, not the passthrough builder's.
+        # Filter scoped to role="assistant" only.
         msgs = [
             {"role": "system", "content": ""},
             {"role": "user", "content": ""},
@@ -571,8 +554,7 @@ class TestDropEmptyAssistantSentinels:
         assert out == msgs
 
     def test_openai_messages_for_passthrough_drops_sentinel(self):
-        """End-to-end through the public builder: the stop-sentinel in a
-        ``ChatCompletionRequest.messages`` list must not reach the wire."""
+        """End-to-end: Stop-sentinel must not reach the wire."""
         req = ChatCompletionRequest(
             model = "default",
             messages = [

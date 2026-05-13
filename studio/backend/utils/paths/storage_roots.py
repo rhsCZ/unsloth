@@ -298,12 +298,10 @@ def resolve_under_root(
     root: Path,
     strip_prefixes: tuple[str, ...] = (),
 ) -> Path:
-    """Resolve ``path_value`` so the result is provably under ``root``.
+    """Resolve ``path_value`` and assert the result is under ``root``.
 
-    Empty/None returns ``root``. Null bytes and ``..`` segments are
-    rejected. Absolute paths are accepted only when already contained
-    under ``root`` (lets pre-resolved internal paths re-enter
-    idempotently); user-facing schemas reject absolutes outright.
+    Absolutes are accepted only if already contained (so internal pre-resolved
+    paths re-enter idempotently); user-facing schemas reject absolutes upstream.
     """
     if not path_value or not str(path_value).strip():
         return root

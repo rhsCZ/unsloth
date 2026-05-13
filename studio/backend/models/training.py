@@ -9,15 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing import Any, Optional, List, Dict, Literal
 
 
-# Bounds tuned to span what a single GPU can handle while rejecting
-# obvious garbage (-1, 0, 1e9, 'abc').
 _MAX_BATCH_SIZE = 4096
 _MAX_GRAD_ACCUM = 4096
 _MAX_STEPS = 1_000_000
 _MAX_EPOCHS = 1000
-# 2M tokens covers long-context experiments; sharded host RAM
-# saturates long before this, so the validator stays a sanity check
-# rather than a hard guarantee.
+# 2M is a sanity cap; host RAM runs out long before this.
 _MAX_SEQ_LENGTH = 2_000_000
 _MAX_LR_VALUE = 1.0
 _MAX_LORA_R = 16_384
@@ -25,7 +21,7 @@ _MAX_LORA_ALPHA = 32_768
 
 
 def _parse_lr(v: Any) -> float:
-    """Parse and bound learning_rate to (0, _MAX_LR_VALUE)."""
+    """Parse learning_rate as a positive float strictly below _MAX_LR_VALUE."""
     if v is None:
         raise ValueError("learning_rate is required")
     if isinstance(v, bool):
@@ -101,11 +97,10 @@ class TrainingStartRequest(BaseModel):
             values.setdefault("train_split", values.pop("split"))
         return values
 
-    # Hyperparameter bounds; bad values produce 422 naming the field.
     @field_validator("learning_rate", mode = "before")
     @classmethod
     def _check_learning_rate(cls, v):
-        # Return as str so existing call sites (which float() themselves) work.
+        # Stringify because downstream call sites float() it themselves.
         lr = _parse_lr(v)
         return str(lr)
 

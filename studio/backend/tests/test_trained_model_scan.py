@@ -31,13 +31,7 @@ from utils.models.model_config import (
 def test_scan_trained_models_includes_lora_and_full_finetune_outputs(
     tmp_path: Path, monkeypatch
 ):
-    # ``scan_trained_models`` resolves the supplied directory through
-    # ``resolve_output_dir``, which since PR #5375's path-containment
-    # pass refuses any absolute path that does not realpath under
-    # ``outputs_root()``. Repoint ``outputs_root`` (and the symbol
-    # already imported into ``model_config``) at ``tmp_path`` so the
-    # test can drop fixture dirs there without escaping the configured
-    # root.
+    # resolve_output_dir refuses absolutes outside outputs_root; point it at tmp_path.
     from utils.models import model_config as _mc
     from utils.paths import storage_roots as _sr
 

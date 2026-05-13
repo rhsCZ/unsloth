@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Backend middleware tests.
-
-Covers the three middlewares wired up in ``main.py``:
-
-* ``MaxBodyMiddleware`` — rejects oversized POST/PUT/PATCH bodies on the
-  inference / dataset / data-recipe / training / export prefixes,
-  including chunked / missing-Content-Length uploads which the previous
-  BaseHTTPMiddleware version let through.
-* ``SecurityHeadersMiddleware`` — stamps the CSP and friends on every
-  response. The CSP defaults to ``script-src 'self'`` (no
-  ``'unsafe-inline'``); handlers can opt back into one inline ``<script>``
-  by attaching the internal nonce header, which is consumed and converted
-  to a per-response ``'nonce-XXX'``.
-* The ``/api/health`` auth gate — must ``await`` the async
-  ``get_current_subject`` dependency; the previous code called it without
-  ``await`` so any Bearer header passed.
-
-These tests build their own minimal FastAPI app rather than mounting the
-real ``main.app`` so they stay fast and avoid importing GGUF loaders,
-trainer state, etc.
-"""
+"""Tests for MaxBodyMiddleware, SecurityHeadersMiddleware, and the /api/health auth gate."""
 
 import asyncio
 import importlib.util
@@ -43,8 +23,6 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 @pytest.fixture(scope = "module")
 def main_module():
-    """Import ``main`` lazily so ``ASGI`` middleware classes are reusable
-    without forcing the global ``main.app`` initialisation on collect-time."""
     import main as _main  # noqa: F401
 
     return _main
@@ -101,11 +79,8 @@ class TestMaxBodyMiddleware:
         assert r.json()["unprotected"] is True
 
     def test_chunked_upload_over_cap_rejected(self, main_module):
-        """Regression: previously the middleware only checked declared
-        ``Content-Length``; clients sending chunked transfer-encoding
-        bypassed the cap. The rewrite counts bytes from the request
-        stream and reports 413 before the FastAPI handler ever runs.
-        """
+        # Regression: declared-Content-Length-only check could be bypassed
+        # by chunked transfer-encoding.
         app = _make_protected_app(1024, main_module)
         c = TestClient(app)
 
@@ -181,9 +156,7 @@ class TestSecurityHeadersMiddleware:
         r = c.get("/plain")
         assert r.status_code == 200
         csp = r.headers["content-security-policy"]
-        # script-src directive must NOT contain unsafe-inline anymore.
-        # Parse out the script-src directive precisely so we don't get
-        # tripped up by 'unsafe-inline' lingering on style-src.
+        # Parse per-directive so style-src unsafe-inline does not false-match.
         directives = {
             chunk.strip().split(" ", 1)[0]: chunk.strip()
             for chunk in csp.split(";")
@@ -211,7 +184,7 @@ class TestSecurityHeadersMiddleware:
         r = c.get("/with-nonce")
         csp = r.headers["content-security-policy"]
         assert f"'nonce-{nonce}'" in csp
-        # The internal handoff header must not leak to clients.
+        # Internal handoff header must not leak to clients.
         assert main_module._CSP_SCRIPT_NONCE_HEADER not in {
             k.lower() for k in r.headers.keys()
         }
@@ -231,9 +204,7 @@ class TestSecurityHeadersMiddleware:
 
 @pytest.fixture
 def health_app(tmp_path, monkeypatch):
-    """Build a minimal app that mounts only ``/api/health`` from
-    ``main.health_check``. Uses an isolated auth db so the test can mint
-    real JWTs through the same code path the real server uses."""
+    """Mount /api/health on a fresh app against an isolated auth db."""
     from auth import storage
 
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "auth.db")
@@ -243,8 +214,6 @@ def health_app(tmp_path, monkeypatch):
     import main as _main
 
     app = FastAPI()
-    # Re-register the route on a fresh app rather than mounting main.app
-    # (which carries the full router stack and would slow tests down).
     app.add_api_route("/api/health", _main.health_check, methods = ["GET"])
 
     import secrets as _secrets
@@ -266,15 +235,11 @@ class TestHealthAuthGate:
         body = r.json()
         assert body["status"] == "healthy"
         assert "timestamp" in body
-        # The full payload's distinguishing fields must NOT appear.
         for forbidden in ("version", "device_type", "studio_root_id"):
             assert forbidden not in body
 
     def test_invalid_bearer_returns_minimal_payload(self, health_app):
-        """Regression for the PR: previously ``get_current_subject``
-        was called without ``await``; the returned coroutine was truthy
-        and the full diagnostic payload leaked to any caller that
-        attached *any* Bearer header (valid or not)."""
+        # Regression: calling the async dep without await made any Bearer header pass.
         c = TestClient(health_app)
         r = c.get(
             "/api/health",

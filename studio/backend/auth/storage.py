@@ -481,14 +481,10 @@ def save_refresh_token(
 
 
 def consume_refresh_token(token: str) -> Optional[Tuple[str, bool]]:
-    """Atomically validate-and-delete a refresh token (single-use rotation).
-    Returns ``(username, is_desktop)`` or ``None`` if missing/expired.
+    """Atomically validate-and-delete a refresh token for single-use rotation.
 
-    Uses ``DELETE ... RETURNING`` so the validate and the delete land in a
-    single statement under SQLite's per-database write lock. A previous
-    SELECT-then-DELETE-WHERE-id pair was racy: two concurrent /api/auth/refresh
-    requests could both win the SELECT before either DELETE ran, letting the
-    same refresh token be consumed twice.
+    DELETE RETURNING fuses validate and delete into one statement so two
+    concurrent refresh requests cannot both consume the same token.
     """
     token_hash = _hash_token(token)
     now = datetime.now(timezone.utc).isoformat()

@@ -59,6 +59,30 @@ export type ExternalReasoningCapabilities = {
  */
 export const EXTERNAL_MAX_OUTPUT_TOKENS = 32768;
 
+/**
+ * Per-provider minimum on the outbound max_tokens. Kimi's docs require
+ * `max_tokens >= 16000` whenever a thinking model is in use so the
+ * reasoning_content and final answer both fit in the budget — anything
+ * lower truncates the response mid-stream. Other providers don't have a
+ * documented floor, so they fall through to the generic min of 64 in
+ * the slider.
+ *
+ * The chat-adapter resolves the effective floor on send and bumps the
+ * outbound max_tokens up to this value if the user's stored maxTokens
+ * sits below it. The settings panel reflects the same floor as the
+ * slider min so the displayed value never drifts from what's sent.
+ */
+const EXTERNAL_MIN_OUTPUT_TOKENS_BY_PROVIDER: Record<string, number> = {
+  kimi: 16000,
+};
+
+export function getExternalMinOutputTokens(
+  providerType: string | null | undefined,
+): number {
+  if (!providerType) return 64;
+  return EXTERNAL_MIN_OUTPUT_TOKENS_BY_PROVIDER[providerType] ?? 64;
+}
+
 const OPENAI_COMPAT_BASE: ProviderCapabilities = {
   temperature: true,
   topP: true,
@@ -305,6 +329,39 @@ export function getExternalReasoningCapabilities(
 
   const isOpenAIProvider = normalizedProvider === "openai";
   const isAnthropicProvider = normalizedProvider === "anthropic";
+  const isKimiProvider = normalizedProvider === "kimi";
+  if (isKimiProvider) {
+    // Kimi exposes a boolean thinking toggle rather than an effort scale.
+    //   - kimi-k2.6:        thinking enabled by default, toggleable
+    //                       via extra_body: {thinking: {type: enabled|disabled}}
+    //   - kimi-k2-thinking: thinking always on, no off switch
+    //   - kimi-k2.5 (and anything else): no thinking
+    if (modelForMatching === "kimi-k2-thinking") {
+      return {
+        supportsReasoning: true,
+        reasoningStyle: "enable_thinking",
+        reasoningAlwaysOn: true,
+        supportsReasoningOff: false,
+        reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
+      };
+    }
+    if (modelForMatching === "kimi-k2.6") {
+      return {
+        supportsReasoning: true,
+        reasoningStyle: "enable_thinking",
+        reasoningAlwaysOn: false,
+        supportsReasoningOff: true,
+        reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
+      };
+    }
+    return {
+      supportsReasoning: false,
+      reasoningStyle: "enable_thinking",
+      reasoningAlwaysOn: false,
+      supportsReasoningOff: false,
+      reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
+    };
+  }
   if (!isOpenAIProvider && !isAnthropicProvider) {
     return {
       supportsReasoning: false,

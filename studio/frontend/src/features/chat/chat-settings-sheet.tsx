@@ -82,6 +82,7 @@ import {
 } from "./presets/preset-policy";
 import {
   EXTERNAL_MAX_OUTPUT_TOKENS,
+  getExternalMinOutputTokens,
   type ProviderCapabilities,
 } from "./provider-capabilities";
 import type { InferenceParams } from "./types/runtime";
@@ -516,6 +517,12 @@ interface ChatSettingsPanelProps {
    * per-param visibility in the sampling section.
    */
   providerCapabilities?: ProviderCapabilities | null;
+  /**
+   * Backend provider type for the active external model (e.g. "kimi",
+   * "anthropic", "openai"), or `null` for local models. Drives the
+   * per-provider Max Tokens floor in the slider.
+   */
+  externalProviderType?: string | null;
   onReloadModel?: () => void;
 }
 
@@ -526,6 +533,7 @@ export function ChatSettingsPanel({
   onParamsChange,
   isExternalModel = false,
   providerCapabilities = null,
+  externalProviderType = null,
   onReloadModel,
 }: ChatSettingsPanelProps) {
   // For non-external (local) models we show every knob — providerCapabilities
@@ -1244,7 +1252,11 @@ export function ChatSettingsPanel({
             <ParamSlider
               label="Max Tokens"
               value={params.maxTokens}
-              min={64}
+              min={
+                isExternalModel
+                  ? getExternalMinOutputTokens(externalProviderType)
+                  : 64
+              }
               max={
                 isExternalModel
                   ? EXTERNAL_MAX_OUTPUT_TOKENS

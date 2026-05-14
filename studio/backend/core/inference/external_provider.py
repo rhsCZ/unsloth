@@ -171,6 +171,25 @@ class ExternalProviderClient:
         for field in provider_info.get("body_omit", ()):
             body.pop(field, None)
 
+        # Kimi (kimi-k2.6, kimi-k2-thinking) accepts a boolean thinking toggle
+        # via a top-level `thinking` field (the docs show it nested under
+        # extra_body, but that is an OpenAI Python SDK convention; on the
+        # wire it merges into the request body).
+        #   - kimi-k2.6 defaults to thinking enabled; clients can pass
+        #     {"type": "disabled"} to suppress it.
+        #   - kimi-k2-thinking is always on; we never send disabled there.
+        # `keep: all` retains every thinking chunk through the stream, which
+        # is what we need so our frontend can wrap reasoning_content into
+        # the chat reasoning panel.
+        if self.provider_type == "kimi" and enable_thinking is not None:
+            if model == "kimi-k2-thinking":
+                # Always on; ignore client toggle to avoid an API-level reject.
+                pass
+            elif enable_thinking:
+                body["thinking"] = {"type": "enabled", "keep": "all"}
+            else:
+                body["thinking"] = {"type": "disabled"}
+
         url = f"{self.base_url}/chat/completions"
         logger.info(
             "Proxying chat completion to %s (provider=%s, model=%s)",

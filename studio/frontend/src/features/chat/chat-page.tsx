@@ -627,6 +627,14 @@ export function ChatPage(): ReactElement {
   const reasoningStyle = useChatRuntimeStore((s) => s.reasoningStyle);
   const reasoningEffort = useChatRuntimeStore((s) => s.reasoningEffort);
   const supportsReasoningOff = useChatRuntimeStore((s) => s.supportsReasoningOff);
+  const activeExternalProviderType = useMemo(() => {
+    const selection = parseExternalModelId(inferenceParams.checkpoint);
+    if (!selection) return null;
+    const provider = externalProviders.find(
+      (p) => p.id === selection.providerId,
+    );
+    return provider?.providerType ?? null;
+  }, [externalProviders, inferenceParams.checkpoint]);
   const activeProviderCapabilities = useMemo(() => {
     const selection = parseExternalModelId(inferenceParams.checkpoint);
     if (!selection) return null;
@@ -1273,6 +1281,7 @@ export function ChatPage(): ReactElement {
         onParamsChange={setInferenceParams}
         isExternalModel={isExternalModel}
         providerCapabilities={activeProviderCapabilities}
+        externalProviderType={activeExternalProviderType}
         onReloadModel={() => {
           const state = useChatRuntimeStore.getState();
           if (state.params.checkpoint) {

@@ -1040,9 +1040,7 @@ class LlamaCppBackend:
         Linux LD_LIBRARY_PATH), then optional system CUDA toolkit
         (``CUDA_PATH/bin`` and ``CUDA_PATH/bin/x64``). #5106."""
         path_dirs = [binary_dir]
-        path_dirs.extend(
-            LlamaCppBackend._windows_pip_nvidia_dll_dirs(prefix)
-        )
+        path_dirs.extend(LlamaCppBackend._windows_pip_nvidia_dll_dirs(prefix))
         if cuda_path:
             cuda_bin = os.path.join(cuda_path, "bin")
             if os.path.isdir(cuda_bin):

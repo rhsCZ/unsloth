@@ -55,6 +55,15 @@ class ExternalProviderClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._timeout = httpx.Timeout(timeout, connect = 10.0)
+        # Separate timeout for SSE streams: reasoning-heavy providers
+        # (Anthropic Opus 4.7 with adaptive thinking, OpenAI gpt-5.x via
+        # /v1/responses) can pause for tens of seconds between bytes
+        # while the model is internally thinking. httpx's read timeout is
+        # the *gap* between successive reads, not a wall clock — so
+        # disabling it lets long thinks complete without cutting the
+        # stream prematurely. connect/write/pool keep the 10s / 120s
+        # bounds so genuine network failures still surface.
+        self._stream_timeout = httpx.Timeout(timeout, connect = 10.0, read = None)
 
     def _auth_headers(self) -> dict[str, str]:
         """Build authentication headers using the provider's registry config."""
@@ -176,7 +185,7 @@ class ExternalProviderClient:
                 url,
                 json = body,
                 headers = self._auth_headers(),
-                timeout = self._timeout,
+                timeout = self._stream_timeout,
             ) as response:
                 if response.status_code != 200:
                     error_body = await response.aread()
@@ -409,7 +418,7 @@ class ExternalProviderClient:
                 url,
                 json = body,
                 headers = self._auth_headers(),
-                timeout = self._timeout,
+                timeout = self._stream_timeout,
             ) as response:
                 if response.status_code != 200:
                     error_body = await response.aread()
@@ -697,7 +706,7 @@ class ExternalProviderClient:
                 url,
                 json = body,
                 headers = self._auth_headers(),
-                timeout = self._timeout,
+                timeout = self._stream_timeout,
             ) as response:
                 if response.status_code != 200:
                     error_body = await response.aread()

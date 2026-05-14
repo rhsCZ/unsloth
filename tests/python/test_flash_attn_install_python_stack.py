@@ -21,6 +21,12 @@ def _smi_result(stdout: str, returncode: int = 0) -> subprocess.CompletedProcess
 
 
 class TestHasBlackwellGpu:
+    def setup_method(self):
+        wheel_utils.has_blackwell_gpu.cache_clear()
+
+    def teardown_method(self):
+        wheel_utils.has_blackwell_gpu.cache_clear()
+
     def test_returns_false_when_nvidia_smi_missing(self):
         with mock.patch.object(wheel_utils.shutil, "which", return_value = None):
             assert wheel_utils.has_blackwell_gpu() is False

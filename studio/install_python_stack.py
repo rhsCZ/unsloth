@@ -631,6 +631,8 @@ def _flash_attn_install_disabled() -> bool:
 def _ensure_flash_attn() -> None:
     if _flash_attn_install_disabled():
         return
+    if NO_TORCH:
+        return
     if has_blackwell_gpu():
         _step(
             "warning",
@@ -638,7 +640,7 @@ def _ensure_flash_attn() -> None:
             _cyan,
         )
         return
-    if NO_TORCH or IS_WINDOWS or IS_MACOS:
+    if IS_WINDOWS or IS_MACOS:
         return
     if (
         subprocess.run(

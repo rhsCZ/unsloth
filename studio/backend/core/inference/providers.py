@@ -19,7 +19,6 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             "gpt-5.5",
             "gpt-5.4",
             "gpt-5.4-mini",
-            "gpt-5.3",
             "o3",
         ],
         "supports_streaming": True,
@@ -33,14 +32,16 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         # never want to surface in the chat UI. Filtering here so backend
         # is the single source of truth.
         "model_id_allowlist": re.compile(r"^(gpt-5\.[345]|gpt-4\.5|o3)(?:[-.]|$)"),
-        # Hide dated snapshots
-        "model_id_denylist": re.compile(r"-\d{4}-\d{2}-\d{2}$"),
+        # Hide dated snapshots and the retired plain gpt-5.3 id.
+        "model_id_denylist": re.compile(r"^(gpt-5\.3)$|-\d{4}-\d{2}-\d{2}$"),
     },
     "anthropic": {
         "display_name": "Anthropic",
         "base_url": "https://api.anthropic.com/v1",
         "default_models": [
             "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
             "claude-opus-4-5",
             "claude-sonnet-4-5",
             "claude-haiku-4-5",

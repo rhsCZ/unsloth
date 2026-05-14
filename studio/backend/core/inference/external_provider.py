@@ -9,7 +9,7 @@ Anthropic uses native Messages API with translation in this client.
 """
 
 import re
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Literal, NamedTuple, Optional
 
 import httpx
 import structlog
@@ -28,12 +28,38 @@ logger = structlog.get_logger(__name__)
 # still accept it. Match the 4-7 line specifically so we keep the knob
 # live on every other Claude generation.
 _ANTHROPIC_TOP_K_DEPRECATED = re.compile(r"^claude-(?:opus|sonnet|haiku)-4-7(?:[-.]|$)")
-_ANTHROPIC_ADAPTIVE_THINKING = re.compile(
-    r"^claude-(?:opus|sonnet|haiku)-4-[67](?:[-.]|$)"
+
+
+class _AnthropicThinkingSpec(NamedTuple):
+    prefixes: tuple[str, ...]
+    kind: Literal["adaptive", "manual"]
+    efforts: tuple[str, ...]
+
+
+_ANTHROPIC_THINKING_SPECS = (
+    _AnthropicThinkingSpec(
+        prefixes = ("claude-opus-4-7",),
+        kind = "adaptive",
+        efforts = ("none", "low", "medium", "high", "xhigh"),
+    ),
+    _AnthropicThinkingSpec(
+        prefixes = ("claude-opus-4-6", "claude-sonnet-4-6"),
+        kind = "adaptive",
+        efforts = ("none", "low", "medium", "high", "xhigh", "max"),
+    ),
+    _AnthropicThinkingSpec(
+        prefixes = ("claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"),
+        kind = "manual",
+        efforts = ("none", "low", "medium", "high"),
+    ),
 )
-_ANTHROPIC_MANUAL_THINKING = re.compile(r"^claude-(?:opus|sonnet|haiku)-4-5(?:[-.]|$)")
-_ANTHROPIC_XHIGH_EFFORT = re.compile(r"^claude-opus-4-7(?:[-.]|$)")
-_ANTHROPIC_MAX_EFFORT = re.compile(r"^claude-(?:opus-4-6|sonnet-4-6)(?:[-.]|$)")
+
+
+def _anthropic_thinking_spec(model: str) -> Optional[_AnthropicThinkingSpec]:
+    for spec in _ANTHROPIC_THINKING_SPECS:
+        if model.startswith(spec.prefixes):
+            return spec
+    return None
 
 # Shared client reused across all requests for HTTP connection pooling.
 # Auth headers and timeouts are passed per-request, so a single client
@@ -363,17 +389,19 @@ class ExternalProviderClient:
             body["top_k"] = top_k
         if system:
             body["system"] = system
+        thinking_spec = _anthropic_thinking_spec(model)
         allowed_efforts = (
-            ("none", "low", "medium", "high", "xhigh")
-            if (
-                _ANTHROPIC_XHIGH_EFFORT.match(model)
-                or _ANTHROPIC_MAX_EFFORT.match(model)
-            )
-            else ("none", "low", "medium", "high")
+            thinking_spec.efforts if thinking_spec else ("none", "low", "medium", "high")
         )
         effort = reasoning_effort if reasoning_effort in allowed_efforts else None
-        if effort == "xhigh" and _ANTHROPIC_MAX_EFFORT.match(model):
-            effort = "max"
+        # Claude 4.6 surfaces its highest tier as "Max" in UX copy, but the
+        # backend and existing persisted values use xhigh semantics. Accept both
+        # for compatibility and normalize outbound requests.
+        if (
+            effort == "max"
+            and model.startswith(("claude-opus-4-6", "claude-sonnet-4-6"))
+        ):
+            effort = "xhigh"
         if effort is None:
             if enable_thinking is False:
                 effort = "none"
@@ -392,7 +420,7 @@ class ExternalProviderClient:
             # an upstream edit ever adds it before this branch runs.
             body["temperature"] = 1
             body.pop("top_p", None)
-            if _ANTHROPIC_ADAPTIVE_THINKING.match(model):
+            if thinking_spec and thinking_spec.kind == "adaptive":
                 # `display` defaults to "omitted" on Claude Opus 4.7 (per the
                 # adaptive-thinking docs) — without an explicit opt-in the
                 # API emits an empty thinking block plus a signature_delta,
@@ -409,7 +437,7 @@ class ExternalProviderClient:
                 # Allowed values: low | medium | high | xhigh | max. See:
                 # https://platform.claude.com/docs/en/api/messages
                 body["output_config"] = {"effort": effort}
-            elif _ANTHROPIC_MANUAL_THINKING.match(model):
+            elif thinking_spec and thinking_spec.kind == "manual":
                 budget_tokens = {"low": 1024, "medium": 2048, "high": 4096}[effort]
                 body["thinking"] = {
                     "type": "enabled",
@@ -718,15 +746,14 @@ class ExternalProviderClient:
             "low",
             "medium",
             "high",
+            "max",
             "xhigh",
         ):
             body["reasoning"] = {"effort": reasoning_effort}
-            if reasoning_effort != "none":
-                body["reasoning"]["summary"] = "auto"
         elif enable_thinking is False:
             body["reasoning"] = {"effort": "none"}
         elif enable_thinking is True:
-            body["reasoning"] = {"effort": "medium", "summary": "auto"}
+            body["reasoning"] = {"effort": "medium"}
         if instructions_parts:
             body["instructions"] = "\n\n".join(instructions_parts)
         if max_tokens is not None:

@@ -62,6 +62,7 @@ const CUSTOM_BACKEND_PROVIDER_TYPE = "openai";
 const CUSTOM_PROVIDER_MISSING_KEY_MESSAGE =
   "No API key found, please make sure API key is added and valid for this provider.";
 const ANTHROPIC_DATED_SNAPSHOT_SUFFIX = /-\d{8}$/;
+const OPENAI_DEPRECATED_MODELS = new Set(["gpt-5.3"]);
 
 function normalizeUrl(input: string): string {
   return input.trim().replace(/\/+$/, "");
@@ -118,8 +119,13 @@ function parseManualModelIds(text: string): string[] {
 }
 
 function pruneProviderModelIds(providerType: string, modelIds: string[]): string[] {
-  if (providerType !== "anthropic") return modelIds;
-  return modelIds.filter((id) => !ANTHROPIC_DATED_SNAPSHOT_SUFFIX.test(id));
+  if (providerType === "anthropic") {
+    return modelIds.filter((id) => !ANTHROPIC_DATED_SNAPSHOT_SUFFIX.test(id));
+  }
+  if (providerType === "openai") {
+    return modelIds.filter((id) => !OPENAI_DEPRECATED_MODELS.has(id));
+  }
+  return modelIds;
 }
 
 function formatModelSummary(models: string[]): string {

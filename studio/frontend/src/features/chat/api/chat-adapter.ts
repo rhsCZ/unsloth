@@ -939,7 +939,7 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               };
         type RequestReasoningEffort = Extract<
           NonNullable<OpenAIChatCompletionsRequest["reasoning_effort"]>,
-          "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+          "none" | "minimal" | "low" | "medium" | "high" | "max" | "xhigh"
         >;
         const fallbackExternalEffort =
           (externalReasoningCaps.reasoningEffortLevels[0] ??

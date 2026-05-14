@@ -32,6 +32,7 @@ export type ReasoningEffort =
   | "low"
   | "medium"
   | "high"
+  | "max"
   | "xhigh";
 
 function loadReasoningEffort(fallback: ReasoningEffort): ReasoningEffort {
@@ -47,6 +48,10 @@ function loadReasoningEffort(fallback: ReasoningEffort): ReasoningEffort {
       raw === "xhigh"
     ) {
       return raw;
+    }
+    if (raw === "max") {
+      // Migrate the short-lived Anthropic 4.6 "max" value back to xhigh.
+      return "xhigh";
     }
     return fallback;
   } catch {

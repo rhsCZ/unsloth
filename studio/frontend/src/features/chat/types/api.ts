@@ -208,6 +208,7 @@ export interface OpenAIChatCompletionsRequest {
     | "low"
     | "medium"
     | "high"
+    | "max"
     | "xhigh"
     | null;
   preserve_thinking?: boolean | null;

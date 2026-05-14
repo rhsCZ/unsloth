@@ -73,6 +73,7 @@ function fileToBase64DataURL(file: File): Promise<string> {
 }
 
 function formatReasoningEffortLabel(level: ReasoningEffort, modelId?: string): string {
+  if (level === "max") return "Max";
   if (level === "xhigh") {
     const normalized = modelId?.trim().toLowerCase() ?? "";
     if (

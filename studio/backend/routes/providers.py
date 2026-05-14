@@ -295,9 +295,21 @@ async def list_provider_models(
 
     try:
         models = await client.list_models()
+        allow_prefixes = info.get("model_id_allow_prefixes")
+        if allow_prefixes is not None:
+            prefix_tuple = tuple(str(p) for p in allow_prefixes if str(p))
+            if prefix_tuple:
+                models = [
+                    m for m in models if m.get("id", "").startswith(prefix_tuple)
+                ]
         allowlist = info.get("model_id_allowlist")
         if allowlist is not None:
             models = [m for m in models if allowlist.match(m.get("id", ""))]
+        deny_exact = info.get("model_id_deny_exact")
+        if deny_exact is not None:
+            deny_ids = {str(m) for m in deny_exact if str(m)}
+            if deny_ids:
+                models = [m for m in models if m.get("id", "") not in deny_ids]
         denylist = info.get("model_id_denylist")
         if denylist is not None:
             models = [m for m in models if not denylist.search(m.get("id", ""))]

@@ -532,10 +532,10 @@ class ChatCompletionRequest(BaseModel):
         description = "[x-unsloth] Enable/disable thinking/reasoning mode for supported models",
     )
     reasoning_effort: Optional[
-        Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+        Literal["none", "minimal", "low", "medium", "high", "max", "xhigh"]
     ] = Field(
         None,
-        description = "[x-unsloth] Reasoning effort level ('none'|'minimal'|'low'|'medium'|'high'|'xhigh'). OpenAI `/v1/responses` accepts model-dependent subsets; local Harmony/gpt-oss templates support low|medium|high.",
+        description = "[x-unsloth] Reasoning effort level ('none'|'minimal'|'low'|'medium'|'high'|'max'|'xhigh'). OpenAI `/v1/responses` accepts model-dependent subsets; Anthropic 4.6 treats max as xhigh alias; local Harmony/gpt-oss templates support low|medium|high.",
     )
     preserve_thinking: Optional[bool] = Field(
         None,

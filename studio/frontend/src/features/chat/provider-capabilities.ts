@@ -42,6 +42,7 @@ export type ExternalReasoningCapabilities = {
     | "low"
     | "medium"
     | "high"
+    | "max"
     | "xhigh"
   )[];
 };
@@ -180,124 +181,102 @@ export function getProviderCapabilities(
 }
 
 const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high"] as const;
-
-function resolveAnthropicReasoningEffortCapabilities(modelId: string): {
+type ReasoningCaps = {
   supportsReasoning: boolean;
   supportsReasoningOff: boolean;
   reasoningEffortLevels: ExternalReasoningCapabilities["reasoningEffortLevels"];
-} {
-  const normalized = modelId.trim().toLowerCase();
-  if (normalized.startsWith("claude-opus-4-7")) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: true,
-      reasoningEffortLevels: ["none", "low", "medium", "high", "xhigh"],
-    };
-  }
-  if (
-    normalized.startsWith("claude-opus-4-6") ||
-    normalized.startsWith("claude-sonnet-4-6")
-  ) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: true,
-      reasoningEffortLevels: ["none", "low", "medium", "high", "xhigh"],
-    };
-  }
-  // Claude 4.7 and 4.6 use adaptive thinking with effort controls.
-  if (
-    normalized.startsWith("claude-sonnet-4-7") ||
-    normalized.startsWith("claude-haiku-4-7") ||
-    normalized.startsWith("claude-haiku-4-6")
-  ) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: true,
-      reasoningEffortLevels: ["none", "low", "medium", "high"],
-    };
-  }
-  // Claude 4.5 still uses manual thinking budgets; we keep the same semantic
-  // UI levels and map them server-side.
-  if (
-    normalized.startsWith("claude-opus-4-5") ||
-    normalized.startsWith("claude-sonnet-4-5") ||
-    normalized.startsWith("claude-haiku-4-5")
-  ) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: true,
-      reasoningEffortLevels: ["none", "low", "medium", "high"],
-    };
-  }
-  return {
-    supportsReasoning: false,
-    supportsReasoningOff: false,
-    reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
-  };
+};
+
+const NO_REASONING_CAPS: ReasoningCaps = {
+  supportsReasoning: false,
+  supportsReasoningOff: false,
+  reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
+};
+
+const ANTHROPIC_REASONING_MODELS = [
+  {
+    prefixes: ["claude-opus-4-7"],
+    levels: ["none", "low", "medium", "high", "xhigh"],
+  },
+  {
+    prefixes: ["claude-opus-4-6", "claude-sonnet-4-6"],
+    levels: ["none", "low", "medium", "high", "xhigh"],
+  },
+  {
+    prefixes: ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+    // Backend maps semantic levels to manual budget_tokens.
+    levels: ["none", "low", "medium", "high"],
+  },
+] as const;
+
+function matchesModelPrefix(
+  modelId: string,
+  prefixes: readonly string[],
+): boolean {
+  return prefixes.some((prefix) => modelId.startsWith(prefix));
 }
 
-function resolveOpenAIReasoningEffortCapabilities(modelId: string): {
-  supportsReasoning: boolean;
-  supportsReasoningOff: boolean;
-  reasoningEffortLevels: ExternalReasoningCapabilities["reasoningEffortLevels"];
-} {
+function resolveAnthropicReasoningEffortCapabilities(modelId: string): ReasoningCaps {
   const normalized = modelId.trim().toLowerCase();
-  if (
-    normalized.startsWith("gpt-5.5-pro") ||
-    normalized.startsWith("gpt-5.4-pro")
-  ) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: false,
-      reasoningEffortLevels: ["medium", "high", "xhigh"],
-    };
-  }
-  if (normalized.startsWith("gpt-5.5") || normalized.startsWith("gpt-5.4")) {
+  const matched = ANTHROPIC_REASONING_MODELS.find((entry) =>
+    matchesModelPrefix(normalized, entry.prefixes),
+  );
+  if (matched) {
     return {
       supportsReasoning: true,
       supportsReasoningOff: true,
-      reasoningEffortLevels: ["none", "low", "medium", "high", "xhigh"],
+      reasoningEffortLevels: matched.levels,
     };
   }
-  if (normalized.startsWith("gpt-5.3-chat-latest")) {
+  return NO_REASONING_CAPS;
+}
+
+const OPENAI_REASONING_MODELS = [
+  {
+    prefixes: ["gpt-5.5-pro", "gpt-5.4-pro"],
+    supportsOff: false,
+    levels: ["medium", "high", "xhigh"],
+  },
+  {
+    prefixes: ["gpt-5.5", "gpt-5.4"],
+    supportsOff: true,
+    levels: ["none", "low", "medium", "high", "xhigh"],
+  },
+  {
+    prefixes: ["gpt-5.3-chat-latest"],
+    supportsOff: false,
+    levels: ["medium"],
+  },
+  {
+    prefixes: ["gpt-5.3-codex"],
+    supportsOff: true,
+    levels: ["none", "low", "medium", "high", "xhigh"],
+  },
+  {
+    prefixes: ["gpt-5", "gpt-5.1", "gpt-5.2"],
+    supportsOff: false,
+    levels: ["minimal", "low", "medium", "high"],
+  },
+  {
+    prefixes: ["o3"],
+    supportsOff: false,
+    levels: DEFAULT_EFFORT_LEVELS,
+  },
+] as const;
+
+function resolveOpenAIReasoningEffortCapabilities(modelId: string): ReasoningCaps {
+  const normalized = modelId.trim().toLowerCase();
+  const matched = OPENAI_REASONING_MODELS.find((entry) =>
+    matchesModelPrefix(normalized, entry.prefixes),
+  );
+  if (matched) {
     return {
       supportsReasoning: true,
-      supportsReasoningOff: false,
-      reasoningEffortLevels: ["medium"],
+      supportsReasoningOff: matched.supportsOff,
+      reasoningEffortLevels: matched.levels,
     };
   }
-  if (normalized.startsWith("gpt-5.3-codex")) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: true,
-      reasoningEffortLevels: ["none", "low", "medium", "high", "xhigh"],
-    };
-  }
-  if (
-    normalized === "gpt-5" ||
-    normalized.startsWith("gpt-5.1") ||
-    normalized.startsWith("gpt-5.2") ||
-    normalized.startsWith("gpt-5.3")
-  ) {
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: false,
-      reasoningEffortLevels: ["minimal", "low", "medium", "high"],
-    };
-  }
-  if (normalized.startsWith("o3")) {
-    // Keep o3 conservative until OpenAI publishes a per-model effort table.
-    return {
-      supportsReasoning: true,
-      supportsReasoningOff: false,
-      reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
-    };
-  }
-  return {
-    supportsReasoning: false,
-    supportsReasoningOff: false,
-    reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
-  };
+  return NO_REASONING_CAPS;
 }
 
 /**

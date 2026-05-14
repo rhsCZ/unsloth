@@ -854,6 +854,17 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
       let cumulativeText = "";
       let reasoningStartAt: number | null = null;
       let reasoningDuration = 0;
+      // Tracks whether we are currently inside a `<think>` block opened by
+      // a `delta.reasoning_content` chunk. Kimi (kimi-k2.6, kimi-k2-thinking)
+      // and DeepSeek's reasoner stream their thinking as a separate
+      // `reasoning_content` field on the chat-completion delta — not as
+      // `content`, not as a structured part. We wrap those chunks with
+      // inline `<think>...</think>` so the existing parseAssistantContent
+      // lifts them into the reasoning panel the same way it does for
+      // local Harmony models. State has to live outside the SSE loop
+      // because the close tag fires when the next chunk carries content
+      // (or when the stream ends).
+      let reasoningContentOpen = false;
       // Tool call content parts — accumulated and yielded cumulatively.
       // result is set directly on the tool-call part when tool_end arrives.
       const toolCallParts: ToolCallMessagePart[] = [];
@@ -1122,7 +1133,21 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               // parts re-wrapped as inline <think> tags) so the rest of the
               // accumulator stays string-based.
               const delta = extractDeltaText(rawDelta);
-              if (!delta) {
+              // Kimi (kimi-k2.6, kimi-k2-thinking) and DeepSeek reasoner
+              // stream thinking via `delta.reasoning_content` as a plain
+              // string field — separate from `delta.content` which carries
+              // the answer. Wrap reasoning chunks inline as <think>...
+              // </think> so parseAssistantContent treats them like any
+              // other reasoning. The close tag fires when the next chunk
+              // brings content, or when the stream ends.
+              const rawReasoning = (
+                chunk.choices?.[0]?.delta as
+                  | { reasoning_content?: unknown }
+                  | undefined
+              )?.reasoning_content;
+              const reasoning =
+                typeof rawReasoning === "string" ? rawReasoning : "";
+              if (!delta && !reasoning) {
                 continue;
               }
               if (waitingFirstChunk) {
@@ -1132,7 +1157,21 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                 runtime.setGeneratingStatus(null);
               }
 
-              cumulativeText += delta;
+              if (reasoning) {
+                if (!reasoningContentOpen) {
+                  cumulativeText += `<think>${reasoning}`;
+                  reasoningContentOpen = true;
+                } else {
+                  cumulativeText += reasoning;
+                }
+              }
+              if (delta) {
+                if (reasoningContentOpen) {
+                  cumulativeText += "</think>";
+                  reasoningContentOpen = false;
+                }
+                cumulativeText += delta;
+              }
               // Mistral's magistral occasionally emits a trailing
               // template-literal artifact (e.g. "${response}") at the end of
               // an otherwise complete answer. It is never part of a real
@@ -1182,6 +1221,13 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
             }
             throw streamError;
           }
+        }
+        // If the stream ended while we were still inside a
+        // delta.reasoning_content block (Kimi / DeepSeek path), close
+        // the open <think> tag so the reasoning panel parses cleanly.
+        if (reasoningContentOpen) {
+          cumulativeText += "</think>";
+          reasoningContentOpen = false;
         }
         settleFirstTokenOk();
 

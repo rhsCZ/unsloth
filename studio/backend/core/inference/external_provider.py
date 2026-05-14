@@ -404,6 +404,24 @@ class ExternalProviderClient:
         url = f"{self.base_url}/messages"
         completion_id = f"chatcmpl-anthropic-{model.replace('/', '-')}"
 
+        # Log the outgoing config keys (not the messages themselves) so we
+        # can prove which thinking/effort fields actually reached the wire.
+        # If Anthropic skips reasoning despite a configured effort, this
+        # tells us whether we sent the field or dropped it on the floor.
+        logger.info(
+            "Anthropic request shape (model=%s, has_thinking=%s, thinking=%s, "
+            "output_config=%s, temperature=%s, has_top_p=%s, has_top_k=%s, "
+            "max_tokens=%s)",
+            model,
+            "thinking" in body,
+            body.get("thinking"),
+            body.get("output_config"),
+            body.get("temperature"),
+            "top_p" in body,
+            "top_k" in body,
+            body.get("max_tokens"),
+        )
+
         _finish_reason_map = {
             "end_turn": "stop",
             "max_tokens": "length",

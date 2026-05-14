@@ -221,7 +221,14 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
     "openrouter": {
         "display_name": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
+        # `openrouter/free` is a server-side router that picks a free
+        # model at random per request, intelligently filtering by the
+        # capabilities the request needs (vision, tool calling,
+        # structured outputs, reasoning). Documented at
+        #   https://openrouter.ai/openrouter/free/api
+        # Lead with it so users get a zero-cost option by default.
         "default_models": [
+            "openrouter/free",
             "openai/gpt-4o",
             "google/gemini-2.5-flash",
             "mistralai/mistral-small-3.1-24b-instruct",

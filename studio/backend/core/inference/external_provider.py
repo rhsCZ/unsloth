@@ -217,6 +217,23 @@ class ExternalProviderClient:
             else:
                 body["thinking"] = {"type": "disabled"}
 
+        # OpenRouter exposes a unified `reasoning` parameter on every
+        # chat-completion request — the gateway routes it to whichever
+        # underlying model actually supports reasoning, and silently
+        # no-ops for ones that don't. Documented at
+        #   https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+        # Shape: `reasoning: {enabled?: bool, effort?: low|medium|high,
+        # max_tokens?: N, exclude?: bool}` with effort and max_tokens
+        # mutually exclusive. We forward either an effort level (when
+        # the user picked one) or a bare {enabled: true/false}.
+        if self.provider_type == "openrouter":
+            if reasoning_effort in ("low", "medium", "high"):
+                body["reasoning"] = {"effort": reasoning_effort}
+            elif enable_thinking is True:
+                body["reasoning"] = {"enabled": True}
+            elif enable_thinking is False:
+                body["reasoning"] = {"enabled": False}
+
         url = f"{self.base_url}/chat/completions"
         logger.info(
             "Proxying chat completion to %s (provider=%s, model=%s)",

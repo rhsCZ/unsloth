@@ -1155,8 +1155,30 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                   | { reasoning_content?: unknown }
                   | undefined
               )?.reasoning_content;
+              // OpenRouter uses a third reasoning shape: a structured
+              // `delta.reasoning_details` array of parts (each carrying
+              // `text`). The router emits this regardless of which
+              // underlying provider it picked, so we extract here and
+              // merge into the same <think>...</think> wrap path used
+              // for Kimi / DeepSeek reasoning_content. See
+              //   https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+              const rawReasoningDetails = (
+                chunk.choices?.[0]?.delta as
+                  | { reasoning_details?: unknown }
+                  | undefined
+              )?.reasoning_details;
+              const reasoningFromDetails = Array.isArray(rawReasoningDetails)
+                ? rawReasoningDetails
+                    .map((part) => {
+                      if (!part || typeof part !== "object") return "";
+                      const text = (part as { text?: unknown }).text;
+                      return typeof text === "string" ? text : "";
+                    })
+                    .join("")
+                : "";
               const reasoning =
-                typeof rawReasoning === "string" ? rawReasoning : "";
+                (typeof rawReasoning === "string" ? rawReasoning : "") +
+                reasoningFromDetails;
               if (!delta && !reasoning) {
                 continue;
               }

@@ -309,6 +309,21 @@ export function getExternalReasoningCapabilities(
   const isOpenAIProvider = normalizedProvider === "openai";
   const isAnthropicProvider = normalizedProvider === "anthropic";
   const isKimiProvider = normalizedProvider === "kimi";
+  const isOpenRouterProvider = normalizedProvider === "openrouter";
+  if (isOpenRouterProvider) {
+    // OpenRouter's unified `reasoning` parameter is accepted on every
+    // chat-completion request; the gateway silently no-ops for models
+    // that don't reason. Surface an enable_thinking-style toggle for all
+    // OpenRouter models — the router decides at fan-out time whether to
+    // exercise the underlying reasoning channel.
+    return {
+      supportsReasoning: true,
+      reasoningStyle: "enable_thinking",
+      reasoningAlwaysOn: false,
+      supportsReasoningOff: true,
+      reasoningEffortLevels: DEFAULT_EFFORT_LEVELS,
+    };
+  }
   if (isKimiProvider) {
     // Kimi exposes a boolean thinking toggle rather than an effort scale.
     //   - kimi-k2.6:        thinking enabled by default, toggleable

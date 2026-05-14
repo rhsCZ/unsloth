@@ -349,10 +349,14 @@ class ExternalProviderClient:
         if effort and effort != "none":
             # Anthropic rejects top_k whenever thinking is enabled.
             body.pop("top_k", None)
-            # Anthropic requires temperature=1 whenever thinking is enabled.
+            # Anthropic requires temperature=1 whenever thinking is enabled,
+            # AND forbids top_p in the same request: setting both produces
+            #   "temperature and top_p cannot both be specified for this
+            #    model. Please use only one."
+            # The base body never sets top_p, but pop defensively in case
+            # an upstream edit ever adds it before this branch runs.
             body["temperature"] = 1
-            # Anthropic thinking supports top_p in the 0.95..1.0 range.
-            body["top_p"] = max(0.95, min(float(top_p), 1.0))
+            body.pop("top_p", None)
             if _ANTHROPIC_ADAPTIVE_THINKING.match(model):
                 body["thinking"] = {"type": "adaptive"}
                 body["output_config"] = {"effort": effort}

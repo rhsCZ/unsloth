@@ -105,9 +105,7 @@ def test_protobuf_message_factory_get_prototype_or_get_message_class_present():
     """
     mf = pytest.importorskip("google.protobuf.message_factory")
     has_mf_class = hasattr(mf, "MessageFactory")
-    has_get_prototype = has_mf_class and hasattr(
-        mf.MessageFactory, "GetPrototype"
-    )
+    has_get_prototype = has_mf_class and hasattr(mf.MessageFactory, "GetPrototype")
     has_get_message_class = hasattr(mf, "GetMessageClass")
     if not has_mf_class:
         pytest.fail(
@@ -460,9 +458,7 @@ def _is_custom_torch_build(raw_version_str):
     local = raw_version_str.split("+", 1)[1]
     if not local:
         return False
-    return not re.fullmatch(
-        r"cu\d[\d.]*|rocm\d[\d.]*|cpu|xpu", local, re.IGNORECASE
-    )
+    return not re.fullmatch(r"cu\d[\d.]*|rocm\d[\d.]*|cpu|xpu", local, re.IGNORECASE)
 
 
 def test_installed_torch_torchvision_pair_is_compatible():
@@ -499,9 +495,7 @@ def test_installed_torch_torchvision_pair_is_compatible():
     is_prerelease = any(t in torch_raw for t in pre_tags) or any(
         t in tv_raw for t in pre_tags
     )
-    is_custom = _is_custom_torch_build(torch_raw) or _is_custom_torch_build(
-        tv_raw
-    )
+    is_custom = _is_custom_torch_build(torch_raw) or _is_custom_torch_build(tv_raw)
     if is_prerelease or is_custom:
         pytest.skip(
             f"torch=={torch_raw} torchvision=={tv_raw} is a custom/"

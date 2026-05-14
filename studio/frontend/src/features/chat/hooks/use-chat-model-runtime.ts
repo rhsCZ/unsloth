@@ -297,10 +297,20 @@ export function useChatModelRuntime() {
           reasoningEffort: clampedReasoningEffort,
           supportsPreserveThinking,
           supportsTools,
-          // Reset per-turn reasoning flag so models that do not support
-          // reasoning do not inherit a stale off state from a prior model.
+          // Reset per-turn reasoning flag so:
+          //   1. models that do not support reasoning do not inherit a stale
+          //      off state from a prior model, and
+          //   2. local reasoning-effort models (where the composer hides
+          //      the Off option via supportsReasoningOff=false) cannot end
+          //      up with reasoningEnabled=false carried over from an
+          //      external model where Off was selected — the composer would
+          //      keep showing "Think: <level>" via effectiveReasoningEnabled,
+          //      but the chat-adapter would omit the kwarg and the Harmony
+          //      template would fall back to its own default effort.
           reasoningEnabled: supportsReasoning
-            ? useChatRuntimeStore.getState().reasoningEnabled
+            ? reasoningStyle === "reasoning_effort"
+              ? true
+              : useChatRuntimeStore.getState().reasoningEnabled
             : true,
           ggufContextLength: currentGgufContextLength,
           ggufMaxContextLength,

@@ -72,8 +72,17 @@ function fileToBase64DataURL(file: File): Promise<string> {
   });
 }
 
-function formatReasoningEffortLabel(level: ReasoningEffort): string {
-  if (level === "xhigh") return "Extra High";
+function formatReasoningEffortLabel(level: ReasoningEffort, modelId?: string): string {
+  if (level === "xhigh") {
+    const normalized = modelId?.trim().toLowerCase() ?? "";
+    if (
+      normalized.startsWith("claude-opus-4-6") ||
+      normalized.startsWith("claude-sonnet-4-6")
+    ) {
+      return "Max";
+    }
+    return "Extra High";
+  }
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
@@ -313,6 +322,8 @@ export function SharedComposer({
     reasoningStyle === "reasoning_effort" && !effectiveSupportsReasoningOff
       ? true
       : reasoningEnabled;
+  const effectiveReasoningVisualEnabled =
+    effectiveReasoningEnabled && reasoningEffort !== "none";
   const reasoningDisabled = !modelLoaded || !supportsReasoning;
   const showReasoningControl = supportsReasoning || reasoningAlwaysOn;
   const toolsDisabled = !modelLoaded || !supportsTools;
@@ -679,19 +690,24 @@ export function SharedComposer({
                     "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                     reasoningDisabled
                       ? "cursor-not-allowed opacity-40"
-                      : "bg-primary/10 text-primary hover:bg-primary/20",
+                      : effectiveReasoningVisualEnabled
+                        ? "bg-primary/10 text-primary hover:bg-primary/20"
+                        : "text-muted-foreground hover:bg-muted-foreground/15",
                   )}
                   aria-label={`Reasoning effort: ${reasoningEffort}`}
                 >
-                  {effectiveReasoningEnabled ? (
+                  {effectiveReasoningVisualEnabled ? (
                     <LightbulbIcon className="size-3.5" />
                   ) : (
                     <LightbulbOffIcon className="size-3.5" />
                   )}
                   <span>
                     Think:{" "}
-                    {effectiveReasoningEnabled
-                      ? formatReasoningEffortLabel(reasoningEffort)
+                    {effectiveReasoningVisualEnabled
+                      ? formatReasoningEffortLabel(
+                          reasoningEffort,
+                          externalSelection?.modelId,
+                        )
                       : formatReasoningDisabledLabel(
                           effectiveSupportsReasoningOff,
                           isExternalOpenAIReasoning,
@@ -708,7 +724,7 @@ export function SharedComposer({
                     }}
                   >
                     {isExternalOpenAIReasoning ? "None" : "Off"}
-                    {!effectiveReasoningEnabled ? " \u2713" : ""}
+                    {!effectiveReasoningVisualEnabled ? " \u2713" : ""}
                   </DropdownMenuItem>
                 )}
                 {effectiveReasoningEffortLevels
@@ -722,8 +738,8 @@ export function SharedComposer({
                       applyQwenThinkingParams(true);
                     }}
                   >
-                    {formatReasoningEffortLabel(level)}
-                    {effectiveReasoningEnabled && reasoningEffort === level ? " \u2713" : ""}
+                    {formatReasoningEffortLabel(level, externalSelection?.modelId)}
+                    {effectiveReasoningVisualEnabled && reasoningEffort === level ? " \u2713" : ""}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

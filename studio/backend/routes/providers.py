@@ -299,9 +299,7 @@ async def list_provider_models(
         if allow_prefixes is not None:
             prefix_tuple = tuple(str(p) for p in allow_prefixes if str(p))
             if prefix_tuple:
-                models = [
-                    m for m in models if m.get("id", "").startswith(prefix_tuple)
-                ]
+                models = [m for m in models if m.get("id", "").startswith(prefix_tuple)]
         allowlist = info.get("model_id_allowlist")
         if allowlist is not None:
             models = [m for m in models if allowlist.match(m.get("id", ""))]

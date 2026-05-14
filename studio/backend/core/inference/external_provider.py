@@ -61,6 +61,7 @@ def _anthropic_thinking_spec(model: str) -> Optional[_AnthropicThinkingSpec]:
             return spec
     return None
 
+
 # Shared client reused across all requests for HTTP connection pooling.
 # Auth headers and timeouts are passed per-request, so a single client
 # handles every provider without storing credentials.
@@ -391,15 +392,16 @@ class ExternalProviderClient:
             body["system"] = system
         thinking_spec = _anthropic_thinking_spec(model)
         allowed_efforts = (
-            thinking_spec.efforts if thinking_spec else ("none", "low", "medium", "high")
+            thinking_spec.efforts
+            if thinking_spec
+            else ("none", "low", "medium", "high")
         )
         effort = reasoning_effort if reasoning_effort in allowed_efforts else None
         # Claude 4.6 surfaces its highest tier as "Max" in UX copy, but the
         # backend and existing persisted values use xhigh semantics. Accept both
         # for compatibility and normalize outbound requests.
-        if (
-            effort == "max"
-            and model.startswith(("claude-opus-4-6", "claude-sonnet-4-6"))
+        if effort == "max" and model.startswith(
+            ("claude-opus-4-6", "claude-sonnet-4-6")
         ):
             effort = "xhigh"
         if effort is None:

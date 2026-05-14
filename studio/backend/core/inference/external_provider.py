@@ -8,6 +8,7 @@ Most registry providers expose OpenAI-compatible /v1/chat/completions endpoints;
 Anthropic uses native Messages API with translation in this client.
 """
 
+import json as _json
 import re
 from typing import Any, AsyncGenerator, Literal, NamedTuple, Optional
 
@@ -272,19 +273,70 @@ class ExternalProviderClient:
                 # Fix: call response.aclose() FIRST (sets PoolByteStream._closed=True),
                 # then lines_gen.aclose() is a no-op and GeneratorExit re-raises cleanly.
                 lines_gen = response.aiter_lines().__aiter__()
+                # Best-effort diagnostics for the default OAI-compat path. Without
+                # this, OpenRouter mid-stream errors (200 OK + error event in the
+                # SSE body) and OpenRouter-router model selection were invisible
+                # in the backend logs — the user only saw "Provider returned
+                # error" in the UI with no trail on the server side.
+                event_counts: dict[str, int] = {}
+                chosen_model: Optional[str] = None
                 try:
                     while True:
                         try:
                             line = await lines_gen.__anext__()
                         except StopAsyncIteration:
                             break
-                        if line.strip():
-                            yield line
+                        if not line.strip():
+                            continue
+                        if line.startswith("data:"):
+                            data_str = line[len("data:") :].strip()
+                            if data_str == "[DONE]":
+                                event_counts["done"] = event_counts.get("done", 0) + 1
+                            elif data_str:
+                                try:
+                                    parsed = _json.loads(data_str)
+                                except Exception:
+                                    parsed = None
+                                if isinstance(parsed, dict):
+                                    # Mid-stream provider error event. OpenRouter
+                                    # in particular returns 200 then surfaces the
+                                    # actual failure as an SSE error event.
+                                    if "error" in parsed:
+                                        event_counts["error"] = (
+                                            event_counts.get("error", 0) + 1
+                                        )
+                                        logger.warning(
+                                            "%s SSE error event: %s",
+                                            self.provider_type,
+                                            parsed.get("error"),
+                                        )
+                                    else:
+                                        event_counts["delta"] = (
+                                            event_counts.get("delta", 0) + 1
+                                        )
+                                    # OpenRouter (and most OAI-compat providers)
+                                    # report the underlying model that handled
+                                    # the request in every chunk's `model` field.
+                                    # Latch the first non-empty value so the
+                                    # router-picked model surfaces in logs and
+                                    # is available to the proxy caller.
+                                    if chosen_model is None and isinstance(
+                                        parsed.get("model"), str
+                                    ):
+                                        chosen_model = parsed["model"]
+                        yield line
                 except GeneratorExit:
                     await response.aclose()  # set PoolByteStream._closed=True FIRST
                     await lines_gen.aclose()  # now safe — aclose() is a no-op
                     raise
                 finally:
+                    logger.info(
+                        "%s stream complete (model=%s, chosen=%s, events=%s)",
+                        self.provider_type,
+                        model,
+                        chosen_model,
+                        event_counts,
+                    )
                     await response.aclose()
                     await lines_gen.aclose()
 

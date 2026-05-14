@@ -49,20 +49,28 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 # Stub heavy deps the rest of the studio backend pulls in IFF they
-# are not installed in this environment. ``sys.modules.setdefault``
-# alone is not enough: pytest collects test files alphabetically, so
-# this file (``test_5106_*``) is imported before any other test
-# imports real ``httpx`` / ``structlog`` / ``loggers``. Unconditionally
-# installing a stub there would shadow the real httpx for every
-# subsequent test in the directory (test_anthropic_messages.py,
-# test_training_*, etc) and break their `from httpx import HTTPError,
-# Response` imports. Guard each stub with ``find_spec`` so we only
-# fall back to the stub when the real module truly is missing.
-import importlib.util as _importlib_util  # noqa: E402
+# fail to import here. Unconditionally installing a stub would shadow
+# the real module for every subsequent test in this dir
+# (test_anthropic_messages.py, test_training_*, etc) and break their
+# ``from httpx import HTTPError, Response`` imports.
+#
+# Why try-import instead of ``importlib.util.find_spec``: ``find_spec``
+# only checks discoverability, not import success. ``studio/backend/
+# loggers/__init__.py`` re-exports ``handlers.get_logger``, and
+# ``handlers.py`` does ``from fastapi import Request, Response`` at
+# module load. In a lightweight env without fastapi, ``find_spec
+# ("loggers")`` returns a spec but the actual import raises during
+# ``from core.inference.llama_cpp import LlamaCppBackend`` collection.
+# Calling ``import_module`` here surfaces that failure and falls back
+# to the local stub. CI has fastapi installed so this is purely a
+# developer-machine ergonomics fix.
+import importlib as _importlib  # noqa: E402
 
 
 def _maybe_stub(name: str, builder):
-    if _importlib_util.find_spec(name) is None:
+    try:
+        _importlib.import_module(name)
+    except ImportError:
         sys.modules[name] = builder()
 
 
@@ -191,22 +199,15 @@ def _populate_studio_install(install_dir: Path, runtime: str = "13.1") -> None:
 def _build_path_dirs_like_start_llama_server(
     binary_dir: Path, prefix: Path, cuda_path: str = ""
 ) -> list[str]:
-    """Faithful reproduction of the win32 branch in
-    LlamaCppBackend.start_llama_server. Returns the ordered list of
-    PATH entries we prepend to the inherited env. Production code:
-    studio/backend/core/inference/llama_cpp.py:2340-2363.
-    """
-    pip_dirs = LlamaCppBackend._windows_pip_nvidia_dll_dirs(str(prefix))
-    path_dirs = [str(binary_dir)]
-    path_dirs.extend(pip_dirs)
-    if cuda_path:
-        cuda_bin = os.path.join(cuda_path, "bin")
-        if os.path.isdir(cuda_bin):
-            path_dirs.append(cuda_bin)
-        cuda_bin_x64 = os.path.join(cuda_path, "bin", "x64")
-        if os.path.isdir(cuda_bin_x64):
-            path_dirs.append(cuda_bin_x64)
-    return path_dirs
+    """Thin wrapper around the production
+    ``LlamaCppBackend._build_windows_path_dirs`` helper, kept so the
+    test reads with ``Path`` arguments. Asserting against the real
+    staticmethod (rather than a hand-copy of its body) is the whole
+    point: if the production PATH order ever drops or reorders
+    ``_windows_pip_nvidia_dll_dirs``, these tests fail."""
+    return LlamaCppBackend._build_windows_path_dirs(
+        str(binary_dir), str(prefix), cuda_path
+    )
 
 
 def _mock_nvidia_smi_run(fake_output: str, returncode: int = 0) -> "mock._patch":
@@ -235,10 +236,15 @@ class TestWindowsGpuDetectionAfter5106Fix:
     every other layer (resolver, PATH builder, install layout) for
     real."""
 
-    def test_nvidia_smi_probe_reports_synthetic_gpu(self):
+    def test_nvidia_smi_probe_reports_synthetic_gpu(self, monkeypatch):
         """Sanity: the production nvidia-smi probe parses CSV output
         and returns (index, free_mib) tuples. This is the entry point
         Studio uses to decide whether a GPU is reachable at all."""
+        # Clear inherited visibility masks so the synthetic CSV is not
+        # filtered or shadowed by the parent shell (e.g. on a shared
+        # GPU runner with CUDA_VISIBLE_DEVICES=1 set).
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("NVIDIA_VISIBLE_DEVICES", raising = False)
         # noahterbest's exact #5106 reproducer: RTX 4090, 22805 MiB free.
         fake_csv = "0, 22805\n"
         with _mock_nvidia_smi_run(fake_csv):

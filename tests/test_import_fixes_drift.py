@@ -175,10 +175,12 @@ def test_trl_cached_available_flags_are_not_tuples():
 
 
 def test_pretrained_model_enable_input_require_grads_uses_old_pattern():
-    """``patch_enable_input_require_grads`` (import_fixes.py 609-670).
-    HF PR #41993 rewrote enable_input_require_grads to iterate
+    """``patch_enable_input_require_grads`` (import_fixes.py 609-670). HF
+    PR #41993 rewrote enable_input_require_grads to iterate
     ``self.modules()`` and call ``get_input_embeddings`` on every
-    submodule; vision submodules then raise NotImplementedError."""
+    submodule; vision submodules then raise NotImplementedError. Healthy
+    state: either the upstream rewrite isn't present (pre-HF#41993), OR
+    the patch installed a NotImplementedError-tolerant replacement."""
     pytest.importorskip("transformers")
     from transformers import PreTrainedModel
 
@@ -187,24 +189,34 @@ def test_pretrained_model_enable_input_require_grads_uses_old_pattern():
     except Exception as exc:
         pytest.skip(f"could not getsource(enable_input_require_grads): {exc!r}")
 
-    if "for module in self.modules()" in src:
-        pytest.fail(
-            "DRIFT DETECTED: PreTrainedModel.enable_input_require_grads now "
-            "iterates self.modules() (post HF#41993). "
-            "patch_enable_input_require_grads has to install a "
-            "NotImplementedError-tolerant replacement."
-        )
+    if "for module in self.modules()" not in src:
+        return  # healthy: pre-HF#41993 shape
+    if "NotImplementedError" in src:
+        return  # healthy: unsloth's tolerant replacement is installed
+
+    pytest.fail(
+        "DRIFT DETECTED: PreTrainedModel.enable_input_require_grads now "
+        "iterates self.modules() (post HF#41993) and has NOT been "
+        "wrapped by patch_enable_input_require_grads; vision submodules "
+        "(e.g. GLM V4.6's self.visual) will raise NotImplementedError "
+        "from get_input_embeddings and crash the whole call."
+    )
 
 
 def test_transformers_torchcodec_available_flag_is_present():
-    """``disable_torchcodec_if_broken`` (import_fixes.py 1291-1317).
-    Flips ``transformers.utils.import_utils._torchcodec_available`` to
-    False when torchcodec is installed but its FFmpeg deps are broken."""
+    """``disable_torchcodec_if_broken`` (import_fixes.py 1291-1317). Needs
+    either the pre-5.x module-level ``_torchcodec_available`` flag, or
+    the 5.x ``is_torchcodec_available`` public function; one of the two
+    is the patch site the fix monkey-patches when FFmpeg is missing."""
     tf_iu = pytest.importorskip("transformers.utils.import_utils")
-    assert hasattr(tf_iu, "_torchcodec_available"), (
-        "transformers.utils.import_utils._torchcodec_available was "
-        "removed/renamed upstream; disable_torchcodec_if_broken can no "
-        "longer disable a broken torchcodec install."
+    has_flag = hasattr(tf_iu, "_torchcodec_available")
+    has_func = callable(getattr(tf_iu, "is_torchcodec_available", None))
+    assert has_flag or has_func, (
+        "transformers.utils.import_utils dropped both "
+        "``_torchcodec_available`` (pre-5.x) AND "
+        "``is_torchcodec_available`` (>=5.x); "
+        "disable_torchcodec_if_broken can no longer disable a broken "
+        "torchcodec install."
     )
 
 
@@ -305,17 +317,26 @@ def test_triton_compiled_kernel_has_num_ctas_and_cluster_dims():
     tc = pytest.importorskip("triton.compiler.compiler")
 
     ck_cls = tc.CompiledKernel
-    # Healthy if class has num_ctas directly; otherwise the fix installs
-    # at instance __init__ time and we cannot cheaply observe that on CPU.
+    # Healthy if either: pre-3.6 class attr present, or unsloth wrapped
+    # ``__init__`` to install num_ctas + cluster_dims per instance (the
+    # post-3.6 shape ``fix_triton_compiled_kernel_missing_attrs`` lands).
     if hasattr(ck_cls, "num_ctas"):
         return
+    init = getattr(ck_cls, "__init__", None)
+    if init is not None:
+        code = getattr(init, "__code__", None)
+        freevars = set(getattr(code, "co_freevars", ()) or ())
+        co_names = set(getattr(code, "co_names", ()) or ())
+        if "_orig_init" in freevars or {"num_ctas", "cluster_dims"}.issubset(co_names):
+            return
 
     pytest.fail(
         "DRIFT DETECTED: triton.CompiledKernel lacks the `num_ctas` "
-        "class attribute; fix_triton_compiled_kernel_missing_attrs "
-        "patches __init__ to inject num_ctas and cluster_dims so "
-        "torch._inductor.runtime.triton_heuristics.make_launcher "
-        "stops crashing under torch.compile."
+        "class attribute AND ``__init__`` has not been wrapped by "
+        "fix_triton_compiled_kernel_missing_attrs; torch Inductor's "
+        "``make_launcher`` will crash on the eager "
+        "``binary.metadata.num_ctas, *binary.metadata.cluster_dims`` "
+        "unpack under torch.compile."
     )
 
 

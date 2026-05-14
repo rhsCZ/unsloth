@@ -810,6 +810,12 @@ export function ChatPage(): ReactElement {
         const nextReasoningEffort = reasoningCaps.supportsReasoning
           ? clampedEffort
           : store.reasoningEffort;
+        // Clear any cached router-picked openrouter/free model unless the
+        // user is staying on openrouter/free — otherwise the chip would
+        // keep showing a stale ":<chosen>" suffix from a previous model.
+        const stillOnOpenRouterFree =
+          selectedProvider?.providerType === "openrouter" &&
+          selectedExternal?.modelId === "openrouter/free";
         setInferenceParams({
           ...store.params,
           checkpoint: value,
@@ -832,9 +838,12 @@ export function ChatPage(): ReactElement {
               : true
             : store.reasoningEnabled,
           supportsPreserveThinking: false,
+          ...(stillOnOpenRouterFree ? {} : { lastOpenRouterChosenModel: null }),
         });
         return;
       }
+      // Local model picked → drop any cached openrouter/free chosen model.
+      useChatRuntimeStore.setState({ lastOpenRouterChosenModel: null });
       void (async () => {
         let showImageCompatibilityWarning = false;
         if (view.mode === "single" && activeThreadId) {
@@ -953,18 +962,34 @@ export function ChatPage(): ReactElement {
       })),
     [modelsFromStore],
   );
+  const lastOpenRouterChosenModel = useChatRuntimeStore(
+    (s) => s.lastOpenRouterChosenModel,
+  );
   const externalModels = useMemo<ExternalModelOption[]>(
     () =>
       externalProviders.flatMap((provider) =>
-        provider.models.map((model) => ({
-          id: buildExternalModelId(provider.id, model),
-          name: model,
-          providerId: provider.id,
-          providerName: provider.name,
-          providerType: provider.providerType,
-        })),
+        provider.models.map((model) => {
+          // For OpenRouter's free router we know which underlying free
+          // model the gateway actually picked once a stream completes
+          // (chat-adapter latches `chunk.model` into the runtime store).
+          // Append it to the chip label so users can tell which model
+          // is replying without digging through logs.
+          const displayName =
+            provider.providerType === "openrouter" &&
+            model === "openrouter/free" &&
+            lastOpenRouterChosenModel
+              ? `${model}:${lastOpenRouterChosenModel}`
+              : model;
+          return {
+            id: buildExternalModelId(provider.id, model),
+            name: displayName,
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.providerType,
+          };
+        }),
       ),
-    [externalProviders],
+    [externalProviders, lastOpenRouterChosenModel],
   );
 
   const [localModels, setLocalModels] = useState<LoraModelOption[]>([]);

@@ -1137,6 +1137,28 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               }
 
               totalChunks += 1;
+              // OpenRouter's free router (openrouter/free) picks a different
+              // underlying free model per request and reports it in every
+              // chunk's top-level `model` field. Latch the first non-empty
+              // value that differs from the requested checkpoint so the
+              // header chip can render "openrouter/free:<chosen>".
+              if (
+                isExternalRequest &&
+                externalProvider?.providerType === "openrouter" &&
+                externalSelection?.modelId === "openrouter/free"
+              ) {
+                const chunkModel = (chunk as { model?: unknown }).model;
+                if (
+                  typeof chunkModel === "string" &&
+                  chunkModel.length > 0 &&
+                  chunkModel !== externalSelection.modelId
+                ) {
+                  const storeState = useChatRuntimeStore.getState();
+                  if (storeState.lastOpenRouterChosenModel !== chunkModel) {
+                    storeState.setLastOpenRouterChosenModel(chunkModel);
+                  }
+                }
+              }
               const rawDelta = chunk.choices?.[0]?.delta?.content;
               // Providers like Mistral's magistral return delta.content as an
               // array of structured parts; normalize to text (with thinking

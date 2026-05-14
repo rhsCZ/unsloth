@@ -262,6 +262,19 @@ class TrainingStartRequest(BaseModel):
     max_steps: Optional[int] = Field(None, description = "Maximum training steps")
     save_steps: int = Field(100, description = "Steps between checkpoints")
     weight_decay: float = Field(0.001, description = "Weight decay")
+    max_grad_norm: float = Field(
+        0.0,
+        ge = 0,
+        description = "Global gradient norm clipping threshold. Set 0 to disable.",
+    )
+    max_grad_value: Optional[float] = Field(
+        None,
+        ge = 0,
+        description = (
+            "Elementwise gradient value clipping threshold. Set 0 to disable. "
+            "If omitted, MLX defaults to 1 unless max_grad_norm is set."
+        ),
+    )
     random_seed: int = Field(42, description = "Random seed")
     packing: bool = Field(False, description = "Enable sequence packing")
     optim: str = Field("adamw_8bit", description = "Optimizer")

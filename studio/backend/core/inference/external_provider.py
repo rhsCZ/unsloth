@@ -358,7 +358,15 @@ class ExternalProviderClient:
             body["temperature"] = 1
             body.pop("top_p", None)
             if _ANTHROPIC_ADAPTIVE_THINKING.match(model):
-                body["thinking"] = {"type": "adaptive"}
+                # `display` defaults to "omitted" on Claude Opus 4.7 (per the
+                # adaptive-thinking docs) — without an explicit opt-in the
+                # API emits an empty thinking block plus a signature_delta,
+                # so our SSE handler would surface a stray <think></think>
+                # and the reasoning panel would stay blank. Force
+                # "summarized" so 4.7 streams thinking_delta events like
+                # 4.6 does. On 4.6 / Sonnet 4.6 this is the default, so
+                # setting it explicitly is harmless.
+                body["thinking"] = {"type": "adaptive", "display": "summarized"}
                 # Per the Messages API reference, the effort knob for
                 # adaptive thinking lives under `output_config.effort` —
                 # NOT as a top-level field. Sending `effort: ...` directly

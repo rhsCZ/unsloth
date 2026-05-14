@@ -110,7 +110,9 @@ def test_adaptive_thinking_body_uses_output_config_effort_shape(monkeypatch):
     _drive(run())
 
     body = captured["body"]
-    assert body["thinking"] == {"type": "adaptive"}
+    # display=summarized is set explicitly so Opus 4.7 (which defaults to
+    # "omitted") still emits thinking_delta events for the reasoning panel.
+    assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
     # Documented shape: effort is nested under output_config.
     # A top-level `effort` field produces a 400:
     #   "effort: Extra inputs are not permitted".

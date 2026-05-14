@@ -420,6 +420,10 @@ class ExternalProviderClient:
                 # NOTE: same manual __anext__ loop as stream_chat_completion — see comment there.
                 lines_gen = response.aiter_lines().__aiter__()
                 thinking_open = False
+                # Diagnostic counters for the next time the user reports
+                # "no thinking content" — distinguishes "Anthropic never sent
+                # thinking_delta" from "frontend didn't render the chunks".
+                event_counts: dict[str, int] = {}
 
                 def _content_chunk(text: str) -> str:
                     chunk = {
@@ -456,6 +460,12 @@ class ExternalProviderClient:
                             continue
 
                         event_type = event.get("type")
+                        if event_type == "content_block_delta":
+                            delta_kind = (event.get("delta") or {}).get("type")
+                            key = f"{event_type}:{delta_kind}"
+                        else:
+                            key = event_type or "<unknown>"
+                        event_counts[key] = event_counts.get(key, 0) + 1
 
                         if event_type == "content_block_delta":
                             delta = event.get("delta", {})
@@ -533,6 +543,18 @@ class ExternalProviderClient:
                     await lines_gen.aclose()  # now safe — aclose() is a no-op
                     raise
                 finally:
+                    # Surface per-event-type counts so reports of "no
+                    # reasoning panel content" can be triaged at a glance:
+                    # zero `content_block_delta:thinking_delta` entries
+                    # means Anthropic skipped thinking for this prompt
+                    # (adaptive can choose to); non-zero means thinking
+                    # arrived and we wrapped it — any visual gap is then
+                    # on the frontend.
+                    logger.info(
+                        "Anthropic stream event counts (model=%s): %s",
+                        model,
+                        event_counts,
+                    )
                     await response.aclose()
                     await lines_gen.aclose()
 

@@ -156,6 +156,7 @@ if not _has_real_accelerator():
 # see the same patched state a real unsloth install would.
 # ---------------------------------------------------------------------------
 
+
 def _apply_unsloth_peft_import_fix_for_tests() -> None:
     import importlib.util as _ilu
 
@@ -166,7 +167,8 @@ def _apply_unsloth_peft_import_fix_for_tests() -> None:
     if pkg_spec is None or not pkg_spec.submodule_search_locations:
         return
     fix_path = os.path.join(
-        pkg_spec.submodule_search_locations[0], "import_fixes.py",
+        pkg_spec.submodule_search_locations[0],
+        "import_fixes.py",
     )
     if not os.path.exists(fix_path):
         return
@@ -187,7 +189,8 @@ def _apply_unsloth_peft_import_fix_for_tests() -> None:
             pkg.__spec__ = pkg_spec
             pkg.__package__ = "unsloth"
             pkg.__file__ = os.path.join(
-                pkg_spec.submodule_search_locations[0], "__init__.py",
+                pkg_spec.submodule_search_locations[0],
+                "__init__.py",
             )
             sys.modules["unsloth"] = pkg
             _installed_skeleton = True

@@ -6,9 +6,10 @@ Unit tests for the Anthropic extended-thinking translation in
 external_provider.
 
 Covers:
-- Adaptive-mode request body uses the documented
-  ``effort: {type: "<level>"}`` shape (not the legacy
-  ``output_config: {effort: ...}``).
+- Adaptive-mode request body nests effort under
+  ``output_config: {effort: "<level>"}`` per the Messages API
+  reference (a top-level ``effort`` field 400s with
+  "effort: Extra inputs are not permitted").
 - Streaming SSE: ``content_block_delta`` with
   ``delta.type == "thinking_delta"`` is translated into inline
   ``<think>...</think>`` chat-completion chunks so the frontend's
@@ -78,7 +79,7 @@ def _payloads_from_lines(lines: list[str]) -> list:
     return out
 
 
-def test_adaptive_thinking_body_uses_effort_type_shape(monkeypatch):
+def test_adaptive_thinking_body_uses_output_config_effort_shape(monkeypatch):
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -110,10 +111,11 @@ def test_adaptive_thinking_body_uses_effort_type_shape(monkeypatch):
 
     body = captured["body"]
     assert body["thinking"] == {"type": "adaptive"}
-    # Documented shape: effort lives at the top level as {type: <level>},
-    # NOT under output_config.
-    assert body["effort"] == {"type": "medium"}
-    assert "output_config" not in body
+    # Documented shape: effort is nested under output_config.
+    # A top-level `effort` field produces a 400:
+    #   "effort: Extra inputs are not permitted".
+    assert body["output_config"] == {"effort": "medium"}
+    assert "effort" not in body
     # Extended-thinking contract: temperature=1, no top_p / top_k.
     assert body["temperature"] == 1
     assert "top_p" not in body
@@ -155,6 +157,8 @@ def test_manual_thinking_body_uses_budget_tokens_on_4_5(monkeypatch):
     # max_tokens must be strictly greater than budget_tokens; we shipped 1024
     # and budget is 4096, so the wrapper should bump max_tokens.
     assert body["max_tokens"] > body["thinking"]["budget_tokens"]
+    # Manual-thinking path does not use output_config / effort — those are
+    # the adaptive-mode controls (Claude 4.6 / 4.7).
     assert "effort" not in body
     assert "output_config" not in body
 

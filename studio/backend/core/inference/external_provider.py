@@ -359,14 +359,13 @@ class ExternalProviderClient:
             body.pop("top_p", None)
             if _ANTHROPIC_ADAPTIVE_THINKING.match(model):
                 body["thinking"] = {"type": "adaptive"}
-                # Per the extended-thinking docs the wire shape for adaptive
-                # mode is `effort: {type: "<level>"}`, not the legacy
-                # `output_config: {effort: "<level>"}` we shipped initially.
-                # The legacy field name appears to be silently ignored by the
-                # API, which meant adaptive ran at the server default effort
-                # regardless of the level the user picked. See:
-                # https://platform.claude.com/docs/en/build-with-claude/extended-thinking
-                body["effort"] = {"type": effort}
+                # Per the Messages API reference, the effort knob for
+                # adaptive thinking lives under `output_config.effort` —
+                # NOT as a top-level field. Sending `effort: ...` directly
+                # produces a 400 "effort: Extra inputs are not permitted".
+                # Allowed values: low | medium | high | xhigh | max. See:
+                # https://platform.claude.com/docs/en/api/messages
+                body["output_config"] = {"effort": effort}
             elif _ANTHROPIC_MANUAL_THINKING.match(model):
                 budget_tokens = {"low": 1024, "medium": 2048, "high": 4096}[effort]
                 body["thinking"] = {

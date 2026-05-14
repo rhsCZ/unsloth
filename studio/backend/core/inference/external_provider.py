@@ -359,7 +359,14 @@ class ExternalProviderClient:
             body.pop("top_p", None)
             if _ANTHROPIC_ADAPTIVE_THINKING.match(model):
                 body["thinking"] = {"type": "adaptive"}
-                body["output_config"] = {"effort": effort}
+                # Per the extended-thinking docs the wire shape for adaptive
+                # mode is `effort: {type: "<level>"}`, not the legacy
+                # `output_config: {effort: "<level>"}` we shipped initially.
+                # The legacy field name appears to be silently ignored by the
+                # API, which meant adaptive ran at the server default effort
+                # regardless of the level the user picked. See:
+                # https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+                body["effort"] = {"type": effort}
             elif _ANTHROPIC_MANUAL_THINKING.match(model):
                 budget_tokens = {"low": 1024, "medium": 2048, "high": 4096}[effort]
                 body["thinking"] = {
@@ -405,6 +412,22 @@ class ExternalProviderClient:
 
                 # NOTE: same manual __anext__ loop as stream_chat_completion — see comment there.
                 lines_gen = response.aiter_lines().__aiter__()
+                thinking_open = False
+
+                def _content_chunk(text: str) -> str:
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": text},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    return f"data: {_json.dumps(chunk)}"
+
                 try:
                     while True:
                         try:
@@ -429,23 +452,51 @@ class ExternalProviderClient:
 
                         if event_type == "content_block_delta":
                             delta = event.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                chunk = {
-                                    "id": completion_id,
-                                    "object": "chat.completion.chunk",
-                                    "choices": [
-                                        {
-                                            "index": 0,
-                                            "delta": {"content": delta.get("text", "")},
-                                            "finish_reason": None,
-                                        }
-                                    ],
-                                }
-                                yield f"data: {_json.dumps(chunk)}"
+                            delta_type = delta.get("type")
+                            if delta_type == "thinking_delta":
+                                # Anthropic streams extended-thinking content as
+                                # thinking_delta events on a separate content
+                                # block. Wrap as inline <think>...</think> so
+                                # the frontend's parseAssistantContent lifts it
+                                # into the reasoning panel — same pattern as
+                                # the OpenAI Responses path.
+                                thinking_text = delta.get("thinking", "")
+                                if thinking_text:
+                                    if not thinking_open:
+                                        thinking_text = f"<think>{thinking_text}"
+                                        thinking_open = True
+                                    yield _content_chunk(thinking_text)
+                            elif delta_type == "text_delta":
+                                # First text after a thinking block closes the
+                                # <think> tag we opened above. Anthropic emits
+                                # a content_block_stop between blocks, but
+                                # closing on the text_delta transition is more
+                                # forgiving if events arrive out of order.
+                                if thinking_open:
+                                    yield _content_chunk("</think>")
+                                    thinking_open = False
+                                text = delta.get("text", "")
+                                if text:
+                                    yield _content_chunk(text)
+                            # signature_delta and any other delta types are
+                            # intentionally skipped — they carry trust /
+                            # verification metadata, not user-visible content.
+
+                        elif event_type == "content_block_stop":
+                            # Close the <think> tag when the thinking block
+                            # ends, in case no text_delta follows (e.g.
+                            # display=omitted on Claude 4.7, or thinking-only
+                            # turns).
+                            if thinking_open:
+                                yield _content_chunk("</think>")
+                                thinking_open = False
 
                         elif event_type == "message_delta":
                             stop_reason = event.get("delta", {}).get("stop_reason")
                             if stop_reason:
+                                if thinking_open:
+                                    yield _content_chunk("</think>")
+                                    thinking_open = False
                                 chunk = {
                                     "id": completion_id,
                                     "object": "chat.completion.chunk",
@@ -462,6 +513,9 @@ class ExternalProviderClient:
                                 yield f"data: {_json.dumps(chunk)}"
 
                         elif event_type == "message_stop":
+                            if thinking_open:
+                                yield _content_chunk("</think>")
+                                thinking_open = False
                             yield "data: [DONE]"
                             await (
                                 response.aclose()

@@ -37,6 +37,7 @@ def test_runtime_flash_attn_prefers_prebuilt_wheel(monkeypatch):
     statuses: list[str] = []
 
     monkeypatch.delenv(worker._FLASH_ATTN_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker, "has_blackwell_gpu", lambda: False)
     monkeypatch.setattr(builtins, "__import__", _missing_flash_attn_import())
     monkeypatch.setattr(
         worker,
@@ -65,6 +66,7 @@ def test_runtime_flash_attn_falls_back_to_pypi(monkeypatch):
     statuses: list[str] = []
 
     monkeypatch.delenv(worker._FLASH_ATTN_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker, "has_blackwell_gpu", lambda: False)
     monkeypatch.setattr(builtins, "__import__", _missing_flash_attn_import())
     monkeypatch.setattr(
         worker,

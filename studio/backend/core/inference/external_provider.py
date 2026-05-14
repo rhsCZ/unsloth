@@ -8,13 +8,20 @@ Most registry providers expose OpenAI-compatible /v1/chat/completions endpoints;
 Anthropic uses native Messages API with translation in this client.
 """
 
-import logging
 import re
 from typing import Any, AsyncGenerator, Optional
 
 import httpx
+import structlog
 
-logger = logging.getLogger(__name__)
+# Use structlog so INFO-level diagnostics actually surface in the
+# studio backend's JSON log stream. The stdlib root logger defaults to
+# WARNING and is not configured with handlers, so plain
+# `logging.getLogger(__name__).info(...)` was being silently dropped —
+# only WARNING/ERROR made it through (because they bypassed the root
+# level threshold via uvicorn's stderr capture). All existing call
+# sites use printf-style positional args, which structlog accepts.
+logger = structlog.get_logger(__name__)
 
 # Claude 4.7 (Opus/Sonnet/Haiku) deprecated top_k and returns 400
 # "top_k is deprecated for this model" when it is set. 3.x and 4.5/4.6

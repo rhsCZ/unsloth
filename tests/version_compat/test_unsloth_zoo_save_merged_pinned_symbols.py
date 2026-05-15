@@ -25,7 +25,9 @@ def _fetch_saving_utils() -> str:
 
 def _fetch_merge_tests() -> str:
     src = fetch_text(
-        "unslothai/unsloth-zoo", ZOO_TAG, "tests/test_unsloth_zoo_lora_merge.py",
+        "unslothai/unsloth-zoo",
+        ZOO_TAG,
+        "tests/test_unsloth_zoo_lora_merge.py",
     )
     if src is None:
         pytest.skip("tests/test_unsloth_zoo_lora_merge.py not fetchable")
@@ -34,8 +36,10 @@ def _fetch_merge_tests() -> str:
 
 def _skip_until_pr_647_lands(src: str) -> None:
     if not any(
-        m in src for m in (
-            "_MOE_MERGE_STATE", "_detect_moe_lora_layout",
+        m in src
+        for m in (
+            "_MOE_MERGE_STATE",
+            "_detect_moe_lora_layout",
             "_resolve_num_experts_from_lora_stats",
         )
     ):
@@ -48,35 +52,43 @@ def _skip_until_pr_647_lands(src: str) -> None:
 def test_zoo_saving_utils_has_moe_merge_state():
     src = _fetch_saving_utils()
     _skip_until_pr_647_lands(src)
-    for sym in ("_MOE_MERGE_STATE", "_reset_moe_merge_state", "_record_moe_merge_fallback"):
+    for sym in (
+        "_MOE_MERGE_STATE",
+        "_reset_moe_merge_state",
+        "_record_moe_merge_fallback",
+    ):
         assert sym in src, f"{sym} missing from saving_utils.py (issue #5410 guard)."
-    assert re.search(r"raise\s+RuntimeError\b[^\n]*MoE", src, re.IGNORECASE), (
-        "no `raise RuntimeError(...MoE...)`; post-loop guard weakened."
-    )
+    assert re.search(
+        r"raise\s+RuntimeError\b[^\n]*MoE", src, re.IGNORECASE
+    ), "no `raise RuntimeError(...MoE...)`; post-loop guard weakened."
 
 
 def test_zoo_saving_utils_has_layout_detector():
     src = _fetch_saving_utils()
     _skip_until_pr_647_lands(src)
-    assert "_detect_moe_lora_layout" in src, "_detect_moe_lora_layout removed (issue #5410)."
-    assert '"swapped"' in src and '"standard"' in src, "one of the layout labels removed."
+    assert (
+        "_detect_moe_lora_layout" in src
+    ), "_detect_moe_lora_layout removed (issue #5410)."
+    assert (
+        '"swapped"' in src and '"standard"' in src
+    ), "one of the layout labels removed."
 
 
 def test_zoo_saving_utils_has_num_experts_resolver():
     src = _fetch_saving_utils()
     _skip_until_pr_647_lands(src)
     assert "_resolve_num_experts_from_lora_stats" in src, "resolver removed (#5410)."
-    assert re.search(r"for\s+_\s+in\s+range\s*\(\s*\d+\s*\)", src), (
-        "resolver walk no longer bounded by `for _ in range(N):`."
-    )
+    assert re.search(
+        r"for\s+_\s+in\s+range\s*\(\s*\d+\s*\)", src
+    ), "resolver walk no longer bounded by `for _ in range(N):`."
 
 
 def test_zoo_saving_utils_writes_generation_config():
     src = _fetch_saving_utils()
     _skip_until_pr_647_lands(src)
-    assert re.search(r"generation_config\.save_pretrained\s*\(", src), (
-        "generation_config.json no longer saved (#5410)."
-    )
+    assert re.search(
+        r"generation_config\.save_pretrained\s*\(", src
+    ), "generation_config.json no longer saved (#5410)."
 
 
 def test_zoo_lora_merge_tests_have_standard_layout_coverage():
@@ -96,9 +108,12 @@ def test_zoo_lora_merge_tests_have_standard_layout_coverage():
 
 def test_unsloth_save_pretrained_merged_entry_point_exists():
     import pathlib
+
     save_py = pathlib.Path(__file__).resolve().parents[2] / "unsloth" / "save.py"
     if not save_py.is_file():
         pytest.skip(f"{save_py} not present")
-    text = save_py.read_text(encoding="utf-8", errors="replace")
+    text = save_py.read_text(encoding = "utf-8", errors = "replace")
     assert "save_pretrained_merged" in text, "entry point removed from unsloth/save.py."
-    assert "merge_and_overwrite_lora" in text, "no dispatch into unsloth_zoo merge; #647 bypassed."
+    assert (
+        "merge_and_overwrite_lora" in text
+    ), "no dispatch into unsloth_zoo merge; #647 bypassed."

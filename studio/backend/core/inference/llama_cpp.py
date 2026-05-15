@@ -470,30 +470,12 @@ class LlamaCppBackend:
         # their own cache (Gemma 3n / Gemma 4: <arch>.attention.shared_kv_layers).
         self._shared_kv_layers: Optional[int] = None
         self._lock = threading.Lock()
-        # Serialises full load_model() invocations end-to-end. Held across
-        # Phase 1 (kill) + Phase 2 (download) + Phase 3 (spawn + warm-up),
-        # so two concurrent /api/inference/load calls cannot leave two
-        # llama-server processes alive at any moment. The fine-grained
-        # ``_lock`` above only guards process-state mutations and is still
-        # acquired briefly by unload_model() / _kill_process(); holding the
-        # serial lock here does NOT block /unload, /status, /load-progress.
-        # See issue #5401.
+        # Wraps load_model() end-to-end so concurrent loads serialise
+        # and never coexist as two llama-server processes (#5401).
         self._serial_load_lock = threading.Lock()
-        # Last extra_args observed on a load_model() call. Intentionally
-        # NOT cleared in unload_model() so that a frontend reload (which
-        # POSTs /api/inference/unload followed by /api/inference/load
-        # without the llama_extra_args field, since the chat UI does not
-        # round-trip those flags) can inherit the values the CLI / first
-        # load supplied. See issue #5401.
+        # Last extra_args / requested n_ctx, preserved across unload so
+        # the chat UI's /unload+/load Apply path can inherit them (#5401).
         self._extra_args: Optional[List[str]] = None
-        # The n_ctx the most recent load_model() was *invoked with* (NOT
-        # the effective context the server is running at -- that one
-        # lives in ``_effective_context_length`` and may have been capped
-        # by VRAM-fit logic). The route layer compares against this so an
-        # Apply that flips the slider between "Auto" (0) and an explicit
-        # length is detected as a settings change even when the running
-        # server happens to be at the same effective context. See issue
-        # #5401 and the gemini-code-assist review on PR #5427.
         self._requested_n_ctx: int = 0
         self._stdout_lines: list[str] = []
         self._stdout_thread: Optional[threading.Thread] = None
@@ -532,29 +514,14 @@ class LlamaCppBackend:
 
     @property
     def extra_args(self) -> Optional[List[str]]:
-        """User-supplied extra ``llama-server`` flags from the last load.
-
-        Returned as a fresh list copy so callers cannot mutate internal
-        state. ``None`` means no extra flags have ever been seen on this
-        backend; ``[]`` means the most recent load explicitly cleared
-        them. The route layer uses this to inherit ``unsloth run``-style
-        flags across frontend Apply reloads — see issue #5401.
-        """
+        """Extra llama-server flags from the last load. Copy; None = never
+        set, [] = explicitly cleared. Used by the route for inheritance."""
         return list(self._extra_args) if self._extra_args is not None else None
 
     @property
     def requested_n_ctx(self) -> int:
-        """The ``n_ctx`` value the last ``load_model()`` was *invoked
-        with* (not the effective context the server is running at).
-
-        Returned as an int -- 0 means the caller asked for the model's
-        native length. The route layer compares an incoming
-        ``request.max_seq_length`` against this so a slider flip from
-        explicit (e.g. 8192) to "Auto" (0) is detected as a real
-        settings change even when the running server's effective context
-        happens to match the explicit value (because VRAM-fit may have
-        capped it). See issue #5401.
-        """
+        """n_ctx the last load was invoked with (not the effective cap).
+        0 means Auto. Used by the route to detect Auto-vs-explicit flips."""
         return self._requested_n_ctx
 
     @property
@@ -2035,32 +2002,14 @@ class LlamaCppBackend:
 
         Returns True if server started and health check passed.
         """
-        # Serialise the entire load_model invocation: Phase 1's kill,
-        # the Phase 2 download, and the Phase 3 spawn must complete
-        # before another concurrent /api/inference/load can start its
-        # own Phase 1. Without this top-level lock two parallel loads
-        # each pass Phase 1 with self._process == None, both run Phase
-        # 2, and Phase 3's defensive kill collapses them to one survivor
-        # -- but for the duration of the second Popen + warm-up the OS
-        # holds two llama-server processes simultaneously, which OOMs
-        # big models (issue #5401 / #5161). The serial lock makes
-        # concurrent loads strictly sequential, so at most one
-        # llama-server is ever alive. It does NOT block /unload,
-        # /status, or /load-progress because those only touch the
-        # fine-grained ``_lock`` or read properties directly.
+        # Serialise the whole load so concurrent /load calls never
+        # leave two llama-server processes alive (#5401 / #5161). Does
+        # not block /unload, /status, /load-progress.
         with self._serial_load_lock:
-            # Remember the extra args this load was invoked with so a
-            # subsequent /api/inference/load arriving without the field
-            # can inherit them (the route reads
-            # ``llama_backend.extra_args``). ``None`` means the caller
-            # chose not to override; ``[]`` clears the stored value.
-            # See issue #5401.
+            # Remember caller intent for later inheritance / comparison.
+            # extra_args: None keeps prior value, [] clears, list sets.
             if extra_args is not None:
                 self._extra_args = list(extra_args)
-            # Track the requested n_ctx so the route comparator can
-            # distinguish "user picked Auto" (0) from "user picked an
-            # explicit length that happens to equal the running effective
-            # context". See requested_n_ctx property docstring.
             self._requested_n_ctx = int(n_ctx)
 
             self._cancel_event.clear()

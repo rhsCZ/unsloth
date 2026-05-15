@@ -414,30 +414,17 @@ def _normalise_settings_str(value: Optional[str]) -> Optional[str]:
 def _request_matches_loaded_settings(
     request: LoadRequest, llama_backend: LlamaCppBackend
 ) -> bool:
-    """Return True iff the request's runtime settings match the loaded server.
-
-    The /api/inference/load short-circuit at the call site additionally checks
-    model identifier + GGUF variant + ``is_loaded`` before delegating here.
-    We compare every setting that ends up on the ``llama-server`` command
-    line so a same-(model, variant) Apply request that *did* change a
-    runtime setting falls through to a real reload instead of silently
-    returning ``status="already_loaded"`` (issue #5401).
-    """
-    # Compare against the *requested* n_ctx, not the effective context.
-    # The effective context can be lower than the request if VRAM-fit
-    # capped it, so comparing against the effective value would
-    # incorrectly call an explicit-to-Auto slider flip a "match".
-    # ``requested_n_ctx == 0`` means the last load asked for the model's
-    # native length; an incoming ``max_seq_length == 0`` matches that.
+    """True iff every runtime setting on the request matches the loaded
+    server. Caller has already checked model+variant+is_loaded. See #5401."""
+    # Compare requested n_ctx (not effective) so VRAM-cap doesn't mask
+    # an Auto-vs-explicit slider flip.
     if request.max_seq_length != llama_backend.requested_n_ctx:
         return False
     if _normalise_settings_str(request.cache_type_kv) != _normalise_settings_str(
         llama_backend.cache_type_kv
     ):
         return False
-    # Speculative dropdown sends "default" / "off" / explicit type names.
-    # The backend stores the type the user selected (or None when not
-    # speculatively decoding). Treat None and "off" as equivalent.
+    # Treat None and "off" as equivalent for the speculative dropdown.
     req_spec = _normalise_settings_str(request.speculative_type)
     backend_spec = _normalise_settings_str(llama_backend.speculative_type)
     if (req_spec or "off") != (backend_spec or "off"):
@@ -446,12 +433,10 @@ def _request_matches_loaded_settings(
         llama_backend.chat_template_override or None
     ):
         return False
+    # llama_extra_args=None means "inherit"; only an explicit list that
+    # differs from what's loaded forces a reload.
     req_extra = list(request.llama_extra_args) if request.llama_extra_args else []
     backend_extra = list(llama_backend.extra_args) if llama_backend.extra_args else []
-    # ``llama_extra_args is None`` on the request means "inherit current",
-    # i.e. the frontend Apply path that does not round-trip the field. We
-    # only fall through to a real reload when the caller *explicitly*
-    # supplied a non-empty list and it differs from what is loaded.
     if request.llama_extra_args is not None and req_extra != backend_extra:
         return False
     return True
@@ -530,12 +515,8 @@ async def load_model(
                 and llama_backend.hf_variant.lower() == request.gguf_variant.lower()
                 and llama_backend.model_identifier
                 and llama_backend.model_identifier.lower() == model_identifier.lower()
-                # Identifier + variant alone are insufficient: a same-model
-                # Apply that changed KV / ctx / spec / template / extra
-                # args used to silently short-circuit and the user's
-                # change was dropped. Require every runtime setting that
-                # ends up on the llama-server command line to also match
-                # before reporting "already_loaded". See issue #5401.
+                # Also require runtime settings to match so Apply changes
+                # aren't silently dropped (#5401).
                 and _request_matches_loaded_settings(request, llama_backend)
             ):
                 logger.info(
@@ -671,21 +652,16 @@ async def load_model(
                 )
                 unsloth_backend.unload_model(unsloth_backend.active_model_name)
 
-            # Inherit ``llama_extra_args`` from the previous load when the
-            # incoming request omits the field. The chat-settings Apply
-            # path on the frontend does not round-trip these flags (see
-            # use-chat-model-runtime.ts), so without this, every reload
-            # after ``unsloth run --some-flag X`` quietly drops the
-            # user's ``--some-flag X`` from the spawned llama-server.
-            # An explicit empty list is still honoured as "clear them".
+            # Inherit llama_extra_args from the previous load when the
+            # request omits the field; the chat-settings Apply path does
+            # not round-trip them. Explicit [] still clears (#5401).
             if request.llama_extra_args is None and llama_backend.extra_args:
                 inherited = list(llama_backend.extra_args)
                 try:
                     extra_llama_args = validate_extra_args(inherited)
                 except ValueError:
-                    # Stored args came from a prior validated load; revalidation
-                    # should not normally fail, but if it does (e.g. managed-flag
-                    # rules changed) fall back to "no extras" rather than 400.
+                    # Should not happen on already-validated args; degrade
+                    # to no-extras rather than 400 if managed flags changed.
                     logger.warning(
                         "Stored llama_extra_args failed revalidation; "
                         "loading without them: %s",

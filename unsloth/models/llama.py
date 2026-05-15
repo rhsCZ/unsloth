@@ -2500,9 +2500,18 @@ class FastLlamaModel:
                 attn_implementation = preferred_attn_impl,
                 **kwargs,
             )
-            # Attach dispatch hooks for bnb multi-device loads.
-            from unsloth.models.vision import _attach_bnb_multidevice_hooks
+            # Guardrail (#5344) + multi-device dispatch hooks share an import.
+            from unsloth.models.vision import (
+                _warn_if_quantization_silently_dropped,
+                _attach_bnb_multidevice_hooks,
+            )
 
+            _warn_if_quantization_silently_dropped(
+                model,
+                load_in_4bit = load_in_4bit,
+                load_in_8bit = kwargs.get("load_in_8bit", False),
+                full_finetuning = full_finetuning,
+            )
             _attach_bnb_multidevice_hooks(
                 model,
                 load_in_4bit = load_in_4bit,

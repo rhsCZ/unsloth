@@ -423,10 +423,13 @@ def _request_matches_loaded_settings(
     runtime setting falls through to a real reload instead of silently
     returning ``status="already_loaded"`` (issue #5401).
     """
-    # max_seq_length == 0 means "use model default" -- treat as a match
-    # against the running effective context length.
-    backend_ctx = llama_backend.context_length or 0
-    if request.max_seq_length and request.max_seq_length != backend_ctx:
+    # Compare against the *requested* n_ctx, not the effective context.
+    # The effective context can be lower than the request if VRAM-fit
+    # capped it, so comparing against the effective value would
+    # incorrectly call an explicit-to-Auto slider flip a "match".
+    # ``requested_n_ctx == 0`` means the last load asked for the model's
+    # native length; an incoming ``max_seq_length == 0`` matches that.
+    if request.max_seq_length != llama_backend.requested_n_ctx:
         return False
     if _normalise_settings_str(request.cache_type_kv) != _normalise_settings_str(
         llama_backend.cache_type_kv

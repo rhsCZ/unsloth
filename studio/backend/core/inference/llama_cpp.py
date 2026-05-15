@@ -486,6 +486,15 @@ class LlamaCppBackend:
         # round-trip those flags) can inherit the values the CLI / first
         # load supplied. See issue #5401.
         self._extra_args: Optional[List[str]] = None
+        # The n_ctx the most recent load_model() was *invoked with* (NOT
+        # the effective context the server is running at -- that one
+        # lives in ``_effective_context_length`` and may have been capped
+        # by VRAM-fit logic). The route layer compares against this so an
+        # Apply that flips the slider between "Auto" (0) and an explicit
+        # length is detected as a settings change even when the running
+        # server happens to be at the same effective context. See issue
+        # #5401 and the gemini-code-assist review on PR #5427.
+        self._requested_n_ctx: int = 0
         self._stdout_lines: list[str] = []
         self._stdout_thread: Optional[threading.Thread] = None
         self._cancel_event = threading.Event()
@@ -532,6 +541,21 @@ class LlamaCppBackend:
         flags across frontend Apply reloads — see issue #5401.
         """
         return list(self._extra_args) if self._extra_args is not None else None
+
+    @property
+    def requested_n_ctx(self) -> int:
+        """The ``n_ctx`` value the last ``load_model()`` was *invoked
+        with* (not the effective context the server is running at).
+
+        Returned as an int -- 0 means the caller asked for the model's
+        native length. The route layer compares an incoming
+        ``request.max_seq_length`` against this so a slider flip from
+        explicit (e.g. 8192) to "Auto" (0) is detected as a real
+        settings change even when the running server's effective context
+        happens to match the explicit value (because VRAM-fit may have
+        capped it). See issue #5401.
+        """
+        return self._requested_n_ctx
 
     @property
     def context_length(self) -> Optional[int]:
@@ -2033,6 +2057,11 @@ class LlamaCppBackend:
             # See issue #5401.
             if extra_args is not None:
                 self._extra_args = list(extra_args)
+            # Track the requested n_ctx so the route comparator can
+            # distinguish "user picked Auto" (0) from "user picked an
+            # explicit length that happens to equal the running effective
+            # context". See requested_n_ctx property docstring.
+            self._requested_n_ctx = int(n_ctx)
 
             self._cancel_event.clear()
 

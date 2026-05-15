@@ -2836,6 +2836,63 @@ class ExternalProviderClient:
             )
             raise
 
+    async def list_openai_containers(self) -> list[dict[str, Any]]:
+        """
+        GET /v1/containers on the user's OpenAI account.
+
+        Returns the raw container records (id, name, created_at,
+        last_active_at, expires_after, status). The route layer
+        reshapes these into the UI summary shape.
+
+        Only valid against api.openai.com — non-cloud OpenAI-compat
+        servers don't implement /v1/containers and would 404 here.
+        Caller is responsible for the is_openai_cloud guard.
+        """
+        response = await _http_client.get(
+            f"{self.base_url}/containers",
+            headers = self._auth_headers(),
+            timeout = self._timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        containers = data.get("data") if isinstance(data, dict) else None
+        return list(containers) if isinstance(containers, list) else []
+
+    async def create_openai_container(
+        self,
+        name: str,
+        ttl_minutes: int,
+    ) -> dict[str, Any]:
+        """
+        POST /v1/containers with ``expires_after.anchor="last_active_at"``.
+        ``ttl_minutes`` is the idle timeout — every API call that
+        touches the container resets the timer.
+        """
+        body = {
+            "name": name,
+            "expires_after": {
+                "anchor": "last_active_at",
+                "minutes": ttl_minutes,
+            },
+        }
+        response = await _http_client.post(
+            f"{self.base_url}/containers",
+            json = body,
+            headers = self._auth_headers(),
+            timeout = self._timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_openai_container(self, container_id: str) -> None:
+        """DELETE /v1/containers/{id}. 404s are surfaced as HTTPError."""
+        response = await _http_client.delete(
+            f"{self.base_url}/containers/{container_id}",
+            headers = self._auth_headers(),
+            timeout = self._timeout,
+        )
+        response.raise_for_status()
+
     async def close(self) -> None:
         """No-op — the underlying client is shared across requests."""
 

@@ -15,6 +15,7 @@ import {
   streamChatCompletions,
   validateModel,
 } from "./chat-api";
+import { createOpenAIContainer } from "./openai-containers";
 import {
   encryptProviderApiKey,
   isProviderKeyRotationError,
@@ -986,21 +987,56 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
             // backend falls back to container_auto. Anthropic doesn't
             // use this (server-side per-turn container).
             let openaiCodeExecContainerId: string | null = null;
-            if (
+            const codeExecEnabledForThisTurn =
               codeToolsEnabled &&
               providerSupportsBuiltinCodeExecution(
                 externalProvider.providerType,
                 externalSelection.modelId,
                 externalProvider.baseUrl,
-              ) &&
-              resolvedThreadId
-            ) {
+              );
+            if (codeExecEnabledForThisTurn && resolvedThreadId) {
               try {
                 const thread = await db.threads.get(resolvedThreadId);
                 openaiCodeExecContainerId =
                   thread?.openaiCodeExecContainerId ?? null;
               } catch {
                 openaiCodeExecContainerId = null;
+              }
+              // Lazy pre-create when the user has configured a non-
+              // default TTL: we POST /v1/containers ourselves with
+              // that TTL so the auto-create-per-thread path actually
+              // honors the user's preference. The default 20-min
+              // container_auto path stays as-is (no extra round trip)
+              // when TTL is unset or matches OpenAI's default.
+              if (
+                !openaiCodeExecContainerId &&
+                externalProvider.providerType === "openai"
+              ) {
+                const ttl = externalProvider.openaiContainerTtlMinutes;
+                if (typeof ttl === "number" && ttl >= 1 && ttl !== 20) {
+                  try {
+                    const created = await createOpenAIContainer(
+                      {
+                        apiKey: externalApiKey,
+                        baseUrl: externalProvider.baseUrl || null,
+                      },
+                      {
+                        name: `chat-${resolvedThreadId.slice(0, 8)}`,
+                        ttlMinutes: ttl,
+                      },
+                    );
+                    openaiCodeExecContainerId = created.id;
+                    void db.threads
+                      .update(resolvedThreadId, {
+                        openaiCodeExecContainerId: created.id,
+                      })
+                      .catch(() => {});
+                  } catch {
+                    // Fall back to container_auto on failure — keeps
+                    // the chat moving; the next turn can retry.
+                    openaiCodeExecContainerId = null;
+                  }
+                }
               }
             }
             return {

@@ -618,6 +618,69 @@ class ChatCompletionRequest(BaseModel):
     )
 
 
+# ── OpenAI shell-tool container management ─────────────────────
+
+
+class OpenAIContainerRequest(BaseModel):
+    """
+    Shared body for the three OpenAI container endpoints (list / create
+    / delete). Carries the encrypted API key + base URL so the route
+    handler can decrypt it and proxy to the user's OpenAI account.
+    Same pattern as the inference proxy endpoints — keeps the key off
+    persistent storage on the backend.
+    """
+
+    encrypted_api_key: str = Field(
+        ...,
+        description = "[x-unsloth] RSA-encrypted, base64-encoded OpenAI API key.",
+    )
+    provider_base_url: Optional[str] = Field(
+        None,
+        description = "[x-unsloth] OpenAI base URL. Only api.openai.com is supported; non-cloud bases are rejected with 400.",
+    )
+
+
+class CreateOpenAIContainerBody(OpenAIContainerRequest):
+    name: str = Field(
+        ...,
+        min_length = 1,
+        max_length = 256,
+        description = "Human-readable container name. Surfaces in the picker UI.",
+    )
+    ttl_minutes: int = Field(
+        20,
+        ge = 1,
+        le = 10080,  # 1 week
+        description = (
+            "Idle-timeout TTL the new container will inherit (anchor="
+            "last_active_at). OpenAI's default is 20; we cap at one "
+            "week as a safety bound."
+        ),
+    )
+
+
+class DeleteOpenAIContainerBody(OpenAIContainerRequest):
+    container_id: str = Field(
+        ...,
+        description = "OpenAI container id (cntr_...) to delete.",
+    )
+
+
+class OpenAIContainerSummary(BaseModel):
+    """One row from GET /v1/containers, reshaped for the UI."""
+
+    id: str
+    name: Optional[str] = None
+    created_at: Optional[int] = None
+    last_active_at: Optional[int] = None
+    expires_after_minutes: Optional[int] = None
+    status: Optional[str] = None
+
+
+class ListOpenAIContainersResponse(BaseModel):
+    containers: list[OpenAIContainerSummary]
+
+
 # ── Streaming response chunks ────────────────────────────────────
 
 

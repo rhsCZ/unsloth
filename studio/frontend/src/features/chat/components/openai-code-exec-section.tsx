@@ -113,6 +113,30 @@ export function OpenAICodeExecSection({
     void refresh();
   }, [refresh]);
 
+  // Auto-bind the active thread to the most-recently-active container
+  // when the thread has none set. Mirrors the chat-adapter's cross-
+  // thread inheritance so the picker shows the same default the
+  // backend would use, and so the user doesn't have to manually
+  // re-pick on every new thread. Sorting by `lastActiveAt` lines up
+  // with what feels "most recent" from the user's perspective. The
+  // user can still pick "Auto-create per thread" explicitly to start
+  // fresh.
+  useEffect(() => {
+    if (!activeThreadId || activeContainerId || containers.length === 0) {
+      return;
+    }
+    const sorted = [...containers].sort(
+      (a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0),
+    );
+    const candidate = sorted[0];
+    if (!candidate) return;
+    void db.threads
+      .update(activeThreadId, {
+        openaiCodeExecContainerId: candidate.id,
+      })
+      .catch(() => {});
+  }, [activeThreadId, activeContainerId, containers]);
+
   const ttlValue = provider.openaiContainerTtlMinutes ?? DEFAULT_TTL_MINUTES;
 
   const onTtlChange = (raw: string) => {
@@ -217,11 +241,14 @@ export function OpenAICodeExecSection({
         />
       </div>
 
-      {/* Active container picker */}
-      <div className="flex flex-col gap-1.5">
+      {/* Active container picker — visually emphasized so it reads as
+          the primary control vs. the static list below. Accent
+          background + ring outline distinguish it from the plain
+          bordered list items beneath. */}
+      <div className="flex flex-col gap-1.5 rounded-md border border-primary/30 bg-primary/5 p-2.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px] font-medium leading-[1.25] tracking-nav text-nav-fg">
-            Active container (this thread)
+          <span className="text-[13px] font-semibold leading-[1.25] tracking-nav text-primary">
+            Active for this thread
           </span>
           <Button
             size="sm"
@@ -240,7 +267,7 @@ export function OpenAICodeExecSection({
           value={activeContainerId ?? AUTO_OPTION_VALUE}
           onChange={(e) => onPick(e.target.value)}
           disabled={!activeThreadId}
-          className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+          className="h-9 w-full rounded-md border border-primary/40 bg-background px-2 text-sm font-medium shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <option value={AUTO_OPTION_VALUE}>Auto-create per thread</option>
           {containers.map((c) => (
@@ -252,43 +279,62 @@ export function OpenAICodeExecSection({
         </select>
       </div>
 
-      {/* Container list with delete actions */}
-      {isLoading && containers.length === 0 ? (
-        <Skeleton className="h-16 w-full" />
-      ) : containers.length > 0 ? (
-        <ul className="flex flex-col gap-1 max-h-44 overflow-auto">
-          {containers.map((c) => (
-            <li
-              key={c.id}
-              className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-2 py-1.5 text-xs"
-            >
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate font-medium">
-                  {c.name ?? "(unnamed)"}
-                </span>
-                <span className="text-muted-foreground">
-                  {c.id} · TTL{" "}
-                  {c.expiresAfterMinutes ?? DEFAULT_TTL_MINUTES}m
-                </span>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-6 w-6 p-0 text-destructive"
-                onClick={() => void onDelete(c.id, c.name)}
-                aria-label={`Delete container ${c.name ?? c.id}`}
-              >
-                <TrashIcon className="size-3.5" />
-              </Button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          No saved containers yet. Use auto-create or create a named
-          one below.
-        </p>
-      )}
+      {/* Container list with delete actions — labeled and visually
+          quieter so it's clearly the "all containers, manage them"
+          area rather than the active selector above. */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          All containers
+        </span>
+        {isLoading && containers.length === 0 ? (
+          <Skeleton className="h-16 w-full" />
+        ) : containers.length > 0 ? (
+          <ul className="flex flex-col gap-1 max-h-44 overflow-auto">
+            {containers.map((c) => {
+              const isActive = c.id === activeContainerId;
+              return (
+                <li
+                  key={c.id}
+                  className={`flex items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-xs ${
+                    isActive
+                      ? "border-primary/30 bg-primary/5"
+                      : "border-border/60"
+                  }`}
+                >
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate font-medium">
+                      {c.name ?? "(unnamed)"}
+                      {isActive ? (
+                        <span className="ml-1.5 text-[10px] font-normal uppercase tracking-wider text-primary">
+                          · active
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {c.id} · TTL{" "}
+                      {c.expiresAfterMinutes ?? DEFAULT_TTL_MINUTES}m
+                    </span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-destructive"
+                    onClick={() => void onDelete(c.id, c.name)}
+                    aria-label={`Delete container ${c.name ?? c.id}`}
+                  >
+                    <TrashIcon className="size-3.5" />
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            No saved containers yet. Use auto-create or create a named
+            one below.
+          </p>
+        )}
+      </div>
 
       {/* Create new */}
       {createOpen ? (

@@ -1002,12 +1002,47 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               } catch {
                 openaiCodeExecContainerId = null;
               }
+              // Cross-thread inheritance: when the active thread has
+              // no container yet, default to the one most recently
+              // used on *any* other thread (provider-scoped).
+              // Matches what the Code Execution settings section
+              // shows in the picker, and keeps the user from getting
+              // a fresh container on every new thread. The picker
+              // can still be set to "Auto-create per thread"
+              // explicitly to opt into a fresh container — but
+              // that's done via the dropdown, not silently.
+              if (
+                !openaiCodeExecContainerId &&
+                externalProvider.providerType === "openai"
+              ) {
+                try {
+                  const others = await db.threads
+                    .orderBy("createdAt")
+                    .reverse()
+                    .toArray();
+                  for (const t of others) {
+                    if (t.id === resolvedThreadId) continue;
+                    if (t.openaiCodeExecContainerId) {
+                      openaiCodeExecContainerId = t.openaiCodeExecContainerId;
+                      void db.threads
+                        .update(resolvedThreadId, {
+                          openaiCodeExecContainerId,
+                        })
+                        .catch(() => {});
+                      break;
+                    }
+                  }
+                } catch {
+                  /* fall through to lazy-create below */
+                }
+              }
               // Lazy pre-create when the user has configured a non-
-              // default TTL: we POST /v1/containers ourselves with
-              // that TTL so the auto-create-per-thread path actually
-              // honors the user's preference. The default 20-min
-              // container_auto path stays as-is (no extra round trip)
-              // when TTL is unset or matches OpenAI's default.
+              // default TTL and there's no inherited container: we
+              // POST /v1/containers ourselves with that TTL so the
+              // auto-create-per-thread path actually honors the
+              // user's preference. The default 20-min container_auto
+              // path stays as-is (no extra round trip) when TTL is
+              // unset or matches OpenAI's default.
               if (
                 !openaiCodeExecContainerId &&
                 externalProvider.providerType === "openai"

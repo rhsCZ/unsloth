@@ -1051,6 +1051,39 @@ class FastBaseModel:
                 # attn_implementation   = attn_implementation,
                 **kwargs,
             )
+            # Opt-in per-expert Linear4bit swap for Gemma-4 MoE checkpoints
+            # whose fused 3D expert weights bnb cannot quantize (#5344).
+            # Off by default; users enable via UNSLOTH_GEMMA4_MOE_4BIT=1.
+            if load_in_4bit and not full_finetuning:
+                try:
+                    from unsloth.models.gemma4_moe_4bit import (
+                        is_gemma4_moe_4bit_enabled,
+                        swap_gemma4_experts_to_per_expert_linear4bit,
+                    )
+                    if is_gemma4_moe_4bit_enabled():
+                        _swapped = swap_gemma4_experts_to_per_expert_linear4bit(
+                            model,
+                            compute_dtype = (
+                                bnb_config.bnb_4bit_compute_dtype
+                                if bnb_config is not None
+                                else torch.bfloat16
+                            ),
+                        )
+                        if _swapped > 0:
+                            print(
+                                f"Unsloth: swapped {_swapped} "
+                                f"Gemma4TextExperts module(s) to per-expert "
+                                f"Linear4bit (see "
+                                f"https://github.com/unslothai/unsloth/issues/5344)."
+                            )
+                except Exception as _e:
+                    warnings.warn(
+                        f"Unsloth: Gemma-4 MoE 4-bit swap failed: "
+                        f"{type(_e).__name__}: {_e}. Falling back to BF16 "
+                        f"experts. Unset UNSLOTH_GEMMA4_MOE_4BIT to silence.",
+                        stacklevel = 2,
+                    )
+
             # Guardrail: see _warn_if_quantization_silently_dropped + #5344.
             _warn_if_quantization_silently_dropped(
                 model,

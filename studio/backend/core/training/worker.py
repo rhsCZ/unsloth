@@ -385,6 +385,7 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     try:
         import tilelang  # noqa: F401
         import tvm_ffi  # noqa: F401
+
         logger.info("tilelang + apache-tvm-ffi already installed")
         return
     except ImportError:
@@ -407,13 +408,19 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     ]
     if shutil.which("uv"):
         pypi_cmd = [
-            "uv", "pip", "install",
-            "--python", sys.executable,
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
             *specs,
         ]
     else:
         pypi_cmd = [
-            sys.executable, "-m", "pip", "install",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
             *specs,
         ]
 

@@ -13,6 +13,7 @@ import { Reasoning, ReasoningGroup } from "@/components/assistant-ui/reasoning";
 import { Sources, SourcesGroup } from "@/components/assistant-ui/sources";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { ToolGroup } from "@/components/assistant-ui/tool-group";
+import { CodeExecutionToolUI } from "@/components/assistant-ui/tool-ui-code-execution";
 import { PythonToolUI } from "@/components/assistant-ui/tool-ui-python";
 import { TerminalToolUI } from "@/components/assistant-ui/tool-ui-terminal";
 import { WebSearchToolUI } from "@/components/assistant-ui/tool-ui-web-search";
@@ -946,6 +947,7 @@ const AssistantMessage: FC = () => {
                 web_search: WebSearchToolUI,
                 python: PythonToolUI,
                 terminal: TerminalToolUI,
+                code_execution: CodeExecutionToolUI,
               },
               Fallback: ToolFallback,
             },

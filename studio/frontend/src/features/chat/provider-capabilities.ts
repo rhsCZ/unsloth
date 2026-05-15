@@ -122,6 +122,49 @@ export function providerSupportsBuiltinWebSearch(
 }
 
 /**
+ * Anthropic-only: whether the selected model accepts the server-side
+ * `code_execution_20250825` tool (Python + bash + str_replace-based file
+ * edits, in a 5 GB sandboxed container per request). Documented at
+ *   https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+ *
+ * Returns false for every non-Anthropic provider. For Anthropic, the
+ * docs list these model families as compatible — match by prefix so
+ * dated snapshot ids (e.g. `claude-haiku-4-5-20251001`) and the rolling
+ * canonical names both light up the pill.
+ *
+ * v1 wires the tool itself; file uploads (container_upload content
+ * blocks and generated-file retrieval via the Files API) are a separate
+ * follow-up — pill being on without files means the model can still do
+ * math, transform pasted text, generate plots that get described back
+ * via stdout, etc.
+ */
+const ANTHROPIC_CODE_EXECUTION_MODEL_PREFIXES = [
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-opus-4-5",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+  // Deprecated upstream but the registry still exposes the ids, so the
+  // pill should remain functional for users on those snapshots.
+  "claude-opus-4-1",
+  "claude-opus-4",
+  "claude-sonnet-4",
+] as const;
+
+export function providerSupportsBuiltinCodeExecution(
+  providerType: string | null | undefined,
+  modelId: string | null | undefined,
+): boolean {
+  if (providerType !== "anthropic") return false;
+  const normalized = modelId?.trim().toLowerCase() ?? "";
+  if (!normalized) return false;
+  return ANTHROPIC_CODE_EXECUTION_MODEL_PREFIXES.some((prefix) =>
+    normalized.startsWith(prefix),
+  );
+}
+
+/**
  * Per-provider minimum on the outbound max_tokens. Kimi's docs require
  * `max_tokens >= 16000` whenever a thinking model is in use so the
  * reasoning_content and final answer both fit in the budget — anything

@@ -1284,6 +1284,33 @@ class ExternalProviderClient:
             )
             body["tools"] = anthropic_tools
 
+        # Anthropic server-side code execution — see
+        #   https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+        # `code_execution_20250825` runs Python + bash + str_replace
+        # file edits inside a 5 GB sandboxed container per request, with
+        # no internet access. The tool entry itself takes no extra
+        # parameters; on the SSE stream Anthropic emits two sub-tool
+        # names — `bash_code_execution` and
+        # `text_editor_code_execution` — wrapped in the standard
+        # server_tool_use / *_tool_result block shape. The matching
+        # beta header (`code-execution-2025-08-25`) is set further down
+        # in this function alongside the request headers.
+        # v1 wires the tool only; file uploads (container_upload
+        # content blocks and generated-file retrieval via the Files
+        # API) are a deliberate follow-up.
+        code_execution_enabled = bool(
+            enabled_tools and "code_execution" in enabled_tools
+        )
+        if code_execution_enabled:
+            anthropic_tools = list(body.get("tools") or [])
+            anthropic_tools.append(
+                {
+                    "type": "code_execution_20250825",
+                    "name": "code_execution",
+                }
+            )
+            body["tools"] = anthropic_tools
+
         url = f"{self.base_url}/messages"
         completion_id = f"chatcmpl-anthropic-{model.replace('/', '-')}"
 
@@ -1313,12 +1340,29 @@ class ExternalProviderClient:
 
         logger.info("Proxying Anthropic Messages API to %s (model=%s)", url, model)
 
+        request_headers = self._auth_headers()
+        if code_execution_enabled:
+            # Anthropic accepts comma-separated beta features in a single
+            # `anthropic-beta` header. Merge our flag onto whatever the
+            # registry's extra_headers contributed (currently nothing on
+            # the beta axis, just anthropic-version) so future betas
+            # added at the registry level keep working.
+            existing_beta = request_headers.get("anthropic-beta", "").strip()
+            beta_parts = (
+                [p.strip() for p in existing_beta.split(",") if p.strip()]
+                if existing_beta
+                else []
+            )
+            if "code-execution-2025-08-25" not in beta_parts:
+                beta_parts.append("code-execution-2025-08-25")
+            request_headers["anthropic-beta"] = ",".join(beta_parts)
+
         try:
             async with _http_client.stream(
                 "POST",
                 url,
                 json = body,
-                headers = self._auth_headers(),
+                headers = request_headers,
                 timeout = self._stream_timeout,
             ) as response:
                 if response.status_code != 200:
@@ -1352,6 +1396,28 @@ class ExternalProviderClient:
                 current_server_tool_use: Optional[dict[str, Any]] = None
                 current_result_block: Optional[dict[str, Any]] = None
                 web_search_calls: dict[str, dict[str, Any]] = {}
+                # code_execution state. Anthropic's
+                # `code_execution_20250825` tool emits the same
+                # server_tool_use → *_tool_result block shape as
+                # web_search, but the server_tool_use carries one of
+                # two sub-tool names (`bash_code_execution` or
+                # `text_editor_code_execution`) and the result block
+                # type matches (`bash_code_execution_tool_result` /
+                # `text_editor_code_execution_tool_result`). Kept
+                # parallel to web_search state so the two paths don't
+                # collide when both pills are on in the same turn.
+                current_code_exec_use: Optional[dict[str, Any]] = None
+                current_code_exec_result: Optional[dict[str, Any]] = None
+                code_execution_calls: dict[str, dict[str, Any]] = {}
+                # Counts surfaced in the final log line so reports of
+                # "Code execution did nothing" can be triaged at a
+                # glance. generated_files_count is interesting for the
+                # future Files API PR — when bash creates files inside
+                # the container, they show up as file_id entries on
+                # bash_code_execution_result.content, and v1 drops
+                # them. Track the count so we know how often it would
+                # have mattered.
+                code_execution_generated_files = 0
                 # Cache usage tracking. message_start carries the input
                 # accounting (incl. cache_creation_input_tokens and
                 # cache_read_input_tokens); message_delta carries cumulative
@@ -1405,6 +1471,48 @@ class ExternalProviderClient:
                         blocks.append(f"Title: {title}\nURL: {url}")
                     return "\n---\n".join(blocks)
 
+                def _format_code_execution_result(
+                    inner: dict[str, Any],
+                ) -> str:
+                    """Render an Anthropic code-execution result block as
+                    the preformatted text payload the frontend's
+                    CodeExecutionToolUI displays inside a <pre>. Handles
+                    bash, text_editor (view/create/str_replace), and the
+                    matching error variants.
+                    """
+                    inner_type = inner.get("type") or ""
+                    if inner_type.endswith("_error"):
+                        return f"Error: {inner.get('error_code', 'unknown')}"
+                    if inner_type == "bash_code_execution_result":
+                        stdout = inner.get("stdout") or ""
+                        stderr = inner.get("stderr") or ""
+                        return_code = inner.get("return_code")
+                        parts: list[str] = []
+                        if stdout:
+                            parts.append(stdout)
+                        if stderr:
+                            parts.append(f"--- stderr ---\n{stderr}")
+                        if isinstance(return_code, int) and return_code != 0:
+                            parts.append(f"return_code: {return_code}")
+                        return "\n".join(parts) if parts else "(no output)"
+                    if inner_type == "text_editor_code_execution_result":
+                        # view: file content; create: is_file_update flag;
+                        # str_replace: diff `lines` list. The matching
+                        # server_tool_use carries the command + path, but
+                        # that's encoded into the tool_start arguments
+                        # already — here we only format the result body.
+                        if "lines" in inner and isinstance(inner.get("lines"), list):
+                            return "\n".join(str(line) for line in inner["lines"])
+                        if "is_file_update" in inner:
+                            return (
+                                "Updated" if inner.get("is_file_update") else "Created"
+                            )
+                        content_field = inner.get("content")
+                        if isinstance(content_field, str):
+                            return content_field
+                        return "(file operation complete)"
+                    return "(code execution complete)"
+
                 try:
                     while True:
                         try:
@@ -1446,9 +1554,10 @@ class ExternalProviderClient:
                         if event_type == "content_block_start":
                             content_block = event.get("content_block") or {}
                             block_type = content_block.get("type")
+                            block_name = content_block.get("name")
                             if (
                                 block_type == "server_tool_use"
-                                and content_block.get("name") == "web_search"
+                                and block_name == "web_search"
                             ):
                                 tool_use_id = content_block.get("id", "") or (
                                     f"ws_{len(web_search_calls)}"
@@ -1473,6 +1582,44 @@ class ExternalProviderClient:
                                     "results": list(content)
                                     if isinstance(content, list)
                                     else [],
+                                }
+                            elif block_type == "server_tool_use" and block_name in (
+                                "bash_code_execution",
+                                "text_editor_code_execution",
+                            ):
+                                tool_use_id = content_block.get("id", "") or (
+                                    f"ce_{len(code_execution_calls)}"
+                                )
+                                kind = (
+                                    "bash"
+                                    if block_name == "bash_code_execution"
+                                    else "text_editor"
+                                )
+                                current_code_exec_use = {
+                                    "id": tool_use_id,
+                                    "kind": kind,
+                                    "buffer": "",
+                                }
+                                code_execution_calls[tool_use_id] = {
+                                    "kind": kind,
+                                    "arguments": {},
+                                    "result": None,
+                                }
+                            elif block_type in (
+                                "bash_code_execution_tool_result",
+                                "text_editor_code_execution_tool_result",
+                            ):
+                                # Anthropic ships the full result content
+                                # on the start event for code-exec result
+                                # blocks (unlike web_search, which can
+                                # split across deltas). Capture it and
+                                # finalize on content_block_stop so the
+                                # ordering matches the web_search path.
+                                tool_use_id = content_block.get("tool_use_id", "")
+                                inner = content_block.get("content") or {}
+                                current_code_exec_result = {
+                                    "tool_use_id": tool_use_id,
+                                    "inner": inner if isinstance(inner, dict) else {},
                                 }
 
                         elif event_type == "content_block_delta":
@@ -1507,15 +1654,20 @@ class ExternalProviderClient:
                                 # per-call by Anthropic via the
                                 # `web_search_tool_result` block; we don't
                                 # need to scrape them off the text events.
-                            elif (
-                                delta_type == "input_json_delta"
-                                and current_server_tool_use is not None
-                            ):
-                                # Streamed partial_json carrying the search
-                                # query. Buffer until content_block_stop.
-                                current_server_tool_use["buffer"] += delta.get(
-                                    "partial_json", ""
-                                )
+                            elif delta_type == "input_json_delta":
+                                # Streamed partial_json carrying tool inputs
+                                # — the search query for web_search, or the
+                                # command/path/etc. for code execution.
+                                # Route to whichever buffer is open. The two
+                                # state slots are exclusive in practice
+                                # (Anthropic doesn't interleave tool input
+                                # streams), but checking both keeps the
+                                # dispatch robust if that ever changes.
+                                partial = delta.get("partial_json", "")
+                                if current_server_tool_use is not None:
+                                    current_server_tool_use["buffer"] += partial
+                                elif current_code_exec_use is not None:
+                                    current_code_exec_use["buffer"] += partial
                             # signature_delta and any other delta types are
                             # intentionally skipped — they carry trust /
                             # verification metadata, not user-visible content.
@@ -1571,6 +1723,68 @@ class ExternalProviderClient:
                                     }
                                 )
                                 current_result_block = None
+                            elif current_code_exec_use is not None:
+                                # End of a code-execution server_tool_use —
+                                # parse the buffered input_json into a
+                                # {command, path, ...} dict and emit
+                                # tool_start. The matching tool_end fires
+                                # on the result block's content_block_stop.
+                                buffer = current_code_exec_use["buffer"]
+                                parsed_args: dict[str, Any] = {}
+                                if buffer:
+                                    try:
+                                        parsed_obj = _json.loads(buffer)
+                                        if isinstance(parsed_obj, dict):
+                                            parsed_args = parsed_obj
+                                    except Exception:
+                                        parsed_args = {}
+                                tool_use_id = current_code_exec_use["id"]
+                                kind = current_code_exec_use["kind"]
+                                emit_args = {"kind": kind, **parsed_args}
+                                if tool_use_id in code_execution_calls:
+                                    code_execution_calls[tool_use_id]["arguments"] = (
+                                        emit_args
+                                    )
+                                yield _emit_tool_event(
+                                    {
+                                        "type": "tool_start",
+                                        "tool_name": "code_execution",
+                                        "tool_call_id": tool_use_id,
+                                        "arguments": emit_args,
+                                    }
+                                )
+                                current_code_exec_use = None
+                            elif current_code_exec_result is not None:
+                                # End of a code-execution result block —
+                                # format the inner result into the text
+                                # payload CodeExecutionToolUI renders.
+                                tool_use_id = current_code_exec_result["tool_use_id"]
+                                inner = current_code_exec_result["inner"]
+                                # Track generated-file count for the
+                                # follow-up Files API PR. v1 drops them.
+                                if isinstance(inner, dict):
+                                    file_blocks = inner.get("content")
+                                    if isinstance(file_blocks, list):
+                                        for entry in file_blocks:
+                                            if isinstance(entry, dict) and entry.get(
+                                                "file_id"
+                                            ):
+                                                code_execution_generated_files += 1
+                                result_text = _format_code_execution_result(
+                                    inner if isinstance(inner, dict) else {}
+                                )
+                                if tool_use_id in code_execution_calls:
+                                    code_execution_calls[tool_use_id]["result"] = (
+                                        result_text
+                                    )
+                                yield _emit_tool_event(
+                                    {
+                                        "type": "tool_end",
+                                        "tool_call_id": tool_use_id,
+                                        "result": result_text,
+                                    }
+                                )
+                                current_code_exec_result = None
                             elif thinking_open:
                                 # Close the <think> tag when the thinking block
                                 # ends, in case no text_delta follows (e.g.
@@ -1638,10 +1852,20 @@ class ExternalProviderClient:
                     # instead. cache_creation tokens are billed at a
                     # small premium; cache_read tokens are billed at a
                     # discount.
+                    code_execution_invocations = len(code_execution_calls)
+                    code_execution_results = sum(
+                        1
+                        for c in code_execution_calls.values()
+                        if c.get("result") is not None
+                    )
                     logger.info(
                         "Anthropic stream complete (model=%s, "
                         "web_search_requested=%s, web_search_invocations=%s, "
                         "results=%s, queries=%s, "
+                        "code_execution_requested=%s, "
+                        "code_execution_invocations=%s, "
+                        "code_execution_results=%s, "
+                        "code_execution_generated_files=%s, "
                         "input_tokens=%s, output_tokens=%s, "
                         "cache_creation_input_tokens=%s, "
                         "cache_read_input_tokens=%s, events=%s)",
@@ -1650,6 +1874,10 @@ class ExternalProviderClient:
                         web_search_invocations,
                         total_results,
                         queries,
+                        code_execution_enabled,
+                        code_execution_invocations,
+                        code_execution_results,
+                        code_execution_generated_files,
                         last_usage.get("input_tokens"),
                         last_usage.get("output_tokens"),
                         last_usage.get("cache_creation_input_tokens"),

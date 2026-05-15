@@ -37,6 +37,7 @@ import {
   getExternalMinOutputTokens,
   getExternalReasoningCapabilities,
   getProviderCapabilities,
+  providerSupportsBuiltinCodeExecution,
   providerSupportsBuiltinWebSearch,
 } from "../provider-capabilities";
 import { useChatRuntimeStore } from "../stores/chat-runtime-store";
@@ -1011,18 +1012,38 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               ...(externalCapabilities?.presencePenalty
                 ? { presence_penalty: params.presencePenalty }
                 : {}),
-              // Built-in web search: when the user has the Search toggle
-              // on AND the active provider supports a server-side
-              // web_search tool (currently OpenAI's /v1/responses), pass
-              // the enable_tools shorthand. Backend translates
-              // enabled_tools=["web_search"] into the provider's tool
-              // schema — for OpenAI that's `tools: [{type:"web_search"}]`
-              // on the Responses body, see _stream_openai_responses.
-              ...(toolsEnabled &&
-              providerSupportsBuiltinWebSearch(externalProvider.providerType)
+              // Built-in tools: Search pill maps to provider-side
+              // web_search (currently OpenAI / Anthropic / OpenRouter /
+              // Kimi); Code pill maps to Anthropic's server-side
+              // code_execution_20250825 tool (Anthropic is the only
+              // external provider that ships one today). Backend
+              // translates enabled_tools into each provider's tool
+              // schema — for Anthropic that's the entries appended to
+              // body["tools"] inside _stream_anthropic.
+              ...((toolsEnabled &&
+                providerSupportsBuiltinWebSearch(externalProvider.providerType)) ||
+              (codeToolsEnabled &&
+                providerSupportsBuiltinCodeExecution(
+                  externalProvider.providerType,
+                  externalSelection.modelId,
+                ))
                 ? {
                     enable_tools: true,
-                    enabled_tools: ["web_search"],
+                    enabled_tools: [
+                      ...(toolsEnabled &&
+                      providerSupportsBuiltinWebSearch(
+                        externalProvider.providerType,
+                      )
+                        ? ["web_search"]
+                        : []),
+                      ...(codeToolsEnabled &&
+                      providerSupportsBuiltinCodeExecution(
+                        externalProvider.providerType,
+                        externalSelection.modelId,
+                      )
+                        ? ["code_execution"]
+                        : []),
+                    ],
                   }
                 : {}),
               provider_id: externalProvider.id,

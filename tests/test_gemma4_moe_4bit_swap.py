@@ -6,6 +6,7 @@ that exercise the swap helper's shape contract, idempotence, and gating
 behaviour. The full repro (resident VRAM 46 GB -> 14.27 GB, cosine sim 0.994
 vs BF16) is documented in the PR description.
 """
+
 import importlib
 import os
 
@@ -54,12 +55,14 @@ def _stub_gemma4_module():
         requires_grad = False,
     )
     from transformers.activations import ACT2FN
+
     module.act_fn = ACT2FN[_StubConfig.hidden_activation]
     return module
 
 
 def test_is_enabled_reads_env_var():
     from unsloth.models import gemma4_moe_4bit
+
     old = os.environ.pop("UNSLOTH_GEMMA4_MOE_4BIT", None)
     try:
         assert gemma4_moe_4bit.is_gemma4_moe_4bit_enabled() is False
@@ -78,6 +81,7 @@ def test_swap_skips_models_without_gemma4_experts():
     from unsloth.models.gemma4_moe_4bit import (
         swap_gemma4_experts_to_per_expert_linear4bit,
     )
+
     model = nn.Sequential(nn.Linear(8, 8), nn.Linear(8, 8))
     assert swap_gemma4_experts_to_per_expert_linear4bit(model) == 0
 
@@ -111,6 +115,7 @@ def test_swap_idempotent_on_stub_module_without_cuda():
     from unsloth.models.gemma4_moe_4bit import (
         swap_gemma4_experts_to_per_expert_linear4bit,
     )
+
     if not torch.cuda.is_available():
         # CPU-only: bnb's Linear4bit init would fail. Validate the model-walk
         # path on an empty Sequential to confirm the helper is side-effect-free.

@@ -32,6 +32,7 @@ Gated on UNSLOTH_GEMMA4_MOE_4BIT (default off) and on load_in_4bit=True.
 Default off until the matching per-expert LoRA path lands; opt in via
 the env var if you want the VRAM win without QLoRA training.
 """
+
 from __future__ import annotations
 
 import os
@@ -67,7 +68,8 @@ def _per_expert_forward(
     final_hidden_states = torch.zeros_like(hidden_states)
     with torch.no_grad():
         expert_mask = torch.nn.functional.one_hot(
-            top_k_index, num_classes = self.num_experts,
+            top_k_index,
+            num_classes = self.num_experts,
         )
         expert_mask = expert_mask.permute(2, 1, 0)
         expert_hit = torch.greater(expert_mask.sum(dim = (-1, -2)), 0).nonzero()
@@ -81,9 +83,7 @@ def _per_expert_forward(
         gate_up = self.gate_up_proj_4bit[expert_idx](current_state)
         gate, up = gate_up.chunk(2, dim = -1)
         current_hidden_states = self.act_fn(gate) * up
-        current_hidden_states = self.down_proj_4bit[expert_idx](
-            current_hidden_states
-        )
+        current_hidden_states = self.down_proj_4bit[expert_idx](current_hidden_states)
         current_hidden_states = (
             current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
         )

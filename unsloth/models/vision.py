@@ -1060,6 +1060,7 @@ class FastBaseModel:
                         is_gemma4_moe_4bit_enabled,
                         swap_gemma4_experts_to_per_expert_linear4bit,
                     )
+
                     if is_gemma4_moe_4bit_enabled():
                         _swapped = swap_gemma4_experts_to_per_expert_linear4bit(
                             model,

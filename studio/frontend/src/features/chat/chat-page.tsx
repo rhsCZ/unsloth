@@ -720,6 +720,7 @@ export function ChatPage(): ReactElement {
     const supportsBuiltinCodeExecution = providerSupportsBuiltinCodeExecution(
       provider?.providerType,
       selection.modelId,
+      provider?.baseUrl,
     );
     // Kimi's k2.6/k2.5 default to thinking enabled on the server side
     // (per https://platform.kimi.ai/docs/models). Mirror that default
@@ -925,6 +926,7 @@ export function ChatPage(): ReactElement {
         const supportsBuiltinCodeExecution = providerSupportsBuiltinCodeExecution(
           selectedProvider?.providerType,
           selectedExternal?.modelId,
+          selectedProvider?.baseUrl,
         );
         // See sibling useEffect above: Kimi's k2.x default to thinking
         // enabled, so the Think pill comes up clicked. Search pill stays

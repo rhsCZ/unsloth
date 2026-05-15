@@ -979,6 +979,30 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
           forceRefreshPublicKey = false,
         ): Promise<OpenAIChatCompletionsRequest> => {
           if (externalSelection && externalProvider) {
+            // OpenAI shell-tool container reuse: pull the per-thread
+            // container_id (if any) so subsequent turns in the same
+            // thread reference the existing container instead of
+            // auto-creating a fresh one. Empty string / undefined →
+            // backend falls back to container_auto. Anthropic doesn't
+            // use this (server-side per-turn container).
+            let openaiCodeExecContainerId: string | null = null;
+            if (
+              codeToolsEnabled &&
+              providerSupportsBuiltinCodeExecution(
+                externalProvider.providerType,
+                externalSelection.modelId,
+                externalProvider.baseUrl,
+              ) &&
+              resolvedThreadId
+            ) {
+              try {
+                const thread = await db.threads.get(resolvedThreadId);
+                openaiCodeExecContainerId =
+                  thread?.openaiCodeExecContainerId ?? null;
+              } catch {
+                openaiCodeExecContainerId = null;
+              }
+            }
             return {
               model: externalSelection.modelId,
               messages: outboundMessages,
@@ -1026,6 +1050,7 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                 providerSupportsBuiltinCodeExecution(
                   externalProvider.providerType,
                   externalSelection.modelId,
+                  externalProvider.baseUrl,
                 ))
                 ? {
                     enable_tools: true,
@@ -1040,6 +1065,7 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                       providerSupportsBuiltinCodeExecution(
                         externalProvider.providerType,
                         externalSelection.modelId,
+                        externalProvider.baseUrl,
                       )
                         ? ["code_execution"]
                         : []),
@@ -1054,6 +1080,11 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                 forceRefreshPublicKey,
               ),
               provider_base_url: externalProvider.baseUrl || null,
+              ...(openaiCodeExecContainerId
+                ? {
+                    openai_code_exec_container_id: openaiCodeExecContainerId,
+                  }
+                : {}),
               ...(supportsProviderPromptCaching(externalProvider.providerType)
                 ? {
                     enable_prompt_caching:
@@ -1137,6 +1168,34 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               // On tool_end: set result on the existing part (transitions to "complete").
               const toolEvent = (chunk as unknown as { _toolEvent?: Record<string, unknown> })._toolEvent;
               if (toolEvent !== undefined) {
+                // OpenAI shell-tool container persistence — see
+                // ThreadRecord.openaiCodeExecContainerId. The backend
+                // emits these synthetic events on the OpenAI Responses
+                // SSE stream after capturing the container_id from a
+                // response, or detecting an expired-container error.
+                if (toolEvent.type === "container_ready") {
+                  const newContainerId = toolEvent.container_id as
+                    | string
+                    | undefined;
+                  if (newContainerId && resolvedThreadId) {
+                    void db.threads
+                      .update(resolvedThreadId, {
+                        openaiCodeExecContainerId: newContainerId,
+                      })
+                      .catch(() => {});
+                  }
+                  continue;
+                }
+                if (toolEvent.type === "container_invalidated") {
+                  if (resolvedThreadId) {
+                    void db.threads
+                      .update(resolvedThreadId, {
+                        openaiCodeExecContainerId: null,
+                      })
+                      .catch(() => {});
+                  }
+                  continue;
+                }
                 if (toolEvent.type === "tool_start") {
                   const id = (toolEvent.tool_call_id as string) || `${toolEvent.tool_name}_${Date.now()}`;
                   const toolArgs = (toolEvent.arguments ?? {}) as ToolCallMessagePart["args"];

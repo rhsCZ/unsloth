@@ -604,6 +604,18 @@ class ChatCompletionRequest(BaseModel):
             "vllm, local, etc.). Treated as enabled when omitted."
         ),
     )
+    openai_code_exec_container_id: Optional[str] = Field(
+        None,
+        description = (
+            "[x-unsloth] OpenAI shell-tool container id from the prior response "
+            "in the same chat thread. When set and `code_execution` is in "
+            "`enabled_tools`, the next /v1/responses call uses "
+            "environment.type='container_reference' so filesystem state "
+            "persists across turns. Unset → environment.type='container_auto' "
+            "and OpenAI creates a fresh container. Only meaningful for the "
+            "OpenAI cloud + gpt-5.5 family path; ignored otherwise."
+        ),
+    )
 
 
 # ── Streaming response chunks ────────────────────────────────────

@@ -122,21 +122,29 @@ export function providerSupportsBuiltinWebSearch(
 }
 
 /**
- * Anthropic-only: whether the selected model accepts the server-side
- * `code_execution_20250825` tool (Python + bash + str_replace-based file
- * edits, in a 5 GB sandboxed container per request). Documented at
- *   https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+ * Whether the selected external provider/model exposes a server-side
+ * code-execution tool. Two providers ship one today:
  *
- * Returns false for every non-Anthropic provider. For Anthropic, the
- * docs list these model families as compatible — match by prefix so
- * dated snapshot ids (e.g. `claude-haiku-4-5-20251001`) and the rolling
- * canonical names both light up the pill.
+ *   - **Anthropic** (`code_execution_20250825`): Python + bash +
+ *     str_replace-based file edits inside a 5 GB sandboxed container
+ *     per request. Documented at
+ *       https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
  *
- * v1 wires the tool itself; file uploads (container_upload content
- * blocks and generated-file retrieval via the Files API) are a separate
- * follow-up — pill being on without files means the model can still do
- * math, transform pasted text, generate plots that get described back
- * via stdout, etc.
+ *   - **OpenAI cloud** (`shell` on /v1/responses): bash inside a
+ *     reusable container; we auto-create one on the first turn of a
+ *     chat thread and reference it on subsequent turns via the
+ *     thread's stored `openaiCodeExecContainerId`. Documented at
+ *       https://developers.openai.com/api/docs/guides/tools-shell
+ *
+ * Returns false for every other provider. The backend additionally
+ * gates the OpenAI shell tool on `is_openai_cloud` so custom
+ * OpenAI-compat servers (ollama / llama.cpp / vLLM) that also report
+ * `provider_type="openai"` never receive the tool — but in practice
+ * none of those catalogs surface the `gpt-5.5` ids anyway, so the
+ * frontend prefix match is enough.
+ *
+ * v1 wires the tools themselves; file uploads (Anthropic
+ * `container_upload` / OpenAI `input_file`) are a deliberate follow-up.
  */
 const ANTHROPIC_CODE_EXECUTION_MODEL_PREFIXES = [
   "claude-opus-4-7",
@@ -152,16 +160,47 @@ const ANTHROPIC_CODE_EXECUTION_MODEL_PREFIXES = [
   "claude-sonnet-4",
 ] as const;
 
+// OpenAI cloud shell-tool gating. Docs only explicitly demonstrate
+// gpt-5.5; gpt-5.5-pro is included because the family share the same
+// /v1/responses contract. `gpt-5.5-pro` is checked first so the prefix
+// match doesn't collide with a hypothetical `gpt-5.5-turbo` etc.
+const OPENAI_CODE_EXECUTION_MODEL_PREFIXES = [
+  "gpt-5.5-pro",
+  "gpt-5.5",
+] as const;
+
+/**
+ * Strict check that a provider configuration points at OpenAI's
+ * managed cloud (api.openai.com), as opposed to a custom OpenAI-compat
+ * backend (ollama / llama.cpp / vLLM / generic "custom" preset). The
+ * shell tool ONLY exists on OpenAI cloud; sending it to anything else
+ * 400s the request. Mirror of the backend's
+ * `is_openai_cloud = "api.openai.com" in self.base_url` guard.
+ */
+function isOpenAICloudBaseUrl(baseUrl: string | null | undefined): boolean {
+  if (!baseUrl) return true; // No override → uses the default openai.com base.
+  return baseUrl.trim().toLowerCase().includes("api.openai.com");
+}
+
 export function providerSupportsBuiltinCodeExecution(
   providerType: string | null | undefined,
   modelId: string | null | undefined,
+  baseUrl?: string | null,
 ): boolean {
-  if (providerType !== "anthropic") return false;
   const normalized = modelId?.trim().toLowerCase() ?? "";
   if (!normalized) return false;
-  return ANTHROPIC_CODE_EXECUTION_MODEL_PREFIXES.some((prefix) =>
-    normalized.startsWith(prefix),
-  );
+  if (providerType === "anthropic") {
+    return ANTHROPIC_CODE_EXECUTION_MODEL_PREFIXES.some((prefix) =>
+      normalized.startsWith(prefix),
+    );
+  }
+  if (providerType === "openai") {
+    if (!isOpenAICloudBaseUrl(baseUrl)) return false;
+    return OPENAI_CODE_EXECUTION_MODEL_PREFIXES.some((prefix) =>
+      normalized.startsWith(prefix),
+    );
+  }
+  return false;
 }
 
 /**

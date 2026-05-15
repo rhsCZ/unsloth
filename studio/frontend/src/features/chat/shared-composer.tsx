@@ -379,6 +379,7 @@ export function SharedComposer({
   const supportsBuiltinCodeExecution = providerSupportsBuiltinCodeExecution(
     selectedExternalProvider?.providerType,
     effectiveExternalModelId,
+    selectedExternalProvider?.baseUrl,
   );
   const searchDisabled =
     !modelLoaded || !(supportsTools || supportsBuiltinWebSearch);

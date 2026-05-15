@@ -193,3 +193,141 @@ def test_mamba_ssm_path_preserves_wheel_first_install_args(monkeypatch):
         release_tag = worker._MAMBA_SSM_RELEASE_TAG,
         release_base_url = "https://github.com/state-spaces/mamba/releases/download",
     )
+
+
+def test_flash_linear_attention_uses_pypi_for_qwen3_5(monkeypatch):
+    install_mock = mock.Mock(return_value = True)
+    monkeypatch.setattr(worker, "_install_package_wheel_first", install_mock)
+
+    worker._ensure_flash_linear_attention(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    install_mock.assert_called_once()
+    _, kwargs = install_mock.call_args
+    assert kwargs["import_name"] == "fla"
+    assert kwargs["display_name"] == "flash-linear-attention"
+    assert kwargs["pypi_name"] == "flash-linear-attention"
+    assert kwargs["pypi_spec"] == "flash-linear-attention"
+    # Pure-Python wheel from PyPI: no version pin, no github wheel lookup.
+    assert "pypi_version" not in kwargs or kwargs["pypi_version"] is None
+    assert callable(kwargs["wheel_url_builder"])
+    assert kwargs["wheel_url_builder"](None) is None
+
+
+def test_flash_linear_attention_skips_for_unrelated_models(monkeypatch):
+    install_mock = mock.Mock(return_value = True)
+    monkeypatch.setattr(worker, "_install_package_wheel_first", install_mock)
+
+    worker._ensure_flash_linear_attention(
+        event_queue = [],
+        model_name = "meta-llama/Llama-3.2-1B-Instruct",
+    )
+
+    install_mock.assert_not_called()
+
+
+def test_flash_linear_attention_matches_full_qwen3_family(monkeypatch):
+    install_mock = mock.Mock(return_value = True)
+    monkeypatch.setattr(worker, "_install_package_wheel_first", install_mock)
+
+    for name in (
+        "unsloth/Qwen3.5-2B",
+        "unsloth/Qwen3_5-MoE-A22B",
+        "unsloth/Qwen3.6-4B",
+        "unsloth/Qwen3_6-4B",
+        "unsloth/Qwen3-Next-80B-A3B",
+        "unsloth/Qwen3_Next-80B-A3B",
+    ):
+        worker._ensure_flash_linear_attention(event_queue = [], model_name = name)
+
+    assert install_mock.call_count == 6
+
+
+def test_tilelang_backend_installs_pinned_pair_for_qwen3_5(monkeypatch):
+    monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/uv")
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+
+    # Force the "not installed" branch by making the imports fail.
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name in ("tilelang", "tvm_ffi"):
+            raise ImportError
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    statuses: list[str] = []
+    monkeypatch.setattr(worker, "_send_status", lambda queue, msg: statuses.append(msg))
+
+    worker._ensure_tilelang_backend(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    run_mock.assert_called_once()
+    args = run_mock.call_args[0][0]
+    assert f"apache-tvm-ffi=={worker._APACHE_TVM_FFI_PACKAGE_VERSION}" in args
+    assert f"tilelang=={worker._TILELANG_PACKAGE_VERSION}" in args
+    assert any("TileLang backend" in s for s in statuses)
+
+
+def test_tilelang_backend_skipped_for_ssm_models(monkeypatch):
+    monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising = False)
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+
+    # Nemotron-H / Falcon-H1 / Granite-H take the mamba_ssm path, not FLA's
+    # gated_delta_rule -> tilelang has no effect on them.
+    for name in (
+        "tiiuae/Falcon-H1-0.5B-Instruct",
+        "nvidia/Nemotron-H-8B-Base",
+        "ibm-granite/granite-4.0-h-tiny",
+        "meta-llama/Llama-3.2-1B-Instruct",
+    ):
+        worker._ensure_tilelang_backend(event_queue = [], model_name = name)
+
+    run_mock.assert_not_called()
+
+
+def test_tilelang_backend_skipped_via_env(monkeypatch):
+    monkeypatch.setenv(worker._TILELANG_SKIP_ENV, "1")
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+
+    worker._ensure_tilelang_backend(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    run_mock.assert_not_called()
+
+
+def test_tilelang_backend_swallows_install_failure(monkeypatch):
+    monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker.shutil, "which", lambda name: None)
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 1, stdout = "boom"))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name in ("tilelang", "tvm_ffi"):
+            raise ImportError
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    statuses: list[str] = []
+    monkeypatch.setattr(worker, "_send_status", lambda queue, msg: statuses.append(msg))
+
+    # Should not raise even when pip exits non-zero.
+    worker._ensure_tilelang_backend(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    run_mock.assert_called_once()
+    assert any("failed" in s.lower() for s in statuses)

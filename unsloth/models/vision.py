@@ -106,15 +106,25 @@ _BNB_QUANT_CLASS_NAMES = ("Linear4bit", "Linear8bitLt", "LinearNF4", "LinearFP4"
 # norms, biases, routers/gates that need fp16/fp32 precision, vision/audio
 # towers, classification heads, rotary tables.
 _GUARDRAIL_SKIP_PATTERNS = (
-    "embed", "embedding",
-    "norm", "ln_", "rms",
+    "embed",
+    "embedding",
+    "norm",
+    "ln_",
+    "rms",
     ".bias",
     "lm_head",
-    "multi_modal_projector", "merger", "modality_projection",
-    "router", "mlp.gate", "block_sparse_moe.gate",
+    "multi_modal_projector",
+    "merger",
+    "modality_projection",
+    "router",
+    "mlp.gate",
+    "block_sparse_moe.gate",
     "mamba",
-    "audio_tower", "vision_tower",
-    "score", "classifier", "qa_outputs",
+    "audio_tower",
+    "vision_tower",
+    "score",
+    "classifier",
+    "qa_outputs",
     "rotary",
 )
 
@@ -152,9 +162,7 @@ def _warn_if_quantization_silently_dropped(
     if not (load_in_4bit or load_in_8bit):
         return
 
-    has_bnb = any(
-        type(m).__name__ in _BNB_QUANT_CLASS_NAMES for m in model.modules()
-    )
+    has_bnb = any(type(m).__name__ in _BNB_QUANT_CLASS_NAMES for m in model.modules())
 
     # Failure mode 1: total bypass.
     if not has_bnb:
@@ -199,9 +207,7 @@ def _warn_if_quantization_silently_dropped(
 
     if suspect_bytes > 0 and suspect_bytes >= 2 * quantized_bytes:
         kind = "4bit" if load_in_4bit else "8bit"
-        suspect_human = ", ".join(
-            f"{n} ({d}, {s})" for n, d, s in suspect_samples
-        )
+        suspect_human = ", ".join(f"{n} ({d}, {s})" for n, d, s in suspect_samples)
         warnings.warn(
             f"Unsloth: load_in_{kind}=True is partially applied. "
             f"bitsandbytes quantized ~{quantized_bytes/1024**3:.2f} GB of "

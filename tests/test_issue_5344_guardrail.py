@@ -5,6 +5,7 @@ Covers two failure modes the helper detects:
   2. partial bypass: bnb quantized nn.Linear but a large fraction of weight
      bytes live in non-nn.Linear Parameters (e.g. Gemma-4 MoE fused experts).
 """
+
 import warnings
 
 import torch
@@ -116,9 +117,7 @@ class _MoEFusedExpertWrapper(nn.Module):
     def __init__(self, num_experts = 128, intermediate = 1408, hidden = 2816):
         super().__init__()
         self.gate_up_proj = nn.Parameter(
-            torch.zeros(
-                (num_experts, intermediate, hidden), dtype = torch.bfloat16
-            ),
+            torch.zeros((num_experts, intermediate, hidden), dtype = torch.bfloat16),
             requires_grad = False,
         )
 

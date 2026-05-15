@@ -751,9 +751,18 @@ const CodeToolsToggle: FC = () => {
     (s) => !!s.params.checkpoint && !s.modelLoading,
   );
   const supportsTools = useChatRuntimeStore((s) => s.supportsTools);
+  // External providers have no local tool runtime, but Anthropic's
+  // Claude 4.x dispatches code_execution_20250825 server-side. The
+  // chat-page resolver stashes that capability in the runtime store
+  // (next to supportsBuiltinWebSearch). Mirror of shared-composer's
+  // codeDisabled so this pill lights up in active threads too.
+  const supportsBuiltinCodeExecution = useChatRuntimeStore(
+    (s) => s.supportsBuiltinCodeExecution,
+  );
   const codeToolsEnabled = useChatRuntimeStore((s) => s.codeToolsEnabled);
   const setCodeToolsEnabled = useChatRuntimeStore((s) => s.setCodeToolsEnabled);
-  const disabled = !(modelLoaded && supportsTools);
+  const disabled =
+    !modelLoaded || !(supportsTools || supportsBuiltinCodeExecution);
 
   return (
     <button

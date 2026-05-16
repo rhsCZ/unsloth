@@ -3,82 +3,50 @@
 
 """Studio chat composer IME + multilingual regression smoke.
 
-Catches two classes of regression that backend / frontend CI both miss:
+Covers two surfaces:
+  A. Stuck IME composition (issue #5318 / PR #5327): duplicate
+     compositionstart with no compositionend left isComposing=true,
+     dropping all subsequent keystrokes including ASCII.
+  B. Multilingual paste round-trip across 31 scripts -- guards the
+     controlled-textarea / React state plumbing against Unicode mangling.
 
-  A. Stuck IME composition (issue #5318 / PR #5327). Repeated
-     compositionstart without a matching compositionend left the
-     assistant-ui composer with isComposing=true forever, so the
-     textarea silently dropped every keystroke -- including plain
-     ASCII after switching the IME back to English. Reported by
-     Japanese, Chinese, and Korean users.
-
-  B. Multilingual paste round-trip. Any future Unicode regression
-     in the controlled textarea / React state plumbing (NFC
-     re-normalisation, UTF-16 surrogate splits, combining-mark
-     reorderings) would silently mangle non-ASCII text without
-     tripping any JS path the existing chat smoke exercises. We
-     paste a fixed string in each of 31 scripts covering >90% of
-     the world's population and require byte-for-byte readback.
-
-Model-free on purpose -- the bug surface is the composer, not
-inference. Wall clock ~60 s on a warm runner.
+Model-free; the bug surface is the composer, not inference.
 
 Env contract matches playwright_chat_ui.py:
-  BASE_URL          base URL of an already-running Studio
-  STUDIO_OLD_PW     bootstrap password from auth/.bootstrap_password
-  STUDIO_NEW_PW     password we rotate to in the first step
-  PW_ART_DIR        artifact dir for screenshots
-  STUDIO_UI_STRICT  '1' = hard-fail on missing elements (CI default)
-
-Run locally:
-  BASE_URL=http://127.0.0.1:8888 \
-  STUDIO_OLD_PW=$(cat ~/.unsloth/studio/auth/.bootstrap_password) \
-  STUDIO_NEW_PW=ChangeMe-$$ \
-  PW_ART_DIR=logs/playwright_ime \
-  python tests/studio/playwright_chat_ime_i18n.py
+  BASE_URL, STUDIO_NEW_PW, PW_ART_DIR, STUDIO_UI_STRICT.
 """
 
 import os
 import sys
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _playwright_robust import (  # noqa: E402
     chromium_launch_args,
+    click_and_wait_for_response,
     install_view_transition_killer,
     install_wall_clock_watchdog,
+    is_benign_console_error,
+    is_benign_page_error,
     recover_or_replace_page,
     wait_for_health,
 )
 
 BASE = os.environ["BASE_URL"]
-OLD = os.environ["STUDIO_OLD_PW"]
 NEW = os.environ["STUDIO_NEW_PW"]
 ART_DIR = os.environ.get("PW_ART_DIR", "logs/playwright_ime")
 ART = Path(ART_DIR)
 ART.mkdir(parents = True, exist_ok = True)
 STRICT = os.environ.get("STUDIO_UI_STRICT", "0") == "1"
 
-# Wall-clock cap. Realistic run is 30-60 s on a warm runner; 5 min
-# leaves headroom for a cold browser launch + first-paint on the
-# mac/win runners if this test ever gets ported to them.
+# Wall-clock cap. Realistic run is 30-60s; 5 min leaves cold-launch headroom.
 WALL_TIMEOUT_S = float(os.environ.get("STUDIO_IME_WALL_TIMEOUT_S", "300"))
 
 
-# Top languages by total speakers (L1 + L2), rounded down -- this
-# list is deliberately broad rather than maximal: each entry is a
-# distinct script / shaping rule and catches a different class of
-# Unicode regression. Together these cover >90% of the world's
-# population by language. Ordering is by speaker count (descending,
-# rough) so the most-impactful regressions surface first in the log.
-#
-# `code` is BCP-47-ish (purely for log labels).
-# `label` is the English display name.
-# `text` is what we paste -- a short universal greeting + arithmetic
-#   string so the line stays under one composer row and the readback
-#   diff is easy to read in the CI log on miss.
+# One short greeting + arithmetic per script (ordered by speaker count) --
+# each entry catches a distinct class of Unicode regression.
 I18N_SAMPLES = [
     ("en", "English", "Hello, 1+1=2"),
     ("zh-CN", "Chinese (Simplified)", "你好，1+1=2"),
@@ -130,12 +98,7 @@ def fail(m):
 
 
 def soft_fail(m):
-    """Hard fail in STRICT mode, info-warn otherwise.
-
-    Mirrors the contract used by `playwright_chat_ui.py`: in CI we
-    set STUDIO_UI_STRICT=1 so a missing button / composer selector
-    fails loudly; locally a partial install is warned and skipped.
-    """
+    """Hard fail in STRICT mode, info-warn otherwise. Mirrors playwright_chat_ui.py."""
     if STRICT:
         fail(m)
     info(f"WARN (strict-off): {m}")
@@ -161,7 +124,6 @@ with sync_playwright() as p:
     page.set_default_timeout(60_000)
 
     page_errors: list[str] = []
-    page.on("pageerror", lambda e: page_errors.append(str(e)))
     console_errors: list[str] = []
 
     def _on_console(m):
@@ -172,7 +134,11 @@ with sync_playwright() as p:
         except Exception:
             return
 
-    page.on("console", _on_console)
+    def _attach_listeners(target):
+        target.on("pageerror", lambda e: page_errors.append(str(e)))
+        target.on("console", _on_console)
+
+    _attach_listeners(page)
 
     def shoot(name):
         _n[0] += 1
@@ -186,13 +152,8 @@ with sync_playwright() as p:
         except Exception as _shoot_err:
             info(f"WARN: screenshot {name} failed: {_shoot_err}")
 
-    # ─────────────────────────────────────────────────────
-    # 1. Bootstrap auth via the UI's /change-password form so
-    #    the auth state matches what a real first-run user sees.
-    #    We mirror the retry-on-rerender pattern from
-    #    playwright_chat_ui.py because the same React form-detach
-    #    races happen here too.
-    # ─────────────────────────────────────────────────────
+    # 1. Bootstrap auth via /change-password (mirrors playwright_chat_ui.py
+    #    retry-on-rerender to absorb React form-detach races).
     step("change-password through UI (Setup your account)")
     form_err: Exception | None = None
     for _form_attempt in range(3):
@@ -211,15 +172,16 @@ with sync_playwright() as p:
             pw_field.fill(NEW, timeout = 60_000)
             page.fill("#confirm-password", NEW, timeout = 60_000)
             shoot("01-change-password-filled")
-            with page.expect_response(
-                lambda r: "/api/auth/change-password" in r.url
-                and r.request.method == "POST",
-                timeout = 30_000,
-            ) as resp_info:
-                page.locator('button[type="submit"]').click()
-            resp = resp_info.value
-            if resp.status >= 400:
-                raise AssertionError(f"change-password POST returned {resp.status}")
+            status, _ = click_and_wait_for_response(
+                page,
+                url_substr = "/api/auth/change-password",
+                method = "POST",
+                do_click = lambda: page.locator('button[type="submit"]').click(),
+                timeout_ms = 30_000,
+                info = lambda m: print(f"[ime]   {m}", flush = True),
+            )
+            if status is not None and status >= 400:
+                raise AssertionError(f"change-password POST returned {status}")
             form_err = None
             break
         except Exception as e:
@@ -235,29 +197,48 @@ with sync_playwright() as p:
                     default_timeout_ms = 60_000,
                     info = lambda m: print(f"[ime]   recovery: {m}", flush = True),
                 )
+                _attach_listeners(page)
     if form_err is not None:
         raise form_err
 
-    # ─────────────────────────────────────────────────────
-    # 2. Composer textarea is the test surface. Wait for it
-    #    to mount after the post-auth redirect into the chat
-    #    shell. We do NOT load a GGUF: the IME / paste bugs we
-    #    are guarding against live in the composer's React
-    #    state, not the inference path.
-    # ─────────────────────────────────────────────────────
+    # 2. Wait for composer mount. No GGUF: the bug surface is React state, not inference.
     step("wait for composer to mount")
     try:
         page.wait_for_load_state("networkidle", timeout = 30_000)
     except Exception:
         pass
     composer = page.locator('textarea[aria-label="Message input"]')
-    composer.wait_for(state = "visible", timeout = 60_000)
+    _mount_err: Exception | None = None
+    for _mount_attempt in range(2):
+        try:
+            composer.wait_for(state = "visible", timeout = 60_000)
+            _mount_err = None
+            break
+        except Exception as e:
+            _mount_err = e
+            info(
+                f"composer.wait_for attempt {_mount_attempt + 1} failed: "
+                f"{type(e).__name__}: {str(e)[:200]}"
+            )
+            try:
+                shoot(f"02-composer-wait-attempt-{_mount_attempt + 1}-fail")
+            except Exception:
+                pass
+            if _mount_attempt == 0:
+                page = recover_or_replace_page(
+                    page,
+                    ctx,
+                    default_timeout_ms = 60_000,
+                    info = lambda m: print(f"[ime]   recovery: {m}", flush = True),
+                )
+                _attach_listeners(page)
+                composer = page.locator('textarea[aria-label="Message input"]')
+    if _mount_err is not None:
+        raise _mount_err
     composer.click()
     shoot("02-composer-focused")
 
-    # Static guard: the composer must opt in to Unicode bidi auto-detection
-    # so RTL scripts (Arabic / Hebrew / Persian / Urdu) flow right-to-left
-    # without forcing the whole UI into RTL.
+    # Main composer must carry dir="auto" so RTL flows right-to-left.
     dir_attr = composer.evaluate("(el) => el.getAttribute('dir')")
     if dir_attr != "auto":
         soft_fail(
@@ -267,22 +248,52 @@ with sync_playwright() as p:
     else:
         info('composer dir="auto" present')
 
+    # Source-level guard for the edit and compare composers (neither
+    # is mounted here): grep the JSX for dir="auto" inside each block.
+    _repo_root = Path(__file__).resolve().parents[2]
+    _thread_src = (
+        _repo_root
+        / "studio/frontend/src/components/assistant-ui/thread.tsx"
+    ).read_text()
+    _shared_src = (
+        _repo_root
+        / "studio/frontend/src/features/chat/shared-composer.tsx"
+    ).read_text()
+    _edit_idx = _thread_src.find("aui-edit-composer-input")
+    if _edit_idx == -1 or 'dir="auto"' not in _thread_src[
+        _edit_idx : _edit_idx + 600
+    ]:
+        soft_fail('edit composer source is missing dir="auto"')
+    else:
+        info('edit composer dir="auto" present (source)')
+    _compare_idx = _shared_src.find("Send to both models")
+    if _compare_idx == -1 or 'dir="auto"' not in _shared_src[
+        max(_compare_idx - 400, 0) : _compare_idx + 400
+    ]:
+        soft_fail('compare composer source is missing dir="auto"')
+    else:
+        info('compare composer dir="auto" present (source)')
+
     def read_value() -> str:
         return composer.evaluate("(el) => el.value")
 
     def set_value_via_setter(s: str) -> str:
-        """Set textarea.value through React's monkey-patched setter
-        AND dispatch the input event so assistant-ui's controlled
-        textarea picks the new value up. Mirrors a real paste -- a
-        plain `.value = s` would be silently overwritten on the next
-        React render. Returns the post-dispatch readback."""
+        """Write via React's monkey-patched setter + paste input event,
+        then await two rAFs so the controlled value is committed before
+        readback (plain `.value=s` would be overwritten on next render)."""
         return composer.evaluate(
-            """(el, v) => {
+            """async (el, v) => {
                 const setter = Object.getOwnPropertyDescriptor(
                     window.HTMLTextAreaElement.prototype, 'value'
                 ).set;
                 setter.call(el, v);
-                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new InputEvent('input', {
+                    bubbles: true,
+                    inputType: 'insertFromPaste',
+                    data: v,
+                }));
+                await new Promise((r) => requestAnimationFrame(r));
+                await new Promise((r) => requestAnimationFrame(r));
                 return el.value;
             }""",
             s,
@@ -291,10 +302,7 @@ with sync_playwright() as p:
     def clear() -> None:
         set_value_via_setter("")
 
-    # ─────────────────────────────────────────────────────
-    # 3. Baseline: ASCII keyboard typing works at all. If this
-    #    fails, every later test is meaningless -- bail fast.
-    # ─────────────────────────────────────────────────────
+    # 3. Baseline: ASCII keyboard typing works. Bail fast if not.
     step("baseline ASCII keyboard typing")
     clear()
     composer.click()
@@ -307,11 +315,7 @@ with sync_playwright() as p:
     shoot("03-baseline-ascii")
     clear()
 
-    # ─────────────────────────────────────────────────────
-    # 4. Multilingual paste round-trip across 30+ scripts.
-    #    Each entry must readback byte-for-byte after a single
-    #    nativeInputValueSetter + input-event dispatch.
-    # ─────────────────────────────────────────────────────
+    # 4. Multilingual paste round-trip; byte-for-byte readback required.
     step(f"multilingual paste round-trip ({len(I18N_SAMPLES)} samples)")
     paste_failures: list[tuple[str, str, str, str]] = []
     for code, label, text in I18N_SAMPLES:
@@ -335,13 +339,7 @@ with sync_playwright() as p:
     info(f"all {len(I18N_SAMPLES)} multilingual paste samples OK")
     shoot("04-paste-all-ok")
 
-    # ─────────────────────────────────────────────────────
-    # 5. Normal IME composition sequence: compose 你好 the way a
-    #    healthy Chinese IME would -- compositionstart ->
-    #    compositionupdate(你) -> compositionupdate(你好) ->
-    #    compositionend -> insertFromComposition. The composer
-    #    must end up with the committed text in its value.
-    # ─────────────────────────────────────────────────────
+    # 5. Healthy IME composition (compositionstart/update/end + insert events).
     step("normal IME composition (compose 你好)")
     clear()
     composer.click()
@@ -373,19 +371,9 @@ with sync_playwright() as p:
     shoot("05-normal-composition")
     clear()
 
-    # ─────────────────────────────────────────────────────
-    # 6. Stuck IME composition: this is the issue #5318 repro.
-    #    Two compositionstart events fire with NO compositionend
-    #    in between (the pattern observed from Japanese / Chinese
-    #    / Korean IMEs on Safari + Arc + Chrome / Windows + macOS
-    #    in the issue reports). On the BROKEN build the React
-    #    composer sticks at isComposing=true and silently drops
-    #    every subsequent input event -- even plain ASCII typed
-    #    after switching the IME back to English. PR #5327 added
-    #    a Studio-owned composition handler that clears stale
-    #    isComposing state on blur / paste / non-composing input,
-    #    so the field must recover.
-    # ─────────────────────────────────────────────────────
+    # 6. Stuck IME repro for issue #5318: duplicate compositionstart with
+    #    no compositionend wedged isComposing=true and dropped ASCII keys.
+    #    PR #5327 cleared the stale state on non-composing input.
     step("BUG REPRO: stuck IME composition recovery (issue #5318)")
     clear()
     composer.click()
@@ -399,80 +387,75 @@ with sync_playwright() as p:
             el.dispatchEvent(new CompositionEvent('compositionstart', {bubbles:true, data:''}));
         }"""
     )
-    # Now try to commit 'abc' as if the user switched back to an English
-    # IME and started typing. On the broken build, the React composer
-    # drops these events because isComposing is still true.
-    stuck_value = composer.evaluate(
-        """(el) => {
-            el.focus();
-            const setter = Object.getOwnPropertyDescriptor(
-                window.HTMLTextAreaElement.prototype, 'value'
-            ).set;
-            setter.call(el, 'abc');
-            el.dispatchEvent(new InputEvent('input', {
-                bubbles:true, inputType:'insertText', data:'abc',
-            }));
-            return el.value;
-        }"""
-    )
-    # Add one more keystroke to also exercise the keyboard path -- if the
-    # textarea unblocked via the input dispatch but the React-state path
-    # is still wedged, this will surface as the textarea showing 'abc'
-    # while the React-rendered value lags.
-    page.keyboard.type("d")
+    # Drive the real keyboard path; on the broken build React drops
+    # 'abcd' and reconciles el.value back to ''. wait_for_function
+    # crosses the microtask boundary so we see committed React state.
+    page.keyboard.type("abcd")
+    try:
+        page.wait_for_function(
+            """(el) => el.value === 'abcd'""",
+            composer.element_handle(),
+            timeout = 5_000,
+        )
+    except Exception:
+        pass
     after_key = read_value()
-    info(
-        f"after_input='abc' readback={stuck_value!r}; after_key='d' readback={after_key!r}"
-    )
+    info(f"after_key='abcd' readback={after_key!r}")
     shoot("06-stuck-composition-recovery")
-    if "abc" not in stuck_value:
+    if after_key != "abcd":
         fail(
-            "stuck-composition repro: textarea never received the post-composition "
-            f"input -- readback {stuck_value!r}. This is the regression from "
-            "issue #5318 / before PR #5327."
+            "stuck-composition repro: keyboard 'abcd' was not preserved after "
+            f"duplicate compositionstart; readback {after_key!r}. React state "
+            "likely still stuck in isComposing=true (issue #5318 / before "
+            "PR #5327)."
         )
-    if "abcd" not in after_key:
-        fail(
-            "stuck-composition repro: textarea received 'abc' via dispatched input "
-            "but the follow-up keyboard 'd' was dropped -- readback "
-            f"{after_key!r}. React state likely still stuck in isComposing=true."
-        )
-    # Also probe the Send button: if isComposing is still true, the
-    # ComposerAction stays disabled (see PR #5327: ComposerAction({
-    # disabled: disabled || isComposing })). Existence + enabled state
-    # is the cheapest cross-check on React's view of composition state.
+    # Cross-check React's view of isComposing via the Send button:
+    # ComposerAction stays disabled while isComposing is true (PR #5327).
     send_btn = page.locator('button[aria-label="Send message"]')
     if send_btn.count() == 0:
         soft_fail("Send button not found after stuck-composition recovery")
     else:
-        is_disabled = send_btn.evaluate("(el) => el.disabled === true")
-        if is_disabled:
+        try:
+            expect(send_btn).not_to_be_disabled(timeout = 5_000)
+            info("Send button correctly enabled after stuck-composition recovery")
+        except Exception:
             soft_fail(
                 "Send button still disabled after stuck-composition recovery -- "
                 "React isComposing state likely never cleared"
             )
-        else:
-            info("Send button correctly enabled after stuck-composition recovery")
     info("stuck-composition recovery PASS")
     clear()
 
-    # ─────────────────────────────────────────────────────
-    # 7. Final state + console.error summary. We do not require
-    #    zero console errors -- the change-password redirect
-    #    typically emits one or two 401 noise lines while the
-    #    page transitions -- but we surface the count so a
-    #    regression that produces a new error class is
-    #    debuggable from the CI log directly.
-    # ─────────────────────────────────────────────────────
+    # 7. Final state. The change-password redirect emits benign 401 noise,
+    #    so we filter via is_benign_* and only fail on real errors.
     shoot("07-final")
-    info(f"page_errors={len(page_errors)} console_errors={len(console_errors)}")
+    real_page_errors = [e for e in page_errors if not is_benign_page_error(e)]
+    real_console_errors = [
+        e for e in console_errors if not is_benign_console_error(e)
+    ]
+    info(
+        f"page_errors={len(page_errors)} ({len(real_page_errors)} non-benign); "
+        f"console_errors={len(console_errors)} "
+        f"({len(real_console_errors)} non-benign)"
+    )
     if page_errors:
         info(f"first page error: {page_errors[0][:200]!r}")
     if console_errors:
         info(f"first console error: {console_errors[0][:200]!r}")
+    if real_page_errors:
+        fail(
+            f"{len(real_page_errors)} non-benign pageerror events; "
+            f"first={real_page_errors[0][:200]!r}"
+        )
+    if real_console_errors:
+        fail(
+            f"{len(real_console_errors)} non-benign console.error events; "
+            f"first={real_console_errors[0][:200]!r}"
+        )
 
     info(
         f"DONE: ascii=OK paste={len(I18N_SAMPLES)}/{len(I18N_SAMPLES)} "
         f"normal_composition=OK stuck_recovery=OK"
     )
+    _watchdog.cancel()
     browser.close()

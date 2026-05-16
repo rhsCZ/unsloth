@@ -1333,9 +1333,13 @@ if ($NeedFrontendBuild -and -not $IsPipInstall) {
     # metadata but no actual content (bin/, lib/). When this happens bun install
     # exits 0 but leaves binaries missing. We validate after install and clear
     # the cache + retry once before falling back to npm.
+    #
+    # --frozen-lockfile so a Windows end-user install can never pull a fresh
+    # minor/patch of a transitive dep from the registry via caret-range
+    # resolution; the tree is exactly what the committed lockfile pins.
     if ($UseBun) {
         Write-Host "   Using bun for package install (faster)" -ForegroundColor DarkGray
-        $bunExit = Invoke-SetupCommand { bun install }
+        $bunExit = Invoke-SetupCommand { bun install --frozen-lockfile }
         # On Windows, .bin/ entries vary by package manager:
         #   npm  → tsc, tsc.cmd, tsc.ps1
         #   bun  → tsc.exe, tsc.bunx
@@ -1349,7 +1353,7 @@ if ($NeedFrontendBuild -and -not $IsPipInstall) {
                 Remove-Item "node_modules" -Recurse -Force -ErrorAction SilentlyContinue
             }
             Invoke-SetupCommand { bun pm cache rm } | Out-Null
-            $bunExit = Invoke-SetupCommand { bun install }
+            $bunExit = Invoke-SetupCommand { bun install --frozen-lockfile }
             $hasTsc = (Test-Path "node_modules\.bin\tsc") -or (Test-Path "node_modules\.bin\tsc.cmd") -or (Test-Path "node_modules\.bin\tsc.exe") -or (Test-Path "node_modules\.bin\tsc.bunx")
             $hasVite = (Test-Path "node_modules\.bin\vite") -or (Test-Path "node_modules\.bin\vite.cmd") -or (Test-Path "node_modules\.bin\vite.exe") -or (Test-Path "node_modules\.bin\vite.bunx")
             if ($bunExit -ne 0 -or -not $hasTsc -or -not $hasVite) {
@@ -1368,13 +1372,16 @@ if ($NeedFrontendBuild -and -not $IsPipInstall) {
         }
     }
     if (-not $UseBun) {
-        $npmExit = Invoke-SetupCommand { npm install }
+        # npm ci (not npm install) so the install is pinned to the committed
+        # lockfile -- a hijacked transitive cannot land via caret-range
+        # resolution. Fails fast if package.json and the lockfile have drifted.
+        $npmExit = Invoke-SetupCommand { npm ci }
         if ($npmExit -ne 0) {
             Pop-Location
             $ErrorActionPreference = $prevEAP_npm
             foreach ($gi in $HiddenGitignores) { Rename-Item -Path "$gi._twbuild" -NewName (Split-Path $gi -Leaf) -Force -ErrorAction SilentlyContinue }
-            Write-Host "[ERROR] npm install failed (exit code $npmExit)" -ForegroundColor Red
-            Write-Host "   Try running 'npm install' manually in frontend/ to see errors" -ForegroundColor Yellow
+            Write-Host "[ERROR] npm ci failed (exit code $npmExit)" -ForegroundColor Red
+            Write-Host "   Try running 'npm ci' manually in frontend/ to see errors" -ForegroundColor Yellow
             exit 1
         }
     }
@@ -1411,11 +1418,13 @@ if (Test-Path $OxcValidatorDir) {
     $prevEAP_oxc = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     Push-Location $OxcValidatorDir
-    $oxcInstallExit = Invoke-SetupCommand { npm install }
+    # npm ci pins the oxc validator install to its committed lockfile so a
+    # hijacked transitive cannot land via caret-range resolution.
+    $oxcInstallExit = Invoke-SetupCommand { npm ci }
     if ($oxcInstallExit -ne 0) {
         Pop-Location
         $ErrorActionPreference = $prevEAP_oxc
-        Write-Host "[ERROR] OXC validator npm install failed (exit code $oxcInstallExit)" -ForegroundColor Red
+        Write-Host "[ERROR] OXC validator npm ci failed (exit code $oxcInstallExit)" -ForegroundColor Red
         exit 1
     }
     Pop-Location

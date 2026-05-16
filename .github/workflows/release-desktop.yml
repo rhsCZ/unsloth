@@ -443,13 +443,17 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: studio/frontend
+        # `npm ci` so a release build can never pull a fresh minor/patch
+        # of a transitive dep from the registry via caret-range resolution;
+        # the tree is exactly what the committed lockfile pins.
+        #
         # Lifecycle scripts (esbuild native-binary postinstall, etc.) are
         # required for `vite build`. The pre-install lockfile structural
         # audit (lockfile_supply_chain_audit.py) is the practical defence
         # against the npm postinstall-dropper class -- it fires BEFORE any
         # tarball runs, on the injection pattern itself rather than an
         # advisory-DB lookup.
-        run: npm install --no-fund --no-audit
+        run: npm ci --no-fund --no-audit
 
       # ── Rust ──
       - name: Install Rust stable

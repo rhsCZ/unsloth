@@ -417,7 +417,9 @@ fi  # end frontend build check
 # ── oxc-validator runtime ──
 if [ -d "$SCRIPT_DIR/backend/core/data_recipe/oxc-validator" ] && command -v npm &>/dev/null; then
     cd "$SCRIPT_DIR/backend/core/data_recipe/oxc-validator"
-    run_quiet_no_exit "npm install (oxc validator runtime)" npm install --no-fund --no-audit --loglevel=error
+    # npm ci pins the oxc validator install to its committed lockfile so a
+    # hijacked transitive cannot land via caret-range resolution.
+    run_quiet_no_exit "npm ci (oxc validator runtime)" npm ci --no-fund --no-audit --loglevel=error
     _oxc_install_rc=$?
     if [ "$_oxc_install_rc" -ne 0 ]; then
         exit "$_oxc_install_rc"

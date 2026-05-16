@@ -1071,7 +1071,18 @@ class FastBaseModel:
             # Opt-in per-expert Linear4bit swap for Gemma-4 MoE checkpoints
             # whose fused 3D expert weights bnb cannot quantize (#5344).
             # Off by default; users enable via UNSLOTH_GEMMA4_MOE_4BIT=1.
-            if load_in_4bit and not full_finetuning:
+            _user_qcfg = kwargs.get("quantization_config", None)
+            if isinstance(_user_qcfg, dict):
+                _qcfg_4bit = bool(_user_qcfg.get("load_in_4bit", False))
+                _qcfg_dtype = _user_qcfg.get("bnb_4bit_compute_dtype", None)
+            elif _user_qcfg is not None:
+                _qcfg_4bit = bool(getattr(_user_qcfg, "load_in_4bit", False))
+                _qcfg_dtype = getattr(_user_qcfg, "bnb_4bit_compute_dtype", None)
+            else:
+                _qcfg_4bit = False
+                _qcfg_dtype = None
+            _effective_load_in_4bit = bool(load_in_4bit) or _qcfg_4bit
+            if _effective_load_in_4bit and not full_finetuning:
                 try:
                     from unsloth.models.gemma4_moe_4bit import (
                         is_gemma4_moe_4bit_enabled,
@@ -1079,13 +1090,15 @@ class FastBaseModel:
                     )
 
                     if is_gemma4_moe_4bit_enabled():
+                        if bnb_config is not None:
+                            _compute_dtype = bnb_config.bnb_4bit_compute_dtype
+                        elif _qcfg_dtype is not None:
+                            _compute_dtype = _qcfg_dtype
+                        else:
+                            _compute_dtype = torch.bfloat16
                         _swapped = swap_gemma4_experts_to_per_expert_linear4bit(
                             model,
-                            compute_dtype = (
-                                bnb_config.bnb_4bit_compute_dtype
-                                if bnb_config is not None
-                                else torch.bfloat16
-                            ),
+                            compute_dtype = _compute_dtype,
                         )
                         if _swapped > 0:
                             print(
@@ -1095,10 +1108,22 @@ class FastBaseModel:
                                 f"https://github.com/unslothai/unsloth/issues/5344)."
                             )
                 except Exception as _e:
+                    _partial = sum(
+                        1 for _m in model.modules()
+                        if getattr(_m, "_unsloth_gemma4_moe_4bit_swapped", False)
+                    )
+                    if _partial:
+                        _state = (
+                            f"{_partial} Gemma4TextExperts module(s) are "
+                            f"already in 4-bit; remaining modules stay BF16. "
+                            f"Reload the model to recover a uniform state."
+                        )
+                    else:
+                        _state = "Falling back to BF16 experts."
                     warnings.warn(
                         f"Unsloth: Gemma-4 MoE 4-bit swap failed: "
-                        f"{type(_e).__name__}: {_e}. Falling back to BF16 "
-                        f"experts. Unset UNSLOTH_GEMMA4_MOE_4BIT to silence.",
+                        f"{type(_e).__name__}: {_e}. {_state} "
+                        f"Unset UNSLOTH_GEMMA4_MOE_4BIT to silence.",
                         stacklevel = 2,
                     )
 

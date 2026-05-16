@@ -193,8 +193,9 @@ def swap_gemma4_experts_to_per_expert_linear4bit(
             gate_up_list.append(gu.to(device))
             down_list.append(dp.to(device))
 
-        # Drop the fused Parameters before attaching the ModuleLists so peak
-        # VRAM during the swap stays bounded by one expert at a time.
+        # The fused BF16 gate_up_proj / down_proj stay live through the loop
+        # above; per-module peak is fused BF16 + accumulated per-expert nf4.
+        # They are released here, before attaching the ModuleLists.
         del module.gate_up_proj
         del module.down_proj
 

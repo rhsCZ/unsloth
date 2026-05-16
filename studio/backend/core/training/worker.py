@@ -759,9 +759,7 @@ def _rebind_in_already_imported_modules(
                 setattr(mod, attr_name, new_obj)
                 count += 1
             except Exception as exc:
-                logger.debug(
-                    "Could not rebind %s in %s: %s", attr_name, mod_name, exc
-                )
+                logger.debug("Could not rebind %s in %s: %s", attr_name, mod_name, exc)
     return count
 
 
@@ -856,14 +854,14 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
         # Reuse the existing wheel-first installer. It does its own
         # idempotency check via `__import__("causal_conv1d")`.
         _install_package_wheel_first(
-            event_queue=eq,
-            import_name="causal_conv1d",
-            display_name="causal-conv1d",
-            pypi_name="causal-conv1d",
-            pypi_version=_CAUSAL_CONV1D_PACKAGE_VERSION,
-            filename_prefix="causal_conv1d",
-            release_tag=_CAUSAL_CONV1D_RELEASE_TAG,
-            release_base_url=(
+            event_queue = eq,
+            import_name = "causal_conv1d",
+            display_name = "causal-conv1d",
+            pypi_name = "causal-conv1d",
+            pypi_version = _CAUSAL_CONV1D_PACKAGE_VERSION,
+            filename_prefix = "causal_conv1d",
+            release_tag = _CAUSAL_CONV1D_RELEASE_TAG,
+            release_base_url = (
                 "https://github.com/Dao-AILab/causal-conv1d/releases/download"
             ),
         )
@@ -883,7 +881,7 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
         wrapped = _make_wrapper(original, install_fn, gate_name)
         setattr(_iu, gate_name, wrapped)
         rebound = _rebind_in_already_imported_modules(
-            attr_name=gate_name, old_obj=original, new_obj=wrapped
+            attr_name = gate_name, old_obj = original, new_obj = wrapped
         )
         rebound_total += rebound
         logger.info(

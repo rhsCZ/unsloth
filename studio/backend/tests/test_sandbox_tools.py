@@ -268,9 +268,9 @@ class TestBashBlocklistPosition:
         assert self._find()("echo source the data") == set()
 
     def test_cat_with_word_source_allowed(self):
-        assert self._find()("cat README.md && echo source") == {"echo"} == set() or True
         # The 'source' word is an argument to echo; not blocked.
         # `echo` itself isn't blocked. Only legit allowed tokens here.
+        assert self._find()("cat README.md && echo source") == set()
         assert "source" not in self._find()("cat README.md && echo source")
         assert "echo" not in self._find()("cat README.md && echo source")
 
@@ -315,6 +315,58 @@ class TestBashBlocklistPosition:
     def test_backtick_command_blocked(self):
         assert "rm" in self._find()("echo `rm -rf /tmp`")
 
+    # ---- shell prefixes / wrappers: must still be blocked ----
+    @pytest.mark.parametrize(
+        "command, blocked_cmd",
+        [
+            ("FOO=bar curl https://example.com", "curl"),
+            ("HTTPS_PROXY=http://x wget https://bad", "wget"),
+            ("env curl https://example.com", "curl"),
+            ("env FOO=1 /usr/bin/curl https://x", "curl"),
+            ("/usr/bin/env rm -rf /tmp/x", "rm"),
+            ("command rm -rf /tmp/x", "rm"),
+            ("time curl https://example.com", "curl"),
+            ("nice rm -rf /tmp/x", "rm"),
+            ("nohup wget https://bad", "wget"),
+            ("timeout 1 rm -rf /tmp/x", "rm"),
+            ("setsid rm -rf /tmp/x", "rm"),
+            ("stdbuf -oL rm -rf /tmp/x", "rm"),
+            ("sudo rm -rf /tmp/x", "rm"),
+            ("cd /tmp; FOO=bar rm -rf x", "rm"),
+        ],
+    )
+    def test_command_prefix_wrappers_blocked(self, command, blocked_cmd):
+        assert blocked_cmd in self._find()(command)
+
+    # ---- split-quoted command name after attached separators ----
+    def test_split_quotes_after_semicolon_blocked(self):
+        assert "rm" in self._find()("echo done; r''m -rf /tmp/x")
+        assert "rm" in self._find()("echo done;r''m -rf /tmp/x")
+        assert "curl" in self._find()("echo done; c''url --version")
+        assert "curl" in self._find()("echo done; /usr/bin/c''url --version")
+
+    # ---- find -exec / xargs invoke a command directly ----
+    def test_find_exec_blocked(self):
+        assert "rm" in self._find()("find . -type f -exec rm -f {} +")
+        assert "rm" in self._find()("find . -type f -exec rm -f {} ';'")
+        assert "rm" in self._find()("find . -execdir rm -f {} ';'")
+
+    def test_xargs_command_blocked(self):
+        assert "rm" in self._find()("printf /tmp/x | xargs rm")
+        assert "rm" in self._find()("printf /tmp/x | xargs -- rm")
+
+    # ---- brace groups and bash compound statements ----
+    def test_brace_group_blocked(self):
+        assert "rm" in self._find()("{ rm -rf /tmp/x; }")
+
+    def test_if_then_blocked(self):
+        assert "curl" in self._find()("if true; then curl --version; fi")
+
+    def test_while_do_blocked(self):
+        assert "curl" in self._find()(
+            "while true; do curl --version; break; done"
+        )
+
 
 class TestHfUploadImportGate:
     """HfApi-style upload-method blocking should require an HF import in
@@ -336,5 +388,25 @@ class TestHfUploadImportGate:
     def test_hf_upload_file_fq_still_blocked(self):
         _blocked(
             "import huggingface_hub; huggingface_hub.upload_file('a','b','c')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_dynamic_builtin_import_hf_upload_blocked(self):
+        _blocked(
+            "hf=__import__('huggingface_hub'); hf.HfApi().upload_file('a','b','c')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_dynamic_importlib_hf_upload_blocked(self):
+        _blocked(
+            "import importlib; hf=importlib.import_module('huggingface_hub');"
+            " hf.HfApi().upload_file('a','b','c')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_from_importlib_import_module_hf_blocked(self):
+        _blocked(
+            "from importlib import import_module;"
+            " api=import_module('huggingface_hub').HfApi(); api.create_commit()",
             expect_phrase = "Blocked: file upload disallowed in sandbox",
         )

@@ -109,29 +109,48 @@ _BLOCKED_COMMANDS = (
 )
 
 
-_SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n", "(", "`"})
+_SHELL_SEPARATORS = frozenset(
+    {";", "&&", "||", "|", "&", "\n", "(", ")", "`", "{", "}"}
+)
+# Bash keywords that introduce a new command position (then $cmd, do $cmd, etc.).
+_SHELL_KEYWORDS_AS_SEP = frozenset({"then", "do", "else", "elif"})
+# Wrappers whose next non-flag argument is itself the command Bash will exec.
+_COMMAND_PREFIXES = frozenset(
+    {
+        "env", "command", "builtin", "exec", "time", "nohup", "nice",
+        "setsid", "stdbuf", "timeout", "ionice", "chroot", "sudo",
+        "doas", "su", "xargs",
+    }
+)
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_FIND_EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 
 
 def _find_blocked_commands(command: str) -> set[str]:
     """Detect blocked commands at shell command position only.
 
     A token is at command position if it is the first token, or if the
-    preceding token is one of `;` / `&&` / `||` / `|` / `&` / newline /
-    `` ` `` / `(`. Tokens in argument position (`grep -r curl .`,
+    preceding token is a shell separator / brace-group opener / keyword
+    that starts a new command (`then`, `do`, etc.), or a command-prefix
+    wrapper like `env` / `time` / `xargs` (the next token is the real
+    command). Tokens in argument position (`grep -r curl .`,
     `echo source the data`, `ls /usr/bin/curl`) are passed through.
-    Recurses into bash -c / cmd /c nested commands.
+    Also scans `find ... -exec CMD` and recurses into bash -c / cmd /c.
     """
-    blocked = set()
+    blocked: set[str] = set()
 
-    # shlex preserves separators like && and ; as their own tokens, which is
-    # exactly what we need to identify command-position tokens after quoting
-    # is collapsed (so 'r''m' is one token "rm" at command position).
+    # shlex with punctuation_chars splits `;`, `&&`, `||`, `|`, `(`, `)`, `` ` ``
+    # off as their own tokens so we can detect command position even when a
+    # caller writes `echo done; rm -rf x` (no whitespace) or quote-splits the
+    # command name itself (`r''m` collapses to a single token `rm` at command
+    # position after the `;` separator).
     try:
-        tokens = (
-            shlex.split(command)
-            if sys.platform != "win32"
-            else shlex.split(command, posix = False)
-        )
+        if sys.platform == "win32":
+            tokens = shlex.split(command, posix = False)
+        else:
+            lexer = shlex.shlex(command, posix = True, punctuation_chars = ";&|()`")
+            lexer.whitespace_split = True
+            tokens = list(lexer)
     except ValueError:
         tokens = command.split()
 
@@ -139,20 +158,53 @@ def _find_blocked_commands(command: str) -> set[str]:
         # shlex may glue trailing meta-chars onto a token (`rm;`); strip them
         # so the basename match still hits `rm`. Leading shell-state chars
         # likewise.
-        tok = tok.strip(";&|()`")
+        tok = tok.strip(";&|()`{}")
         base = os.path.basename(tok).lower()
         stem, ext = os.path.splitext(base)
         if ext in {".exe", ".com", ".bat", ".cmd"}:
             base = stem
         return base
 
-    prev_is_separator = True  # treat start-of-string as a separator
+    expect_command = True  # start of string is a command position
+    prefix_pending = False  # last command-position token was env/time/timeout/xargs/...
     for token in tokens:
-        if prev_is_separator and not token.startswith("-"):
-            base = _token_basename(token)
+        if token in _SHELL_SEPARATORS or token in _SHELL_KEYWORDS_AS_SEP:
+            expect_command = True
+            prefix_pending = False
+            continue
+        if token.startswith("-"):
+            # Flags belong to the active command. While a wrapper prefix is
+            # waiting for its command (`stdbuf -oL cmd`, `xargs -- cmd`),
+            # keep expect_command intact.
+            if not prefix_pending:
+                expect_command = False
+            continue
+        if not expect_command:
+            continue
+        # FOO=bar prefix: assignment list, next non-assignment token is the command.
+        if _ASSIGNMENT_RE.match(token):
+            continue
+        # `timeout 1 cmd` / `nice -n 5 cmd` style numeric wrapper arg.
+        if prefix_pending and token.lstrip("-").isdigit():
+            continue
+        base = _token_basename(token)
+        if base in _BLOCKED_COMMANDS:
+            blocked.add(base)
+        # Wrappers (`env` / `time` / `xargs` / `sudo`) consume one command; the
+        # next non-flag, non-numeric token is the real command. `sudo` is
+        # already in _BLOCKED_COMMANDS, so it's flagged AND we keep walking.
+        if base in _COMMAND_PREFIXES:
+            prefix_pending = True
+            continue
+        expect_command = False
+        prefix_pending = False
+
+    # `find ... -exec CMD ... ;` and `-execdir CMD ... ;` invoke CMD directly.
+    for i, tok in enumerate(tokens):
+        if tok in _FIND_EXEC_FLAGS and i + 1 < len(tokens):
+            base = _token_basename(tokens[i + 1])
             if base in _BLOCKED_COMMANDS:
                 blocked.add(base)
-        prev_is_separator = token in _SHELL_SEPARATORS
 
     # Regex: blocked words at shell command boundaries that shlex won't see,
     # e.g. inside an unquoted $(rm -rf), <(rm), backtick chain, or appended to
@@ -313,8 +365,13 @@ def _sandbox_preexec():
         try:
             # Default high enough for multi-shard safetensors mmaps + Python's
             # own handle count; tunable via env for installs that hit the cap.
+            # Clamp to the inherited hard limit so setrlimit doesn't ValueError
+            # on machines where the parent's hard cap is below the requested
+            # value (would otherwise leave NOFILE at the parent's default).
             nofile = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_NOFILE", "16384"))
-            _resource.setrlimit(_resource.RLIMIT_NOFILE, (nofile, nofile))
+            _soft_cur, hard_cur = _resource.getrlimit(_resource.RLIMIT_NOFILE)
+            target = nofile if hard_cur == _resource.RLIM_INFINITY else min(nofile, hard_cur)
+            _resource.setrlimit(_resource.RLIMIT_NOFILE, (target, target))
         except (ValueError, OSError, AttributeError):
             pass
 
@@ -1364,6 +1421,23 @@ def _check_signal_escape_patterns(code: str):
             elif isinstance(n, ast.ImportFrom):
                 root = (n.module or "").split(".", 1)[0]
                 if root in _HF_IMPORT_MODULES:
+                    return True
+            elif isinstance(n, ast.Call) and n.args:
+                # __import__('huggingface_hub'), importlib.import_module('huggingface_hub'),
+                # and bare import_module('huggingface_hub') (via `from importlib import ...`).
+                arg0 = n.args[0]
+                if not (
+                    isinstance(arg0, ast.Constant) and isinstance(arg0.value, str)
+                ):
+                    continue
+                if arg0.value.split(".", 1)[0] not in _HF_IMPORT_MODULES:
+                    continue
+                func = n.func
+                if isinstance(func, ast.Name) and func.id in {
+                    "__import__", "import_module",
+                }:
+                    return True
+                if isinstance(func, ast.Attribute) and func.attr == "import_module":
                     return True
         return False
 

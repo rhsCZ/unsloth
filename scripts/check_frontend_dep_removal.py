@@ -482,6 +482,93 @@ def scripts_bin_refs(
     return refs
 
 
+def tsconfig_compiler_types_refs() -> set[str]:
+    """Read studio/frontend/tsconfig*.json and return the set of
+    package names referenced in compilerOptions.types arrays. These are
+    implicitly loaded by tsc and count as a real use even though they
+    have no explicit import.
+    """
+    out: set[str] = set()
+    base = REPO_ROOT / "studio/frontend"
+    for name in ("tsconfig.json", "tsconfig.app.json", "tsconfig.node.json"):
+        path = base / name
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text()
+            # tsconfig allows comments; strip simple line comments.
+            text = re.sub(r"//[^\n]*", "", text)
+            data = json.loads(text)
+        except (OSError, json.JSONDecodeError):
+            continue
+        types = (data.get("compilerOptions", {}) or {}).get("types", []) or []
+        for t in types:
+            if not isinstance(t, str):
+                continue
+            # `vite/client` resolves to `vite` package.
+            pkg = t.split("/", 1)[0] if not t.startswith("@") else "/".join(t.split("/", 2)[:2])
+            out.add(pkg)
+    return out
+
+
+def enumerate_dep_usage(head_pkg: dict, head_lock: dict) -> dict[str, list]:
+    """For every declared dep, classify whether it appears used. Returns
+    a dict with these categories:
+      - used:                 has at least one detected usage in src/,
+                              config files, scripts.bin, package.json
+                              field refs, or tsconfig types
+      - unused:               no detected usage anywhere
+      - type_pkg_kept:        @types/X where X is still declared
+      - type_pkg_orphan:      @types/X where X is no longer declared
+                              (or X is removed) -- candidate for removal
+
+    Each entry is the package name. The categorisation is opinionated;
+    `unused` is a CANDIDATE list, not a guarantee. The caller should
+    verify before deletion.
+    """
+    decl = all_decl_names(head_pkg)
+    bin_to_pkg = build_bin_to_pkg(head_lock) if head_lock else {}
+    script_refs = scripts_bin_refs(head_pkg, bin_to_pkg)
+    tsc_types = tsconfig_compiler_types_refs()
+
+    results: dict[str, list] = {
+        "used": [],
+        "unused": [],
+        "type_pkg_kept": [],
+        "type_pkg_orphan": [],
+    }
+    for name in sorted(decl):
+        if name.startswith("@types/"):
+            target = name[len("@types/") :]
+            if "__" in target:
+                scope, sub = target.split("__", 1)
+                target = f"@{scope}/{sub}"
+            if target == "node":
+                results["type_pkg_kept"].append(name)
+            elif target in decl:
+                results["type_pkg_kept"].append(name)
+            else:
+                results["type_pkg_orphan"].append(name)
+            continue
+        # Real-source-usage check
+        hits = find_usage(name)
+        used = bool(hits)
+        # Bin scripts
+        if not used and name in script_refs:
+            used = True
+        # package.json non-dep field references
+        if not used and package_json_extra_refs(head_pkg, name):
+            used = True
+        # tsconfig compilerOptions.types implicit usage
+        if not used and name in tsc_types:
+            used = True
+        if used:
+            results["used"].append(name)
+        else:
+            results["unused"].append(name)
+    return results
+
+
 def find_imports_without_decl(head_pkg: dict) -> list[tuple[str, int, str]]:
     """Reverse check: find bare-specifier imports in studio/frontend/src
     that don't correspond to any declared package.json dep. Catches the
@@ -628,7 +715,13 @@ def main() -> int:
         "--strict",
         action = "store_true",
         help = "Also fail on hygiene warnings (lockfile sync, "
-        "@types orphans, imports without declared dep).",
+        "@types orphans, imports without declared dep, unused deps).",
+    )
+    p.add_argument(
+        "--enumerate-dead",
+        action = "store_true",
+        help = "Print every declared dep that appears unused anywhere "
+        "in the repo. Informational; does not fail unless --strict.",
     )
     args = p.parse_args()
 
@@ -661,6 +754,26 @@ def main() -> int:
 
     if not removed:
         print("[OK] no dependencies removed from studio/frontend/package.json")
+        if args.enumerate_dead:
+            print()
+            enum = enumerate_dep_usage(head_pkg, head_lock)
+            print("Dead-dep enumeration:")
+            if enum["unused"]:
+                print(f"  unused ({len(enum['unused'])}):")
+                for n in enum["unused"]:
+                    print(f"    - {n}")
+            else:
+                print("  unused: none")
+            if enum["type_pkg_orphan"]:
+                print(f"  type_pkg_orphan ({len(enum['type_pkg_orphan'])}):")
+                for n in enum["type_pkg_orphan"]:
+                    print(f"    - {n}")
+            if args.verbose:
+                print(f"  used: {len(enum['used'])}")
+                print(f"  type_pkg_kept: {len(enum['type_pkg_kept'])}")
+            if args.strict and (enum["unused"] or enum["type_pkg_orphan"]):
+                print("FAIL (--strict): dead deps present")
+                return 1
         return 0
 
     print(
@@ -743,8 +856,33 @@ def main() -> int:
             print(f"  - {file}:{ln}  imports '{spec}'")
         print()
 
+    enum = None
+    if args.enumerate_dead:
+        enum = enumerate_dep_usage(head_pkg, head_lock)
+        print("Dead-dep enumeration:")
+        if enum["unused"]:
+            print(f"  unused ({len(enum['unused'])}):")
+            for n in enum["unused"]:
+                print(f"    - {n}")
+        else:
+            print("  unused: none")
+        if enum["type_pkg_orphan"]:
+            print(f"  type_pkg_orphan ({len(enum['type_pkg_orphan'])}):")
+            for n in enum["type_pkg_orphan"]:
+                print(f"    - {n}")
+        if args.verbose:
+            print(f"  used: {len(enum['used'])}")
+            print(f"  type_pkg_kept: {len(enum['type_pkg_kept'])}")
+        print()
+
     strict_failures = bool(failures) or (
-        args.strict and (sync_warns or types_warns or missing_imports)
+        args.strict
+        and (
+            sync_warns
+            or types_warns
+            or missing_imports
+            or (enum and (enum["unused"] or enum["type_pkg_orphan"]))
+        )
     )
 
     if failures:

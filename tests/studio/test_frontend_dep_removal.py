@@ -1110,6 +1110,176 @@ def run_adversarial_cases() -> int:
     return 0 if passed == len(ADV_CASES) else 1
 
 
+# ---------------------------------------------------------------------------
+# Dead-dep enumeration cases.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EnumCase:
+    id: str
+    desc: str
+    add_deps: dict[str, str]
+    add_dev_deps: dict[str, str]
+    field_patch: dict
+    extra_file: tuple[str, str] | None  # (relative_path, content) or None
+    expected_unused: set[str]
+    expected_used: set[str]
+    expected_orphan_types: set[str]
+
+
+ENUM_CASES: list[EnumCase] = [
+    EnumCase(
+        "E01",
+        "fake dep with no usage anywhere is flagged unused",
+        {"__enum_fake_unused_pkg__": "^1.0.0"},
+        {},
+        {},
+        None,
+        {"__enum_fake_unused_pkg__"},
+        set(),
+        set(),
+    ),
+    EnumCase(
+        "E02",
+        "fake dep referenced via vite.config-style import is flagged used "
+        "(uses a real adversarial file as the import site)",
+        {"__enum_used_via_src__": "^1.0.0"},
+        {},
+        {},
+        (
+            "src/__dep_check_adversarial__/enum_e02.ts",
+            'import x from "__enum_used_via_src__";\n',
+        ),
+        set(),
+        {"__enum_used_via_src__"},
+        set(),
+    ),
+    EnumCase(
+        "E03",
+        "fake dep referenced only in package.json `overrides` is flagged used",
+        {"__enum_used_via_overrides__": "^1.0.0"},
+        {},
+        {"overrides": {"__enum_used_via_overrides__": "^1.0.0"}},
+        None,
+        set(),
+        {"__enum_used_via_overrides__"},
+        set(),
+    ),
+    EnumCase(
+        "E04",
+        "@types/X where X is declared -> kept (NOT orphan)",
+        {"__enum_real_pkg__": "^1.0.0"},
+        {"@types/__enum_real_pkg__": "^1.0.0"},
+        {},
+        (
+            "src/__dep_check_adversarial__/enum_e04.ts",
+            'import x from "__enum_real_pkg__";\n',
+        ),
+        set(),
+        {"__enum_real_pkg__"},
+        set(),
+    ),
+    EnumCase(
+        "E05",
+        "@types/X where X is NOT declared anywhere -> orphan",
+        {},
+        {"@types/__enum_orphan_pkg__": "^1.0.0"},
+        {},
+        None,
+        set(),
+        set(),
+        {"@types/__enum_orphan_pkg__"},
+    ),
+]
+
+
+def run_enum_cases() -> int:
+    head_pkg = json.loads(HEAD_PKG.read_text())
+    passed = 0
+    ADVERSARIAL_TMP_DIR.mkdir(parents = True, exist_ok = True)
+    for ec in ENUM_CASES:
+        synth_head = json.loads(json.dumps(head_pkg))
+        synth_head.setdefault("dependencies", {}).update(ec.add_deps)
+        synth_head.setdefault("devDependencies", {}).update(ec.add_dev_deps)
+        for k, v in ec.field_patch.items():
+            synth_head[k] = v
+        # Drop any temp source file if needed.
+        fpath = None
+        if ec.extra_file:
+            rel, content = ec.extra_file
+            fpath = REPO / rel
+            fpath.parent.mkdir(parents = True, exist_ok = True)
+            fpath.write_text(content)
+        with tempfile.NamedTemporaryFile("w", suffix = ".json", delete = False) as f:
+            json.dump(synth_head, f, indent = 2)
+            head_path = f.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT),
+                 "--base-pkg", str(HEAD_PKG),
+                 "--head-pkg", head_path,
+                 "--head-lock", str(HEAD_LOCK),
+                 "--enumerate-dead"],
+                capture_output = True, text = True, cwd = str(REPO),
+            )
+        finally:
+            os.unlink(head_path)
+            if fpath:
+                try:
+                    fpath.unlink()
+                except FileNotFoundError:
+                    pass
+        # Parse the dead-dep enumeration output.
+        unused: set[str] = set()
+        orphans: set[str] = set()
+        in_unused = False
+        in_orphan = False
+        for line in proc.stdout.splitlines():
+            s = line.strip()
+            if s.startswith("unused ("):
+                in_unused = True
+                in_orphan = False
+                continue
+            if s.startswith("type_pkg_orphan ("):
+                in_unused = False
+                in_orphan = True
+                continue
+            if s.startswith("used:") or s.startswith("type_pkg_kept:"):
+                in_unused = in_orphan = False
+                continue
+            if s.startswith("- "):
+                if in_unused:
+                    unused.add(s[2:])
+                elif in_orphan:
+                    orphans.add(s[2:])
+        unused_ok = ec.expected_unused.issubset(unused) and (
+            not ec.expected_used or not (ec.expected_used & unused)
+        )
+        orphan_ok = ec.expected_orphan_types.issubset(orphans)
+        ok = unused_ok and orphan_ok
+        mark = "PASS" if ok else "FAIL"
+        print(f"  [{mark}] {ec.id}: {ec.desc}")
+        if not ok:
+            print(f"      expected unused superset: {sorted(ec.expected_unused)}")
+            print(f"      expected used NOT in unused: {sorted(ec.expected_used)}")
+            print(f"      expected orphans superset: {sorted(ec.expected_orphan_types)}")
+            print(f"      actual unused: {sorted(unused)}")
+            print(f"      actual orphans: {sorted(orphans)}")
+            for ln in proc.stdout.splitlines()[:30]:
+                print(f"      {ln}")
+        if ok:
+            passed += 1
+    # Cleanup tmp dir if empty.
+    try:
+        ADVERSARIAL_TMP_DIR.rmdir()
+    except OSError:
+        pass
+    print()
+    print(f"{passed}/{len(ENUM_CASES)} enumeration cases pass")
+    return 0 if passed == len(ENUM_CASES) else 1
+
+
 def main() -> int:
     head_pkg = json.loads(HEAD_PKG.read_text())
     print(f"Running {len(CASES)} edge cases against {SCRIPT.relative_to(REPO)}")
@@ -1143,7 +1313,18 @@ def main() -> int:
     print()
     pkg_rc = run_pkg_field_cases()
 
-    if passed == total and cls_rc == 0 and adv_rc == 0 and pkg_rc == 0:
+    print()
+    print(f"Running {len(ENUM_CASES)} dead-dep enumeration cases")
+    print()
+    enum_rc = run_enum_cases()
+
+    if (
+        passed == total
+        and cls_rc == 0
+        and adv_rc == 0
+        and pkg_rc == 0
+        and enum_rc == 0
+    ):
         return 0
     return 1
 

@@ -317,13 +317,16 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     if sys.version_info < _FLA_MIN_PYTHON:
         logger.info(
             "Skipping flash-linear-attention install: requires Python >= %d.%d, have %s",
-            _FLA_MIN_PYTHON[0], _FLA_MIN_PYTHON[1], sys.version.split()[0],
+            _FLA_MIN_PYTHON[0],
+            _FLA_MIN_PYTHON[1],
+            sys.version.split()[0],
         )
         return
 
     try:
         import fla.modules  # noqa: F401
         import fla.ops.gated_delta_rule  # noqa: F401
+
         logger.info("flash-linear-attention already importable")
         return
     except ImportError:
@@ -343,14 +346,20 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     ]
     if shutil.which("uv"):
         pypi_cmd = [
-            "uv", "pip", "install",
-            "--python", sys.executable,
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
             "--no-deps",
             *specs,
         ]
     else:
         pypi_cmd = [
-            sys.executable, "-m", "pip", "install",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
             "--no-deps",
             *specs,
         ]
@@ -365,7 +374,9 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
         )
     except _sp.TimeoutExpired:
         logger.warning("flash-linear-attention install timed out; continuing")
-        _send_status(event_queue, "flash-linear-attention install timed out; continuing")
+        _send_status(
+            event_queue, "flash-linear-attention install timed out; continuing"
+        )
         return
 
     if result.returncode != 0:
@@ -442,6 +453,7 @@ def _installed_tvm_ffi_version() -> str | None:
     """
     try:
         from importlib.metadata import version as _pkg_version
+
         return _pkg_version("apache-tvm-ffi")
     except Exception:
         return None
@@ -468,7 +480,9 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     if sys.version_info < _FLA_MIN_PYTHON:
         logger.info(
             "Skipping tilelang install: requires Python >= %d.%d, have %s",
-            _FLA_MIN_PYTHON[0], _FLA_MIN_PYTHON[1], sys.version.split()[0],
+            _FLA_MIN_PYTHON[0],
+            _FLA_MIN_PYTHON[1],
+            sys.version.split()[0],
         )
         return
     if not any(sys.platform.startswith(p) for p in _TILELANG_SUPPORTED_PLATFORMS):
@@ -485,6 +499,7 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         try:
             import tilelang  # noqa: F401
             import tvm_ffi  # noqa: F401
+
             logger.info("tilelang + apache-tvm-ffi already installed")
             return
         except ImportError:
@@ -513,14 +528,20 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     extra_args = ["--force-reinstall", "--no-deps"] if needs_reinstall else []
     if shutil.which("uv"):
         pypi_cmd = [
-            "uv", "pip", "install",
-            "--python", sys.executable,
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
             *extra_args,
             *specs,
         ]
     else:
         pypi_cmd = [
-            sys.executable, "-m", "pip", "install",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
             *extra_args,
             *specs,
         ]

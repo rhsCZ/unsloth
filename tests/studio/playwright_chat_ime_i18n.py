@@ -80,37 +80,37 @@ WALL_TIMEOUT_S = float(os.environ.get("STUDIO_IME_WALL_TIMEOUT_S", "300"))
 #   string so the line stays under one composer row and the readback
 #   diff is easy to read in the CI log on miss.
 I18N_SAMPLES = [
-    ("en",     "English",                 "Hello, 1+1=2"),
-    ("zh-CN",  "Chinese (Simplified)",    "你好，1+1=2"),
-    ("es",     "Spanish",                 "Hola, 1+1=2"),
-    ("hi",     "Hindi (Devanagari)",      "नमस्ते, 1+1=2"),
-    ("ar",     "Arabic (RTL)",            "مرحبا، ١+١=٢"),
-    ("bn",     "Bengali",                 "নমস্কার, ১+১=২"),
-    ("pt",     "Portuguese",              "Olá, 1+1=2"),
-    ("ru",     "Russian (Cyrillic)",      "Привет, 1+1=2"),
-    ("ja",     "Japanese",                "こんにちは、1+1=2"),
-    ("pa",     "Punjabi (Gurmukhi)",      "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, 1+1=2"),
-    ("de",     "German",                  "Hallo, 1+1=2"),
-    ("jv",     "Javanese",                "Halo, 1+1=2"),
-    ("ko",     "Korean (Hangul)",         "안녕하세요, 1+1=2"),
-    ("fr",     "French",                  "Bonjour, 1+1=2"),
-    ("tr",     "Turkish",                 "Merhaba, 1+1=2"),
-    ("vi",     "Vietnamese (diacritics)", "Xin chào, 1+1=2"),
-    ("ur",     "Urdu (Arabic-Naskh)",     "ہیلو، 1+1=2"),
-    ("ta",     "Tamil",                   "வணக்கம், 1+1=2"),
-    ("te",     "Telugu",                  "నమస్తే, 1+1=2"),
-    ("mr",     "Marathi (Devanagari)",    "नमस्कार, 1+1=2"),
-    ("it",     "Italian",                 "Ciao, 1+1=2"),
-    ("th",     "Thai",                    "สวัสดี, ๑+๑=๒"),
-    ("pl",     "Polish",                  "Cześć, 1+1=2"),
-    ("uk",     "Ukrainian (Cyrillic)",    "Привіт, 1+1=2"),
-    ("fa",     "Persian (RTL)",           "سلام، ۱+۱=۲"),
-    ("nl",     "Dutch",                   "Hallo, 1+1=2"),
-    ("he",     "Hebrew (RTL)",            "שלום, 1+1=2"),
-    ("el",     "Greek",                   "Γειά, 1+1=2"),
-    ("id",     "Indonesian",              "Halo, 1+1=2"),
-    ("sw",     "Swahili",                 "Habari, 1+1=2"),
-    ("emoji",  "Emoji + ZWJ + flag",      "👋 🇺🇳 👨‍👩‍👧‍👦 1+1=2"),
+    ("en", "English", "Hello, 1+1=2"),
+    ("zh-CN", "Chinese (Simplified)", "你好，1+1=2"),
+    ("es", "Spanish", "Hola, 1+1=2"),
+    ("hi", "Hindi (Devanagari)", "नमस्ते, 1+1=2"),
+    ("ar", "Arabic (RTL)", "مرحبا، ١+١=٢"),
+    ("bn", "Bengali", "নমস্কার, ১+১=২"),
+    ("pt", "Portuguese", "Olá, 1+1=2"),
+    ("ru", "Russian (Cyrillic)", "Привет, 1+1=2"),
+    ("ja", "Japanese", "こんにちは、1+1=2"),
+    ("pa", "Punjabi (Gurmukhi)", "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, 1+1=2"),
+    ("de", "German", "Hallo, 1+1=2"),
+    ("jv", "Javanese", "Halo, 1+1=2"),
+    ("ko", "Korean (Hangul)", "안녕하세요, 1+1=2"),
+    ("fr", "French", "Bonjour, 1+1=2"),
+    ("tr", "Turkish", "Merhaba, 1+1=2"),
+    ("vi", "Vietnamese (diacritics)", "Xin chào, 1+1=2"),
+    ("ur", "Urdu (Arabic-Naskh)", "ہیلو، 1+1=2"),
+    ("ta", "Tamil", "வணக்கம், 1+1=2"),
+    ("te", "Telugu", "నమస్తే, 1+1=2"),
+    ("mr", "Marathi (Devanagari)", "नमस्कार, 1+1=2"),
+    ("it", "Italian", "Ciao, 1+1=2"),
+    ("th", "Thai", "สวัสดี, ๑+๑=๒"),
+    ("pl", "Polish", "Cześć, 1+1=2"),
+    ("uk", "Ukrainian (Cyrillic)", "Привіт, 1+1=2"),
+    ("fa", "Persian (RTL)", "سلام، ۱+۱=۲"),
+    ("nl", "Dutch", "Hallo, 1+1=2"),
+    ("he", "Hebrew (RTL)", "שלום, 1+1=2"),
+    ("el", "Greek", "Γειά, 1+1=2"),
+    ("id", "Indonesian", "Halo, 1+1=2"),
+    ("sw", "Swahili", "Habari, 1+1=2"),
+    ("emoji", "Emoji + ZWJ + flag", "👋 🇺🇳 👨‍👩‍👧‍👦 1+1=2"),
 ]
 
 
@@ -212,15 +212,14 @@ with sync_playwright() as p:
             page.fill("#confirm-password", NEW, timeout = 60_000)
             shoot("01-change-password-filled")
             with page.expect_response(
-                lambda r: "/api/auth/change-password" in r.url and r.request.method == "POST",
+                lambda r: "/api/auth/change-password" in r.url
+                and r.request.method == "POST",
                 timeout = 30_000,
             ) as resp_info:
                 page.locator('button[type="submit"]').click()
             resp = resp_info.value
             if resp.status >= 400:
-                raise AssertionError(
-                    f"change-password POST returned {resp.status}"
-                )
+                raise AssertionError(f"change-password POST returned {resp.status}")
             form_err = None
             break
         except Exception as e:
@@ -263,7 +262,7 @@ with sync_playwright() as p:
     if dir_attr != "auto":
         soft_fail(
             f'composer is missing dir="auto" (got {dir_attr!r}); RTL '
-            'languages will render LTR.'
+            "languages will render LTR."
         )
     else:
         info('composer dir="auto" present')
@@ -422,7 +421,9 @@ with sync_playwright() as p:
     # while the React-rendered value lags.
     page.keyboard.type("d")
     after_key = read_value()
-    info(f"after_input='abc' readback={stuck_value!r}; after_key='d' readback={after_key!r}")
+    info(
+        f"after_input='abc' readback={stuck_value!r}; after_key='d' readback={after_key!r}"
+    )
     shoot("06-stuck-composition-recovery")
     if "abc" not in stuck_value:
         fail(

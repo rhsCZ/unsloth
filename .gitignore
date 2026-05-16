@@ -229,10 +229,7 @@ log.txt
 setup_leo.sh
 server.pid
 *.log
-# Default-ignore stray package-lock.json files that npm creates in random
-# Python subtrees during development. Lockfiles for the real npm projects
-# inside this repo are committed explicitly via the negative patterns below
-# (npm ci in setup.sh / setup.ps1 / release-desktop.yml depends on them).
+# Ignore stray lockfiles; real npm projects opt back in below (npm ci needs them).
 package-lock.json
 !studio/frontend/package-lock.json
 !studio/backend/core/data_recipe/oxc-validator/package-lock.json

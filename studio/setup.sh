@@ -343,11 +343,7 @@ trap _restore_gitignores EXIT
 _try_bun_install() {
     local _log _exit_code=0
     _log=$(mktemp)
-    # --frozen-lockfile prevents the installer from auto-pulling newer
-    # transitive versions when a caret range in package.json would allow
-    # it. Combined with the npm-ci fallback below, this keeps the
-    # release-build dep set identical to what the committed lockfile
-    # captures.
+    # --frozen-lockfile so a fresh caret-range patch can't land via npm registry.
     bun install --frozen-lockfile >"$_log" 2>&1 || _exit_code=$?
 
     # bun may create .exe shims on Windows (Git Bash / MSYS2) instead of plain scripts
@@ -386,10 +382,7 @@ if command -v bun &>/dev/null; then
     fi
 fi
 if [ "$_bun_install_ok" = false ]; then
-    # npm ci (not npm install) -- strictly install what package-lock.json
-    # pins, so an attacker who hijacks a minor/patch of a transitive dep
-    # cannot have it pulled into a release build via caret-range
-    # resolution. Fails fast if package.json and the lockfile have drifted.
+    # npm ci: install exactly what the lockfile pins, fail on drift.
     run_quiet_no_exit "npm ci" npm ci --no-fund --no-audit --loglevel=error
     _npm_install_rc=$?
     if [ "$_npm_install_rc" -ne 0 ]; then
@@ -417,8 +410,7 @@ fi  # end frontend build check
 # ── oxc-validator runtime ──
 if [ -d "$SCRIPT_DIR/backend/core/data_recipe/oxc-validator" ] && command -v npm &>/dev/null; then
     cd "$SCRIPT_DIR/backend/core/data_recipe/oxc-validator"
-    # npm ci pins the oxc validator install to its committed lockfile so a
-    # hijacked transitive cannot land via caret-range resolution.
+    # npm ci: lockfile-strict (see frontend install above).
     run_quiet_no_exit "npm ci (oxc validator runtime)" npm ci --no-fund --no-audit --loglevel=error
     _oxc_install_rc=$?
     if [ "$_oxc_install_rc" -ne 0 ]; then

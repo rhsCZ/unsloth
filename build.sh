@@ -33,14 +33,9 @@ _restore_gitignores() {
 }
 trap _restore_gitignores EXIT
 
-# Use bun for install if available (faster), fall back to npm.
-# Both paths use lockfile-strict mode so a release build cannot silently
-# pull a newer minor/patch of any transitive dep from the registry. Naked
-# `bun install` / `npm install` honour caret ranges in package.json and
-# will fetch new compatible versions if available, which is the standard
-# vector for supply-chain attacks that compromise a sub-dep at a patch
-# release. `--frozen-lockfile` / `npm ci` install only what the lockfile
-# pins and abort on any drift.
+# Use bun if available (faster), fall back to npm. Lockfile-strict on
+# both paths so a release build can't pull a fresh caret-range patch
+# of any transitive from the registry.
 _install_ok=false
 if command -v bun &>/dev/null; then
     if bun install --frozen-lockfile; then

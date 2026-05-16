@@ -1333,10 +1333,7 @@ if ($NeedFrontendBuild -and -not $IsPipInstall) {
     # metadata but no actual content (bin/, lib/). When this happens bun install
     # exits 0 but leaves binaries missing. We validate after install and clear
     # the cache + retry once before falling back to npm.
-    #
-    # --frozen-lockfile so a Windows end-user install can never pull a fresh
-    # minor/patch of a transitive dep from the registry via caret-range
-    # resolution; the tree is exactly what the committed lockfile pins.
+    # --frozen-lockfile so a fresh caret-range patch can't land via npm registry.
     if ($UseBun) {
         Write-Host "   Using bun for package install (faster)" -ForegroundColor DarkGray
         $bunExit = Invoke-SetupCommand { bun install --frozen-lockfile }
@@ -1372,9 +1369,7 @@ if ($NeedFrontendBuild -and -not $IsPipInstall) {
         }
     }
     if (-not $UseBun) {
-        # npm ci (not npm install) so the install is pinned to the committed
-        # lockfile -- a hijacked transitive cannot land via caret-range
-        # resolution. Fails fast if package.json and the lockfile have drifted.
+        # npm ci: install exactly what the lockfile pins, fail on drift.
         $npmExit = Invoke-SetupCommand { npm ci }
         if ($npmExit -ne 0) {
             Pop-Location
@@ -1418,8 +1413,7 @@ if (Test-Path $OxcValidatorDir) {
     $prevEAP_oxc = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     Push-Location $OxcValidatorDir
-    # npm ci pins the oxc validator install to its committed lockfile so a
-    # hijacked transitive cannot land via caret-range resolution.
+    # npm ci: lockfile-strict (see frontend install above).
     $oxcInstallExit = Invoke-SetupCommand { npm ci }
     if ($oxcInstallExit -ne 0) {
         Pop-Location

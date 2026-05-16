@@ -205,10 +205,10 @@ class TestSecurityHeadersMiddleware:
             for chunk in csp.split(";")
             if chunk.strip().startswith("img-src ")
         )
-        # Tokenise the directive so the assertion matches an exact CSP source
-        # expression and CodeQL doesn't read this as URL substring sanitisation.
+        # Tokenise and compare with `==` so CodeQL's URL-substring rule does
+        # not read directive-string `in` membership as URL sanitisation.
         img_sources = img_directive.split()
-        assert "https://www.google.com" in img_sources
+        assert any(src == "https://www.google.com" for src in img_sources)
         # Pre-existing favicon CDNs stay allowed.
         for host in (
             "https://t0.gstatic.com",
@@ -216,7 +216,7 @@ class TestSecurityHeadersMiddleware:
             "https://t2.gstatic.com",
             "https://t3.gstatic.com",
         ):
-            assert host in img_sources
+            assert any(src == host for src in img_sources)
 
 
 # =====================================================================

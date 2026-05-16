@@ -105,7 +105,9 @@ class TestClientIp:
     def test_xff_strips_ipv4_port(self, env_trust_proxy):
         from routes.auth import _client_ip
 
-        req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "198.51.100.7:50001, 10.0.0.1"})
+        req = _FakeRequest(
+            "127.0.0.1", {"x-forwarded-for": "198.51.100.7:50001, 10.0.0.1"}
+        )
         assert _client_ip(req) == "198.51.100.7"
 
     def test_xff_strips_bracketed_ipv6_port(self, env_trust_proxy):
@@ -139,7 +141,7 @@ class TestClientIp:
         # otherwise suffix variations create attacker-controlled buckets.
         req = _FakeRequest(
             "127.0.0.1",
-            {"forwarded": 'for=198.51.100.42, for=10.0.0.1;proto=https'},
+            {"forwarded": "for=198.51.100.42, for=10.0.0.1;proto=https"},
         )
         assert _client_ip(req) == "198.51.100.42"
 
@@ -200,15 +202,11 @@ class TestBucketKeyAndBlocking:
         monkeypatch.setattr(auth_routes, "_LOGIN_IP_MAX_FAILS", 5)
         req = _FakeRequest("203.0.113.10")
         for idx in range(5):
-            auth_routes._record_login_failure(
-                auth_routes._unknown_user_key(req)
-            )
+            auth_routes._record_login_failure(auth_routes._unknown_user_key(req))
             # Different "username" each attempt would not have throttled
             # under per-(ip,username) only; the IP aggregate must.
         # The next missing-user attempt is blocked.
-        assert auth_routes._login_blocked(
-            auth_routes._unknown_user_key(req)
-        ) > 0
+        assert auth_routes._login_blocked(auth_routes._unknown_user_key(req)) > 0
 
     def test_unknown_user_bucket_is_single_sentinel(self, env_no_proxy):
         """Random unknown usernames from one IP collapse to one bucket."""

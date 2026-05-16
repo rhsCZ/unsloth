@@ -343,6 +343,85 @@ def types_orphan_warnings(head_pkg: dict) -> list[str]:
     return warnings
 
 
+_PKG_JSON_SKIP_KEYS = {
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+    "bundleDependencies",
+    "bundledDependencies",
+}
+
+# Top-level fields whose contents are never package references. We walk
+# everything else recursively.
+_PKG_JSON_OPAQUE_KEYS = {
+    "browserslist",       # browser queries
+    "keywords",           # free-form strings
+    "engines",            # node/npm version constraints
+    "engineStrict",       # bool
+    "packageManager",     # `pnpm@9.0.0` -- the package manager binary
+    "volta",              # version pins for node/npm/yarn
+    "files",              # paths included in publish
+    "directories",        # paths
+    "publishConfig",      # registry / access config
+    "config",             # generic npm config values
+    "main", "module", "browser", "types", "typings", "type", "exports",
+    "imports", "bin", "man",  # author-side fields (not consumer refs)
+    "scripts",            # handled separately via scripts_bin_refs()
+    "repository", "bugs", "homepage", "funding",
+    "author", "contributors", "maintainers", "license", "licenses",
+    "name", "version", "description", "private", "sideEffects",
+    "workspaces",         # paths/globs, NOT pkg names
+}
+
+
+def package_json_extra_refs(pkg: dict, target: str) -> list[str]:
+    """Walk every key/value in package.json EXCEPT the dep declaration
+    blocks, and return citations for string values or dict keys that
+    equal `target` (or `target/subpath`).
+
+    Catches the patterns the public dep-checker tools commonly miss:
+      - `overrides` / `resolutions` / `pnpm.overrides` keys
+      - `pnpm.patchedDependencies` keys
+      - `peerDependenciesMeta` keys
+      - `prettier`: "@my/prettier-config"
+      - `eslintConfig.extends`: ["..."] / "..."
+      - `stylelint.extends` / `stylelint.plugins`
+      - `babel.presets` / `babel.plugins`
+      - `jest.preset` / `jest.setupFiles` / `jest.transform`
+      - `commitlint.extends`, `renovate.extends`, `remarkConfig.plugins`
+    """
+    target_sub = target + "/"
+    cites: list[str] = []
+
+    def matches(s: object) -> bool:
+        return isinstance(s, str) and (s == target or s.startswith(target_sub))
+
+    def walk(obj: object, path: str) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                # Skip top-level dep declaration fields entirely.
+                if path == "" and k in _PKG_JSON_SKIP_KEYS:
+                    continue
+                # Top-level fields whose contents are never package refs.
+                if path == "" and k in _PKG_JSON_OPAQUE_KEYS:
+                    continue
+                # Inside `overrides` / `resolutions` / etc., the KEY itself
+                # is a package reference.
+                if matches(k):
+                    cites.append(f"{path}.{k}" if path else k)
+                walk(v, f"{path}.{k}" if path else k)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, f"{path}[{i}]")
+        elif isinstance(obj, str):
+            if matches(obj):
+                cites.append(f"{path}: {obj}")
+
+    walk(pkg, "")
+    return cites
+
+
 def build_bin_to_pkg(head_lock: dict) -> dict[str, str]:
     """Map a binary name (e.g. 'vite', 'tsc', 'eslint') to the package
     that provides it. Built from each lockfile entry's `bin` field.
@@ -613,6 +692,8 @@ def main() -> int:
         hits = find_usage(name)
         for cite in script_refs.get(name, []):
             hits.append(Hit("studio/frontend/package.json", 0, "script_bin", cite))
+        for cite in package_json_extra_refs(head_pkg, name):
+            hits.append(Hit("studio/frontend/package.json", 0, "pkg_json_field", cite))
         top, nested = reachable_install_paths(name)
         importable_top_level = top is not None
         # Source imports of bare specifier `name` resolve ONLY to top-level

@@ -800,6 +800,241 @@ ADV_CASES: list[AdvCase] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# package.json field-reference cases: simulate `prettier: "@x/config"`,
+# `eslintConfig.extends`, `overrides`, `peerDependenciesMeta`, etc.
+# These test the package_json_extra_refs() coverage. Cross-checked against
+# the patterns used by Tailwind, Stylelint, Prettier, Next.js, Astro,
+# TypeScript, ESLint, SvelteKit, Storybook, Vite, and TanStack/Query
+# manifests.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PkgFieldCase:
+    id: str
+    desc: str
+    field_patch: dict  # extra fields to merge into synth_head package.json
+    target_pkg: str
+    expected_status: str
+    expected_failures: list[str]
+
+
+PKG_FIELD_CASES: list[PkgFieldCase] = [
+    PkgFieldCase(
+        "P01",
+        "removing pkg referenced only in `prettier` string field",
+        {"prettier": "__pkg_prettier_config__"},
+        "__pkg_prettier_config__",
+        "FAIL",
+        ["__pkg_prettier_config__"],
+    ),
+    PkgFieldCase(
+        "P02",
+        "removing pkg referenced in `eslintConfig.extends` array",
+        {"eslintConfig": {"extends": ["__pkg_eslint_cfg__"]}},
+        "__pkg_eslint_cfg__",
+        "FAIL",
+        ["__pkg_eslint_cfg__"],
+    ),
+    PkgFieldCase(
+        "P03",
+        "removing pkg referenced in `stylelint.plugins`",
+        {"stylelint": {"plugins": ["__pkg_stylelint_plugin__"]}},
+        "__pkg_stylelint_plugin__",
+        "FAIL",
+        ["__pkg_stylelint_plugin__"],
+    ),
+    PkgFieldCase(
+        "P04",
+        "removing pkg referenced in `babel.presets`",
+        {"babel": {"presets": [["__pkg_babel_preset__", {"opt": 1}]]}},
+        "__pkg_babel_preset__",
+        "FAIL",
+        ["__pkg_babel_preset__"],
+    ),
+    PkgFieldCase(
+        "P05",
+        "removing pkg used as a key in `overrides`",
+        {"overrides": {"__pkg_overridden__": "^1.0.0"}},
+        "__pkg_overridden__",
+        "FAIL",
+        ["__pkg_overridden__"],
+    ),
+    PkgFieldCase(
+        "P06",
+        "removing pkg used as a key in `pnpm.overrides`",
+        {"pnpm": {"overrides": {"__pkg_pnpm_override__": "^1.0.0"}}},
+        "__pkg_pnpm_override__",
+        "FAIL",
+        ["__pkg_pnpm_override__"],
+    ),
+    PkgFieldCase(
+        "P07",
+        "removing pkg used as a key in `pnpm.patchedDependencies`",
+        {"pnpm": {"patchedDependencies": {"__pkg_patched__": "patches/x.patch"}}},
+        "__pkg_patched__",
+        "FAIL",
+        ["__pkg_patched__"],
+    ),
+    PkgFieldCase(
+        "P08",
+        "removing pkg used as a key in `peerDependenciesMeta`",
+        {"peerDependenciesMeta": {"__pkg_peer_meta__": {"optional": True}}},
+        "__pkg_peer_meta__",
+        "FAIL",
+        ["__pkg_peer_meta__"],
+    ),
+    PkgFieldCase(
+        "P09",
+        "removing pkg referenced in `jest.preset` string",
+        {"jest": {"preset": "__pkg_jest_preset__"}},
+        "__pkg_jest_preset__",
+        "FAIL",
+        ["__pkg_jest_preset__"],
+    ),
+    PkgFieldCase(
+        "P10",
+        "removing pkg referenced in `commitlint.extends`",
+        {"commitlint": {"extends": ["__pkg_commitlint__"]}},
+        "__pkg_commitlint__",
+        "FAIL",
+        ["__pkg_commitlint__"],
+    ),
+    PkgFieldCase(
+        "P11",
+        "removing pkg referenced in `renovate.extends`",
+        {"renovate": {"extends": ["__pkg_renovate__"]}},
+        "__pkg_renovate__",
+        "FAIL",
+        ["__pkg_renovate__"],
+    ),
+    PkgFieldCase(
+        "P12",
+        "removing pkg referenced in `remarkConfig.plugins`",
+        {"remarkConfig": {"plugins": ["__pkg_remark__"]}},
+        "__pkg_remark__",
+        "FAIL",
+        ["__pkg_remark__"],
+    ),
+    PkgFieldCase(
+        "P13",
+        "removing pkg with subpath ref in tool config (`pkg/config`)",
+        {"prettier": "__pkg_prettier_sub__/config"},
+        "__pkg_prettier_sub__",
+        "FAIL",
+        ["__pkg_prettier_sub__"],
+    ),
+    PkgFieldCase(
+        "P14",
+        "false-positive guard: similar-prefix package in tool config",
+        {"prettier": "__pkg_short_extra__/config"},
+        "__pkg_short__",
+        "PASS",
+        [],
+    ),
+    PkgFieldCase(
+        "P15",
+        "false-positive guard: package-named string in `browserslist` "
+        "must NOT trigger (browserslist values are browser queries, "
+        "never package names)",
+        {"browserslist": ["last 2 versions", "__pkg_browserslist__"]},
+        "__pkg_browserslist__",
+        "PASS",
+        [],
+    ),
+    PkgFieldCase(
+        "P16",
+        "false-positive guard: matching string in `keywords` field",
+        {"keywords": ["__pkg_keyword__", "foo"]},
+        "__pkg_keyword__",
+        "PASS",
+        [],
+    ),
+    PkgFieldCase(
+        "P17",
+        "false-positive guard: matching string in `workspaces` (paths)",
+        {"workspaces": ["packages/__pkg_workspace_path__"]},
+        "__pkg_workspace_path__",
+        "PASS",
+        [],
+    ),
+    PkgFieldCase(
+        "P18",
+        "false-positive guard: matching value in `files` field",
+        {"files": ["dist/__pkg_in_files__"]},
+        "__pkg_in_files__",
+        "PASS",
+        [],
+    ),
+    PkgFieldCase(
+        "P19",
+        "false-positive guard: matching `packageManager` string",
+        {"packageManager": "__pkg_in_pm__@1.0.0"},
+        "__pkg_in_pm__",
+        "PASS",
+        [],
+    ),
+]
+
+
+def run_pkg_field_cases() -> int:
+    head_pkg = json.loads(HEAD_PKG.read_text())
+    passed = 0
+    for pc in PKG_FIELD_CASES:
+        synth_head = json.loads(json.dumps(head_pkg))
+        # Apply the field patch (deep-merge isn't needed; we control the keys).
+        for k, v in pc.field_patch.items():
+            synth_head[k] = v
+        # Base has the target in dependencies; head does not. The extra field
+        # in synth_head references the target pkg even though it's no longer
+        # in deps.
+        synth_base = json.loads(json.dumps(head_pkg))
+        synth_base.setdefault("dependencies", {})[pc.target_pkg] = "^1.0.0"
+        with tempfile.NamedTemporaryFile("w", suffix = ".json", delete = False) as f:
+            json.dump(synth_base, f, indent = 2)
+            base_path = f.name
+        with tempfile.NamedTemporaryFile("w", suffix = ".json", delete = False) as f:
+            json.dump(synth_head, f, indent = 2)
+            head_path = f.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT),
+                 "--base-pkg", base_path,
+                 "--head-pkg", head_path,
+                 "--head-lock", str(HEAD_LOCK)],
+                capture_output = True, text = True, cwd = str(REPO),
+            )
+        finally:
+            os.unlink(base_path)
+            os.unlink(head_path)
+        actual_status = {0: "PASS", 1: "FAIL"}.get(proc.returncode, f"RC{proc.returncode}")
+        fails: list[str] = []
+        in_summary = False
+        for line in proc.stdout.splitlines():
+            if "FAIL:" in line and "removed package" in line:
+                in_summary = True
+                continue
+            if in_summary and line.strip().startswith("- "):
+                fails.append(line.strip()[2:])
+        # The expected_failures includes the tolerated-FP case (P15); we
+        # accept BOTH expected_status and expected_failures matches.
+        ok = (actual_status == pc.expected_status
+              and set(fails) == set(pc.expected_failures))
+        mark = "PASS" if ok else "FAIL"
+        print(f"  [{mark}] {pc.id}: {pc.desc}")
+        if not ok:
+            print(f"      expected: status={pc.expected_status} fails={pc.expected_failures}")
+            print(f"      actual:   status={actual_status} fails={fails}")
+            for ln in proc.stdout.splitlines()[:25]:
+                print(f"      {ln}")
+        if ok:
+            passed += 1
+    print()
+    print(f"{passed}/{len(PKG_FIELD_CASES)} package.json-field cases pass")
+    return 0 if passed == len(PKG_FIELD_CASES) else 1
+
+
 def run_adversarial_cases() -> int:
     ADVERSARIAL_TMP_DIR.mkdir(parents = True, exist_ok = True)
     head_pkg = json.loads(HEAD_PKG.read_text())
@@ -903,7 +1138,12 @@ def main() -> int:
     print()
     adv_rc = run_adversarial_cases()
 
-    if passed == total and cls_rc == 0 and adv_rc == 0:
+    print()
+    print(f"Running {len(PKG_FIELD_CASES)} package.json-field cases")
+    print()
+    pkg_rc = run_pkg_field_cases()
+
+    if passed == total and cls_rc == 0 and adv_rc == 0 and pkg_rc == 0:
         return 0
     return 1
 

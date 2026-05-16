@@ -60,6 +60,20 @@ _FLASH_ATTN_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_FLASHATTN_INSTALL"
 _TILELANG_PACKAGE_VERSION = "0.1.8"
 _APACHE_TVM_FFI_PACKAGE_VERSION = "0.1.9"
 _TILELANG_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_TILELANG_INSTALL"
+# fla-core 0.5.0 requires torch>=2.7.0; pin both so plain pip never
+# upgrades torch underneath the Studio venv.
+_FLA_PACKAGE_VERSION = "0.5.0"
+_FLA_CORE_PACKAGE_VERSION = "0.5.0"
+# flash-linear-attention and tilelang both require Python >=3.10.
+_FLA_MIN_PYTHON = (3, 10)
+# tilelang wheels exist for Linux x86_64/aarch64 and macOS arm64. We
+# never want to fall back to its 93MB sdist on a Studio worker, so
+# skip on platforms outside that set.
+_TILELANG_SUPPORTED_PLATFORMS = ("linux",)
+_TILELANG_INSTALL_TIMEOUT_S = 600
+# apache-tvm-ffi 0.1.10/0.1.11 trigger "CUDA: misaligned address" on
+# sm_100. If we detect a stale broken version, force a reinstall.
+_TVM_FFI_BROKEN_VERSIONS = ("0.1.10", "0.1.11")
 
 
 def _model_wants_causal_conv1d(model_name: str) -> bool:
@@ -284,31 +298,88 @@ def _ensure_causal_conv1d_fast_path(event_queue: Any, model_name: str) -> None:
 
 
 def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
-    """Install ``flash-linear-attention`` from PyPI for models that need it.
+    """Install ``flash-linear-attention`` + ``fla-core`` for Qwen3.5 family.
 
-    Qwen3.5 / Qwen3.6 / Qwen3-Next (and the SSM hybrids covered by
-    ``_model_wants_causal_conv1d``) gate their fast path on FLA's
-    ``chunk_gated_delta_rule`` / ``fused_recurrent_gated_delta_rule``
-    being importable. Without FLA, transformers falls back to a pure
-    Python torch loop (~2.35x slower in our Qwen3.5-2B-Vision bench).
+    Qwen3.5 / Qwen3.6 / Qwen3-Next gate their transformers fast path on
+    FLA's ``chunk_gated_delta_rule`` / ``fused_recurrent_gated_delta_rule``
+    being importable. Without FLA the path falls back to a pure-Python
+    torch loop (~2.35x slower in our Qwen3.5-2B-Vision bench).
 
-    FLA ships as a universal py3-none-any wheel on PyPI (Triton kernels
-    JIT-compile at runtime), so no wheel-matching dance is needed.
+    True SSM families (Nemotron-H, Falcon-H1, Granite-H, LFM2) take the
+    mamba_ssm path and never call FLA's GDN kernels, so we skip them.
+
+    Both packages are pure-Python wheels on PyPI. We install with
+    ``--no-deps`` to prevent fla-core's ``torch>=2.7.0`` requirement
+    from silently upgrading the Studio venv's torch.
     """
-    if not _model_wants_causal_conv1d(model_name):
+    if not _model_wants_tilelang(model_name):
+        return
+    if sys.version_info < _FLA_MIN_PYTHON:
+        logger.info(
+            "Skipping flash-linear-attention install: requires Python >= %d.%d, have %s",
+            _FLA_MIN_PYTHON[0], _FLA_MIN_PYTHON[1], sys.version.split()[0],
+        )
         return
 
-    _install_package_wheel_first(
-        event_queue = event_queue,
-        import_name = "fla",
-        display_name = "flash-linear-attention",
-        pypi_name = "flash-linear-attention",
-        wheel_url_builder = lambda env: None,
-        pypi_spec = "flash-linear-attention",
-        pypi_status_message = (
-            "Installing flash-linear-attention from PyPI for the fast path..."
+    try:
+        import fla.modules  # noqa: F401
+        import fla.ops.gated_delta_rule  # noqa: F401
+        logger.info("flash-linear-attention already importable")
+        return
+    except ImportError:
+        pass
+
+    _send_status(
+        event_queue,
+        (
+            f"Installing flash-linear-attention=={_FLA_PACKAGE_VERSION} "
+            f"(with fla-core=={_FLA_CORE_PACKAGE_VERSION}) for the fast path..."
         ),
     )
+
+    specs = [
+        f"fla-core=={_FLA_CORE_PACKAGE_VERSION}",
+        f"flash-linear-attention=={_FLA_PACKAGE_VERSION}",
+    ]
+    if shutil.which("uv"):
+        pypi_cmd = [
+            "uv", "pip", "install",
+            "--python", sys.executable,
+            "--no-deps",
+            *specs,
+        ]
+    else:
+        pypi_cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--no-deps",
+            *specs,
+        ]
+
+    try:
+        result = _sp.run(
+            pypi_cmd,
+            stdout = _sp.PIPE,
+            stderr = _sp.STDOUT,
+            text = True,
+            timeout = _TILELANG_INSTALL_TIMEOUT_S,
+        )
+    except _sp.TimeoutExpired:
+        logger.warning("flash-linear-attention install timed out; continuing")
+        _send_status(event_queue, "flash-linear-attention install timed out; continuing")
+        return
+
+    if result.returncode != 0:
+        logger.warning(
+            "flash-linear-attention install failed (continuing on torch fallback):\n%s",
+            result.stdout,
+        )
+        _send_status(
+            event_queue,
+            "flash-linear-attention install failed; continuing on torch fallback",
+        )
+        return
+
+    logger.info("Installed flash-linear-attention for the FLA fast path")
 
 
 _SSM_MODEL_SUBSTRINGS = (
@@ -363,6 +434,19 @@ def _model_wants_tilelang(model_name: str) -> bool:
     return any(sub in name for sub in _TILELANG_MODEL_SUBSTRINGS)
 
 
+def _installed_tvm_ffi_version() -> str | None:
+    """Return ``apache-tvm-ffi`` version if importable, else None.
+
+    Used to decide whether an in-place install needs to force a reinstall
+    because the existing version is on the broken list.
+    """
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("apache-tvm-ffi")
+    except Exception:
+        return None
+
+
 def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     """Install ``tilelang`` + pinned ``apache-tvm-ffi`` for FLA's TileLang backend.
 
@@ -381,15 +465,35 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         return
     if not _model_wants_tilelang(model_name):
         return
-
-    try:
-        import tilelang  # noqa: F401
-        import tvm_ffi  # noqa: F401
-
-        logger.info("tilelang + apache-tvm-ffi already installed")
+    if sys.version_info < _FLA_MIN_PYTHON:
+        logger.info(
+            "Skipping tilelang install: requires Python >= %d.%d, have %s",
+            _FLA_MIN_PYTHON[0], _FLA_MIN_PYTHON[1], sys.version.split()[0],
+        )
         return
-    except ImportError:
-        pass
+    if not any(sys.platform.startswith(p) for p in _TILELANG_SUPPORTED_PLATFORMS):
+        logger.info(
+            "Skipping tilelang install: no prebuilt wheel for platform %s",
+            sys.platform,
+        )
+        return
+
+    existing_tvm_ffi = _installed_tvm_ffi_version()
+    needs_reinstall = existing_tvm_ffi in _TVM_FFI_BROKEN_VERSIONS
+
+    if not needs_reinstall:
+        try:
+            import tilelang  # noqa: F401
+            import tvm_ffi  # noqa: F401
+            logger.info("tilelang + apache-tvm-ffi already installed")
+            return
+        except ImportError:
+            pass
+    else:
+        logger.info(
+            "Forcing tilelang reinstall: apache-tvm-ffi %s is on the broken list",
+            existing_tvm_ffi,
+        )
 
     _send_status(
         event_queue,
@@ -406,30 +510,34 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         f"apache-tvm-ffi=={_APACHE_TVM_FFI_PACKAGE_VERSION}",
         f"tilelang=={_TILELANG_PACKAGE_VERSION}",
     ]
+    extra_args = ["--force-reinstall", "--no-deps"] if needs_reinstall else []
     if shutil.which("uv"):
         pypi_cmd = [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            sys.executable,
+            "uv", "pip", "install",
+            "--python", sys.executable,
+            *extra_args,
             *specs,
         ]
     else:
         pypi_cmd = [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
+            sys.executable, "-m", "pip", "install",
+            *extra_args,
             *specs,
         ]
 
-    result = _sp.run(
-        pypi_cmd,
-        stdout = _sp.PIPE,
-        stderr = _sp.STDOUT,
-        text = True,
-    )
+    try:
+        result = _sp.run(
+            pypi_cmd,
+            stdout = _sp.PIPE,
+            stderr = _sp.STDOUT,
+            text = True,
+            timeout = _TILELANG_INSTALL_TIMEOUT_S,
+        )
+    except _sp.TimeoutExpired:
+        logger.warning("TileLang backend install timed out; continuing")
+        _send_status(event_queue, "TileLang backend install timed out; continuing")
+        return
+
     if result.returncode != 0:
         logger.warning(
             "TileLang backend install failed (continuing without it):\n%s",

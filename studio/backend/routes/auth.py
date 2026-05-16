@@ -7,6 +7,7 @@ Authentication API routes
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
+import os
 import threading
 import time
 from collections import deque
@@ -36,35 +37,68 @@ from auth.authentication import (
 router = APIRouter()
 
 
-# In-memory per-IP login rate limiter; multi-process deployment needs a shared store.
-_LOGIN_BUCKETS: dict[str, deque] = {}
+# In-memory login rate limiter, keyed on (ip, username) so one
+# misbehaving client cannot lock out the rest of the user base, and one
+# attacker cannot lock out a known account by spraying usernames.
+# Multi-process deployment still needs a shared store.
+_LOGIN_BUCKETS: dict[tuple[str, str], deque] = {}
 _LOGIN_BUCKETS_LOCK = threading.Lock()
 _LOGIN_WINDOW_SECONDS = 60.0
 _LOGIN_MAX_FAILS = 5
 _LOGIN_LOCKOUT_SECONDS = 60
 
 
-def _client_key(request: Request | None) -> str:
-    if request is None or request.client is None:
+def _trust_forwarded_for() -> bool:
+    """Honour X-Forwarded-For only when explicitly opted in via env.
+
+    Setting UNSLOTH_STUDIO_TRUST_FORWARDED=1 means a reverse proxy is in
+    front of Studio (nginx, Tailscale, Cloudflare, ...). Without it the
+    header could be spoofed by any direct caller.
+    """
+    return os.environ.get("UNSLOTH_STUDIO_TRUST_FORWARDED", "").lower() in (
+        "1", "true", "yes",
+    )
+
+
+def _client_ip(request: Request | None) -> str:
+    if request is None:
         return "_unknown"
-    return request.client.host or "_unknown"
+    if _trust_forwarded_for():
+        # First entry in X-Forwarded-For is the originating client; trim and
+        # strip ports / bracketed IPv6.
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            first = xff.split(",", 1)[0].strip()
+            if first:
+                return first
+        fwd = request.headers.get("forwarded", "")
+        if fwd:
+            for tok in fwd.split(";"):
+                tok = tok.strip()
+                if tok.lower().startswith("for="):
+                    return tok[4:].strip('"').strip("[]")
+    return (request.client.host if request.client else None) or "_unknown"
 
 
-def _record_login_failure(ip: str) -> int:
+def _bucket_key(request: Request | None, username: str) -> tuple[str, str]:
+    return (_client_ip(request), (username or "").lower())
+
+
+def _record_login_failure(key: tuple[str, str]) -> int:
     now = time.monotonic()
     with _LOGIN_BUCKETS_LOCK:
-        bucket = _LOGIN_BUCKETS.setdefault(ip, deque())
+        bucket = _LOGIN_BUCKETS.setdefault(key, deque())
         while bucket and now - bucket[0] > _LOGIN_WINDOW_SECONDS:
             bucket.popleft()
         bucket.append(now)
         return len(bucket)
 
 
-def _login_blocked(ip: str) -> int:
+def _login_blocked(key: tuple[str, str]) -> int:
     """Return seconds until the next attempt is allowed, or 0."""
     now = time.monotonic()
     with _LOGIN_BUCKETS_LOCK:
-        bucket = _LOGIN_BUCKETS.get(ip)
+        bucket = _LOGIN_BUCKETS.get(key)
         if not bucket:
             return 0
         while bucket and now - bucket[0] > _LOGIN_WINDOW_SECONDS:
@@ -74,9 +108,9 @@ def _login_blocked(ip: str) -> int:
         return 0
 
 
-def _clear_login_bucket(ip: str) -> None:
+def _clear_login_bucket(key: tuple[str, str]) -> None:
     with _LOGIN_BUCKETS_LOCK:
-        _LOGIN_BUCKETS.pop(ip, None)
+        _LOGIN_BUCKETS.pop(key, None)
 
 
 @router.get("/status", response_model = AuthStatusResponse)
@@ -95,14 +129,16 @@ async def auth_status() -> AuthStatusResponse:
 
 @router.post("/login", response_model = Token)
 async def login(payload: AuthLoginRequest, request: Request) -> Token:
-    """Login with username/password. Rate-limited per source IP."""
-    ip = _client_key(request)
-    blocked_for = _login_blocked(ip)
+    """Login with username/password. Rate-limited per (source IP, username)."""
+    key = _bucket_key(request, payload.username)
+    blocked_for = _login_blocked(key)
     if blocked_for > 0:
         raise HTTPException(
             status_code = status.HTTP_429_TOO_MANY_REQUESTS,
+            # IP is intentionally not interpolated into the body; behind a
+            # proxy or NAT it is either misleading or an info leak.
             detail = (
-                f"Too many failed login attempts from {ip}. "
+                f"Too many failed login attempts. "
                 f"Try again in {blocked_for} seconds."
             ),
             headers = {"Retry-After": str(blocked_for)},
@@ -110,7 +146,7 @@ async def login(payload: AuthLoginRequest, request: Request) -> Token:
 
     record = storage.get_user_and_secret(payload.username)
     if record is None:
-        _record_login_failure(ip)
+        _record_login_failure(key)
         raise HTTPException(
             status_code = status.HTTP_401_UNAUTHORIZED,
             detail = "Incorrect password. Run 'unsloth studio reset-password' in your terminal to reset it.",
@@ -118,13 +154,13 @@ async def login(payload: AuthLoginRequest, request: Request) -> Token:
 
     salt, pwd_hash, _jwt_secret, must_change_password = record
     if not hashing.verify_password(payload.password, salt, pwd_hash):
-        _record_login_failure(ip)
+        _record_login_failure(key)
         raise HTTPException(
             status_code = status.HTTP_401_UNAUTHORIZED,
             detail = "Incorrect password. Run 'unsloth studio reset-password' in your terminal to reset it.",
         )
 
-    _clear_login_bucket(ip)
+    _clear_login_bucket(key)
     access_token = create_access_token(subject = payload.username)
     refresh_token = create_refresh_token(subject = payload.username)
     return Token(

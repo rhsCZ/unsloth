@@ -196,6 +196,19 @@ class TestSecurityHeadersMiddleware:
         nonced = main_module._build_csp("XYZ")
         assert "script-src 'self' 'nonce-XYZ';" in nonced
 
+    def test_img_src_allows_google_favicons(self, main_module):
+        # sources.tsx fetches https://www.google.com/s2/favicons?... ; without
+        # this allowlist entry citation favicons fall back to gray initials.
+        csp = main_module._build_csp()
+        img_directive = next(
+            chunk.strip() for chunk in csp.split(";") if chunk.strip().startswith("img-src ")
+        )
+        assert "https://www.google.com" in img_directive
+        # Pre-existing favicon CDNs stay allowed.
+        for host in ("https://t0.gstatic.com", "https://t1.gstatic.com",
+                     "https://t2.gstatic.com", "https://t3.gstatic.com"):
+            assert host in img_directive
+
 
 # =====================================================================
 # /api/health auth gate

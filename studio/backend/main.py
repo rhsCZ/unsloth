@@ -283,7 +283,7 @@ def _build_csp(script_nonce: "str | None" = None) -> str:
         "default-src 'self'; "
         "img-src 'self' data: blob: https://t0.gstatic.com "
         "https://t1.gstatic.com https://t2.gstatic.com "
-        "https://t3.gstatic.com; "
+        "https://t3.gstatic.com https://www.google.com; "
         "connect-src 'self' https://huggingface.co https://datasets-server.huggingface.co; "
         "style-src 'self' 'unsafe-inline'; "
         f"{script_src}; "

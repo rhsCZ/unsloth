@@ -163,8 +163,12 @@ def _warn_if_quantization_silently_dropped(
             load_in_4bit = load_in_4bit or bool(quantization_config.get("load_in_4bit"))
             load_in_8bit = load_in_8bit or bool(quantization_config.get("load_in_8bit"))
         else:
-            load_in_4bit = load_in_4bit or bool(getattr(quantization_config, "load_in_4bit", False))
-            load_in_8bit = load_in_8bit or bool(getattr(quantization_config, "load_in_8bit", False))
+            load_in_4bit = load_in_4bit or bool(
+                getattr(quantization_config, "load_in_4bit", False)
+            )
+            load_in_8bit = load_in_8bit or bool(
+                getattr(quantization_config, "load_in_8bit", False)
+            )
     if not (load_in_4bit or load_in_8bit):
         return
 

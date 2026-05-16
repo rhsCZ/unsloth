@@ -26,6 +26,7 @@ if str(_BACKEND_ROOT) not in sys.path:
 def _reset_buckets():
     """Clear the in-memory bucket dict between tests."""
     from routes import auth as auth_routes
+
     auth_routes._LOGIN_BUCKETS.clear()
     yield
     auth_routes._LOGIN_BUCKETS.clear()
@@ -44,19 +45,23 @@ def env_trust_proxy(monkeypatch):
 class _FakeRequest:
     def __init__(self, client_host = "127.0.0.1", headers = None):
         from starlette.datastructures import Headers
+
         self.client = type("Client", (), {"host": client_host})()
         self.headers = Headers(headers or {})
 
 
 # ---------- _client_ip ----------
 
+
 class TestClientIp:
     def test_uses_request_client_host_by_default(self, env_no_proxy):
         from routes.auth import _client_ip
+
         assert _client_ip(_FakeRequest("203.0.113.5")) == "203.0.113.5"
 
     def test_ignores_xff_when_trust_off(self, env_no_proxy):
         from routes.auth import _client_ip
+
         req = _FakeRequest(
             "127.0.0.1",
             {"x-forwarded-for": "198.51.100.7, 10.0.0.1"},
@@ -67,6 +72,7 @@ class TestClientIp:
 
     def test_honours_first_xff_when_trust_on(self, env_trust_proxy):
         from routes.auth import _client_ip
+
         req = _FakeRequest(
             "127.0.0.1",
             {"x-forwarded-for": "198.51.100.7, 10.0.0.1"},
@@ -75,10 +81,12 @@ class TestClientIp:
 
     def test_falls_back_to_client_host_when_xff_missing(self, env_trust_proxy):
         from routes.auth import _client_ip
+
         assert _client_ip(_FakeRequest("203.0.113.9")) == "203.0.113.9"
 
     def test_honours_forwarded_header_when_trust_on(self, env_trust_proxy):
         from routes.auth import _client_ip
+
         req = _FakeRequest(
             "127.0.0.1",
             {"forwarded": 'for="198.51.100.42";proto=https'},
@@ -87,6 +95,7 @@ class TestClientIp:
 
     def test_unknown_when_no_client(self, env_no_proxy):
         from routes.auth import _client_ip
+
         req = _FakeRequest()
         req.client = None
         assert _client_ip(req) == "_unknown"
@@ -94,11 +103,16 @@ class TestClientIp:
 
 # ---------- bucket compose / blocking ----------
 
+
 class TestBucketKeyAndBlocking:
     def test_record_per_user_isolates_other_users(self, env_no_proxy):
         from routes.auth import (
-            _bucket_key, _record_login_failure, _login_blocked, _LOGIN_MAX_FAILS,
+            _bucket_key,
+            _record_login_failure,
+            _login_blocked,
+            _LOGIN_MAX_FAILS,
         )
+
         req = _FakeRequest("203.0.113.1")
         for _ in range(_LOGIN_MAX_FAILS):
             _record_login_failure(_bucket_key(req, "alice"))
@@ -108,8 +122,12 @@ class TestBucketKeyAndBlocking:
 
     def test_record_per_ip_isolates_other_ips(self, env_no_proxy):
         from routes.auth import (
-            _bucket_key, _record_login_failure, _login_blocked, _LOGIN_MAX_FAILS,
+            _bucket_key,
+            _record_login_failure,
+            _login_blocked,
+            _LOGIN_MAX_FAILS,
         )
+
         req_a = _FakeRequest("203.0.113.1")
         req_b = _FakeRequest("203.0.113.2")
         for _ in range(_LOGIN_MAX_FAILS):
@@ -120,12 +138,14 @@ class TestBucketKeyAndBlocking:
 
     def test_username_lowercased_in_key(self, env_no_proxy):
         from routes.auth import _bucket_key
+
         req = _FakeRequest("203.0.113.1")
         assert _bucket_key(req, "Alice") == _bucket_key(req, "alice")
         assert _bucket_key(req, "ALICE") == _bucket_key(req, "alice")
 
 
 # ---------- /login 429 body ----------
+
 
 class TestLogin429Body:
     @pytest.fixture
@@ -137,7 +157,9 @@ class TestLogin429Body:
         import secrets as _secrets
 
         monkeypatch.setattr(storage, "DB_PATH", tmp_path / "auth.db")
-        monkeypatch.setattr(storage, "_BOOTSTRAP_PW_PATH", tmp_path / ".bootstrap_password")
+        monkeypatch.setattr(
+            storage, "_BOOTSTRAP_PW_PATH", tmp_path / ".bootstrap_password"
+        )
         monkeypatch.setattr(storage, "_bootstrap_password", None)
         storage.create_initial_user(
             username = storage.DEFAULT_ADMIN_USERNAME,

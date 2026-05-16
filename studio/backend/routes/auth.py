@@ -56,7 +56,9 @@ def _trust_forwarded_for() -> bool:
     header could be spoofed by any direct caller.
     """
     return os.environ.get("UNSLOTH_STUDIO_TRUST_FORWARDED", "").lower() in (
-        "1", "true", "yes",
+        "1",
+        "true",
+        "yes",
     )
 
 

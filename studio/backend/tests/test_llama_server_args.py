@@ -274,9 +274,7 @@ def test_strip_shadowing_flags_boolean_does_not_consume_next_token():
 
 
 def test_strip_shadowing_flags_jinja_boolean_preserves_positional():
-    out = strip_shadowing_flags(
-        ["--jinja", "trailing-positional"], strip_template = True
-    )
+    out = strip_shadowing_flags(["--jinja", "trailing-positional"], strip_template = True)
     assert out == ["trailing-positional"]
 
 

@@ -376,6 +376,7 @@ def test_tilelang_backend_skipped_on_unsupported_linux_arch(monkeypatch):
     monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising = False)
     monkeypatch.setattr(worker.sys, "platform", "linux")
     import platform as _platform
+
     monkeypatch.setattr(_platform, "machine", lambda: "ppc64le")
     run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
     monkeypatch.setattr(worker._sp, "run", run_mock)
@@ -398,11 +399,13 @@ def test_tilelang_backend_pins_only_binary(monkeypatch):
     monkeypatch.setattr(worker, "_send_status", lambda *a, **k: None)
     # Need to bypass the post-install probe too.
     probe_calls = {"count": 0}
+
     def fake_probe():
         probe_calls["count"] += 1
         # First probe (pre-install): False so install runs.
         # Second probe (post-install): True so success branch taken.
         return probe_calls["count"] > 1
+
     monkeypatch.setattr(worker, "_tilelang_importable", fake_probe)
 
     worker._ensure_tilelang_backend(

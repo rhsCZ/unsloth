@@ -76,9 +76,7 @@ _FLA_MIN_TORCH = (2, 7)
 _FLA_MIN_PYTHON = (3, 10)
 # tilelang 0.1.8 wheels: Linux x86_64 / aarch64 and macOS arm64.
 # We never want to fall back to its 93MB sdist on a Studio worker.
-_TILELANG_SUPPORTED_LINUX_MACHINES = frozenset(
-    ("x86_64", "amd64", "aarch64", "arm64")
-)
+_TILELANG_SUPPORTED_LINUX_MACHINES = frozenset(("x86_64", "amd64", "aarch64", "arm64"))
 _TILELANG_INSTALL_TIMEOUT_S = 600
 # apache-tvm-ffi 0.1.10/0.1.11 trigger "CUDA: misaligned address" on
 # sm_100. If we detect a stale broken version, force a reinstall.
@@ -310,6 +308,7 @@ def _installed_torch_version_tuple() -> tuple[int, int] | None:
     """Return ``(major, minor)`` of the installed torch, else None."""
     try:
         from importlib.metadata import version as _pkg_version
+
         raw = _pkg_version("torch").split("+", 1)[0]
         parts = raw.split(".")
         return (int(parts[0]), int(parts[1]))
@@ -328,6 +327,7 @@ def _flash_linear_attention_importable() -> bool:
     try:
         import fla.modules  # noqa: F401
         import fla.ops.gated_delta_rule  # noqa: F401
+
         return True
     except Exception as exc:
         logger.warning(
@@ -529,6 +529,7 @@ def _tilelang_importable() -> bool:
     try:
         import tilelang  # noqa: F401
         import tvm_ffi  # noqa: F401
+
         return True
     except Exception as exc:
         logger.warning(
@@ -546,6 +547,7 @@ def _tilelang_platform_supported() -> bool:
     we restrict to Linux x86_64/aarch64 explicitly.
     """
     import platform as _platform
+
     if not sys.platform.startswith("linux"):
         return False
     return _platform.machine().lower() in _TILELANG_SUPPORTED_LINUX_MACHINES
@@ -579,9 +581,11 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         return
     if not _tilelang_platform_supported():
         import platform as _platform
+
         logger.info(
             "Skipping tilelang install: no prebuilt wheel for %s/%s",
-            sys.platform, _platform.machine(),
+            sys.platform,
+            _platform.machine(),
         )
         return
 

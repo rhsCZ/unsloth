@@ -88,10 +88,15 @@ jobs:
       # still imported somewhere. The script walks the lockfile dep graph
       # from the new top-level deps and only counts top-level node_modules
       # paths as valid resolution targets for bare src/ imports.
+      #
+      # actions/checkout uses fetch-depth: 1 by default, so the base branch
+      # is not available locally. Fetch the single base commit we need so
+      # `git show origin/<base>:...` can resolve the pre-PR package.json.
       - name: Dependency removal safety check
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
         run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           python3 scripts/check_frontend_dep_removal.py \
             --base "origin/${{ github.base_ref }}" \
             --enumerate-dead

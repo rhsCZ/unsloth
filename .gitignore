@@ -233,4 +233,5 @@ server.pid
 package-lock.json
 !studio/frontend/package-lock.json
 !studio/backend/core/data_recipe/oxc-validator/package-lock.json
+!studio/package-lock.json
 llama.cpp/

@@ -33,23 +33,14 @@ _restore_gitignores() {
 }
 trap _restore_gitignores EXIT
 
-# Use bun if a bun.lock is committed (lockfile-strict, fast), else npm ci.
-# bun install --frozen-lockfile cannot migrate from package-lock.json, so if
-# only the npm lockfile is present we skip bun and go straight to npm ci.
-_install_ok=false
-if [ -f bun.lock ] && command -v bun &>/dev/null; then
-    if bun install --frozen-lockfile; then
-        _install_ok=true
-    else
-        echo "⚠ bun install --frozen-lockfile failed, falling back to npm ci"
-        rm -rf node_modules
-    fi
-fi
-if [ "$_install_ok" != "true" ]; then
-    if ! npm ci; then
-        echo "❌ ERROR: package install failed" >&2
-        exit 1
-    fi
+# Frontend installs always use npm ci against the committed lockfile.
+# There is no bun.lock anywhere in the repo, so a bun-first branch
+# would always miss and silently regenerate (or fail under
+# --frozen-lockfile). Keep this single path until/unless a real
+# bun.lock lands.
+if ! npm ci; then
+    echo "❌ ERROR: npm ci failed" >&2
+    exit 1
 fi
 npm run build       # outputs to studio/frontend/dist/
 

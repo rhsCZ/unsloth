@@ -237,7 +237,7 @@ class TestSandboxCpuRlimitDefault:
     def test_nofile_env_tunable(self):
         src = (_BACKEND_ROOT / "core" / "inference" / "tools.py").read_text()
         # Parity with the other rlimits: must come from the env, not be hardcoded.
-        assert 'UNSLOTH_STUDIO_SANDBOX_NOFILE' in src
+        assert "UNSLOTH_STUDIO_SANDBOX_NOFILE" in src
 
 
 class TestMaxBodyDefault:
@@ -257,6 +257,7 @@ class TestBashBlocklistPosition:
     @staticmethod
     def _find():
         from core.inference.tools import _find_blocked_commands
+
         return _find_blocked_commands
 
     # ---- argument-position: must NOT be blocked ----

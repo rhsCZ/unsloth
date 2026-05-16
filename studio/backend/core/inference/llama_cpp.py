@@ -2021,6 +2021,7 @@ class LlamaCppBackend:
             # (the first one hadn't published _healthy=True yet). If the
             # live server already satisfies this request, do nothing.
             if self._already_in_target_state(
+                gguf_path = gguf_path,
                 model_identifier = model_identifier,
                 hf_variant = hf_variant,
                 n_ctx = n_ctx,
@@ -2683,18 +2684,14 @@ class LlamaCppBackend:
 
                 self._healthy = True
 
-                # Commit caller intent (extra_args + requested n_ctx)
-                # only after the server is healthy so a failed startup
-                # does not poison subsequent inheritance / comparator
-                # checks. ``extra_args``: None keeps prior, [] clears,
-                # list sets. Source records (model, variant) so the
-                # route can refuse cross-model inheritance (#5401).
+                # Commit caller intent only after _healthy=True so a
+                # failed startup can't poison the next inheritance check.
+                # None keeps prior, [] clears, list sets. Source records
+                # the caller's hf_variant (None for local files) so the
+                # route's same_source check stays symmetric.
                 if extra_args is not None:
                     self._extra_args = list(extra_args)
-                    self._extra_args_source = (
-                        model_identifier,
-                        self._hf_variant,
-                    )
+                    self._extra_args_source = (model_identifier, hf_variant)
                 self._requested_n_ctx = int(n_ctx)
 
                 # Catch silent CPU fallback when GPU was intended (#5106).
@@ -2729,6 +2726,7 @@ class LlamaCppBackend:
         chat_template_override: Optional[str],
         extra_args: Optional[List[str]],
         is_vision: bool,
+        gguf_path: Optional[str] = None,
     ) -> bool:
         """True iff the live server already satisfies these load kwargs.
 
@@ -2740,7 +2738,16 @@ class LlamaCppBackend:
             return False
         if (self._model_identifier or "").lower() != (model_identifier or "").lower():
             return False
-        if (self._hf_variant or "").lower() != (hf_variant or "").lower():
+        # Direct-file loads pass hf_variant=None while the backend
+        # stores an extracted filename label; compare paths instead
+        # to keep the guard symmetric.
+        if gguf_path is not None and self._gguf_path:
+            try:
+                if Path(self._gguf_path).resolve() != Path(gguf_path).resolve():
+                    return False
+            except OSError:
+                return False
+        elif (self._hf_variant or "").lower() != (hf_variant or "").lower():
             return False
         if self._requested_n_ctx != int(n_ctx):
             return False
@@ -2756,9 +2763,10 @@ class LlamaCppBackend:
         if _norm(self._cache_type_kv) != _norm(cache_type_kv):
             return False
 
-        # Vision GGUFs silently drop speculative decoding (see line
-        # 2338); treat the request's value as "off" so a vision load
-        # with speculative_type="default" still matches.
+        # Vision GGUFs silently drop speculative decoding in
+        # load_model (the spec gate is "not is_vision"); treat the
+        # request's value as "off" so a vision load with
+        # speculative_type="default" still matches.
         if self._is_vision or is_vision:
             req_spec = "off"
         else:

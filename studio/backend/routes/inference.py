@@ -450,11 +450,16 @@ def _request_matches_loaded_settings(
     ):
         return False
     # llama_extra_args=None means "inherit"; only an explicit list that
-    # differs from what's loaded forces a reload.
-    req_extra = list(request.llama_extra_args) if request.llama_extra_args else []
+    # differs forces a reload. On the inherit path, refuse to match if
+    # stored extras contain any shadow flag, so the reload path can
+    # strip them instead of leaving a stale override in effect.
     backend_extra = list(llama_backend.extra_args) if llama_backend.extra_args else []
-    if request.llama_extra_args is not None and req_extra != backend_extra:
-        return False
+    if request.llama_extra_args is None:
+        if backend_extra and strip_shadowing_flags(backend_extra) != backend_extra:
+            return False
+    else:
+        if list(request.llama_extra_args) != backend_extra:
+            return False
     return True
 
 
@@ -513,6 +518,11 @@ async def load_model(
             extra_llama_args = validate_extra_args(request.llama_extra_args)
         except ValueError as exc:
             raise HTTPException(status_code = 400, detail = str(exc))
+        # Re-narrow []-from-None back to None so the inheritance path
+        # below can tell "caller omitted" from "caller explicit []".
+        extra_llama_args: Optional[list[str]] = (
+            None if request.llama_extra_args is None else extra_llama_args
+        )
 
         model_identifier, model_log_label, native_grant_backed = (
             _resolve_model_identifier_for_request(request, operation = "load-model")
@@ -669,16 +679,12 @@ async def load_model(
                 unsloth_backend.unload_model(unsloth_backend.active_model_name)
 
             # Inherit llama_extra_args from the previous load when the
-            # request omits the field; the chat-settings Apply path does
-            # not round-trip them. Explicit [] still clears (#5401).
-            #
-            # Inheritance is gated on the stored args having come from
-            # the same (model_identifier, hf_variant) so a switch to a
-            # different model cannot pick up the previous model's pass-
-            # through flags. Tokens that would shadow first-class
-            # request fields (``-c`` / ``--cache-type-*`` / ``--spec-*``
-            # / ``--chat-template*``) are stripped so the inherited
-            # override cannot silently win llama.cpp's last-wins parse.
+            # request omits the field (the chat-settings Apply path
+            # does not round-trip them; explicit [] still clears).
+            # Inheritance is gated on (model_identifier, hf_variant)
+            # to refuse cross-model pickup, and shadowing flags are
+            # stripped so an inherited override can't win the last-wins
+            # CLI parse against a freshly-supplied first-class field.
             if request.llama_extra_args is None and llama_backend.extra_args:
                 source = llama_backend.extra_args_source
                 same_source = bool(
@@ -695,8 +701,22 @@ async def load_model(
                         source,
                         (model_identifier, request.gguf_variant),
                     )
+                    # Cross-model: clear explicitly so the backend
+                    # doesn't inherit via "no opinion" semantics.
+                    extra_llama_args = []
                 else:
-                    stripped = strip_shadowing_flags(llama_backend.extra_args)
+                    # Strip only the groups whose first-class field
+                    # was actually set by the caller, so an inherited
+                    # --chat-template-file survives an Apply that omits
+                    # chat_template_override.
+                    fields_set = getattr(request, "model_fields_set", set())
+                    stripped = strip_shadowing_flags(
+                        llama_backend.extra_args,
+                        strip_context = "max_seq_length" in fields_set,
+                        strip_cache = "cache_type_kv" in fields_set,
+                        strip_spec = "speculative_type" in fields_set,
+                        strip_template = "chat_template_override" in fields_set,
+                    )
                     try:
                         extra_llama_args = validate_extra_args(stripped)
                     except ValueError:

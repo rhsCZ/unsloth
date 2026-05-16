@@ -78,6 +78,7 @@ import {
 import { useSettingsDialogStore } from "@/features/settings";
 import { useEffectiveProfile, UserAvatar } from "@/features/profile";
 import { usePlatformStore } from "@/config/env";
+import { clearAuthTokens, logout } from "@/features/auth";
 import { TOUR_OPEN_EVENT } from "@/features/tour";
 import {
   deleteTrainingRun,
@@ -763,10 +764,8 @@ export function AppSidebar() {
                     // Best-effort server-side revocation; ignore network errors
                     // so the local clear path still runs and the user lands on /login.
                     try {
-                      const { logout } = await import("@/features/auth/api");
                       await logout();
                     } catch {
-                      const { clearAuthTokens } = await import("@/features/auth/session");
                       clearAuthTokens();
                     }
                     void navigate({ to: "/login" });

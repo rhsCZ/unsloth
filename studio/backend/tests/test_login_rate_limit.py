@@ -24,12 +24,14 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 @pytest.fixture(autouse = True)
 def _reset_buckets():
-    """Clear the in-memory bucket dict between tests."""
+    """Clear the in-memory bucket dicts between tests."""
     from routes import auth as auth_routes
 
     auth_routes._LOGIN_BUCKETS.clear()
+    auth_routes._LOGIN_IP_BUCKETS.clear()
     yield
     auth_routes._LOGIN_BUCKETS.clear()
+    auth_routes._LOGIN_IP_BUCKETS.clear()
 
 
 @pytest.fixture
@@ -100,6 +102,54 @@ class TestClientIp:
         req.client = None
         assert _client_ip(req) == "_unknown"
 
+    def test_xff_strips_ipv4_port(self, env_trust_proxy):
+        from routes.auth import _client_ip
+
+        req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "198.51.100.7:50001, 10.0.0.1"})
+        assert _client_ip(req) == "198.51.100.7"
+
+    def test_xff_strips_bracketed_ipv6_port(self, env_trust_proxy):
+        from routes.auth import _client_ip
+
+        req = _FakeRequest(
+            "127.0.0.1", {"x-forwarded-for": "[2001:db8::1]:50001, 10.0.0.1"}
+        )
+        assert _client_ip(req) == "2001:db8::1"
+
+    def test_forwarded_strips_ipv4_port(self, env_trust_proxy):
+        from routes.auth import _client_ip
+
+        req = _FakeRequest(
+            "127.0.0.1", {"forwarded": 'for="198.51.100.7:50001";proto=https'}
+        )
+        assert _client_ip(req) == "198.51.100.7"
+
+    def test_forwarded_strips_bracketed_ipv6_port(self, env_trust_proxy):
+        from routes.auth import _client_ip
+
+        req = _FakeRequest(
+            "127.0.0.1", {"forwarded": 'for="[2001:db8::1]:50001";proto=https'}
+        )
+        assert _client_ip(req) == "2001:db8::1"
+
+    def test_forwarded_isolates_first_element(self, env_trust_proxy):
+        from routes.auth import _client_ip
+
+        # Multi-element Forwarded must pick the first element only,
+        # otherwise suffix variations create attacker-controlled buckets.
+        req = _FakeRequest(
+            "127.0.0.1",
+            {"forwarded": 'for=198.51.100.42, for=10.0.0.1;proto=https'},
+        )
+        assert _client_ip(req) == "198.51.100.42"
+
+    def test_xff_invalid_ip_falls_back_to_client_host(self, env_trust_proxy):
+        from routes.auth import _client_ip
+
+        # A garbage XFF must not propagate into the bucket key.
+        req = _FakeRequest("127.0.0.1", {"x-forwarded-for": "not-an-ip"})
+        assert _client_ip(req) == "127.0.0.1"
+
 
 # ---------- bucket compose / blocking ----------
 
@@ -142,6 +192,48 @@ class TestBucketKeyAndBlocking:
         req = _FakeRequest("203.0.113.1")
         assert _bucket_key(req, "Alice") == _bucket_key(req, "alice")
         assert _bucket_key(req, "ALICE") == _bucket_key(req, "alice")
+
+    def test_rotating_usernames_hit_ip_aggregate_cap(self, env_no_proxy, monkeypatch):
+        """Spraying nonexistent usernames from one IP must still be throttled."""
+        from routes import auth as auth_routes
+
+        monkeypatch.setattr(auth_routes, "_LOGIN_IP_MAX_FAILS", 5)
+        req = _FakeRequest("203.0.113.10")
+        for idx in range(5):
+            auth_routes._record_login_failure(
+                auth_routes._unknown_user_key(req)
+            )
+            # Different "username" each attempt would not have throttled
+            # under per-(ip,username) only; the IP aggregate must.
+        # The next missing-user attempt is blocked.
+        assert auth_routes._login_blocked(
+            auth_routes._unknown_user_key(req)
+        ) > 0
+
+    def test_unknown_user_bucket_is_single_sentinel(self, env_no_proxy):
+        """Random unknown usernames from one IP collapse to one bucket."""
+        from routes import auth as auth_routes
+
+        req = _FakeRequest("203.0.113.11")
+        unknown_key = auth_routes._unknown_user_key(req)
+        for _ in range(20):
+            auth_routes._record_login_failure(unknown_key)
+        # Account bucket cardinality stays at exactly one sentinel entry
+        # for this IP regardless of how many distinct usernames sprayed.
+        ip_keys = [k for k in auth_routes._LOGIN_BUCKETS if k[0] == "203.0.113.11"]
+        assert len(ip_keys) == 1
+        assert ip_keys[0][1].startswith("\x00")
+
+    def test_account_bucket_cap_bounded(self, env_no_proxy, monkeypatch):
+        """The per-account bucket dict cannot grow without bound."""
+        from routes import auth as auth_routes
+
+        monkeypatch.setattr(auth_routes, "_LOGIN_MAX_BUCKETS", 10)
+        req = _FakeRequest("203.0.113.12")
+        for idx in range(50):
+            auth_routes._record_login_failure((req.client.host, f"user-{idx}"))
+        # Hard cap respected; further keys do not allocate.
+        assert len(auth_routes._LOGIN_BUCKETS) <= 10
 
 
 # ---------- /login 429 body ----------

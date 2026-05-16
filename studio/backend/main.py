@@ -267,7 +267,8 @@ logger = LogConfig.setup_logging(
 app.add_middleware(LoggingMiddleware)
 
 
-# Web-search favicons load from *.gstatic.com; everything else is same-origin.
+# Web-search favicons load from *.gstatic.com and www.google.com/s2/favicons;
+# everything else is same-origin.
 from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 from starlette.requests import Request as _StarletteRequest  # noqa: E402
 

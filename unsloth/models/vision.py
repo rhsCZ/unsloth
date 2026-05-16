@@ -1061,7 +1061,9 @@ class FastBaseModel:
         if isinstance(_qcfg_dtype, str):
             _qcfg_dtype_str = _qcfg_dtype.removeprefix("torch.")
             _maybe_dtype = getattr(torch, _qcfg_dtype_str, None)
-            _qcfg_dtype = _maybe_dtype if isinstance(_maybe_dtype, torch.dtype) else None
+            _qcfg_dtype = (
+                _maybe_dtype if isinstance(_maybe_dtype, torch.dtype) else None
+            )
         _effective_load_in_4bit = bool(load_in_4bit) or _qcfg_4bit
 
         def _maybe_swap_gemma4_moe_4bit(_target_model):
@@ -1099,7 +1101,8 @@ class FastBaseModel:
                     )
             except Exception as _e:
                 _partial = sum(
-                    1 for _m in _target_model.modules()
+                    1
+                    for _m in _target_model.modules()
                     if getattr(_m, "_unsloth_gemma4_moe_4bit_swapped", False)
                 )
                 if _partial:

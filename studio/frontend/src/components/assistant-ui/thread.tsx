@@ -328,6 +328,10 @@ const Composer: FC<{ disabled?: boolean }> = ({ disabled }) => {
         autoFocus={!disabled}
         disabled={disabled}
         aria-label="Message input"
+        // dir="auto" lets the browser pick LTR/RTL from the first strong
+        // character so Arabic, Hebrew, Persian, and Urdu input flows the
+        // right way without affecting Latin / CJK / Devanagari users.
+        dir="auto"
         {...inputProps}
       />
       <ComposerAction
@@ -1161,6 +1165,8 @@ const EditComposer: FC = () => {
         <ComposerPrimitive.Input
           className="aui-edit-composer-input min-h-14 w-full resize-none bg-transparent p-4 text-foreground text-sm font-[450] outline-none"
           autoFocus={true}
+          // See main composer above for the dir="auto" rationale.
+          dir="auto"
           {...inputProps}
         />
         <div className="aui-edit-composer-footer mx-3 mb-3 flex items-center gap-2 self-end">

@@ -999,16 +999,26 @@ def run_pkg_field_cases() -> int:
             head_path = f.name
         try:
             proc = subprocess.run(
-                [sys.executable, str(SCRIPT),
-                 "--base-pkg", base_path,
-                 "--head-pkg", head_path,
-                 "--head-lock", str(HEAD_LOCK)],
-                capture_output = True, text = True, cwd = str(REPO),
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--base-pkg",
+                    base_path,
+                    "--head-pkg",
+                    head_path,
+                    "--head-lock",
+                    str(HEAD_LOCK),
+                ],
+                capture_output = True,
+                text = True,
+                cwd = str(REPO),
             )
         finally:
             os.unlink(base_path)
             os.unlink(head_path)
-        actual_status = {0: "PASS", 1: "FAIL"}.get(proc.returncode, f"RC{proc.returncode}")
+        actual_status = {0: "PASS", 1: "FAIL"}.get(
+            proc.returncode, f"RC{proc.returncode}"
+        )
         fails: list[str] = []
         in_summary = False
         for line in proc.stdout.splitlines():
@@ -1019,12 +1029,15 @@ def run_pkg_field_cases() -> int:
                 fails.append(line.strip()[2:])
         # The expected_failures includes the tolerated-FP case (P15); we
         # accept BOTH expected_status and expected_failures matches.
-        ok = (actual_status == pc.expected_status
-              and set(fails) == set(pc.expected_failures))
+        ok = actual_status == pc.expected_status and set(fails) == set(
+            pc.expected_failures
+        )
         mark = "PASS" if ok else "FAIL"
         print(f"  [{mark}] {pc.id}: {pc.desc}")
         if not ok:
-            print(f"      expected: status={pc.expected_status} fails={pc.expected_failures}")
+            print(
+                f"      expected: status={pc.expected_status} fails={pc.expected_failures}"
+            )
             print(f"      actual:   status={actual_status} fails={fails}")
             for ln in proc.stdout.splitlines()[:25]:
                 print(f"      {ln}")
@@ -1216,12 +1229,20 @@ def run_enum_cases() -> int:
             head_path = f.name
         try:
             proc = subprocess.run(
-                [sys.executable, str(SCRIPT),
-                 "--base-pkg", str(HEAD_PKG),
-                 "--head-pkg", head_path,
-                 "--head-lock", str(HEAD_LOCK),
-                 "--enumerate-dead"],
-                capture_output = True, text = True, cwd = str(REPO),
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--base-pkg",
+                    str(HEAD_PKG),
+                    "--head-pkg",
+                    head_path,
+                    "--head-lock",
+                    str(HEAD_LOCK),
+                    "--enumerate-dead",
+                ],
+                capture_output = True,
+                text = True,
+                cwd = str(REPO),
             )
         finally:
             os.unlink(head_path)
@@ -1263,7 +1284,9 @@ def run_enum_cases() -> int:
         if not ok:
             print(f"      expected unused superset: {sorted(ec.expected_unused)}")
             print(f"      expected used NOT in unused: {sorted(ec.expected_used)}")
-            print(f"      expected orphans superset: {sorted(ec.expected_orphan_types)}")
+            print(
+                f"      expected orphans superset: {sorted(ec.expected_orphan_types)}"
+            )
             print(f"      actual unused: {sorted(unused)}")
             print(f"      actual orphans: {sorted(orphans)}")
             for ln in proc.stdout.splitlines()[:30]:
@@ -1318,13 +1341,7 @@ def main() -> int:
     print()
     enum_rc = run_enum_cases()
 
-    if (
-        passed == total
-        and cls_rc == 0
-        and adv_rc == 0
-        and pkg_rc == 0
-        and enum_rc == 0
-    ):
+    if passed == total and cls_rc == 0 and adv_rc == 0 and pkg_rc == 0 and enum_rc == 0:
         return 0
     return 1
 

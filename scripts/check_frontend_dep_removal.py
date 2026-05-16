@@ -355,23 +355,42 @@ _PKG_JSON_SKIP_KEYS = {
 # Top-level fields whose contents are never package references. We walk
 # everything else recursively.
 _PKG_JSON_OPAQUE_KEYS = {
-    "browserslist",       # browser queries
-    "keywords",           # free-form strings
-    "engines",            # node/npm version constraints
-    "engineStrict",       # bool
-    "packageManager",     # `pnpm@9.0.0` -- the package manager binary
-    "volta",              # version pins for node/npm/yarn
-    "files",              # paths included in publish
-    "directories",        # paths
-    "publishConfig",      # registry / access config
-    "config",             # generic npm config values
-    "main", "module", "browser", "types", "typings", "type", "exports",
-    "imports", "bin", "man",  # author-side fields (not consumer refs)
-    "scripts",            # handled separately via scripts_bin_refs()
-    "repository", "bugs", "homepage", "funding",
-    "author", "contributors", "maintainers", "license", "licenses",
-    "name", "version", "description", "private", "sideEffects",
-    "workspaces",         # paths/globs, NOT pkg names
+    "browserslist",  # browser queries
+    "keywords",  # free-form strings
+    "engines",  # node/npm version constraints
+    "engineStrict",  # bool
+    "packageManager",  # `pnpm@9.0.0` -- the package manager binary
+    "volta",  # version pins for node/npm/yarn
+    "files",  # paths included in publish
+    "directories",  # paths
+    "publishConfig",  # registry / access config
+    "config",  # generic npm config values
+    "main",
+    "module",
+    "browser",
+    "types",
+    "typings",
+    "type",
+    "exports",
+    "imports",
+    "bin",
+    "man",  # author-side fields (not consumer refs)
+    "scripts",  # handled separately via scripts_bin_refs()
+    "repository",
+    "bugs",
+    "homepage",
+    "funding",
+    "author",
+    "contributors",
+    "maintainers",
+    "license",
+    "licenses",
+    "name",
+    "version",
+    "description",
+    "private",
+    "sideEffects",
+    "workspaces",  # paths/globs, NOT pkg names
 }
 
 
@@ -506,7 +525,11 @@ def tsconfig_compiler_types_refs() -> set[str]:
             if not isinstance(t, str):
                 continue
             # `vite/client` resolves to `vite` package.
-            pkg = t.split("/", 1)[0] if not t.startswith("@") else "/".join(t.split("/", 2)[:2])
+            pkg = (
+                t.split("/", 1)[0]
+                if not t.startswith("@")
+                else "/".join(t.split("/", 2)[:2])
+            )
             out.add(pkg)
     return out
 

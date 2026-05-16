@@ -1141,9 +1141,6 @@ class FastBaseModel:
                 # attn_implementation   = attn_implementation,
                 **kwargs,
             )
-            # Opt-in per-expert Linear4bit swap for Gemma-4 MoE checkpoints
-            # whose fused 3D expert weights bnb cannot quantize (#5344).
-            # Off by default; users enable via UNSLOTH_GEMMA4_MOE_4BIT=1.
             _maybe_swap_gemma4_moe_4bit(model)
 
             # Guardrail: see _warn_if_quantization_silently_dropped + #5344.

@@ -252,24 +252,22 @@ with sync_playwright() as p:
     # is mounted here): grep the JSX for dir="auto" inside each block.
     _repo_root = Path(__file__).resolve().parents[2]
     _thread_src = (
-        _repo_root
-        / "studio/frontend/src/components/assistant-ui/thread.tsx"
+        _repo_root / "studio/frontend/src/components/assistant-ui/thread.tsx"
     ).read_text()
     _shared_src = (
-        _repo_root
-        / "studio/frontend/src/features/chat/shared-composer.tsx"
+        _repo_root / "studio/frontend/src/features/chat/shared-composer.tsx"
     ).read_text()
     _edit_idx = _thread_src.find("aui-edit-composer-input")
-    if _edit_idx == -1 or 'dir="auto"' not in _thread_src[
-        _edit_idx : _edit_idx + 600
-    ]:
+    if _edit_idx == -1 or 'dir="auto"' not in _thread_src[_edit_idx : _edit_idx + 600]:
         soft_fail('edit composer source is missing dir="auto"')
     else:
         info('edit composer dir="auto" present (source)')
     _compare_idx = _shared_src.find("Send to both models")
-    if _compare_idx == -1 or 'dir="auto"' not in _shared_src[
-        max(_compare_idx - 400, 0) : _compare_idx + 400
-    ]:
+    if (
+        _compare_idx == -1
+        or 'dir="auto"'
+        not in _shared_src[max(_compare_idx - 400, 0) : _compare_idx + 400]
+    ):
         soft_fail('compare composer source is missing dir="auto"')
     else:
         info('compare composer dir="auto" present (source)')
@@ -430,9 +428,7 @@ with sync_playwright() as p:
     #    so we filter via is_benign_* and only fail on real errors.
     shoot("07-final")
     real_page_errors = [e for e in page_errors if not is_benign_page_error(e)]
-    real_console_errors = [
-        e for e in console_errors if not is_benign_console_error(e)
-    ]
+    real_console_errors = [e for e in console_errors if not is_benign_console_error(e)]
     info(
         f"page_errors={len(page_errors)} ({len(real_page_errors)} non-benign); "
         f"console_errors={len(console_errors)} "

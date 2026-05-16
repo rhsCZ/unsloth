@@ -45,10 +45,10 @@ def test_ime_workflow_step_does_not_set_studio_old_pw():
     drive_idx = yml.find("Drive IME + multilingual paste regression")
     assert drive_idx != -1, "IME drive step not found in workflow"
     next_step_idx = yml.find("- name:", drive_idx + 1)
-    drive_block = yml[drive_idx:next_step_idx if next_step_idx != -1 else None]
-    assert "STUDIO_OLD_PW" not in drive_block, (
-        "IME drive step still passes dead STUDIO_OLD_PW env var"
-    )
+    drive_block = yml[drive_idx : next_step_idx if next_step_idx != -1 else None]
+    assert (
+        "STUDIO_OLD_PW" not in drive_block
+    ), "IME drive step still passes dead STUDIO_OLD_PW env var"
     assert "STUDIO_NEW_PW" in drive_block, "IME drive step missing STUDIO_NEW_PW"
 
 
@@ -57,17 +57,17 @@ def test_ime_pass_password_step_does_not_export_old_pw():
     pass_idx = yml.find("Pass bootstrap pw for IME / i18n test")
     assert pass_idx != -1, "IME password setup step not found"
     next_step_idx = yml.find("- name:", pass_idx + 1)
-    pass_block = yml[pass_idx:next_step_idx if next_step_idx != -1 else None]
-    assert "STUDIO_IME_OLD_PW" not in pass_block, (
-        "IME password setup still exports dead STUDIO_IME_OLD_PW"
-    )
+    pass_block = yml[pass_idx : next_step_idx if next_step_idx != -1 else None]
+    assert (
+        "STUDIO_IME_OLD_PW" not in pass_block
+    ), "IME password setup still exports dead STUDIO_IME_OLD_PW"
     assert "STUDIO_IME_NEW_PW" in pass_block
 
 
 def test_ime_playwright_script_does_not_read_studio_old_pw():
     src = IME_PY.read_text()
     code_only = re.sub(r'""".*?"""', "", src, flags = re.DOTALL)
-    assert "STUDIO_OLD_PW" not in code_only, (
-        "IME Playwright script still references dead STUDIO_OLD_PW env var"
-    )
+    assert (
+        "STUDIO_OLD_PW" not in code_only
+    ), "IME Playwright script still references dead STUDIO_OLD_PW env var"
     assert 'os.environ["STUDIO_NEW_PW"]' in code_only

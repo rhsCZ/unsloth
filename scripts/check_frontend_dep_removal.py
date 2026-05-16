@@ -366,7 +366,9 @@ def build_bin_to_pkg(head_lock: dict) -> dict[str, str]:
 _SCRIPT_TOKENIZE = re.compile(r"\s*(?:&&|\|\||;|\|(?!\|))\s*")
 
 
-def scripts_bin_refs(head_pkg: dict, bin_to_pkg: dict[str, str]) -> dict[str, list[str]]:
+def scripts_bin_refs(
+    head_pkg: dict, bin_to_pkg: dict[str, str]
+) -> dict[str, list[str]]:
     """Return `{package_name: ['scripts.X: cmd', ...]}` listing every
     package referenced via its bin name in package.json scripts.
     """
@@ -381,12 +383,16 @@ def scripts_bin_refs(head_pkg: dict, bin_to_pkg: dict[str, str]) -> dict[str, li
                 continue
             words = chunk.split()
             idx = 0
-            while idx < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[idx]):
+            while idx < len(words) and re.match(
+                r"^[A-Za-z_][A-Za-z0-9_]*=", words[idx]
+            ):
                 idx += 1
             if idx >= len(words):
                 continue
             first = words[idx]
-            if first in {"npx", "pnpx", "yarn", "pnpm", "bunx"} and idx + 1 < len(words):
+            if first in {"npx", "pnpx", "yarn", "pnpm", "bunx"} and idx + 1 < len(
+                words
+            ):
                 idx += 1
                 first = words[idx]
             first = first.removeprefix("./node_modules/.bin/")

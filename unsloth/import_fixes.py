@@ -1289,55 +1289,31 @@ def patch_torchcodec_audio_decoder():
 
 
 def disable_torchcodec_if_broken():
-    """Make broken torchcodec behave as if it were uninstalled.
+    """Make broken torchcodec behave as if uninstalled (#5446).
 
-    transformers (>= 4.55) and datasets (>= 4.0) both sniff torchcodec via
-    ``importlib.util.find_spec()``, which returns True even when the native
-    libtorchcodec / libavutil libraries cannot dlopen (Colab without the
-    matching FFmpeg, ABI mismatch with torch, etc). Downstream code then tries
-    to actually use torchcodec and crashes with RuntimeError mid-import.
-
-    If the load test fails we treat torchcodec as uninstalled:
-      * transformers < 5: flip ``_torchcodec_available`` to False.
-      * transformers >= 5: rebind ``is_torchcodec_available`` to ``lambda: False``
-        and clear its lru_cache.
-      * datasets >= 4.0: flip ``datasets.config.TORCHCODEC_AVAILABLE``, which
-        gates every torchcodec call site inside datasets (audio.py, video.py,
-        features.py, the three formatters, ...). Without this, transformers
-        falls back to librosa but datasets still routes through torchcodec
-        and re-raises the same RuntimeError -- see issue #5446.
-      * sys.modules: drop half-loaded ``torchcodec*`` and the
-        ``datasets.features._torchcodec`` wrapper, then seat
-        ``sys.modules["torchcodec"] = None`` as a sentinel. After this, any
-        future ``import torchcodec`` or ``from torchcodec.X import Y`` raises
-        ``ModuleNotFoundError`` (subclass of ImportError) instead of the
-        broken-native-lib RuntimeError, so the unconditional torchcodec
-        imports inside datasets / torchaudio fall through their existing
-        ``except ImportError`` handlers cleanly. This also makes
-        ``find_spec("torchcodec")`` return None on re-entry so this function
-        is a no-op on the second call.
+    transformers and datasets both detect torchcodec via find_spec, which
+    returns True even when the native libs cannot dlopen. We flip their
+    flags and seat a sys.modules sentinel so downstream imports fall through
+    their existing except ImportError handlers cleanly.
     """
     try:
         import importlib.util
 
         if importlib.util.find_spec("torchcodec") is None:
-            return  # not installed (or already disabled by us)
+            return  # absent or already disabled
 
-        # Real load test. RuntimeError is what torchcodec raises on dlopen
-        # failure; OSError covers chained "libavutil.so.X not found" shapes.
+        # RuntimeError on dlopen failure; OSError covers chained libavutil.so misses.
         from torchcodec.decoders import AudioDecoder
     except (ImportError, RuntimeError, OSError):
-        # Patch transformers' availability checks.
+        # transformers: flip flag (<5) and/or rebind lru_cache'd func (>=5).
         try:
             import transformers.utils.import_utils as tf_import_utils
 
-            # transformers < 5 path: module-level cached flag.
             try:
                 tf_import_utils._torchcodec_available = False
             except AttributeError:
                 pass
 
-            # transformers >= 5 path: lru_cache'd is_torchcodec_available().
             is_avail = getattr(tf_import_utils, "is_torchcodec_available", None)
             if is_avail is not None:
                 try:
@@ -1348,7 +1324,7 @@ def disable_torchcodec_if_broken():
         except ImportError:
             pass
 
-        # Patch datasets' availability flag (datasets >= 4.0).
+        # datasets >= 4.0: own flag gating audio/video/features/formatters.
         try:
             import datasets.config as datasets_config
 
@@ -1357,10 +1333,8 @@ def disable_torchcodec_if_broken():
         except ImportError:
             pass
 
-        # Drop half-loaded torchcodec submodules + the datasets wrapper, then
-        # block any future import. ``sys.modules[name] = None`` is the
-        # standard "module is absent" sentinel: import torchcodec raises
-        # ModuleNotFoundError, find_spec returns None.
+        # Drop half-loaded entries and seat the absence sentinel. After this,
+        # import torchcodec raises ModuleNotFoundError and find_spec returns None.
         for _stale in [
             n
             for n in list(sys.modules)

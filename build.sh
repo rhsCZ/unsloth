@@ -33,11 +33,11 @@ _restore_gitignores() {
 }
 trap _restore_gitignores EXIT
 
-# Use bun if available (faster), fall back to npm. Lockfile-strict on
-# both paths so a release build can't pull a fresh caret-range patch
-# of any transitive from the registry.
+# Use bun if a bun.lock is committed (lockfile-strict, fast), else npm ci.
+# bun install --frozen-lockfile cannot migrate from package-lock.json, so if
+# only the npm lockfile is present we skip bun and go straight to npm ci.
 _install_ok=false
-if command -v bun &>/dev/null; then
+if [ -f bun.lock ] && command -v bun &>/dev/null; then
     if bun install --frozen-lockfile; then
         _install_ok=true
     else

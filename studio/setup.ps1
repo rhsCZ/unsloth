@@ -1327,13 +1327,15 @@ if ($NeedFrontendBuild -and -not $IsPipInstall) {
     $ErrorActionPreference = "Continue"
     Push-Location $FrontendDir
 
-    $UseBun = $null -ne (Get-Command bun -ErrorAction SilentlyContinue)
+    # Only use bun when a committed bun.lock is present. bun install
+    # --frozen-lockfile cannot migrate from package-lock.json, so without
+    # bun.lock the bun path would always fail.
+    $UseBun = ($null -ne (Get-Command bun -ErrorAction SilentlyContinue)) -and (Test-Path "bun.lock")
 
     # bun's package cache can become corrupt -- packages get stored with only
     # metadata but no actual content (bin/, lib/). When this happens bun install
     # exits 0 but leaves binaries missing. We validate after install and clear
     # the cache + retry once before falling back to npm.
-    # --frozen-lockfile so a fresh caret-range patch can't land via npm registry.
     if ($UseBun) {
         Write-Host "   Using bun for package install (faster)" -ForegroundColor DarkGray
         $bunExit = Invoke-SetupCommand { bun install --frozen-lockfile }

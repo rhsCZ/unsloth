@@ -53,6 +53,8 @@ on:
       - 'studio/backend/requirements/**'
       - 'studio/frontend/package.json'
       - 'studio/frontend/package-lock.json'
+      - 'studio/backend/core/data_recipe/oxc-validator/package.json'
+      - 'studio/backend/core/data_recipe/oxc-validator/package-lock.json'
       - 'studio/src-tauri/Cargo.toml'
       - 'studio/src-tauri/Cargo.lock'
       - 'pyproject.toml'
@@ -278,7 +280,7 @@ jobs:
           {
             echo "## Lockfile supply-chain audit"
             echo
-            echo "Scanned: studio/frontend/package-lock.json + studio/src-tauri/Cargo.lock"
+            echo "Scanned: studio/frontend/package-lock.json + studio/backend/core/data_recipe/oxc-validator/package-lock.json + studio/src-tauri/Cargo.lock"
             echo
             echo "No structural anomalies or known IOC strings."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -304,6 +306,22 @@ jobs:
             echo
             echo '```'
             tail -200 ../../logs-npm-audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: npm audit (oxc-validator runtime)
+        # Same audit surface, separate npm project (oxc-parser, oxlint).
+        continue-on-error: true
+        working-directory: studio/backend/core/data_recipe/oxc-validator
+        run: |
+          set +e
+          npm audit --audit-level=high | tee "$GITHUB_WORKSPACE/logs-npm-audit-oxc.txt"
+          npm audit --json > "$GITHUB_WORKSPACE/logs-npm-audit-oxc.json" || true
+          {
+            echo "## npm audit (oxc-validator)"
+            echo
+            echo '```'
+            tail -200 "$GITHUB_WORKSPACE/logs-npm-audit-oxc.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -348,6 +366,7 @@ jobs:
           /tmp/osv-scanner --version
           /tmp/osv-scanner scan source \
             --lockfile=studio/frontend/package-lock.json \
+            --lockfile=studio/backend/core/data_recipe/oxc-validator/package-lock.json \
             --lockfile=studio/src-tauri/Cargo.lock \
             --lockfile=requirements.txt:audit-reqs/unsloth-deps.txt \
             --lockfile=requirements.txt:audit-reqs/studio.txt \
@@ -913,16 +932,29 @@ jobs:
         # downloaded tarball, and only fetches from registry.npmjs.org.
         # Initially non-blocking so the baseline can settle; drop
         # continue-on-error once the baseline is clean for a week.
+        #
+        # Two separate npm projects share this scan surface; scan each.
         run: |
           set -o pipefail
           LOG=logs-scan-npm.txt
           python3 scripts/scan_npm_packages.py 2>&1 | tee "$LOG"
+          LOG2=logs-scan-npm-oxc.txt
+          python3 scripts/scan_npm_packages.py \
+            --lockfile studio/backend/core/data_recipe/oxc-validator/package-lock.json \
+            2>&1 | tee "$LOG2"
           {
-            echo "## scan_npm_packages"
+            echo "## scan_npm_packages (Studio frontend)"
             echo
             echo '### Findings (tail)'
             echo '```'
             tail -300 "$LOG"
+            echo '```'
+            echo
+            echo "## scan_npm_packages (oxc-validator)"
+            echo
+            echo '### Findings (tail)'
+            echo '```'
+            tail -300 "$LOG2"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -930,7 +962,9 @@ jobs:
         if: always()
         with:
           name: scan-npm-packages-log
-          path: logs-scan-npm.txt
+          path: |
+            logs-scan-npm.txt
+            logs-scan-npm-oxc.txt
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────
@@ -1103,6 +1137,9 @@ jobs:
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
           git show "$BASE_SHA:studio/frontend/package-lock.json" \
             > /tmp/base-package-lock.json
+          # OXC lockfile may not exist on the base ref (newly added).
+          git show "$BASE_SHA:studio/backend/core/data_recipe/oxc-validator/package-lock.json" \
+            > /tmp/base-oxc-package-lock.json 2>/dev/null || echo '{}' > /tmp/base-oxc-package-lock.json
 
       - name: Diff for newly-added install-script deps
         if: github.event_name == 'pull_request'
@@ -1110,6 +1147,9 @@ jobs:
           python3 scripts/check_new_install_scripts.py \
             --base /tmp/base-package-lock.json \
             --head studio/frontend/package-lock.json
+          python3 scripts/check_new_install_scripts.py \
+            --base /tmp/base-oxc-package-lock.json \
+            --head studio/backend/core/data_recipe/oxc-validator/package-lock.json
 
       - name: Skip install-script diff (non-PR trigger)
         if: github.event_name != 'pull_request'

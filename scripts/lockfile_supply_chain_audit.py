@@ -652,7 +652,10 @@ def audit_cargo_lockfile(path: Path) -> list[Finding]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-DEFAULT_NPM_LOCKFILES = ("studio/frontend/package-lock.json",)
+DEFAULT_NPM_LOCKFILES = (
+    "studio/frontend/package-lock.json",
+    "studio/backend/core/data_recipe/oxc-validator/package-lock.json",
+)
 DEFAULT_CARGO_LOCKFILES = ("studio/src-tauri/Cargo.lock",)
 
 
@@ -671,7 +674,8 @@ def main(argv: list[str] | None = None) -> int:
         default = None,
         help = (
             "Path to a package-lock.json (repeatable). "
-            "Default: studio/frontend/package-lock.json."
+            "Default: studio/frontend/package-lock.json plus "
+            "studio/backend/core/data_recipe/oxc-validator/package-lock.json."
         ),
     )
     parser.add_argument(

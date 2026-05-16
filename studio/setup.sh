@@ -367,7 +367,11 @@ _try_bun_install() {
 }
 
 _bun_install_ok=false
-if command -v bun &>/dev/null; then
+# bun install --frozen-lockfile cannot migrate from package-lock.json, so we
+# only enter the bun path when a committed bun.lock exists. Without it,
+# bun would fail every time and the corrupt-cache retry would clear the
+# user's bun cache for nothing.
+if [ -f bun.lock ] && command -v bun &>/dev/null; then
     substep "using bun for package install (faster)"
     if _try_bun_install; then
         _bun_install_ok=true

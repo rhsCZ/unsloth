@@ -2775,17 +2775,13 @@ class LlamaCppBackend:
         if req_spec != backend_spec:
             return False
 
-        if (self._chat_template_override or None) != (
-            chat_template_override or None
-        ):
+        if (self._chat_template_override or None) != (chat_template_override or None):
             return False
 
         # extra_args=None means "no opinion" (inherit semantics handled
         # at the route layer); only an explicit list forces equality.
         if extra_args is not None:
-            current = (
-                list(self._extra_args) if self._extra_args is not None else []
-            )
+            current = list(self._extra_args) if self._extra_args is not None else []
             if list(extra_args) != current:
                 return False
         return True

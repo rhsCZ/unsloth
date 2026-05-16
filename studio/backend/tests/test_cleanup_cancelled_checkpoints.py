@@ -157,3 +157,24 @@ def test_symlinked_child_skipped(outputs_setup):
     assert (
         target / "important.txt"
     ).exists(), "symlink target outside outputs_root must not be rmtree'd"
+
+
+def test_non_numeric_tmp_checkpoint_suffix_preserved(outputs_setup):
+    """HF Trainer's partials are tmp-checkpoint-<step>. A user-named
+    tmp-checkpoint-final / tmp-checkpoint-backup / tmp-checkpoint-notes
+    must NOT be deleted by the cancel cleanup."""
+    from core.training.training import _cleanup_cancelled_checkpoints
+
+    out = outputs_setup / "run-non-numeric"
+    out.mkdir()
+    numeric = _mk_dir(out, "tmp-checkpoint-100")
+    user_final = _mk_dir(out, "tmp-checkpoint-final")
+    user_backup = _mk_dir(out, "tmp-checkpoint-backup")
+    user_notes = _mk_dir(out, "tmp-checkpoint-user-notes")
+
+    _cleanup_cancelled_checkpoints(out)
+
+    assert not numeric.exists(), "in-flight tmp-checkpoint-100 should be removed"
+    assert user_final.exists(), "user dir tmp-checkpoint-final must be preserved"
+    assert user_backup.exists(), "user dir tmp-checkpoint-backup must be preserved"
+    assert user_notes.exists(), "user dir tmp-checkpoint-user-notes must be preserved"

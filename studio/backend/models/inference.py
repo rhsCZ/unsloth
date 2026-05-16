@@ -400,8 +400,9 @@ class ChatMessage(BaseModel):
     content parts for multimodal messages (OpenAI vision format).
     Assistant messages that only contain tool calls may set ``content``
     to ``None`` with ``tool_calls`` populated. ``role="tool"`` messages
-    carry the result of a client-executed tool call and require
-    ``tool_call_id`` per the OpenAI spec.
+    carry the result of a client-executed tool call; ``tool_call_id`` is
+    accepted as missing here and resolved at the ``ChatCompletionRequest``
+    layer by walking back to the preceding assistant turn.
     """
 
     role: Literal["system", "user", "assistant", "tool"] = Field(
@@ -627,9 +628,28 @@ class ChatCompletionRequest(BaseModel):
         the first unconsumed tool_call. Fall back to a synthesised id only
         when no candidate assistant turn exists.
         """
-        # Track which assistant tool_calls have already been claimed by an
-        # earlier tool message so we don't reuse one id for two results.
+        # Track which assistant tool_calls have already been claimed by a
+        # tool result so we don't reuse one id for two results. Pre-mark
+        # explicit `tool_call_id`s first; otherwise a sibling result with a
+        # missing id would walk back and pick the same call again.
         consumed: set[tuple[int, int]] = set()
+
+        def _mark_consumed(start_idx: int, tool_call_id: str) -> None:
+            for asst_idx in range(start_idx - 1, -1, -1):
+                prev = self.messages[asst_idx]
+                if prev.role == "user":
+                    break
+                if prev.role != "assistant" or not prev.tool_calls:
+                    continue
+                for tc_idx, tc in enumerate(prev.tool_calls):
+                    if isinstance(tc, dict) and tc.get("id") == tool_call_id:
+                        consumed.add((asst_idx, tc_idx))
+                        return
+
+        for tool_idx, msg in enumerate(self.messages):
+            if msg.role == "tool" and msg.tool_call_id:
+                _mark_consumed(tool_idx, msg.tool_call_id)
+
         for tool_idx, msg in enumerate(self.messages):
             if msg.role != "tool" or msg.tool_call_id:
                 continue
@@ -646,14 +666,16 @@ class ChatCompletionRequest(BaseModel):
                 for tc_idx, tc in enumerate(prev.tool_calls):
                     if (asst_idx, tc_idx) in consumed:
                         continue
-                    tc_id = (tc or {}).get("id")
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = tc.get("id")
                     if not tc_id:
                         continue
-                    if (
-                        msg.name
-                        and isinstance(tc, dict)
-                        and (tc.get("function") or {}).get("name") == msg.name
-                    ):
+                    function = tc.get("function")
+                    function_name = (
+                        function.get("name") if isinstance(function, dict) else None
+                    )
+                    if msg.name and function_name == msg.name:
                         name_match = (tc_id, asst_idx, tc_idx)
                         break
                     if fallback is None:

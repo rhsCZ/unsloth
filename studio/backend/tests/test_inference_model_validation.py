@@ -175,3 +175,52 @@ def test_walkback_does_not_cross_user_turn():
     assert last is not None
     assert last != "old_call"
     assert last.startswith("call_")
+
+
+def test_walkback_skips_explicitly_consumed_tool_call_id():
+    """Sibling tool result with an explicit id must reserve its assistant
+    slot so a follow-up missing-id result picks the OTHER tool call."""
+    req = _req(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_a",
+                        "type": "function",
+                        "function": {"name": "calc", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_b",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_a", "content": "4"},
+            {"role": "tool", "content": "second result"},
+        ]
+    )
+    assert [m.tool_call_id for m in req.messages if m.role == "tool"] == [
+        "call_a",
+        "call_b",
+    ]
+
+
+def test_walkback_handles_malformed_function_string():
+    """A tool_call with ``function`` as a string (provider quirk) must not
+    raise; resolution falls back to fallback id selection."""
+    req = _req(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_a", "type": "function", "function": "calc"},
+                ],
+            },
+            {"role": "tool", "name": "calc", "content": "4"},
+        ]
+    )
+    assert req.messages[-1].tool_call_id == "call_a"

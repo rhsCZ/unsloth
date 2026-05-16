@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import re
 import shutil
 import threading
 import time
@@ -70,11 +71,14 @@ def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
         )
         return
     removed = 0
+    # HF Trainer's partials are `tmp-checkpoint-<step>` with an integer step.
+    # Restrict to that exact shape so a user `tmp-checkpoint-final`, etc.,
+    # is not deleted by the cancel cleanup.
+    _hf_tmp = re.compile(r"^tmp-checkpoint-\d+$")
     for entry in out.iterdir():
         if not entry.is_dir() or entry.is_symlink():
             continue
-        name = entry.name
-        if not name.startswith("tmp-checkpoint-"):
+        if not _hf_tmp.match(entry.name):
             continue
         try:
             shutil.rmtree(entry, ignore_errors = False)
@@ -383,8 +387,8 @@ class TrainingBackend:
         if self._pump_thread is not None and self._pump_thread.is_alive():
             self._pump_thread.join(timeout = 8.0)
 
-        # Drop checkpoint-* dirs on explicit cancel only; stop-and-save
-        # keeps its artifacts.
+        # Drop in-flight tmp-checkpoint-<step> partials on explicit cancel.
+        # Completed checkpoint-<step>/ dirs stay so the user can resume.
         if cancelled and output_dir:
             try:
                 _cleanup_cancelled_checkpoints(output_dir)

@@ -60,17 +60,14 @@ jobs:
         with:
           workspaces: studio/src-tauri -> target
 
-      # Pre-install lockfile structural audit. Has to fire BEFORE
-      # any `npm ci` so a tarball's `prepare` / `postinstall` cannot
-      # run ahead of the scan. Pure-Python read-only; safe everywhere.
+      # Must run BEFORE any `npm ci` so a tarball's prepare/postinstall
+      # cannot execute ahead of the structural scan.
       - name: Lockfile supply-chain audit (pre-install scan)
         run: python3 scripts/lockfile_supply_chain_audit.py
 
       - name: Install pinned Tauri CLI (matches release-desktop.yml)
-        # `npm ci` resolves @tauri-apps/cli and its platform-specific
-        # optional native binaries from studio/package-lock.json --
-        # transitive versions are fully pinned, integrity hashes are
-        # verified, and the install is reproducible across re-runs.
+        # `npm ci` resolves @tauri-apps/cli from studio/package-lock.json
+        # (transitives fully pinned, integrity hashes verified).
         run: npm ci --prefix studio --no-fund --no-audit
 
       - name: Verify pinned Tauri CLI version
@@ -81,12 +78,9 @@ jobs:
 
       - name: Frontend build (npm ci, vite)
         working-directory: studio/frontend
-        # Lifecycle scripts (esbuild native-binary postinstall, etc.) are
-        # required for `vite build`. The pre-install lockfile structural
-        # audit (lockfile_supply_chain_audit.py) above is the practical
-        # defence against the npm postinstall-dropper class -- it fires
-        # BEFORE any tarball runs, on the injection pattern itself rather
-        # than an advisory-DB lookup.
+        # Vite build needs esbuild's native-binary postinstall; the
+        # pre-install lockfile audit above is what gates that path
+        # against the npm postinstall-dropper class.
         run: |
           npm ci --no-fund --no-audit
           npm run build

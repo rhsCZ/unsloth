@@ -397,12 +397,8 @@ class Finding:
 def audit_npm_lockfile(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     if not path.exists():
-        # A missing lockfile is a configuration error, not a clean bill
-        # of health: a default lockfile that quietly disappears (e.g.
-        # the install path was reverted to `npm install` without
-        # updating DEFAULT_NPM_LOCKFILES) would otherwise let this
-        # audit print `0 findings` while `npm ci` later fails. Fail
-        # loudly so the missing path surfaces as a finding.
+        # A missing requested lockfile is a config error, not a clean
+        # audit; surface it so a deleted default cannot pass silently.
         findings.append(
             Finding(
                 path = str(path),
@@ -570,8 +566,7 @@ _PACKAGE_HEADER = re.compile(r"^\[\[package\]\]\s*$")
 def audit_cargo_lockfile(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     if not path.exists():
-        # See audit_npm_lockfile: refuse to silently treat a missing
-        # default lockfile as a clean scan.
+        # See audit_npm_lockfile: missing lockfile is a finding.
         findings.append(
             Finding(
                 path = str(path),
@@ -751,11 +746,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     root = Path(args.root).resolve()
-    # When the user passes an explicit `--npm-lockfile` or
-    # `--cargo-lockfile` they are scoping the scan to exactly those
-    # paths; do NOT silently graft the other ecosystem's defaults on
-    # top. Falling back to defaults is reserved for the no-args CI
-    # invocation, where every default path must exist.
+    # Explicit --npm-lockfile/--cargo-lockfile scopes the scan to those
+    # paths; defaults apply only to the no-args CI invocation.
     _user_explicit = args.npm_lockfile is not None or args.cargo_lockfile is not None
     if _user_explicit:
         npm_paths = [root / p for p in (args.npm_lockfile or ())]

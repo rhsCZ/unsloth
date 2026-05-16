@@ -34,17 +34,24 @@ _restore_gitignores() {
 trap _restore_gitignores EXIT
 
 # Use bun for install if available (faster), fall back to npm.
+# Both paths use lockfile-strict mode so a release build cannot silently
+# pull a newer minor/patch of any transitive dep from the registry. Naked
+# `bun install` / `npm install` honour caret ranges in package.json and
+# will fetch new compatible versions if available, which is the standard
+# vector for supply-chain attacks that compromise a sub-dep at a patch
+# release. `--frozen-lockfile` / `npm ci` install only what the lockfile
+# pins and abort on any drift.
 _install_ok=false
 if command -v bun &>/dev/null; then
-    if bun install; then
+    if bun install --frozen-lockfile; then
         _install_ok=true
     else
-        echo "⚠ bun install failed, falling back to npm"
+        echo "⚠ bun install --frozen-lockfile failed, falling back to npm ci"
         rm -rf node_modules
     fi
 fi
 if [ "$_install_ok" != "true" ]; then
-    if ! npm install; then
+    if ! npm ci; then
         echo "❌ ERROR: package install failed" >&2
         exit 1
     fi

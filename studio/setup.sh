@@ -343,7 +343,12 @@ trap _restore_gitignores EXIT
 _try_bun_install() {
     local _log _exit_code=0
     _log=$(mktemp)
-    bun install >"$_log" 2>&1 || _exit_code=$?
+    # --frozen-lockfile prevents the installer from auto-pulling newer
+    # transitive versions when a caret range in package.json would allow
+    # it. Combined with the npm-ci fallback below, this keeps the
+    # release-build dep set identical to what the committed lockfile
+    # captures.
+    bun install --frozen-lockfile >"$_log" 2>&1 || _exit_code=$?
 
     # bun may create .exe shims on Windows (Git Bash / MSYS2) instead of plain scripts
     if [ "$_exit_code" -eq 0 ] \
@@ -381,7 +386,11 @@ if command -v bun &>/dev/null; then
     fi
 fi
 if [ "$_bun_install_ok" = false ]; then
-    run_quiet_no_exit "npm install" npm install --no-fund --no-audit --loglevel=error
+    # npm ci (not npm install) -- strictly install what package-lock.json
+    # pins, so an attacker who hijacks a minor/patch of a transitive dep
+    # cannot have it pulled into a release build via caret-range
+    # resolution. Fails fast if package.json and the lockfile have drifted.
+    run_quiet_no_exit "npm ci" npm ci --no-fund --no-audit --loglevel=error
     _npm_install_rc=$?
     if [ "$_npm_install_rc" -ne 0 ]; then
         exit "$_npm_install_rc"

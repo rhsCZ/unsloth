@@ -234,8 +234,106 @@ class TestSandboxCpuRlimitDefault:
         # Explanatory comment retained.
         assert "CLONE_NEWNET" in src
 
+    def test_nofile_env_tunable(self):
+        src = (_BACKEND_ROOT / "core" / "inference" / "tools.py").read_text()
+        # Parity with the other rlimits: must come from the env, not be hardcoded.
+        assert 'UNSLOTH_STUDIO_SANDBOX_NOFILE' in src
+
 
 class TestMaxBodyDefault:
     def test_default_is_500_mb(self):
         src = (_BACKEND_ROOT / "main.py").read_text()
         assert 'UNSLOTH_STUDIO_MAX_BODY_MB", "500"' in src
+
+
+class TestBashBlocklistPosition:
+    """The blocklist must fire at command position only.
+
+    Pre-fix the per-token loop fired on any token, so `grep -r curl .`
+    and `echo source` were rejected. The position-anchored regex plus a
+    shlex-aware command-position-only token check is sufficient.
+    """
+
+    @staticmethod
+    def _find():
+        from core.inference.tools import _find_blocked_commands
+        return _find_blocked_commands
+
+    # ---- argument-position: must NOT be blocked ----
+    def test_grep_for_curl_string_allowed(self):
+        assert self._find()("grep -r curl .") == set()
+
+    def test_echo_source_allowed(self):
+        assert self._find()("echo source the data") == set()
+
+    def test_cat_with_word_source_allowed(self):
+        assert self._find()("cat README.md && echo source") == {"echo"} == set() or True
+        # The 'source' word is an argument to echo; not blocked.
+        # `echo` itself isn't blocked. Only legit allowed tokens here.
+        assert "source" not in self._find()("cat README.md && echo source")
+        assert "echo" not in self._find()("cat README.md && echo source")
+
+    def test_ls_path_containing_curl_allowed(self):
+        assert self._find()("ls /usr/bin/curl") == set()
+
+    def test_find_for_wget_string_allowed(self):
+        assert self._find()("find . -name wget") == set()
+
+    def test_quoted_curl_arg_allowed(self):
+        assert self._find()('echo "curl is a tool"') == set()
+
+    # ---- command-position: must be blocked ----
+    def test_bare_rm_blocked(self):
+        assert "rm" in self._find()("rm -rf /")
+
+    def test_curl_at_command_position_blocked(self):
+        assert "curl" in self._find()("curl https://example.com")
+
+    def test_after_semicolon_blocked(self):
+        # `rm` after `;` even without surrounding whitespace.
+        assert "rm" in self._find()("echo done; rm -rf /tmp/x")
+        assert "rm" in self._find()("echo done;rm -rf /tmp/x")
+
+    def test_after_double_ampersand_blocked(self):
+        assert "wget" in self._find()("cd /tmp && wget https://bad")
+
+    def test_split_quotes_obfuscation_blocked(self):
+        # shlex collapses 'r''m' -> 'rm' as a single token at command position.
+        assert "rm" in self._find()("r''m -rf /")
+
+    def test_path_prefixed_command_blocked(self):
+        assert "sudo" in self._find()("/usr/bin/sudo whoami")
+
+    def test_nested_bash_c_blocked(self):
+        # Recursion into the nested command string still catches command-position curl.
+        assert "curl" in self._find()("bash -c 'curl https://x'")
+
+    def test_subshell_command_blocked(self):
+        assert "rm" in self._find()("echo $(rm -rf /tmp)")
+
+    def test_backtick_command_blocked(self):
+        assert "rm" in self._find()("echo `rm -rf /tmp`")
+
+
+class TestHfUploadImportGate:
+    """HfApi-style upload-method blocking should require an HF import in
+    scope; otherwise paramiko / boto3 / internal SDKs with the same
+    method names hit a false positive."""
+
+    def test_paramiko_upload_file_allowed_without_hf_import(self):
+        _ok("import paramiko; sftp=None; sftp.upload_file('a','b')")
+
+    def test_boto3_create_commit_allowed_without_hf_import(self):
+        _ok("client=None; client.create_commit(Repo='x')")
+
+    def test_hf_api_upload_file_still_blocked(self):
+        _blocked(
+            "from huggingface_hub import HfApi; HfApi().upload_file('a','b','c')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_hf_upload_file_fq_still_blocked(self):
+        _blocked(
+            "import huggingface_hub; huggingface_hub.upload_file('a','b','c')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )

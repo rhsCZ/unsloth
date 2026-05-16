@@ -109,16 +109,23 @@ _BLOCKED_COMMANDS = (
 )
 
 
-def _find_blocked_commands(command: str) -> set[str]:
-    """Detect blocked commands using shlex tokenization and regex scanning.
+_SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n", "(", "`"})
 
-    Catches: full paths (/usr/bin/sudo), quoted strings ("sudo"),
-    split-quotes (su""do), backslash escapes (\\rm), and command-position
-    words after ;, |, &&, $().
+
+def _find_blocked_commands(command: str) -> set[str]:
+    """Detect blocked commands at shell command position only.
+
+    A token is at command position if it is the first token, or if the
+    preceding token is one of `;` / `&&` / `||` / `|` / `&` / newline /
+    `` ` `` / `(`. Tokens in argument position (`grep -r curl .`,
+    `echo source the data`, `ls /usr/bin/curl`) are passed through.
+    Recurses into bash -c / cmd /c nested commands.
     """
     blocked = set()
 
-    # 1. shlex tokenization (handles quotes, escapes, concatenation)
+    # shlex preserves separators like && and ; as their own tokens, which is
+    # exactly what we need to identify command-position tokens after quoting
+    # is collapsed (so 'r''m' is one token "rm" at command position).
     try:
         tokens = (
             shlex.split(command)
@@ -128,21 +135,29 @@ def _find_blocked_commands(command: str) -> set[str]:
     except ValueError:
         tokens = command.split()
 
-    for token in tokens:
-        base = os.path.basename(token).lower()
-        # Strip common Windows executable extensions so that
-        # runas.exe, shutdown.bat, etc. match the blocklist.
+    def _token_basename(tok: str) -> str:
+        # shlex may glue trailing meta-chars onto a token (`rm;`); strip them
+        # so the basename match still hits `rm`. Leading shell-state chars
+        # likewise.
+        tok = tok.strip(";&|()`")
+        base = os.path.basename(tok).lower()
         stem, ext = os.path.splitext(base)
         if ext in {".exe", ".com", ".bat", ".cmd"}:
             base = stem
-        if base in _BLOCKED_COMMANDS:
-            blocked.add(base)
+        return base
 
-    # 2. Regex: catch blocked words at shell command boundaries
-    #    (semicolons, pipes, &&, ||, backticks, $(), <(), subshells, newlines)
-    #    Uses a single combined pattern for all blocked words.
-    #    Handles optional Unix path prefix (/usr/bin/) and Windows drive
-    #    letter prefix (C:\Windows\...\).
+    prev_is_separator = True  # treat start-of-string as a separator
+    for token in tokens:
+        if prev_is_separator and not token.startswith("-"):
+            base = _token_basename(token)
+            if base in _BLOCKED_COMMANDS:
+                blocked.add(base)
+        prev_is_separator = token in _SHELL_SEPARATORS
+
+    # Regex: blocked words at shell command boundaries that shlex won't see,
+    # e.g. inside an unquoted $(rm -rf), <(rm), backtick chain, or appended to
+    # a separator with no whitespace ("foo;rm"). Anchored to command-position
+    # delimiters; does not match in argument position.
     lowered = command.lower()
     if _BLOCKED_COMMANDS:
         words_alt = "|".join(re.escape(w) for w in sorted(_BLOCKED_COMMANDS))
@@ -153,7 +168,7 @@ def _find_blocked_commands(command: str) -> set[str]:
         )
         blocked.update(re.findall(pattern, lowered))
 
-    # 3. Check for nested shell invocations (bash -c 'sudo whoami',
+    # Nested shell invocations (bash -c 'sudo whoami',
     #    bash -lc '...', bash --login -c '...', cmd /c '...').
     #    When a -c or /c flag is found, look backwards for a shell name
     #    (skipping intermediate flags like --login, -l, -x) and recursively
@@ -296,7 +311,10 @@ def _sandbox_preexec():
         except (ValueError, OSError, AttributeError):
             pass
         try:
-            _resource.setrlimit(_resource.RLIMIT_NOFILE, (1024, 1024))
+            # Default high enough for multi-shard safetensors mmaps + Python's
+            # own handle count; tunable via env for installs that hit the cap.
+            nofile = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_NOFILE", "16384"))
+            _resource.setrlimit(_resource.RLIMIT_NOFILE, (nofile, nofile))
         except (ValueError, OSError, AttributeError):
             pass
 
@@ -1327,10 +1345,35 @@ def _check_signal_escape_patterns(code: str):
                     return True
         return False
 
+    # Bare method-name fallback (`x.upload_file(...)`) is intentionally fuzzy,
+    # but should only fire when huggingface_hub / hf_api is actually imported
+    # somewhere in the snippet -- otherwise paramiko.upload_file, boto3
+    # create_commit, etc. hit a false positive. We pre-scan for the imports.
+    _HF_IMPORT_MODULES = (
+        "huggingface_hub",
+        "hf_api",
+        "huggingface_hub.hf_api",
+    )
+
+    def _module_has_hf_import(tree: ast.AST) -> bool:
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for alias in n.names:
+                    if alias.name.split(".", 1)[0] in _HF_IMPORT_MODULES:
+                        return True
+            elif isinstance(n, ast.ImportFrom):
+                root = (n.module or "").split(".", 1)[0]
+                if root in _HF_IMPORT_MODULES:
+                    return True
+        return False
+
+    _hf_in_scope = _module_has_hf_import(tree)
+
     def _method_call_is_hf_upload(node: ast.Call) -> bool:
-        """True for HfApi upload method names on any receiver."""
+        """True for HfApi upload method names when huggingface_hub is imported."""
         return (
-            isinstance(node.func, ast.Attribute)
+            _hf_in_scope
+            and isinstance(node.func, ast.Attribute)
             and node.func.attr in _UPLOAD_HF_METHODS
         )
 

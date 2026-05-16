@@ -512,7 +512,7 @@ async def health_check(request: Request):
         "desktop_manageability_version": 1,
         "supports_desktop_auth": True,
         "supports_desktop_backend_ownership": True,
-        # Hex digest of the install path; launchers reject sibling Studios on the same port.
+        # Opaque per-install id; launchers reject sibling Studios on the same port.
         "studio_root_id": _studio_root_id(),
         "native_path_leases_supported": native_path_leases_supported(),
         **({"desktop_owner": owner} if (owner := _desktop_owner()) else {}),

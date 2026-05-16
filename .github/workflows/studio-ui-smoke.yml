@@ -229,12 +229,9 @@ jobs:
           kill "${STUDIO_EXTRA_PID}" 2>/dev/null || true
           sleep 2
 
-      # The IME + multilingual paste regression test (issue #5318 /
-      # PR #5327). Boots a third Studio on its own port so a hang or
-      # crash here cannot poison the earlier UI tests. No GGUF load
-      # is required -- the bug surface is the composer textarea's
-      # React state, not the inference path -- so this step is fast
-      # (~60 s wall clock on a warm runner).
+      # IME + multilingual paste regression (issue #5318 / PR #5327).
+      # Third Studio on its own port so a hang here cannot poison the
+      # earlier UI tests. No GGUF -- the bug surface is the composer.
       - name: Reset auth + boot Studio for IME / i18n tests (port 18896)
         run: |
           unsloth studio reset-password
@@ -280,11 +277,8 @@ jobs:
           sleep 2
 
       - name: Upload Playwright artifacts
-        # Always upload (not just failure) so a green run's screenshots
-        # are reviewable in the Actions UI -- catches "passed but the
-        # UI is silently broken" regressions that would be invisible
-        # otherwise. Both Studio's logs (chat + extra) and BOTH
-        # Playwright artifact dirs are bundled.
+        # Always upload so a green run's screenshots stay reviewable --
+        # catches "passed but the UI is silently broken" regressions.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

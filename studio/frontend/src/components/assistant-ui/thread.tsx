@@ -328,9 +328,8 @@ const Composer: FC<{ disabled?: boolean }> = ({ disabled }) => {
         autoFocus={!disabled}
         disabled={disabled}
         aria-label="Message input"
-        // dir="auto" lets the browser pick LTR/RTL from the first strong
-        // character so Arabic, Hebrew, Persian, and Urdu input flows the
-        // right way without affecting Latin / CJK / Devanagari users.
+        // dir="auto": browser picks LTR/RTL from the first strong char;
+        // no effect on Latin / CJK / Devanagari.
         dir="auto"
         {...inputProps}
       />

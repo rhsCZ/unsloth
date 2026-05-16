@@ -64,12 +64,21 @@ _TILELANG_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_TILELANG_INSTALL"
 # upgrades torch underneath the Studio venv.
 _FLA_PACKAGE_VERSION = "0.5.0"
 _FLA_CORE_PACKAGE_VERSION = "0.5.0"
+_FLA_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_FLA_INSTALL"
+# fla-core's runtime dep that --no-deps suppresses. Without einops,
+# `import fla.modules` raises ModuleNotFoundError at startup.
+_FLA_RUNTIME_DEPS = ("einops",)
+# Studio installer permits torch>=2.4,<2.11.0 but fla-core 0.5.0
+# declares torch>=2.7.0; skip FLA on older torch to keep the
+# fallback path clean.
+_FLA_MIN_TORCH = (2, 7)
 # flash-linear-attention and tilelang both require Python >=3.10.
 _FLA_MIN_PYTHON = (3, 10)
-# tilelang wheels exist for Linux x86_64/aarch64 and macOS arm64. We
-# never want to fall back to its 93MB sdist on a Studio worker, so
-# skip on platforms outside that set.
-_TILELANG_SUPPORTED_PLATFORMS = ("linux",)
+# tilelang 0.1.8 wheels: Linux x86_64 / aarch64 and macOS arm64.
+# We never want to fall back to its 93MB sdist on a Studio worker.
+_TILELANG_SUPPORTED_LINUX_MACHINES = frozenset(
+    ("x86_64", "amd64", "aarch64", "arm64")
+)
 _TILELANG_INSTALL_TIMEOUT_S = 600
 # apache-tvm-ffi 0.1.10/0.1.11 trigger "CUDA: misaligned address" on
 # sm_100. If we detect a stale broken version, force a reinstall.
@@ -297,6 +306,37 @@ def _ensure_causal_conv1d_fast_path(event_queue: Any, model_name: str) -> None:
     )
 
 
+def _installed_torch_version_tuple() -> tuple[int, int] | None:
+    """Return ``(major, minor)`` of the installed torch, else None."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        raw = _pkg_version("torch").split("+", 1)[0]
+        parts = raw.split(".")
+        return (int(parts[0]), int(parts[1]))
+    except Exception:
+        return None
+
+
+def _flash_linear_attention_importable() -> bool:
+    """Best-effort import probe.
+
+    Catches arbitrary exceptions (not just ImportError) so a broken
+    optional package (OSError on missing native lib, RuntimeError from a
+    bad init) does not abort the worker; we fall back to reinstall or
+    the torch path.
+    """
+    try:
+        import fla.modules  # noqa: F401
+        import fla.ops.gated_delta_rule  # noqa: F401
+        return True
+    except Exception as exc:
+        logger.warning(
+            "flash-linear-attention is not importable; continuing with install/fallback: %s",
+            exc,
+        )
+        return False
+
+
 def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     """Install ``flash-linear-attention`` + ``fla-core`` for Qwen3.5 family.
 
@@ -308,10 +348,15 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     True SSM families (Nemotron-H, Falcon-H1, Granite-H, LFM2) take the
     mamba_ssm path and never call FLA's GDN kernels, so we skip them.
 
-    Both packages are pure-Python wheels on PyPI. We install with
-    ``--no-deps`` to prevent fla-core's ``torch>=2.7.0`` requirement
-    from silently upgrading the Studio venv's torch.
+    Pinned ``flash-linear-attention``, ``fla-core`` and the runtime
+    deps we explicitly want (``einops``) are installed with ``--no-deps``
+    so pip never silently upgrades torch from fla-core's ``torch>=2.7.0``
+    requirement.
+
+    Set ``UNSLOTH_STUDIO_SKIP_FLA_INSTALL=1`` to bypass entirely.
     """
+    if os.getenv(_FLA_SKIP_ENV) == "1":
+        return
     if not _model_wants_tilelang(model_name):
         return
     if sys.version_info < _FLA_MIN_PYTHON:
@@ -322,15 +367,21 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
             sys.version.split()[0],
         )
         return
+    torch_ver = _installed_torch_version_tuple()
+    if torch_ver is not None and torch_ver < _FLA_MIN_TORCH:
+        _send_status(
+            event_queue,
+            (
+                f"Skipping flash-linear-attention install: fla-core requires "
+                f"torch>={_FLA_MIN_TORCH[0]}.{_FLA_MIN_TORCH[1]}, have "
+                f"{torch_ver[0]}.{torch_ver[1]}"
+            ),
+        )
+        return
 
-    try:
-        import fla.modules  # noqa: F401
-        import fla.ops.gated_delta_rule  # noqa: F401
-
+    if _flash_linear_attention_importable():
         logger.info("flash-linear-attention already importable")
         return
-    except ImportError:
-        pass
 
     _send_status(
         event_queue,
@@ -340,7 +391,11 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
         ),
     )
 
+    # Install fla-core's required non-torch runtime deps explicitly
+    # because `--no-deps` suppresses them. Without einops, `import
+    # fla.modules` raises ModuleNotFoundError at runtime.
     specs = [
+        *_FLA_RUNTIME_DEPS,
         f"fla-core=={_FLA_CORE_PACKAGE_VERSION}",
         f"flash-linear-attention=={_FLA_PACKAGE_VERSION}",
     ]
@@ -387,6 +442,16 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
         _send_status(
             event_queue,
             "flash-linear-attention install failed; continuing on torch fallback",
+        )
+        return
+
+    # Verify the install actually produced importable modules. Catches
+    # the case where pip exits 0 but a transitive runtime dep we did
+    # not list is missing.
+    if not _flash_linear_attention_importable():
+        _send_status(
+            event_queue,
+            "flash-linear-attention installed but is not importable; continuing on torch fallback",
         )
         return
 
@@ -459,6 +524,33 @@ def _installed_tvm_ffi_version() -> str | None:
         return None
 
 
+def _tilelang_importable() -> bool:
+    """Best-effort tilelang import probe; catches broader than ImportError."""
+    try:
+        import tilelang  # noqa: F401
+        import tvm_ffi  # noqa: F401
+        return True
+    except Exception as exc:
+        logger.warning(
+            "tilelang/tvm_ffi is not importable; continuing with install/fallback: %s",
+            exc,
+        )
+        return False
+
+
+def _tilelang_platform_supported() -> bool:
+    """True iff the current platform has a tilelang 0.1.8 wheel.
+
+    tilelang publishes manylinux x86_64/aarch64 and macOS arm64 wheels
+    plus a 93MB sdist; we never want the sdist on a Studio worker, so
+    we restrict to Linux x86_64/aarch64 explicitly.
+    """
+    import platform as _platform
+    if not sys.platform.startswith("linux"):
+        return False
+    return _platform.machine().lower() in _TILELANG_SUPPORTED_LINUX_MACHINES
+
+
 def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     """Install ``tilelang`` + pinned ``apache-tvm-ffi`` for FLA's TileLang backend.
 
@@ -485,10 +577,11 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
             sys.version.split()[0],
         )
         return
-    if not any(sys.platform.startswith(p) for p in _TILELANG_SUPPORTED_PLATFORMS):
+    if not _tilelang_platform_supported():
+        import platform as _platform
         logger.info(
-            "Skipping tilelang install: no prebuilt wheel for platform %s",
-            sys.platform,
+            "Skipping tilelang install: no prebuilt wheel for %s/%s",
+            sys.platform, _platform.machine(),
         )
         return
 
@@ -496,14 +589,9 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     needs_reinstall = existing_tvm_ffi in _TVM_FFI_BROKEN_VERSIONS
 
     if not needs_reinstall:
-        try:
-            import tilelang  # noqa: F401
-            import tvm_ffi  # noqa: F401
-
+        if _tilelang_importable():
             logger.info("tilelang + apache-tvm-ffi already installed")
             return
-        except ImportError:
-            pass
     else:
         logger.info(
             "Forcing tilelang reinstall: apache-tvm-ffi %s is on the broken list",
@@ -519,13 +607,17 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         ),
     )
 
-    # Install both in one pip resolve so the apache-tvm-ffi pin wins over
-    # tilelang's `>=0.1.2,~=0.1.0` constraint.
+    # Install both in one pip resolve so the apache-tvm-ffi pin wins
+    # over tilelang's `>=0.1.2,~=0.1.0` constraint. Resolve deps in
+    # both fresh-install and force-reinstall paths so tilelang's
+    # runtime deps (z3-solver, ml-dtypes, ...) get pulled in.
+    # `--only-binary=:all:` keeps us off the 93MB tilelang sdist.
     specs = [
         f"apache-tvm-ffi=={_APACHE_TVM_FFI_PACKAGE_VERSION}",
         f"tilelang=={_TILELANG_PACKAGE_VERSION}",
     ]
-    extra_args = ["--force-reinstall", "--no-deps"] if needs_reinstall else []
+    extra_args = ["--force-reinstall"] if needs_reinstall else []
+    binary_args = ["--only-binary=:all:"]
     if shutil.which("uv"):
         pypi_cmd = [
             "uv",
@@ -533,6 +625,7 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
             "install",
             "--python",
             sys.executable,
+            *binary_args,
             *extra_args,
             *specs,
         ]
@@ -542,6 +635,7 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
             "-m",
             "pip",
             "install",
+            *binary_args,
             *extra_args,
             *specs,
         ]
@@ -567,6 +661,15 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         _send_status(
             event_queue,
             "TileLang backend install failed; continuing on the FLA Triton path",
+        )
+        return
+
+    # Verify imports succeed; pip can return 0 while a native library
+    # (libz3.so, ...) is missing for the runtime load.
+    if not _tilelang_importable():
+        _send_status(
+            event_queue,
+            "TileLang backend installed but is not importable; continuing on the FLA Triton path",
         )
         return
 

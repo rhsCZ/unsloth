@@ -293,6 +293,128 @@ def test_flash_linear_attention_skipped_below_python_3_10(monkeypatch):
     run_mock.assert_not_called()
 
 
+def test_flash_linear_attention_skipped_via_env(monkeypatch):
+    monkeypatch.setenv(worker._FLA_SKIP_ENV, "1")
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+
+    worker._ensure_flash_linear_attention(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    run_mock.assert_not_called()
+
+
+def test_flash_linear_attention_skipped_below_torch_2_7(monkeypatch):
+    monkeypatch.delenv(worker._FLA_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker, "_installed_torch_version_tuple", lambda: (2, 5))
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+    statuses: list[str] = []
+    monkeypatch.setattr(worker, "_send_status", lambda queue, msg: statuses.append(msg))
+
+    worker._ensure_flash_linear_attention(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    run_mock.assert_not_called()
+    assert any("torch>=" in s for s in statuses)
+
+
+def test_flash_linear_attention_install_includes_einops(monkeypatch):
+    monkeypatch.delenv(worker._FLA_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/uv")
+    monkeypatch.setattr(worker, "_installed_torch_version_tuple", lambda: (2, 9))
+    monkeypatch.setattr(worker, "_flash_linear_attention_importable", lambda: False)
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+    monkeypatch.setattr(worker, "_send_status", lambda *a, **k: None)
+
+    worker._ensure_flash_linear_attention(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    args = run_mock.call_args[0][0]
+    assert "--no-deps" in args
+    assert "einops" in args
+    assert f"flash-linear-attention=={worker._FLA_PACKAGE_VERSION}" in args
+    assert f"fla-core=={worker._FLA_CORE_PACKAGE_VERSION}" in args
+
+
+def test_flash_linear_attention_logs_post_install_import_failure(monkeypatch):
+    """pip exits 0 but `import fla.modules` still fails (missing transitive)."""
+    monkeypatch.delenv(worker._FLA_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/uv")
+    monkeypatch.setattr(worker, "_installed_torch_version_tuple", lambda: (2, 9))
+    import_calls = {"count": 0}
+
+    def fake_importable():
+        import_calls["count"] += 1
+        # First call (pre-install probe) -> False so we attempt install.
+        # Second call (post-install verify) -> still False.
+        return False
+
+    monkeypatch.setattr(worker, "_flash_linear_attention_importable", fake_importable)
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+    statuses: list[str] = []
+    monkeypatch.setattr(worker, "_send_status", lambda queue, msg: statuses.append(msg))
+
+    worker._ensure_flash_linear_attention(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    assert import_calls["count"] == 2
+    assert any("not importable" in s for s in statuses)
+
+
+def test_tilelang_backend_skipped_on_unsupported_linux_arch(monkeypatch):
+    monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker.sys, "platform", "linux")
+    import platform as _platform
+    monkeypatch.setattr(_platform, "machine", lambda: "ppc64le")
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+
+    worker._ensure_tilelang_backend(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    run_mock.assert_not_called()
+
+
+def test_tilelang_backend_pins_only_binary(monkeypatch):
+    monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising = False)
+    monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/uv")
+    monkeypatch.setattr(worker, "_installed_tvm_ffi_version", lambda: None)
+    monkeypatch.setattr(worker, "_tilelang_importable", lambda: False)
+    run_mock = mock.Mock(return_value = mock.Mock(returncode = 0, stdout = ""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+    monkeypatch.setattr(worker, "_send_status", lambda *a, **k: None)
+    # Need to bypass the post-install probe too.
+    probe_calls = {"count": 0}
+    def fake_probe():
+        probe_calls["count"] += 1
+        # First probe (pre-install): False so install runs.
+        # Second probe (post-install): True so success branch taken.
+        return probe_calls["count"] > 1
+    monkeypatch.setattr(worker, "_tilelang_importable", fake_probe)
+
+    worker._ensure_tilelang_backend(
+        event_queue = [],
+        model_name = "unsloth/Qwen3.5-2B",
+    )
+
+    args = run_mock.call_args[0][0]
+    assert "--only-binary=:all:" in args
+    assert "--no-deps" not in args
+
+
 def _force_missing_tilelang_imports(monkeypatch):
     real_import = builtins.__import__
 
@@ -343,7 +465,10 @@ def test_tilelang_backend_reinstalls_when_tvm_ffi_is_broken(monkeypatch):
     run_mock.assert_called_once()
     args = run_mock.call_args[0][0]
     assert "--force-reinstall" in args
-    assert "--no-deps" in args
+    # Reinstall must NOT strip deps; tilelang needs z3-solver/ml-dtypes
+    # and friends at runtime.
+    assert "--no-deps" not in args
+    assert "--only-binary=:all:" in args
 
 
 def test_tilelang_backend_skipped_below_python_3_10(monkeypatch):

@@ -65,9 +65,13 @@ _TILELANG_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_TILELANG_INSTALL"
 _FLA_PACKAGE_VERSION = "0.5.0"
 _FLA_CORE_PACKAGE_VERSION = "0.5.0"
 _FLA_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_FLA_INSTALL"
-# fla-core's runtime dep that --no-deps suppresses. Without einops,
-# `import fla.modules` raises ModuleNotFoundError at startup.
-_FLA_RUNTIME_DEPS = ("einops",)
+# fla-core declares `einops` in its METADATA but `fla/utils.py`
+# also imports `packaging` at module load; that one is NOT declared
+# upstream (an FLA bug). triton is a torch dep but we list it
+# defensively because some torch wheel builds skip it. With --no-deps
+# we have to bring these in ourselves, otherwise `import fla.modules`
+# raises ModuleNotFoundError at startup.
+_FLA_RUNTIME_DEPS = ("einops", "packaging", "triton")
 # Studio installer permits torch>=2.4,<2.11.0 but fla-core 0.5.0
 # declares torch>=2.7.0; skip FLA on older torch to keep the
 # fallback path clean.
@@ -349,9 +353,9 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     mamba_ssm path and never call FLA's GDN kernels, so we skip them.
 
     Pinned ``flash-linear-attention``, ``fla-core`` and the runtime
-    deps we explicitly want (``einops``) are installed with ``--no-deps``
-    so pip never silently upgrades torch from fla-core's ``torch>=2.7.0``
-    requirement.
+    deps we explicitly want (``einops``, ``packaging``, ``triton``)
+    are installed with ``--no-deps`` so pip never silently upgrades
+    torch from fla-core's ``torch>=2.7.0`` requirement.
 
     Set ``UNSLOTH_STUDIO_SKIP_FLA_INSTALL=1`` to bypass entirely.
     """
@@ -392,8 +396,9 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     )
 
     # Install fla-core's required non-torch runtime deps explicitly
-    # because `--no-deps` suppresses them. Without einops, `import
-    # fla.modules` raises ModuleNotFoundError at runtime.
+    # because `--no-deps` suppresses them. Without einops/packaging
+    # (and triton, on minimal torch builds), `import fla.modules`
+    # raises ModuleNotFoundError at runtime.
     specs = [
         *_FLA_RUNTIME_DEPS,
         f"fla-core=={_FLA_CORE_PACKAGE_VERSION}",

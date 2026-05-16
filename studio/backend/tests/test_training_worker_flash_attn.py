@@ -339,7 +339,12 @@ def test_flash_linear_attention_install_includes_einops(monkeypatch):
 
     args = run_mock.call_args[0][0]
     assert "--no-deps" in args
+    # einops is declared by fla-core; packaging and triton are pulled in
+    # because fla/utils.py imports them at module load but neither is
+    # declared in fla-core's METADATA (an upstream FLA gap).
     assert "einops" in args
+    assert "packaging" in args
+    assert "triton" in args
     assert f"flash-linear-attention=={worker._FLA_PACKAGE_VERSION}" in args
     assert f"fla-core=={worker._FLA_CORE_PACKAGE_VERSION}" in args
 

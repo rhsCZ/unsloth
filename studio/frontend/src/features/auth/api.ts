@@ -98,9 +98,14 @@ async function retryWithTauriAutoAuth(
 // the loser would 401 and be force-logged-out. All callers share one
 // in-flight promise.
 let refreshInflight: Promise<boolean> | null = null;
+// Logout sets a generation marker so an in-flight refresh that resolves
+// after logout() returns does NOT repopulate localStorage with a fresh
+// access/refresh token pair (would silently re-auth the SPA).
+let logoutGeneration = 0;
 
 export async function refreshSession(): Promise<boolean> {
   if (refreshInflight) return refreshInflight;
+  const startGeneration = logoutGeneration;
   refreshInflight = (async () => {
     const refreshToken = getRefreshToken();
     if (!refreshToken) return false;
@@ -118,6 +123,9 @@ export async function refreshSession(): Promise<boolean> {
         return false;
       }
       const payload = (await response.json()) as RefreshResponse;
+      // A concurrent logout() bumped the generation before we resolved.
+      // Drop the new tokens on the floor so the user stays logged out.
+      if (startGeneration !== logoutGeneration) return false;
       storeAuthTokens(
         payload.access_token,
         payload.refresh_token,
@@ -190,19 +198,38 @@ export async function authFetch(
   return retryWithCurrentToken(resolvedInput, init);
 }
 
-export async function logout(): Promise<void> {
-  // Best-effort server-side revocation. If the server is unreachable we
-  // still clear local state so the SPA lands the user on /login.
-  const accessToken = getAuthToken();
+async function postLogout(accessToken: string | null): Promise<Response | null> {
   try {
-    await fetchWithTauriNetworkRetry(apiUrl("/api/auth/logout"), {
+    return await fetchWithTauriNetworkRetry(apiUrl("/api/auth/logout"), {
       method: "POST",
       headers: accessToken
         ? { Authorization: `Bearer ${accessToken}` }
         : undefined,
     });
   } catch {
-    // ignore
+    return null;
   }
-  clearAuthTokens();
+}
+
+export async function logout(): Promise<void> {
+  // Server-side revoke. If the access token has expired the backend
+  // returns 401 BEFORE storage.revoke_user_refresh_tokens fires, so the
+  // refresh token would stay valid for its full 7-day lifetime. Rotate
+  // once via the refresh token and retry the revoke with the fresh
+  // access token. Both branches still clear local state on the way out.
+  //
+  // The logoutGeneration bump in finally invalidates any refreshSession
+  // that started before this call: when it resolves it sees the bumped
+  // counter and drops its new token pair on the floor instead of
+  // repopulating localStorage after we clear it.
+  try {
+    let response = await postLogout(getAuthToken());
+    if (response && response.status === 401 && getRefreshToken()) {
+      const refreshed = await refreshSession();
+      if (refreshed) response = await postLogout(getAuthToken());
+    }
+  } finally {
+    logoutGeneration += 1;
+    clearAuthTokens();
+  }
 }

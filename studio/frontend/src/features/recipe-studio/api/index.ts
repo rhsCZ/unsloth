@@ -2,7 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { authFetch } from "@/features/auth";
-import { formatFastApiDetail } from "@/lib/format-fastapi-error";
+import { formatFastApiDetail, readFastApiError } from "@/lib/format-fastapi-error";
 
 const DEFAULT_BASE = "/api/data-recipe";
 
@@ -456,22 +456,17 @@ export async function uploadUnstructuredFile(
   );
 
   if (res.status === 413) {
-    const detail = await res.json().catch(() => ({ detail: "File too large" }));
     return {
       file_id: "",
       filename: file.name,
       size_bytes: file.size,
       status: "error",
-      error:
-        typeof detail.detail === "string" ? detail.detail : "File too large",
+      error: await readFastApiError(res, "File too large"),
     };
   }
 
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: "Upload failed" }));
-    throw new Error(
-      typeof detail.detail === "string" ? detail.detail : "Upload failed",
-    );
+    throw new Error(await readFastApiError(res, "Upload failed"));
   }
 
   return res.json();

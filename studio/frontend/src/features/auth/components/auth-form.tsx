@@ -79,6 +79,7 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
   const navigate = useNavigate();
   const isLoginMode = mode === "login";
   const [showPassword, setShowPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const username = HIDDEN_LOGIN_USERNAME;
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -379,7 +380,7 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
               <div className="relative">
                 <Input
                   id="new-password"
-                  type={showPassword ? "text" : "password"}
+                  type={showNewPassword ? "text" : "password"}
                   className="pr-10"
                   autoComplete="new-password"
                   value={newPassword}
@@ -392,9 +393,9 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
                   variant="ghost"
                   size="icon"
                   className="absolute right-0 top-0 h-full px-3 text-muted-foreground hover:bg-transparent"
-                  onClick={() => setShowPassword((prev) => !prev)}
+                  onClick={() => setShowNewPassword((prev) => !prev)}
                 >
-                  {showPassword ? (
+                  {showNewPassword ? (
                     <EyeOff className="h-4 w-4" />
                   ) : (
                     <Eye className="h-4 w-4" />

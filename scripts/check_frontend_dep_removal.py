@@ -190,36 +190,75 @@ def reachable_from_head(head_pkg: dict, lock: dict) -> set[str]:
 
 
 def classify(pkg: str, file: str, content: str) -> str | None:
-    """Return why `content` references `pkg`, or None."""
+    """Return why `content` references `pkg`, or None.
+
+    `content` may span multiple lines (for multi-line imports/exports);
+    each pattern uses re.DOTALL where it matters. The bare-spec
+    regexes use a word-boundary check on the package name so that
+    `foobar` does not match `foo`.
+    """
     esc = re.escape(pkg)
-    if re.search(rf"import\s+(?:[^'\";]*?\s+from\s+)?['\"]{esc}(?:/[^'\"]*)?['\"]", content):
-        return "static_import"
-    if re.search(rf"import\s+['\"]{esc}(?:/[^'\"]*)?['\"]", content):
-        return "side_effect_import"
-    if re.search(rf"import\(\s*['\"]{esc}(?:/[^'\"]*)?['\"]\s*\)", content):
-        return "dynamic_import"
-    if re.search(rf"require(?:\.resolve)?\(\s*['\"]{esc}(?:/[^'\"]*)?['\"]\s*\)", content):
-        return "require"
-    if re.search(rf"@import\s+['\"]{esc}", content):
+    # Subpath gate: after the package name, the next char must be either
+    # the closing quote, `/`, or end-of-string. Prevents foo matching foobar.
+    sub = r"(?:/[^'\"`]*)?"
+
+    flags_dotall = re.DOTALL | re.MULTILINE
+
+    # CSS @import is checked first so it does not collide with the
+    # side-effect-import regex below.
+    if re.search(rf"@import\s+['\"]{esc}{sub}['\"]", content):
         return "css_import"
+    # Static imports: handle multi-line `import { ... } from "pkg"` by
+    # allowing arbitrary content (newlines included) between `import`
+    # and `from`. The non-greedy match plus the required `from` keeps
+    # this scoped to a single statement.
+    if re.search(rf"(?<!@)\bimport\b[^;'\"]*?\bfrom\s+['\"]{esc}{sub}['\"]",
+                 content, flags_dotall):
+        return "static_import"
+    # Side-effect import: `import "pkg"` (no `from`). The negative
+    # lookbehind rules out CSS `@import` lines.
+    if re.search(rf"(?<!@)\bimport\s+['\"]{esc}{sub}['\"]", content):
+        return "side_effect_import"
+    # Dynamic import: `import("pkg")` and `await import("pkg")`.
+    if re.search(rf"\bimport\(\s*['\"]{esc}{sub}['\"]\s*\)", content):
+        return "dynamic_import"
+    # require / require.resolve
+    if re.search(rf"\brequire(?:\.resolve)?\(\s*['\"]{esc}{sub}['\"]\s*\)", content):
+        return "require"
+    # Re-exports: `export * from "pkg"`, `export { x } from "pkg"`,
+    # `export type { Foo } from "pkg"`. Multi-line supported.
+    if re.search(rf"\bexport\b[^;'\"]*?\bfrom\s+['\"]{esc}{sub}['\"]",
+                 content, flags_dotall):
+        return "re_export"
+    # HTML script / link
     if re.search(rf"<script[^>]*src\s*=\s*['\"][^'\"]*/{esc}", content):
         return "html_script"
     if re.search(rf"<link[^>]*href\s*=\s*['\"][^'\"]*/{esc}", content):
         return "html_link"
-    if re.search(rf"///\s*<reference\s+types\s*=\s*['\"]{esc}(?:/[^'\"]*)?['\"]", content):
+    # TypeScript triple-slash
+    if re.search(rf"///\s*<reference\s+types\s*=\s*['\"]{esc}{sub}['\"]", content):
         return "tsc_triple_slash"
-    if re.search(rf"new\s+URL\(\s*['\"]{esc}(?:/[^'\"]*)?['\"]", content):
+    # new URL("pkg/...", import.meta.url)
+    if re.search(rf"\bnew\s+URL\(\s*['\"]{esc}{sub}['\"]", content):
         return "new_url"
-    if re.search(rf"url\(\s*['\"]?[^)'\"]*/{esc}/", content):
+    # CSS url(...) referencing the package
+    if re.search(rf"\burl\(\s*['\"]?[^)'\"]*/{esc}/", content):
         return "css_url"
-    if re.search(rf"`{esc}(?:/[^`$]*)?`", content):
+    # Template literal containing the package as the leading specifier
+    if re.search(rf"`{esc}{sub}`", content):
         return "template_literal"
-    # Bare quoted-string only meaningful in JS-like files.
+    # JSDoc / TS @import comment: `@import("pkg")`
+    if re.search(rf"@import\(\s*['\"]{esc}{sub}['\"]\s*\)", content):
+        return "jsdoc_import"
+    # Bare quoted-string fallback (config plugin lists, vite aliases,
+    # tsconfig paths, biome config plugin arrays, shadcn registries).
     if file in EXPECTED_NOISE_FILES:
         return None
     if not JS_LIKE_EXT.search(file):
         return None
-    if re.search(rf"['\"]{esc}(?:/[^'\"]*)?['\"]", content):
+    # Boundary: pkg must be followed by `'`, `"`, or `/` to avoid
+    # matching `foo` inside `foobar`.
+    if re.search(rf"['\"]{esc}(?:['\"]|/)", content):
         return "string_literal"
     return None
 
@@ -326,15 +365,45 @@ def grep_repo(pat: str) -> list[tuple[str, int, str]]:
     return rows
 
 
+_file_lines_cache: dict[str, list[str]] = {}
+
+
+def _read_file(path: str) -> list[str]:
+    if path not in _file_lines_cache:
+        try:
+            _file_lines_cache[path] = Path(path).read_text(errors="replace").splitlines()
+        except (OSError, UnicodeDecodeError):
+            _file_lines_cache[path] = []
+    return _file_lines_cache[path]
+
+
 def find_usage(pkg: str) -> list[Hit]:
-    """Return real usages of `pkg`. Filters pip-playwright separately."""
+    """Return real usages of `pkg`. Filters pip-playwright separately.
+
+    For each filename returned by grep, also feed a multi-line window
+    around the matching line into classify() so multi-line imports
+    (`import {\n a\n} from "pkg"`) get picked up.
+    """
     rows = grep_repo(re.escape(pkg))
     hits = []
+    seen_keys: set[tuple[str, str]] = set()
     for file, lineno, content in rows:
         if pkg == "playwright" and PIP_PLAYWRIGHT.search(content):
             continue
+        # Try the single-line classify first.
         kind = classify(pkg, file, content)
+        if not kind:
+            # Multi-line window: 4 lines above + the line itself + 4 below.
+            lines = _read_file(file)
+            lo = max(0, lineno - 5)
+            hi = min(len(lines), lineno + 4)
+            window = "\n".join(lines[lo:hi])
+            kind = classify(pkg, file, window)
         if kind:
+            key = (file, kind)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             hits.append(Hit(file, lineno, kind, content[:160]))
     return hits
 

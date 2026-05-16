@@ -118,3 +118,66 @@ def validate_extra_args(args: Optional[Iterable[str]]) -> list[str]:
 def is_managed_flag(flag: str) -> bool:
     """True if ``flag`` is a Studio-managed llama-server flag."""
     return flag in _DENYLIST
+
+
+# Pass-through flags that shadow first-class ``LoadRequest`` fields
+# (``max_seq_length``, ``cache_type_kv``, ``speculative_type``,
+# ``chat_template_override``). When the route inherits a previous
+# load's extra_args because the current request omitted the field, the
+# current request is still supplying these first-class values, so any
+# inherited token that would otherwise win llama.cpp's last-wins parse
+# is stripped here. Without this, ``unsloth run -c 4096`` followed by a
+# UI Apply with ``max_seq_length=8192`` would silently stay at 4096
+# (#5401).
+_SHADOWING_FLAGS: frozenset[str] = frozenset(
+    {
+        # max_seq_length -> -c / --ctx-size
+        "-c",
+        "--ctx-size",
+        # cache_type_kv -> --cache-type-k / --cache-type-v
+        "-ctk",
+        "--cache-type-k",
+        "-ctv",
+        "--cache-type-v",
+        # speculative_type -> --spec-* + Studio's draft tuning
+        "--spec-default",
+        "--spec-type",
+        "--spec-ngram-size-n",
+        "--spec-ngram-size",
+        "--draft-min",
+        "--draft-max",
+        # chat_template_override -> --chat-template* + jinja toggles
+        "--chat-template",
+        "--chat-template-file",
+        "--chat-template-kwargs",
+        "--jinja",
+        "--no-jinja",
+    }
+)
+
+
+def strip_shadowing_flags(args: Iterable[str]) -> list[str]:
+    """Strip flags that shadow first-class Studio settings.
+
+    Used when the route inherits a previous load's ``llama_extra_args``
+    so that an inherited ``-c 4096`` cannot override the current
+    request's ``max_seq_length`` (and equivalents for cache /
+    speculative / chat template). See ``_SHADOWING_FLAGS`` (#5401).
+    """
+    tokens = [str(a) for a in (args or [])]
+    out: list[str] = []
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        flag = _flag_name(tok)
+        if flag is None or flag not in _SHADOWING_FLAGS:
+            out.append(tok)
+            i += 1
+            continue
+        # Drop this token. If it doesn't already pack ``=value`` and
+        # the next token isn't a flag, drop that as the flag's value.
+        if "=" not in tok and i + 1 < n and _flag_name(tokens[i + 1]) is None:
+            i += 2
+        else:
+            i += 1
+    return out

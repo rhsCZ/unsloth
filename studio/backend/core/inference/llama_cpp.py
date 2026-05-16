@@ -475,7 +475,11 @@ class LlamaCppBackend:
         self._serial_load_lock = threading.Lock()
         # Last extra_args / requested n_ctx, preserved across unload so
         # the chat UI's /unload+/load Apply path can inherit them (#5401).
+        # ``_extra_args_source`` records the (model_identifier, hf_variant)
+        # the stored args came from so the route can refuse cross-model
+        # inheritance.
         self._extra_args: Optional[List[str]] = None
+        self._extra_args_source: Optional[tuple[str, Optional[str]]] = None
         self._requested_n_ctx: int = 0
         self._stdout_lines: list[str] = []
         self._stdout_thread: Optional[threading.Thread] = None
@@ -523,6 +527,13 @@ class LlamaCppBackend:
         """n_ctx the last load was invoked with (not the effective cap).
         0 means Auto. Used by the route to detect Auto-vs-explicit flips."""
         return self._requested_n_ctx
+
+    @property
+    def extra_args_source(self) -> Optional[tuple[str, Optional[str]]]:
+        """(model_identifier, hf_variant) the stored extra_args came from.
+        ``None`` if no extras have ever been recorded. Used by the route
+        to refuse cross-model inheritance (#5401)."""
+        return self._extra_args_source
 
     @property
     def context_length(self) -> Optional[int]:
@@ -2006,11 +2017,24 @@ class LlamaCppBackend:
         # leave two llama-server processes alive (#5401 / #5161). Does
         # not block /unload, /status, /load-progress.
         with self._serial_load_lock:
-            # Remember caller intent for later inheritance / comparison.
-            # extra_args: None keeps prior value, [] clears, list sets.
-            if extra_args is not None:
-                self._extra_args = list(extra_args)
-            self._requested_n_ctx = int(n_ctx)
+            # Duplicate /load that raced past the route-level check
+            # (the first one hadn't published _healthy=True yet). If the
+            # live server already satisfies this request, do nothing.
+            if self._already_in_target_state(
+                model_identifier = model_identifier,
+                hf_variant = hf_variant,
+                n_ctx = n_ctx,
+                cache_type_kv = cache_type_kv,
+                speculative_type = speculative_type,
+                chat_template_override = chat_template_override,
+                extra_args = extra_args,
+                is_vision = is_vision,
+            ):
+                logger.info(
+                    f"load_model: backend already in target state for "
+                    f"'{model_identifier}', skipping reload"
+                )
+                return True
 
             self._cancel_event.clear()
 
@@ -2659,6 +2683,20 @@ class LlamaCppBackend:
 
                 self._healthy = True
 
+                # Commit caller intent (extra_args + requested n_ctx)
+                # only after the server is healthy so a failed startup
+                # does not poison subsequent inheritance / comparator
+                # checks. ``extra_args``: None keeps prior, [] clears,
+                # list sets. Source records (model, variant) so the
+                # route can refuse cross-model inheritance (#5401).
+                if extra_args is not None:
+                    self._extra_args = list(extra_args)
+                    self._extra_args_source = (
+                        model_identifier,
+                        self._hf_variant,
+                    )
+                self._requested_n_ctx = int(n_ctx)
+
                 # Catch silent CPU fallback when GPU was intended (#5106).
                 self._gpu_offload_active = self._classify_gpu_offload(
                     gpu_indices is not None or use_fit, gpus or []
@@ -2679,6 +2717,70 @@ class LlamaCppBackend:
                     f"for model '{model_identifier}'"
                 )
                 return True
+
+    def _already_in_target_state(
+        self,
+        *,
+        model_identifier: str,
+        hf_variant: Optional[str],
+        n_ctx: int,
+        cache_type_kv: Optional[str],
+        speculative_type: Optional[str],
+        chat_template_override: Optional[str],
+        extra_args: Optional[List[str]],
+        is_vision: bool,
+    ) -> bool:
+        """True iff the live server already satisfies these load kwargs.
+
+        Mirrors ``routes/inference.py:_request_matches_loaded_settings``
+        but compares raw kwargs so ``load_model`` can short-circuit a
+        duplicate /load that raced past the route-level check (#5401).
+        """
+        if not self.is_loaded:
+            return False
+        if (self._model_identifier or "").lower() != (model_identifier or "").lower():
+            return False
+        if (self._hf_variant or "").lower() != (hf_variant or "").lower():
+            return False
+        if self._requested_n_ctx != int(n_ctx):
+            return False
+
+        def _norm(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                stripped = value.strip().lower()
+                return stripped or None
+            return value
+
+        if _norm(self._cache_type_kv) != _norm(cache_type_kv):
+            return False
+
+        # Vision GGUFs silently drop speculative decoding (see line
+        # 2338); treat the request's value as "off" so a vision load
+        # with speculative_type="default" still matches.
+        if self._is_vision or is_vision:
+            req_spec = "off"
+        else:
+            req_spec = _norm(speculative_type) or "off"
+        backend_spec = _norm(self._speculative_type) or "off"
+        if req_spec != backend_spec:
+            return False
+
+        if (self._chat_template_override or None) != (
+            chat_template_override or None
+        ):
+            return False
+
+        # extra_args=None means "no opinion" (inherit semantics handled
+        # at the route layer); only an explicit list forces equality.
+        if extra_args is not None:
+            current = (
+                list(self._extra_args) if self._extra_args is not None else []
+            )
+            if list(extra_args) != current:
+                return False
+        return True
 
     def _classify_gpu_offload(
         self,
@@ -2786,6 +2888,10 @@ class LlamaCppBackend:
             logger.warning(f"Error killing llama-server process: {e}")
         finally:
             self._process = None
+            # Clear healthy so a /load arriving during the replacement
+            # server's warm-up window cannot short-circuit against the
+            # previous server's health (#5401).
+            self._healthy = False
             if self._stdout_thread is not None:
                 self._stdout_thread.join(timeout = 2)
                 self._stdout_thread = None

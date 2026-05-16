@@ -119,7 +119,10 @@ try:
         _DEFAULT_T_MAX_PREDICT_MS,
         detect_reasoning_flags,
     )
-    from core.inference.llama_server_args import validate_extra_args
+    from core.inference.llama_server_args import (
+        strip_shadowing_flags,
+        validate_extra_args,
+    )
     from utils.models import ModelConfig
     from utils.inference import load_inference_config
     from utils.models.model_config import load_model_defaults
@@ -141,7 +144,10 @@ except ImportError:
         _DEFAULT_T_MAX_PREDICT_MS,
         detect_reasoning_flags,
     )
-    from core.inference.llama_server_args import validate_extra_args
+    from core.inference.llama_server_args import (
+        strip_shadowing_flags,
+        validate_extra_args,
+    )
     from utils.models import ModelConfig
     from utils.inference import load_inference_config
     from utils.models.model_config import load_model_defaults
@@ -429,10 +435,15 @@ def _request_matches_loaded_settings(
         llama_backend.cache_type_kv
     ):
         return False
-    # Treat None and "off" as equivalent for the speculative dropdown.
-    req_spec = _normalise_settings_str(request.speculative_type)
-    backend_spec = _normalise_settings_str(llama_backend.speculative_type)
-    if (req_spec or "off") != (backend_spec or "off"):
+    # Vision loads silently drop speculative decoding (llama_cpp.py gates
+    # spec on ``not is_vision``), so treat the request as ``off`` against
+    # the backend's ``None`` to avoid forcing a redundant reload.
+    if llama_backend.is_vision:
+        req_spec = "off"
+    else:
+        req_spec = _normalise_settings_str(request.speculative_type) or "off"
+    backend_spec = _normalise_settings_str(llama_backend.speculative_type) or "off"
+    if req_spec != backend_spec:
         return False
     if (request.chat_template_override or None) != (
         llama_backend.chat_template_override or None
@@ -660,24 +671,50 @@ async def load_model(
             # Inherit llama_extra_args from the previous load when the
             # request omits the field; the chat-settings Apply path does
             # not round-trip them. Explicit [] still clears (#5401).
+            #
+            # Inheritance is gated on the stored args having come from
+            # the same (model_identifier, hf_variant) so a switch to a
+            # different model cannot pick up the previous model's pass-
+            # through flags. Tokens that would shadow first-class
+            # request fields (``-c`` / ``--cache-type-*`` / ``--spec-*``
+            # / ``--chat-template*``) are stripped so the inherited
+            # override cannot silently win llama.cpp's last-wins parse.
             if request.llama_extra_args is None and llama_backend.extra_args:
-                inherited = list(llama_backend.extra_args)
-                try:
-                    extra_llama_args = validate_extra_args(inherited)
-                except ValueError:
-                    # Should not happen on already-validated args; degrade
-                    # to no-extras rather than 400 if managed flags changed.
-                    logger.warning(
-                        "Stored llama_extra_args failed revalidation; "
-                        "loading without them: %s",
-                        inherited,
-                    )
-                    extra_llama_args = []
-                else:
+                source = llama_backend.extra_args_source
+                same_source = bool(
+                    source
+                    and source[0]
+                    and source[0].lower() == model_identifier.lower()
+                    and (source[1] or "").lower()
+                    == (request.gguf_variant or "").lower()
+                )
+                if not same_source:
                     logger.info(
-                        "Inheriting llama_extra_args from previous load: %s",
-                        extra_llama_args,
+                        "Not inheriting llama_extra_args: stored args came "
+                        "from %s, loading %s",
+                        source,
+                        (model_identifier, request.gguf_variant),
                     )
+                else:
+                    stripped = strip_shadowing_flags(llama_backend.extra_args)
+                    try:
+                        extra_llama_args = validate_extra_args(stripped)
+                    except ValueError:
+                        # Should not happen on already-validated args; degrade
+                        # to no-extras rather than 400 if managed flags changed.
+                        logger.warning(
+                            "Stored llama_extra_args failed revalidation; "
+                            "loading without them: %s",
+                            stripped,
+                        )
+                        extra_llama_args = []
+                    else:
+                        if extra_llama_args:
+                            logger.info(
+                                "Inheriting llama_extra_args from previous "
+                                "load (same model, shadow-stripped): %s",
+                                extra_llama_args,
+                            )
 
             # Route to HF mode or local mode based on config
             # Run in a thread so the event loop stays free for progress

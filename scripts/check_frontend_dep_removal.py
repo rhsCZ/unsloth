@@ -20,6 +20,7 @@ Exit codes:
   1  at least one removed dep is referenced and not resolvable
   2  invocation error (bad args, missing file, git error)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,15 +57,29 @@ JS_LIKE_EXT = re.compile(
 )
 
 GREP_INCLUDES = [
-    "--include=*.ts", "--include=*.tsx", "--include=*.js", "--include=*.jsx",
-    "--include=*.mjs", "--include=*.cjs",
-    "--include=*.html", "--include=*.htm",
-    "--include=*.css", "--include=*.scss", "--include=*.sass",
-    "--include=*.json", "--include=*.jsonc",
-    "--include=*.md", "--include=*.mdx",
-    "--include=*.py", "--include=*.rs", "--include=*.toml",
-    "--include=*.yml", "--include=*.yaml",
-    "--include=*.sh", "--include=*.ps1", "--include=*.bat",
+    "--include=*.ts",
+    "--include=*.tsx",
+    "--include=*.js",
+    "--include=*.jsx",
+    "--include=*.mjs",
+    "--include=*.cjs",
+    "--include=*.html",
+    "--include=*.htm",
+    "--include=*.css",
+    "--include=*.scss",
+    "--include=*.sass",
+    "--include=*.json",
+    "--include=*.jsonc",
+    "--include=*.md",
+    "--include=*.mdx",
+    "--include=*.py",
+    "--include=*.rs",
+    "--include=*.toml",
+    "--include=*.yml",
+    "--include=*.yaml",
+    "--include=*.sh",
+    "--include=*.ps1",
+    "--include=*.bat",
     "--include=Dockerfile*",
 ]
 GREP_EXCLUDES = [
@@ -99,8 +114,11 @@ class Hit:
 def run(cmd: list[str], cwd: Path | None = None) -> str:
     """Run a command, return stdout. On non-zero exit, return ''."""
     res = subprocess.run(
-        cmd, cwd=cwd or REPO_ROOT, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True,
+        cmd,
+        cwd = cwd or REPO_ROOT,
+        stdout = subprocess.PIPE,
+        stderr = subprocess.PIPE,
+        text = True,
     )
     return res.stdout if res.returncode == 0 else ""
 
@@ -212,8 +230,11 @@ def classify(pkg: str, file: str, content: str) -> str | None:
     # allowing arbitrary content (newlines included) between `import`
     # and `from`. The non-greedy match plus the required `from` keeps
     # this scoped to a single statement.
-    if re.search(rf"(?<!@)\bimport\b[^;'\"]*?\bfrom\s+['\"]{esc}{sub}['\"]",
-                 content, flags_dotall):
+    if re.search(
+        rf"(?<!@)\bimport\b[^;'\"]*?\bfrom\s+['\"]{esc}{sub}['\"]",
+        content,
+        flags_dotall,
+    ):
         return "static_import"
     # Side-effect import: `import "pkg"` (no `from`). The negative
     # lookbehind rules out CSS `@import` lines.
@@ -227,8 +248,9 @@ def classify(pkg: str, file: str, content: str) -> str | None:
         return "require"
     # Re-exports: `export * from "pkg"`, `export { x } from "pkg"`,
     # `export type { Foo } from "pkg"`. Multi-line supported.
-    if re.search(rf"\bexport\b[^;'\"]*?\bfrom\s+['\"]{esc}{sub}['\"]",
-                 content, flags_dotall):
+    if re.search(
+        rf"\bexport\b[^;'\"]*?\bfrom\s+['\"]{esc}{sub}['\"]", content, flags_dotall
+    ):
         return "re_export"
     # HTML script / link
     if re.search(rf"<script[^>]*src\s*=\s*['\"][^'\"]*/{esc}", content):
@@ -271,19 +293,25 @@ def lockfile_root_sync(head_pkg: dict, head_lock: dict) -> list[str]:
     if not head_lock:
         return warnings
     root = head_lock.get("packages", {}).get("", {})
-    lock_decl = {**(root.get("dependencies") or {}),
-                 **(root.get("devDependencies") or {}),
-                 **(root.get("peerDependencies") or {}),
-                 **(root.get("optionalDependencies") or {})}
+    lock_decl = {
+        **(root.get("dependencies") or {}),
+        **(root.get("devDependencies") or {}),
+        **(root.get("peerDependencies") or {}),
+        **(root.get("optionalDependencies") or {}),
+    }
     pkg_decl = {}
     for f in DEP_FIELDS:
         pkg_decl.update(head_pkg.get(f) or {})
     only_in_lock = set(lock_decl) - set(pkg_decl)
     only_in_pkg = set(pkg_decl) - set(lock_decl)
     if only_in_lock:
-        warnings.append(f"lockfile <root> lists deps not in package.json (lockfile stale): {sorted(only_in_lock)}")
+        warnings.append(
+            f"lockfile <root> lists deps not in package.json (lockfile stale): {sorted(only_in_lock)}"
+        )
     if only_in_pkg:
-        warnings.append(f"package.json declares deps not in lockfile <root> (run npm install): {sorted(only_in_pkg)}")
+        warnings.append(
+            f"package.json declares deps not in lockfile <root> (run npm install): {sorted(only_in_pkg)}"
+        )
     return warnings
 
 
@@ -302,14 +330,16 @@ def types_orphan_warnings(head_pkg: dict) -> list[str]:
         # @types/foo provides types for `foo`
         # @types/foo-bar provides types for `foo-bar`
         # @types/scope__pkg provides types for `@scope/pkg`
-        target = name[len("@types/"):]
+        target = name[len("@types/") :]
         if "__" in target:
             scope, sub = target.split("__", 1)
             target = f"@{scope}/{sub}"
         if target == "node":
             continue  # Node.js types are always implicit
         if target not in decl:
-            warnings.append(f"@types/{target.replace('@', '').replace('/', '__')} present but '{target}' is not declared")
+            warnings.append(
+                f"@types/{target.replace('@', '').replace('/', '__')} present but '{target}' is not declared"
+            )
     return warnings
 
 
@@ -324,9 +354,16 @@ def find_imports_without_decl(head_pkg: dict) -> list[tuple[str, int, str]]:
         decl.update((head_pkg.get(f) or {}).keys())
     # Also: anything tsconfig path-aliases (just '@/...' here) is internal
     pattern = r"(?:from|import)\s+['\"]([^'\"./][^'\"]*)['\"]"
-    args = ["grep", "-rnE", pattern,
-            "--include=*.ts", "--include=*.tsx", "--include=*.js", "--include=*.jsx",
-            "studio/frontend/src"]
+    args = [
+        "grep",
+        "-rnE",
+        pattern,
+        "--include=*.ts",
+        "--include=*.tsx",
+        "--include=*.js",
+        "--include=*.jsx",
+        "studio/frontend/src",
+    ]
     out = run(args)
     missing = []
     for line in out.splitlines():
@@ -347,8 +384,19 @@ def find_imports_without_decl(head_pkg: dict) -> list[tuple[str, int, str]]:
             # Internal aliases like '@/foo' or starts with builtin names
             if pkg_name == "@":
                 continue
-            if pkg_name in {"node:fs", "node:path", "fs", "path", "url", "stream",
-                            "crypto", "buffer", "util", "events", "child_process"}:
+            if pkg_name in {
+                "node:fs",
+                "node:path",
+                "fs",
+                "path",
+                "url",
+                "stream",
+                "crypto",
+                "buffer",
+                "util",
+                "events",
+                "child_process",
+            }:
                 continue
             missing.append((file, ln, spec))
     return missing
@@ -371,7 +419,9 @@ _file_lines_cache: dict[str, list[str]] = {}
 def _read_file(path: str) -> list[str]:
     if path not in _file_lines_cache:
         try:
-            _file_lines_cache[path] = Path(path).read_text(errors="replace").splitlines()
+            _file_lines_cache[path] = (
+                Path(path).read_text(errors = "replace").splitlines()
+            )
         except (OSError, UnicodeDecodeError):
             _file_lines_cache[path] = []
     return _file_lines_cache[path]
@@ -409,20 +459,38 @@ def find_usage(pkg: str) -> list[Hit]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("--base", default="origin/main",
-                   help="git ref to diff against (default: origin/main). "
-                        "Examples: HEAD~1, main, a-tag, a-sha.")
-    p.add_argument("--base-pkg", help="optional override: read base package.json from this path")
-    p.add_argument("--base-lock", help="optional override: read base lockfile from this path")
-    p.add_argument("--head-pkg", default=str(REPO_ROOT / FRONTEND_PKG),
-                   help="head package.json path (default: working tree)")
-    p.add_argument("--head-lock", default=str(REPO_ROOT / FRONTEND_LOCK),
-                   help="head lockfile path (default: working tree)")
-    p.add_argument("--verbose", action="store_true")
-    p.add_argument("--strict", action="store_true",
-                   help="Also fail on hygiene warnings (lockfile sync, "
-                        "@types orphans, imports without declared dep).")
+    p = argparse.ArgumentParser(
+        description = __doc__, formatter_class = argparse.RawTextHelpFormatter
+    )
+    p.add_argument(
+        "--base",
+        default = "origin/main",
+        help = "git ref to diff against (default: origin/main). "
+        "Examples: HEAD~1, main, a-tag, a-sha.",
+    )
+    p.add_argument(
+        "--base-pkg", help = "optional override: read base package.json from this path"
+    )
+    p.add_argument(
+        "--base-lock", help = "optional override: read base lockfile from this path"
+    )
+    p.add_argument(
+        "--head-pkg",
+        default = str(REPO_ROOT / FRONTEND_PKG),
+        help = "head package.json path (default: working tree)",
+    )
+    p.add_argument(
+        "--head-lock",
+        default = str(REPO_ROOT / FRONTEND_LOCK),
+        help = "head lockfile path (default: working tree)",
+    )
+    p.add_argument("--verbose", action = "store_true")
+    p.add_argument(
+        "--strict",
+        action = "store_true",
+        help = "Also fail on hygiene warnings (lockfile sync, "
+        "@types orphans, imports without declared dep).",
+    )
     args = p.parse_args()
 
     if args.base_pkg:
@@ -431,10 +499,16 @@ def main() -> int:
         base_pkg = read_pkg_at(args.base, FRONTEND_PKG)
     head_pkg = read_pkg_file(Path(args.head_pkg))
     if not base_pkg:
-        print(f"ERROR: could not read base package.json at {args.base}:{FRONTEND_PKG}", file=sys.stderr)
+        print(
+            f"ERROR: could not read base package.json at {args.base}:{FRONTEND_PKG}",
+            file = sys.stderr,
+        )
         return 2
     if not head_pkg:
-        print(f"ERROR: could not read head package.json at {args.head_pkg}", file=sys.stderr)
+        print(
+            f"ERROR: could not read head package.json at {args.head_pkg}",
+            file = sys.stderr,
+        )
         return 2
 
     if args.base_lock:
@@ -450,7 +524,9 @@ def main() -> int:
         print("[OK] no dependencies removed from studio/frontend/package.json")
         return 0
 
-    print(f"Checking {len(removed)} removed package(s) from studio/frontend/package.json")
+    print(
+        f"Checking {len(removed)} removed package(s) from studio/frontend/package.json"
+    )
     print(f"Base: {args.base}    Head: working tree")
     print()
 
@@ -464,7 +540,8 @@ def main() -> int:
         top = f"node_modules/{name}"
         top_path = top if top in reachable_paths else None
         nested = sorted(
-            p for p in reachable_paths
+            p
+            for p in reachable_paths
             if p != top and p.endswith(f"/node_modules/{name}")
         )
         return top_path, nested
@@ -487,8 +564,10 @@ def main() -> int:
         if top:
             print(f"    reachable (top-level): {top}")
         if nested:
-            print(f"    reachable (nested, NOT importable from src/): {nested[0]}"
-                  + (f" (+{len(nested)-1} more)" if len(nested) > 1 else ""))
+            print(
+                f"    reachable (nested, NOT importable from src/): {nested[0]}"
+                + (f" (+{len(nested)-1} more)" if len(nested) > 1 else "")
+            )
         if hits:
             for h in hits[:5]:
                 print(f"    [{h.kind}] {h.file}:{h.line}  {h.snippet}")
@@ -524,7 +603,9 @@ def main() -> int:
     )
 
     if failures:
-        print(f"FAIL: {len(failures)} removed package(s) still referenced and not resolvable")
+        print(
+            f"FAIL: {len(failures)} removed package(s) still referenced and not resolvable"
+        )
         for name, _ in failures:
             print(f"  - {name}")
         return 1

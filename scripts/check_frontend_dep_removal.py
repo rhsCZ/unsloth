@@ -13,7 +13,7 @@ Usage:
   python scripts/check_frontend_dep_removal.py
   python scripts/check_frontend_dep_removal.py --base origin/main
   python scripts/check_frontend_dep_removal.py --base HEAD~1
-  python scripts/check_frontend_dep_removal.py --base-pkg PATH --base-lock PATH
+  python scripts/check_frontend_dep_removal.py --base-pkg PATH --head-lock PATH
 
 Exit codes:
   0  every removed dep is safe (no source refs or still resolvable)
@@ -134,7 +134,7 @@ def read_pkg_at(base: str, path: str) -> dict:
 def read_pkg_file(path: Path) -> dict:
     if not path.exists():
         return {}
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding = "utf-8"))
 
 
 def all_decl_names(pkg: dict) -> set[str]:
@@ -142,19 +142,6 @@ def all_decl_names(pkg: dict) -> set[str]:
     for field in DEP_FIELDS:
         names.update((pkg.get(field) or {}).keys())
     return names
-
-
-def lock_resolvable(lock: dict, name: str) -> list[str]:
-    """Return lockfile paths that still install `name` (transitive ok).
-    Naive: any path matching the name. May give false positives on a stale
-    lockfile. Prefer `reachable_from_head` for sync-aware analysis.
-    """
-    pkgs = lock.get("packages", {})
-    hits = []
-    for path in pkgs:
-        if path == f"node_modules/{name}" or path.endswith(f"/node_modules/{name}"):
-            hits.append(path)
-    return hits
 
 
 def _resolve_install_path(parent_path: str, name: str, pkgs: dict) -> str | None:
@@ -721,9 +708,6 @@ def main() -> int:
         "--base-pkg", help = "optional override: read base package.json from this path"
     )
     p.add_argument(
-        "--base-lock", help = "optional override: read base lockfile from this path"
-    )
-    p.add_argument(
         "--head-pkg",
         default = str(REPO_ROOT / FRONTEND_PKG),
         help = "head package.json path (default: working tree)",
@@ -731,7 +715,8 @@ def main() -> int:
     p.add_argument(
         "--head-lock",
         default = str(REPO_ROOT / FRONTEND_LOCK),
-        help = "head lockfile path (default: working tree)",
+        help = "head lockfile path (default: working tree). "
+        "Reachability analysis runs against this lockfile.",
     )
     p.add_argument("--verbose", action = "store_true")
     p.add_argument(
@@ -766,10 +751,14 @@ def main() -> int:
         )
         return 2
 
-    if args.base_lock:
-        head_lock = read_pkg_file(Path(args.head_lock))
-    else:
-        head_lock = read_pkg_file(Path(args.head_lock))
+    head_lock_path = Path(args.head_lock)
+    if not head_lock_path.exists():
+        print(
+            f"ERROR: head lockfile not found at {head_lock_path}",
+            file = sys.stderr,
+        )
+        return 2
+    head_lock = read_pkg_file(head_lock_path)
 
     base_names = all_decl_names(base_pkg)
     head_names = all_decl_names(head_pkg)

@@ -120,6 +120,7 @@ from routes import (
     inference_router,
     inference_studio_router,
     models_router,
+    providers_router,
     training_history_router,
     training_router,
 )
@@ -222,6 +223,11 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target = _precache, daemon = True).start()
 
+    # Initialize RSA key pair for API key encryption (external providers)
+    from core.inference.key_exchange import init_key_pair
+
+    init_key_pair()
+
     if storage.ensure_default_admin():
         bootstrap_pw = storage.get_bootstrap_password()
         app.state.bootstrap_password = bootstrap_pw
@@ -293,7 +299,8 @@ def _build_csp(script_nonce: "str | None" = None) -> str:
         "https://cdn-avatars.huggingface.co; "
         "connect-src 'self' https://huggingface.co "
         "https://*.huggingface.co https://cdn-lfs.huggingface.co "
-        "https://cdn-lfs.hf.co https://hf.co https://*.hf.co; "
+        "https://cdn-lfs.hf.co https://hf.co https://*.hf.co "
+        "https://datasets-server.huggingface.co; "
         "style-src 'self' 'unsafe-inline'; "
         f"{script_src}; "
         "font-src 'self' data:; "
@@ -489,6 +496,7 @@ app.include_router(inference_studio_router, prefix = "/api/inference", tags = ["
 # so external tools (Open WebUI, SillyTavern, etc.) can use the
 # standard /v1/chat/completions path.
 app.include_router(inference_router, prefix = "/v1", tags = ["openai-compat"])
+app.include_router(providers_router, prefix = "/api/providers", tags = ["providers"])
 app.include_router(datasets_router, prefix = "/api/datasets", tags = ["datasets"])
 app.include_router(data_recipe_router, prefix = "/api/data-recipe", tags = ["data-recipe"])
 app.include_router(export_router, prefix = "/api/export", tags = ["export"])

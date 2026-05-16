@@ -934,14 +934,23 @@ jobs:
         # continue-on-error once the baseline is clean for a week.
         #
         # Two separate npm projects share this scan surface; scan each.
+        # Capture exit codes via PIPESTATUS so a HIGH/CRITICAL on the
+        # frontend lockfile does not skip the OXC scan (both reports
+        # are most useful exactly when one already failed).
         run: |
+          set +e
           set -o pipefail
+
           LOG=logs-scan-npm.txt
           python3 scripts/scan_npm_packages.py 2>&1 | tee "$LOG"
+          frontend_rc=${PIPESTATUS[0]}
+
           LOG2=logs-scan-npm-oxc.txt
           python3 scripts/scan_npm_packages.py \
             --lockfile studio/backend/core/data_recipe/oxc-validator/package-lock.json \
             2>&1 | tee "$LOG2"
+          oxc_rc=${PIPESTATUS[0]}
+
           {
             echo "## scan_npm_packages (Studio frontend)"
             echo
@@ -957,6 +966,11 @@ jobs:
             tail -300 "$LOG2"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$frontend_rc" -ne 0 ]; then
+            exit "$frontend_rc"
+          fi
+          exit "$oxc_rc"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()

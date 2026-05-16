@@ -433,12 +433,10 @@ class ChatMessage(BaseModel):
             raise ValueError('"name" is only valid on role="tool" messages.')
 
         if self.role == "tool":
-            if not self.tool_call_id:
-                # Frontend's second-round POST drops the streamed id;
-                # synthesise one so the request round-trips.
-                import secrets as _secrets
-
-                self.tool_call_id = f"call_{_secrets.token_hex(8)}"
+            # tool_call_id may be missing here; ChatCompletionRequest fills it
+            # from the prior assistant turn (with a random fallback) once it
+            # can see the whole conversation. Per-message we only enforce
+            # non-empty content.
             if not self.content:
                 raise ValueError('role="tool" messages require non-empty "content".')
         elif self.role == "assistant":
@@ -616,6 +614,61 @@ class ChatCompletionRequest(BaseModel):
             "OpenAI cloud + gpt-5.5 family path; ignored otherwise."
         ),
     )
+
+    @model_validator(mode = "after")
+    def _resolve_missing_tool_call_ids(self) -> "ChatCompletionRequest":
+        """Fill in tool_call_id by walking back to the preceding assistant turn.
+
+        OpenAI / Anthropic passthrough require tool result ids to match the
+        assistant's tool_calls[].id; a random hex stamp breaks that pairing.
+        For each role="tool" message with no tool_call_id, find the most
+        recent earlier role="assistant" message that has tool_calls, prefer
+        one whose function.name matches this message's name, otherwise take
+        the first unconsumed tool_call. Fall back to a synthesised id only
+        when no candidate assistant turn exists.
+        """
+        # Track which assistant tool_calls have already been claimed by an
+        # earlier tool message so we don't reuse one id for two results.
+        consumed: set[tuple[int, int]] = set()
+        for tool_idx, msg in enumerate(self.messages):
+            if msg.role != "tool" or msg.tool_call_id:
+                continue
+            picked: str | None = None
+            for asst_idx in range(tool_idx - 1, -1, -1):
+                prev = self.messages[asst_idx]
+                if prev.role != "assistant" or not prev.tool_calls:
+                    if prev.role == "user":
+                        break  # crossing a user turn invalidates the lookup
+                    continue
+                # Prefer a tool_call whose function name matches.
+                name_match = None
+                fallback = None
+                for tc_idx, tc in enumerate(prev.tool_calls):
+                    if (asst_idx, tc_idx) in consumed:
+                        continue
+                    tc_id = (tc or {}).get("id")
+                    if not tc_id:
+                        continue
+                    if (
+                        msg.name
+                        and isinstance(tc, dict)
+                        and (tc.get("function") or {}).get("name") == msg.name
+                    ):
+                        name_match = (tc_id, asst_idx, tc_idx)
+                        break
+                    if fallback is None:
+                        fallback = (tc_id, asst_idx, tc_idx)
+                chosen = name_match or fallback
+                if chosen is not None:
+                    picked, a, t = chosen
+                    consumed.add((a, t))
+                    break
+            if picked is None:
+                import secrets as _secrets
+
+                picked = f"call_{_secrets.token_hex(8)}"
+            msg.tool_call_id = picked
+        return self
 
 
 # ── OpenAI shell-tool container management ─────────────────────

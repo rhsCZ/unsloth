@@ -41,10 +41,18 @@ logger = get_logger(__name__)
 
 
 def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
-    """Remove ``checkpoint-<int>`` subdirs after a cancelled run.
-    Only paths whose realpath is under outputs_root are touched."""
+    """Remove only in-flight ``tmp-checkpoint-*`` partials after a cancel.
+
+    HF Trainer writes ``tmp-checkpoint-<step>/`` and atomically renames to
+    ``checkpoint-<step>/`` once the save completes. On Cancel the partial
+    can be left behind; that is the 67 MB residue PR #5375's hardening
+    pass set out to remove. Completed ``checkpoint-<int>/`` directories
+    are user-owned artefacts the user expects to resume from, so they
+    stay. Symlinks are skipped so containment cannot be bypassed via a
+    symlinked output_dir.
+    """
     out = Path(output_dir)
-    if not out.exists():
+    if not out.exists() or not out.is_dir() or out.is_symlink():
         return
     try:
         out_real = out.resolve()
@@ -62,14 +70,11 @@ def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
         )
         return
     removed = 0
-    for entry in out.iterdir() if out.is_dir() else []:
-        if not entry.is_dir():
+    for entry in out.iterdir():
+        if not entry.is_dir() or entry.is_symlink():
             continue
         name = entry.name
-        if not name.startswith("checkpoint-"):
-            continue
-        tail = name[len("checkpoint-") :]
-        if not tail.isdigit():
+        if not name.startswith("tmp-checkpoint-"):
             continue
         try:
             shutil.rmtree(entry, ignore_errors = False)
@@ -77,7 +82,7 @@ def _cleanup_cancelled_checkpoints(output_dir: str | os.PathLike) -> None:
         except OSError as exc:
             logger.warning("Could not remove %s: %s", entry, exc)
     logger.info(
-        "Cancelled-run cleanup removed %d checkpoint dir(s) under %s",
+        "Cancelled-run cleanup removed %d in-flight tmp-checkpoint dir(s) under %s",
         removed,
         out,
     )

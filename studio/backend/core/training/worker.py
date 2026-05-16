@@ -85,6 +85,10 @@ _TILELANG_INSTALL_TIMEOUT_S = 600
 # apache-tvm-ffi 0.1.10/0.1.11 trigger "CUDA: misaligned address" on
 # sm_100. If we detect a stale broken version, force a reinstall.
 _TVM_FFI_BROKEN_VERSIONS = ("0.1.10", "0.1.11")
+# Set to "1" to fall back to the substring-based gate for FLA / tilelang
+# installs. Normal operation hooks transformers' availability functions
+# so the install fires only when the loaded model actually checks them.
+_FAST_PATH_HOOKS_SKIP_ENV = "UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS"
 
 
 def _model_wants_causal_conv1d(model_name: str) -> bool:
@@ -341,16 +345,13 @@ def _flash_linear_attention_importable() -> bool:
         return False
 
 
-def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
-    """Install ``flash-linear-attention`` + ``fla-core`` for Qwen3.5 family.
+def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
+    """Install ``flash-linear-attention`` + ``fla-core`` unconditionally.
 
-    Qwen3.5 / Qwen3.6 / Qwen3-Next gate their transformers fast path on
-    FLA's ``chunk_gated_delta_rule`` / ``fused_recurrent_gated_delta_rule``
-    being importable. Without FLA the path falls back to a pure-Python
-    torch loop (~2.35x slower in our Qwen3.5-2B-Vision bench).
-
-    True SSM families (Nemotron-H, Falcon-H1, Granite-H, LFM2) take the
-    mamba_ssm path and never call FLA's GDN kernels, so we skip them.
+    This is the body of the installer with the model-name substring gate
+    removed: the caller has already proven (via the runtime hook on
+    ``is_flash_linear_attention_available``) that the loaded model
+    actually needs FLA, so we just need to make the import work.
 
     Pinned ``flash-linear-attention``, ``fla-core`` and the runtime
     deps we explicitly want (``einops``, ``packaging``, ``triton``)
@@ -360,8 +361,6 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     Set ``UNSLOTH_STUDIO_SKIP_FLA_INSTALL=1`` to bypass entirely.
     """
     if os.getenv(_FLA_SKIP_ENV) == "1":
-        return
-    if not _model_wants_tilelang(model_name):
         return
     if sys.version_info < _FLA_MIN_PYTHON:
         logger.info(
@@ -463,6 +462,19 @@ def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
     logger.info("Installed flash-linear-attention for the FLA fast path")
 
 
+def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
+    """Legacy substring-gated installer.
+
+    Kept for the ``UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1`` opt-out path,
+    where the runtime hook on ``is_flash_linear_attention_available`` is
+    disabled and we fall back to a model-name match. The hook is the
+    primary gate in normal operation.
+    """
+    if not _model_wants_tilelang(model_name):
+        return
+    _ensure_flash_linear_attention_unconditional(event_queue)
+
+
 _SSM_MODEL_SUBSTRINGS = (
     "nemotron_h",
     "nemotron-h",
@@ -558,8 +570,12 @@ def _tilelang_platform_supported() -> bool:
     return _platform.machine().lower() in _TILELANG_SUPPORTED_LINUX_MACHINES
 
 
-def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
-    """Install ``tilelang`` + pinned ``apache-tvm-ffi`` for FLA's TileLang backend.
+def _ensure_tilelang_backend_unconditional(event_queue: Any) -> None:
+    """Install ``tilelang`` + pinned ``apache-tvm-ffi`` unconditionally.
+
+    Called from the FLA hook because tilelang only matters once FLA is
+    active; the substring gate is gone here. Pre-existing platform,
+    Python, and skip-env guards remain.
 
     The combined pin is important: `tilelang` declares
     ``apache-tvm-ffi>=0.1.2,~=0.1.0`` which lets pip pull the latest 0.1.10/
@@ -567,14 +583,9 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
     Triton kernels on sm_100 (Blackwell). Pinning to 0.1.9 (the upper bound
     that ``mamba_ssm 2.3.2`` itself uses) avoids the regression.
 
-    Both packages are pure-Python wheels on PyPI; no wheel-matching dance
-    is needed.
-
     Set ``UNSLOTH_STUDIO_SKIP_TILELANG_INSTALL=1`` to bypass.
     """
     if os.getenv(_TILELANG_SKIP_ENV) == "1":
-        return
-    if not _model_wants_tilelang(model_name):
         return
     if sys.version_info < _FLA_MIN_PYTHON:
         logger.info(
@@ -683,6 +694,209 @@ def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
         return
 
     logger.info("Installed TileLang backend for FLA fast path")
+
+
+def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
+    """Legacy substring-gated tilelang installer (opt-out path)."""
+    if not _model_wants_tilelang(model_name):
+        return
+    _ensure_tilelang_backend_unconditional(event_queue)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Runtime hook on transformers' fast-path availability gates.
+#
+# transformers' qwen3_5 / qwen3_5_moe / qwen3_next modeling files do
+#
+#     if is_causal_conv1d_available():
+#         from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
+#     if is_flash_linear_attention_available():
+#         from fla.modules import FusedRMSNormGated
+#         from fla.ops.gated_delta_rule import ...
+#
+# at MODULE IMPORT TIME. If the gate returns False then, the fast-path
+# symbols are bound to None and the model falls back to a pure-Python
+# torch loop forever in that process. We wrap the gates so the first
+# call (always at modeling import time, because the worker has not
+# loaded a model yet) drives the matching install synchronously and
+# returns True post-install. That way:
+#
+# - Any model whose architecture actually queries the gates triggers
+#   the install, regardless of its name.
+# - Models that never query the gates (Llama, Gemma, dense Qwen, …)
+#   never pay the install cost.
+#
+# This supersedes the substring-based `_model_wants_tilelang` check
+# for these two kernels. Set `UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1`
+# to fall back to the legacy substring path.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _rebind_in_already_imported_modules(
+    *, attr_name: str, old_obj: Any, new_obj: Any
+) -> int:
+    """Replace `attr_name` in every loaded module that bound `old_obj`.
+
+    Modeling files do `from transformers.utils.import_utils import
+    is_flash_linear_attention_available`, which creates a local binding
+    in the importing module. Reassigning the symbol on
+    `transformers.utils.import_utils` does NOT reach those bindings.
+    We sweep `sys.modules` for any module whose module-level dict
+    contains `attr_name` bound to `old_obj` and rebind it to `new_obj`.
+    Returns the number of bindings rewritten.
+    """
+    count = 0
+    # snapshot keys to avoid mutating during iteration
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        try:
+            existing = getattr(mod, attr_name, None)
+        except Exception:
+            continue
+        if existing is old_obj:
+            try:
+                setattr(mod, attr_name, new_obj)
+                count += 1
+            except Exception as exc:
+                logger.debug(
+                    "Could not rebind %s in %s: %s", attr_name, mod_name, exc
+                )
+    return count
+
+
+def _install_fast_path_hooks(event_queue: Any) -> None:
+    """Wrap `is_flash_linear_attention_available` and
+    `is_causal_conv1d_available` so the first call drives the matching
+    install if the underlying package is missing.
+
+    The wrapper:
+      1. Clears the original `@lru_cache` so the underlying check is
+         actually re-evaluated.
+      2. Calls the original. If it returns True, no work to do.
+      3. If False, triggers `_ensure_*_unconditional(event_queue)` (FLA
+         pulls tilelang too), clears the cache again, and re-checks.
+      4. Returns the final boolean. If the install failed, returns
+         False — same observable behaviour as before this PR, the
+         model just falls back to the torch loop.
+
+    Idempotent: subsequent calls short-circuit on an `installed` flag.
+    """
+    if os.getenv(_FAST_PATH_HOOKS_SKIP_ENV) == "1":
+        logger.info("Fast-path hooks disabled via env; using substring fallback")
+        return
+
+    try:
+        from transformers.utils import import_utils as _iu
+    except Exception as exc:
+        logger.warning(
+            "transformers.utils.import_utils not importable; skipping fast-path hooks: %s",
+            exc,
+        )
+        return
+
+    def _make_wrapper(
+        original: Callable[[], bool],
+        install_fn: Callable[[Any], None],
+        gate_name: str,
+    ) -> Callable[[], bool]:
+        state = {"installed": False}
+
+        def wrapper() -> bool:
+            if state["installed"]:
+                return original()
+            # Clear the lru_cache so the underlying check re-evaluates
+            # after any pre-hook calls (defensive, the worker subprocess
+            # is freshly spawned so this should be a no-op).
+            try:
+                original.cache_clear()
+            except AttributeError:
+                pass
+            ok = original()
+            if not ok:
+                logger.info("Hook fired for %s; triggering install", gate_name)
+                _send_status(
+                    event_queue,
+                    f"Hook fired for {gate_name}; installing kernel...",
+                )
+                try:
+                    install_fn(event_queue)
+                except Exception as exc:
+                    logger.warning(
+                        "Install fired by %s hook raised: %s; continuing on torch fallback",
+                        gate_name,
+                        exc,
+                    )
+                # Re-check post-install.
+                try:
+                    original.cache_clear()
+                except AttributeError:
+                    pass
+                ok = original()
+                logger.info(
+                    "Hook for %s completed; post-install availability=%s",
+                    gate_name,
+                    ok,
+                )
+            state["installed"] = True
+            return ok
+
+        wrapper.__wrapped__ = original  # type: ignore[attr-defined]
+        # Re-expose cache_clear so callers that introspect it still work.
+        wrapper.cache_clear = getattr(original, "cache_clear", lambda: None)  # type: ignore[attr-defined]
+        return wrapper
+
+    def _fla_install(eq: Any) -> None:
+        # FLA without tilelang gets ~2.35x speedup; tilelang adds ~26%.
+        # They pair up, so install both on the same trigger.
+        _ensure_flash_linear_attention_unconditional(eq)
+        _ensure_tilelang_backend_unconditional(eq)
+
+    def _causal_conv1d_install(eq: Any) -> None:
+        # Reuse the existing wheel-first installer. It does its own
+        # idempotency check via `__import__("causal_conv1d")`.
+        _install_package_wheel_first(
+            event_queue=eq,
+            import_name="causal_conv1d",
+            display_name="causal-conv1d",
+            pypi_name="causal-conv1d",
+            pypi_version=_CAUSAL_CONV1D_PACKAGE_VERSION,
+            filename_prefix="causal_conv1d",
+            release_tag=_CAUSAL_CONV1D_RELEASE_TAG,
+            release_base_url=(
+                "https://github.com/Dao-AILab/causal-conv1d/releases/download"
+            ),
+        )
+
+    rebound_total = 0
+    for gate_name, install_fn in (
+        ("is_flash_linear_attention_available", _fla_install),
+        ("is_causal_conv1d_available", _causal_conv1d_install),
+    ):
+        original = getattr(_iu, gate_name, None)
+        if original is None:
+            logger.info(
+                "transformers.utils.import_utils.%s missing; skipping that hook",
+                gate_name,
+            )
+            continue
+        wrapped = _make_wrapper(original, install_fn, gate_name)
+        setattr(_iu, gate_name, wrapped)
+        rebound = _rebind_in_already_imported_modules(
+            attr_name=gate_name, old_obj=original, new_obj=wrapped
+        )
+        rebound_total += rebound
+        logger.info(
+            "Installed fast-path hook on %s (rebound %d modules)",
+            gate_name,
+            rebound,
+        )
+
+    if rebound_total > 0:
+        logger.info(
+            "Rebound %d pre-existing module-level references to fast-path gates",
+            rebound_total,
+        )
 
 
 def _should_try_runtime_flash_attn_install(max_seq_length: int) -> bool:
@@ -1496,19 +1710,29 @@ def run_training_process(
         )
 
     # ── 1b. Install fast-path kernel libraries for the chosen model.
-    # Order:
-    #   1) causal-conv1d (gates transformers' qwen3_5 / qwen3_next fast path)
-    #   2) flash-linear-attention (the other half of that gate; without it
-    #      the conv kernel alone gives ~no measurable speedup)
-    #   3) mamba-ssm (true SSM families only: Nemotron-H, Falcon-H1, etc.)
-    #   4) tilelang + apache-tvm-ffi (FLA's TileLang backend, optional but
-    #      adds ~26% on Qwen3.5 GDN layers on Hopper+)
-    #   5) flash-attn (only for max_seq_length >= 32k, separate concern)
+    #
+    # Primary gate: hook transformers' fast-path availability functions.
+    # When the loaded model's modeling file does
+    #     if is_flash_linear_attention_available(): from fla.modules import ...
+    # the hook fires and installs FLA + tilelang on the spot. Models that
+    # never call those gates never trigger the install. This supersedes
+    # substring-based detection for FLA and tilelang.
+    #
+    # Legacy substring path remains for:
+    #   - causal-conv1d (also covered by its own hook, but the substring
+    #     installer prefers the wheel-first install and is reused here
+    #     from the hook closure too)
+    #   - mamba-ssm (true SSM families)
+    #   - flash-attn (long-context only)
+    # plus an opt-out via UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1.
     try:
-        _ensure_causal_conv1d_fast_path(event_queue, model_name)
-        _ensure_flash_linear_attention(event_queue, model_name)
+        if os.getenv(_FAST_PATH_HOOKS_SKIP_ENV) == "1":
+            _ensure_causal_conv1d_fast_path(event_queue, model_name)
+            _ensure_flash_linear_attention(event_queue, model_name)
+            _ensure_tilelang_backend(event_queue, model_name)
+        else:
+            _install_fast_path_hooks(event_queue)
         _ensure_mamba_ssm(event_queue, model_name)
-        _ensure_tilelang_backend(event_queue, model_name)
         _ensure_flash_attn_for_long_context(
             event_queue,
             int(config.get("max_seq_length", 2048)),

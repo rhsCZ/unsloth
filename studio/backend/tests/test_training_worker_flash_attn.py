@@ -580,3 +580,280 @@ def test_tilelang_backend_swallows_install_failure(monkeypatch):
 
     run_mock.assert_called_once()
     assert any("failed" in s.lower() for s in statuses)
+
+
+# ───────────────────────────────────────────────────────────────────
+# Runtime hook on `is_flash_linear_attention_available` /
+# `is_causal_conv1d_available`. These are the primary gate in
+# normal operation; the substring tests above cover the
+# UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1 fallback.
+# ───────────────────────────────────────────────────────────────────
+
+
+class _FakeQueue(list):
+    """List with `.put` so worker._send_status can send into it during tests."""
+
+    def put(self, item):
+        self.append(item)
+
+
+def _make_fake_gate(initial_return: bool):
+    """Build a callable that mimics transformers' lru_cache-decorated gates.
+
+    Tracks call count and exposes a `cache_clear` attribute. The return
+    value can be flipped to mimic install-then-True behaviour by setting
+    `.next_return`.
+    """
+
+    class Gate:
+        def __init__(self, initial: bool) -> None:
+            self.next_return = initial
+            self.call_count = 0
+            self.cache_clear_count = 0
+
+        def __call__(self) -> bool:
+            self.call_count += 1
+            return self.next_return
+
+        def cache_clear(self) -> None:
+            self.cache_clear_count += 1
+
+    return Gate(initial_return)
+
+
+def _patch_iu_gates(monkeypatch, fla_gate, conv_gate):
+    """Drop fake gates onto transformers.utils.import_utils for the test."""
+    from transformers.utils import import_utils as _iu
+
+    monkeypatch.setattr(_iu, "is_flash_linear_attention_available", fla_gate)
+    monkeypatch.setattr(_iu, "is_causal_conv1d_available", conv_gate)
+
+
+def test_hook_installs_when_gate_returns_false(monkeypatch):
+    fla_gate = _make_fake_gate(initial_return=False)
+    conv_gate = _make_fake_gate(initial_return=False)
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    fla_install = mock.Mock(side_effect=lambda eq: setattr(fla_gate, "next_return", True))
+    tile_install = mock.Mock(side_effect=lambda eq: None)
+    conv_install = mock.Mock(side_effect=lambda **kw: setattr(conv_gate, "next_return", True))
+
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", fla_install
+    )
+    monkeypatch.setattr(
+        worker, "_ensure_tilelang_backend_unconditional", tile_install
+    )
+    monkeypatch.setattr(worker, "_install_package_wheel_first", conv_install)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+    from transformers.utils import import_utils as _iu
+
+    # Both gates are now wrapped. Call them — the hook should drive the install.
+    assert _iu.is_flash_linear_attention_available() is True
+    fla_install.assert_called_once()
+    tile_install.assert_called_once()
+    assert _iu.is_causal_conv1d_available() is True
+    conv_install.assert_called_once()
+
+
+def test_hook_skips_install_when_gate_already_true(monkeypatch):
+    fla_gate = _make_fake_gate(initial_return=True)
+    conv_gate = _make_fake_gate(initial_return=True)
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    fla_install = mock.Mock()
+    tile_install = mock.Mock()
+    conv_install = mock.Mock()
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", fla_install
+    )
+    monkeypatch.setattr(
+        worker, "_ensure_tilelang_backend_unconditional", tile_install
+    )
+    monkeypatch.setattr(worker, "_install_package_wheel_first", conv_install)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+    from transformers.utils import import_utils as _iu
+
+    assert _iu.is_flash_linear_attention_available() is True
+    assert _iu.is_causal_conv1d_available() is True
+    fla_install.assert_not_called()
+    tile_install.assert_not_called()
+    conv_install.assert_not_called()
+
+
+def test_hook_idempotent_on_repeat_call(monkeypatch):
+    fla_gate = _make_fake_gate(initial_return=False)
+    conv_gate = _make_fake_gate(initial_return=False)
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    fla_install = mock.Mock(side_effect=lambda eq: setattr(fla_gate, "next_return", True))
+    tile_install = mock.Mock()
+    conv_install = mock.Mock(side_effect=lambda **kw: setattr(conv_gate, "next_return", True))
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", fla_install
+    )
+    monkeypatch.setattr(
+        worker, "_ensure_tilelang_backend_unconditional", tile_install
+    )
+    monkeypatch.setattr(worker, "_install_package_wheel_first", conv_install)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+    from transformers.utils import import_utils as _iu
+
+    # First call: hook fires.
+    _iu.is_flash_linear_attention_available()
+    # Subsequent calls: must not re-trigger the installer.
+    _iu.is_flash_linear_attention_available()
+    _iu.is_flash_linear_attention_available()
+    assert fla_install.call_count == 1
+    assert tile_install.call_count == 1
+
+
+def test_hook_handles_install_failure_gracefully(monkeypatch):
+    fla_gate = _make_fake_gate(initial_return=False)
+    conv_gate = _make_fake_gate(initial_return=True)  # bypass to focus on FLA
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    def raising_install(eq):
+        raise RuntimeError("pip failed to fetch wheel")
+
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", raising_install
+    )
+    monkeypatch.setattr(
+        worker, "_ensure_tilelang_backend_unconditional", lambda eq: None
+    )
+    monkeypatch.setattr(worker, "_install_package_wheel_first", lambda **kw: None)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+    from transformers.utils import import_utils as _iu
+
+    # Must not raise; returns False so transformers falls back to torch loop.
+    assert _iu.is_flash_linear_attention_available() is False
+
+
+def test_hook_can_be_disabled_via_env(monkeypatch):
+    fla_gate = _make_fake_gate(initial_return=False)
+    conv_gate = _make_fake_gate(initial_return=False)
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    fla_install = mock.Mock()
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", fla_install
+    )
+    monkeypatch.setenv(worker._FAST_PATH_HOOKS_SKIP_ENV, "1")
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+    from transformers.utils import import_utils as _iu
+
+    # Hook should NOT have been installed; gates remain the fakes.
+    assert _iu.is_flash_linear_attention_available is fla_gate
+    assert _iu.is_causal_conv1d_available is conv_gate
+    fla_install.assert_not_called()
+
+
+def test_hook_clears_lru_cache_before_first_check(monkeypatch):
+    fla_gate = _make_fake_gate(initial_return=True)
+    conv_gate = _make_fake_gate(initial_return=True)
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", lambda eq: None
+    )
+    monkeypatch.setattr(
+        worker, "_ensure_tilelang_backend_unconditional", lambda eq: None
+    )
+    monkeypatch.setattr(worker, "_install_package_wheel_first", lambda **kw: None)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+    from transformers.utils import import_utils as _iu
+
+    _iu.is_flash_linear_attention_available()
+    # The wrapper called cache_clear at least once before delegating.
+    assert fla_gate.cache_clear_count >= 1
+
+
+def test_hook_rewrites_previously_imported_module_bindings(monkeypatch):
+    """Modeling files bind `is_flash_linear_attention_available` locally
+    via `from ... import is_X`. Reassigning the attribute on
+    transformers.utils.import_utils alone does NOT reach those local
+    bindings. The hook installer sweeps sys.modules and rebinds them.
+    """
+    fla_gate = _make_fake_gate(initial_return=False)
+    conv_gate = _make_fake_gate(initial_return=True)
+    _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
+
+    # Create a fake modeling module that did `from ... import is_flash_linear_attention_available`.
+    fake_mod = sys.modules.setdefault(
+        "_test_fake_modeling_qwen35", type(sys)("_test_fake_modeling_qwen35")
+    )
+    fake_mod.is_flash_linear_attention_available = fla_gate
+
+    def fake_install(eq):
+        fla_gate.next_return = True
+
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", fake_install
+    )
+    monkeypatch.setattr(
+        worker, "_ensure_tilelang_backend_unconditional", lambda eq: None
+    )
+    monkeypatch.setattr(worker, "_install_package_wheel_first", lambda **kw: None)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+    # The fake module's local binding has been rewritten to the wrapper.
+    assert fake_mod.is_flash_linear_attention_available is not fla_gate
+    # Calling through the fake module's reference triggers the install.
+    assert fake_mod.is_flash_linear_attention_available() is True
+
+    del sys.modules["_test_fake_modeling_qwen35"]
+
+
+def test_hook_skips_when_import_utils_unavailable(monkeypatch):
+    """If transformers.utils.import_utils can't be imported, the hook
+    installer must log and return cleanly rather than crash the worker."""
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name == "transformers.utils" or name == "transformers.utils.import_utils":
+            raise ImportError("transformers missing in worker venv")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+
+    # Should not raise.
+    worker._install_fast_path_hooks(event_queue=_FakeQueue())
+
+
+def test_substring_fallback_unchanged_when_hook_skipped(monkeypatch):
+    """With the hook disabled, the orchestration falls back to the
+    substring path. Confirm _ensure_flash_linear_attention(model_name)
+    still gates on model name as before."""
+    install_mock = mock.Mock()
+    monkeypatch.setattr(
+        worker, "_ensure_flash_linear_attention_unconditional", install_mock
+    )
+    monkeypatch.setenv(worker._FAST_PATH_HOOKS_SKIP_ENV, "1")
+
+    # Qwen3.5 model triggers install.
+    worker._ensure_flash_linear_attention(event_queue=[], model_name="unsloth/Qwen3.5-2B")
+    assert install_mock.call_count == 1
+
+    # Llama doesn't.
+    worker._ensure_flash_linear_attention(event_queue=[], model_name="meta-llama/Llama-3.1-8B")
+    assert install_mock.call_count == 1

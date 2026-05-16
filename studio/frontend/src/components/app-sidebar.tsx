@@ -49,6 +49,7 @@ import {
   Edit03Icon,
   Globe02Icon,
   HelpCircleIcon,
+  Logout01Icon,
   Search01Icon,
   PowerIcon,
   PencilEdit02Icon,
@@ -756,6 +757,23 @@ export function AppSidebar() {
                 >
                   <HugeiconsIcon icon={HelpCircleIcon} strokeWidth={1.75} className="size-icon" />
                   <span>Help</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={async () => {
+                    // Best-effort server-side revocation; ignore network errors
+                    // so the local clear path still runs and the user lands on /login.
+                    try {
+                      const { logout } = await import("@/features/auth/api");
+                      await logout();
+                    } catch {
+                      const { clearAuthTokens } = await import("@/features/auth/session");
+                      clearAuthTokens();
+                    }
+                    void navigate({ to: "/login" });
+                  }}
+                >
+                  <HugeiconsIcon icon={Logout01Icon} strokeWidth={1.75} className="size-icon" />
+                  <span>Log out</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setShutdownOpen(true)}>
                   <HugeiconsIcon icon={PowerIcon} strokeWidth={1.75} className="size-icon" />

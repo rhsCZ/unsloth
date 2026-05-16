@@ -93,34 +93,45 @@ async function retryWithTauriAutoAuth(
   return null;
 }
 
+// Module-level singleflight: the backend now consumes the refresh token
+// atomically on /api/auth/refresh, so two concurrent calls would race and
+// the loser would 401 and be force-logged-out. All callers share one
+// in-flight promise.
+let refreshInflight: Promise<boolean> | null = null;
+
 export async function refreshSession(): Promise<boolean> {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) return false;
-
-  try {
-    const response = await fetchWithTauriNetworkRetry(
-      apiUrl("/api/auth/refresh"),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      },
-    );
-
-    if (!response.ok) {
-      clearAuthTokens();
+  if (refreshInflight) return refreshInflight;
+  refreshInflight = (async () => {
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return false;
+    try {
+      const response = await fetchWithTauriNetworkRetry(
+        apiUrl("/api/auth/refresh"),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        },
+      );
+      if (!response.ok) {
+        clearAuthTokens();
+        return false;
+      }
+      const payload = (await response.json()) as RefreshResponse;
+      storeAuthTokens(
+        payload.access_token,
+        payload.refresh_token,
+        payload.must_change_password,
+      );
+      return true;
+    } catch {
       return false;
     }
-
-    const payload = (await response.json()) as RefreshResponse;
-    storeAuthTokens(
-      payload.access_token,
-      payload.refresh_token,
-      payload.must_change_password,
-    );
-    return true;
-  } catch {
-    return false;
+  })();
+  try {
+    return await refreshInflight;
+  } finally {
+    refreshInflight = null;
   }
 }
 
@@ -179,6 +190,19 @@ export async function authFetch(
   return retryWithCurrentToken(resolvedInput, init);
 }
 
-export function logout(): void {
+export async function logout(): Promise<void> {
+  // Best-effort server-side revocation. If the server is unreachable we
+  // still clear local state so the SPA lands the user on /login.
+  const accessToken = getAuthToken();
+  try {
+    await fetchWithTauriNetworkRetry(apiUrl("/api/auth/logout"), {
+      method: "POST",
+      headers: accessToken
+        ? { Authorization: `Bearer ${accessToken}` }
+        : undefined,
+    });
+  } catch {
+    // ignore
+  }
   clearAuthTokens();
 }

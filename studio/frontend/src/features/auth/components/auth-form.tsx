@@ -342,6 +342,39 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
         {!isLoginMode && (
           <>
             <div className="space-y-2">
+              <Label htmlFor="current-password">Current password</Label>
+              <div className="relative">
+                <Input
+                  id="current-password"
+                  type={showPassword ? "text" : "password"}
+                  className="pr-10"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  minLength={8}
+                  required
+                  placeholder={
+                    window.__UNSLOTH_BOOTSTRAP__?.password
+                      ? "Pre-filled with first-boot password"
+                      : undefined
+                  }
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-full px-3 text-muted-foreground hover:bg-transparent"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="new-password">New password</Label>
               <div className="relative">
                 <Input

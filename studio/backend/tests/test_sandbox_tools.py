@@ -363,9 +363,7 @@ class TestBashBlocklistPosition:
         assert "curl" in self._find()("if true; then curl --version; fi")
 
     def test_while_do_blocked(self):
-        assert "curl" in self._find()(
-            "while true; do curl --version; break; done"
-        )
+        assert "curl" in self._find()("while true; do curl --version; break; done")
 
 
 class TestHfUploadImportGate:

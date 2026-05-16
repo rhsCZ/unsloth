@@ -117,9 +117,22 @@ _SHELL_KEYWORDS_AS_SEP = frozenset({"then", "do", "else", "elif"})
 # Wrappers whose next non-flag argument is itself the command Bash will exec.
 _COMMAND_PREFIXES = frozenset(
     {
-        "env", "command", "builtin", "exec", "time", "nohup", "nice",
-        "setsid", "stdbuf", "timeout", "ionice", "chroot", "sudo",
-        "doas", "su", "xargs",
+        "env",
+        "command",
+        "builtin",
+        "exec",
+        "time",
+        "nohup",
+        "nice",
+        "setsid",
+        "stdbuf",
+        "timeout",
+        "ionice",
+        "chroot",
+        "sudo",
+        "doas",
+        "su",
+        "xargs",
     }
 )
 _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -370,7 +383,9 @@ def _sandbox_preexec():
             # value (would otherwise leave NOFILE at the parent's default).
             nofile = int(os.environ.get("UNSLOTH_STUDIO_SANDBOX_NOFILE", "16384"))
             _soft_cur, hard_cur = _resource.getrlimit(_resource.RLIMIT_NOFILE)
-            target = nofile if hard_cur == _resource.RLIM_INFINITY else min(nofile, hard_cur)
+            target = (
+                nofile if hard_cur == _resource.RLIM_INFINITY else min(nofile, hard_cur)
+            )
             _resource.setrlimit(_resource.RLIMIT_NOFILE, (target, target))
         except (ValueError, OSError, AttributeError):
             pass
@@ -1426,15 +1441,14 @@ def _check_signal_escape_patterns(code: str):
                 # __import__('huggingface_hub'), importlib.import_module('huggingface_hub'),
                 # and bare import_module('huggingface_hub') (via `from importlib import ...`).
                 arg0 = n.args[0]
-                if not (
-                    isinstance(arg0, ast.Constant) and isinstance(arg0.value, str)
-                ):
+                if not (isinstance(arg0, ast.Constant) and isinstance(arg0.value, str)):
                     continue
                 if arg0.value.split(".", 1)[0] not in _HF_IMPORT_MODULES:
                     continue
                 func = n.func
                 if isinstance(func, ast.Name) and func.id in {
-                    "__import__", "import_module",
+                    "__import__",
+                    "import_module",
                 }:
                     return True
                 if isinstance(func, ast.Attribute) and func.attr == "import_module":

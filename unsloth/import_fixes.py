@@ -1289,7 +1289,7 @@ def patch_torchcodec_audio_decoder():
 
 
 def disable_torchcodec_if_broken():
-    """Disable torchcodec in transformers AND datasets if it cannot actually load.
+    """Make broken torchcodec behave as if it were uninstalled.
 
     transformers (>= 4.55) and datasets (>= 4.0) both sniff torchcodec via
     ``importlib.util.find_spec()``, which returns True even when the native
@@ -1297,24 +1297,31 @@ def disable_torchcodec_if_broken():
     matching FFmpeg, ABI mismatch with torch, etc). Downstream code then tries
     to actually use torchcodec and crashes with RuntimeError mid-import.
 
-    If the load test fails we:
-      * transformers < 5: flip the module-level ``_torchcodec_available`` flag.
-      * transformers >= 5: rebind the ``@lru_cache`` ``is_torchcodec_available``
-        function to ``lambda: False`` and clear its cache.
+    If the load test fails we treat torchcodec as uninstalled:
+      * transformers < 5: flip ``_torchcodec_available`` to False.
+      * transformers >= 5: rebind ``is_torchcodec_available`` to ``lambda: False``
+        and clear its lru_cache.
       * datasets >= 4.0: flip ``datasets.config.TORCHCODEC_AVAILABLE``, which
         gates every torchcodec call site inside datasets (audio.py, video.py,
         features.py, the three formatters, ...). Without this, transformers
         falls back to librosa but datasets still routes through torchcodec
         and re-raises the same RuntimeError -- see issue #5446.
       * sys.modules: drop half-loaded ``torchcodec*`` and the
-        ``datasets.features._torchcodec`` wrapper so later re-imports do not
-        re-trigger the failed native-library load.
+        ``datasets.features._torchcodec`` wrapper, then seat
+        ``sys.modules["torchcodec"] = None`` as a sentinel. After this, any
+        future ``import torchcodec`` or ``from torchcodec.X import Y`` raises
+        ``ModuleNotFoundError`` (subclass of ImportError) instead of the
+        broken-native-lib RuntimeError, so the unconditional torchcodec
+        imports inside datasets / torchaudio fall through their existing
+        ``except ImportError`` handlers cleanly. This also makes
+        ``find_spec("torchcodec")`` return None on re-entry so this function
+        is a no-op on the second call.
     """
     try:
         import importlib.util
 
         if importlib.util.find_spec("torchcodec") is None:
-            return  # not installed, nothing to do
+            return  # not installed (or already disabled by us)
 
         # Real load test. RuntimeError is what torchcodec raises on dlopen
         # failure; OSError covers chained "libavutil.so.X not found" shapes.
@@ -1350,7 +1357,10 @@ def disable_torchcodec_if_broken():
         except ImportError:
             pass
 
-        # Drop half-loaded torchcodec submodules + the datasets wrapper.
+        # Drop half-loaded torchcodec submodules + the datasets wrapper, then
+        # block any future import. ``sys.modules[name] = None`` is the
+        # standard "module is absent" sentinel: import torchcodec raises
+        # ModuleNotFoundError, find_spec returns None.
         for _stale in [
             n
             for n in list(sys.modules)
@@ -1359,6 +1369,7 @@ def disable_torchcodec_if_broken():
             or n == "datasets.features._torchcodec"
         ]:
             sys.modules.pop(_stale, None)
+        sys.modules["torchcodec"] = None
 
 
 def disable_broken_wandb():

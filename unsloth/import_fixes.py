@@ -1352,7 +1352,8 @@ def disable_torchcodec_if_broken():
 
         # Drop half-loaded torchcodec submodules + the datasets wrapper.
         for _stale in [
-            n for n in list(sys.modules)
+            n
+            for n in list(sys.modules)
             if n == "torchcodec"
             or n.startswith("torchcodec.")
             or n == "datasets.features._torchcodec"

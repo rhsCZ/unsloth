@@ -343,6 +343,60 @@ def types_orphan_warnings(head_pkg: dict) -> list[str]:
     return warnings
 
 
+def build_bin_to_pkg(head_lock: dict) -> dict[str, str]:
+    """Map a binary name (e.g. 'vite', 'tsc', 'eslint') to the package
+    that provides it. Built from each lockfile entry's `bin` field.
+    """
+    out: dict[str, str] = {}
+    if not head_lock:
+        return out
+    for path, meta in head_lock.get("packages", {}).items():
+        if not path:
+            continue
+        name = path.split("node_modules/")[-1]
+        bins = meta.get("bin")
+        if isinstance(bins, dict):
+            for binname in bins:
+                out.setdefault(binname, name)
+        elif isinstance(bins, str):
+            out.setdefault(name.split("/")[-1], name)
+    return out
+
+
+_SCRIPT_TOKENIZE = re.compile(r"\s*(?:&&|\|\||;|\|(?!\|))\s*")
+
+
+def scripts_bin_refs(head_pkg: dict, bin_to_pkg: dict[str, str]) -> dict[str, list[str]]:
+    """Return `{package_name: ['scripts.X: cmd', ...]}` listing every
+    package referenced via its bin name in package.json scripts.
+    """
+    scripts = head_pkg.get("scripts", {}) or {}
+    refs: dict[str, list[str]] = {}
+    for script_name, raw_cmd in scripts.items():
+        if not isinstance(raw_cmd, str):
+            continue
+        for chunk in _SCRIPT_TOKENIZE.split(raw_cmd):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            words = chunk.split()
+            idx = 0
+            while idx < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[idx]):
+                idx += 1
+            if idx >= len(words):
+                continue
+            first = words[idx]
+            if first in {"npx", "pnpx", "yarn", "pnpm", "bunx"} and idx + 1 < len(words):
+                idx += 1
+                first = words[idx]
+            first = first.removeprefix("./node_modules/.bin/")
+            first = first.removeprefix("node_modules/.bin/")
+            pkg = bin_to_pkg.get(first)
+            if pkg:
+                refs.setdefault(pkg, []).append(f"scripts.{script_name}: {raw_cmd}")
+    return refs
+
+
 def find_imports_without_decl(head_pkg: dict) -> list[tuple[str, int, str]]:
     """Reverse check: find bare-specifier imports in studio/frontend/src
     that don't correspond to any declared package.json dep. Catches the
@@ -531,6 +585,8 @@ def main() -> int:
     print()
 
     reachable_paths = reachable_from_head(head_pkg, head_lock) if head_lock else set()
+    bin_to_pkg = build_bin_to_pkg(head_lock) if head_lock else {}
+    script_refs = scripts_bin_refs(head_pkg, bin_to_pkg)
 
     def reachable_install_paths(name: str) -> tuple[str | None, list[str]]:
         """Return (top_level_path, nested_paths). top_level is what bare
@@ -549,6 +605,8 @@ def main() -> int:
     failures: list[tuple[str, list[Hit]]] = []
     for name in removed:
         hits = find_usage(name)
+        for cite in script_refs.get(name, []):
+            hits.append(Hit("studio/frontend/package.json", 0, "script_bin", cite))
         top, nested = reachable_install_paths(name)
         importable_top_level = top is not None
         # Source imports of bare specifier `name` resolve ONLY to top-level

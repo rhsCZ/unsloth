@@ -215,6 +215,47 @@ CASES: list[Case] = [
         "PASS",
         [],
     ),
+    Case(
+        "C25",
+        "removing vite is safe: @vitejs/plugin-react and @tailwindcss/vite "
+        "keep it via peer (bin still resolves)",
+        ["vite"],
+        "PASS",
+        [],
+    ),
+    Case(
+        "C26",
+        "removing typescript is safe: 11 transitive @typescript-eslint/* "
+        "parents keep tsc bin alive",
+        ["typescript"],
+        "PASS",
+        [],
+    ),
+    Case(
+        "C27",
+        "removing eslint is safe: typescript-eslint and eslint-plugin-* "
+        "peers keep eslint bin alive",
+        ["eslint"],
+        "PASS",
+        [],
+    ),
+    Case(
+        "C28",
+        "removing @biomejs/biome breaks scripts.biome:check / biome:fix "
+        "(no transitive parents, biome bin orphans)",
+        ["@biomejs/biome"],
+        "FAIL",
+        ["@biomejs/biome"],
+    ),
+    Case(
+        "C29",
+        "removing both @biomejs/biome AND @vitejs/plugin-react together: "
+        "biome dies outright; vite loses one of its two retained peers "
+        "but @tailwindcss/vite still keeps it",
+        ["@biomejs/biome", "@vitejs/plugin-react"],
+        "FAIL",
+        ["@biomejs/biome", "@vitejs/plugin-react"],
+    ),
 ]
 
 
@@ -535,6 +576,70 @@ CLASSIFY_CASES: list[ClassifyCase] = [
         "build/x.cjs",
         'const path = require.resolve("lodash/fp");',
         "require",
+    ),
+    ClassifyCase(
+        "U29",
+        "TypeScript ambient `declare module`",
+        "@tanstack/react-router",
+        "src/app/router.tsx",
+        'declare module "@tanstack/react-router" {\n  interface X {}\n}',
+        "string_literal",
+    ),
+    ClassifyCase(
+        "U30",
+        "namespace import `import * as X from pkg`",
+        "@radix-ui/react-slot",
+        "src/x.tsx",
+        'import * as Slot from "@radix-ui/react-slot";',
+        "static_import",
+    ),
+    ClassifyCase(
+        "U31",
+        "combined default + named import",
+        "react",
+        "src/x.tsx",
+        'import React, { useState } from "react";',
+        "static_import",
+    ),
+    ClassifyCase(
+        "U32",
+        "default-as-named import alias",
+        "react",
+        "src/x.tsx",
+        'import { default as R } from "react";',
+        "static_import",
+    ),
+    ClassifyCase(
+        "U33",
+        "re-export default",
+        "lodash",
+        "src/x.ts",
+        'export { default } from "lodash";',
+        "re_export",
+    ),
+    ClassifyCase(
+        "U34",
+        "re-export default as alias",
+        "lodash",
+        "src/x.ts",
+        'export { default as _ } from "lodash";',
+        "re_export",
+    ),
+    ClassifyCase(
+        "U35",
+        ".then() dynamic import (no await)",
+        "@tauri-apps/api",
+        "src/x.ts",
+        'import("@tauri-apps/api/window").then(m => m.x());',
+        "dynamic_import",
+    ),
+    ClassifyCase(
+        "U36",
+        "TypeScript import() in type position",
+        "react",
+        "src/x.ts",
+        'type C = import("react").ComponentType;',
+        "dynamic_import",
     ),
 ]
 

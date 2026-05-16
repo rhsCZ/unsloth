@@ -23,6 +23,7 @@ def outputs_setup(tmp_path, monkeypatch):
     the symbol on the importer module, not on storage_roots.
     """
     from core.training import training as training_mod
+
     monkeypatch.setattr(training_mod, "outputs_root", lambda: tmp_path)
     return tmp_path
 
@@ -102,8 +103,9 @@ def test_output_dir_outside_outputs_root_is_refused(tmp_path, monkeypatch):
 
     _cleanup_cancelled_checkpoints(outside)
 
-    assert (outside / "tmp-checkpoint-1").exists(), \
-        "must not rmtree under a path outside outputs_root"
+    assert (
+        outside / "tmp-checkpoint-1"
+    ).exists(), "must not rmtree under a path outside outputs_root"
 
 
 def test_symlinked_output_dir_skipped(outputs_setup):
@@ -123,8 +125,7 @@ def test_symlinked_output_dir_skipped(outputs_setup):
 
     _cleanup_cancelled_checkpoints(link)
 
-    assert (real / "tmp-checkpoint-1").exists(), \
-        "symlinked output_dir must be skipped"
+    assert (real / "tmp-checkpoint-1").exists(), "symlinked output_dir must be skipped"
 
 
 def test_missing_output_dir_is_noop(outputs_setup):
@@ -153,5 +154,6 @@ def test_symlinked_child_skipped(outputs_setup):
 
     _cleanup_cancelled_checkpoints(out)
 
-    assert (target / "important.txt").exists(), \
-        "symlink target outside outputs_root must not be rmtree'd"
+    assert (
+        target / "important.txt"
+    ).exists(), "symlink target outside outputs_root must not be rmtree'd"

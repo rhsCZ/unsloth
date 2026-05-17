@@ -174,6 +174,7 @@ def _ensure_pt_dequant_state(layer):
     if getattr(layer, "_unsloth_pt_dequant_ready", False):
         return
     from bitsandbytes.functional import dequantize_blockwise
+
     qs = layer.weight.quant_state
     if qs.nested:
         absmax_fp32 = dequantize_blockwise(qs.absmax, qs.state2)
@@ -199,7 +200,7 @@ def _pt_dequant_one(packed_uint8, absmax_fp32, blocksize, shape, dtype, codes):
     n_blocks = (n_elements + blocksize - 1) // blocksize
     values = values.view(n_blocks, blocksize) * absmax_fp32.view(-1, 1)
     target = shape[0] * shape[1]
-    return values.reshape(-1)[: target].view(shape).to(dtype)
+    return values.reshape(-1)[:target].view(shape).to(dtype)
 
 
 def _pt_dequant_stack_subset(layers, indices_cpu, codes):
@@ -230,9 +231,6 @@ def _get_compiled_pt_dequant_stack():
             fullgraph = False,
         )
     return _COMPILED_PT_DEQUANT_STACK
-
-
-
 
 
 def _dequant_stack(layers):
@@ -413,7 +411,10 @@ def _grouped_mm_forward_4bit_pt_compiled(
     self.down_proj = nn.Parameter(down, requires_grad = False)
     try:
         return forward_native_grouped_mm(
-            self, hidden_states, compact_top_k, top_k_weights,
+            self,
+            hidden_states,
+            compact_top_k,
+            top_k_weights,
         )
     finally:
         del self.gate_up_proj

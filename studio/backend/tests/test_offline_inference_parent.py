@@ -187,12 +187,16 @@ class TestLoraDetectOffline:
         # once. Other call sites in from_identifier may also hit it; the
         # essential check is that it's bounded, not zero (which would
         # indicate we silently skip the check and miss cached LoRA repos).
-        assert mock.call_count >= 1, \
-            "LoRA-detect path must consult hf_model_info even offline; the " \
+        assert mock.call_count >= 1, (
+            "LoRA-detect path must consult hf_model_info even offline; the "
             "OfflineModeIsEnabled short-circuit is what makes it cheap"
+        )
 
     def test_cached_lora_detected_when_api_unreachable(
-        self, monkeypatch, clean_offline_env, tmp_path,
+        self,
+        monkeypatch,
+        clean_offline_env,
+        tmp_path,
     ):
         """Even when the HF API is unreachable, a cached adapter_config.json
         in the snapshot must mark the repo as a LoRA."""

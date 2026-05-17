@@ -76,11 +76,9 @@ except ImportError:
     _httpx_stub.Response = type("Response", (), {})
     _httpx_stub.Request = type("Request", (), {})
 
-
     class _FakeTimeout:
         def __init__(self, *a, **kw):
             pass
-
 
     _httpx_stub.Timeout = _FakeTimeout
     _httpx_stub.Client = type(

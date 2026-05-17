@@ -44,13 +44,20 @@ def print_studio_stop_hint() -> None:
     def style(text: str, code: str) -> str:
         return f"{code}{text}{reset}" if use_color else text
 
-    print("\n".join([
-        "",
-        style("  To stop Unsloth Studio: press Ctrl+C in this terminal.", stop_hint_style),
-        style("  (On macOS this is Control+C, not Command+C.)", dim),
-        style("─" * 52, dim),
-        "",
-    ]))
+    print(
+        "\n".join(
+            [
+                "",
+                style(
+                    "  To stop Unsloth Studio: press Ctrl+C in this terminal.",
+                    stop_hint_style,
+                ),
+                style("  (On macOS this is Control+C, not Command+C.)", dim),
+                style("─" * 52, dim),
+                "",
+            ]
+        )
+    )
 
 
 def print_studio_access_banner(
@@ -174,7 +181,10 @@ def print_studio_access_banner(
         lines.extend(
             [
                 "",
-                style("  To stop Unsloth Studio: press Ctrl+C in this terminal.", stop_hint_style),
+                style(
+                    "  To stop Unsloth Studio: press Ctrl+C in this terminal.",
+                    stop_hint_style,
+                ),
                 style("  (On macOS this is Control+C, not Command+C.)", dim),
                 style("─" * 52, dim),
                 "",

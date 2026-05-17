@@ -93,7 +93,7 @@ def _install_uvicorn_startup_log_rewrite(bind_host: str, display_host: str) -> N
 
     def _rewrite(text: str) -> str:
         if text.startswith(old_prefix):
-            text = new_prefix + text[len(old_prefix):]
+            text = new_prefix + text[len(old_prefix) :]
         return old_suffix_re.sub(new_suffix, text)
 
     class _UvicornStartupRewrite(logging.Filter):
@@ -200,9 +200,7 @@ def _verify_global_reachability(display_host: str, port: int) -> None:
         pass
 
     try:
-        qs = urllib.parse.urlencode(
-            {"host": f"{display_host}:{port}", "max_nodes": 3}
-        )
+        qs = urllib.parse.urlencode({"host": f"{display_host}:{port}", "max_nodes": 3})
         req = urllib.request.Request(
             f"https://check-host.net/check-tcp?{qs}",
             headers = {
@@ -229,17 +227,18 @@ def _verify_global_reachability(display_host: str, port: int) -> None:
             time.sleep(1.5)
             try:
                 with urllib.request.urlopen(poll_req, timeout = 5) as resp:
-                    results = json.loads(
-                        resp.read().decode("utf-8", errors = "replace")
-                    )
+                    results = json.loads(resp.read().decode("utf-8", errors = "replace"))
             except Exception:
                 continue
             if results and all(v is not None for v in results.values()):
                 break
             # Two decisive nodes is enough; stop polling early.
             decisive = [
-                v for v in results.values()
-                if isinstance(v, list) and v and isinstance(v[0], dict)
+                v
+                for v in results.values()
+                if isinstance(v, list)
+                and v
+                and isinstance(v[0], dict)
                 and ("time" in v[0] or "error" in v[0])
             ]
             if len(decisive) >= 2:

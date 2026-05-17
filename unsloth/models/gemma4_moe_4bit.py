@@ -136,6 +136,7 @@ _COMPILED_DEQUANT_STACK = None
 def _dequant_stack(layers):
     """Dequantize each Linear4bit in a ModuleList and stack into (E, out, in)."""
     from bitsandbytes.functional import dequantize_4bit
+
     return torch.stack(
         [dequantize_4bit(L.weight.data, L.weight.quant_state) for L in layers],
         dim = 0,
@@ -145,6 +146,7 @@ def _dequant_stack(layers):
 def _dequant_stack_subset(layers, indices_cpu):
     """Dequantize only experts whose CPU-int indices are in indices_cpu."""
     from bitsandbytes.functional import dequantize_4bit
+
     return torch.stack(
         [
             dequantize_4bit(layers[i].weight.data, layers[i].weight.quant_state)
@@ -196,7 +198,10 @@ def _grouped_mm_forward_4bit(
     self.down_proj = nn.Parameter(down, requires_grad = False)
     try:
         return forward_native_grouped_mm(
-            self, hidden_states, top_k_index, top_k_weights,
+            self,
+            hidden_states,
+            top_k_index,
+            top_k_weights,
         )
     finally:
         del self.gate_up_proj
@@ -237,7 +242,10 @@ def _grouped_mm_forward_4bit_active_only(
     self.down_proj = nn.Parameter(down, requires_grad = False)
     try:
         return forward_native_grouped_mm(
-            self, hidden_states, compact_top_k, top_k_weights,
+            self,
+            hidden_states,
+            compact_top_k,
+            top_k_weights,
         )
     finally:
         del self.gate_up_proj
@@ -255,6 +263,7 @@ def _cached_dequant(module, attr_name, expert_idx, layer):
     cache = getattr(module, cache_attr, None)
     if cache is None:
         from collections import OrderedDict
+
         cache = OrderedDict()
         setattr(module, cache_attr, cache)
     cached = cache.get(expert_idx, None)
@@ -290,7 +299,10 @@ def _grouped_mm_forward_4bit_static_bf16(
     self.down_proj = self._unsloth_static_bf16_down
     try:
         return forward_native_grouped_mm(
-            self, hidden_states, top_k_index, top_k_weights,
+            self,
+            hidden_states,
+            top_k_index,
+            top_k_weights,
         )
     finally:
         del self.gate_up_proj
@@ -324,10 +336,7 @@ def _grouped_mm_forward_4bit_active_only_cached(
         dim = 0,
     )
     down = torch.stack(
-        [
-            _cached_dequant(self, "down", i, self.down_proj_4bit[i])
-            for i in active_cpu
-        ],
+        [_cached_dequant(self, "down", i, self.down_proj_4bit[i]) for i in active_cpu],
         dim = 0,
     )
 
@@ -339,7 +348,10 @@ def _grouped_mm_forward_4bit_active_only_cached(
     self.down_proj = nn.Parameter(down, requires_grad = False)
     try:
         return forward_native_grouped_mm(
-            self, hidden_states, compact_top_k, top_k_weights,
+            self,
+            hidden_states,
+            compact_top_k,
+            top_k_weights,
         )
     finally:
         del self.gate_up_proj

@@ -996,6 +996,7 @@
 	}
 }
 
+/* Lighter shadow + tighter vertical padding than Sonner's defaults; !important because Sonner injects its base rules at runtime. */
 [data-sonner-toast][data-styled='true'] {
 	padding: 10px 16px !important;
 	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;

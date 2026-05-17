@@ -162,10 +162,12 @@ class TestIterHfCacheSnapshots:
         assert list(_iter_hf_cache_snapshots("unsloth/bare")) == []
 
     def test_yields_newest_first(self, hf_cache):
-        old = _build_cache(hf_cache, "unsloth/multi", {"x.gguf": 1},
-                           snapshot_sha = "a" * 40)
-        new = _build_cache(hf_cache, "unsloth/multi", {"y.gguf": 1},
-                           snapshot_sha = "b" * 40)
+        old = _build_cache(
+            hf_cache, "unsloth/multi", {"x.gguf": 1}, snapshot_sha = "a" * 40
+        )
+        new = _build_cache(
+            hf_cache, "unsloth/multi", {"y.gguf": 1}, snapshot_sha = "b" * 40
+        )
         os.utime(old, (1000, 1000))
         os.utime(new, (2000, 2000))
         out = list(_iter_hf_cache_snapshots("unsloth/multi"))
@@ -186,7 +188,8 @@ class TestIterHfCacheSnapshots:
 class TestListGgufVariantsFromCache:
     def test_returns_variants_when_cached(self, hf_cache):
         _build_cache(
-            hf_cache, "unsloth/Qwen3.5-4B-GGUF",
+            hf_cache,
+            "unsloth/Qwen3.5-4B-GGUF",
             {
                 "Qwen3.5-4B-UD-Q4_K_XL.gguf": 100,
                 "Qwen3.5-4B-Q2_K.gguf": 50,
@@ -203,7 +206,9 @@ class TestListGgufVariantsFromCache:
 
 
 class TestListGgufVariantsOffline:
-    def test_offline_env_short_circuits_api(self, hf_cache, clean_offline_env, monkeypatch):
+    def test_offline_env_short_circuits_api(
+        self, hf_cache, clean_offline_env, monkeypatch
+    ):
         _build_cache(hf_cache, "unsloth/a", {"a-UD-Q4_K_XL.gguf": 1})
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
@@ -216,7 +221,9 @@ class TestListGgufVariantsOffline:
         assert variants[0].quant == "UD-Q4_K_XL"
 
     def test_api_exception_falls_back_to_cache(
-        self, hf_cache, clean_offline_env,
+        self,
+        hf_cache,
+        clean_offline_env,
     ):
         _build_cache(hf_cache, "unsloth/a", {"a-Q4_K_M.gguf": 1})
 
@@ -256,7 +263,8 @@ class TestListGgufVariantsOffline:
 class TestDetectGgufFromCache:
     def test_picks_best_quant(self, hf_cache):
         _build_cache(
-            hf_cache, "unsloth/a",
+            hf_cache,
+            "unsloth/a",
             {"a-Q2_K.gguf": 1, "a-UD-Q4_K_XL.gguf": 1},
         )
         assert _detect_gguf_from_hf_cache("unsloth/a") == "a-UD-Q4_K_XL.gguf"
@@ -267,12 +275,14 @@ class TestDetectGgufFromCache:
         missed this layout, falling through to the synthetic
         ``{repo}-{variant}.gguf`` heuristic."""
         _build_cache(
-            hf_cache, "unsloth/gpt-oss-20b-BF16",
+            hf_cache,
+            "unsloth/gpt-oss-20b-BF16",
             {"BF16/foo.gguf": 1},
         )
         out = _detect_gguf_from_hf_cache("unsloth/gpt-oss-20b-BF16")
-        assert out == "BF16/foo.gguf", \
-            f"subdir-only layout must resolve to relative path, got {out}"
+        assert (
+            out == "BF16/foo.gguf"
+        ), f"subdir-only layout must resolve to relative path, got {out}"
 
     def test_returns_none_when_no_gguf(self, hf_cache):
         _build_cache(hf_cache, "unsloth/a", {"README.md": 10})
@@ -281,7 +291,10 @@ class TestDetectGgufFromCache:
 
 class TestDetectGgufModelRemoteOffline:
     def test_offline_env_short_circuits_retries(
-        self, hf_cache, clean_offline_env, monkeypatch,
+        self,
+        hf_cache,
+        clean_offline_env,
+        monkeypatch,
     ):
         _build_cache(hf_cache, "unsloth/a", {"a-Q4_K_M.gguf": 1})
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -299,13 +312,17 @@ class TestDetectGgufModelRemoteOffline:
             raise OSError("hub down")
 
         # Patch time.sleep so the 1s/2s/4s backoff doesn't slow the test.
-        with patch("huggingface_hub.model_info", boom), \
-                patch("time.sleep", lambda *_: None):
+        with (
+            patch("huggingface_hub.model_info", boom),
+            patch("time.sleep", lambda *_: None),
+        ):
             out = detect_gguf_model_remote("unsloth/a")
         assert out == "a-Q4_K_M.gguf"
 
     def test_repository_not_found_does_not_consult_cache(
-        self, hf_cache, clean_offline_env,
+        self,
+        hf_cache,
+        clean_offline_env,
     ):
         # Cache has a file but the API explicitly says repo is gone.
         _build_cache(hf_cache, "unsloth/a", {"a-Q4_K_M.gguf": 1})
@@ -337,6 +354,7 @@ class _DnsState:
     def fail(self):
         def _fail(*a, **k):
             raise socket.gaierror(-2, "Name or service not known")
+
         self._mp.setattr(socket, "gethostbyname", _fail)
 
     def ok(self):
@@ -401,7 +419,10 @@ class TestHfOfflineIfDnsDead:
             assert "HF_HUB_OFFLINE" not in os.environ
 
     def test_user_set_hf_hub_offline_is_preserved(
-        self, dns, clean_offline_env, monkeypatch,
+        self,
+        dns,
+        clean_offline_env,
+        monkeypatch,
     ):
         # User explicitly set offline before launching Studio.
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -413,7 +434,10 @@ class TestHfOfflineIfDnsDead:
         assert os.environ.get("HF_HUB_OFFLINE") == "1"
 
     def test_user_set_transformers_offline_is_preserved(
-        self, dns, clean_offline_env, monkeypatch,
+        self,
+        dns,
+        clean_offline_env,
+        monkeypatch,
     ):
         monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
         dns.fail()
@@ -426,7 +450,9 @@ class TestHfOfflineIfDnsDead:
         assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
 
     def test_exception_inside_block_still_restores_env(
-        self, dns, clean_offline_env,
+        self,
+        dns,
+        clean_offline_env,
     ):
         dns.fail()
         with pytest.raises(RuntimeError, match = "boom"):

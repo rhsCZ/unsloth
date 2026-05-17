@@ -692,6 +692,10 @@ def test_hook_installs_when_gate_returns_false(monkeypatch):
 
 
 def test_hook_skips_install_when_gate_already_true(monkeypatch):
+    """When both gates are already True AND tilelang is healthy, the hook
+    must do zero install work. (Tilelang repair on the already-True path
+    is covered by test_hook_runs_tilelang_repair_when_fla_already_true.)
+    """
     fla_gate = _make_fake_gate(initial_return=True)
     conv_gate = _make_fake_gate(initial_return=True)
     _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
@@ -706,6 +710,11 @@ def test_hook_skips_install_when_gate_already_true(monkeypatch):
         worker, "_ensure_tilelang_backend_unconditional", tile_install
     )
     monkeypatch.setattr(worker, "_install_package_wheel_first", conv_install)
+    # Tilelang healthy so the post_available path is a no-op (otherwise
+    # it would call tile_install, which is correct behaviour but
+    # outside the scope of this test).
+    monkeypatch.setattr(worker, "_tilelang_importable", lambda: True)
+    monkeypatch.setattr(worker, "_installed_tvm_ffi_version", lambda: "0.1.9")
     monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
 
     worker._install_fast_path_hooks(event_queue=_FakeQueue(), model_name="unsloth/Qwen3.5-2B")

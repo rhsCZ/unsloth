@@ -888,7 +888,9 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
             except AttributeError:
                 pass
             ok = original()
+            ran_install = False
             if not ok:
+                ran_install = True
                 logger.info("Hook fired for %s; triggering install", gate_name)
                 _send_status(
                     event_queue,
@@ -909,10 +911,14 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
                     gate_name,
                     ok,
                 )
-            # Even when FLA was already True, the post-available action
-            # may still have work (tilelang missing / broken tvm-ffi
-            # repair).
-            if ok and post_available_fn is not None:
+            # post_available_fn handles edge cases that ONLY occur on
+            # the gate-was-already-True path (e.g. tilelang missing
+            # while FLA is already importable, or apache-tvm-ffi on
+            # the broken-versions list while FLA otherwise works).
+            # If install_fn ran, it already chained the matching
+            # follow-up install (`_fla_install` installs tilelang too),
+            # so running post_available_fn would double-install.
+            if ok and not ran_install and post_available_fn is not None:
                 try:
                     post_available_fn(event_queue)
                 except Exception as exc:

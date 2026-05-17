@@ -1344,7 +1344,9 @@ def test_install_fast_path_hooks_does_not_set_fla_tilelang_on_cuda(monkeypatch):
 # ───────────────────────────────────────────────────────────────────
 
 
-def _make_fake_transformers_tree(tmp_path, fla_types: list[str], non_fla_types: list[str]):
+def _make_fake_transformers_tree(
+    tmp_path, fla_types: list[str], non_fla_types: list[str]
+):
     """Lay out a tmp dir as `transformers/models/{type}/modeling_{type}.py`."""
     pkg = tmp_path / "transformers"
     models = pkg / "models"

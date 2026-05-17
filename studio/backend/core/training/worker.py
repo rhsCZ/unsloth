@@ -745,7 +745,9 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
     # User can override with FLA_TILELANG=1.
     if _torch_has_hip() and os.environ.get("FLA_TILELANG") is None:
         os.environ["FLA_TILELANG"] = "0"
-        logger.info("HIP/ROCm torch detected; setting FLA_TILELANG=0 (no HIP GEMM in tilelang 0.1.8)")
+        logger.info(
+            "HIP/ROCm torch detected; setting FLA_TILELANG=0 (no HIP GEMM in tilelang 0.1.8)"
+        )
 
     try:
         from transformers.utils import import_utils as _iu
@@ -776,11 +778,15 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
             if not ok:
                 ran_install = True
                 logger.info("Hook fired for %s; triggering install", gate_name)
-                _send_status(event_queue, f"Hook fired for {gate_name}; installing kernel...")
+                _send_status(
+                    event_queue, f"Hook fired for {gate_name}; installing kernel..."
+                )
                 try:
                     ok = bool(install_fn(event_queue))
                 except Exception as exc:
-                    logger.warning("%s install raised: %s; falling back to torch", gate_name, exc)
+                    logger.warning(
+                        "%s install raised: %s; falling back to torch", gate_name, exc
+                    )
                     ok = False
                 logger.info("%s hook done; available=%s", gate_name, ok)
             # post_available_fn handles "gate already True but ancillary kernel broken" (e.g. tilelang
@@ -789,7 +795,9 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
                 try:
                     post_available_fn(event_queue)
                 except Exception as exc:
-                    logger.warning("%s post-available step raised: %s; continuing", gate_name, exc)
+                    logger.warning(
+                        "%s post-available step raised: %s; continuing", gate_name, exc
+                    )
             state["installed"] = True
             return ok
 
@@ -800,19 +808,27 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
     def _fla_install(eq: Any) -> bool:
         # FLA alone ~2.35x; +tilelang adds ~26%. tilelang is GDN-only (Qwen3.5 family).
         if not _ensure_flash_linear_attention_unconditional(eq):
-            logger.info("FLA install did not produce an importable runtime; skipping TileLang")
+            logger.info(
+                "FLA install did not produce an importable runtime; skipping TileLang"
+            )
             return False
         if _model_wants_tilelang(model_name):
             _ensure_tilelang_backend_unconditional(eq)
         else:
-            logger.info("Model %r outside TileLang allowlist; FLA Triton path is sufficient", model_name)
+            logger.info(
+                "Model %r outside TileLang allowlist; FLA Triton path is sufficient",
+                model_name,
+            )
         return True
 
     def _fla_post_available(eq: Any) -> None:
         # FLA already imports; repair tilelang if missing or on the broken tvm-ffi list.
         if not _model_wants_tilelang(model_name):
             return
-        if _installed_tvm_ffi_version() not in _TVM_FFI_BROKEN_VERSIONS and _tilelang_importable():
+        if (
+            _installed_tvm_ffi_version() not in _TVM_FFI_BROKEN_VERSIONS
+            and _tilelang_importable()
+        ):
             return
         _ensure_tilelang_backend_unconditional(eq)
 
@@ -837,14 +853,19 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
     ):
         original = getattr(_iu, gate_name, None)
         if original is None:
-            logger.info("%s missing on transformers.utils.import_utils; skipping hook", gate_name)
+            logger.info(
+                "%s missing on transformers.utils.import_utils; skipping hook",
+                gate_name,
+            )
             continue
         wrapped = _make_wrapper(original, install_fn, gate_name, post_fn)
         setattr(_iu, gate_name, wrapped)
         rebound = _rebind_in_already_imported_modules(
             attr_name = gate_name, old_obj = original, new_obj = wrapped
         )
-        logger.info("Installed fast-path hook on %s (rebound %d modules)", gate_name, rebound)
+        logger.info(
+            "Installed fast-path hook on %s (rebound %d modules)", gate_name, rebound
+        )
 
 
 def _should_try_runtime_flash_attn_install(max_seq_length: int) -> bool:

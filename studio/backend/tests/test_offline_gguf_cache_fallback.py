@@ -504,7 +504,8 @@ class TestDownloadMmprojOfflineCacheFallback:
     is present in cache."""
 
     def test_cache_lookup_returns_cached_mmproj_when_list_repo_files_fails(
-        self, hf_cache,
+        self,
+        hf_cache,
     ):
         _build_cache(
             hf_cache,
@@ -523,8 +524,10 @@ class TestDownloadMmprojOfflineCacheFallback:
             # Echo back so the test can verify the cache-resolved filename
             return f"/fake/cache/{repo_id}/{filename}"
 
-        with patch("huggingface_hub.list_repo_files", boom_list), \
-                patch("huggingface_hub.hf_hub_download", fake_download):
+        with (
+            patch("huggingface_hub.list_repo_files", boom_list),
+            patch("huggingface_hub.hf_hub_download", fake_download),
+        ):
             out = backend._download_mmproj(
                 hf_repo = "unsloth/vision-GGUF",
                 hf_token = None,
@@ -552,8 +555,10 @@ class TestDownloadMmprojOfflineCacheFallback:
             captured["filename"] = filename
             return f"/fake/{filename}"
 
-        with patch("huggingface_hub.list_repo_files", boom_list), \
-                patch("huggingface_hub.hf_hub_download", fake_download):
+        with (
+            patch("huggingface_hub.list_repo_files", boom_list),
+            patch("huggingface_hub.hf_hub_download", fake_download),
+        ):
             backend._download_mmproj(
                 hf_repo = "unsloth/vision-GGUF",
                 hf_token = None,

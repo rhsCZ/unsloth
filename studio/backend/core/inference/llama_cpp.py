@@ -2036,7 +2036,8 @@ class LlamaCppBackend:
 
         def _pick_mmproj(candidates: list[str]) -> Optional[str]:
             mmproj_files = sorted(
-                f for f in candidates
+                f
+                for f in candidates
                 if f.lower().endswith(".gguf") and "mmproj" in Path(f).name.lower()
             )
             if not mmproj_files:
@@ -2049,6 +2050,7 @@ class LlamaCppBackend:
         target: Optional[str] = None
         try:
             from huggingface_hub import list_repo_files
+
             target = _pick_mmproj(list_repo_files(hf_repo, token = hf_token))
         except Exception as e:
             logger.debug(f"Could not list repo files for mmproj: {e}")
@@ -2061,14 +2063,11 @@ class LlamaCppBackend:
 
                 for snap in _iter_hf_cache_snapshots(hf_repo):
                     rel_files = [
-                        p.relative_to(snap).as_posix()
-                        for p in snap.rglob("*.gguf")
+                        p.relative_to(snap).as_posix() for p in snap.rglob("*.gguf")
                     ]
                     target = _pick_mmproj(rel_files)
                     if target is not None:
-                        logger.info(
-                            "Resolved mmproj %s from local HF cache", target
-                        )
+                        logger.info("Resolved mmproj %s from local HF cache", target)
                         break
             except Exception as e:
                 logger.debug(f"Offline cache lookup for mmproj failed: {e}")

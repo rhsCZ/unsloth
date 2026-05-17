@@ -1002,6 +1002,11 @@
 	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
 }
 
+/* Boost shadow on dark surfaces; mirrors .shadow-border / .menu-soft-surface pattern. */
+.dark [data-sonner-toast][data-styled='true'] {
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
+}
+
 /* Flat scrollbar chrome */
 * {
 	scrollbar-width: thin;

@@ -698,8 +698,7 @@ async def load_model(
                     source
                     and source[0]
                     and source[0].lower() == model_identifier.lower()
-                    and (source[1] or "").lower()
-                    == (resolved_variant or "").lower()
+                    and (source[1] or "").lower() == (resolved_variant or "").lower()
                 )
                 if not same_source:
                     logger.info(

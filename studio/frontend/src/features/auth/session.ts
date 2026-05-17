@@ -63,6 +63,12 @@ export function mustChangePassword(): boolean {
 
 export function setMustChangePassword(required: boolean): void {
   if (!canUseStorage()) return;
+  // `required` is a boolean status flag from /api/auth/refresh and
+  // /api/auth/change-password; it carries no credential material even
+  // though CodeQL's clear-text-storage analyser traces it back through
+  // loginWithPassword's TokenResponse. The two-arg .setItem write is
+  // string-only by definition.
+  // lgtm[js/clear-text-storage-of-sensitive-information]
   localStorage.setItem(AUTH_MUST_CHANGE_PASSWORD_KEY, String(required));
 }
 

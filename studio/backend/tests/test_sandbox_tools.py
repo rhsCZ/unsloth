@@ -408,3 +408,33 @@ class TestHfUploadImportGate:
             " api=import_module('huggingface_hub').HfApi(); api.create_commit()",
             expect_phrase = "Blocked: file upload disallowed in sandbox",
         )
+
+    def test_hf_bare_name_upload_file_blocked(self):
+        # `from huggingface_hub import upload_file` then bare `upload_file(...)`
+        # is a canonical HF call shape that the Attribute-only gate missed.
+        _blocked(
+            "from huggingface_hub import upload_file;"
+            " upload_file(path_or_fileobj='x', path_in_repo='x', repo_id='r')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_hf_bare_name_upload_folder_blocked(self):
+        _blocked(
+            "from huggingface_hub import upload_folder;"
+            " upload_folder(folder_path='x', repo_id='r')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_hf_bare_name_create_commit_blocked(self):
+        _blocked(
+            "from huggingface_hub import create_commit;"
+            " create_commit(operations=[], repo_id='r')",
+            expect_phrase = "Blocked: file upload disallowed in sandbox",
+        )
+
+    def test_bare_name_upload_file_without_hf_import_allowed(self):
+        # No HF import -- local helper named upload_file should pass.
+        _ok(
+            "def upload_file(*a, **k):\n    pass\n"
+            "upload_file('x', 'y', 'z')"
+        )

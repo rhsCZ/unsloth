@@ -1458,12 +1458,20 @@ def _check_signal_escape_patterns(code: str):
     _hf_in_scope = _module_has_hf_import(tree)
 
     def _method_call_is_hf_upload(node: ast.Call) -> bool:
-        """True for HfApi upload method names when huggingface_hub is imported."""
-        return (
-            _hf_in_scope
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in _UPLOAD_HF_METHODS
-        )
+        """True for HfApi upload method names when huggingface_hub is imported.
+
+        Catches both `HfApi().upload_file(...)` (Attribute) and
+        `from huggingface_hub import upload_file; upload_file(...)` (Name).
+        The bare-name branch fires only when an HF import is in scope, mirroring
+        the Attribute branch's gating so paramiko/boto3 do not false-positive.
+        """
+        if not _hf_in_scope:
+            return False
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr in _UPLOAD_HF_METHODS
+        if isinstance(node.func, ast.Name):
+            return node.func.id in _UPLOAD_HF_METHODS
+        return False
 
     class NetworkAndIoVisitor(ast.NodeVisitor):
         def visit_Call(self, node):

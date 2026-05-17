@@ -434,7 +434,4 @@ class TestHfUploadImportGate:
 
     def test_bare_name_upload_file_without_hf_import_allowed(self):
         # No HF import -- local helper named upload_file should pass.
-        _ok(
-            "def upload_file(*a, **k):\n    pass\n"
-            "upload_file('x', 'y', 'z')"
-        )
+        _ok("def upload_file(*a, **k):\n    pass\n" "upload_file('x', 'y', 'z')")

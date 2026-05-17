@@ -1335,7 +1335,7 @@ def list_gguf_variants(
     """
     from huggingface_hub import model_info as hf_model_info
 
-    # Offline mode: serve from cache, skip the API call entirely.
+    # Offline: skip the API and serve from cache.
     offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in (
         "1",
         "true",
@@ -1349,7 +1349,7 @@ def list_gguf_variants(
     try:
         info = hf_model_info(repo_id, token = hf_token, files_metadata = True)
     except Exception as e:
-        # Network unreachable: use the local snapshot if fully downloaded.
+        # API failed; fall back to local snapshot if fully downloaded.
         cached = _list_gguf_variants_from_hf_cache(repo_id)
         if cached is not None:
             logger.warning(
@@ -1552,9 +1552,8 @@ def detect_gguf_model_remote(
     config.json on the GGUF-only repo. Three attempts with 1s/2s/4s
     backoff covers the typical free-runner HF Hub flakiness.
 
-    When fully offline, falls back to scanning the local HF cache so
-    a model that has been downloaded already is still recognized as
-    GGUF (and therefore routed to llama-server, not MLX/Unsloth).
+    When offline, falls back to the local HF cache so a downloaded
+    repo is still routed to llama-server (not MLX/Unsloth).
     """
     import time
     from huggingface_hub import model_info as hf_model_info
@@ -1590,8 +1589,7 @@ def detect_gguf_model_remote(
             if attempt < 2:
                 time.sleep(2**attempt)
 
-    # Every attempt failed. Fall back to local cache so an offline user
-    # with the model already on disk still gets the GGUF route.
+    # All attempts failed; fall back to local cache for offline users.
     cached = _detect_gguf_from_hf_cache(repo_id)
     if cached is not None:
         logger.warning(

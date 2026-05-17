@@ -1774,11 +1774,9 @@ class LlamaCppBackend:
             except Exception as e:
                 logger.warning(f"Could not list repo files: {e}")
 
-            # Offline fallback: resolve variant -> filename from the local
-            # HF cache. The repo-name + variant heuristic below is wrong
-            # when the file inside the repo doesn't echo the repo name
-            # (e.g. repo `unsloth/Qwen3.6-27B-MTP-GGUF` contains a file
-            # `Qwen3.6-27B-UD-Q4_K_XL.gguf` with no "MTP").
+            # Offline: resolve variant -> filename from the local HF cache.
+            # The heuristic below assumes filenames echo the repo name,
+            # which breaks for e.g. Qwen3.6-27B-MTP-GGUF (no "MTP" in file).
             if not gguf_filename:
                 try:
                     from huggingface_hub import constants as hf_constants
@@ -2051,10 +2049,8 @@ class LlamaCppBackend:
         """
         self._cancel_event.clear()
 
-        # Offline auto-detect: if huggingface.co won't resolve, every
-        # hf_hub_download below would burn ~25s on retries before
-        # falling back to cache. Setting HF_HUB_OFFLINE=1 up front
-        # makes the cache hit instant.
+        # Offline auto-detect: skip 25s of hf_hub_download retries if DNS
+        # is dead; cached files resolve instantly under HF_HUB_OFFLINE=1.
         if hf_repo and "HF_HUB_OFFLINE" not in os.environ:
             import socket as _socket
 

@@ -648,9 +648,8 @@ def run_inference_process(
         os.environ["HF_HUB_DISABLE_XET"] = "1"
         logger.info("Xet transport disabled (HF_HUB_DISABLE_XET=1)")
 
-    # Offline auto-detect: if huggingface.co can't be resolved, set
-    # HF_HUB_OFFLINE so every hf_hub_download in this worker uses the
-    # local cache directly instead of burning ~25s per file on retries.
+    # Offline auto-detect: skip 25s of hf_hub_download retries per file
+    # if DNS is dead; cached files resolve instantly under HF_HUB_OFFLINE=1.
     if "HF_HUB_OFFLINE" not in os.environ:
         import socket as _socket
 

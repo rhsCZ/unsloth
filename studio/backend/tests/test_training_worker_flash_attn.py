@@ -264,6 +264,12 @@ def test_flash_linear_attention_matches_full_qwen3_family(monkeypatch):
     monkeypatch.setattr(worker._sp, "run", run_mock)
     _force_missing_fla_imports(monkeypatch)
     monkeypatch.setattr(worker, "_send_status", lambda *a, **k: None)
+    # Hermetic discovery: pretend installed transformers ships all the Qwen GDN families.
+    monkeypatch.setattr(
+        worker,
+        "_discover_fla_model_types",
+        lambda: frozenset({"qwen3_5", "qwen3_5_moe", "qwen3_6", "qwen3_next"}),
+    )
 
     for name in (
         "unsloth/Qwen3.5-2B",
@@ -903,22 +909,21 @@ def test_hook_skips_when_import_utils_unavailable(monkeypatch):
 
 
 def test_substring_fallback_unchanged_when_hook_skipped(monkeypatch):
-    """With the hook disabled, the orchestration falls back to the
-    substring path. Confirm _ensure_flash_linear_attention(model_name)
-    still gates on model name as before."""
+    """Hook disabled -> legacy gate falls back to auto-discovered model types."""
     install_mock = mock.Mock()
     monkeypatch.setattr(
         worker, "_ensure_flash_linear_attention_unconditional", install_mock
     )
+    monkeypatch.setattr(
+        worker, "_discover_fla_model_types", lambda: frozenset({"qwen3_5"})
+    )
     monkeypatch.setenv(worker._FAST_PATH_HOOKS_SKIP_ENV, "1")
 
-    # Qwen3.5 model triggers install.
     worker._ensure_flash_linear_attention(
         event_queue = [], model_name = "unsloth/Qwen3.5-2B"
     )
     assert install_mock.call_count == 1
 
-    # Llama doesn't.
     worker._ensure_flash_linear_attention(
         event_queue = [], model_name = "meta-llama/Llama-3.1-8B"
     )
@@ -1324,3 +1329,154 @@ def test_install_fast_path_hooks_does_not_set_fla_tilelang_on_cuda(monkeypatch):
     )
 
     assert _os.environ.get("FLA_TILELANG") is None
+
+
+# ───────────────────────────────────────────────────────────────────
+# Auto-discovery of FLA model_types from the installed transformers
+# ───────────────────────────────────────────────────────────────────
+
+
+def _make_fake_transformers_tree(tmp_path, fla_types: list[str], non_fla_types: list[str]):
+    """Lay out a tmp dir as `transformers/models/{type}/modeling_{type}.py`."""
+    pkg = tmp_path / "transformers"
+    models = pkg / "models"
+    models.mkdir(parents = True)
+    (pkg / "__init__.py").write_text("")
+    for t in fla_types:
+        d = models / t
+        d.mkdir()
+        (d / f"modeling_{t}.py").write_text(
+            "from ...utils.import_utils import is_flash_linear_attention_available\n"
+            "if is_flash_linear_attention_available():\n"
+            "    from fla.modules import FusedRMSNormGated\n"
+            "    from fla.ops.gated_delta_rule import chunk_gated_delta_rule\n"
+        )
+    for t in non_fla_types:
+        d = models / t
+        d.mkdir()
+        (d / f"modeling_{t}.py").write_text("class Foo: pass\n")
+    return pkg
+
+
+def _reset_fla_cache(monkeypatch):
+    monkeypatch.setattr(worker, "_TRANSFORMERS_FLA_MODEL_TYPES_CACHE", None)
+
+
+def test_discover_fla_model_types_returns_only_fla_users(tmp_path, monkeypatch):
+    pkg = _make_fake_transformers_tree(
+        tmp_path,
+        fla_types = ["qwen3_5", "qwen3_5_moe", "qwen3_next"],
+        non_fla_types = ["llama", "gpt2", "mistral"],
+    )
+    fake = mock.MagicMock(__file__ = str(pkg / "__init__.py"))
+    monkeypatch.setitem(sys.modules, "transformers", fake)
+    _reset_fla_cache(monkeypatch)
+
+    result = worker._discover_fla_model_types()
+    assert result == frozenset({"qwen3_5", "qwen3_5_moe", "qwen3_next"})
+    assert "llama" not in result
+    assert "gpt2" not in result
+
+
+def test_discover_fla_model_types_caches_across_calls(tmp_path, monkeypatch):
+    pkg = _make_fake_transformers_tree(
+        tmp_path, fla_types = ["qwen3_5"], non_fla_types = []
+    )
+    fake = mock.MagicMock(__file__ = str(pkg / "__init__.py"))
+    monkeypatch.setitem(sys.modules, "transformers", fake)
+    _reset_fla_cache(monkeypatch)
+
+    from pathlib import Path as _Path
+
+    read_calls = [0]
+    real_read = _Path.read_text
+
+    def counting_read(self, *a, **kw):
+        read_calls[0] += 1
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(_Path, "read_text", counting_read)
+
+    first = worker._discover_fla_model_types()
+    after_first = read_calls[0]
+    second = worker._discover_fla_model_types()
+
+    assert first == second
+    assert read_calls[0] == after_first  # cache hit: no extra disk reads
+
+
+def test_discover_fla_model_types_handles_missing_transformers(monkeypatch):
+    _reset_fla_cache(monkeypatch)
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals = None, locals = None, fromlist = (), level = 0):
+        if name == "transformers":
+            raise ImportError("transformers not installed")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    result = worker._discover_fla_model_types()
+    assert result == frozenset()
+
+
+def test_discover_fla_model_types_handles_unreadable_file(tmp_path, monkeypatch):
+    pkg = _make_fake_transformers_tree(
+        tmp_path, fla_types = ["qwen3_5"], non_fla_types = []
+    )
+    fake = mock.MagicMock(__file__ = str(pkg / "__init__.py"))
+    monkeypatch.setitem(sys.modules, "transformers", fake)
+    _reset_fla_cache(monkeypatch)
+
+    from pathlib import Path as _Path
+
+    real_read = _Path.read_text
+
+    def boom_read(self, *a, **kw):
+        if "modeling_qwen3_5.py" in str(self):
+            raise OSError("permission denied")
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(_Path, "read_text", boom_read)
+    result = worker._discover_fla_model_types()
+    assert result == frozenset()  # unreadable file simply doesn't contribute
+
+
+def test_model_wants_tilelang_handles_real_repo_names(monkeypatch):
+    monkeypatch.setattr(
+        worker,
+        "_discover_fla_model_types",
+        lambda: frozenset({"qwen3_5", "qwen3_5_moe", "qwen3_next"}),
+    )
+    cases = [
+        ("unsloth/Qwen3.5-2B", True),
+        ("Qwen/Qwen3.5-MoE-A3B", True),
+        ("mlx-community/qwen3-next-80b", True),
+        ("unsloth/qwen3_5_moe_a3b_lora", True),
+        ("meta-llama/Llama-3.1-8B", False),
+        ("nvidia/Nemotron-H-4B", False),
+        ("mistralai/Mistral-7B-v0.3", False),
+        ("", False),
+    ]
+    for name, expected in cases:
+        assert worker._model_wants_tilelang(name) is expected, name
+
+
+def test_model_wants_tilelang_empty_when_transformers_has_no_fla(monkeypatch):
+    monkeypatch.setattr(worker, "_discover_fla_model_types", lambda: frozenset())
+    assert worker._model_wants_tilelang("unsloth/Qwen3.5-2B") is False
+    assert worker._model_wants_tilelang("meta-llama/Llama-3.1-8B") is False
+
+
+def test_model_wants_tilelang_normalizes_separators(monkeypatch):
+    monkeypatch.setattr(
+        worker, "_discover_fla_model_types", lambda: frozenset({"qwen3_next"})
+    )
+    for variant in (
+        "qwen3-next",
+        "Qwen3.Next",
+        "Qwen/Qwen3 Next",
+        "anyone/qwen3_next",
+        "qwen3.next-80b",
+    ):
+        assert worker._model_wants_tilelang(variant) is True, variant

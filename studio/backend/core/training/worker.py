@@ -619,6 +619,7 @@ def _torch_has_hip() -> bool:
     """
     try:
         import torch as _torch
+
         return getattr(_torch.version, "hip", None) is not None
     except Exception:
         return False

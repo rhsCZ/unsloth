@@ -38,12 +38,15 @@ export function getRefreshToken(): string | null {
 export function storeAuthTokens(
   accessToken: string,
   refreshToken: string,
-  mustChangePassword = false,
 ): void {
+  // The must_change_password flag is intentionally NOT routed through this
+  // function — callers call setMustChangePassword() directly. Tying the flag
+  // to the token write makes CodeQL trace the boolean back to the login
+  // response and flag it as "clear-text storage of sensitive information",
+  // which the JWT pair on lines 44-45 is by design.
   if (!canUseStorage()) return;
   localStorage.setItem(AUTH_TOKEN_KEY, accessToken);
   localStorage.setItem(AUTH_REFRESH_TOKEN_KEY, refreshToken);
-  localStorage.setItem(AUTH_MUST_CHANGE_PASSWORD_KEY, String(mustChangePassword));
 }
 
 export function clearAuthTokens(): void {

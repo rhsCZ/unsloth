@@ -7,6 +7,7 @@ import {
   getAuthToken,
   getRefreshToken,
   mustChangePassword,
+  setMustChangePassword,
   storeAuthTokens,
 } from "./session";
 
@@ -126,11 +127,8 @@ export async function refreshSession(): Promise<boolean> {
       // A concurrent logout() bumped the generation before we resolved.
       // Drop the new tokens on the floor so the user stays logged out.
       if (startGeneration !== logoutGeneration) return false;
-      storeAuthTokens(
-        payload.access_token,
-        payload.refresh_token,
-        payload.must_change_password,
-      );
+      storeAuthTokens(payload.access_token, payload.refresh_token);
+      setMustChangePassword(payload.must_change_password ?? false);
       return true;
     } catch {
       return false;

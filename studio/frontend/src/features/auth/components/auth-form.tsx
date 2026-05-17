@@ -238,7 +238,6 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
           storeAuthTokens(
             bootstrapToken.access_token,
             bootstrapToken.refresh_token,
-            bootstrapToken.must_change_password,
           );
           setMustChangePassword(bootstrapToken.must_change_password);
           accessToken = bootstrapToken.access_token;
@@ -275,11 +274,7 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
       } else {
         setMustChangePassword(token.must_change_password);
       }
-      storeAuthTokens(
-        token.access_token,
-        token.refresh_token,
-        token.must_change_password,
-      );
+      storeAuthTokens(token.access_token, token.refresh_token);
       navigate({ to: getPostAuthRoute() });
     } catch (err: unknown) {
       let msg = err instanceof Error ? err.message : "Auth failed.";

@@ -328,7 +328,9 @@ def cmd_train(args) -> int:
         )
         if k in train_result
     }
-    assert len(losses_per_step) == 20, f"expected 20 logged steps, got {losses_per_step}"
+    assert (
+        len(losses_per_step) == 20
+    ), f"expected 20 logged steps, got {losses_per_step}"
     for i, l in enumerate(losses_per_step):
         assert math.isfinite(l) and 0 < l < 50, f"step {i+1} loss bad: {l}"
     assert (

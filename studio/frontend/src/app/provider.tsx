@@ -291,7 +291,7 @@ export function AppProvider({ children }: AppProviderProps) {
       <TauriWrapper>
         {children}
       </TauriWrapper>
-      <Toaster position="top-right" visibleToasts={2} expand={true} />
+      <Toaster position="bottom-right" visibleToasts={2} expand={true} />
     </ThemeProvider>
   );
 }

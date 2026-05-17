@@ -336,7 +336,12 @@ def cmd_train(args) -> int:
         len(losses_per_step) == 30
     ), f"expected 30 logged steps, got {losses_per_step}"
     for i, l in enumerate(losses_per_step):
-        assert math.isfinite(l) and 0 < l < 50, f"step {i+1} loss bad: {l}"
+        # Allow exact 0.0 -- with this fixture (single repeated train row,
+        # lr=1e-3, bs=2, grad_accum=3) the LoRA reliably memorizes by step
+        # ~10 and the per-step loss underflows to 0.0 in fp16 from then on.
+        # That's the success signal, not a bug; the load-bearing gate is
+        # post_train_loss < 0.1 below.
+        assert math.isfinite(l) and 0 <= l < 50, f"step {i+1} loss bad: {l}"
     assert (
         losses_per_step[-1] < losses_per_step[0] * 1.1
     ), f"loss diverged: {losses_per_step[0]} -> {losses_per_step[-1]}"

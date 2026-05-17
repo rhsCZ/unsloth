@@ -80,6 +80,16 @@ def is_gemma4_moe_4bit_grouped_cached_enabled() -> bool:
     return os.environ.get("UNSLOTH_GEMMA4_MOE_4BIT_GROUPED_CACHE", "0") == "1"
 
 
+def is_gemma4_moe_4bit_grouped_pt_dequant_enabled() -> bool:
+    """Opt-in via UNSLOTH_GEMMA4_MOE_4BIT_GROUPED_PT_DEQUANT=1. Layered on
+    grouped+active_only. Replaces bnb.functional.dequantize_4bit with a
+    pure-tensor NF4 dequant so torch.compile can fuse the unpack + codebook
+    lookup + stack + grouped_mm into one Inductor graph. Per-block absmax is
+    pre-dequantized at swap time and cached on each Linear4bit, so the
+    per-forward path is bnb-free."""
+    return os.environ.get("UNSLOTH_GEMMA4_MOE_4BIT_GROUPED_PT_DEQUANT", "0") == "1"
+
+
 def is_gemma4_moe_4bit_grouped_static_bf16_enabled() -> bool:
     """Opt-in via UNSLOTH_GEMMA4_MOE_4BIT_GROUPED_STATIC_BF16=1. Dequant every
     expert ONCE on the first forward and keep the fused (E, 2I, H) / (E, H, I)
@@ -130,7 +140,99 @@ def _per_expert_forward(
     return final_hidden_states
 
 
+# NF4 codebook (16 entries, bnb convention). Used by the pure-PyTorch dequant
+# path which torch.compile can fuse with the surrounding stack + grouped_mm.
+_NF4_CODES = torch.tensor(
+    [
+        -1.0,
+        -0.6961928009986877,
+        -0.5250730514526367,
+        -0.39491748809814453,
+        -0.28444138169288635,
+        -0.18477343022823334,
+        -0.09105003625154495,
+        0.0,
+        0.07958029955625534,
+        0.16093020141124725,
+        0.24611230194568634,
+        0.33791524171829224,
+        0.44070982933044434,
+        0.5626170039176941,
+        0.7229568362236023,
+        1.0,
+    ],
+    dtype = torch.float32,
+)
+
+_COMPILED_PT_DEQUANT_STACK = None
 _COMPILED_DEQUANT_STACK = None
+
+
+def _ensure_pt_dequant_state(layer):
+    """Cache the dequantized absmax + codebook on the layer so the per-forward
+    path needs no bnb calls. Idempotent. Called at swap time."""
+    if getattr(layer, "_unsloth_pt_dequant_ready", False):
+        return
+    from bitsandbytes.functional import dequantize_blockwise
+    qs = layer.weight.quant_state
+    if qs.nested:
+        absmax_fp32 = dequantize_blockwise(qs.absmax, qs.state2)
+        absmax_fp32 = (absmax_fp32 + qs.offset).to(torch.float32)
+    else:
+        absmax_fp32 = qs.absmax.to(torch.float32)
+    layer._unsloth_pt_absmax_fp32 = absmax_fp32.contiguous()
+    layer._unsloth_pt_blocksize = qs.blocksize
+    layer._unsloth_pt_shape = tuple(qs.shape)
+    layer._unsloth_pt_dtype = qs.dtype
+    layer._unsloth_pt_dequant_ready = True
+
+
+def _pt_dequant_one(packed_uint8, absmax_fp32, blocksize, shape, dtype, codes):
+    """Pure-PyTorch NF4 dequant of one expert weight. Bit-exact vs bnb.
+    Pure tensor ops -> torch.compile-friendly."""
+    packed = packed_uint8.reshape(-1)
+    high = (packed >> 4) & 0xF
+    low = packed & 0xF
+    indices = torch.stack([high, low], dim = -1).reshape(-1).to(torch.long)
+    values = codes[indices]  # fp32
+    n_elements = values.numel()
+    n_blocks = (n_elements + blocksize - 1) // blocksize
+    values = values.view(n_blocks, blocksize) * absmax_fp32.view(-1, 1)
+    target = shape[0] * shape[1]
+    return values.reshape(-1)[: target].view(shape).to(dtype)
+
+
+def _pt_dequant_stack_subset(layers, indices_cpu, codes):
+    """Pure-PyTorch dequant of a subset of experts and stack into (E_active, out, in)."""
+    return torch.stack(
+        [
+            _pt_dequant_one(
+                layers[i].weight.data,
+                layers[i]._unsloth_pt_absmax_fp32,
+                layers[i]._unsloth_pt_blocksize,
+                layers[i]._unsloth_pt_shape,
+                layers[i]._unsloth_pt_dtype,
+                codes,
+            )
+            for i in indices_cpu
+        ],
+        dim = 0,
+    )
+
+
+def _get_compiled_pt_dequant_stack():
+    """Lazy-compile the pure-PT dequant+stack helper. Re-used across forwards."""
+    global _COMPILED_PT_DEQUANT_STACK
+    if _COMPILED_PT_DEQUANT_STACK is None:
+        _COMPILED_PT_DEQUANT_STACK = torch.compile(
+            _pt_dequant_stack_subset,
+            dynamic = True,
+            fullgraph = False,
+        )
+    return _COMPILED_PT_DEQUANT_STACK
+
+
+
 
 
 def _dequant_stack(layers):
@@ -276,6 +378,47 @@ def _cached_dequant(module, attr_name, expert_idx, layer):
     while len(cache) > cap:
         cache.popitem(last = False)
     return w
+
+
+def _grouped_mm_forward_4bit_pt_compiled(
+    self,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Active-only grouped forward using pure-PyTorch NF4 dequant + torch.compile.
+    Pre-cached per-expert absmax means the per-forward path is bnb-free, so
+    Inductor can fuse unpack + codebook lookup + stack into one Triton
+    kernel."""
+    from unsloth_zoo.temporary_patches.moe_utils import (
+        forward_native_grouped_mm,
+    )
+
+    flat = top_k_index.reshape(-1)
+    active_experts, inverse = torch.unique(flat, return_inverse = True)
+    active_cpu = active_experts.tolist()
+    n_active = len(active_cpu)
+
+    codes = _NF4_CODES.to(hidden_states.device)
+    dequant_fn = _get_compiled_pt_dequant_stack()
+
+    gate_up = dequant_fn(self.gate_up_proj_4bit, active_cpu, codes)
+    down = dequant_fn(self.down_proj_4bit, active_cpu, codes)
+
+    compact_top_k = inverse.view_as(top_k_index)
+
+    saved_n_experts = self.num_experts
+    self.num_experts = n_active
+    self.gate_up_proj = nn.Parameter(gate_up, requires_grad = False)
+    self.down_proj = nn.Parameter(down, requires_grad = False)
+    try:
+        return forward_native_grouped_mm(
+            self, hidden_states, compact_top_k, top_k_weights,
+        )
+    finally:
+        del self.gate_up_proj
+        del self.down_proj
+        self.num_experts = saved_n_experts
 
 
 def _grouped_mm_forward_4bit_static_bf16(
@@ -470,6 +613,13 @@ def swap_gemma4_experts_to_per_expert_linear4bit(
             and is_gemma4_moe_4bit_grouped_static_bf16_enabled()
         ):
             _fwd = _grouped_mm_forward_4bit_static_bf16
+        elif (
+            is_gemma4_moe_4bit_grouped_enabled()
+            and is_gemma4_moe_4bit_grouped_pt_dequant_enabled()
+        ):
+            for L in list(module.gate_up_proj_4bit) + list(module.down_proj_4bit):
+                _ensure_pt_dequant_state(L)
+            _fwd = _grouped_mm_forward_4bit_pt_compiled
         elif (
             is_gemma4_moe_4bit_grouped_enabled()
             and is_gemma4_moe_4bit_grouped_active_only_enabled()

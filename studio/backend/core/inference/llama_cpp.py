@@ -1774,6 +1774,75 @@ class LlamaCppBackend:
             except Exception as e:
                 logger.warning(f"Could not list repo files: {e}")
 
+            # Offline fallback: resolve variant -> filename from the local
+            # HF cache. The repo-name + variant heuristic below is wrong
+            # when the file inside the repo doesn't echo the repo name
+            # (e.g. repo `unsloth/Qwen3.6-27B-MTP-GGUF` contains a file
+            # `Qwen3.6-27B-UD-Q4_K_XL.gguf` with no "MTP").
+            if not gguf_filename:
+                try:
+                    from huggingface_hub import constants as hf_constants
+                    cache_root = Path(hf_constants.HF_HUB_CACHE)
+                    target = f"models--{hf_repo.replace('/', '--')}".lower()
+                    repo_dir = next(
+                        (
+                            e for e in cache_root.iterdir()
+                            if e.is_dir() and e.name.lower() == target
+                        ),
+                        None,
+                    )
+                    if repo_dir and (repo_dir / "snapshots").is_dir():
+                        boundary = re.compile(
+                            r"(?<![a-zA-Z0-9])"
+                            + re.escape(hf_variant.lower())
+                            + r"(?![a-zA-Z0-9])"
+                        )
+                        snap_dirs = sorted(
+                            (
+                                s for s in (repo_dir / "snapshots").iterdir()
+                                if s.is_dir()
+                            ),
+                            key = lambda s: s.stat().st_mtime,
+                            reverse = True,
+                        )
+                        for snap in snap_dirs:
+                            matches = sorted(
+                                p.relative_to(snap).as_posix()
+                                for p in snap.rglob("*.gguf")
+                                if "mmproj" not in p.name.lower()
+                                and boundary.search(p.name.lower())
+                            )
+                            if matches:
+                                gguf_filename = matches[0]
+                                m = _SHARD_FULL_RE.match(
+                                    Path(gguf_filename).name
+                                )
+                                if m:
+                                    prefix = m.group(1)
+                                    total = m.group(3)
+                                    sibling_pat = re.compile(
+                                        r"^"
+                                        + re.escape(prefix)
+                                        + r"-\d{5}-of-"
+                                        + re.escape(total)
+                                        + r"\.gguf$"
+                                    )
+                                    gguf_extra_shards = [
+                                        f
+                                        for f in matches[1:]
+                                        if sibling_pat.match(Path(f).name)
+                                    ]
+                                logger.info(
+                                    "Resolved variant %s -> %s from local HF cache",
+                                    hf_variant,
+                                    gguf_filename,
+                                )
+                                break
+                except Exception as e:
+                    logger.debug(
+                        f"Offline cache lookup for variant failed: {e}"
+                    )
+
             if not gguf_filename:
                 repo_name = hf_repo.split("/")[-1].replace("-GGUF", "")
                 gguf_filename = f"{repo_name}-{hf_variant}.gguf"
@@ -1781,8 +1850,6 @@ class LlamaCppBackend:
         # Check disk space and fall back to a smaller variant if needed
         all_gguf_files = [gguf_filename] + gguf_extra_shards
         try:
-            import os
-
             from huggingface_hub import get_paths_info, try_to_load_from_cache
 
             path_infos = list(get_paths_info(hf_repo, all_gguf_files, token = hf_token))
@@ -1984,6 +2051,24 @@ class LlamaCppBackend:
         Returns True if server started and health check passed.
         """
         self._cancel_event.clear()
+
+        # Offline auto-detect: if huggingface.co won't resolve, every
+        # hf_hub_download below would burn ~25s on retries before
+        # falling back to cache. Setting HF_HUB_OFFLINE=1 up front
+        # makes the cache hit instant.
+        if hf_repo and "HF_HUB_OFFLINE" not in os.environ:
+            import socket as _socket
+            try:
+                _socket.setdefaulttimeout(2.0)
+                _socket.gethostbyname("huggingface.co")
+            except Exception:
+                os.environ["HF_HUB_OFFLINE"] = "1"
+                os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+                logger.warning(
+                    "huggingface.co unreachable -- enabling HF_HUB_OFFLINE for this process."
+                )
+            finally:
+                _socket.setdefaulttimeout(None)
 
         # ── Phase 1: kill old process (under lock, fast) ──────────
         with self._lock:

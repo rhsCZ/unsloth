@@ -1283,6 +1283,43 @@ def _extract_quant_label(filename: str) -> str:
     return stem.split("-")[-1]
 
 
+def _list_gguf_variants_from_hf_cache(
+    repo_id: str,
+) -> Optional[tuple[list[GgufVariantInfo], bool]]:
+    """Variants from the local HF cache snapshot, or None if not cached."""
+    try:
+        from huggingface_hub import constants as hf_constants
+    except Exception:
+        return None
+
+    cache_dir = Path(hf_constants.HF_HUB_CACHE)
+    if not cache_dir.is_dir():
+        return None
+
+    target = f"models--{repo_id.replace('/', '--')}".lower()
+    repo_dir: Optional[Path] = None
+    for entry in cache_dir.iterdir():
+        if entry.is_dir() and entry.name.lower() == target:
+            repo_dir = entry
+            break
+    if repo_dir is None:
+        return None
+
+    snapshots = repo_dir / "snapshots"
+    if not snapshots.is_dir():
+        return None
+
+    snap_dirs = [s for s in snapshots.iterdir() if s.is_dir()]
+    if not snap_dirs:
+        return None
+    snap_dirs.sort(key = lambda s: s.stat().st_mtime, reverse = True)
+    for snap in snap_dirs:
+        variants, has_vision = list_local_gguf_variants(str(snap))
+        if variants or has_vision:
+            return variants, has_vision
+    return None
+
+
 def list_gguf_variants(
     repo_id: str,
     hf_token: Optional[str] = None,
@@ -1298,7 +1335,29 @@ def list_gguf_variants(
     """
     from huggingface_hub import model_info as hf_model_info
 
-    info = hf_model_info(repo_id, token = hf_token, files_metadata = True)
+    # Offline mode: serve from cache, skip the API call entirely.
+    offline = (
+        os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes")
+        or os.environ.get("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes")
+    )
+    if offline:
+        cached = _list_gguf_variants_from_hf_cache(repo_id)
+        if cached is not None:
+            return cached
+
+    try:
+        info = hf_model_info(repo_id, token = hf_token, files_metadata = True)
+    except Exception as e:
+        # Network unreachable: use the local snapshot if fully downloaded.
+        cached = _list_gguf_variants_from_hf_cache(repo_id)
+        if cached is not None:
+            logger.warning(
+                "HF API unreachable for %s (%s); using local cache snapshot.",
+                repo_id,
+                e.__class__.__name__,
+            )
+            return cached
+        raise
     variants: list[GgufVariantInfo] = []
     has_vision = False
 
@@ -1439,6 +1498,42 @@ def _find_local_gguf_by_variant(directory: str, variant: str) -> Optional[str]:
     return None
 
 
+def _detect_gguf_from_hf_cache(repo_id: str) -> Optional[str]:
+    """Best GGUF filename for *repo_id* from the local HF cache, or None."""
+    try:
+        from huggingface_hub import constants as hf_constants
+    except Exception:
+        return None
+
+    cache_dir = Path(hf_constants.HF_HUB_CACHE)
+    if not cache_dir.is_dir():
+        return None
+
+    target = f"models--{repo_id.replace('/', '--')}".lower()
+    repo_dir: Optional[Path] = None
+    for entry in cache_dir.iterdir():
+        if entry.is_dir() and entry.name.lower() == target:
+            repo_dir = entry
+            break
+    if repo_dir is None:
+        return None
+
+    snapshots = repo_dir / "snapshots"
+    if not snapshots.is_dir():
+        return None
+
+    snap_dirs = [s for s in snapshots.iterdir() if s.is_dir()]
+    snap_dirs.sort(key = lambda s: s.stat().st_mtime, reverse = True)
+    for snap in snap_dirs:
+        rel_files = [
+            f.relative_to(snap).as_posix()
+            for f in _iter_gguf_files(snap, recursive = True)
+        ]
+        if rel_files:
+            return _pick_best_gguf(rel_files)
+    return None
+
+
 def detect_gguf_model_remote(
     repo_id: str,
     hf_token: Optional[str] = None,
@@ -1455,9 +1550,22 @@ def detect_gguf_model_remote(
     through to the MLX backend, which then fails opening a non-existent
     config.json on the GGUF-only repo. Three attempts with 1s/2s/4s
     backoff covers the typical free-runner HF Hub flakiness.
+
+    When fully offline, falls back to scanning the local HF cache so
+    a model that has been downloaded already is still recognized as
+    GGUF (and therefore routed to llama-server, not MLX/Unsloth).
     """
     import time
     from huggingface_hub import model_info as hf_model_info
+
+    offline = (
+        os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes")
+        or os.environ.get("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes")
+    )
+    if offline:
+        cached = _detect_gguf_from_hf_cache(repo_id)
+        if cached is not None:
+            return cached
 
     last_err: Optional[Exception] = None
     for attempt in range(3):
@@ -1479,6 +1587,18 @@ def detect_gguf_model_remote(
                 return None
             if attempt < 2:
                 time.sleep(2**attempt)
+
+    # Every attempt failed. Fall back to local cache so an offline user
+    # with the model already on disk still gets the GGUF route.
+    cached = _detect_gguf_from_hf_cache(repo_id)
+    if cached is not None:
+        logger.warning(
+            "HF API unreachable for '%s' (%s); using local cache to detect GGUF.",
+            repo_id,
+            type(last_err).__name__ if last_err else "unknown",
+        )
+        return cached
+
     logger.warning(
         f"Could not check GGUF files for '{repo_id}' after 3 attempts: {last_err}"
     )

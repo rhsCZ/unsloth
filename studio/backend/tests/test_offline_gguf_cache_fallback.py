@@ -53,34 +53,46 @@ sys.modules.setdefault("loggers", _loggers_stub)
 _structlog_stub = _types.ModuleType("structlog")
 sys.modules.setdefault("structlog", _structlog_stub)
 
-_httpx_stub = _types.ModuleType("httpx")
-for _exc_name in (
-    "ConnectError",
-    "TimeoutException",
-    "ReadTimeout",
-    "ReadError",
-    "RemoteProtocolError",
-    "CloseError",
-):
-    setattr(_httpx_stub, _exc_name, type(_exc_name, (Exception,), {}))
+# Prefer real httpx if installed (CI always installs it). Falling back to
+# a stub when httpx is genuinely missing keeps the test runnable in
+# trimmed-down dev environments. The stub set has to track every attr
+# huggingface_hub touches at import time, so when in doubt, install httpx.
+try:
+    import httpx  # noqa: F401
+except ImportError:
+    _httpx_stub = _types.ModuleType("httpx")
+    for _exc_name in (
+        "ConnectError",
+        "TimeoutException",
+        "ReadTimeout",
+        "ReadError",
+        "RemoteProtocolError",
+        "CloseError",
+        "HTTPError",
+        "RequestError",
+        "HTTPStatusError",
+    ):
+        setattr(_httpx_stub, _exc_name, type(_exc_name, (Exception,), {}))
+    _httpx_stub.Response = type("Response", (), {})
+    _httpx_stub.Request = type("Request", (), {})
 
 
-class _FakeTimeout:
-    def __init__(self, *a, **kw):
-        pass
+    class _FakeTimeout:
+        def __init__(self, *a, **kw):
+            pass
 
 
-_httpx_stub.Timeout = _FakeTimeout
-_httpx_stub.Client = type(
-    "Client",
-    (),
-    {
-        "__init__": lambda self, **kw: None,
-        "__enter__": lambda self: self,
-        "__exit__": lambda self, *a: None,
-    },
-)
-sys.modules.setdefault("httpx", _httpx_stub)
+    _httpx_stub.Timeout = _FakeTimeout
+    _httpx_stub.Client = type(
+        "Client",
+        (),
+        {
+            "__init__": lambda self, **kw: None,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: None,
+        },
+    )
+    sys.modules.setdefault("httpx", _httpx_stub)
 
 
 from huggingface_hub import constants as hf_constants

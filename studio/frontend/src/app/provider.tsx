@@ -295,9 +295,8 @@ export function AppProvider({ children }: AppProviderProps) {
         position="top-right"
         visibleToasts={2}
         expand={true}
-        closeButton
-        // Sit at the header line, shifted left so toasts don't overlap the
-        // chat parameters / settings buttons on the right edge.
+        closeButton={true}
+        // Clear the chat header buttons on the right.
         offset={{ top: 12, right: 64 }}
       />
     </ThemeProvider>

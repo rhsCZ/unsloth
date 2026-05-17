@@ -983,7 +983,7 @@ export function useChatModelRuntime() {
             toast.success(`${displayName} loaded`, {
               id: toastId,
               description: undefined,
-              duration: 2000,
+              duration: 8000,
             });
           }
           notifyNative({
@@ -1002,7 +1002,7 @@ export function useChatModelRuntime() {
               toast.error(message, {
                 id: toastId,
                 description: undefined,
-                duration: 5000,
+                duration: 8000,
               });
             }
             notifyNative({

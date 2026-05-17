@@ -1131,3 +1131,9 @@
 	animation: none;
 	mix-blend-mode: normal;
 }
+
+/* Sonner hardcodes `top: 0` on the close button; pin it 8px from the top
+   inside the toast. Paired with --toast-close-button-end in sonner.tsx. */
+[data-sonner-toast][data-styled="true"] [data-close-button] {
+	top: 8px !important;
+}

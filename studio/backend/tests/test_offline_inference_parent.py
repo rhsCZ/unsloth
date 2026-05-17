@@ -41,21 +41,32 @@ _loggers_stub.get_logger = lambda name: __import__("logging").getLogger(name)
 sys.modules.setdefault("loggers", _loggers_stub)
 sys.modules.setdefault("structlog", _types.ModuleType("structlog"))
 _hx = _types.ModuleType("httpx")
-for _exc in ("ConnectError", "TimeoutException", "ReadTimeout", "ReadError",
-             "RemoteProtocolError", "CloseError"):
+for _exc in (
+    "ConnectError",
+    "TimeoutException",
+    "ReadTimeout",
+    "ReadError",
+    "RemoteProtocolError",
+    "CloseError",
+):
     setattr(_hx, _exc, type(_exc, (Exception,), {}))
 
 
 class _FakeTimeout:
-    def __init__(self, *a, **k): pass
+    def __init__(self, *a, **k):
+        pass
 
 
 _hx.Timeout = _FakeTimeout
-_hx.Client = type("Client", (), {
-    "__init__": lambda s, **k: None,
-    "__enter__": lambda s: s,
-    "__exit__": lambda s, *a: None,
-})
+_hx.Client = type(
+    "Client",
+    (),
+    {
+        "__init__": lambda s, **k: None,
+        "__enter__": lambda s: s,
+        "__exit__": lambda s, *a: None,
+    },
+)
 sys.modules.setdefault("httpx", _hx)
 
 
@@ -96,7 +107,10 @@ class TestEnvOffline:
 
 class TestTransformersVersionOfflineShortCircuits:
     def test_tokenizer_config_skips_urllib_when_offline(
-        self, monkeypatch, clean_offline_env, tmp_path,
+        self,
+        monkeypatch,
+        clean_offline_env,
+        tmp_path,
     ):
         # No local config, env is offline -> must NOT call urlopen.
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -110,7 +124,10 @@ class TestTransformersVersionOfflineShortCircuits:
             assert _check_tokenizer_config_needs_v5(unique) is False
 
     def test_config_550_skips_urllib_when_offline(
-        self, monkeypatch, clean_offline_env, tmp_path,
+        self,
+        monkeypatch,
+        clean_offline_env,
+        tmp_path,
     ):
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
         unique = f"unsloth/never-cached-{tmp_path.name}-cfg"
@@ -128,7 +145,9 @@ class TestLoraDetectOfflineShortCircuit:
     ~25s waiting for the HF API to time out before spawning the worker."""
 
     def test_hf_model_info_not_called_when_offline(
-        self, monkeypatch, clean_offline_env,
+        self,
+        monkeypatch,
+        clean_offline_env,
     ):
         from utils.models.model_config import ModelConfig
 

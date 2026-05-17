@@ -1131,9 +1131,3 @@
 	animation: none;
 	mix-blend-mode: normal;
 }
-
-/* Sonner hardcodes `top: 0` on the close button; vertically center it inside
-   the toast box. Paired with --toast-close-button-transform in sonner.tsx. */
-[data-sonner-toast][data-styled="true"] [data-close-button] {
-	top: 50% !important;
-}

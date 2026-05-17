@@ -422,9 +422,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> bool:
     # Probe once; reuse the result for short-circuit AND
     # --force-reinstall decision so call count stays stable.
     already_importable = _flash_linear_attention_importable()
-    if already_importable and _flash_linear_attention_current(
-        already_importable=True
-    ):
+    if already_importable and _flash_linear_attention_current(already_importable = True):
         logger.info("flash-linear-attention already importable at the pinned version")
         return True
 
@@ -632,10 +630,10 @@ def _run_pip(cmd: list[str], event_queue: Any, label: str) -> bool:
     try:
         result = _sp.run(
             cmd,
-            stdout=_sp.PIPE,
-            stderr=_sp.STDOUT,
-            text=True,
-            timeout=_TILELANG_INSTALL_TIMEOUT_S,
+            stdout = _sp.PIPE,
+            stderr = _sp.STDOUT,
+            text = True,
+            timeout = _TILELANG_INSTALL_TIMEOUT_S,
         )
     except _sp.TimeoutExpired:
         logger.warning("%s install timed out; continuing", label)
@@ -645,9 +643,7 @@ def _run_pip(cmd: list[str], event_queue: Any, label: str) -> bool:
         logger.warning(
             "%s install failed (continuing without it):\n%s", label, result.stdout
         )
-        _send_status(
-            event_queue, f"{label} install failed; continuing"
-        )
+        _send_status(event_queue, f"{label} install failed; continuing")
         return False
     return True
 
@@ -824,9 +820,7 @@ def _rebind_in_already_imported_modules(
                 setattr(mod, attr_name, new_obj)
                 count += 1
             except Exception as exc:
-                logger.debug(
-                    "Could not rebind %s in %s: %s", attr_name, mod_name, exc
-                )
+                logger.debug("Could not rebind %s in %s: %s", attr_name, mod_name, exc)
     return count
 
 
@@ -967,14 +961,14 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
     def _causal_conv1d_install(eq: Any) -> bool:
         # Reuse the existing wheel-first installer.
         ok = _install_package_wheel_first(
-            event_queue=eq,
-            import_name="causal_conv1d",
-            display_name="causal-conv1d",
-            pypi_name="causal-conv1d",
-            pypi_version=_CAUSAL_CONV1D_PACKAGE_VERSION,
-            filename_prefix="causal_conv1d",
-            release_tag=_CAUSAL_CONV1D_RELEASE_TAG,
-            release_base_url=(
+            event_queue = eq,
+            import_name = "causal_conv1d",
+            display_name = "causal-conv1d",
+            pypi_name = "causal-conv1d",
+            pypi_version = _CAUSAL_CONV1D_PACKAGE_VERSION,
+            filename_prefix = "causal_conv1d",
+            release_tag = _CAUSAL_CONV1D_RELEASE_TAG,
+            release_base_url = (
                 "https://github.com/Dao-AILab/causal-conv1d/releases/download"
             ),
         )
@@ -999,7 +993,7 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
         wrapped = _make_wrapper(original, install_fn, gate_name, post_fn)
         setattr(_iu, gate_name, wrapped)
         rebound = _rebind_in_already_imported_modules(
-            attr_name=gate_name, old_obj=original, new_obj=wrapped
+            attr_name = gate_name, old_obj = original, new_obj = wrapped
         )
         rebound_total += rebound
         logger.info(

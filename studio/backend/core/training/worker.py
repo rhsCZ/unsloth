@@ -345,8 +345,45 @@ def _flash_linear_attention_importable() -> bool:
         return False
 
 
-def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
+def _flash_linear_attention_current(already_importable: bool | None = None) -> bool:
+    """True iff FLA is importable AND meets the PR's pinned versions.
+
+    A user with an older `flash-linear-attention` (e.g. 0.4.x) on the
+    venv would import fine but lack the gated_delta_rule kernels we
+    expect. Version-checking before short-circuiting forces a reinstall
+    to the pin.
+
+    `already_importable=True` lets the caller skip the import probe
+    when it has just performed it (call-count stability for tests).
+    """
+    if already_importable is None:
+        already_importable = _flash_linear_attention_importable()
+    if not already_importable:
+        return False
+    try:
+        from importlib.metadata import version as _pkg_version
+        from packaging.version import Version
+
+        fla_v = Version(_pkg_version("flash-linear-attention"))
+        core_v = Version(_pkg_version("fla-core"))
+        return fla_v >= Version(_FLA_PACKAGE_VERSION) and core_v >= Version(
+            _FLA_CORE_PACKAGE_VERSION
+        )
+    except Exception as exc:
+        logger.warning(
+            "flash-linear-attention importable but version check failed; treating as stale: %s",
+            exc,
+        )
+        return False
+
+
+def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> bool:
     """Install ``flash-linear-attention`` + ``fla-core`` unconditionally.
+
+    Returns True iff FLA is importable AT THE PINNED VERSION post-call;
+    False otherwise (skipped, install failed, deep import broken, etc).
+    Callers use the return value to decide whether to chain into
+    tilelang or short-circuit cleanly.
 
     This is the body of the installer with the model-name substring gate
     removed: the caller has already proven (via the runtime hook on
@@ -361,7 +398,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
     Set ``UNSLOTH_STUDIO_SKIP_FLA_INSTALL=1`` to bypass entirely.
     """
     if os.getenv(_FLA_SKIP_ENV) == "1":
-        return
+        return False
     if sys.version_info < _FLA_MIN_PYTHON:
         logger.info(
             "Skipping flash-linear-attention install: requires Python >= %d.%d, have %s",
@@ -369,7 +406,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
             _FLA_MIN_PYTHON[1],
             sys.version.split()[0],
         )
-        return
+        return False
     torch_ver = _installed_torch_version_tuple()
     if torch_ver is not None and torch_ver < _FLA_MIN_TORCH:
         _send_status(
@@ -380,11 +417,16 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
                 f"{torch_ver[0]}.{torch_ver[1]}"
             ),
         )
-        return
+        return False
 
-    if _flash_linear_attention_importable():
-        logger.info("flash-linear-attention already importable")
-        return
+    # Probe once; reuse the result for short-circuit AND
+    # --force-reinstall decision so call count stays stable.
+    already_importable = _flash_linear_attention_importable()
+    if already_importable and _flash_linear_attention_current(
+        already_importable=True
+    ):
+        logger.info("flash-linear-attention already importable at the pinned version")
+        return True
 
     _send_status(
         event_queue,
@@ -403,6 +445,13 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
         f"fla-core=={_FLA_CORE_PACKAGE_VERSION}",
         f"flash-linear-attention=={_FLA_PACKAGE_VERSION}",
     ]
+    extra_args = ["--no-deps"]
+    # If an older FLA is importable we must force-reinstall to get the pinned
+    # version. Without --force-reinstall pip would see fla-core present and
+    # do nothing; --no-deps still applies so torch stays untouched.
+    if already_importable:
+        extra_args.append("--force-reinstall")
+
     if shutil.which("uv"):
         pypi_cmd = [
             "uv",
@@ -410,7 +459,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
             "install",
             "--python",
             sys.executable,
-            "--no-deps",
+            *extra_args,
             *specs,
         ]
     else:
@@ -419,7 +468,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
             "-m",
             "pip",
             "install",
-            "--no-deps",
+            *extra_args,
             *specs,
         ]
 
@@ -436,7 +485,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
         _send_status(
             event_queue, "flash-linear-attention install timed out; continuing"
         )
-        return
+        return False
 
     if result.returncode != 0:
         logger.warning(
@@ -447,7 +496,7 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
             event_queue,
             "flash-linear-attention install failed; continuing on torch fallback",
         )
-        return
+        return False
 
     # Verify the install actually produced importable modules. Catches
     # the case where pip exits 0 but a transitive runtime dep we did
@@ -457,9 +506,10 @@ def _ensure_flash_linear_attention_unconditional(event_queue: Any) -> None:
             event_queue,
             "flash-linear-attention installed but is not importable; continuing on torch fallback",
         )
-        return
+        return False
 
     logger.info("Installed flash-linear-attention for the FLA fast path")
+    return True
 
 
 def _ensure_flash_linear_attention(event_queue: Any, model_name: str) -> None:
@@ -570,23 +620,60 @@ def _tilelang_platform_supported() -> bool:
     return _platform.machine().lower() in _TILELANG_SUPPORTED_LINUX_MACHINES
 
 
-def _ensure_tilelang_backend_unconditional(event_queue: Any) -> None:
+def _pip_install_cmd(*args: str) -> list[str]:
+    """Build a `uv pip install` or `python -m pip install` invocation."""
+    if shutil.which("uv"):
+        return ["uv", "pip", "install", "--python", sys.executable, *args]
+    return [sys.executable, "-m", "pip", "install", *args]
+
+
+def _run_pip(cmd: list[str], event_queue: Any, label: str) -> bool:
+    """Run a pip install command and report success/failure via status."""
+    try:
+        result = _sp.run(
+            cmd,
+            stdout=_sp.PIPE,
+            stderr=_sp.STDOUT,
+            text=True,
+            timeout=_TILELANG_INSTALL_TIMEOUT_S,
+        )
+    except _sp.TimeoutExpired:
+        logger.warning("%s install timed out; continuing", label)
+        _send_status(event_queue, f"{label} install timed out; continuing")
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "%s install failed (continuing without it):\n%s", label, result.stdout
+        )
+        _send_status(
+            event_queue, f"{label} install failed; continuing"
+        )
+        return False
+    return True
+
+
+def _ensure_tilelang_backend_unconditional(event_queue: Any) -> bool:
     """Install ``tilelang`` + pinned ``apache-tvm-ffi`` unconditionally.
+
+    Returns True iff tilelang + tvm_ffi are importable post-call.
 
     Called from the FLA hook because tilelang only matters once FLA is
     active; the substring gate is gone here. Pre-existing platform,
     Python, and skip-env guards remain.
 
-    The combined pin is important: `tilelang` declares
-    ``apache-tvm-ffi>=0.1.2,~=0.1.0`` which lets pip pull the latest 0.1.10/
-    0.1.11, but those versions hit a "CUDA: misaligned address" crash in
-    Triton kernels on sm_100 (Blackwell). Pinning to 0.1.9 (the upper bound
-    that ``mamba_ssm 2.3.2`` itself uses) avoids the regression.
+    Repair semantics for a broken `apache-tvm-ffi` (0.1.10/0.1.11):
+      step 1: ``--force-reinstall --no-deps apache-tvm-ffi==0.1.9``
+              (downgrades ONLY the broken package; does NOT touch
+              torch or the CUDA stack)
+      step 2: regular install for ``tilelang`` + ``apache-tvm-ffi``
+              resolves any missing transitive deps (z3-solver,
+              ml-dtypes) without --force-reinstall, so it never
+              replaces torch with a different CUDA build either.
 
     Set ``UNSLOTH_STUDIO_SKIP_TILELANG_INSTALL=1`` to bypass.
     """
     if os.getenv(_TILELANG_SKIP_ENV) == "1":
-        return
+        return False
     if sys.version_info < _FLA_MIN_PYTHON:
         logger.info(
             "Skipping tilelang install: requires Python >= %d.%d, have %s",
@@ -594,7 +681,7 @@ def _ensure_tilelang_backend_unconditional(event_queue: Any) -> None:
             _FLA_MIN_PYTHON[1],
             sys.version.split()[0],
         )
-        return
+        return False
     if not _tilelang_platform_supported():
         import platform as _platform
 
@@ -603,21 +690,44 @@ def _ensure_tilelang_backend_unconditional(event_queue: Any) -> None:
             sys.platform,
             _platform.machine(),
         )
-        return
+        return False
 
     existing_tvm_ffi = _installed_tvm_ffi_version()
-    needs_reinstall = existing_tvm_ffi in _TVM_FFI_BROKEN_VERSIONS
+    needs_repair = existing_tvm_ffi in _TVM_FFI_BROKEN_VERSIONS
 
-    if not needs_reinstall:
-        if _tilelang_importable():
-            logger.info("tilelang + apache-tvm-ffi already installed")
-            return
-    else:
+    if not needs_repair and _tilelang_importable():
+        logger.info("tilelang + apache-tvm-ffi already installed")
+        return True
+
+    # Step 1: if a broken tvm-ffi is present, surgically downgrade it
+    # without --no-deps' usual deps-only-once semantics. --no-deps here
+    # protects torch and the CUDA stack from being uninstalled by
+    # --force-reinstall pulling in apache-tvm-ffi's full dep graph.
+    if needs_repair:
         logger.info(
-            "Forcing tilelang reinstall: apache-tvm-ffi %s is on the broken list",
+            "Forcing apache-tvm-ffi downgrade: %s is on the broken list",
             existing_tvm_ffi,
         )
+        _send_status(
+            event_queue,
+            (
+                f"Downgrading apache-tvm-ffi {existing_tvm_ffi} -> "
+                f"{_APACHE_TVM_FFI_PACKAGE_VERSION} (broken-versions list)"
+            ),
+        )
+        repair_cmd = _pip_install_cmd(
+            "--only-binary=:all:",
+            "--force-reinstall",
+            "--no-deps",
+            f"apache-tvm-ffi=={_APACHE_TVM_FFI_PACKAGE_VERSION}",
+        )
+        if not _run_pip(repair_cmd, event_queue, "TileLang backend repair"):
+            return False
 
+    # Step 2: regular dependency-resolving install so missing transitive
+    # deps (z3-solver, ml-dtypes, ...) get pulled in. Without
+    # --force-reinstall pip is a no-op for already-correct packages,
+    # so this never replaces torch.
     _send_status(
         event_queue,
         (
@@ -626,63 +736,13 @@ def _ensure_tilelang_backend_unconditional(event_queue: Any) -> None:
             f"tilelang=={_TILELANG_PACKAGE_VERSION}) for FLA fast path..."
         ),
     )
-
-    # Install both in one pip resolve so the apache-tvm-ffi pin wins
-    # over tilelang's `>=0.1.2,~=0.1.0` constraint. Resolve deps in
-    # both fresh-install and force-reinstall paths so tilelang's
-    # runtime deps (z3-solver, ml-dtypes, ...) get pulled in.
-    # `--only-binary=:all:` keeps us off the 93MB tilelang sdist.
-    specs = [
+    install_cmd = _pip_install_cmd(
+        "--only-binary=:all:",
         f"apache-tvm-ffi=={_APACHE_TVM_FFI_PACKAGE_VERSION}",
         f"tilelang=={_TILELANG_PACKAGE_VERSION}",
-    ]
-    extra_args = ["--force-reinstall"] if needs_reinstall else []
-    binary_args = ["--only-binary=:all:"]
-    if shutil.which("uv"):
-        pypi_cmd = [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            sys.executable,
-            *binary_args,
-            *extra_args,
-            *specs,
-        ]
-    else:
-        pypi_cmd = [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            *binary_args,
-            *extra_args,
-            *specs,
-        ]
-
-    try:
-        result = _sp.run(
-            pypi_cmd,
-            stdout = _sp.PIPE,
-            stderr = _sp.STDOUT,
-            text = True,
-            timeout = _TILELANG_INSTALL_TIMEOUT_S,
-        )
-    except _sp.TimeoutExpired:
-        logger.warning("TileLang backend install timed out; continuing")
-        _send_status(event_queue, "TileLang backend install timed out; continuing")
-        return
-
-    if result.returncode != 0:
-        logger.warning(
-            "TileLang backend install failed (continuing without it):\n%s",
-            result.stdout,
-        )
-        _send_status(
-            event_queue,
-            "TileLang backend install failed; continuing on the FLA Triton path",
-        )
-        return
+    )
+    if not _run_pip(install_cmd, event_queue, "TileLang backend"):
+        return False
 
     # Verify imports succeed; pip can return 0 while a native library
     # (libz3.so, ...) is missing for the runtime load.
@@ -691,9 +751,10 @@ def _ensure_tilelang_backend_unconditional(event_queue: Any) -> None:
             event_queue,
             "TileLang backend installed but is not importable; continuing on the FLA Triton path",
         )
-        return
+        return False
 
     logger.info("Installed TileLang backend for FLA fast path")
+    return True
 
 
 def _ensure_tilelang_backend(event_queue: Any, model_name: str) -> None:
@@ -741,19 +802,23 @@ def _rebind_in_already_imported_modules(
     is_flash_linear_attention_available`, which creates a local binding
     in the importing module. Reassigning the symbol on
     `transformers.utils.import_utils` does NOT reach those bindings.
-    We sweep `sys.modules` for any module whose module-level dict
-    contains `attr_name` bound to `old_obj` and rebind it to `new_obj`.
-    Returns the number of bindings rewritten.
+
+    We use `module.__dict__.get(attr_name)` (NOT `getattr(mod, ...)`)
+    because transformers' lazy module aliases override `__getattr__` and
+    `getattr(mod, name)` will trigger an "Accessing X from .models..."
+    advisory warning AND can materialise lazy imports we have no
+    interest in. The dict lookup only sees real module-level bindings.
     """
     count = 0
+    missing = object()
     # snapshot keys to avoid mutating during iteration
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
-        try:
-            existing = getattr(mod, attr_name, None)
-        except Exception:
+        module_dict = getattr(mod, "__dict__", None)
+        if not isinstance(module_dict, dict):
             continue
+        existing = module_dict.get(attr_name, missing)
         if existing is old_obj:
             try:
                 setattr(mod, attr_name, new_obj)
@@ -765,7 +830,7 @@ def _rebind_in_already_imported_modules(
     return count
 
 
-def _install_fast_path_hooks(event_queue: Any) -> None:
+def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
     """Wrap `is_flash_linear_attention_available` and
     `is_causal_conv1d_available` so the first call drives the matching
     install if the underlying package is missing.
@@ -773,14 +838,23 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
     The wrapper:
       1. Clears the original `@lru_cache` so the underlying check is
          actually re-evaluated.
-      2. Calls the original. If it returns True, no work to do.
-      3. If False, triggers `_ensure_*_unconditional(event_queue)` (FLA
-         pulls tilelang too), clears the cache again, and re-checks.
-      4. Returns the final boolean. If the install failed, returns
-         False — same observable behaviour as before this PR, the
-         model just falls back to the torch loop.
+      2. Calls the original. If it returns True, no work to do other
+         than the post-available action (e.g. tilelang repair).
+      3. If False, calls `install_fn(event_queue) -> bool`. The returned
+         bool is the authoritative post-install availability (NOT a
+         re-call of `original()`, which can lie when pip exited 0 but
+         deep imports are broken).
+      4. Calls `post_available_fn(event_queue)` if available, so
+         tilelang's broken-version repair runs even when FLA was
+         already True.
+
+    `model_name` is threaded through so the FLA install can gate
+    tilelang on `_model_wants_tilelang(model_name)`. tilelang is a
+    Qwen3.5-family optimisation; non-Qwen FLA-using architectures
+    (OLMo-Hybrid, future GDN models) only want FLA itself.
 
     Idempotent: subsequent calls short-circuit on an `installed` flag.
+    Set `UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1` to bypass.
     """
     if os.getenv(_FAST_PATH_HOOKS_SKIP_ENV) == "1":
         logger.info("Fast-path hooks disabled via env; using substring fallback")
@@ -797,8 +871,9 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
 
     def _make_wrapper(
         original: Callable[[], bool],
-        install_fn: Callable[[Any], None],
+        install_fn: Callable[[Any], bool],
         gate_name: str,
+        post_available_fn: Callable[[Any], None] | None = None,
     ) -> Callable[[], bool]:
         state = {"installed": False}
 
@@ -820,24 +895,32 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
                     f"Hook fired for {gate_name}; installing kernel...",
                 )
                 try:
-                    install_fn(event_queue)
+                    install_result = install_fn(event_queue)
+                    ok = bool(install_result)
                 except Exception as exc:
                     logger.warning(
                         "Install fired by %s hook raised: %s; continuing on torch fallback",
                         gate_name,
                         exc,
                     )
-                # Re-check post-install.
-                try:
-                    original.cache_clear()
-                except AttributeError:
-                    pass
-                ok = original()
+                    ok = False
                 logger.info(
                     "Hook for %s completed; post-install availability=%s",
                     gate_name,
                     ok,
                 )
+            # Even when FLA was already True, the post-available action
+            # may still have work (tilelang missing / broken tvm-ffi
+            # repair).
+            if ok and post_available_fn is not None:
+                try:
+                    post_available_fn(event_queue)
+                except Exception as exc:
+                    logger.warning(
+                        "%s post-available step raised: %s; continuing",
+                        gate_name,
+                        exc,
+                    )
             state["installed"] = True
             return ok
 
@@ -846,16 +929,44 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
         wrapper.cache_clear = getattr(original, "cache_clear", lambda: None)  # type: ignore[attr-defined]
         return wrapper
 
-    def _fla_install(eq: Any) -> None:
+    def _fla_install(eq: Any) -> bool:
         # FLA without tilelang gets ~2.35x speedup; tilelang adds ~26%.
-        # They pair up, so install both on the same trigger.
-        _ensure_flash_linear_attention_unconditional(eq)
+        # tilelang is a Qwen3.5-family optimisation only; non-Qwen FLA
+        # users (OLMo-Hybrid, ...) skip it. Order: install FLA first,
+        # gate tilelang on (FLA succeeded) AND (model wants tilelang).
+        fla_ok = _ensure_flash_linear_attention_unconditional(eq)
+        if not fla_ok:
+            logger.info(
+                "FLA install did not produce an importable runtime; "
+                "skipping TileLang backend"
+            )
+            return False
+        if _model_wants_tilelang(model_name):
+            _ensure_tilelang_backend_unconditional(eq)
+        else:
+            logger.info(
+                "Model %r does not match the TileLang allowlist; "
+                "skipping TileLang backend (FLA Triton path is sufficient)",
+                model_name,
+            )
+        return True
+
+    def _fla_post_available(eq: Any) -> None:
+        # Runs when FLA was already importable (gate returned True
+        # without triggering install). If the model wants tilelang and
+        # tilelang is missing or `apache-tvm-ffi` is on the broken
+        # version list, the unconditional installer will repair it.
+        if not _model_wants_tilelang(model_name):
+            return
+        existing_tvm = _installed_tvm_ffi_version()
+        needs_repair = existing_tvm in _TVM_FFI_BROKEN_VERSIONS
+        if not needs_repair and _tilelang_importable():
+            return
         _ensure_tilelang_backend_unconditional(eq)
 
-    def _causal_conv1d_install(eq: Any) -> None:
-        # Reuse the existing wheel-first installer. It does its own
-        # idempotency check via `__import__("causal_conv1d")`.
-        _install_package_wheel_first(
+    def _causal_conv1d_install(eq: Any) -> bool:
+        # Reuse the existing wheel-first installer.
+        ok = _install_package_wheel_first(
             event_queue=eq,
             import_name="causal_conv1d",
             display_name="causal-conv1d",
@@ -867,11 +978,16 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
                 "https://github.com/Dao-AILab/causal-conv1d/releases/download"
             ),
         )
+        return bool(ok)
 
     rebound_total = 0
-    for gate_name, install_fn in (
-        ("is_flash_linear_attention_available", _fla_install),
-        ("is_causal_conv1d_available", _causal_conv1d_install),
+    for gate_name, install_fn, post_fn in (
+        (
+            "is_flash_linear_attention_available",
+            _fla_install,
+            _fla_post_available,
+        ),
+        ("is_causal_conv1d_available", _causal_conv1d_install, None),
     ):
         original = getattr(_iu, gate_name, None)
         if original is None:
@@ -880,7 +996,7 @@ def _install_fast_path_hooks(event_queue: Any) -> None:
                 gate_name,
             )
             continue
-        wrapped = _make_wrapper(original, install_fn, gate_name)
+        wrapped = _make_wrapper(original, install_fn, gate_name, post_fn)
         setattr(_iu, gate_name, wrapped)
         rebound = _rebind_in_already_imported_modules(
             attr_name=gate_name, old_obj=original, new_obj=wrapped
@@ -1711,27 +1827,26 @@ def run_training_process(
 
     # ── 1b. Install fast-path kernel libraries for the chosen model.
     #
-    # Primary gate: hook transformers' fast-path availability functions.
-    # When the loaded model's modeling file does
-    #     if is_flash_linear_attention_available(): from fla.modules import ...
-    # the hook fires and installs FLA + tilelang on the spot. Models that
-    # never call those gates never trigger the install. This supersedes
-    # substring-based detection for FLA and tilelang.
-    #
-    # Legacy substring path remains for:
-    #   - causal-conv1d (also covered by its own hook, but the substring
-    #     installer prefers the wheel-first install and is reused here
-    #     from the hook closure too)
-    #   - mamba-ssm (true SSM families)
-    #   - flash-attn (long-context only)
-    # plus an opt-out via UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1.
+    # 1) causal-conv1d ALWAYS runs eagerly via the substring path.
+    #    Some SSM modeling files (nemotron_h, falcon_h1, granitemoehybrid)
+    #    use `lazy_load_kernel("causal-conv1d")` directly and never call
+    #    transformers' `is_causal_conv1d_available()`, so the runtime
+    #    hook on that gate would not fire for them.
+    # 2) FLA + tilelang: primary gate is the runtime hook on transformers'
+    #    `is_flash_linear_attention_available`. Models whose architecture
+    #    queries that gate auto-trigger the install; others never pay.
+    #    `_install_fast_path_hooks` also wraps `is_causal_conv1d_available`
+    #    as a defence in depth for newer modeling files that do use it.
+    # 3) mamba-ssm + flash-attn keep their existing substring / size gates.
+    # 4) `UNSLOTH_STUDIO_SKIP_FAST_PATH_HOOKS=1` falls back to the
+    #    substring path for FLA / tilelang.
     try:
+        _ensure_causal_conv1d_fast_path(event_queue, model_name)
         if os.getenv(_FAST_PATH_HOOKS_SKIP_ENV) == "1":
-            _ensure_causal_conv1d_fast_path(event_queue, model_name)
             _ensure_flash_linear_attention(event_queue, model_name)
             _ensure_tilelang_backend(event_queue, model_name)
         else:
-            _install_fast_path_hooks(event_queue)
+            _install_fast_path_hooks(event_queue, model_name)
         _ensure_mamba_ssm(event_queue, model_name)
         _ensure_flash_attn_for_long_context(
             event_queue,

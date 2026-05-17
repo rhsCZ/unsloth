@@ -943,10 +943,9 @@ def test_substring_fallback_unchanged_when_hook_skipped(monkeypatch):
 # ───────────────────────────────────────────────────────────────────
 
 
-def test_hook_does_not_install_tilelang_for_non_qwen_fla_model(monkeypatch):
-    """Finding #1: OLMo-Hybrid (and similar non-Qwen GDN models) call
-    `is_flash_linear_attention_available` but should NOT get tilelang,
-    which is a Qwen3.5-family optimisation. Was unconditional before."""
+def test_hook_does_not_install_tilelang_for_model_outside_allowlist(monkeypatch):
+    """A model whose name is not in the auto-discovered FLA allowlist calls
+    is_flash_linear_attention_available but should NOT get tilelang."""
     fla_gate = _make_fake_gate(initial_return = False)
     conv_gate = _make_fake_gate(initial_return = True)
     _patch_iu_gates(monkeypatch, fla_gate, conv_gate)
@@ -965,9 +964,18 @@ def test_hook_does_not_install_tilelang_for_non_qwen_fla_model(monkeypatch):
         worker, "_install_package_wheel_first", mock.Mock(return_value = True)
     )
     monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising = False)
+    # Hermetize the auto-discovered set so the test stays valid as new
+    # transformers releases add FLA-using model_types (eg olmo_hybrid in
+    # 5.4.0). The semantic under test is "outside-allowlist -> no tilelang".
+    monkeypatch.setattr(
+        worker,
+        "_discover_fla_model_types",
+        lambda: frozenset({"qwen3_5", "qwen3_5_moe", "qwen3_next"}),
+    )
 
     worker._install_fast_path_hooks(
-        event_queue = _FakeQueue(), model_name = "allenai/OLMo-Hybrid-1B"
+        event_queue = _FakeQueue(),
+        model_name = "fake-org/Fictional-FLA-Only-Model-7B",
     )
 
     from transformers.utils import import_utils as _iu

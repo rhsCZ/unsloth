@@ -271,7 +271,13 @@ def cmd_train(args) -> int:
         config = MLXTrainingConfig(
             per_device_train_batch_size = 2,
             gradient_accumulation_steps = 3,
-            max_steps = 7,
+            # max_steps tuned against MLX's AdamW bias_correction=True path
+            # (matches torch.AdamW). Empirically 15-30 steps reliably emits
+            # "Unsloth" in greedy across 4 different seeds; 7 sits below
+            # the convergence horizon and 50+ overshoots past the basin.
+            # See https://github.com/danielhanchen/unsloth-staging-2/pull/119
+            # for the bisection.
+            max_steps = 20,
             learning_rate = 1e-3,
             warmup_steps = 0,
             lr_scheduler_type = "constant",
@@ -322,7 +328,7 @@ def cmd_train(args) -> int:
         )
         if k in train_result
     }
-    assert len(losses_per_step) == 7, f"expected 7 logged steps, got {losses_per_step}"
+    assert len(losses_per_step) == 20, f"expected 20 logged steps, got {losses_per_step}"
     for i, l in enumerate(losses_per_step):
         assert math.isfinite(l) and 0 < l < 50, f"step {i+1} loss bad: {l}"
     assert (

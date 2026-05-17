@@ -12,7 +12,7 @@ import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface CopyableErrorChipProps {
   message: string;
@@ -26,11 +26,22 @@ export function CopyableErrorChip({
   ariaLabel,
 }: CopyableErrorChipProps) {
   const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear any pending reset on unmount to avoid a setState on an
+  // unmounted component.
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
 
   const handleCopy = async () => {
     if (await copyToClipboard(message)) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => {
+        setCopied(false);
+        resetTimer.current = null;
+      }, 1800);
     }
   };
 

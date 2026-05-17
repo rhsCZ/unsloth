@@ -31,7 +31,17 @@ const wrappedCallable = withDismissibleFalse(
   sonnerToast as unknown as AnyFn,
 ) as typeof sonnerToast;
 
-// `promise`, `dismiss`, `getHistory`, `getToasts` take no options.
+// `promise(p, data?)` carries `dismissible` at the top of `data`,
+// covering loading / success / error states. `dismiss`, `getHistory`,
+// `getToasts` take no options.
+const wrappedPromise: typeof sonnerToast.promise = ((promise, data) => {
+  const merged =
+    data && typeof data === "object" && !("dismissible" in data)
+      ? { dismissible: false, ...data }
+      : (data ?? { dismissible: false });
+  return sonnerToast.promise(promise, merged);
+}) as typeof sonnerToast.promise;
+
 export const toast: typeof sonnerToast = Object.assign(wrappedCallable, {
   success: withDismissibleFalse(sonnerToast.success.bind(sonnerToast) as AnyFn) as typeof sonnerToast.success,
   info: withDismissibleFalse(sonnerToast.info.bind(sonnerToast) as AnyFn) as typeof sonnerToast.info,
@@ -40,7 +50,7 @@ export const toast: typeof sonnerToast = Object.assign(wrappedCallable, {
   message: withDismissibleFalse(sonnerToast.message.bind(sonnerToast) as AnyFn) as typeof sonnerToast.message,
   loading: withDismissibleFalse(sonnerToast.loading.bind(sonnerToast) as AnyFn) as typeof sonnerToast.loading,
   custom: withDismissibleFalse(sonnerToast.custom.bind(sonnerToast) as AnyFn) as typeof sonnerToast.custom,
-  promise: sonnerToast.promise.bind(sonnerToast) as typeof sonnerToast.promise,
+  promise: wrappedPromise,
   dismiss: sonnerToast.dismiss.bind(sonnerToast) as typeof sonnerToast.dismiss,
   getHistory: sonnerToast.getHistory.bind(sonnerToast) as typeof sonnerToast.getHistory,
   getToasts: sonnerToast.getToasts.bind(sonnerToast) as typeof sonnerToast.getToasts,

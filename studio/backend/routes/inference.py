@@ -687,19 +687,26 @@ async def load_model(
             # CLI parse against a freshly-supplied first-class field.
             if request.llama_extra_args is None and llama_backend.extra_args:
                 source = llama_backend.extra_args_source
+                # Compare against the resolved variant, not the request
+                # field: callers commonly omit gguf_variant for local
+                # ``.gguf`` paths and HF auto-pick flows. ``config.gguf_
+                # variant`` is the variant load_model was actually
+                # invoked with (see the HF / local branches below), so
+                # both sides of the comparison key off the same string.
+                resolved_variant = config.gguf_variant
                 same_source = bool(
                     source
                     and source[0]
                     and source[0].lower() == model_identifier.lower()
                     and (source[1] or "").lower()
-                    == (request.gguf_variant or "").lower()
+                    == (resolved_variant or "").lower()
                 )
                 if not same_source:
                     logger.info(
                         "Not inheriting llama_extra_args: stored args came "
                         "from %s, loading %s",
                         source,
-                        (model_identifier, request.gguf_variant),
+                        (model_identifier, resolved_variant),
                     )
                     # Cross-model: clear explicitly so the backend
                     # doesn't inherit via "no opinion" semantics.
@@ -768,6 +775,10 @@ async def load_model(
                     llama_backend.load_model,
                     gguf_path = config.gguf_file,
                     mmproj_path = config.gguf_mmproj_file,
+                    # Pass the resolved variant so _extra_args_source
+                    # is keyed off the same string the inheritance
+                    # check at the top of /load uses (#5401 followup).
+                    hf_variant = config.gguf_variant,
                     model_identifier = config.identifier,
                     is_vision = config.is_vision,
                     n_ctx = request.max_seq_length,

@@ -53,41 +53,53 @@ sys.modules.setdefault("loggers", _loggers_stub)
 _structlog_stub = _types.ModuleType("structlog")
 sys.modules.setdefault("structlog", _structlog_stub)
 
-_httpx_stub = _types.ModuleType("httpx")
-for _exc_name in (
-    "ConnectError",
-    "TimeoutException",
-    "ReadTimeout",
-    "ReadError",
-    "RemoteProtocolError",
-    "CloseError",
-):
-    setattr(_httpx_stub, _exc_name, type(_exc_name, (Exception,), {}))
+# Prefer real httpx if installed (CI installs it). Stub only as fallback.
+try:
+    import httpx  # noqa: F401
+except ImportError:
+    _httpx_stub = _types.ModuleType("httpx")
+    for _exc_name in (
+        "ConnectError",
+        "TimeoutException",
+        "ReadTimeout",
+        "ReadError",
+        "RemoteProtocolError",
+        "CloseError",
+        "HTTPError",
+        "RequestError",
+        "HTTPStatusError",
+    ):
+        setattr(_httpx_stub, _exc_name, type(_exc_name, (Exception,), {}))
+    _httpx_stub.Response = type("Response", (), {})
+    _httpx_stub.Request = type("Request", (), {})
 
+    class _FakeTimeout:
+        def __init__(self, *a, **kw):
+            pass
 
-class _FakeTimeout:
-    def __init__(self, *a, **kw):
-        pass
-
-
-_httpx_stub.Timeout = _FakeTimeout
-_httpx_stub.Client = type(
-    "Client",
-    (),
-    {
-        "__init__": lambda self, **kw: None,
-        "__enter__": lambda self: self,
-        "__exit__": lambda self, *a: None,
-    },
-)
-sys.modules.setdefault("httpx", _httpx_stub)
+    _httpx_stub.Timeout = _FakeTimeout
+    _httpx_stub.Client = type(
+        "Client",
+        (),
+        {
+            "__init__": lambda self, **kw: None,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: None,
+        },
+    )
+    sys.modules.setdefault("httpx", _httpx_stub)
 
 
 from huggingface_hub import constants as hf_constants
 
-from core.inference.llama_cpp import _hf_offline_if_dns_dead, _probe_dns_dead
+from core.inference.llama_cpp import (
+    LlamaCppBackend,
+    _hf_offline_if_dns_dead,
+    _probe_dns_dead,
+)
 from utils.models.model_config import (
     _detect_gguf_from_hf_cache,
+    _extract_quant_label,
     _iter_hf_cache_snapshots,
     _list_gguf_variants_from_hf_cache,
     detect_gguf_model_remote,
@@ -461,3 +473,107 @@ class TestHfOfflineIfDnsDead:
         # Cleanup must happen on exception as well.
         assert "HF_HUB_OFFLINE" not in os.environ
         assert "TRANSFORMERS_OFFLINE" not in os.environ
+
+
+class TestExtractQuantLabelSubdir:
+    """``_extract_quant_label`` must consider the parent directories when
+    the basename has no quant token. Subdir layouts like ``BF16/foo.gguf``
+    are documented in this codebase and surface through the cache scan."""
+
+    def test_quant_in_basename_unchanged(self):
+        assert _extract_quant_label("BF16/foo-BF16.gguf") == "BF16"
+        assert _extract_quant_label("model-Q4_K_M.gguf") == "Q4_K_M"
+
+    def test_quant_only_in_parent_dir(self):
+        assert _extract_quant_label("BF16/foo.gguf") == "BF16"
+
+    def test_ud_prefix_in_parent_dir(self):
+        assert _extract_quant_label("UD-Q4_K_XL/weight.gguf") == "UD-Q4_K_XL"
+
+    def test_deeper_nesting_picks_nearest_quant_dir(self):
+        # When multiple parent segments could match, prefer the one closest
+        # to the file (innermost). This matches how repos like
+        # ``models/MXFP4_MOE/foo.gguf`` are laid out.
+        assert _extract_quant_label("models/MXFP4_MOE/foo.gguf") == "MXFP4_MOE"
+
+
+class TestDownloadMmprojOfflineCacheFallback:
+    """``LlamaCppBackend._download_mmproj`` must resolve cached mmproj
+    GGUFs offline, same shape as ``_download_gguf``. Without this the
+    offline vision GGUF load path returns ``None`` even when the mmproj
+    is present in cache."""
+
+    def test_cache_lookup_returns_cached_mmproj_when_list_repo_files_fails(
+        self, hf_cache,
+    ):
+        _build_cache(
+            hf_cache,
+            "unsloth/vision-GGUF",
+            {
+                "vision-Q4_K_M.gguf": 1,
+                "mmproj-vision-F16.gguf": 1,
+            },
+        )
+        backend = LlamaCppBackend()
+
+        def boom_list(*a, **k):
+            raise OSError("offline")
+
+        def fake_download(*, repo_id, filename, token = None):
+            # Echo back so the test can verify the cache-resolved filename
+            return f"/fake/cache/{repo_id}/{filename}"
+
+        with patch("huggingface_hub.list_repo_files", boom_list), \
+                patch("huggingface_hub.hf_hub_download", fake_download):
+            out = backend._download_mmproj(
+                hf_repo = "unsloth/vision-GGUF",
+                hf_token = None,
+            )
+        assert out is not None, "mmproj must resolve from cache when offline"
+        assert "mmproj-vision-F16.gguf" in out
+
+    def test_prefers_f16_variant_when_multiple_mmproj_in_cache(self, hf_cache):
+        _build_cache(
+            hf_cache,
+            "unsloth/vision-GGUF",
+            {
+                "mmproj-vision-BF16.gguf": 1,
+                "mmproj-vision-F16.gguf": 1,
+            },
+        )
+        backend = LlamaCppBackend()
+
+        def boom_list(*a, **k):
+            raise OSError("offline")
+
+        captured = {}
+
+        def fake_download(*, repo_id, filename, token = None):
+            captured["filename"] = filename
+            return f"/fake/{filename}"
+
+        with patch("huggingface_hub.list_repo_files", boom_list), \
+                patch("huggingface_hub.hf_hub_download", fake_download):
+            backend._download_mmproj(
+                hf_repo = "unsloth/vision-GGUF",
+                hf_token = None,
+            )
+        assert captured.get("filename") == "mmproj-vision-F16.gguf"
+
+    def test_no_mmproj_in_cache_returns_none(self, hf_cache):
+        _build_cache(
+            hf_cache,
+            "unsloth/text-only-GGUF",
+            {"text-Q4_K_M.gguf": 1},
+        )
+        backend = LlamaCppBackend()
+
+        def boom_list(*a, **k):
+            raise OSError("offline")
+
+        with patch("huggingface_hub.list_repo_files", boom_list):
+            out = backend._download_mmproj(
+                hf_repo = "unsloth/text-only-GGUF",
+                hf_token = None,
+            )
+        assert out is None

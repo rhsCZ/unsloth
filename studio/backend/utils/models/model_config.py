@@ -1259,12 +1259,10 @@ def _extract_quant_label(filename: str) -> str:
     """
     import re
 
-    # Use only the basename (rfilename may include directory)
     basename = filename.rsplit("/", 1)[-1]
     # Strip .gguf and any shard suffix (-00001-of-00010)
     stem = re.sub(r"-\d{3,}-of-\d{3,}", "", basename.rsplit(".", 1)[0])
-    # Match known quantization patterns
-    match = re.search(
+    quant_re = (
         r"(UD-)?"  # Optional UD- prefix (Ultra Discrete)
         r"(MXFP[0-9]+(?:_[A-Z0-9]+)*"  # MXFP variants: MXFP4, MXFP4_MOE
         r"|IQ[0-9]+_[A-Z]+(?:_[A-Z0-9]+)?"  # IQ variants: IQ4_XS, IQ4_NL, IQ1_S
@@ -1272,10 +1270,19 @@ def _extract_quant_label(filename: str) -> str:
         r"|Q[0-9]+_K_[A-Z]+"  # K-quant: Q4_K_M, Q3_K_S
         r"|Q[0-9]+_[0-9]+"  # Standard: Q8_0, Q5_1
         r"|Q[0-9]+_K"  # Short K-quant: Q6_K
-        r"|BF16|F16|F32)",  # Full precision
-        stem,
-        re.IGNORECASE,
+        r"|BF16|F16|F32)"  # Full precision
     )
+    match = re.search(quant_re, stem, re.IGNORECASE)
+    # Subdir layouts like ``BF16/foo.gguf`` keep the quant in the directory,
+    # not the basename. Look at the parent dirs too so the variant label
+    # matches the snapshot-relative path produced elsewhere.
+    if not match and "/" in filename:
+        parents = filename.rsplit("/", 1)[0]
+        for segment in reversed(parents.split("/")):
+            m = re.search(quant_re, segment, re.IGNORECASE)
+            if m:
+                match = m
+                break
     if match:
         prefix = match.group(1) or ""
         return f"{prefix}{match.group(2)}"

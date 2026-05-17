@@ -278,6 +278,12 @@ def cmd_train(args) -> int:
             optim = "adamw",
             weight_decay = 0.0,
             max_grad_norm = 1.0,
+            # Disable the trainer's per-element grad-value clip (1.0 by
+            # default since unsloth-zoo #652) so max_grad_norm above is the
+            # only clip in effect. Otherwise the elementwise cap slows
+            # memorization of this tiny one-row dataset below the
+            # EXPECT_IN_OUTPUT threshold in 7 steps.
+            max_grad_value = 0.0,
             logging_steps = 1,
             max_seq_length = 64,
             seed = SEED,

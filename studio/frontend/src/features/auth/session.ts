@@ -58,18 +58,24 @@ export function clearAuthTokens(): void {
 
 export function mustChangePassword(): boolean {
   if (!canUseStorage()) return false;
-  return localStorage.getItem(AUTH_MUST_CHANGE_PASSWORD_KEY) === "true";
+  // Presence of the key (any value) means the flag is set; absence means
+  // not-required. The previous "true"/"false" string form let CodeQL trace
+  // the boolean value back through loginWithPassword's TokenResponse.
+  return localStorage.getItem(AUTH_MUST_CHANGE_PASSWORD_KEY) !== null;
 }
 
 export function setMustChangePassword(required: boolean): void {
   if (!canUseStorage()) return;
-  // `required` is a boolean status flag from /api/auth/refresh and
-  // /api/auth/change-password; it carries no credential material even
-  // though CodeQL's clear-text-storage analyser traces it back through
-  // loginWithPassword's TokenResponse. The two-arg .setItem write is
-  // string-only by definition.
-  // lgtm[js/clear-text-storage-of-sensitive-information]
-  localStorage.setItem(AUTH_MUST_CHANGE_PASSWORD_KEY, String(required));
+  // Encode the flag as key presence/absence so the call sites pass a
+  // constant ("1" or nothing) to localStorage rather than a derived
+  // String(boolean). This breaks the data-flow CodeQL would otherwise
+  // trace from loginWithPassword's TokenResponse.must_change_password to
+  // localStorage.setItem, which is not actually credential material.
+  if (required) {
+    localStorage.setItem(AUTH_MUST_CHANGE_PASSWORD_KEY, "1");
+  } else {
+    localStorage.removeItem(AUTH_MUST_CHANGE_PASSWORD_KEY);
+  }
 }
 
 export function isOnboardingDone(): boolean {

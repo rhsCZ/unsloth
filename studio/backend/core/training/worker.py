@@ -604,18 +604,49 @@ def _tilelang_importable() -> bool:
         return False
 
 
+def _torch_has_hip() -> bool:
+    """True iff the installed torch is a HIP / ROCm build.
+
+    We check `torch.version.hip` (non-None on ROCm wheels). This is the
+    reliable signal even on x86_64 Linux Strix Halo / MI300, where
+    `sys.platform` and `platform.machine()` look identical to a CUDA box.
+
+    Importing torch here is acceptable in the worker subprocess context:
+    the next step after kernel installers is the model load, which
+    imports torch anyway. We swallow import errors so a missing torch
+    (extremely unusual at this point) is treated as "not HIP" and the
+    rest of the gate stack handles it.
+    """
+    try:
+        import torch as _torch
+        return getattr(_torch.version, "hip", None) is not None
+    except Exception:
+        return False
+
+
 def _tilelang_platform_supported() -> bool:
-    """True iff the current platform has a tilelang 0.1.8 wheel.
+    """True iff the current platform has a usable tilelang 0.1.8 backend.
 
     tilelang publishes manylinux x86_64/aarch64 and macOS arm64 wheels
     plus a 93MB sdist; we never want the sdist on a Studio worker, so
     we restrict to Linux x86_64/aarch64 explicitly.
+
+    Excludes HIP / ROCm torch builds: tilelang 0.1.8 has no HIP GEMM
+    instruction, so `_select_gemm_instruction` raises `Unsupported
+    target for gemm: hip` mid-compile during Qwen3.5 GDN backward.
+    Reported by h34v3nzc0dex on Strix Halo (gfx1151, ROCm 7.13). The
+    pip wheel installs fine and imports cleanly, but FLA's TileLang
+    dispatcher then crashes at first training step. See PR 5434.
     """
     import platform as _platform
 
     if not sys.platform.startswith("linux"):
         return False
-    return _platform.machine().lower() in _TILELANG_SUPPORTED_LINUX_MACHINES
+    if _platform.machine().lower() not in _TILELANG_SUPPORTED_LINUX_MACHINES:
+        return False
+    if _torch_has_hip():
+        return False
+    return True
 
 
 def _pip_install_cmd(*args: str) -> list[str]:
@@ -853,6 +884,23 @@ def _install_fast_path_hooks(event_queue: Any, model_name: str) -> None:
     if os.getenv(_FAST_PATH_HOOKS_SKIP_ENV) == "1":
         logger.info("Fast-path hooks disabled via env; using substring fallback")
         return
+
+    # Defensive: on HIP/ROCm torch builds, FLA's TileLang backend (when
+    # tilelang is installed for any reason — e.g. a stale CUDA env that
+    # was reused for ROCm) crashes mid-backward with
+    # "Unsupported target for gemm: hip" inside
+    # `tilelang.tileop.gemm._select_gemm_instruction`. The install gate
+    # in `_ensure_tilelang_backend_unconditional` prevents NEW installs
+    # on HIP; this env-var setdefault disables FLA's TileLang dispatch
+    # for already-installed tilelang too. Users can override by setting
+    # FLA_TILELANG=1 explicitly. Reported by h34v3nzc0dex on Strix Halo.
+    if _torch_has_hip() and os.environ.get("FLA_TILELANG") is None:
+        os.environ["FLA_TILELANG"] = "0"
+        logger.info(
+            "HIP/ROCm torch detected; setting FLA_TILELANG=0 to keep "
+            "FLA on the safe Triton path (tilelang 0.1.8 has no HIP "
+            "GEMM backend)"
+        )
 
     try:
         from transformers.utils import import_utils as _iu

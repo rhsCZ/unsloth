@@ -1221,3 +1221,91 @@ def test_run_training_process_eagerly_installs_causal_conv1d_in_normal_mode():
         "branch, so SSM models that bypass is_causal_conv1d_available() still "
         "get the eager install"
     )
+
+
+# ───────────────────────────────────────────────────────────────────
+# HIP / ROCm regression coverage (h34v3nzc0dex Strix Halo report).
+# tilelang 0.1.8 has no HIP GEMM backend; FLA's TileLang dispatch
+# crashes mid-backward on AMD with "Unsupported target for gemm: hip".
+# The fix: skip the install on HIP-built torch AND setdefault
+# FLA_TILELANG=0 so already-installed tilelang doesn't get used either.
+# ───────────────────────────────────────────────────────────────────
+
+
+def test_tilelang_platform_unsupported_on_hip_torch(monkeypatch):
+    """Strix Halo / MI300 with ROCm torch: linux + x86_64 looks
+    identical to a CUDA box at the OS level, so the platform check
+    must consult torch.version.hip explicitly.
+    """
+    monkeypatch.setattr(worker, "_torch_has_hip", lambda: True)
+    assert worker._tilelang_platform_supported() is False
+
+
+def test_tilelang_install_skipped_on_hip_torch(monkeypatch):
+    """End-to-end: the unconditional installer must not call pip on HIP torch."""
+    monkeypatch.delenv(worker._TILELANG_SKIP_ENV, raising=False)
+    monkeypatch.setattr(worker, "_torch_has_hip", lambda: True)
+    run_mock = mock.Mock(return_value=mock.Mock(returncode=0, stdout=""))
+    monkeypatch.setattr(worker._sp, "run", run_mock)
+    monkeypatch.setattr(worker, "_send_status", lambda *a, **k: None)
+
+    result = worker._ensure_tilelang_backend_unconditional(event_queue=[])
+
+    assert result is False
+    run_mock.assert_not_called()
+
+
+def test_install_fast_path_hooks_sets_fla_tilelang_zero_on_hip(monkeypatch):
+    """When HIP torch is detected, hook installer must set
+    FLA_TILELANG=0 (via setdefault — respects user override) so any
+    PRE-EXISTING tilelang install isn't used by FLA's dispatcher.
+    """
+    import os as _os
+    monkeypatch.delenv("FLA_TILELANG", raising=False)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+    monkeypatch.setattr(worker, "_torch_has_hip", lambda: True)
+    monkeypatch.setattr(worker, "_ensure_flash_linear_attention_unconditional", lambda eq: True)
+    monkeypatch.setattr(worker, "_ensure_tilelang_backend_unconditional", lambda eq: True)
+    monkeypatch.setattr(worker, "_install_package_wheel_first", lambda **kw: True)
+
+    worker._install_fast_path_hooks(
+        event_queue=_FakeQueue(), model_name="unsloth/Qwen3.5-2B"
+    )
+
+    assert _os.environ.get("FLA_TILELANG") == "0"
+
+
+def test_install_fast_path_hooks_respects_user_fla_tilelang_override(monkeypatch):
+    """If the user explicitly set FLA_TILELANG (even on HIP), don't
+    overwrite — they may know they have a HIP-aware tilelang fork.
+    """
+    import os as _os
+    monkeypatch.setenv("FLA_TILELANG", "1")
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+    monkeypatch.setattr(worker, "_torch_has_hip", lambda: True)
+    monkeypatch.setattr(worker, "_ensure_flash_linear_attention_unconditional", lambda eq: True)
+    monkeypatch.setattr(worker, "_ensure_tilelang_backend_unconditional", lambda eq: True)
+    monkeypatch.setattr(worker, "_install_package_wheel_first", lambda **kw: True)
+
+    worker._install_fast_path_hooks(
+        event_queue=_FakeQueue(), model_name="unsloth/Qwen3.5-2B"
+    )
+
+    assert _os.environ["FLA_TILELANG"] == "1"
+
+
+def test_install_fast_path_hooks_does_not_set_fla_tilelang_on_cuda(monkeypatch):
+    """CUDA path must NOT set FLA_TILELANG (tilelang is wanted there)."""
+    import os as _os
+    monkeypatch.delenv("FLA_TILELANG", raising=False)
+    monkeypatch.delenv(worker._FAST_PATH_HOOKS_SKIP_ENV, raising=False)
+    monkeypatch.setattr(worker, "_torch_has_hip", lambda: False)
+    monkeypatch.setattr(worker, "_ensure_flash_linear_attention_unconditional", lambda eq: True)
+    monkeypatch.setattr(worker, "_ensure_tilelang_backend_unconditional", lambda eq: True)
+    monkeypatch.setattr(worker, "_install_package_wheel_first", lambda **kw: True)
+
+    worker._install_fast_path_hooks(
+        event_queue=_FakeQueue(), model_name="unsloth/Qwen3.5-2B"
+    )
+
+    assert _os.environ.get("FLA_TILELANG") is None

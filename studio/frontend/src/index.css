@@ -1131,3 +1131,9 @@
 	animation: none;
 	mix-blend-mode: normal;
 }
+
+/* Sonner hardcodes `top: 0` on the close button; pin it tight to the corner
+   so the X stays at the top of every toast regardless of toast height. */
+[data-sonner-toast][data-styled="true"] [data-close-button] {
+	top: 8px !important;
+}

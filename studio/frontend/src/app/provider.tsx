@@ -291,7 +291,15 @@ export function AppProvider({ children }: AppProviderProps) {
       <TauriWrapper>
         {children}
       </TauriWrapper>
-      <Toaster position="top-right" visibleToasts={2} expand={true} />
+      <Toaster
+        position="top-right"
+        visibleToasts={2}
+        expand={true}
+        closeButton
+        // Sit at the header line, shifted left so toasts don't overlap the
+        // chat parameters / settings buttons on the right edge.
+        offset={{ top: 12, right: 64 }}
+      />
     </ThemeProvider>
   );
 }

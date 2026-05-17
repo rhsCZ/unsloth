@@ -271,13 +271,17 @@ def cmd_train(args) -> int:
         config = MLXTrainingConfig(
             per_device_train_batch_size = 2,
             gradient_accumulation_steps = 3,
-            # max_steps tuned against MLX's AdamW bias_correction=True path
-            # (matches torch.AdamW). Empirically 15-30 steps reliably emits
-            # "Unsloth" in greedy across 4 different seeds; 7 sits below
-            # the convergence horizon and 50+ overshoots past the basin.
-            # See https://github.com/danielhanchen/unsloth-staging-2/pull/119
-            # for the bisection.
-            max_steps = 20,
+            # max_steps tuned against MLX's AdamW bias_correction=True
+            # path (matches torch.AdamW). Empirically:
+            #   7 steps:  below the convergence horizon, fails on all 4
+            #             tested seeds
+            #   20 steps: works on seeds 3407/42/999, fails on seed=1337
+            #   30 steps: works on all 4 seeds (3407/42/999/1337)
+            #   50 steps: drifts past the basin on seeds 3407/42
+            #   100 steps: re-enters the basin on seed 3407
+            # 30 is the central seed-robust value. Bisection workflow:
+            # https://github.com/danielhanchen/unsloth-staging-2/pull/119
+            max_steps = 30,
             learning_rate = 1e-3,
             warmup_steps = 0,
             lr_scheduler_type = "constant",
@@ -329,8 +333,8 @@ def cmd_train(args) -> int:
         if k in train_result
     }
     assert (
-        len(losses_per_step) == 20
-    ), f"expected 20 logged steps, got {losses_per_step}"
+        len(losses_per_step) == 30
+    ), f"expected 30 logged steps, got {losses_per_step}"
     for i, l in enumerate(losses_per_step):
         assert math.isfinite(l) and 0 < l < 50, f"step {i+1} loss bad: {l}"
     assert (
@@ -342,6 +346,17 @@ def cmd_train(args) -> int:
     metrics["post_train_loss"] = round(post_loss, 4)
     metrics["post_train_grad_norm"] = round(post_norm, 4)
     assert post_loss < pre_loss, f"post {post_loss} >= pre {pre_loss}"
+    # Numeric memorization gate. With this config (bs=2, grad_accum=3,
+    # lr=1e-3, max_steps=30) the model reliably fits the single train
+    # row to post_train_loss < 0.05 across all 4 seeds tested. This is
+    # the load-bearing assertion -- the greedy "Unsloth" string check
+    # below is a softer sanity gate because greedy decoding from the
+    # prompt is sensitive to the LoRA basin shape even at the same
+    # post_train_loss.
+    assert post_loss < 0.1, (
+        f"post_train_loss {post_loss:.4f} >= 0.1 -- model did not "
+        f"memorize the train row. Trainer regression suspected."
+    )
 
     from mlx_lm import generate
 

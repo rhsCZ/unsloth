@@ -101,6 +101,46 @@ _SWA_CACHE: Optional[dict] = None
 _SWA_CACHE_LOCK = threading.Lock()
 
 
+def _probe_dns_dead(host: str = "huggingface.co", timeout: float = 2.0) -> bool:
+    """Quick blocking DNS check. Restores any prior default timeout."""
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        try:
+            socket.gethostbyname(host)
+            return False
+        except Exception:
+            return True
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
+@contextlib.contextmanager
+def _hf_offline_if_dns_dead():
+    """Set HF_HUB_OFFLINE for the body of this block only when DNS to
+    huggingface.co fails. Restores the env on exit so a transient
+    resolver hiccup at the start of one load can't quarantine the whole
+    process. Respects an explicit user setting (no-op if already set)."""
+    if "HF_HUB_OFFLINE" in os.environ:
+        yield False
+        return
+    if not _probe_dns_dead():
+        yield False
+        return
+
+    transformers_was_set = "TRANSFORMERS_OFFLINE" in os.environ
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    if not transformers_was_set:
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    logger.warning("huggingface.co unreachable; using local HF cache for this load.")
+    try:
+        yield True
+    finally:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        if not transformers_was_set:
+            os.environ.pop("TRANSFORMERS_OFFLINE", None)
+
+
 def _swa_cache_path() -> Path:
     home = os.environ.get("UNSLOTH_STUDIO_HOME") or os.environ.get("STUDIO_HOME")
     base = Path(home) if home else Path.home() / ".unsloth" / "studio"
@@ -1777,66 +1817,49 @@ class LlamaCppBackend:
             # Offline: resolve variant -> filename from the local HF cache.
             # The heuristic below assumes filenames echo the repo name,
             # which breaks for e.g. Qwen3.6-27B-MTP-GGUF (no "MTP" in file).
+            # Match against the rel path (not just basename) so subdir
+            # layouts like ``BF16/foo.gguf`` are findable.
             if not gguf_filename:
                 try:
-                    from huggingface_hub import constants as hf_constants
+                    from utils.models.model_config import _iter_hf_cache_snapshots
 
-                    cache_root = Path(hf_constants.HF_HUB_CACHE)
-                    target = f"models--{hf_repo.replace('/', '--')}".lower()
-                    repo_dir = next(
-                        (
-                            e
-                            for e in cache_root.iterdir()
-                            if e.is_dir() and e.name.lower() == target
-                        ),
-                        None,
+                    boundary = re.compile(
+                        r"(?<![a-zA-Z0-9])"
+                        + re.escape(hf_variant.lower())
+                        + r"(?![a-zA-Z0-9])"
                     )
-                    if repo_dir and (repo_dir / "snapshots").is_dir():
-                        boundary = re.compile(
-                            r"(?<![a-zA-Z0-9])"
-                            + re.escape(hf_variant.lower())
-                            + r"(?![a-zA-Z0-9])"
+                    for snap in _iter_hf_cache_snapshots(hf_repo):
+                        matches = sorted(
+                            p.relative_to(snap).as_posix()
+                            for p in snap.rglob("*.gguf")
+                            if "mmproj" not in p.name.lower()
+                            and boundary.search(p.relative_to(snap).as_posix().lower())
                         )
-                        snap_dirs = sorted(
-                            (
-                                s
-                                for s in (repo_dir / "snapshots").iterdir()
-                                if s.is_dir()
-                            ),
-                            key = lambda s: s.stat().st_mtime,
-                            reverse = True,
-                        )
-                        for snap in snap_dirs:
-                            matches = sorted(
-                                p.relative_to(snap).as_posix()
-                                for p in snap.rglob("*.gguf")
-                                if "mmproj" not in p.name.lower()
-                                and boundary.search(p.name.lower())
+                        if not matches:
+                            continue
+                        gguf_filename = matches[0]
+                        m = _SHARD_FULL_RE.match(Path(gguf_filename).name)
+                        if m:
+                            prefix = m.group(1)
+                            total = m.group(3)
+                            sibling_pat = re.compile(
+                                r"^"
+                                + re.escape(prefix)
+                                + r"-\d{5}-of-"
+                                + re.escape(total)
+                                + r"\.gguf$"
                             )
-                            if matches:
-                                gguf_filename = matches[0]
-                                m = _SHARD_FULL_RE.match(Path(gguf_filename).name)
-                                if m:
-                                    prefix = m.group(1)
-                                    total = m.group(3)
-                                    sibling_pat = re.compile(
-                                        r"^"
-                                        + re.escape(prefix)
-                                        + r"-\d{5}-of-"
-                                        + re.escape(total)
-                                        + r"\.gguf$"
-                                    )
-                                    gguf_extra_shards = [
-                                        f
-                                        for f in matches[1:]
-                                        if sibling_pat.match(Path(f).name)
-                                    ]
-                                logger.info(
-                                    "Resolved variant %s -> %s from local HF cache",
-                                    hf_variant,
-                                    gguf_filename,
-                                )
-                                break
+                            gguf_extra_shards = [
+                                f
+                                for f in matches[1:]
+                                if sibling_pat.match(Path(f).name)
+                            ]
+                        logger.info(
+                            "Resolved variant %s -> %s from local HF cache",
+                            hf_variant,
+                            gguf_filename,
+                        )
+                        break
                 except Exception as e:
                     logger.debug(f"Offline cache lookup for variant failed: {e}")
 
@@ -2049,23 +2072,6 @@ class LlamaCppBackend:
         """
         self._cancel_event.clear()
 
-        # Offline auto-detect: skip 25s of hf_hub_download retries if DNS
-        # is dead; cached files resolve instantly under HF_HUB_OFFLINE=1.
-        if hf_repo and "HF_HUB_OFFLINE" not in os.environ:
-            import socket as _socket
-
-            try:
-                _socket.setdefaulttimeout(2.0)
-                _socket.gethostbyname("huggingface.co")
-            except Exception:
-                os.environ["HF_HUB_OFFLINE"] = "1"
-                os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-                logger.warning(
-                    "huggingface.co unreachable -- enabling HF_HUB_OFFLINE for this process."
-                )
-            finally:
-                _socket.setdefaulttimeout(None)
-
         # ── Phase 1: kill old process (under lock, fast) ──────────
         with self._lock:
             self._kill_process()
@@ -2079,18 +2085,21 @@ class LlamaCppBackend:
             )
 
         # ── Phase 2: download (NO lock held, so cancel can proceed) ──
+        # Scope HF_HUB_OFFLINE to the download block only when DNS is
+        # dead; cleanup runs even on exception so a transient hiccup
+        # at the start of one load cannot quarantine future loads.
         if hf_repo:
-            model_path = self._download_gguf(
-                hf_repo = hf_repo,
-                hf_variant = hf_variant,
-                hf_token = hf_token,
-            )
-            # Auto-download mmproj for vision models
-            if is_vision and not mmproj_path:
-                mmproj_path = self._download_mmproj(
+            with _hf_offline_if_dns_dead():
+                model_path = self._download_gguf(
                     hf_repo = hf_repo,
+                    hf_variant = hf_variant,
                     hf_token = hf_token,
                 )
+                if is_vision and not mmproj_path:
+                    mmproj_path = self._download_mmproj(
+                        hf_repo = hf_repo,
+                        hf_token = hf_token,
+                    )
         elif gguf_path:
             if not Path(gguf_path).is_file():
                 raise FileNotFoundError(f"GGUF file not found: {gguf_path}")

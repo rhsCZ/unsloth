@@ -650,17 +650,24 @@ def run_inference_process(
 
     # Offline auto-detect: skip 25s of hf_hub_download retries per file
     # if DNS is dead; cached files resolve instantly under HF_HUB_OFFLINE=1.
+    # Scope is this subprocess only -- orchestrator spawns a fresh worker
+    # per load (see core/inference/orchestrator.py), so the env cannot
+    # persist across loads.
     if "HF_HUB_OFFLINE" not in os.environ:
         import socket as _socket
 
+        prev_timeout = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(2.0)
         try:
-            _socket.setdefaulttimeout(2.0)
             _socket.gethostbyname("huggingface.co")
         except Exception:
             os.environ["HF_HUB_OFFLINE"] = "1"
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            logger.warning(
+                "huggingface.co unreachable; HF_HUB_OFFLINE=1 set for this worker."
+            )
         finally:
-            _socket.setdefaulttimeout(None)
+            _socket.setdefaulttimeout(prev_timeout)
 
     import warnings
     from loggers.config import LogConfig

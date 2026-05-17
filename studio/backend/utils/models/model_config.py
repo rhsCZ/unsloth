@@ -1283,37 +1283,51 @@ def _extract_quant_label(filename: str) -> str:
     return stem.split("-")[-1]
 
 
+def _iter_hf_cache_snapshots(repo_id: str):
+    """Yield HF cache snapshot dirs for *repo_id*, newest first.
+
+    Empty generator if HF_HUB_CACHE is missing, the repo isn't cached,
+    or has no snapshots. Repo name match is case-insensitive to handle
+    casing drift between download time and lookup.
+    """
+    try:
+        from huggingface_hub import constants as hf_constants
+    except Exception:
+        return
+
+    cache_dir = Path(hf_constants.HF_HUB_CACHE)
+    if not cache_dir.is_dir():
+        return
+
+    target = f"models--{repo_id.replace('/', '--')}".lower()
+    repo_dir: Optional[Path] = None
+    try:
+        for entry in cache_dir.iterdir():
+            if entry.is_dir() and entry.name.lower() == target:
+                repo_dir = entry
+                break
+    except OSError:
+        return
+    if repo_dir is None:
+        return
+
+    snapshots = repo_dir / "snapshots"
+    if not snapshots.is_dir():
+        return
+
+    try:
+        snap_dirs = [s for s in snapshots.iterdir() if s.is_dir()]
+    except OSError:
+        return
+    snap_dirs.sort(key = lambda s: s.stat().st_mtime, reverse = True)
+    yield from snap_dirs
+
+
 def _list_gguf_variants_from_hf_cache(
     repo_id: str,
 ) -> Optional[tuple[list[GgufVariantInfo], bool]]:
     """Variants from the local HF cache snapshot, or None if not cached."""
-    try:
-        from huggingface_hub import constants as hf_constants
-    except Exception:
-        return None
-
-    cache_dir = Path(hf_constants.HF_HUB_CACHE)
-    if not cache_dir.is_dir():
-        return None
-
-    target = f"models--{repo_id.replace('/', '--')}".lower()
-    repo_dir: Optional[Path] = None
-    for entry in cache_dir.iterdir():
-        if entry.is_dir() and entry.name.lower() == target:
-            repo_dir = entry
-            break
-    if repo_dir is None:
-        return None
-
-    snapshots = repo_dir / "snapshots"
-    if not snapshots.is_dir():
-        return None
-
-    snap_dirs = [s for s in snapshots.iterdir() if s.is_dir()]
-    if not snap_dirs:
-        return None
-    snap_dirs.sort(key = lambda s: s.stat().st_mtime, reverse = True)
-    for snap in snap_dirs:
+    for snap in _iter_hf_cache_snapshots(repo_id):
         variants, has_vision = list_local_gguf_variants(str(snap))
         if variants or has_vision:
             return variants, has_vision
@@ -1501,31 +1515,7 @@ def _find_local_gguf_by_variant(directory: str, variant: str) -> Optional[str]:
 
 def _detect_gguf_from_hf_cache(repo_id: str) -> Optional[str]:
     """Best GGUF filename for *repo_id* from the local HF cache, or None."""
-    try:
-        from huggingface_hub import constants as hf_constants
-    except Exception:
-        return None
-
-    cache_dir = Path(hf_constants.HF_HUB_CACHE)
-    if not cache_dir.is_dir():
-        return None
-
-    target = f"models--{repo_id.replace('/', '--')}".lower()
-    repo_dir: Optional[Path] = None
-    for entry in cache_dir.iterdir():
-        if entry.is_dir() and entry.name.lower() == target:
-            repo_dir = entry
-            break
-    if repo_dir is None:
-        return None
-
-    snapshots = repo_dir / "snapshots"
-    if not snapshots.is_dir():
-        return None
-
-    snap_dirs = [s for s in snapshots.iterdir() if s.is_dir()]
-    snap_dirs.sort(key = lambda s: s.stat().st_mtime, reverse = True)
-    for snap in snap_dirs:
+    for snap in _iter_hf_cache_snapshots(repo_id):
         rel_files = [
             f.relative_to(snap).as_posix()
             for f in _iter_gguf_files(snap, recursive = True)

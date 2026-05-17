@@ -653,6 +653,7 @@ def run_inference_process(
     # local cache directly instead of burning ~25s per file on retries.
     if "HF_HUB_OFFLINE" not in os.environ:
         import socket as _socket
+
         try:
             _socket.setdefaulttimeout(2.0)
             _socket.gethostbyname("huggingface.co")

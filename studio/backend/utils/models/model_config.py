@@ -1336,10 +1336,11 @@ def list_gguf_variants(
     from huggingface_hub import model_info as hf_model_info
 
     # Offline mode: serve from cache, skip the API call entirely.
-    offline = (
-        os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes")
-        or os.environ.get("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes")
-    )
+    offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or os.environ.get("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes")
     if offline:
         cached = _list_gguf_variants_from_hf_cache(repo_id)
         if cached is not None:
@@ -1558,10 +1559,11 @@ def detect_gguf_model_remote(
     import time
     from huggingface_hub import model_info as hf_model_info
 
-    offline = (
-        os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes")
-        or os.environ.get("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes")
-    )
+    offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ) or os.environ.get("TRANSFORMERS_OFFLINE", "").lower() in ("1", "true", "yes")
     if offline:
         cached = _detect_gguf_from_hf_cache(repo_id)
         if cached is not None:

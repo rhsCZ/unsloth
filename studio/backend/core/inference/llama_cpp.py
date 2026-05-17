@@ -1782,11 +1782,13 @@ class LlamaCppBackend:
             if not gguf_filename:
                 try:
                     from huggingface_hub import constants as hf_constants
+
                     cache_root = Path(hf_constants.HF_HUB_CACHE)
                     target = f"models--{hf_repo.replace('/', '--')}".lower()
                     repo_dir = next(
                         (
-                            e for e in cache_root.iterdir()
+                            e
+                            for e in cache_root.iterdir()
                             if e.is_dir() and e.name.lower() == target
                         ),
                         None,
@@ -1799,7 +1801,8 @@ class LlamaCppBackend:
                         )
                         snap_dirs = sorted(
                             (
-                                s for s in (repo_dir / "snapshots").iterdir()
+                                s
+                                for s in (repo_dir / "snapshots").iterdir()
                                 if s.is_dir()
                             ),
                             key = lambda s: s.stat().st_mtime,
@@ -1814,9 +1817,7 @@ class LlamaCppBackend:
                             )
                             if matches:
                                 gguf_filename = matches[0]
-                                m = _SHARD_FULL_RE.match(
-                                    Path(gguf_filename).name
-                                )
+                                m = _SHARD_FULL_RE.match(Path(gguf_filename).name)
                                 if m:
                                     prefix = m.group(1)
                                     total = m.group(3)
@@ -1839,9 +1840,7 @@ class LlamaCppBackend:
                                 )
                                 break
                 except Exception as e:
-                    logger.debug(
-                        f"Offline cache lookup for variant failed: {e}"
-                    )
+                    logger.debug(f"Offline cache lookup for variant failed: {e}")
 
             if not gguf_filename:
                 repo_name = hf_repo.split("/")[-1].replace("-GGUF", "")
@@ -2058,6 +2057,7 @@ class LlamaCppBackend:
         # makes the cache hit instant.
         if hf_repo and "HF_HUB_OFFLINE" not in os.environ:
             import socket as _socket
+
             try:
                 _socket.setdefaulttimeout(2.0)
                 _socket.gethostbyname("huggingface.co")

@@ -330,6 +330,13 @@ export function ChatProvidersSettings({
               updatedAt,
             };
           });
+        // Server is authoritative when it has rows. If the server has none
+        // but localStorage does, keep the local list so the model picker
+        // (which renders from the same store) doesn't lose entries the
+        // user can still use. The next provider add/edit promotes them.
+        if (syncedProviders.length === 0 && providersRef.current.length > 0) {
+          return;
+        }
         onProvidersChange(syncedProviders);
       } catch (error) {
         const message =
@@ -501,19 +508,28 @@ export function ChatProvidersSettings({
       return;
     }
     const curated = selectedRegistryEntry?.model_list_mode === "curated";
-    const manualModels = isCustomProvider || curated;
+    const manualOnly = isCustomProvider || curated;
+    // Remote-mode providers can also accept manual IDs as a fallback
+    // when the user knows the model name (no live API call needed).
+    const manualIds = parseManualModelIds(manualModelIds);
+    const allowManual = manualOnly || manualIds.length > 0;
     const modelsToSave = pruneProviderModelIds(
       providerType,
-      manualModels
+      allowManual
       ? [
           ...new Set([
             ...selectedModelIds,
-            ...parseManualModelIds(manualModelIds),
+            ...manualIds,
           ]),
         ]
       : [...selectedModelIds],
     );
-    if (manualModels) {
+    if (manualOnly) {
+      if (modelsToSave.length === 0) {
+        toast.error("Add at least one model ID.");
+        return;
+      }
+    } else if (manualIds.length > 0) {
       if (modelsToSave.length === 0) {
         toast.error("Add at least one model ID.");
         return;
@@ -521,7 +537,7 @@ export function ChatProvidersSettings({
     } else {
       if (availableModels.length === 0) {
         toast.error(
-          "Load available models first, then choose which to enable.",
+          "Load available models or enter model IDs manually below.",
         );
         return;
       }
@@ -553,7 +569,7 @@ export function ChatProvidersSettings({
         name: created.display_name,
         baseUrl: created.base_url ?? "",
         models: modelsToSave,
-        availableModels: manualModels
+        availableModels: manualOnly
           ? []
           : pruneProviderModelIds(providerType, availableModels),
         isReasoningModel: supportsProviderReasoningToggle(uiProviderType)
@@ -597,19 +613,21 @@ export function ChatProvidersSettings({
     }
     const entry = registryByType.get(existing.providerType);
     const curated = entry?.model_list_mode === "curated";
-    const manualModels = isEditingCustomProvider || curated;
+    const manualOnly = isEditingCustomProvider || curated;
+    const manualIds = parseManualModelIds(manualModelIds);
+    const allowManual = manualOnly || manualIds.length > 0;
     const modelsToSave = pruneProviderModelIds(
       existing.providerType,
-      manualModels
+      allowManual
       ? [
           ...new Set([
             ...selectedModelIds,
-            ...parseManualModelIds(manualModelIds),
+            ...manualIds,
           ]),
         ]
       : [...selectedModelIds],
     );
-    if (manualModels) {
+    if (manualOnly || manualIds.length > 0) {
       if (modelsToSave.length === 0) {
         toast.error("Add at least one model ID.");
         return;
@@ -617,7 +635,7 @@ export function ChatProvidersSettings({
     } else {
       if (availableModels.length === 0) {
         toast.error(
-          "Load available models first, then choose which to enable.",
+          "Load available models or enter model IDs manually below.",
         );
         return;
       }
@@ -655,7 +673,7 @@ export function ChatProvidersSettings({
                 name: updated.display_name,
                 baseUrl: updated.base_url ?? "",
                 models: modelsToSave,
-                availableModels: manualModels
+                availableModels: manualOnly
                   ? []
                   : pruneProviderModelIds(existing.providerType, availableModels),
                 isReasoningModel: supportsProviderReasoningToggle(
@@ -1184,71 +1202,96 @@ export function ChatProvidersSettings({
                       />
                     </div>
                   </div>
-                ) : availableModels.length === 0 ? null : (
+                ) : (
                   <div className="space-y-3 px-4 py-4">
-                    <div className="grid grid-cols-[112px_minmax(220px,330px)_auto] items-center gap-3 max-sm:grid-cols-1">
-                      <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                        {availableModelsLabel}
-                      </span>
-                      <Input
-                        id={`provider-model-search-${modelsPanelKey}`}
-                        type="search"
-                        value={modelSearchQuery}
-                        onChange={(event) =>
-                          setModelSearchQuery(event.target.value)
-                        }
-                        placeholder="Search"
-                        aria-label="Search models"
-                        className={modelSearchInputClassName}
-                      />
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2 text-xs font-medium text-foreground/80 hover:bg-muted/45"
-                          onClick={selectAllModels}
-                        >
-                          Select all
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 px-2 text-xs font-medium text-foreground/80 hover:bg-muted/45"
-                          onClick={clearModelSelection}
-                        >
-                          Clear
-                        </Button>
-                      </div>
-                    </div>
-                    <ul className="max-h-56 overflow-y-auto rounded-[8px] border border-border/70 bg-background/50">
-                      {filteredAvailableModels.length === 0 ? (
-                        <li className="px-3 py-3 text-xs text-muted-foreground">
-                          No matching models
-                        </li>
-                      ) : (
-                        filteredAvailableModels.map((model, index) => (
-                          <li
-                            key={model}
-                            className="flex cursor-pointer items-center gap-2.5 border-border/60 border-b px-3 py-2 last:border-b-0 hover:bg-muted/35"
-                            onClick={() => toggleModel(model)}
-                          >
-                            <Checkbox
-                              id={`provider-model-remote-${modelsPanelKey}-${index}`}
-                              checked={selectedModelIds.includes(model)}
-                              onCheckedChange={() => toggleModel(model)}
-                              onClick={(event) => event.stopPropagation()}
-                            />
-                            <span
-                              className="min-w-0 break-all text-sm leading-tight"
+                    {availableModels.length === 0 ? null : (
+                      <>
+                        <div className="grid grid-cols-[112px_minmax(220px,330px)_auto] items-center gap-3 max-sm:grid-cols-1">
+                          <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                            {availableModelsLabel}
+                          </span>
+                          <Input
+                            id={`provider-model-search-${modelsPanelKey}`}
+                            type="search"
+                            value={modelSearchQuery}
+                            onChange={(event) =>
+                              setModelSearchQuery(event.target.value)
+                            }
+                            placeholder="Search"
+                            aria-label="Search models"
+                            className={modelSearchInputClassName}
+                          />
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs font-medium text-foreground/80 hover:bg-muted/45"
+                              onClick={selectAllModels}
                             >
-                              {model}
-                            </span>
-                          </li>
-                        ))
-                      )}
-                    </ul>
+                              Select all
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-xs font-medium text-foreground/80 hover:bg-muted/45"
+                              onClick={clearModelSelection}
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                        </div>
+                        <ul className="max-h-56 overflow-y-auto rounded-[8px] border border-border/70 bg-background/50">
+                          {filteredAvailableModels.length === 0 ? (
+                            <li className="px-3 py-3 text-xs text-muted-foreground">
+                              No matching models
+                            </li>
+                          ) : (
+                            filteredAvailableModels.map((model, index) => (
+                              <li
+                                key={model}
+                                className="flex cursor-pointer items-center gap-2.5 border-border/60 border-b px-3 py-2 last:border-b-0 hover:bg-muted/35"
+                                onClick={() => toggleModel(model)}
+                              >
+                                <Checkbox
+                                  id={`provider-model-remote-${modelsPanelKey}-${index}`}
+                                  checked={selectedModelIds.includes(model)}
+                                  onCheckedChange={() => toggleModel(model)}
+                                  onClick={(event) => event.stopPropagation()}
+                                />
+                                <span
+                                  className="min-w-0 break-all text-sm leading-tight"
+                                >
+                                  {model}
+                                </span>
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                      </>
+                    )}
+                    {/* Fallback: paste model IDs when the live catalog is unavailable. */}
+                    <div className="space-y-2">
+                      <Label
+                        htmlFor="provider-manual-models"
+                        className="text-sm font-medium"
+                      >
+                        {availableModels.length === 0
+                          ? "Or enter model IDs manually (one per line or comma-separated)"
+                          : "Additional model IDs (one per line or comma-separated)"}
+                      </Label>
+                      <Textarea
+                        id="provider-manual-models"
+                        value={manualModelIds}
+                        onChange={(event) =>
+                          setManualModelIds(event.target.value)
+                        }
+                        placeholder={"model-id-1\nmodel-id-2"}
+                        rows={4}
+                        className="min-h-[80px] resize-y font-mono text-sm"
+                      />
+                    </div>
                   </div>
                 )}
               </motion.div>

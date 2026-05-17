@@ -63,6 +63,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
           "--border-radius": "var(--radius)",
+          // Anchor close button inside the toast, top-right (overrides sonner's
+          // default left placement and outside-corner translate).
+          "--toast-close-button-start": "unset",
+          "--toast-close-button-end": "unset",
+          "--toast-close-button-transform": "none",
         } as React.CSSProperties
       }
       toastOptions={{

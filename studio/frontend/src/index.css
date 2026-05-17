@@ -996,8 +996,7 @@
 	}
 }
 
-/* Toast text must be selectable so users can copy errors / logs.
-   Buttons stay non-selectable for clean clicks. */
+/* Selectable toast text; non-selectable toast buttons. */
 [data-sonner-toast],
 [data-sonner-toast] [data-content],
 [data-sonner-toast] [data-title],

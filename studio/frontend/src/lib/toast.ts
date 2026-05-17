@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-/**
- * sonner `toast` wrapper that defaults `dismissible: false`.
- *
- * sonner's swipe-to-dismiss captures the pointer on mousedown, which
- * blocks browser text selection inside the toast body. Setting
- * `dismissible: false` skips that capture so users can highlight and
- * copy error / log messages. Auto-dismiss, close buttons, and action
- * buttons still work. Callers can opt back in with `dismissible: true`.
- *
- * Drop-in replacement: `import { toast } from "@/lib/toast"`.
- */
+// sonner `toast` wrapper that defaults `dismissible: false` so swipe
+// capture doesn't block text selection. Drop-in for `from "sonner"`.
 
 import { toast as sonnerToast, type ExternalToast } from "sonner";
 
@@ -19,8 +10,7 @@ type AnyFn = (...args: unknown[]) => unknown;
 
 function withDismissibleFalse<F extends AnyFn>(fn: F): F {
   return ((...args: unknown[]) => {
-    // Toast methods are `(message, options?)`. Decide by arity so
-    // React-element messages are not mistaken for options.
+    // Branch by arity: React-element messages are objects too.
     if (args.length <= 1) {
       args.push({ dismissible: false } satisfies ExternalToast);
     } else {
@@ -41,8 +31,7 @@ const wrappedCallable = withDismissibleFalse(
   sonnerToast as unknown as AnyFn,
 ) as typeof sonnerToast;
 
-// `promise`, `dismiss`, `getHistory`, `getToasts` don't take per-toast
-// options so they pass through unchanged.
+// `promise`, `dismiss`, `getHistory`, `getToasts` take no options.
 export const toast: typeof sonnerToast = Object.assign(wrappedCallable, {
   success: withDismissibleFalse(sonnerToast.success.bind(sonnerToast) as AnyFn) as typeof sonnerToast.success,
   info: withDismissibleFalse(sonnerToast.info.bind(sonnerToast) as AnyFn) as typeof sonnerToast.info,

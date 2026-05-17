@@ -1380,10 +1380,7 @@ export function ChatPage(): ReactElement {
                 role="status"
                 aria-live="polite"
               >
-                <CopyableErrorChip
-                  message={modelsError}
-                  ariaLabel="Show full model error and copy"
-                />
+                <CopyableErrorChip message={modelsError} />
               </div>
             ) : null}
           </div>

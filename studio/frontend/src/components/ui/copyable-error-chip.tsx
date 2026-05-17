@@ -17,13 +17,11 @@ import { useEffect, useRef, useState } from "react";
 interface CopyableErrorChipProps {
   message: string;
   className?: string;
-  ariaLabel?: string;
 }
 
 export function CopyableErrorChip({
   message,
   className,
-  ariaLabel,
 }: CopyableErrorChipProps) {
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -48,9 +46,11 @@ export function CopyableErrorChip({
   return (
     <Popover>
       <PopoverTrigger asChild={true}>
+        {/* No aria-label override: the visible message text is the
+            button's accessible name, so screen readers announce the
+            full (untruncated) error. Truncation here is purely visual. */}
         <button
           type="button"
-          aria-label={ariaLabel ?? "Show full error message"}
           className={cn(
             "flex max-w-[28rem] min-w-0 cursor-pointer items-center rounded-md text-left text-xs text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             className,

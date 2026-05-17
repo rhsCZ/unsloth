@@ -63,18 +63,19 @@ const Toaster = ({ ...props }: ToasterProps) => {
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
           "--border-radius": "var(--radius)",
-          // Anchor close button inside the toast, top-right (overrides sonner's
-          // default left placement and outside-corner translate).
+          // Anchor close button on the right inside the toast (overrides
+          // sonner's default left placement and outside-corner translate).
+          // Vertical centering of the button is done via a rule in index.css.
           "--toast-close-button-start": "unset",
           "--toast-close-button-end": "unset",
-          "--toast-close-button-transform": "none",
+          "--toast-close-button-transform": "translateY(-50%)",
         } as React.CSSProperties
       }
       toastOptions={{
         classNames: {
           toast: "cn-toast",
           description: "!text-muted-foreground",
-          closeButton: "!top-3 !right-3 !translate-y-0",
+          closeButton: "!right-3",
         },
       }}
       {...props}

@@ -69,7 +69,15 @@ _DENYLIST_GROUPS: tuple[frozenset[str], ...] = (
     # Single-model server -- Studio runs one model per llama-server
     # process and serves its own UI. Enabling multi-model loading or
     # llama-server's built-in web UI changes the surface clients see.
+    # ``--webui``/``--no-webui`` are the legacy spelling; current
+    # upstream uses ``--ui``/``--no-ui`` + ``--ui-*`` companions.
+    # Keep both so the denylist matches old and new llama-server
+    # binaries (Studio's prebuilt vs system-llama.cpp).
     frozenset({"--webui", "--no-webui"}),
+    frozenset({"--ui", "--no-ui"}),
+    frozenset({"--ui-config"}),
+    frozenset({"--ui-config-file"}),
+    frozenset({"--ui-mcp-proxy", "--no-ui-mcp-proxy"}),
     frozenset({"--models-dir"}),
     frozenset({"--models-preset"}),
     frozenset({"--models-max"}),

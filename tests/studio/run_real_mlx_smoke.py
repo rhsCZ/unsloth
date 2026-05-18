@@ -287,7 +287,13 @@ def cmd_train(args) -> int:
             lr_scheduler_type = "constant",
             optim = "adamw",
             weight_decay = 0.0,
-            max_grad_norm = 1.0,
+            # Elementwise clip is materially cheaper than norm clip on
+            # MLX (no cross-tree reduction). Be explicit so users / CI
+            # don't get a "both enabled, value wins" notice from the
+            # trainer when MLXTrainingConfig's max_grad_value default
+            # fires alongside an HF-style max_grad_norm.
+            max_grad_norm = 0.0,
+            max_grad_value = 1.0,
             logging_steps = 1,
             max_seq_length = 64,
             seed = SEED,

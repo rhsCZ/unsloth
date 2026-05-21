@@ -1184,6 +1184,9 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         extra_args += data_collator_check
 
         # Also check if .pad exists -> if not, and is VLM, then change it!
+        # Only swap LM/Seq2Seq collators; leave preference collators
+        # (DPODataCollatorWithPadding etc.) alone so ORPO/DPO/CPO/KTO keep
+        # their own prompt/chosen/rejected handling.
         pad_check = (
             "if not isinstance(data_collator, UnslothVisionDataCollator):\n"
             "    if not hasattr(__tokenizer, 'pad') and hasattr(__tokenizer, 'tokenizer'):\n"
@@ -1192,7 +1195,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
             "                __tokenizer.tokenizer,\n"
             "                pad_to_multiple_of = getattr(args, 'pad_to_multiple_of', None),\n"
             "            )\n"
-            "        else:\n"
+            "        elif isinstance(data_collator, TransformersDataCollatorForLanguageModeling):\n"
             "            data_collator = TransformersDataCollatorForLanguageModeling(\n"
             "                __tokenizer.tokenizer,\n"
             "                mlm = False,\n"
@@ -2270,6 +2273,11 @@ def patch_trl_vllm_generation():
 def PatchFastRL(algorithm = None, FastLanguageModel = None):
     if FastLanguageModel is not None:
         PatchRL(FastLanguageModel)
+    # Under UNSLOTH_ALLOW_CPU=1 (CPU-only CI), skip TRL trainer rewriting so
+    # downstream `inspect.getsource(trl.SFTTrainer)` drift detectors see the
+    # pristine upstream class, not the compiled Unsloth* wrappers.
+    if os.environ.get("UNSLOTH_ALLOW_CPU", "0") == "1":
+        return
     # Install the disable_gradient_checkpointing noop BEFORE
     # patch_trl_rl_trainers. patch_trl_rl_trainers imports extra trl.* trainer
     # submodules while generating the compiled cache; any new trl.* modules

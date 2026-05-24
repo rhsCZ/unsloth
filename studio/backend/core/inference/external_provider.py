@@ -9,9 +9,10 @@ Anthropic uses native Messages API with translation in this client.
 """
 
 import json as _json
+import mimetypes
 import re
 import time
-from typing import Any, AsyncGenerator, Literal, NamedTuple, Optional
+from typing import Any, AsyncGenerator, Literal, NamedTuple, Optional, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -295,6 +296,23 @@ class ExternalProviderClient:
     ):
         self.provider_type = provider_type
         self.base_url = base_url.rstrip("/")
+        # Legacy Gemini configs saved with the OpenAI-compatibility base
+        # (`/v1beta/openai`) build broken native URLs after PR #5720
+        # switched Gemini onto the native streamGenerateContent endpoint
+        # (`/v1beta/openai/models/{model}:streamGenerateContent` 404s).
+        # Strip the `/openai` suffix transparently so saved providers keep
+        # working without a manual re-config. Gate strictly to the
+        # Google-hosted base so custom proxies whose paths also end in
+        # `/openai` (e.g. `https://proxy.example.com/team/openai`) are
+        # left untouched.
+        if self.provider_type == "gemini":
+            _parsed_base = urlparse(self.base_url)
+            if (
+                (_parsed_base.hostname or "").lower()
+                == "generativelanguage.googleapis.com"
+                and _parsed_base.path.rstrip("/") == "/v1beta/openai"
+            ):
+                self.base_url = self.base_url[: -len("/openai")]
         self.api_key = api_key
         self._timeout = httpx.Timeout(timeout, connect = 10.0)
         # Separate timeout for SSE streams: reasoning-heavy providers
@@ -315,6 +333,18 @@ class ExternalProviderClient:
         auth_header = provider_info.get("auth_header", "Authorization")
         auth_prefix = provider_info.get("auth_prefix", "Bearer ")
 
+        # Gemini connections pointed at any non-Google host speak the
+        # OpenAI-compatible surface (LiteLLM, OpenAI-compat vLLM
+        # routers, custom gateways) and authenticate with
+        # Authorization: Bearer ..., not Google's native x-goog-api-key.
+        # Override the registry default so OAI-compat dispatch receives
+        # the right header.
+        if self.provider_type == "gemini":
+            _host = (urlparse(self.base_url).hostname or "").lower()
+            if _host != "generativelanguage.googleapis.com":
+                auth_header = "Authorization"
+                auth_prefix = "Bearer "
+
         headers = {"Content-Type": "application/json"}
         # Skip auth header when api_key is empty (optional for local providers);
         # httpx rejects an empty `Bearer ` value as "Illegal header value".
@@ -329,6 +359,20 @@ class ExternalProviderClient:
         from core.inference.providers import get_provider_info
 
         info = get_provider_info(self.provider_type) or {}
+        # Gemini ships an OpenAI-compatible surface at
+        # `/v1beta/openai/chat/completions` (Authorization: Bearer ...)
+        # and a native surface at `/v1beta/models/...:streamGenerateContent`
+        # (x-goog-api-key). Google-hosted Gemini moved to native in this
+        # PR for full feature coverage, but third-party gateways /
+        # custom OAI-compat proxies (LiteLLM, OpenAI-compatible vLLM
+        # routers, etc.) would break if we forced them through the
+        # native translator. Default ANY non-Google Gemini base to
+        # OpenAI-compatible dispatch so saved custom-proxy connections
+        # keep working.
+        if self.provider_type == "gemini":
+            _host = (urlparse(self.base_url).hostname or "").lower()
+            if _host != "generativelanguage.googleapis.com":
+                return True
         return info.get("openai_compatible", True)
 
     async def stream_chat_completion(
@@ -343,11 +387,13 @@ class ExternalProviderClient:
         enable_thinking: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
         enabled_tools: Optional[list[str]] = None,
-        enable_prompt_caching: Optional[bool] = None,
+        enable_prompt_caching: Optional[Union[bool, str]] = None,
         openai_code_exec_container_id: Optional[str] = None,
         anthropic_code_exec_container_id: Optional[str] = None,
         prompt_cache_ttl: Optional[str] = None,
         compaction_threshold: Optional[int] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         stream: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
@@ -377,6 +423,10 @@ class ExternalProviderClient:
                     presence_penalty,
                     enabled_tools,
                     enable_prompt_caching,
+                    enable_thinking,
+                    reasoning_effort,
+                    tools,
+                    tool_choice,
                 ):
                     yield line
                 return
@@ -2574,6 +2624,10 @@ class ExternalProviderClient:
         presence_penalty: float = 0.0,
         enabled_tools: Optional[list[str]] = None,
         enable_prompt_caching: Optional[Any] = None,
+        enable_thinking: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Call Google's native Gemini API and translate its streaming
@@ -2681,12 +2735,22 @@ class ExternalProviderClient:
                         elif url:
                             # Remote image. Gemini's `fileData` part takes
                             # a `fileUri` for both Files-API uploads and
-                            # public https URLs.
+                            # public https URLs. Guess MIME from the URL
+                            # path so PNG/WebP/GIF inputs are not mislabeled
+                            # as JPEG (Gemini rejects mismatched mime).
+                            _path = urlparse(url).path
+                            _guessed, _ = mimetypes.guess_type(_path)
+                            _media_type = (
+                                _guessed
+                                if isinstance(_guessed, str)
+                                and _guessed.startswith("image/")
+                                else "image/jpeg"
+                            )
                             parts.append(
                                 {
                                     "fileData": {
                                         "fileUri": url,
-                                        "mimeType": "image/jpeg",
+                                        "mimeType": _media_type,
                                     }
                                 }
                             )
@@ -2727,7 +2791,23 @@ class ExternalProviderClient:
                     }
                     if isinstance(tc_id, str) and tc_id:
                         function_call_part["id"] = tc_id
-                    parts.append({"functionCall": function_call_part})
+                    # Gemini 3 function-calling requires the prior
+                    # thoughtSignature to be echoed back as a sibling
+                    # of the functionCall part. The translator stows
+                    # it on the assistant tool_call via
+                    # `extra_content.google.thought_signature` (see
+                    # the inbound emit below).
+                    fc_part: dict[str, Any] = {"functionCall": function_call_part}
+                    extra = tc.get("extra_content")
+                    if isinstance(extra, dict):
+                        google_extra = extra.get("google") or {}
+                        if isinstance(google_extra, dict):
+                            sig = google_extra.get(
+                                "thought_signature"
+                            ) or google_extra.get("thoughtSignature")
+                            if isinstance(sig, str) and sig:
+                                fc_part["thoughtSignature"] = sig
+                    parts.append(fc_part)
             if role == "tool":
                 # OpenAI's role="tool" follow-up carries the function
                 # result. Gemini's matching shape is a role="user" turn
@@ -2790,18 +2870,112 @@ class ExternalProviderClient:
         if max_tokens is not None:
             gen_config["maxOutputTokens"] = max_tokens
 
-        # Nano Banana image generation. When the user picked the image
-        # model (or asked for image_generation as a tool), tell Gemini
-        # to return image bytes by setting `responseModalities`. The
-        # response carries an `inlineData` part on each candidate which
-        # we translate to a tool_end with image_b64/image_mime so the
-        # chat UI renders the picture inline. See
-        # https://ai.google.dev/gemini-api/docs/image-generation.
-        is_image_model = "-image" in model.lower() or bool(
-            enabled_tools and "image_generation" in enabled_tools
-        )
+        # Nano Banana image generation. Gemini only accepts
+        # `responseModalities: ["TEXT","IMAGE"]` on the image-capable
+        # model family (id contains `-image` or `nano-banana`). Text-
+        # only models such as `gemini-2.5-flash` 400 on the same body,
+        # so only force image mode when the selected model actually
+        # supports it -- a stale `enabled_tools=["image_generation"]`
+        # on a text model is silently treated as a regular turn.
+        # https://ai.google.dev/gemini-api/docs/image-generation
+        model_lc = model.lower()
+        is_image_picker_model = "-image" in model_lc or "nano-banana" in model_lc
+        # `image_generation` is meaningful only on image-capable model
+        # IDs. A stale enabled_tools=["image_generation"] on a text
+        # model is dropped (text models 400 on responseModalities).
+        is_image_model = is_image_picker_model
         if is_image_model:
             gen_config["responseModalities"] = ["TEXT", "IMAGE"]
+
+        # Thinking control. The Gemini 3 family migrated to a string
+        # `thinkingLevel` (LOW/MEDIUM/HIGH/MINIMAL) and rejects sending
+        # both `thinkingLevel` + `thinkingBudget`. Gemini 3 also cannot
+        # turn thinking fully off -- the "off" position is "minimal" on
+        # Flash and "low" on Pro (Pro does not even accept "minimal").
+        # https://ai.google.dev/gemini-api/docs/thinking
+        # Gemini 2.5 stays on `thinkingBudget` (int; 0 = off on Flash,
+        # -1 = dynamic, N > 0 = hard cap). Image models do not benefit
+        # from a visible thinking knob and we skip the field entirely
+        # so stale UI state does not leak through.
+        _GEMINI3_THINKING_PREFIXES = (
+            "gemini-3.5-",
+            "gemini-3.1-",
+            "gemini-3-",
+            "gemini-pro-latest",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+        )
+        _GEMINI3_PRO_PREFIXES = (
+            "gemini-3.5-pro",
+            "gemini-3.1-pro",
+            "gemini-3-pro",
+            "gemini-pro-latest",
+        )
+        _PRO_THINKING_PREFIXES = ("gemini-2.5-pro",)
+        is_gemini3_thinking = any(
+            model_lc.startswith(p) for p in _GEMINI3_THINKING_PREFIXES
+        )
+        is_gemini3_pro = any(model_lc.startswith(p) for p in _GEMINI3_PRO_PREFIXES)
+        _is_pro_thinking_only = any(
+            model_lc == p or model_lc.startswith(p + "-")
+            for p in _PRO_THINKING_PREFIXES
+        )
+        effort_lc = (reasoning_effort or "").strip().lower()
+        if not is_image_model and is_gemini3_thinking:
+            # Gemini 3.x: thinkingLevel only. Per Google's docs
+            # (https://ai.google.dev/gemini-api/docs/thinking and
+            # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro):
+            #   - Gemini 3.1+ Pro: low/medium/high (medium added in 3.1).
+            #   - Gemini 3 Pro (deprecated, shut down 2026-03-09): low/high.
+            #   - Gemini 3.x Flash + Flash-Lite + *-latest: minimal/low/
+            #     medium/high.
+            # Coerce "minimal" to "low" on Pro tier ("minimal" is the
+            # only level uniformly unsupported across Pro variants).
+            # "medium" stays intact -- 3.1+ Pro accepts it.
+            _G3_LEVELS = {"minimal", "low", "medium", "high"}
+            level: Optional[str] = None
+            if effort_lc in ("none", "off"):
+                level = "low" if is_gemini3_pro else "minimal"
+            elif effort_lc == "max":
+                level = "high"
+            elif effort_lc in _G3_LEVELS:
+                if is_gemini3_pro and effort_lc == "minimal":
+                    level = "low"
+                else:
+                    level = effort_lc
+            elif enable_thinking is True:
+                level = "high"
+            elif enable_thinking is False:
+                level = "low" if is_gemini3_pro else "minimal"
+            if level is not None:
+                gen_config["thinkingConfig"] = {"thinkingLevel": level}
+        elif not is_image_model:
+            # Gemini 2.5 / older: thinkingBudget int. Effort -> budget
+            # mirrors the OpenAI minimal/low/medium/high ladder so the
+            # existing frontend picker maps cleanly.
+            # NOTE: gemini-2.5-flash-lite rejects positive budgets below
+            # 512 with HTTP 400, so minimal=512 sits at that floor.
+            _EFFORT_TO_BUDGET: dict[str, int] = {
+                "minimal": 512,
+                "low": 2048,
+                "medium": 8192,
+                "high": 24576,
+                "xhigh": -1,
+                "max": -1,
+            }
+            thinking_budget: Optional[int] = None
+            if effort_lc == "none" or enable_thinking is False:
+                # Pro-tier 2.5 rejects budget=0 (400 "only works in
+                # thinking mode"), so coerce to a small positive value.
+                thinking_budget = 128 if _is_pro_thinking_only else 0
+            elif effort_lc in _EFFORT_TO_BUDGET:
+                thinking_budget = _EFFORT_TO_BUDGET[effort_lc]
+            elif enable_thinking is True:
+                thinking_budget = -1
+            if thinking_budget is not None:
+                gen_config["thinkingConfig"] = {
+                    "thinkingBudget": thinking_budget,
+                }
 
         if gen_config:
             body["generationConfig"] = gen_config
@@ -2812,13 +2986,83 @@ class ExternalProviderClient:
         #   https://ai.google.dev/gemini-api/docs/grounding
         # - `{codeExecution: {}}` -- sandboxed Python tool.
         #   https://ai.google.dev/gemini-api/docs/code-execution
+        # Image-mode (responseModalities=[TEXT,IMAGE]) rejects code
+        # execution. Google Search grounding is documented as supported
+        # on the Gemini 3 image picker family (Nano Banana Pro =
+        # gemini-3-pro-image-preview, gemini-3.1-flash-image-preview)
+        # but NOT on the older 2.5-flash-image family. Allow Search
+        # only on the documented image models; older image models keep
+        # the strict "no text tools" gate.
+        def _gemini_image_model_allows_google_search(_m: str) -> bool:
+            return (
+                _m.startswith("gemini-3-pro-image")
+                or _m.startswith("gemini-3.1-flash-image")
+                or _m.startswith("nano-banana-pro")
+                or _m.startswith("nano-banana-2")
+            )
+
+        google_search_allowed = (
+            not is_image_model or _gemini_image_model_allows_google_search(model_lc)
+        )
+        code_execution_allowed = not is_image_model
+        text_tools_allowed = not is_image_model
         tools_array: list[dict[str, Any]] = []
-        if enabled_tools and "web_search" in enabled_tools:
+        if enabled_tools and "web_search" in enabled_tools and google_search_allowed:
             tools_array.append({"googleSearch": {}})
-        if enabled_tools and "code_execution" in enabled_tools:
+        if (
+            enabled_tools
+            and "code_execution" in enabled_tools
+            and code_execution_allowed
+        ):
             tools_array.append({"codeExecution": {}})
+        # OpenAI-style function declarations -> Gemini functionDeclarations.
+        # https://ai.google.dev/gemini-api/docs/function-calling#step_1
+        function_declarations: list[dict[str, Any]] = []
+        if tools and text_tools_allowed:
+            for _tool in tools:
+                if not isinstance(_tool, dict) or _tool.get("type") != "function":
+                    continue
+                _fn = _tool.get("function")
+                if not isinstance(_fn, dict) or not _fn.get("name"):
+                    continue
+                _decl: dict[str, Any] = {
+                    "name": _fn["name"],
+                    "description": _fn.get("description") or "",
+                }
+                _params = _fn.get("parameters")
+                if isinstance(_params, dict):
+                    _decl["parameters"] = _params
+                function_declarations.append(_decl)
+        if function_declarations:
+            tools_array.append({"functionDeclarations": function_declarations})
         if tools_array:
             body["tools"] = tools_array
+        # Tool-choice mapping: OpenAI "auto"/"none"/"required"/{name=...}
+        # -> Gemini toolConfig.functionCallingConfig.mode + allowedFunctionNames.
+        if tool_choice is not None and function_declarations and text_tools_allowed:
+            _mode: Optional[str] = None
+            _allowed: Optional[list[str]] = None
+            if isinstance(tool_choice, str):
+                _tc_lc = tool_choice.strip().lower()
+                if _tc_lc == "auto":
+                    _mode = "AUTO"
+                elif _tc_lc == "none":
+                    _mode = "NONE"
+                elif _tc_lc in ("required", "any"):
+                    _mode = "ANY"
+            elif (
+                isinstance(tool_choice, dict) and tool_choice.get("type") == "function"
+            ):
+                _fn_pick = tool_choice.get("function") or {}
+                _name = _fn_pick.get("name") if isinstance(_fn_pick, dict) else None
+                if isinstance(_name, str) and _name:
+                    _mode = "ANY"
+                    _allowed = [_name]
+            if _mode is not None:
+                _fcc: dict[str, Any] = {"mode": _mode}
+                if _allowed:
+                    _fcc["allowedFunctionNames"] = _allowed
+                body["toolConfig"] = {"functionCallingConfig": _fcc}
 
         # Prompt caching. The Gemini caching contract is "create a
         # CachedContent resource, then pass its name on
@@ -2830,6 +3074,19 @@ class ExternalProviderClient:
         if isinstance(enable_prompt_caching, str) and enable_prompt_caching:
             body["cachedContent"] = enable_prompt_caching
 
+        # Guard against path-traversal in the user-controlled model id
+        # before it lands in a URL path segment. A model like
+        # `../cachedContents/x` would otherwise normalize to
+        # `/v1beta/cachedContents/x` and send the configured API key to
+        # an unintended endpoint. Gemini model ids in the documented
+        # catalog match `[A-Za-z0-9._-]+` only.
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", model):
+            yield _error_sse_line(
+                400,
+                f"Invalid Gemini model id: {model!r}",
+                self.provider_type,
+            )
+            return
         url = f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse"
         completion_id = f"chatcmpl-gemini-{model.replace('/', '-')}"
 
@@ -2857,19 +3114,34 @@ class ExternalProviderClient:
             }
             return f"data: {_json.dumps(chunk)}"
 
-        def _text_chunk(text: str) -> str:
+        def _text_chunk(
+            text: str, extra_content: Optional[dict[str, Any]] = None
+        ) -> str:
+            delta: dict[str, Any] = {"content": text}
+            if extra_content:
+                delta["extra_content"] = extra_content
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"content": text},
+                        "delta": delta,
                         "finish_reason": None,
                     }
                 ],
             }
             return f"data: {_json.dumps(chunk)}"
+
+        def _gemini_part_extra(part: dict[str, Any]) -> Optional[dict[str, Any]]:
+            """Return ``{"google": {"thought_signature": ...}}`` when the
+            Gemini stream part carries a `thoughtSignature` we need to
+            replay on a follow-up turn (Gemini 3 image editing + tool
+            contexts both require an exact signature echo)."""
+            sig = part.get("thoughtSignature") or part.get("thought_signature")
+            if isinstance(sig, str) and sig:
+                return {"google": {"thought_signature": sig}}
+            return None
 
         # Gemini finish reasons -> OpenAI vocabulary. Reference:
         # https://ai.google.dev/api/rest/v1beta/Candidate#FinishReason
@@ -2887,7 +3159,18 @@ class ExternalProviderClient:
 
         last_usage: Optional[dict[str, Any]] = None
         emitted_function_call_ids: set[str] = set()
-        web_search_active = bool(enabled_tools and "web_search" in enabled_tools)
+        # True once any Gemini functionCall part has been emitted so the
+        # final finish_reason swaps STOP -> tool_calls (matches the
+        # OpenAI Chat Completions contract; an OAI client that sees a
+        # tool_calls delta followed by finish_reason="stop" never
+        # executes the tool).
+        emitted_any_function_call = False
+        # web_search_active drives the tool_start / tool_end envelope.
+        # Track on whether `googleSearch` was actually forwarded above,
+        # not the raw caller intent -- image-mode requests filter the
+        # tool out, and emitting a phantom "search complete" card on a
+        # turn where Gemini was never told to search confuses the UI.
+        web_search_active = any("googleSearch" in t for t in tools_array)
         web_search_tool_id = "gemini_web_search"
         web_search_tool_started = False
         web_search_tool_ended = False
@@ -2896,6 +3179,13 @@ class ExternalProviderClient:
         # executableCode part so the matching codeExecutionResult can
         # close out the same envelope. None between rounds.
         gemini_code_exec_pending_id: Optional[str] = None
+        # The most recently emitted code_execution id + result text. Kept
+        # *after* the tool_end so a following inline image (matplotlib
+        # plot rendered by codeExecution) can attach to the same card
+        # via a `__IMAGES__:` marker instead of spawning a separate
+        # image_generation event.
+        last_code_exec_tool_id: Optional[str] = None
+        last_code_exec_result_text: str = ""
 
         try:
             async with _http_client.stream(
@@ -2964,6 +3254,43 @@ class ExternalProviderClient:
                         if isinstance(usage_meta, dict):
                             last_usage = usage_meta
 
+                        # Prompt-level safety block: Gemini ships zero
+                        # candidates plus a `promptFeedback.blockReason`
+                        # (e.g. SAFETY). The downstream OAI client would
+                        # otherwise see an empty successful assistant
+                        # response. Surface as a content_filter error
+                        # event so the UI can render the block reason.
+                        prompt_feedback = event.get("promptFeedback")
+                        if isinstance(prompt_feedback, dict) and prompt_feedback.get(
+                            "blockReason"
+                        ):
+                            block_reason = str(prompt_feedback.get("blockReason"))
+                            # Close out the synthetic web_search start so
+                            # the UI does not show a spinner stuck on
+                            # "searching..." after the error toast lands.
+                            if (
+                                web_search_active
+                                and web_search_tool_started
+                                and not web_search_tool_ended
+                            ):
+                                yield _emit_tool_event(
+                                    {
+                                        "type": "tool_end",
+                                        "tool_call_id": web_search_tool_id,
+                                        "result": (
+                                            "(search aborted: Gemini blocked "
+                                            f"prompt: {block_reason})"
+                                        ),
+                                    }
+                                )
+                                web_search_tool_ended = True
+                            yield _error_sse_line(
+                                400,
+                                f"Gemini blocked prompt: {block_reason}",
+                                self.provider_type,
+                            )
+                            return
+
                         candidates = event.get("candidates") or []
                         if not isinstance(candidates, list):
                             continue
@@ -3009,10 +3336,40 @@ class ExternalProviderClient:
                                 for part in parts:
                                     if not isinstance(part, dict):
                                         continue
-                                    # Text delta.
+                                    # Text delta. Stow part-level
+                                    # `thoughtSignature` on the delta so
+                                    # Gemini 3 turns that need an exact
+                                    # signature echo round-trip cleanly.
                                     text = part.get("text")
+                                    _part_extra = _gemini_part_extra(part)
                                     if isinstance(text, str) and text:
-                                        yield _text_chunk(text)
+                                        yield _text_chunk(
+                                            text,
+                                            extra_content = _part_extra,
+                                        )
+                                    elif _part_extra is not None and not any(
+                                        k in part
+                                        for k in (
+                                            "functionCall",
+                                            "executableCode",
+                                            "codeExecutionResult",
+                                            "inlineData",
+                                        )
+                                    ):
+                                        # Final/empty-text fragment that
+                                        # still carries thoughtSignature
+                                        # (Gemini 3 sometimes ships the
+                                        # signature on a content-free
+                                        # part). Emit an empty-content
+                                        # delta with extra_content so
+                                        # the signature is preserved
+                                        # without spawning duplicate
+                                        # tool envelopes for parts that
+                                        # are handled below.
+                                        yield _text_chunk(
+                                            "",
+                                            extra_content = _part_extra,
+                                        )
                                     # functionCall -> OpenAI tool_calls
                                     # delta envelope.
                                     fc = part.get("functionCall")
@@ -3035,6 +3392,34 @@ class ExternalProviderClient:
                                         # hardcoded to 0, breaking
                                         # parallel/multi-tool turns.
                                         tc_index = len(emitted_function_call_ids) - 1
+                                        tool_call_delta: dict[str, Any] = {
+                                            "index": tc_index,
+                                            "id": fc_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": fc_name,
+                                                "arguments": _json.dumps(fc_args),
+                                            },
+                                        }
+                                        # Gemini 3 function-calling: the
+                                        # part-level `thoughtSignature`
+                                        # must be echoed back on the
+                                        # next turn or the model rejects
+                                        # the tool-result envelope. Stow
+                                        # it on `extra_content.google`
+                                        # so the frontend can persist it
+                                        # and our outbound translator
+                                        # (below) can replay it.
+                                        thought_sig = part.get(
+                                            "thoughtSignature"
+                                        ) or part.get("thought_signature")
+                                        if isinstance(thought_sig, str) and thought_sig:
+                                            tool_call_delta["extra_content"] = {
+                                                "google": {
+                                                    "thought_signature": thought_sig,
+                                                }
+                                            }
+                                        emitted_any_function_call = True
                                         tool_chunk = {
                                             "id": completion_id,
                                             "object": "chat.completion.chunk",
@@ -3042,19 +3427,7 @@ class ExternalProviderClient:
                                                 {
                                                     "index": 0,
                                                     "delta": {
-                                                        "tool_calls": [
-                                                            {
-                                                                "index": tc_index,
-                                                                "id": fc_id,
-                                                                "type": "function",
-                                                                "function": {
-                                                                    "name": fc_name,
-                                                                    "arguments": _json.dumps(
-                                                                        fc_args
-                                                                    ),
-                                                                },
-                                                            }
-                                                        ]
+                                                        "tool_calls": [tool_call_delta]
                                                     },
                                                     "finish_reason": None,
                                                 }
@@ -3074,9 +3447,29 @@ class ExternalProviderClient:
                                         code_str = exec_code.get("code") or ""
                                         if code_str:
                                             code_tool_id = (
-                                                f"gemini_code_exec_{time.time_ns()}"
+                                                exec_code.get("id")
+                                                or f"gemini_code_exec_{time.time_ns()}"
                                             )
                                             gemini_code_exec_pending_id = code_tool_id
+                                            # Stow the raw Gemini part so
+                                            # follow-up turns can replay
+                                            # the native `executableCode`
+                                            # (Gemini rejects a generic
+                                            # functionCall echo for code
+                                            # execution history).
+                                            _exec_thought_sig = part.get(
+                                                "thoughtSignature"
+                                            ) or part.get("thought_signature")
+                                            _exec_native: dict[str, Any] = {
+                                                "executableCode": exec_code,
+                                            }
+                                            if (
+                                                isinstance(_exec_thought_sig, str)
+                                                and _exec_thought_sig
+                                            ):
+                                                _exec_native["thoughtSignature"] = (
+                                                    _exec_thought_sig
+                                                )
                                             yield _emit_tool_event(
                                                 {
                                                     "type": "tool_start",
@@ -3093,6 +3486,9 @@ class ExternalProviderClient:
                                                             ).lower()
                                                         ),
                                                         "code": code_str,
+                                                        "google": {
+                                                            "native_part": _exec_native,
+                                                        },
                                                     },
                                                 }
                                             )
@@ -3116,8 +3512,15 @@ class ExternalProviderClient:
                                         # present; otherwise mint a fresh
                                         # id so the UI still renders the
                                         # output as a code_execution event.
+                                        # Pair the tool_end with the most
+                                        # recent code_exec tool_start id so
+                                        # the UI matches start/end. Fall back
+                                        # to exec_result.id (no preceding
+                                        # executableCode part), then mint a
+                                        # fresh id as a last resort.
                                         pair_id = (
                                             gemini_code_exec_pending_id
+                                            or exec_result.get("id")
                                             or f"gemini_code_exec_{time.time_ns()}"
                                         )
                                         if gemini_code_exec_pending_id is None:
@@ -3132,45 +3535,126 @@ class ExternalProviderClient:
                                                     },
                                                 }
                                             )
+                                        _result_thought_sig = part.get(
+                                            "thoughtSignature"
+                                        ) or part.get("thought_signature")
+                                        _result_native: dict[str, Any] = {
+                                            "codeExecutionResult": exec_result,
+                                        }
+                                        if (
+                                            isinstance(_result_thought_sig, str)
+                                            and _result_thought_sig
+                                        ):
+                                            _result_native["thoughtSignature"] = (
+                                                _result_thought_sig
+                                            )
                                         yield _emit_tool_event(
                                             {
                                                 "type": "tool_end",
                                                 "tool_call_id": pair_id,
                                                 "result": result_text,
+                                                "google": {
+                                                    "native_part": _result_native,
+                                                },
                                             }
                                         )
+                                        last_code_exec_tool_id = pair_id
+                                        last_code_exec_result_text = result_text
                                         gemini_code_exec_pending_id = None
-                                    # inlineData -> Nano Banana image
-                                    # output. Same tool_start/tool_end
-                                    # envelope as the OpenAI image
-                                    # generation path so the existing
-                                    # chat-adapter renderer just works.
+                                    # inlineData -> image bytes. Two
+                                    # paths:
+                                    #  (a) On a Nano Banana / image
+                                    #      picker turn this is the
+                                    #      generated image; emit the
+                                    #      standard image_generation
+                                    #      tool envelope.
+                                    #  (b) On a text turn that wired
+                                    #      codeExecution, this is the
+                                    #      sandbox's matplotlib output
+                                    #      shipped alongside the result.
+                                    #      Attach to the SAME
+                                    #      code_execution card via the
+                                    #      `__IMAGES__:` marker the
+                                    #      chat-adapter understands so
+                                    #      the UI shows one combined
+                                    #      tool event instead of a
+                                    #      bonus empty image_generation
+                                    #      card.
                                     inline = part.get("inlineData")
                                     if isinstance(inline, dict):
                                         b64 = inline.get("data") or ""
                                         mime = inline.get("mimeType") or "image/png"
                                         if b64:
-                                            img_id = f"img_{time.time_ns()}"
-                                            yield _emit_tool_event(
-                                                {
-                                                    "type": "tool_start",
-                                                    "tool_name": "image_generation",
-                                                    "tool_call_id": img_id,
-                                                    "arguments": {
-                                                        "kind": "image",
-                                                        "prompt": "",
-                                                    },
-                                                }
+                                            image_uri = f"data:{mime};base64,{b64}"
+                                            attached_to_code_exec = (
+                                                not is_image_model
+                                                and last_code_exec_tool_id is not None
+                                                and bool(enabled_tools)
+                                                and "code_execution"
+                                                in (enabled_tools or [])
                                             )
-                                            yield _emit_tool_event(
-                                                {
+                                            if attached_to_code_exec:
+                                                updated_result = (
+                                                    last_code_exec_result_text
+                                                    + "\n__IMAGES__:"
+                                                    + _json.dumps([image_uri])
+                                                )
+                                                yield _emit_tool_event(
+                                                    {
+                                                        "type": "tool_end",
+                                                        "tool_call_id": (
+                                                            last_code_exec_tool_id
+                                                        ),
+                                                        "result": updated_result,
+                                                    }
+                                                )
+                                                last_code_exec_result_text = (
+                                                    updated_result
+                                                )
+                                            else:
+                                                img_id = f"img_{time.time_ns()}"
+                                                yield _emit_tool_event(
+                                                    {
+                                                        "type": "tool_start",
+                                                        "tool_name": "image_generation",
+                                                        "tool_call_id": img_id,
+                                                        "arguments": {
+                                                            "kind": "image",
+                                                            "prompt": "",
+                                                        },
+                                                    }
+                                                )
+                                                # Gemini 3 image editing
+                                                # requires the prior
+                                                # turn's
+                                                # `thoughtSignature` to
+                                                # be echoed back on the
+                                                # inline image part of
+                                                # the user message;
+                                                # persist it on the
+                                                # tool_end so the
+                                                # frontend can replay
+                                                # it.
+                                                _img_thought_sig = part.get(
+                                                    "thoughtSignature"
+                                                ) or part.get("thought_signature")
+                                                _img_tool_end: dict[str, Any] = {
                                                     "type": "tool_end",
                                                     "tool_call_id": img_id,
                                                     "result": "",
                                                     "image_b64": b64,
                                                     "image_mime": mime,
                                                 }
-                                            )
+                                                if (
+                                                    isinstance(_img_thought_sig, str)
+                                                    and _img_thought_sig
+                                                ):
+                                                    _img_tool_end["google"] = {
+                                                        "thought_signature": (
+                                                            _img_thought_sig
+                                                        ),
+                                                    }
+                                                yield _emit_tool_event(_img_tool_end)
                             finish_reason = cand.get("finishReason")
                             if isinstance(finish_reason, str):
                                 mapped = _finish_reason_map.get(finish_reason, "stop")
@@ -3207,6 +3691,13 @@ class ExternalProviderClient:
                         web_search_tool_ended = True
 
                     if final_finish_reason:
+                        # OpenAI clients trigger tool execution when
+                        # finish_reason="tool_calls". Gemini emits
+                        # "STOP" even when the turn was a pure
+                        # functionCall request, so override after the
+                        # fact to match the OAI contract.
+                        if emitted_any_function_call and final_finish_reason == "stop":
+                            final_finish_reason = "tool_calls"
                         finish_chunk = {
                             "id": completion_id,
                             "object": "chat.completion.chunk",
@@ -3225,16 +3716,32 @@ class ExternalProviderClient:
                     # `_build_usage_chunk` emitter handles wire
                     # formatting (and downstream cost calculators
                     # already understand the shape).
+                    # `thoughtsTokenCount` is the hidden-reasoning slice
+                    # of output, billed alongside `candidatesTokenCount`;
+                    # roll both into `output_tokens` so total_tokens
+                    # equals promptToken + candidatesToken + thoughtsToken
+                    # and the cost calculator does not undercount.
                     if isinstance(last_usage, dict):
+                        thought_tokens = last_usage.get("thoughtsTokenCount") or 0
+                        candidate_tokens = last_usage.get("candidatesTokenCount") or 0
+                        prompt_tokens = last_usage.get("promptTokenCount") or 0
+                        # Gemini bills tool-call prompt slices separately
+                        # via `toolUsePromptTokenCount`. Fold into input
+                        # so total_tokens does not undercount tool turns.
+                        tool_use_prompt_tokens = (
+                            last_usage.get("toolUsePromptTokenCount") or 0
+                        )
                         translated_usage = {
-                            "input_tokens": (last_usage.get("promptTokenCount") or 0),
-                            "output_tokens": (
-                                last_usage.get("candidatesTokenCount") or 0
-                            ),
+                            "input_tokens": prompt_tokens + tool_use_prompt_tokens,
+                            "output_tokens": candidate_tokens + thought_tokens,
                             "input_tokens_details": {
                                 "cached_tokens": (
                                     last_usage.get("cachedContentTokenCount") or 0
-                                )
+                                ),
+                                "tool_use_prompt_tokens": tool_use_prompt_tokens,
+                            },
+                            "output_tokens_details": {
+                                "reasoning_tokens": thought_tokens,
                             },
                         }
                         usage_line = _build_usage_chunk(
@@ -3244,14 +3751,31 @@ class ExternalProviderClient:
                             yield usage_line
 
                     yield "data: [DONE]"
-                    await response.aclose()
-                except GeneratorExit:
+                finally:
+                    # Close BOTH the upstream response and the manual
+                    # aiter_lines() iterator on every exit path -- normal
+                    # [DONE], prompt-block return, and GeneratorExit on
+                    # client cancellation. response.aclose() FIRST so
+                    # PoolByteStream._closed=True and lines_gen.aclose()
+                    # is a no-op (avoids the httpcore 1.0.x
+                    # "async generator ignored GeneratorExit" path).
+                    # Skipping lines_gen.aclose() emits
+                    # `RuntimeWarning: coroutine method 'aclose' of
+                    # 'Response.aiter_lines' was never awaited`.
                     await response.aclose()
                     await lines_gen.aclose()
-                    raise
 
         except httpx.ConnectError as exc:
             logger.error("Connection error to %s: %s", self.provider_type, exc)
+            if web_search_tool_started and not web_search_tool_ended:
+                yield _emit_tool_event(
+                    {
+                        "type": "tool_end",
+                        "tool_call_id": web_search_tool_id,
+                        "result": f"(search aborted: connection error: {exc})",
+                    }
+                )
+                web_search_tool_ended = True
             yield _error_sse_line(
                 502,
                 f"Failed to connect to {self.provider_type}: {exc}",
@@ -3259,6 +3783,15 @@ class ExternalProviderClient:
             )
         except httpx.ReadTimeout as exc:
             logger.error("Read timeout from %s: %s", self.provider_type, exc)
+            if web_search_tool_started and not web_search_tool_ended:
+                yield _emit_tool_event(
+                    {
+                        "type": "tool_end",
+                        "tool_call_id": web_search_tool_id,
+                        "result": "(search aborted: read timeout)",
+                    }
+                )
+                web_search_tool_ended = True
             yield _error_sse_line(
                 504,
                 f"Timeout waiting for {self.provider_type} response",
@@ -3266,6 +3799,15 @@ class ExternalProviderClient:
             )
         except httpx.HTTPError as exc:
             logger.error("HTTP error from %s: %s", self.provider_type, exc)
+            if web_search_tool_started and not web_search_tool_ended:
+                yield _emit_tool_event(
+                    {
+                        "type": "tool_end",
+                        "tool_call_id": web_search_tool_id,
+                        "result": f"(search aborted: transport error: {exc})",
+                    }
+                )
+                web_search_tool_ended = True
             yield _error_sse_line(
                 502,
                 f"Error communicating with {self.provider_type}: {exc}",
@@ -4739,6 +5281,17 @@ def _build_usage_chunk(
             "total_tokens": prompt_tokens + completion_tokens,
             "prompt_tokens_details": {"cached_tokens": cached},
         }
+        # Surface OpenAI Responses / Gemini reasoning-token detail. The
+        # caller pre-populates last_usage["output_tokens_details"] with
+        # at least {"reasoning_tokens": ...}; mirror it into the OAI
+        # `completion_tokens_details` shape so SDKs can render the
+        # hidden-thoughts slice.
+        out_details = last_usage.get("output_tokens_details")
+        if isinstance(out_details, dict) and out_details:
+            usage_block["completion_tokens_details"] = {
+                "reasoning_tokens": out_details.get("reasoning_tokens") or 0,
+            }
+            usage_block["output_tokens_details"] = out_details
 
     chunk = {
         "id": completion_id,

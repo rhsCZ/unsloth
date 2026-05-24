@@ -40,8 +40,26 @@ from core.inference import external_provider as ep_mod
 from core.inference.external_provider import ExternalProviderClient
 
 
+_active_mock_clients: list[httpx.AsyncClient] = []
+
+
 def _drive(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    # Create a fresh loop per drive so tests don't share asyncio state.
+    # Close mocked clients + shutdown async-generators inside this loop
+    # so Python 3.13 doesn't emit the
+    # `Response.aiter_*.aclose was never awaited` warning on GC.
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(coro)
+        while _active_mock_clients:
+            mc = _active_mock_clients.pop()
+            loop.run_until_complete(mc.aclose())
+        return result
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
 
 
 def _make_gemini_client(
@@ -55,11 +73,11 @@ def _make_gemini_client(
 
 
 def _mock_http(monkeypatch, handler):
-    monkeypatch.setattr(
-        ep_mod,
-        "_http_client",
-        httpx.AsyncClient(transport = httpx.MockTransport(handler)),
-    )
+    mock_client = httpx.AsyncClient(transport = httpx.MockTransport(handler))
+    monkeypatch.setattr(ep_mod, "_http_client", mock_client)
+    # `_drive` will aclose this at the end of the run inside the same
+    # event loop so we do not leak an unawaited aclose() coroutine.
+    _active_mock_clients.append(mock_client)
 
 
 def _gemini_sse(events: list[dict]) -> bytes:
@@ -249,6 +267,460 @@ def test_presence_penalty_forwarded_to_generation_config(monkeypatch):
     assert "presencePenalty" not in captured["body"]["generationConfig"]
 
 
+# ── thinkingConfig translation ────────────────────────────────────────
+
+
+def test_gemini25_flash_thinking_disabled_sets_budget_zero(monkeypatch):
+    """Gemini 2.5 Flash still uses thinkingBudget; 0 = off."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash",
+        enable_thinking = False,
+    )
+    tc = captured["body"]["generationConfig"].get("thinkingConfig")
+    assert tc == {"thinkingBudget": 0}, tc
+
+
+def test_gemini3_flash_thinking_disabled_uses_minimal_level(monkeypatch):
+    """Gemini 3 Flash migrated to thinkingLevel; "off" maps to minimal
+    (Gemini 3 cannot turn thinking fully off)."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-3.5-flash",
+        enable_thinking = False,
+    )
+    tc = captured["body"]["generationConfig"].get("thinkingConfig")
+    assert tc == {"thinkingLevel": "minimal"}, tc
+
+
+def test_gemini25_pro_thinking_disabled_uses_small_budget(monkeypatch):
+    """Gemini 2.5 Pro 400s on thinkingBudget=0 ("only works in thinking
+    mode"); coerce to a small positive budget."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-pro",
+        enable_thinking = False,
+    )
+    tc = captured["body"]["generationConfig"].get("thinkingConfig")
+    assert tc is not None and tc.get("thinkingBudget", 0) > 0, tc
+
+
+def test_gemini3_pro_thinking_disabled_uses_low_level(monkeypatch):
+    """Gemini 3 Pro uses thinkingLevel and rejects 'minimal' (Pro tier),
+    so 'off' coerces to 'low' (lowest the API accepts)."""
+    for model in (
+        "gemini-3.1-pro-preview",
+        "gemini-3-pro-preview",
+        "gemini-3.5-pro",
+        "gemini-pro-latest",
+    ):
+        captured = _capture_body(
+            monkeypatch,
+            model = model,
+            enable_thinking = False,
+        )
+        tc = captured["body"]["generationConfig"].get("thinkingConfig")
+        assert tc == {"thinkingLevel": "low"}, (model, tc)
+
+
+def test_gemini25_flash_effort_levels_map_to_budgets(monkeypatch):
+    """Gemini 2.5 Flash retains the integer thinkingBudget ladder."""
+    cases = {
+        "minimal": 512,
+        "low": 2048,
+        "medium": 8192,
+        "high": 24576,
+        "max": -1,
+        "xhigh": -1,
+    }
+    for effort, expected in cases.items():
+        captured = _capture_body(
+            monkeypatch,
+            model = "gemini-2.5-flash",
+            reasoning_effort = effort,
+        )
+        tc = captured["body"]["generationConfig"].get("thinkingConfig")
+        assert tc == {"thinkingBudget": expected}, (effort, tc)
+
+
+def test_gemini3_flash_effort_levels_map_to_thinking_level(monkeypatch):
+    """Gemini 3 Flash thinkingLevel ladder: minimal/low/medium/high."""
+    cases = {
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "high",
+    }
+    for effort, expected in cases.items():
+        captured = _capture_body(
+            monkeypatch,
+            model = "gemini-3.5-flash",
+            reasoning_effort = effort,
+        )
+        tc = captured["body"]["generationConfig"].get("thinkingConfig")
+        assert tc == {"thinkingLevel": expected}, (effort, tc)
+
+
+def test_gemini3_pro_passes_medium_through(monkeypatch):
+    """Gemini 3.1+ Pro accepts thinkingLevel="medium" per
+    https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro;
+    forward as-is (medium is the documented mid-tier on Gemini 3.1)."""
+    for model in (
+        "gemini-3.1-pro-preview",
+        "gemini-pro-latest",
+    ):
+        captured = _capture_body(
+            monkeypatch,
+            model = model,
+            reasoning_effort = "medium",
+        )
+        tc = captured["body"]["generationConfig"].get("thinkingConfig")
+        assert tc == {"thinkingLevel": "medium"}, (model, tc)
+
+
+def test_gemini3_pro_minimal_effort_coerces_to_low(monkeypatch):
+    """Gemini 3 Pro rejects thinkingLevel="minimal"; coerce to "low"."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-3.1-pro-preview",
+        reasoning_effort = "minimal",
+    )
+    tc = captured["body"]["generationConfig"].get("thinkingConfig")
+    assert tc == {"thinkingLevel": "low"}, tc
+
+
+def test_gemini3_flash_effort_none_maps_to_minimal(monkeypatch):
+    """reasoning_effort='none' on Gemini 3 Flash -> thinkingLevel=minimal."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-3.5-flash",
+        reasoning_effort = "none",
+    )
+    tc = captured["body"]["generationConfig"].get("thinkingConfig")
+    assert tc == {"thinkingLevel": "minimal"}, tc
+
+
+def test_thinking_default_omits_thinking_config(monkeypatch):
+    """When neither knob is supplied, thinkingConfig is omitted entirely
+    (Google's server-side default applies)."""
+    captured = _capture_body(monkeypatch, model = "gemini-3.5-flash")
+    gc = captured["body"]["generationConfig"]
+    assert "thinkingConfig" not in gc, gc
+
+
+def test_nano_banana_alias_routes_through_image_modalities(monkeypatch):
+    """`nano-banana-pro-preview` is an alias for the Pro image model and
+    must set responseModalities=[TEXT,IMAGE] same as the `*-image` ids."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "nano-banana-pro-preview",
+    )
+    gc = captured["body"]["generationConfig"]
+    assert gc.get("responseModalities") == ["TEXT", "IMAGE"], gc
+
+
+def test_image_models_skip_thinking_config(monkeypatch):
+    """Image-tier ids do not benefit from a visible thinking knob and
+    must NOT forward thinkingConfig even when stale UI state still
+    sends `reasoning_effort` or `enable_thinking=False`."""
+    for model in (
+        "gemini-2.5-flash-image",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "nano-banana-pro-preview",
+    ):
+        captured = _capture_body(
+            monkeypatch,
+            model = model,
+            reasoning_effort = "high",
+            enable_thinking = False,
+        )
+        gc = captured["body"]["generationConfig"]
+        assert "thinkingConfig" not in gc, (model, gc)
+
+
+def test_image_models_drop_code_execution(monkeypatch):
+    """All image-tier ids reject `tools: [{codeExecution: {}}]`; drop
+    silently. (Gemini 3 image models DO accept googleSearch -- see
+    test_gemini3_image_models_allow_google_search; older image models
+    drop everything.)"""
+    for model in (
+        "gemini-2.5-flash-image",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "nano-banana-pro-preview",
+    ):
+        captured = _capture_body(
+            monkeypatch,
+            model = model,
+            enabled_tools = ["code_execution"],
+        )
+        tools_arr = captured["body"].get("tools") or []
+        names = [list(t.keys())[0] for t in tools_arr]
+        assert "codeExecution" not in names, (model, tools_arr)
+
+
+def test_gemini_35_pro_uses_thinking_level(monkeypatch):
+    """`gemini-3.5-pro` is part of the Gemini 3 family and uses
+    thinkingLevel (not thinkingBudget). "Off" maps to "low" because Pro
+    tier rejects "minimal"."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-3.5-pro",
+        enable_thinking = False,
+    )
+    tc = captured["body"]["generationConfig"].get("thinkingConfig")
+    assert tc == {"thinkingLevel": "low"}, tc
+
+
+def test_gemini3_image_models_allow_google_search(monkeypatch):
+    """Google documents Search grounding on the Gemini 3 image family
+    (gemini-3-pro-image-preview, gemini-3.1-flash-image-preview,
+    nano-banana-pro). codeExecution stays blocked on image mode."""
+    for model in (
+        "gemini-3-pro-image-preview",
+        "gemini-3.1-flash-image-preview",
+        "nano-banana-pro-preview",
+    ):
+        captured = _capture_body(
+            monkeypatch,
+            model = model,
+            enabled_tools = ["web_search", "code_execution"],
+        )
+        tools_arr = captured["body"].get("tools") or []
+        names = [list(t.keys())[0] for t in tools_arr]
+        assert "googleSearch" in names, (model, tools_arr)
+        assert "codeExecution" not in names, (model, tools_arr)
+
+
+def test_legacy_image_models_block_google_search(monkeypatch):
+    """Older Gemini image ids (gemini-2.5-flash-image) still 400 on
+    `tools: [{googleSearch: {}}]`; backend keeps stripping it."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash-image",
+        enabled_tools = ["web_search", "code_execution"],
+    )
+    assert "tools" not in captured["body"], captured["body"].get("tools")
+
+
+def test_legacy_openai_base_url_normalized(monkeypatch):
+    """Saved Gemini providers carrying the legacy `/v1beta/openai` base
+    (from the pre-PR OpenAI-compat plumbing) now point at the native
+    endpoint without the user re-saving the connection."""
+    client = ExternalProviderClient(
+        provider_type = "gemini",
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key = "AIza-test-key",
+    )
+    assert client.base_url == "https://generativelanguage.googleapis.com/v1beta"
+
+
+def test_finish_reason_swaps_to_tool_calls_when_function_call_emitted(monkeypatch):
+    """Gemini emits finishReason="STOP" even for pure functionCall turns;
+    surface as `tool_calls` so OAI clients trigger tool execution."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"functionCall": {"name": "lookup", "args": {"k": "v"}}}
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+    ]
+    lines = _collect(monkeypatch, sse)
+    chunks = _parse_chunks(lines)
+    finish_chunks = [
+        c for c in chunks if c.get("choices", [{}])[0].get("finish_reason") is not None
+    ]
+    assert finish_chunks, chunks
+    assert finish_chunks[-1]["choices"][0]["finish_reason"] == "tool_calls", chunks
+
+
+def test_thought_signature_round_trips_into_gemini_function_call(monkeypatch):
+    """An assistant tool_call carrying `extra_content.google.thought_signature`
+    must echo the value back as a sibling of the Gemini functionCall part."""
+    captured = _capture_body(
+        monkeypatch,
+        messages = [
+            {"role": "user", "content": "lookup x"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                        "extra_content": {"google": {"thought_signature": "SIG-ABC"}},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_0",
+                "name": "lookup",
+                "content": "{}",
+            },
+        ],
+    )
+    contents = captured["body"]["contents"]
+    fc_turn = next((c for c in contents if c["role"] == "model"), None)
+    assert fc_turn is not None, contents
+    fc_part = next(
+        (p for p in fc_turn["parts"] if "functionCall" in p),
+        None,
+    )
+    assert fc_part is not None, fc_turn
+    assert fc_part.get("thoughtSignature") == "SIG-ABC", fc_part
+
+
+def test_thought_signature_emitted_in_tool_call_delta(monkeypatch):
+    """A Gemini functionCall part with `thoughtSignature` must surface
+    that signature on the outbound OpenAI tool_calls delta via
+    `extra_content.google.thought_signature`."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "lookup",
+                                    "args": {"k": "v"},
+                                    "id": "call_xyz",
+                                },
+                                "thoughtSignature": "SIG-FROM-GEMINI",
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+    ]
+    chunks = _parse_chunks(_collect(monkeypatch, sse))
+    deltas = [
+        tc
+        for c in chunks
+        for tc in (c.get("choices", [{}])[0].get("delta", {}) or {}).get(
+            "tool_calls", []
+        )
+    ]
+    assert deltas, chunks
+    sig = deltas[0].get("extra_content", {}).get("google", {}).get("thought_signature")
+    assert sig == "SIG-FROM-GEMINI", deltas
+
+
+def test_image_models_suppress_phantom_web_search_card(monkeypatch):
+    """When the image guard filters googleSearch out of the outbound
+    request, the inbound stream must NOT emit web_search tool_start /
+    tool_end (otherwise the UI shows a misleading 'Search complete'
+    card on a turn where Gemini never actually searched)."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": "drawn"}]},
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+    ]
+    lines = _collect(
+        monkeypatch,
+        sse,
+        model = "gemini-2.5-flash-image",
+        enabled_tools = ["web_search", "code_execution"],
+    )
+    chunks = _parse_chunks(lines)
+    tool_evs = [
+        ev
+        for c in chunks
+        for ev in [c.get("_toolEvent")]
+        if isinstance(ev, dict) and ev.get("tool_name") == "web_search"
+    ]
+    assert tool_evs == [], tool_evs
+
+
+def test_image_generation_tool_on_image_model_drops_text_tools(monkeypatch):
+    """`enabled_tools=["image_generation", "web_search", "code_execution"]`
+    on a Gemini IMAGE model flips responseModalities to TEXT+IMAGE; in
+    that mode codeExecution must NOT be forwarded (Gemini rejects text
+    code tools alongside image responseModalities). Older image
+    families also drop googleSearch."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash-image",
+        enabled_tools = [
+            "image_generation",
+            "web_search",
+            "code_execution",
+        ],
+    )
+    assert "tools" not in captured["body"], captured["body"]
+    assert captured["body"]["generationConfig"].get("responseModalities") == [
+        "TEXT",
+        "IMAGE",
+    ]
+
+
+def test_prompt_feedback_block_reason_surfaces_as_error(monkeypatch):
+    """`promptFeedback.blockReason` with zero candidates must produce
+    an error chunk, not a silent empty assistant reply."""
+    sse = [
+        {
+            "promptFeedback": {"blockReason": "SAFETY"},
+        }
+    ]
+    chunks = _parse_chunks(_collect(monkeypatch, sse))
+    error_chunks = [c for c in chunks if "error" in c]
+    assert error_chunks, chunks
+    assert "SAFETY" in (
+        error_chunks[0].get("error", {}).get("message") or ""
+    ), error_chunks
+
+
+def test_usage_chunk_includes_thoughts_tokens(monkeypatch):
+    """`thoughtsTokenCount` is the hidden-reasoning slice of output;
+    roll it into `output_tokens` AND surface it on
+    `output_tokens_details.reasoning_tokens` so total_tokens reflects
+    the full billable spend."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "thoughtsTokenCount": 20,
+                "totalTokenCount": 35,
+            },
+        }
+    ]
+    chunks = _parse_chunks(_collect(monkeypatch, sse))
+    usage_chunk = next((c for c in chunks if isinstance(c.get("usage"), dict)), None)
+    assert usage_chunk is not None, chunks
+    usage = usage_chunk["usage"]
+    assert usage.get("prompt_tokens") == 10, usage
+    # candidates 5 + thoughts 20 = 25 output tokens; total = 35.
+    assert usage.get("completion_tokens") == 25, usage
+    assert usage.get("total_tokens") == 35, usage
+
+
 # ── web_search forwarded as googleSearch tool ────────────────────────
 
 
@@ -308,10 +780,14 @@ def test_image_model_sets_response_modalities(monkeypatch):
     ]
 
 
-def test_image_generation_tool_sets_response_modalities(monkeypatch):
+def test_image_generation_tool_sets_response_modalities_on_image_model(monkeypatch):
+    """`enabled_tools=["image_generation"]` flips responseModalities
+    only when the selected model is image-capable; otherwise the
+    request stays plain text (text-only models 400 on
+    responseModalities)."""
     captured = _capture_body(
         monkeypatch,
-        model = "gemini-2.5-flash",
+        model = "gemini-2.5-flash-image",
         enabled_tools = ["image_generation"],
     )
     assert captured["body"]["generationConfig"]["responseModalities"] == [
@@ -883,3 +1359,602 @@ def test_grounding_metadata_surfaces_as_tool_end_citations(monkeypatch):
     assert "https://example.com/b" in result
     assert "Example A" in result
     assert "Example B" in result
+
+
+# ── round 3 review follow-ups ─────────────────────────────────────────
+
+
+def test_custom_gemini_proxy_base_url_not_rewritten():
+    """Only the Google-hosted /v1beta/openai base is normalized; a
+    custom gateway whose path ends in /openai must be left alone."""
+    client = ExternalProviderClient(
+        provider_type = "gemini",
+        base_url = "https://proxy.example.com/team/openai",
+        api_key = "AIza-test-key",
+    )
+    assert client.base_url == "https://proxy.example.com/team/openai"
+
+
+def test_custom_gemini_proxy_uses_openai_dispatch():
+    """Any non-Google Gemini base (LiteLLM, custom OpenAI-compat
+    routers) must route through the OpenAI-compatible forwarder, not
+    the native translator. Auth uses Authorization: Bearer ..., not
+    x-goog-api-key."""
+    for base in (
+        "https://proxy.example.com/team/openai",
+        "https://proxy.example.com/v1",
+        "https://litellm.internal.example/v1",
+    ):
+        client = ExternalProviderClient(
+            provider_type = "gemini",
+            base_url = base,
+            api_key = "AIza-test-key",
+        )
+        assert client._is_openai_compatible() is True, base
+        headers = client._auth_headers()
+        assert "x-goog-api-key" not in {k.lower() for k in headers}, (
+            base,
+            headers,
+        )
+        assert headers["Authorization"] == "Bearer AIza-test-key", (
+            base,
+            headers,
+        )
+
+
+def test_google_hosted_gemini_still_uses_native_dispatch():
+    """Google-hosted Gemini keeps native dispatch + x-goog-api-key auth."""
+    client = ExternalProviderClient(
+        provider_type = "gemini",
+        base_url = "https://generativelanguage.googleapis.com/v1beta",
+        api_key = "AIza-test-key",
+    )
+    assert client._is_openai_compatible() is False
+    headers = client._auth_headers()
+    assert headers.get("x-goog-api-key") == "AIza-test-key", headers
+
+
+def test_invalid_gemini_model_id_rejected_before_request(monkeypatch):
+    """Path-traversal model ids must be rejected before the URL is
+    interpolated so the configured API key isn't sent to unintended
+    Gemini endpoints."""
+
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            content = _gemini_sse([]),
+            headers = {"content-type": "text/event-stream"},
+        )
+
+    _mock_http(monkeypatch, handler)
+
+    out: list[str] = []
+
+    async def run():
+        client = _make_gemini_client()
+        async for line in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "../cachedContents/leak",
+            temperature = 0.7,
+            top_p = 0.95,
+            max_tokens = 16,
+        ):
+            out.append(line)
+        await client.close()
+
+    _drive(run())
+    # No outbound request should have been issued.
+    assert captured == [], captured
+    error_lines = [line for line in out if '"error"' in line]
+    assert error_lines, out
+
+
+def test_top_k_omitted_when_not_explicit_default_for_gemini(monkeypatch):
+    """top_k=None means "use provider default"; helper must not emit
+    `topK` in generationConfig when the caller didn't pass it."""
+    captured = _capture_body(monkeypatch, top_k = None)
+    assert "topK" not in captured["body"]["generationConfig"], captured["body"]
+
+
+def test_text_model_image_generation_tool_silently_dropped(monkeypatch):
+    """A stale `enabled_tools=["image_generation"]` on a text-only
+    Gemini model (e.g. gemini-2.5-flash) must NOT switch the request
+    into image mode -- Google's API 400s on responseModalities for
+    text models."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash",
+        enabled_tools = ["image_generation"],
+    )
+    gc = captured["body"]["generationConfig"]
+    assert "responseModalities" not in gc, gc
+
+
+def test_empty_text_part_with_thought_signature_emits_extra_content(
+    monkeypatch,
+):
+    """Gemini 3 can ship a content-free fragment whose only payload is
+    `thoughtSignature`. The translator must still surface that signature
+    on a delta.extra_content envelope so the next turn can replay it."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "answer"},
+                            {"thoughtSignature": "SIG-FINAL"},
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 2,
+                "candidatesTokenCount": 1,
+            },
+        }
+    ]
+    lines = _collect(monkeypatch, sse)
+    chunks = _parse_chunks(lines)
+    extra_carriers = [
+        c
+        for c in chunks
+        if c.get("choices")
+        and c["choices"][0]["delta"].get("extra_content")
+        == {"google": {"thought_signature": "SIG-FINAL"}}
+    ]
+    assert extra_carriers, chunks
+
+
+def test_enable_prompt_caching_false_string_coerces_to_bool():
+    """Pre-PR the field was Optional[bool]; widening to Union[bool,str]
+    must preserve historical coercion so callers sending `"false"`
+    still opt out of caching."""
+    from models.inference import ChatCompletionRequest
+
+    msg = {"role": "user", "content": "hi"}
+    req = ChatCompletionRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "messages": [msg],
+            "enable_prompt_caching": "false",
+        }
+    )
+    assert req.enable_prompt_caching is False, req.enable_prompt_caching
+
+    req = ChatCompletionRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "messages": [msg],
+            "enable_prompt_caching": "true",
+        }
+    )
+    assert req.enable_prompt_caching is True
+
+    # An actual cache resource name passes through untouched.
+    req = ChatCompletionRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "messages": [msg],
+            "enable_prompt_caching": "cachedContents/abc123",
+        }
+    )
+    assert req.enable_prompt_caching == "cachedContents/abc123"
+
+
+def test_legacy_google_openai_base_url_is_rewritten():
+    """The Google-hosted /v1beta/openai legacy base IS still rewritten."""
+    client = ExternalProviderClient(
+        provider_type = "gemini",
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key = "AIza-test-key",
+    )
+    assert client.base_url == "https://generativelanguage.googleapis.com/v1beta"
+
+
+def test_remote_image_url_mime_inferred_from_extension(monkeypatch):
+    """Non-data image_url parts must guess MIME from the path so PNG /
+    WebP / GIF inputs are not silently mislabeled as JPEG."""
+    cases = {
+        "https://cdn.example.com/diagram.png": "image/png",
+        "https://cdn.example.com/diagram.webp": "image/webp",
+        "https://cdn.example.com/diagram.gif": "image/gif",
+        "https://cdn.example.com/diagram.jpg": "image/jpeg",
+        "https://cdn.example.com/path/no-ext": "image/jpeg",
+    }
+    for url, expected in cases.items():
+        captured = _capture_body(
+            monkeypatch,
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is this?"},
+                        {"type": "image_url", "image_url": {"url": url}},
+                    ],
+                }
+            ],
+        )
+        parts = captured["body"]["contents"][-1]["parts"]
+        file_parts = [p for p in parts if "fileData" in p]
+        assert file_parts, (url, parts)
+        assert file_parts[0]["fileData"]["mimeType"] == expected, (
+            url,
+            file_parts,
+        )
+
+
+def test_tool_use_prompt_tokens_added_to_input_tokens(monkeypatch):
+    """`toolUsePromptTokenCount` must roll into the OpenAI prompt
+    total -- otherwise tool turns silently undercount input tokens."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "result"}],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "toolUsePromptTokenCount": 100,
+                "candidatesTokenCount": 5,
+                "thoughtsTokenCount": 2,
+            },
+        }
+    ]
+    lines = _collect(monkeypatch, sse)
+    chunks = _parse_chunks(lines)
+    usage_chunks = [c for c in chunks if c.get("usage")]
+    assert len(usage_chunks) == 1, chunks
+    usage = usage_chunks[0]["usage"]
+    assert usage["prompt_tokens"] == 110, usage
+    assert usage["completion_tokens"] == 7, usage
+    assert usage["total_tokens"] == 117, usage
+    assert usage["completion_tokens_details"]["reasoning_tokens"] == 2, usage
+
+
+def test_usage_chunk_reasoning_tokens_surfaced(monkeypatch):
+    """thoughtsTokenCount must surface as completion_tokens_details.
+    reasoning_tokens in the emitted OpenAI usage chunk."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "ok"}],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 8,
+                "candidatesTokenCount": 5,
+                "thoughtsTokenCount": 20,
+            },
+        }
+    ]
+    lines = _collect(monkeypatch, sse)
+    chunks = _parse_chunks(lines)
+    usage_chunks = [c for c in chunks if c.get("usage")]
+    assert len(usage_chunks) == 1, chunks
+    usage = usage_chunks[0]["usage"]
+    assert usage["completion_tokens"] == 25, usage
+    assert usage["completion_tokens_details"]["reasoning_tokens"] == 20, usage
+
+
+def test_prompt_block_pairs_web_search_tool_end(monkeypatch):
+    """When `promptFeedback.blockReason` triggers after the synthetic
+    web_search tool_start, the helper must emit a matching tool_end so
+    the UI does not leave a "searching..." spinner stuck on screen."""
+    sse = [
+        {"promptFeedback": {"blockReason": "SAFETY"}},
+    ]
+    lines = _collect(
+        monkeypatch,
+        sse,
+        enabled_tools = ["web_search"],
+    )
+    chunks = _parse_chunks(lines)
+    tool_events = [c["_toolEvent"] for c in chunks if "_toolEvent" in c]
+    starts = [e for e in tool_events if e.get("type") == "tool_start"]
+    ends = [e for e in tool_events if e.get("type") == "tool_end"]
+    assert len(starts) == 1, tool_events
+    assert len(ends) == 1, tool_events
+    assert ends[0]["tool_call_id"] == "gemini_web_search"
+    assert "aborted" in ends[0]["result"]
+    error_chunks = [c for c in chunks if c.get("error")]
+    assert error_chunks, chunks
+
+
+def test_code_execution_tool_events_stow_native_part(monkeypatch):
+    """executableCode / codeExecutionResult must round-trip native ids
+    and thoughtSignature in google.native_part so follow-up turns can
+    replay Gemini's required history shape."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "executableCode": {
+                                    "id": "code_a",
+                                    "language": "PYTHON",
+                                    "code": "print(1+1)",
+                                },
+                                "thoughtSignature": "SIG-CODE",
+                            },
+                            {
+                                "codeExecutionResult": {
+                                    "id": "result_a",
+                                    "outcome": "OUTCOME_OK",
+                                    "output": "2\n",
+                                },
+                            },
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 4,
+            },
+        }
+    ]
+    lines = _collect(
+        monkeypatch,
+        sse,
+        enabled_tools = ["code_execution"],
+    )
+    chunks = _parse_chunks(lines)
+    tool_events = [c["_toolEvent"] for c in chunks if "_toolEvent" in c]
+    starts = [e for e in tool_events if e.get("type") == "tool_start"]
+    ends = [e for e in tool_events if e.get("type") == "tool_end"]
+    code_start = next(
+        (e for e in starts if e.get("tool_name") == "code_execution"),
+        None,
+    )
+    code_end = next(iter(ends), None)
+    assert code_start is not None, starts
+    assert code_start["tool_call_id"] == "code_a", code_start
+    native = code_start["arguments"]["google"]["native_part"]
+    assert native["executableCode"]["id"] == "code_a"
+    assert native["thoughtSignature"] == "SIG-CODE"
+    assert code_end is not None, ends
+    assert code_end["tool_call_id"] == "code_a", code_end
+    native_end = code_end["google"]["native_part"]
+    assert native_end["codeExecutionResult"]["id"] == "result_a"
+
+
+def test_inline_image_tool_end_carries_thought_signature(monkeypatch):
+    """Inline image parts with thoughtSignature must persist it on the
+    emitted tool_end so Gemini 3 image editing can echo it back."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(b"PNG").decode(),
+                                },
+                                "thoughtSignature": "SIG-IMG",
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 4,
+                "candidatesTokenCount": 1,
+            },
+        }
+    ]
+    lines = _collect(
+        monkeypatch,
+        sse,
+        model = "gemini-2.5-flash-image",
+    )
+    chunks = _parse_chunks(lines)
+    tool_events = [c["_toolEvent"] for c in chunks if "_toolEvent" in c]
+    image_ends = [
+        e for e in tool_events if e.get("type") == "tool_end" and e.get("image_b64")
+    ]
+    assert image_ends, tool_events
+    assert image_ends[0]["google"]["thought_signature"] == "SIG-IMG"
+
+
+def test_text_chunk_carries_thought_signature(monkeypatch):
+    """Text parts with thoughtSignature surface it on delta.extra_content
+    so frontend persistence can replay it on the follow-up turn."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "text": "hello",
+                                "thoughtSignature": "SIG-TEXT",
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 2,
+                "candidatesTokenCount": 1,
+            },
+        }
+    ]
+    lines = _collect(monkeypatch, sse)
+    chunks = _parse_chunks(lines)
+    text_chunks = [
+        c
+        for c in chunks
+        if c.get("choices") and c["choices"][0]["delta"].get("content") == "hello"
+    ]
+    assert text_chunks, chunks
+    extra = text_chunks[0]["choices"][0]["delta"].get("extra_content")
+    assert extra == {"google": {"thought_signature": "SIG-TEXT"}}, text_chunks
+
+
+def test_openai_tools_translated_into_function_declarations(monkeypatch):
+    """Standard ChatCompletionRequest.tools must be forwarded into
+    Gemini's tools[].functionDeclarations envelope."""
+    captured = _capture_body(
+        monkeypatch,
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Look up the weather for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string"},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        tool_choice = {"type": "function", "function": {"name": "get_weather"}},
+    )
+    tools_arr = captured["body"].get("tools") or []
+    fn_decls = [t for t in tools_arr if "functionDeclarations" in t]
+    assert fn_decls, captured["body"]
+    decls = fn_decls[0]["functionDeclarations"]
+    assert decls[0]["name"] == "get_weather"
+    assert decls[0]["parameters"]["properties"]["city"]["type"] == "string"
+    tool_config = captured["body"].get("toolConfig")
+    assert tool_config is not None, captured["body"]
+    fcc = tool_config["functionCallingConfig"]
+    assert fcc["mode"] == "ANY"
+    assert fcc["allowedFunctionNames"] == ["get_weather"]
+
+
+def test_tool_choice_auto_maps_to_function_calling_mode_auto(monkeypatch):
+    """tool_choice="auto" maps to toolConfig.functionCallingConfig.mode."""
+    captured = _capture_body(
+        monkeypatch,
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "noop", "parameters": {"type": "object"}},
+            }
+        ],
+        tool_choice = "auto",
+    )
+    fcc = captured["body"]["toolConfig"]["functionCallingConfig"]
+    assert fcc["mode"] == "AUTO"
+    assert "allowedFunctionNames" not in fcc
+
+
+def test_code_exec_inline_image_attaches_to_code_execution_card(monkeypatch):
+    """A codeExecution sandbox plot (matplotlib) ships as an inline
+    image part right after the codeExecutionResult. Instead of spawning
+    a separate empty image_generation card, attach to the same
+    code_execution tool_end via the `__IMAGES__:` marker the chat
+    adapter already understands."""
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "executableCode": {
+                                    "id": "code_plot",
+                                    "language": "PYTHON",
+                                    "code": "import matplotlib.pyplot as plt; plt.plot([1,2,3]); plt.savefig('out.png')",
+                                },
+                            },
+                            {
+                                "codeExecutionResult": {
+                                    "outcome": "OUTCOME_OK",
+                                    "output": "saved",
+                                },
+                            },
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": base64.b64encode(b"PNGDATA").decode(),
+                                },
+                            },
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 4,
+            },
+        }
+    ]
+    lines = _collect(
+        monkeypatch,
+        sse,
+        enabled_tools = ["code_execution"],
+    )
+    chunks = _parse_chunks(lines)
+    tool_events = [c["_toolEvent"] for c in chunks if "_toolEvent" in c]
+    # No standalone image_generation card should have been emitted.
+    image_starts = [
+        e
+        for e in tool_events
+        if e.get("type") == "tool_start" and e.get("tool_name") == "image_generation"
+    ]
+    assert not image_starts, tool_events
+    # The code_execution tool_end should now carry the inline image
+    # via the `__IMAGES__:` marker.
+    code_ends = [
+        e
+        for e in tool_events
+        if e.get("type") == "tool_end" and e.get("tool_call_id") == "code_plot"
+    ]
+    assert code_ends, tool_events
+    final_result = code_ends[-1]["result"]
+    assert "__IMAGES__:" in final_result, code_ends
+    assert "data:image/png;base64," in final_result, code_ends
+
+
+def test_image_models_drop_function_declarations(monkeypatch):
+    """Image-mode requests cannot mix tools with responseModalities so
+    user-supplied function declarations must be dropped."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash-image",
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "noop", "parameters": {"type": "object"}},
+            }
+        ],
+    )
+    assert captured["body"].get("tools") is None
+    assert captured["body"]["generationConfig"]["responseModalities"] == [
+        "TEXT",
+        "IMAGE",
+    ]

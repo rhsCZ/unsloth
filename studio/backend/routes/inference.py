@@ -427,9 +427,17 @@ _TOOL_ACTION_NUDGE = (
     " Do NOT output code blocks -- use the python tool instead."
 )
 
-# Regex for stripping leaked tool-call XML from assistant messages/stream
+# Strip tool-call XML the speculative buffer in core/inference/llama_cpp.py
+# split across the visible/DRAIN boundary. Four leak shapes:
+#   1. well-formed `<tool_call>...</tool_call>` / `<function=...>...</function>`
+#   2. orphan opening to EOF (close was DRAINED)
+#   3. bare orphan close (open was DRAINED)
+#   4. tail-only `</parameter>` (outer close truncated by EOS); anchored to
+#      `\Z` so mid-text `<parameter>` in user code samples survives.
 _TOOL_XML_RE = _re.compile(
-    r"<tool_call>.*?</tool_call>|<function=\w+>.*?</function>",
+    r"<(?:tool_call|function=\w+)>.*?(?:</(?:tool_call|function)>|\Z)"
+    r"|</(?:tool_call|function)>"
+    r"|</parameter>\s*\Z",
     _re.DOTALL,
 )
 logger = get_logger(__name__)
@@ -1712,11 +1720,35 @@ def _build_external_messages(
     result = []
     for msg in messages:
         if isinstance(msg.content, str):
-            # Skip assistant messages with empty content (some providers reject them)
-            if msg.role == "assistant" and not msg.content.strip():
+            # Drop bare assistant messages with no content AND no
+            # tool_calls (some providers reject empty assistant turns).
+            # Preserve assistant turns whose only payload is tool_calls
+            # so multi-turn function-call loops round-trip.
+            if (
+                msg.role == "assistant"
+                and not msg.content.strip()
+                and not msg.tool_calls
+            ):
                 continue
-            result.append({"role": msg.role, "content": msg.content})
-        elif isinstance(msg.content, list):
+            out: dict[str, Any] = {"role": msg.role, "content": msg.content}
+            if msg.role == "assistant" and msg.tool_calls:
+                out["tool_calls"] = msg.tool_calls
+            if msg.role == "tool":
+                if msg.tool_call_id:
+                    out["tool_call_id"] = msg.tool_call_id
+                if msg.name:
+                    out["name"] = msg.name
+            result.append(out)
+            continue
+        # Assistant messages with content=None but populated tool_calls
+        # are valid (post-tool-call assistant turn). Forward them so the
+        # provider helper can rebuild the functionCall part.
+        if msg.content is None and msg.role == "assistant" and msg.tool_calls:
+            result.append(
+                {"role": "assistant", "content": "", "tool_calls": msg.tool_calls}
+            )
+            continue
+        if isinstance(msg.content, list):
             if supports_vision:
                 parts = []
                 for part in msg.content:
@@ -1750,7 +1782,15 @@ def _build_external_messages(
                         # provider would 400 on the unknown part, so
                         # gate by provider_type.
                         parts.append({"type": "compaction", "content": part.content})
-                result.append({"role": msg.role, "content": parts})
+                entry: dict[str, Any] = {"role": msg.role, "content": parts}
+                if msg.role == "assistant" and msg.tool_calls:
+                    entry["tool_calls"] = msg.tool_calls
+                if msg.role == "tool":
+                    if msg.tool_call_id:
+                        entry["tool_call_id"] = msg.tool_call_id
+                    if msg.name:
+                        entry["name"] = msg.name
+                result.append(entry)
             else:
                 # Non-vision provider: strip images / documents, keep
                 # text, optionally keep compaction (Anthropic only --
@@ -1766,9 +1806,17 @@ def _build_external_messages(
                 if len(preserved) == 1 and preserved[0]["type"] == "text":
                     # Single text part collapses back to a string for
                     # providers that don't accept content arrays.
-                    result.append({"role": msg.role, "content": preserved[0]["text"]})
+                    entry = {"role": msg.role, "content": preserved[0]["text"]}
                 else:
-                    result.append({"role": msg.role, "content": preserved})
+                    entry = {"role": msg.role, "content": preserved}
+                if msg.role == "assistant" and msg.tool_calls:
+                    entry["tool_calls"] = msg.tool_calls
+                if msg.role == "tool":
+                    if msg.tool_call_id:
+                        entry["tool_call_id"] = msg.tool_call_id
+                    if msg.name:
+                        entry["name"] = msg.name
+                result.append(entry)
     return result
 
 
@@ -1851,6 +1899,14 @@ async def _proxy_to_external_provider(
         api_key = api_key,
     )
 
+    # `top_k` defaults to 20 in ChatCompletionRequest because the local
+    # inference path expects an int, but the external-provider path
+    # should treat "field omitted from JSON" as "use provider default"
+    # so callers that send only model/messages do not silently get
+    # different sampling than before this PR. Pydantic's
+    # `model_fields_set` tracks explicit-vs-default per request.
+    _top_k_explicit = payload.top_k if "top_k" in payload.model_fields_set else None
+
     async def _stream():
         gen = client.stream_chat_completion(
             messages = chat_messages,
@@ -1859,7 +1915,7 @@ async def _proxy_to_external_provider(
             top_p = payload.top_p,
             max_tokens = payload.max_tokens,
             presence_penalty = payload.presence_penalty,
-            top_k = payload.top_k,
+            top_k = _top_k_explicit,
             enable_thinking = payload.enable_thinking,
             reasoning_effort = payload.reasoning_effort,
             enabled_tools = payload.enabled_tools,
@@ -1868,6 +1924,8 @@ async def _proxy_to_external_provider(
             anthropic_code_exec_container_id = payload.anthropic_code_exec_container_id,
             prompt_cache_ttl = payload.prompt_cache_ttl,
             compaction_threshold = payload.compaction_threshold,
+            tools = payload.tools,
+            tool_choice = payload.tool_choice,
             stream = payload.stream,
         )
         try:

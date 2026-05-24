@@ -872,17 +872,49 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
         throw new Error("Missing connection API key.");
       }
 
+      // OpenAI Responses-API image_generation server tool. Pill is
+      // gated on OpenAI cloud + a Responses-API model id; the backend
+      // additionally re-checks is_openai_cloud before appending
+      // {type:"image_generation"} to the request tools array. Computed
+      // ahead of Search/Code so Gemini image mode can suppress them.
+      const imageGenerationEnabledForThisTurn = Boolean(
+        externalProvider &&
+          externalSelection &&
+          imageToolsEnabled &&
+          providerSupportsBuiltinImageGeneration(
+            externalProvider.providerType,
+            externalSelection.modelId,
+            externalProvider.baseUrl,
+          ),
+      );
+      // Gemini rejects codeExecution alongside
+      // responseModalities=[TEXT,IMAGE]. Search is also blocked on the
+      // older 2.5 image family but explicitly allowed on the Gemini 3
+      // image family (gemini-3-pro-image-preview,
+      // gemini-3.1-flash-image-preview, Nano Banana Pro) per Google's
+      // docs. providerSupportsBuiltinWebSearch / Code already encode
+      // the per-model allowance, so we lean on them instead of a
+      // blanket image-mode disable.
+      const geminiImageModeForThisTurn =
+        externalProvider?.providerType === "gemini" &&
+        imageGenerationEnabledForThisTurn;
       const webSearchEnabledForThisTurn =
         Boolean(
           externalProvider &&
+            externalSelection &&
             toolsEnabled &&
-            providerSupportsBuiltinWebSearch(externalProvider.providerType),
+            providerSupportsBuiltinWebSearch(
+              externalProvider.providerType,
+              externalSelection.modelId,
+              externalProvider.baseUrl,
+            ),
         );
       const codeExecEnabledForThisTurn =
         Boolean(
           externalProvider &&
             externalSelection &&
             codeToolsEnabled &&
+            !geminiImageModeForThisTurn &&
             providerSupportsBuiltinCodeExecution(
               externalProvider.providerType,
               externalSelection.modelId,
@@ -902,20 +934,6 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
       const providerShipsWebFetch = Boolean(
         externalProvider &&
           providerSupportsBuiltinWebFetch(externalProvider.providerType),
-      );
-      // OpenAI Responses-API image_generation server tool. Pill is
-      // gated on OpenAI cloud + a Responses-API model id; the backend
-      // additionally re-checks is_openai_cloud before appending
-      // {type:"image_generation"} to the request tools array.
-      const imageGenerationEnabledForThisTurn = Boolean(
-        externalProvider &&
-          externalSelection &&
-          imageToolsEnabled &&
-          providerSupportsBuiltinImageGeneration(
-            externalProvider.providerType,
-            externalSelection.modelId,
-            externalProvider.baseUrl,
-          ),
       );
 
       const outboundMessages = messages
@@ -1766,6 +1784,62 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               const reasoning =
                 (typeof rawReasoning === "string" ? rawReasoning : "") +
                 reasoningFromDetails;
+              // OpenAI-shape `delta.tool_calls`. Gemini's translator
+              // emits these for user-supplied functionDeclarations (no
+              // `_toolEvent` envelope, no text delta). Surface as
+              // tool-call parts so the UI renders the function-call
+              // card and downstream auto-execution can pick them up.
+              const rawDeltaToolCalls = (
+                chunk.choices?.[0]?.delta as
+                  | { tool_calls?: unknown }
+                  | undefined
+              )?.tool_calls;
+              if (
+                Array.isArray(rawDeltaToolCalls) &&
+                rawDeltaToolCalls.length > 0
+              ) {
+                for (const tc of rawDeltaToolCalls) {
+                  if (!tc || typeof tc !== "object") continue;
+                  const call = tc as {
+                    id?: string;
+                    index?: number;
+                    function?: { name?: string; arguments?: string };
+                  };
+                  const fnName = call.function?.name ?? "";
+                  const argsText = call.function?.arguments ?? "{}";
+                  const callId =
+                    call.id ||
+                    `tool_call_${call.index ?? toolCallParts.length}`;
+                  let args: ToolCallMessagePart["args"] = {};
+                  try {
+                    args = JSON.parse(argsText) as ToolCallMessagePart["args"];
+                  } catch {
+                    args = { _raw: argsText } as ToolCallMessagePart["args"];
+                  }
+                  toolCallParts.push({
+                    type: "tool-call" as const,
+                    toolCallId: callId,
+                    toolName: fnName,
+                    argsText,
+                    args,
+                  });
+                }
+                yield {
+                  content: [
+                    ...toolCallParts,
+                    ...parseAssistantContent(cumulativeText),
+                  ],
+                  metadata: {
+                    timing: buildTiming(
+                      streamStartTime,
+                      totalChunks,
+                      firstTokenTime,
+                    ),
+                    custom: { reasoningDuration },
+                  },
+                };
+                continue;
+              }
               if (!delta && !reasoning) {
                 continue;
               }

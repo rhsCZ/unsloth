@@ -105,13 +105,29 @@ def test_anthropic_empty_stop_omitted(monkeypatch):
     assert "stop" not in body, body
 
 
-def test_anthropic_stop_sequences_dedup_and_drop_empties(monkeypatch):
-    """Whitespace-only / duplicate chips shouldn't reach the wire and
-    waste budget against Anthropic's 16-entry cap."""
+def test_anthropic_stop_sequences_dedup_and_drop_whitespace(monkeypatch):
+    """Anthropic 400s on any stop sequence that contains no non-
+    whitespace character (`stop_sequences: each stop sequence must
+    contain non-whitespace`). Empty strings, " ", "\\n", "\\n\\n", and
+    other whitespace-only chips are filtered out client-side so the
+    request reaches the wire. Duplicates are deduped to avoid wasting
+    slots against the cap.
+    """
     captured = _install_mock(monkeypatch)
-    body = _drive_anthropic(captured, stop = ["END", "", "END", "DONE", "  ", "END"])
-    # Order preserved on first sight, duplicates and empties dropped.
-    assert body.get("stop_sequences") == ["END", "DONE", "  "], body
+    body = _drive_anthropic(
+        captured,
+        stop = ["END", "", "END", "DONE", "  ", "END", "\n\n", "\t"],
+    )
+    # Order preserved on first sight, duplicates + every whitespace-only
+    # entry dropped.
+    assert body.get("stop_sequences") == ["END", "DONE"], body
+
+
+def test_anthropic_single_whitespace_stop_string_dropped(monkeypatch):
+    """Single-string stop="\\n\\n" must not reach the wire either."""
+    captured = _install_mock(monkeypatch)
+    body = _drive_anthropic(captured, stop = "\n\n")
+    assert "stop_sequences" not in body, body
 
 
 def test_anthropic_stop_sequences_truncated_to_16(monkeypatch):
@@ -137,21 +153,58 @@ def test_anthropic_service_tier_unsupported_values_dropped(monkeypatch, bogus):
     assert "service_tier" not in body, body
 
 
-def test_anthropic_disable_parallel_tool_use_only_when_false(monkeypatch):
+def _drive_anthropic_with_tools(captured, **kwargs) -> dict:
+    """Same as `_drive_anthropic` but enables a server-side tool
+    (`web_search`) so the request body carries `tools`. Needed to
+    exercise the `disable_parallel_tool_use` nesting path, which only
+    fires when there is at least one tool defined.
+    """
+    enabled_tools = kwargs.pop("enabled_tools", None) or ["web_search"]
+    return _drive_anthropic(captured, enabled_tools = enabled_tools, **kwargs)
+
+
+def test_anthropic_disable_parallel_tool_use_nested_under_tool_choice(monkeypatch):
+    """`disable_parallel_tool_use` must be a property of `tool_choice`,
+    NOT a top-level body field. Top-level placement is rejected with
+    `extraneous key [disable_parallel_tool_use] is not permitted`. See
+    https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use.
+    """
+    captured = _install_mock(monkeypatch)
+    body = _drive_anthropic_with_tools(captured, parallel_tool_calls = False)
+    # Top-level fields must not carry the flag — Anthropic 400s otherwise.
+    assert "disable_parallel_tool_use" not in body, body
+    assert "parallel_tool_calls" not in body, body
+    # The flag is set on tool_choice. Default type is "auto" when the
+    # user didn't pick one explicitly.
+    tc = body.get("tool_choice")
+    assert isinstance(tc, dict), body
+    assert tc.get("disable_parallel_tool_use") is True, body
+    assert tc.get("type") == "auto", body
+
+
+def test_anthropic_disable_parallel_tool_use_skipped_without_tools(monkeypatch):
+    """Without any tools defined, `disable_parallel_tool_use` is a
+    no-op upstream — skip it so the request body stays minimal and the
+    flag never lands at top level either.
+    """
     captured = _install_mock(monkeypatch)
     body = _drive_anthropic(captured, parallel_tool_calls = False)
-    assert body.get("disable_parallel_tool_use") is True, body
-    # Anthropic has no `parallel_tool_calls` field.
+    assert "disable_parallel_tool_use" not in body, body
     assert "parallel_tool_calls" not in body, body
+    assert "tool_choice" not in body, body
 
 
 def test_anthropic_parallel_tool_calls_default_not_sent(monkeypatch):
     captured = _install_mock(monkeypatch)
-    body = _drive_anthropic(captured, parallel_tool_calls = True)
-    # True is the upstream default; do not surface
-    # `disable_parallel_tool_use: false` which would over-specify the request.
+    body = _drive_anthropic_with_tools(captured, parallel_tool_calls = True)
+    # True is the upstream default; do not surface a tool_choice we
+    # would otherwise not have set, and definitely no top-level
+    # `disable_parallel_tool_use`.
     assert "disable_parallel_tool_use" not in body, body
     assert "parallel_tool_calls" not in body, body
+    tc = body.get("tool_choice")
+    if isinstance(tc, dict):
+        assert "disable_parallel_tool_use" not in tc, body
 
 
 def test_anthropic_rejects_openai_only_knobs(monkeypatch):
@@ -332,11 +385,22 @@ def test_openai_responses_forwards_service_tier(monkeypatch):
     assert body.get("service_tier") == "priority", body
 
 
-def test_openai_responses_rejects_chat_only_service_tier(monkeypatch):
+@pytest.mark.parametrize("value", ["auto", "default", "flex", "scale", "priority"])
+def test_openai_responses_accepts_full_service_tier_enum(monkeypatch, value):
+    """`openai-python`'s ResponseCreateParams declares
+    `Optional[Literal["auto", "default", "flex", "scale", "priority"]]`
+    so every value in that set forwards untouched."""
     captured = _install_mock(monkeypatch, sse_payload = _responses_done_payload())
-    body = _drive_openai_responses(captured, service_tier = "scale")
-    # Responses only accepts auto|default|flex|priority -- `scale` is
-    # silently dropped so a stale frontend cannot 400 the request.
+    body = _drive_openai_responses(captured, service_tier = value)
+    assert body.get("service_tier") == value, body
+
+
+def test_openai_responses_drops_anthropic_only_service_tier(monkeypatch):
+    """`standard_only` is Anthropic-only and Responses has never accepted
+    it. Drop it client-side so a stale frontend cannot 400 the request.
+    """
+    captured = _install_mock(monkeypatch, sse_payload = _responses_done_payload())
+    body = _drive_openai_responses(captured, service_tier = "standard_only")
     assert "service_tier" not in body, body
 
 
@@ -407,3 +471,151 @@ def test_chat_completion_request_clamps_frequency_penalty_range():
                 "frequency_penalty": -3.0,
             }
         )
+
+
+# ── Kimi web-search bypass forwards new sampling fields ────────────────
+
+
+def test_kimi_web_search_bypass_forwards_new_sampling_fields(monkeypatch):
+    """The Kimi `enabled_tools=["web_search"]` path takes an early
+    return into `_stream_kimi_web_search` BEFORE the default OAI-compat
+    body builder runs. PR #5711 added new sampling fields to the
+    default builder; this test pins that the web-search bypass also
+    forwards them so Kimi-with-search and Kimi-without-search behave
+    consistently."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "kimi",
+            base_url = "https://api.moonshot.ai/v1",
+            api_key = "kimi-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "kimi-k2.6",
+            temperature = 1.0,
+            top_p = 1.0,
+            max_tokens = 256,
+            enabled_tools = ["web_search"],
+            presence_penalty = 0.5,
+            frequency_penalty = 1.25,
+            seed = 7,
+            stop = ["END"],
+            parallel_tool_calls = False,
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert body.get("frequency_penalty") == 1.25, body
+    assert body.get("seed") == 7, body
+    assert body.get("stop") == ["END"], body
+    assert body.get("parallel_tool_calls") is False, body
+    assert body.get("presence_penalty") == 0.5, body
+    # body_omit still strips temperature / top_p for Kimi.
+    assert "temperature" not in body, body
+    assert "top_p" not in body, body
+
+
+# ── Local OpenAI passthrough forwards new sampling fields ──────────────
+
+
+def test_local_openai_passthrough_forwards_new_sampling_fields():
+    """Round 1 reviewers (10/20) flagged that
+    `_build_openai_passthrough_body` dropped frequency_penalty / seed /
+    parallel_tool_calls when forwarding to llama-server. Pin the
+    extended contract."""
+    from models.inference import ChatCompletionRequest
+    from routes.inference import _build_openai_passthrough_body
+
+    payload = ChatCompletionRequest.model_validate(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "frequency_penalty": 1.25,
+            "seed": 123,
+            "stop": ["END"],
+            "parallel_tool_calls": False,
+        }
+    )
+    body = _build_openai_passthrough_body(payload, backend_ctx = 4096)
+    assert body["frequency_penalty"] == 1.25, body
+    assert body["seed"] == 123, body
+    assert body["stop"] == ["END"], body
+    assert body["parallel_tool_calls"] is False, body
+
+
+# ── Responses → ChatCompletions bridge preserves parallel_tool_calls ──
+
+
+def test_responses_to_chat_bridge_preserves_parallel_tool_calls():
+    """Round 3 reviewers flagged that `_build_chat_request` (the
+    /v1/responses → /v1/chat/completions translator) dropped
+    `parallel_tool_calls`, so a Responses-API caller that set
+    `parallel_tool_calls=false` never saw the flag reach llama-server.
+    Pin the translation."""
+    from models.inference import ChatMessage, ResponsesRequest
+    from routes.inference import _build_chat_request, _build_openai_passthrough_body
+
+    payload = ResponsesRequest(
+        input = "hi",
+        stream = True,
+        parallel_tool_calls = False,
+    )
+    chat_req = _build_chat_request(
+        payload,
+        [ChatMessage(role = "user", content = "hi")],
+        stream = True,
+    )
+    assert chat_req.parallel_tool_calls is False, chat_req
+    body = _build_openai_passthrough_body(chat_req, backend_ctx = 4096)
+    assert body["parallel_tool_calls"] is False, body
+
+
+def test_responses_to_chat_bridge_omits_unset_parallel_tool_calls():
+    """Unset `parallel_tool_calls` (None) must not appear on the
+    translated body — the upstream default is `true` everywhere, so
+    forwarding `parallel_tool_calls=None` would over-specify."""
+    from models.inference import ChatMessage, ResponsesRequest
+    from routes.inference import _build_chat_request, _build_openai_passthrough_body
+
+    payload = ResponsesRequest(input = "hi", stream = True)
+    chat_req = _build_chat_request(
+        payload,
+        [ChatMessage(role = "user", content = "hi")],
+        stream = True,
+    )
+    assert chat_req.parallel_tool_calls is None, chat_req
+    body = _build_openai_passthrough_body(chat_req, backend_ctx = 4096)
+    assert "parallel_tool_calls" not in body, body
+
+
+# ── Backend ChatInferenceSettings schema accepts new fields ────────────
+
+
+def test_chat_settings_payload_accepts_new_sampling_keys():
+    """Round 1 reviewers flagged that `ChatSettingsPayload.extra="forbid"`
+    with the old field list 422'd every settings save that contained
+    any of the new keys. Pin that the new keys round-trip."""
+    from routes.chat_history import ChatSettingsPayload
+
+    parsed = ChatSettingsPayload.model_validate(
+        {
+            "inferenceParams": {
+                "frequencyPenalty": 0.7,
+                "seed": 42,
+                "stop": ["END"],
+                "serviceTier": "standard_only",
+                "parallelToolCalls": False,
+            }
+        }
+    )
+    ip = parsed.inferenceParams
+    assert ip is not None
+    assert ip.frequencyPenalty == 0.7
+    assert ip.seed == 42
+    assert ip.stop == ["END"]
+    assert ip.serviceTier == "standard_only"
+    assert ip.parallelToolCalls is False

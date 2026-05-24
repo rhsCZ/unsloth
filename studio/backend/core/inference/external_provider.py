@@ -435,6 +435,11 @@ class ExternalProviderClient:
                 messages,
                 model,
                 max_tokens,
+                frequency_penalty = frequency_penalty,
+                seed = seed,
+                stop = stop,
+                parallel_tool_calls = parallel_tool_calls,
+                presence_penalty = presence_penalty,
             ):
                 yield line
             return
@@ -850,6 +855,12 @@ class ExternalProviderClient:
         messages: list[dict[str, Any]],
         model: str,
         max_tokens: Optional[int],
+        *,
+        frequency_penalty: Optional[float] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, list[str]]] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        presence_penalty: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Kimi $web_search round-trip.
@@ -888,6 +899,43 @@ class ExternalProviderClient:
         }
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
+
+        # Forward the new optional sampling extensions (#5711) on the
+        # web-search bypass too. The default OAI-compat body construction
+        # (which adds these) is skipped because this helper returns
+        # early; forwarding here ensures kimi-with-search honours the
+        # same sampling controls as kimi-without-search.
+        if presence_penalty is not None:
+            body["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            body["frequency_penalty"] = frequency_penalty
+        if seed is not None:
+            body["seed"] = seed
+        if stop:
+            # Mirror the default OAI-compat path's stop handling exactly
+            # so Kimi-with-search and Kimi-without-search apply the
+            # same rules — a single string is forwarded verbatim and
+            # lists are deduped + truncated to OpenAI's 4-entry cap.
+            # Earlier the bypass dropped whitespace-only strings here
+            # while the normal path forwarded them, which was an
+            # asymmetric provider-path fix.
+            if isinstance(stop, str):
+                body["stop"] = stop
+            elif isinstance(stop, list):
+                sequences = list(
+                    dict.fromkeys(s for s in stop if isinstance(s, str) and s)
+                )
+                if len(sequences) > 4:
+                    logger.warning(
+                        "stop sequences truncated to 4 entries "
+                        "(received %d, OpenAI's hard cap is 4)",
+                        len(sequences),
+                    )
+                    body["stop"] = sequences[:4]
+                elif sequences:
+                    body["stop"] = sequences
+        if parallel_tool_calls is not None:
+            body["parallel_tool_calls"] = parallel_tool_calls
 
         # Strip body fields the Kimi registry declares unusable
         # (temperature/top_p — see body_omit in providers.py).
@@ -1407,25 +1455,37 @@ class ExternalProviderClient:
         # Optional sampling extensions. Anthropic has no
         # frequency_penalty / seed / logprobs equivalents, so those are
         # silently dropped by virtue of not being forwarded from
-        # stream_chat_completion. The three knobs Anthropic does accept
-        # land here:
-        #   stop                  → stop_sequences (renamed)
+        # stream_chat_completion. The two body-level knobs Anthropic
+        # does accept land here:
+        #   stop                  → stop_sequences (renamed, ws-stripped)
         #   service_tier          → service_tier (auto|standard_only only)
-        #   parallel_tool_calls   → disable_parallel_tool_use (inverted)
+        # parallel_tool_calls inversion is applied AFTER the tools
+        # wiring below, because Anthropic requires it nested under
+        # tool_choice (top-level placement is rejected with
+        # `extraneous key [disable_parallel_tool_use] is not permitted`).
         if stop:
             sequences: list[str]
             if isinstance(stop, str):
-                sequences = [stop]
+                sequences = [stop] if stop.strip() else []
             else:
-                # Dedupe + drop empties first; Anthropic 400s on empty
-                # entries and the docs cap stop_sequences at 16 entries.
+                # Dedupe + drop whitespace-only entries. Anthropic 400s
+                # on any sequence that contains no non-whitespace char:
+                # `stop_sequences: each stop sequence must contain
+                # non-whitespace`. That rejects empty strings, " ", and
+                # — critically — common defaults like "\n" / "\n\n".
+                # The truncation cap below (16) is a client-side guard;
+                # the Anthropic Messages API does not publish a max
+                # array length but every SDK we have inspected treats
+                # 16 as a sane ceiling (Bedrock's hard cap is 8191, so
+                # this only matters when callers paste pathologically
+                # long lists by accident).
                 sequences = list(
-                    dict.fromkeys(s for s in stop if isinstance(s, str) and s)
+                    dict.fromkeys(s for s in stop if isinstance(s, str) and s.strip())
                 )
             if len(sequences) > 16:
                 logger.warning(
                     "stop_sequences truncated to 16 entries "
-                    "(received %d, Anthropic's hard cap is 16)",
+                    "(received %d, client-side guard ceiling)",
                     len(sequences),
                 )
                 sequences = sequences[:16]
@@ -1433,10 +1493,6 @@ class ExternalProviderClient:
                 body["stop_sequences"] = sequences
         if service_tier in ("auto", "standard_only"):
             body["service_tier"] = service_tier
-        if parallel_tool_calls is False:
-            # Default upstream behavior is parallel-allowed; only
-            # forward when the user explicitly disabled it.
-            body["disable_parallel_tool_use"] = True
         # Anthropic only caches a prefix when at least one cache_control
         # marker is attached to it — the frontend defaults
         # enable_prompt_caching to True for Anthropic, so treat `None` the
@@ -1666,6 +1722,23 @@ class ExternalProviderClient:
             # the next turn fall back to auto-create.
             if anthropic_code_exec_container_id:
                 body["container"] = anthropic_code_exec_container_id
+
+        # parallel_tool_calls=false → disable_parallel_tool_use=true,
+        # nested under tool_choice (NOT top-level). The Anthropic
+        # Messages API only accepts `disable_parallel_tool_use` as a
+        # property on the `tool_choice` object (ToolChoiceAuto /
+        # ToolChoiceAny / ToolChoiceTool). Top-level placement is
+        # rejected with `extraneous key [disable_parallel_tool_use]
+        # is not permitted`. Without any tools the flag is also a
+        # no-op upstream — skip it to keep the request body minimal.
+        # See
+        #   https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
+        if parallel_tool_calls is False and body.get("tools"):
+            tc = body.get("tool_choice")
+            if not isinstance(tc, dict):
+                tc = {"type": "auto"}
+            tc["disable_parallel_tool_use"] = True
+            body["tool_choice"] = tc
 
         # Server-side context compaction — see
         #   https://platform.claude.com/docs/en/build-with-claude/compaction
@@ -2758,12 +2831,18 @@ class ExternalProviderClient:
             "input": input_items,
             "stream": True,
         }
-        # Responses accepts service_tier on the same enum set as Chat
-        # Completions minus `scale`. parallel_tool_calls follows the
-        # same shape (default true). The frontend capability gate
-        # (provider-capabilities.ts) already filters the option lists
-        # per provider, so we just forward what we got.
-        if service_tier in ("auto", "default", "flex", "priority"):
+        # Responses accepts the same service_tier enum set as Chat
+        # Completions (auto|default|flex|scale|priority) per the live
+        # `openai-python` SDK
+        # (`src/openai/types/responses/response_create_params.py`
+        # declares `Optional[Literal["auto", "default", "flex",
+        # "scale", "priority"]]`). parallel_tool_calls follows the same
+        # shape (default true). The frontend capability gate
+        # (provider-capabilities.ts) already filters per-provider, so
+        # we just forward whatever value the dispatcher hands us, with
+        # `standard_only` (Anthropic-only) being the one value Responses
+        # has never accepted.
+        if service_tier in ("auto", "default", "flex", "scale", "priority"):
             body["service_tier"] = service_tier
         if parallel_tool_calls is not None:
             body["parallel_tool_calls"] = bool(parallel_tool_calls)

@@ -3780,6 +3780,14 @@ def _build_chat_request(
         chat_kwargs["top_p"] = payload.top_p
     if payload.max_output_tokens is not None:
         chat_kwargs["max_tokens"] = payload.max_output_tokens
+    # `parallel_tool_calls` is now a first-class field on
+    # ChatCompletionRequest (PR #5711) and the OpenAI-compat
+    # passthrough builder forwards it. Translate it here so a Responses
+    # API caller (e.g. OpenAI Codex SDK) that sets
+    # `parallel_tool_calls=false` actually sees the preference reach
+    # llama-server instead of getting silently dropped at the bridge.
+    if payload.parallel_tool_calls is not None:
+        chat_kwargs["parallel_tool_calls"] = payload.parallel_tool_calls
 
     chat_tools = _translate_responses_tools_to_chat(payload.tools)
     if chat_tools is not None:
@@ -3789,13 +3797,7 @@ def _build_chat_request(
     if chat_tool_choice is not None:
         chat_kwargs["tool_choice"] = chat_tool_choice
 
-    req = ChatCompletionRequest(**chat_kwargs)
-    # `parallel_tool_calls` is not a first-class field on ChatCompletionRequest,
-    # but the model allows extras and _build_openai_passthrough_body forwards
-    # only explicitly-known fields. Llama-server does not currently implement
-    # parallel_tool_calls semantics, so we accept-and-ignore it on the
-    # Responses side to avoid breaking SDK clients that always send it.
-    return req
+    return ChatCompletionRequest(**chat_kwargs)
 
 
 def _chat_tool_calls_to_responses_output(tool_calls: list[dict]) -> list[dict]:
@@ -4898,6 +4900,9 @@ def _build_passthrough_payload(
     min_p = None,
     repetition_penalty = None,
     presence_penalty = None,
+    frequency_penalty = None,
+    seed = None,
+    parallel_tool_calls = None,
     tool_choice = "auto",
     response_format = None,
     chat_template_kwargs = None,
@@ -4929,6 +4934,18 @@ def _build_passthrough_payload(
         body["repeat_penalty"] = repetition_penalty
     if presence_penalty is not None:
         body["presence_penalty"] = presence_penalty
+    # New per-provider sampling extensions (PR #5711). llama-server's
+    # /v1/chat/completions endpoint accepts the standard OpenAI fields,
+    # so forward them straight through. parallel_tool_calls is a no-op
+    # on llama-server today (the upstream always dispatches sequentially)
+    # but forward it anyway so a future llama-server release that
+    # implements it picks up the user's preference automatically.
+    if frequency_penalty is not None:
+        body["frequency_penalty"] = frequency_penalty
+    if seed is not None:
+        body["seed"] = seed
+    if parallel_tool_calls is not None:
+        body["parallel_tool_calls"] = parallel_tool_calls
     if response_format is not None:
         # llama-server applies a GBNF grammar derived from the JSON schema
         # when response_format is present. Field is documented flat at the
@@ -5347,6 +5364,9 @@ def _build_openai_passthrough_body(payload, backend_ctx = None) -> dict:
         min_p = payload.min_p,
         repetition_penalty = payload.repetition_penalty,
         presence_penalty = payload.presence_penalty,
+        frequency_penalty = payload.frequency_penalty,
+        seed = payload.seed,
+        parallel_tool_calls = payload.parallel_tool_calls,
         tool_choice = tool_choice,
         response_format = _extract_response_format(payload),
         chat_template_kwargs = tpl_kwargs,

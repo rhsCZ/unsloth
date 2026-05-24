@@ -445,6 +445,24 @@ def test_expand_np_handles_multiple_occurrences(monkeypatch):
     assert sys.argv == ["unsloth", "run", "-np", "8", "-np", "16"]
 
 
+@pytest.mark.parametrize("attached,expected", [("-np-1", "-1"), ("-np+1", "+1")])
+def test_expand_np_handles_signed_attached_forms(monkeypatch, attached, expected):
+    """Signed -np-1 / -np+1 must split too: Click would otherwise
+    cluster `-n -p -1` and set port=-1 silently."""
+    monkeypatch.setattr(sys, "argv", ["unsloth", "run", attached])
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "-np", expected]
+
+
+def test_consume_helper_rejects_empty_inline_value():
+    """`-m=` must error before re-exec instead of becoming --model ''."""
+    import typer as _typer
+
+    helper = _studio_mod()._consume_legacy_short_aliases
+    with pytest.raises(_typer.BadParameter, match = "non-empty"):
+        helper(["-m="], ("-m",), None, "--model")
+
+
 def test_attached_np8_no_longer_silently_sets_port(monkeypatch):
     """Behavioural pin: after _expand_attached_np_short runs in the
     entry-point gate, `-np8` produces --parallel=8 (not --port=8)."""
@@ -460,3 +478,54 @@ def test_attached_np8_no_longer_silently_sets_port(monkeypatch):
     assert argv[argv.index("--parallel") + 1] == "8", argv
     # Port must stay at the typer default (not silently rewritten to 8).
     assert argv[argv.index("--port") + 1] == "8888", argv
+
+
+def test_expand_np_stops_at_double_dash(monkeypatch):
+    """`--` ends option processing; post-`--` `-np8` must stay raw."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["unsloth", "run", "--model", "X", "--", "-np8"],
+    )
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "--model", "X", "--", "-np8"]
+
+
+def test_consume_helper_stops_at_double_dash():
+    """Legacy alias promotion must not consume tokens past `--`."""
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(
+        ["--top-k", "20", "--", "-m", "FOO"],
+        ("-m",),
+        None,
+        "--model",
+    )
+    assert value is None
+    assert remaining == ["--top-k", "20", "--", "-m", "FOO"]
+
+
+def test_consume_helper_rejects_long_flag_as_value():
+    """`-m --flash-attn` should error: --xxx is unambiguously a flag."""
+    import typer as _typer
+
+    helper = _studio_mod()._consume_legacy_short_aliases
+    with pytest.raises(_typer.BadParameter, match = "--flash-attn"):
+        helper(["-m", "--flash-attn"], ("-m",), None, "--model")
+
+
+def test_consume_helper_allows_bare_dash_as_value():
+    """A lone `-` is a valid stdin/path sentinel, not a flag."""
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(["-m", "-", "--top-k", "20"], ("-m",), None, "--model")
+    assert value == "-"
+    assert remaining == ["--top-k", "20"]
+
+
+def test_consume_helper_allows_short_dash_value():
+    """Short `-x` tokens may be paths or arbitrary values (e.g. a model
+    name that legitimately starts with `-`); only `--long` flags are
+    rejected as values."""
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(["-m", "-foo", "--top-k", "20"], ("-m",), None, "--model")
+    assert value == "-foo"
+    assert remaining == ["--top-k", "20"]

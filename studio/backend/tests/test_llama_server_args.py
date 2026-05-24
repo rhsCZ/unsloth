@@ -176,6 +176,11 @@ def test_denylist_rejects_all_aliases(denied):
         (["--parallel", "999"], "--parallel"),
         (["-np", "0"], "-np"),
         (["-np999"], "-np"),
+        # Signed attached forms must also classify as managed; otherwise
+        # `-np-1` would slip past validation while sharing intent with
+        # the rejected `--parallel -1`.
+        (["-np-1"], "-np"),
+        (["-np+1"], "-np"),
     ],
 )
 def test_parallel_flags_are_managed(args, offending):
@@ -231,6 +236,12 @@ def test_is_managed_flag_true_for_denied():
     assert is_managed_flag("--parallel") is True
     assert is_managed_flag("--n-parallel") is True
     assert is_managed_flag("-np") is True
+    # Normalised forms must classify the same as the canonical token,
+    # so callers using is_managed_flag for filtering stay in sync with
+    # validate_extra_args.
+    assert is_managed_flag("-np8") is True
+    assert is_managed_flag("--parallel=8") is True
+    assert is_managed_flag("--port=9000") is True
 
 
 def test_is_managed_flag_false_for_pass_through():

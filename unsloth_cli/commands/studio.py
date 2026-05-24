@@ -642,20 +642,25 @@ def _expand_attached_np_short() -> None:
     # Click clusters `-np8` as `-n -p 8` (because `-p` is the typer short
     # for `--port`), silently dropping the parallel value. Rewrite to
     # separated `-np <N>` so the typer alias matches. Space/equals forms
-    # (`-np 8`, `-np=8`) already parse correctly.
+    # (`-np 8`, `-np=8`) already parse correctly. Stop at `--` so explicit
+    # post-`--` payload tokens are never rewritten. Signed suffixes
+    # (`-np-1`, `-np+1`) are normalised too so this stays in lockstep
+    # with the backend validator's _flag_name; otherwise Click would
+    # cluster them into `-n -p -1` and silently set port=-1.
     i = 0
     while i < len(sys.argv):
         tok = sys.argv[i]
-        if (
-            len(tok) > 3
-            and tok.startswith("-np")
-            and tok[3] != "="
-            and tok[3:].isdigit()
-        ):
-            sys.argv[i : i + 1] = ["-np", tok[3:]]
-            i += 2
-        else:
-            i += 1
+        if tok == "--":
+            break
+        if len(tok) > 3 and tok.startswith("-np") and tok[3] != "=":
+            suffix = tok[3:]
+            if suffix.isdigit() or (
+                len(suffix) > 1 and suffix[0] in {"-", "+"} and suffix[1:].isdigit()
+            ):
+                sys.argv[i : i + 1] = ["-np", suffix]
+                i += 2
+                continue
+        i += 1
 
 
 def _consume_legacy_short_aliases(
@@ -679,6 +684,11 @@ def _consume_legacy_short_aliases(
     i, n = 0, len(args)
     while i < n:
         tok = args[i]
+        # `--` ends option processing; everything after is raw payload and
+        # must not be promoted, even if it lexically matches an alias.
+        if tok == "--":
+            out.extend(args[i:])
+            break
         name, sep, inline = tok.partition("=")
         if name not in aliases:
             out.append(tok)
@@ -689,10 +699,23 @@ def _consume_legacy_short_aliases(
                 f"{name} conflicts with {canonical} already provided"
             )
         if sep:
+            # Reject `-m=` empty inline form so the caller doesn't end
+            # up re-execing with --model '' (which becomes "." for
+            # frontend paths).
+            if inline == "":
+                raise typer.BadParameter(f"{name} requires a non-empty value")
             value = inline
             i += 1
         elif i + 1 < n:
-            value = args[i + 1]
+            nxt = args[i + 1]
+            # Reject `-m --foo` style usage: a `--long` next-token is
+            # unambiguously a flag, not a value. Single-dash `-x` tokens
+            # may be paths or arbitrary values, so they pass through.
+            if nxt.startswith("--") and nxt != "--":
+                raise typer.BadParameter(
+                    f"{name} expects a value but got the flag {nxt}"
+                )
+            value = nxt
             i += 2
         else:
             raise typer.BadParameter(f"{name} requires a value")
@@ -807,7 +830,8 @@ def run(
 
     if model is None:
         typer.echo(
-            "Error: Missing option '--model' / '-hf' / '--hf-repo'.",
+            "Error: Missing option '--model' / '-hf' / '--hf-repo' "
+            "(legacy aliases '-m' / '-hfr' are still accepted).",
             err = True,
         )
         raise typer.Exit(2)

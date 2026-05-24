@@ -140,7 +140,7 @@ def _invoke(monkeypatch, args):
             "ignore_unknown_options": True,
         },
     )(studio_mod.run)
-    CliRunner(mix_stderr = False).invoke(app, args, catch_exceptions = True)
+    CliRunner().invoke(app, args, catch_exceptions = True)
     return captured
 
 
@@ -198,3 +198,265 @@ def test_dash_hf_documented_alias_still_works(monkeypatch):
     # before re-exec, so the child sees --model + --gguf-variant.
     assert argv[argv.index("--model") + 1] == ("unsloth/gemma-4-26B-A4B-it-GGUF"), argv
     assert argv[argv.index("--gguf-variant") + 1] == "UD-Q4_K_XL", argv
+
+
+# Legacy-alias backwards compatibility. -m / -hfr / -f were typer aliases
+# pre-PR. Dropping them from typer would break any script using the exact
+# tokens, so an in-function preprocessor promotes EXACT matches back into
+# their typer parameters while leaving clustered tokens (`-mg`, `-fa`, ...)
+# in the llama-server pass-through tail.
+
+
+@pytest.mark.parametrize(
+    "legacy_args,expected_model",
+    [
+        (["-m", "unsloth/Qwen3-1.7B-GGUF"], "unsloth/Qwen3-1.7B-GGUF"),
+        (["-m=unsloth/Qwen3-1.7B-GGUF"], "unsloth/Qwen3-1.7B-GGUF"),
+        (["-hfr", "unsloth/Qwen3-1.7B-GGUF"], "unsloth/Qwen3-1.7B-GGUF"),
+        (["-hfr=unsloth/Qwen3-1.7B-GGUF"], "unsloth/Qwen3-1.7B-GGUF"),
+    ],
+)
+def test_legacy_model_aliases_still_promote_to_model(
+    monkeypatch,
+    legacy_args,
+    expected_model,
+):
+    """Pre-PR `-m X` / `-hfr X` set --model X. The preprocessor must
+    keep those scripts working."""
+    captured = _invoke(monkeypatch, legacy_args)
+    assert len(captured) == 1, f"parent did not re-exec for {legacy_args}"
+    argv = captured[0]
+    assert argv[argv.index("--model") + 1] == expected_model, argv
+    # The legacy alias must not also leak into the pass-through tail.
+    for alias in ("-m", "-hfr"):
+        if alias in legacy_args:
+            assert alias not in argv, f"legacy {alias} leaked into child argv: {argv}"
+
+
+def test_legacy_frontend_alias_still_promotes_to_frontend(monkeypatch):
+    """Pre-PR `-f dist` set --frontend dist. Preprocessor preserves it."""
+    captured = _invoke(monkeypatch, ["--model", "X", "-f", "/tmp/dist"])
+    assert len(captured) == 1
+    argv = captured[0]
+    assert argv[argv.index("--frontend") + 1] == "/tmp/dist", argv
+    assert "-f" not in argv, f"-f leaked into child argv: {argv}"
+
+
+def test_legacy_model_alias_conflicts_with_long_form(monkeypatch):
+    """Passing both --model X and -m Y should error -- ambiguous intent."""
+    captured = _invoke(monkeypatch, ["--model", "X", "-m", "Y"])
+    # The preprocessor raises typer.BadParameter before reaching execvp.
+    assert (
+        len(captured) == 0
+    ), f"expected error before re-exec, got launch with argv = {captured}"
+
+
+def test_clustered_tokens_are_not_promoted(monkeypatch):
+    """`-mg 0`, `-fa`, `-fitt 1024` are llama-server flags, not legacy
+    aliases. They must pass through to llama-server even though they
+    start with `-m` / `-f`."""
+    captured = _invoke(
+        monkeypatch,
+        ["--model", "X", "-mg", "0", "-fa", "-fitt", "1024"],
+    )
+    assert len(captured) == 1
+    argv = captured[0]
+    # Studio --model came from --model X, not from `-mg` cluster.
+    assert argv[argv.index("--model") + 1] == "X", argv
+    # All three llama-server tokens survive verbatim in the tail.
+    for flag in ("-mg", "-fa", "-fitt"):
+        assert flag in argv, f"{flag!r} was promoted instead of passed through: {argv}"
+
+
+def test_legacy_m_with_repo_variant_syntax(monkeypatch):
+    """`-m unsloth/foo:UD-Q4_K_XL` must round-trip through the preprocessor
+    AND _split_repo_variant so the child sees --model + --gguf-variant."""
+    captured = _invoke(
+        monkeypatch,
+        ["-m", "unsloth/Qwen3-1.7B-GGUF:UD-Q4_K_XL"],
+    )
+    assert len(captured) == 1
+    argv = captured[0]
+    assert argv[argv.index("--model") + 1] == "unsloth/Qwen3-1.7B-GGUF", argv
+    assert argv[argv.index("--gguf-variant") + 1] == "UD-Q4_K_XL", argv
+
+
+def test_missing_model_after_preprocessor_errors(monkeypatch):
+    """If neither --model nor any legacy alias is supplied, the
+    preprocessor's required-check must trigger a clean exit(2)."""
+    captured = _invoke(monkeypatch, ["--parallel", "8"])
+    # No execvp because the missing-model check raises typer.Exit(2)
+    # before reaching the re-exec branch.
+    assert (
+        len(captured) == 0
+    ), f"expected exit before re-exec, got launch with argv = {captured}"
+
+
+def test_legacy_m_inline_value_form(monkeypatch):
+    """`-m=foo` inline form must be promoted just like `-m foo`."""
+    captured = _invoke(monkeypatch, ["-m=unsloth/Qwen3-1.7B-GGUF"])
+    assert len(captured) == 1
+    argv = captured[0]
+    assert argv[argv.index("--model") + 1] == "unsloth/Qwen3-1.7B-GGUF", argv
+
+
+# Direct unit tests for the _consume_legacy_short_aliases helper.
+
+
+def test_consume_helper_exact_match_space_form():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(
+        ["-m", "FOO", "--top-k", "20"],
+        ("-m",),
+        None,
+        "--model",
+    )
+    assert value == "FOO"
+    assert remaining == ["--top-k", "20"]
+
+
+def test_consume_helper_exact_match_inline_form():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(
+        ["-m=FOO", "--top-k", "20"],
+        ("-m",),
+        None,
+        "--model",
+    )
+    assert value == "FOO"
+    assert remaining == ["--top-k", "20"]
+
+
+def test_consume_helper_leaves_clusters_alone():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(
+        ["-mg", "0", "-md", "/x"],
+        ("-m",),
+        None,
+        "--model",
+    )
+    assert value is None
+    assert remaining == ["-mg", "0", "-md", "/x"]
+
+
+def test_consume_helper_value_already_set_raises():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    import typer as _typer
+
+    with pytest.raises(_typer.BadParameter):
+        helper(["-m", "Y"], ("-m",), "X", "--model")
+
+
+def test_consume_helper_missing_value_raises():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    import typer as _typer
+
+    with pytest.raises(_typer.BadParameter):
+        helper(["-m"], ("-m",), None, "--model")
+
+
+def test_consume_helper_multiple_aliases_in_group():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(
+        ["-hfr", "FOO", "--top-k", "20"],
+        ("-m", "-hfr"),
+        None,
+        "--model",
+    )
+    assert value == "FOO"
+    assert remaining == ["--top-k", "20"]
+
+
+def test_consume_helper_preserves_value_when_no_match():
+    helper = _studio_mod()._consume_legacy_short_aliases
+    value, remaining = helper(
+        ["--top-k", "20"],
+        ("-m",),
+        "PRESET",
+        "--model",
+    )
+    assert value == "PRESET"
+    assert remaining == ["--top-k", "20"]
+
+
+# _expand_attached_np_short: Click clusters `-np8` as `-n -p 8` because
+# `-p` is the typer short for `--port`. This silently sets port=8 and
+# drops the parallel value. The rewrite splits the attached form into
+# the space-separated form before Click parses.
+
+
+def test_expand_np_rewrites_attached_form(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["unsloth", "studio", "run", "--model", "X", "-np8"],
+    )
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == [
+        "unsloth",
+        "studio",
+        "run",
+        "--model",
+        "X",
+        "-np",
+        "8",
+    ]
+
+
+@pytest.mark.parametrize("value", ["1", "8", "64", "999"])
+def test_expand_np_rewrites_all_digit_values(monkeypatch, value):
+    monkeypatch.setattr(sys, "argv", ["unsloth", "studio", "run", f"-np{value}"])
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "studio", "run", "-np", value]
+
+
+def test_expand_np_leaves_space_form_alone(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["unsloth", "run", "-np", "8"])
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "-np", "8"]
+
+
+def test_expand_np_leaves_equals_form_alone(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["unsloth", "run", "-np=8"])
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "-np=8"]
+
+
+def test_expand_np_leaves_non_digit_suffix_alone(monkeypatch):
+    # `-npfoo` is not a valid attached value -- leave for typer to reject.
+    monkeypatch.setattr(sys, "argv", ["unsloth", "run", "-npfoo"])
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "-npfoo"]
+
+
+def test_expand_np_leaves_bare_np_alone(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["unsloth", "run", "-np"])
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "-np"]
+
+
+def test_expand_np_handles_multiple_occurrences(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["unsloth", "run", "-np8", "-np16"],
+    )
+    _studio_mod()._expand_attached_np_short()
+    assert sys.argv == ["unsloth", "run", "-np", "8", "-np", "16"]
+
+
+def test_attached_np8_no_longer_silently_sets_port(monkeypatch):
+    """Behavioural pin: after _expand_attached_np_short runs in the
+    entry-point gate, `-np8` produces --parallel=8 (not --port=8)."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["unsloth", "studio", "run", "--model", "X", "-np8"],
+    )
+    _studio_mod()._expand_attached_np_short()
+    captured = _invoke(monkeypatch, sys.argv[2:])  # skip "unsloth studio"
+    assert len(captured) == 1, "parent did not re-exec"
+    argv = captured[0]
+    assert argv[argv.index("--parallel") + 1] == "8", argv
+    # Port must stay at the typer default (not silently rewritten to 8).
+    assert argv[argv.index("--port") + 1] == "8888", argv

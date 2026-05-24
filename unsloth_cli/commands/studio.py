@@ -638,6 +638,67 @@ def _split_repo_variant(model_arg: str) -> tuple[str, Optional[str]]:
     return repo, variant
 
 
+def _expand_attached_np_short() -> None:
+    # Click clusters `-np8` as `-n -p 8` (because `-p` is the typer short
+    # for `--port`), silently dropping the parallel value. Rewrite to
+    # separated `-np <N>` so the typer alias matches. Space/equals forms
+    # (`-np 8`, `-np=8`) already parse correctly.
+    i = 0
+    while i < len(sys.argv):
+        tok = sys.argv[i]
+        if (
+            len(tok) > 3
+            and tok.startswith("-np")
+            and tok[3] != "="
+            and tok[3:].isdigit()
+        ):
+            sys.argv[i : i + 1] = ["-np", tok[3:]]
+            i += 2
+        else:
+            i += 1
+
+
+def _consume_legacy_short_aliases(
+    args: List[str],
+    aliases: tuple[str, ...],
+    current: Optional[str],
+    canonical: str,
+) -> tuple[Optional[str], List[str]]:
+    """Pop exact-match legacy short aliases from args; leave clusters alone.
+
+    Pre-PR, `-m` / `-hfr` were typer aliases for `--model` and `-f` was an
+    alias for `--frontend`. They were dropped from typer because Click's
+    1-char short-option clustering silently mis-parsed llama-server tokens
+    like `-fa` / `-mg` / `-fitt` as `--frontend a` / `--model g` /
+    `--frontend itt`. This shim re-accepts the legacy aliases as exact
+    whole tokens (or ``-x=value`` inline form) only -- clustered tokens
+    are left in ``args`` for the llama-server pass-through path.
+    """
+    out: List[str] = []
+    value = current
+    i, n = 0, len(args)
+    while i < n:
+        tok = args[i]
+        name, sep, inline = tok.partition("=")
+        if name not in aliases:
+            out.append(tok)
+            i += 1
+            continue
+        if value is not None:
+            raise typer.BadParameter(
+                f"{name} conflicts with {canonical} already provided"
+            )
+        if sep:
+            value = inline
+            i += 1
+        elif i + 1 < n:
+            value = args[i + 1]
+            i += 2
+        else:
+            raise typer.BadParameter(f"{name} requires a value")
+    return value, out
+
+
 @studio_app.command(
     context_settings = {
         "allow_extra_args": True,
@@ -646,13 +707,16 @@ def _split_repo_variant(model_arg: str) -> tuple[str, Optional[str]]:
 )
 def run(
     ctx: typer.Context,
-    model: str = typer.Option(
-        ...,
+    model: Optional[str] = typer.Option(
+        None,
         "--model",
         "-hf",
         "--hf-repo",
-        # `-m` and `-hfr` removed: Click cluster-ate llama-server shorts
-        # like `-mg`, `-md`, `-mu`. `-hf` is kept (2-char, no clustering).
+        # `-m` / `-hfr` removed from typer (Click cluster-ate `-mg`, `-md`,
+        # `-mu`, etc. as pass-through). Legacy exact-match `-m` / `-hfr`
+        # are still recognised via _consume_legacy_short_aliases below.
+        # `-hf` kept (2-char, no clustering). Required-check happens
+        # after the preprocessor so `-m X` still works.
         help = (
             "Model path or HF repo. Accepts llama.cpp-style "
             "`org/repo:variant` syntax. `-hf` / `--hf-repo` match "
@@ -722,6 +786,31 @@ def run(
         unsloth studio run --model some-model --chat-template-file /path/to/tpl.jinja
     """
     extra_llama_args: List[str] = list(ctx.args) if ctx.args else []
+
+    # Backwards-compat: promote legacy `-m` / `-hfr` / `-f` exact-match
+    # tokens from the pass-through tail back into their typer parameters.
+    # Clustered tokens (`-fa`, `-mg`, `-fitt`, ...) are left as extras.
+    model, extra_llama_args = _consume_legacy_short_aliases(
+        extra_llama_args,
+        ("-m", "-hfr"),
+        model,
+        "--model",
+    )
+    legacy_frontend, extra_llama_args = _consume_legacy_short_aliases(
+        extra_llama_args,
+        ("-f",),
+        str(frontend) if frontend is not None else None,
+        "--frontend",
+    )
+    if legacy_frontend is not None and frontend is None:
+        frontend = Path(legacy_frontend)
+
+    if model is None:
+        typer.echo(
+            "Error: Missing option '--model' / '-hf' / '--hf-repo'.",
+            err = True,
+        )
+        raise typer.Exit(2)
 
     # ── 0. Parse llama.cpp-style ``repo:variant`` syntax in --model. ───
     # Lets users write ``--model unsloth/foo-GGUF:UD-Q4_K_XL`` instead

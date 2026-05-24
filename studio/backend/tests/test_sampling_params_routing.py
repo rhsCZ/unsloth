@@ -31,7 +31,18 @@ from core.inference.external_provider import ExternalProviderClient
 
 
 def _drive(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    # Explicit loop lifecycle + asyncgen shutdown so the httpx /
+    # MockTransport-backed async generators in the providers are
+    # finalised in this task instead of being collected later (which
+    # triggers the "aiter_text aclose was never awaited" warning the
+    # reviewer round noticed).
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(coro)
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        return result
+    finally:
+        loop.close()
 
 
 def _install_mock(monkeypatch, *, sse_payload: bytes | None = None) -> dict:
@@ -874,6 +885,63 @@ def test_local_anthropic_disable_parallel_tool_use_translation():
     assert _extract(None) is None
     assert _extract("auto") is None  # string form (non-dict) → no opinion
     assert _extract({"type": "auto", "disable_parallel_tool_use": "yes"}) is None
+
+
+def test_anthropic_passthrough_emitter_serialises_tool_calls_on_opt_out():
+    """When the Anthropic-compat passthrough is asked to disable
+    parallel tool calls, `AnthropicPassthroughEmitter.feed_chunk()`
+    must drop every streamed `delta.tool_calls` entry beyond the
+    first index, matching the GGUF agentic-loop client-side cap and
+    keeping the wire-side `disable_parallel_tool_use=true` honest
+    even when llama-server's jinja template ignores it."""
+    from core.inference.anthropic_compat import AnthropicPassthroughEmitter
+
+    emitter = AnthropicPassthroughEmitter(parallel_tool_calls = False)
+    emitter.start("msg_x", "test-model")
+    events = emitter.feed_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_a",
+                                "function": {"name": "first", "arguments": "{"},
+                            },
+                            {
+                                "index": 1,
+                                "id": "call_b",
+                                "function": {"name": "second", "arguments": "{"},
+                            },
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    joined = "\n".join(events)
+    assert "first" in joined, joined
+    assert "second" not in joined, joined
+
+    emitter_open = AnthropicPassthroughEmitter(parallel_tool_calls = True)
+    emitter_open.start("msg_y", "test-model")
+    events_open = emitter_open.feed_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "id": "a", "function": {"name": "x"}},
+                            {"index": 1, "id": "b", "function": {"name": "y"}},
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    joined_open = "\n".join(events_open)
+    assert "x" in joined_open and "y" in joined_open, joined_open
 
 
 def test_gguf_tool_loop_enforces_parallel_tool_calls_false():

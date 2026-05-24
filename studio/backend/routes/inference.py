@@ -239,6 +239,22 @@ router = APIRouter()
 studio_router = APIRouter()
 
 
+def _clean_local_stop_list(stop) -> Optional[list[str]]:
+    """Strip empty / non-string entries from a stop sequence input.
+
+    Mirrors `_normalize_stop_for_provider` (external_provider.py) so
+    local llama-server callers cannot ship `stop=["", "END"]` and
+    get a 400. Returns `None` when nothing survives, so the caller
+    can omit the field entirely.
+    """
+    if isinstance(stop, str):
+        return [stop] if stop else None
+    if isinstance(stop, list):
+        cleaned = [s for s in stop if isinstance(s, str) and s]
+        return cleaned or None
+    return None
+
+
 def _detect_safetensors_features(backend, chat_template: Optional[str]) -> dict:
     """Classify reasoning/tool capabilities via the GGUF classifier so
     flags match across backends. gpt-oss is overridden because Harmony
@@ -2482,13 +2498,7 @@ async def openai_chat_completions(
                     max_tokens = payload.max_tokens,
                     repetition_penalty = payload.repetition_penalty,
                     presence_penalty = payload.presence_penalty,
-                    stop = payload.stop
-                    if isinstance(payload.stop, list)
-                    else (
-                        [payload.stop]
-                        if isinstance(payload.stop, str) and payload.stop
-                        else None
-                    ),
+                    stop = _clean_local_stop_list(payload.stop),
                     cancel_event = cancel_event,
                     enable_thinking = payload.enable_thinking,
                     reasoning_effort = payload.reasoning_effort,
@@ -2671,13 +2681,7 @@ async def openai_chat_completions(
                 max_tokens = payload.max_tokens,
                 repetition_penalty = payload.repetition_penalty,
                 presence_penalty = payload.presence_penalty,
-                stop = payload.stop
-                if isinstance(payload.stop, list)
-                else (
-                    [payload.stop]
-                    if isinstance(payload.stop, str) and payload.stop
-                    else None
-                ),
+                stop = _clean_local_stop_list(payload.stop),
                 cancel_event = cancel_event,
                 enable_thinking = payload.enable_thinking,
                 reasoning_effort = payload.reasoning_effort,
@@ -3005,6 +3009,7 @@ async def openai_chat_completions(
                 else 300,
                 session_id = payload.session_id,
                 use_adapter = payload.use_adapter,
+                parallel_tool_calls = payload.parallel_tool_calls,
             )
 
         _sf_tool_sentinel = object()
@@ -3873,6 +3878,11 @@ async def _responses_non_streaming(
         msg = choices[0].get("message", {}) or {}
         text = msg.get("content", "") or ""
         tool_calls = msg.get("tool_calls") or []
+    # Match the cap applied on GGUF / Anthropic / safetensors tool
+    # paths: when the caller opted out of parallel tool calls, surface
+    # at most one. llama.cpp may not enforce the flag.
+    if payload.parallel_tool_calls is False and tool_calls:
+        tool_calls = tool_calls[:1]
 
     usage_data = body.get("usage", {})
     input_tokens = usage_data.get("prompt_tokens", 0)
@@ -3994,6 +4004,12 @@ async def _responses_stream(
         tool_call_state: dict[int, dict] = {}
         # Text message lives at output_index 0; tool calls claim 1, 2, ...
         next_output_index = 1
+        # When the caller opted out of parallel tool calls, latch the
+        # first index we see and drop subsequent siblings — mirrors the
+        # GGUF agentic-loop / Anthropic-passthrough caps; llama.cpp may
+        # not enforce the upstream flag (ggml-org/llama.cpp#22043).
+        serial_tool_calls = payload.parallel_tool_calls is False
+        first_serial_idx: Optional[int] = None
 
         def _snapshot_output() -> list[dict]:
             """Snapshot of all completed output items for response.completed."""
@@ -4110,6 +4126,11 @@ async def _responses_stream(
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
+                    if serial_tool_calls:
+                        if first_serial_idx is None:
+                            first_serial_idx = idx
+                        if idx != first_serial_idx:
+                            continue
                     st = tool_call_state.get(idx)
                     fn = tc.get("function") or {}
                     if st is None:
@@ -4963,8 +4984,18 @@ def _build_passthrough_payload(
         else (backend_ctx or _DEFAULT_MAX_TOKENS_FLOOR)
     )
     body["t_max_predict_ms"] = _DEFAULT_T_MAX_PREDICT_MS
+    # Strip empty / non-string stop entries before forwarding to
+    # llama-server; the external-provider helper does this via
+    # `_normalize_stop_for_provider`, and the local path needs the same
+    # defensive shape so a stale `stop=["", "END"]` cannot 400 upstream.
     if stop:
-        body["stop"] = stop
+        if isinstance(stop, str):
+            if stop:
+                body["stop"] = stop
+        elif isinstance(stop, list):
+            cleaned = [s for s in stop if isinstance(s, str) and s]
+            if cleaned:
+                body["stop"] = cleaned
     if min_p is not None:
         body["min_p"] = min_p
     if repetition_penalty is not None:
@@ -5042,7 +5073,9 @@ async def _anthropic_passthrough_stream(
     _tracker.__enter__()
 
     async def _stream():
-        emitter = AnthropicPassthroughEmitter()
+        emitter = AnthropicPassthroughEmitter(
+            parallel_tool_calls = parallel_tool_calls,
+        )
         for line in emitter.start(message_id, model_name):
             yield line
 
@@ -5209,6 +5242,13 @@ async def _anthropic_passthrough_non_streaming(
             content_blocks.append(AnthropicResponseTextBlock(text = text))
 
     tool_calls = message.get("tool_calls") or []
+    # Mirror the GGUF agentic-loop client-side cap: when the caller
+    # opted out of parallel tool calls, surface at most one tool_use
+    # block even if llama-server returned more than one. llama.cpp may
+    # not enforce the flag on every jinja template (see
+    # ggml-org/llama.cpp#22043).
+    if parallel_tool_calls is False and tool_calls:
+        tool_calls = tool_calls[:1]
     for tc in tool_calls:
         fn = tc.get("function") or {}
         try:

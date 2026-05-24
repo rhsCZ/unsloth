@@ -256,6 +256,40 @@ def _apply_mistral_reasoning_controls(
 _http_client = httpx.AsyncClient()
 
 
+# Server-side builtin tool names that external providers emit
+# synthetic tool events for. Used by `_stamp_server_tool_marker` to
+# tag the outbound `_toolEvent.arguments` so the frontend serializer
+# can tell synthetic provider-side cards from real user-declared tool
+# calls of the same name (local llama.cpp web_search, OpenAI
+# function-calling tool literally named `web_search`, etc.).
+_SERVER_SIDE_BUILTIN_TOOL_NAMES = frozenset(
+    {"web_search", "web_fetch", "code_execution", "image_generation"}
+)
+
+
+def _stamp_server_tool_marker(payload: dict[str, Any]) -> None:
+    """Tag synthetic provider-side tool events so the frontend can
+    distinguish them from real user-declared / local function tools of
+    the same name. The marker rides on `arguments._server_tool` and is
+    only added for known server-side builtin names; user-supplied
+    tool calls echoed back through these helpers (e.g. Kimi
+    `$web_search`) keep their existing shape because we keep this scoped
+    to the canonical builtin names.
+    """
+    if not isinstance(payload, dict):
+        return
+    if payload.get("type") != "tool_start":
+        return
+    name = payload.get("tool_name")
+    if not isinstance(name, str) or name not in _SERVER_SIDE_BUILTIN_TOOL_NAMES:
+        return
+    args = payload.get("arguments")
+    if not isinstance(args, dict):
+        args = {}
+        payload["arguments"] = args
+    args["_server_tool"] = True
+
+
 def _build_kimi_tool_end(
     synthetic_chunk_fn: Any,
     tool_call_id: str,
@@ -466,6 +500,8 @@ class ExternalProviderClient:
                 enable_prompt_caching,
                 openai_code_exec_container_id,
                 compaction_threshold,
+                tools,
+                tool_choice,
             ):
                 yield line
             return
@@ -594,6 +630,15 @@ class ExternalProviderClient:
                     body.get("model"),
                 )
 
+        # Forward OpenAI-style function tools / tool_choice on every
+        # OAI-compat route (incl. custom Gemini OpenAI proxies like
+        # LiteLLM). Without this, callers that wire user-defined tools
+        # silently lose function-calling on non-native providers.
+        if tools:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
+
         url = f"{self.base_url}/chat/completions"
         logger.info(
             "Proxying chat completion to %s (provider=%s, model=%s)",
@@ -662,6 +707,7 @@ class ExternalProviderClient:
                 web_search_tool_ended = False
 
                 def _emit_synthetic_tool_event(payload: dict[str, Any]) -> str:
+                    _stamp_server_tool_marker(payload)
                     chunk = {
                         "id": f"chatcmpl-{self.provider_type}-synthetic",
                         "object": "chat.completion.chunk",
@@ -917,6 +963,7 @@ class ExternalProviderClient:
         synthetic_id = f"chatcmpl-{self.provider_type}-synthetic"
 
         def _synthetic_chunk(payload: dict[str, Any]) -> str:
+            _stamp_server_tool_marker(payload)
             chunk = {
                 "id": synthetic_id,
                 "object": "chat.completion.chunk",
@@ -1874,6 +1921,7 @@ class ExternalProviderClient:
                     return f"data: {_json.dumps(chunk)}"
 
                 def _emit_tool_event(payload: dict[str, Any]) -> str:
+                    _stamp_server_tool_marker(payload)
                     chunk = {
                         "id": completion_id,
                         "object": "chat.completion.chunk",
@@ -2754,9 +2802,38 @@ class ExternalProviderClient:
                                     }
                                 }
                             )
+            # Gemini 3 strict function-calling requires text-part
+            # thoughtSignatures to be replayed on history; the frontend
+            # stows the latest one as
+            # extra_content.google.thought_signature on the assistant
+            # message and we pin it onto the last text part here.
+            if role == "assistant" and parts:
+                _msg_extra = msg.get("extra_content") if isinstance(msg, dict) else None
+                if isinstance(_msg_extra, dict):
+                    _msg_g = _msg_extra.get("google") or {}
+                    if isinstance(_msg_g, dict):
+                        _msg_sig = _msg_g.get("thought_signature") or _msg_g.get(
+                            "thoughtSignature"
+                        )
+                        if isinstance(_msg_sig, str) and _msg_sig:
+                            for _idx in range(len(parts) - 1, -1, -1):
+                                if "text" in parts[_idx]:
+                                    parts[_idx] = {
+                                        **parts[_idx],
+                                        "thoughtSignature": _msg_sig,
+                                    }
+                                    break
             # OpenAI may attach tool_calls on an assistant message.
             # Translate into Gemini's functionCall part so the prior
             # turn's tool request round-trips back to the model.
+            # Special-case the built-in `code_execution` and
+            # `image_generation` tool names: those map to Gemini's
+            # native `executableCode` / `codeExecutionResult` /
+            # `inlineData` parts, which Gemini requires for manual
+            # multi-turn history. The native dict is stowed on
+            # `extra_content.google.native_part` when the inbound
+            # translator emits the tool event; replay it verbatim so
+            # the next turn carries Gemini's id and thoughtSignature.
             tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
             if isinstance(tool_calls, list):
                 for tc in tool_calls:
@@ -2779,6 +2856,42 @@ class ExternalProviderClient:
                     tc_id = tc.get("id")
                     if fn_name and isinstance(tc_id, str) and tc_id:
                         tool_call_names[tc_id] = fn_name
+
+                    # Replay built-in tools (code_execution,
+                    # image_generation) as the native Gemini parts the
+                    # inbound translator stowed under
+                    # `extra_content.google.native_part`. Falls through
+                    # to the generic functionCall path when the native
+                    # dict is missing (e.g. older messages persisted
+                    # before this field existed).
+                    _extra = tc.get("extra_content")
+                    _native_part = None
+                    _google_extra: dict[str, Any] = {}
+                    if isinstance(_extra, dict):
+                        _ge = _extra.get("google") or {}
+                        if isinstance(_ge, dict):
+                            _google_extra = _ge
+                            _native_part = _ge.get("native_part")
+                    if fn_name in ("code_execution", "image_generation") and isinstance(
+                        _native_part, dict
+                    ):
+                        for _native_key in (
+                            "executableCode",
+                            "codeExecutionResult",
+                            "inlineData",
+                        ):
+                            _sub = _native_part.get(_native_key)
+                            if not isinstance(_sub, dict):
+                                continue
+                            _replay_part: dict[str, Any] = {_native_key: _sub}
+                            _sig = _native_part.get(
+                                "thoughtSignature"
+                            ) or _native_part.get("thought_signature")
+                            if isinstance(_sig, str) and _sig:
+                                _replay_part["thoughtSignature"] = _sig
+                            parts.append(_replay_part)
+                        continue
+
                     # Forward the OpenAI tool_call id into Gemini's
                     # functionCall.id so a follow-up turn that issues
                     # multiple calls to the same function (different
@@ -2798,15 +2911,11 @@ class ExternalProviderClient:
                     # `extra_content.google.thought_signature` (see
                     # the inbound emit below).
                     fc_part: dict[str, Any] = {"functionCall": function_call_part}
-                    extra = tc.get("extra_content")
-                    if isinstance(extra, dict):
-                        google_extra = extra.get("google") or {}
-                        if isinstance(google_extra, dict):
-                            sig = google_extra.get(
-                                "thought_signature"
-                            ) or google_extra.get("thoughtSignature")
-                            if isinstance(sig, str) and sig:
-                                fc_part["thoughtSignature"] = sig
+                    sig = _google_extra.get("thought_signature") or _google_extra.get(
+                        "thoughtSignature"
+                    )
+                    if isinstance(sig, str) and sig:
+                        fc_part["thoughtSignature"] = sig
                     parts.append(fc_part)
             if role == "tool":
                 # OpenAI's role="tool" follow-up carries the function
@@ -2880,12 +2989,31 @@ class ExternalProviderClient:
         # https://ai.google.dev/gemini-api/docs/image-generation
         model_lc = model.lower()
         is_image_picker_model = "-image" in model_lc or "nano-banana" in model_lc
-        # `image_generation` is meaningful only on image-capable model
-        # IDs. A stale enabled_tools=["image_generation"] on a text
-        # model is dropped (text models 400 on responseModalities).
-        is_image_model = is_image_picker_model
+        # Image-tier model IDs reject text-only tools (code_execution,
+        # user functions) and thinkingConfig regardless of whether the
+        # Images pill is on -- those are model-level constraints
+        # documented by Google. The pill only controls whether we ask
+        # Gemini to actually emit image output via
+        # `responseModalities: ["TEXT","IMAGE"]`. Decoupling the two
+        # avoids the case where Images is off + Code/Search is on
+        # forwards `tools: [{codeExecution: {}}]` plus
+        # `thinkingConfig` to an image model and 400s.
+        image_tool_requested = bool(
+            enabled_tools and "image_generation" in enabled_tools
+        )
+        # Strict tool / thinking strip uses the model-id check.
+        is_image_model_strict = is_image_picker_model
+        # The actual modality flip only happens when the user opted in.
+        is_image_model = is_image_picker_model and image_tool_requested
         if is_image_model:
             gen_config["responseModalities"] = ["TEXT", "IMAGE"]
+        elif is_image_picker_model:
+            # Google's image-tier models default to text+image output
+            # when responseModalities is omitted, so an image-capable
+            # model with the Images pill OFF would still incur image
+            # generation cost on a regular text question. Force
+            # text-only so the UI state and outbound request agree.
+            gen_config["responseModalities"] = ["TEXT"]
 
         # Thinking control. The Gemini 3 family migrated to a string
         # `thinkingLevel` (LOW/MEDIUM/HIGH/MINIMAL) and rejects sending
@@ -2921,7 +3049,7 @@ class ExternalProviderClient:
             for p in _PRO_THINKING_PREFIXES
         )
         effort_lc = (reasoning_effort or "").strip().lower()
-        if not is_image_model and is_gemini3_thinking:
+        if not is_image_model_strict and is_gemini3_thinking:
             # Gemini 3.x: thinkingLevel only. Per Google's docs
             # (https://ai.google.dev/gemini-api/docs/thinking and
             # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro):
@@ -2949,7 +3077,7 @@ class ExternalProviderClient:
                 level = "low" if is_gemini3_pro else "minimal"
             if level is not None:
                 gen_config["thinkingConfig"] = {"thinkingLevel": level}
-        elif not is_image_model:
+        elif not is_image_model_strict:
             # Gemini 2.5 / older: thinkingBudget int. Effort -> budget
             # mirrors the OpenAI minimal/low/medium/high ladder so the
             # existing frontend picker maps cleanly.
@@ -3002,10 +3130,11 @@ class ExternalProviderClient:
             )
 
         google_search_allowed = (
-            not is_image_model or _gemini_image_model_allows_google_search(model_lc)
+            not is_image_model_strict
+            or _gemini_image_model_allows_google_search(model_lc)
         )
-        code_execution_allowed = not is_image_model
-        text_tools_allowed = not is_image_model
+        code_execution_allowed = not is_image_model_strict
+        text_tools_allowed = not is_image_model_strict
         tools_array: list[dict[str, Any]] = []
         if enabled_tools and "web_search" in enabled_tools and google_search_allowed:
             tools_array.append({"googleSearch": {}})
@@ -3017,6 +3146,66 @@ class ExternalProviderClient:
             tools_array.append({"codeExecution": {}})
         # OpenAI-style function declarations -> Gemini functionDeclarations.
         # https://ai.google.dev/gemini-api/docs/function-calling#step_1
+        # Gemini's Schema accepts only the OpenAPI 3.0 subset documented
+        # at https://ai.google.dev/api/caching#Schema; OpenAI's strict
+        # tool definitions routinely include `additionalProperties`,
+        # `$schema`, `$defs`, `strict`, `examples`, and similar keys
+        # which 400 the request as INVALID_ARGUMENT. Strip them
+        # recursively before forwarding.
+        _GEMINI_ALLOWED_SCHEMA_KEYS = frozenset(
+            {
+                "type",
+                "format",
+                "title",
+                "description",
+                "nullable",
+                "enum",
+                "maxItems",
+                "minItems",
+                "properties",
+                "required",
+                "minProperties",
+                "maxProperties",
+                "items",
+                "minimum",
+                "maximum",
+                "minLength",
+                "maxLength",
+                "pattern",
+                "default",
+                "anyOf",
+                "propertyOrdering",
+            }
+        )
+
+        def _sanitize_gemini_schema(node: Any) -> Any:
+            # Recursively filter to Gemini's OpenAPI 3.0 subset. At a
+            # Schema-keyword dict layer we drop keys not in the
+            # allowlist; under `properties` the keys are user-defined
+            # field names and the values are themselves Schemas; under
+            # `items` / `anyOf` the values are also Schemas.
+            if isinstance(node, dict):
+                cleaned: dict[str, Any] = {}
+                for _k, _v in node.items():
+                    if _k not in _GEMINI_ALLOWED_SCHEMA_KEYS:
+                        continue
+                    if _k == "properties" and isinstance(_v, dict):
+                        cleaned[_k] = {
+                            _name: _sanitize_gemini_schema(_subschema)
+                            for _name, _subschema in _v.items()
+                        }
+                    elif _k == "items":
+                        cleaned[_k] = _sanitize_gemini_schema(_v)
+                    elif _k == "anyOf" and isinstance(_v, list):
+                        cleaned[_k] = [_sanitize_gemini_schema(_entry) for _entry in _v]
+                    elif _k in ("required", "enum", "propertyOrdering"):
+                        # Lists of plain strings; copy verbatim.
+                        cleaned[_k] = _v
+                    else:
+                        cleaned[_k] = _v
+                return cleaned
+            return node
+
         function_declarations: list[dict[str, Any]] = []
         if tools and text_tools_allowed:
             for _tool in tools:
@@ -3031,7 +3220,7 @@ class ExternalProviderClient:
                 }
                 _params = _fn.get("parameters")
                 if isinstance(_params, dict):
-                    _decl["parameters"] = _params
+                    _decl["parameters"] = _sanitize_gemini_schema(_params)
                 function_declarations.append(_decl)
         if function_declarations:
             tools_array.append({"functionDeclarations": function_declarations})
@@ -3100,6 +3289,7 @@ class ExternalProviderClient:
         )
 
         def _emit_tool_event(payload: dict[str, Any]) -> str:
+            _stamp_server_tool_marker(payload)
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
@@ -3599,6 +3789,15 @@ class ExternalProviderClient:
                                                     + "\n__IMAGES__:"
                                                     + _json.dumps([image_uri])
                                                 )
+                                                # Stow the inlineData native
+                                                # part too so a follow-up turn
+                                                # can replay the plot image
+                                                # alongside the executableCode
+                                                # and codeExecutionResult; the
+                                                # frontend tool_end merge
+                                                # union joins it into the
+                                                # existing code-exec card's
+                                                # native_part.
                                                 yield _emit_tool_event(
                                                     {
                                                         "type": "tool_end",
@@ -3606,6 +3805,14 @@ class ExternalProviderClient:
                                                             last_code_exec_tool_id
                                                         ),
                                                         "result": updated_result,
+                                                        "google": {
+                                                            "native_part": {
+                                                                "inlineData": {
+                                                                    "mimeType": mime,
+                                                                    "data": b64,
+                                                                },
+                                                            },
+                                                        },
                                                     }
                                                 )
                                                 last_code_exec_result_text = (
@@ -3645,15 +3852,33 @@ class ExternalProviderClient:
                                                     "image_b64": b64,
                                                     "image_mime": mime,
                                                 }
+                                                # Stow the native inlineData
+                                                # part so multi-turn image
+                                                # editing replays the original
+                                                # model image (plus thought
+                                                # signature on Gemini 3) as
+                                                # native Gemini history rather
+                                                # than a generic functionCall.
+                                                _img_native: dict[str, Any] = {
+                                                    "inlineData": {
+                                                        "mimeType": mime,
+                                                        "data": b64,
+                                                    },
+                                                }
+                                                _img_google: dict[str, Any] = {
+                                                    "native_part": _img_native,
+                                                }
                                                 if (
                                                     isinstance(_img_thought_sig, str)
                                                     and _img_thought_sig
                                                 ):
-                                                    _img_tool_end["google"] = {
-                                                        "thought_signature": (
-                                                            _img_thought_sig
-                                                        ),
-                                                    }
+                                                    _img_native["thoughtSignature"] = (
+                                                        _img_thought_sig
+                                                    )
+                                                    _img_google["thought_signature"] = (
+                                                        _img_thought_sig
+                                                    )
+                                                _img_tool_end["google"] = _img_google
                                                 yield _emit_tool_event(_img_tool_end)
                             finish_reason = cand.get("finishReason")
                             if isinstance(finish_reason, str):
@@ -3827,6 +4052,8 @@ class ExternalProviderClient:
         enable_prompt_caching: Optional[bool] = None,
         openai_code_exec_container_id: Optional[str] = None,
         compaction_threshold: Optional[int] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Call OpenAI's /v1/responses endpoint and translate its SSE stream back
@@ -3858,6 +4085,78 @@ class ExternalProviderClient:
                         if part.get("type") == "text" and part.get("text"):
                             instructions_parts.append(part["text"])
                 continue
+
+            # OpenAI Responses uses item-shape history for function
+            # calling: assistant turns that invoked user tools must
+            # serialize each call as a `function_call` input item, and
+            # each role="tool" follow-up as a `function_call_output`
+            # item keyed by the matching `call_id`. Without this the
+            # second turn after a function call sends Chat Completions
+            # shape and Responses 400s the request.
+            if role == "tool":
+                _call_id = msg.get("tool_call_id") or ""
+                if isinstance(content, list):
+                    _flat_parts: list[str] = []
+                    for part in content:
+                        if part.get("type") == "text" and part.get("text"):
+                            _flat_parts.append(part["text"])
+                    _output_text = "".join(_flat_parts)
+                else:
+                    _output_text = content if isinstance(content, str) else ""
+                if _call_id:
+                    input_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": _call_id,
+                            "output": _output_text,
+                        }
+                    )
+                continue
+
+            # Assistant turns that returned tool_calls translate each
+            # call as a `function_call` item (carrying name + JSON
+            # arguments + call_id). Skip builtin server-side cards
+            # (marked `args._server_tool`) which never round-trip as
+            # user functions.
+            _tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+            if role == "assistant" and isinstance(_tool_calls, list):
+                for _tc in _tool_calls:
+                    if not isinstance(_tc, dict):
+                        continue
+                    _fn = _tc.get("function") or {}
+                    if not isinstance(_fn, dict) or not _fn.get("name"):
+                        continue
+                    _args_raw = _fn.get("arguments") or ""
+                    if not isinstance(_args_raw, str):
+                        try:
+                            _args_raw = _json.dumps(_args_raw)
+                        except Exception:
+                            _args_raw = ""
+                    _is_server_builtin = False
+                    try:
+                        _args_obj = _json.loads(_args_raw) if _args_raw else {}
+                        if (
+                            isinstance(_args_obj, dict)
+                            and _args_obj.get("_server_tool") is True
+                        ):
+                            _is_server_builtin = True
+                    except Exception:
+                        _is_server_builtin = False
+                    if _is_server_builtin:
+                        continue
+                    _call_id_out = _tc.get("id") or f"call_{time.time_ns()}"
+                    input_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": _call_id_out,
+                            "name": _fn["name"],
+                            "arguments": _args_raw,
+                        }
+                    )
+                # Skip the assistant text payload when content is empty
+                # (the model produced only tool calls on this turn).
+                if not content:
+                    continue
 
             if isinstance(content, str):
                 input_items.append({"role": role, "content": content})
@@ -4039,9 +4338,51 @@ class ExternalProviderClient:
         image_generation_enabled_openai = bool(
             enabled_tools and "image_generation" in enabled_tools and is_openai_cloud
         )
-        if enabled_tools:
-            tools_array: list[dict[str, Any]] = []
-            if "web_search" in enabled_tools:
+        # OpenAI-style user function tools translate into the Responses
+        # function-tool shape (`{type:"function", name, description,
+        # parameters}` instead of the Chat Completions
+        # `{type:"function", function:{name, ...}}`). Forward them so
+        # callers using normal Chat Completions `tools` against
+        # gpt-5.x keep working when we route through /v1/responses.
+        responses_user_function_tools: list[dict[str, Any]] = []
+        if tools:
+            for _tool in tools:
+                if not isinstance(_tool, dict) or _tool.get("type") != "function":
+                    continue
+                _fn = _tool.get("function")
+                if not isinstance(_fn, dict) or not _fn.get("name"):
+                    continue
+                _entry: dict[str, Any] = {
+                    "type": "function",
+                    "name": _fn["name"],
+                }
+                if _fn.get("description"):
+                    _entry["description"] = _fn["description"]
+                if isinstance(_fn.get("parameters"), dict):
+                    _entry["parameters"] = _fn["parameters"]
+                responses_user_function_tools.append(_entry)
+
+        # Map OpenAI Chat Completions tool_choice to the Responses
+        # tool_choice value. Strings ("auto"/"none"/"required") pass
+        # through unchanged; the function pick uses the Responses
+        # shape `{type:"function", name:"..."}`.
+        responses_tool_choice: Optional[Any] = None
+        if tool_choice is not None and responses_user_function_tools:
+            if isinstance(tool_choice, str):
+                _tc_lc = tool_choice.strip().lower()
+                if _tc_lc in ("auto", "none", "required"):
+                    responses_tool_choice = _tc_lc
+            elif (
+                isinstance(tool_choice, dict) and tool_choice.get("type") == "function"
+            ):
+                _fn_pick = tool_choice.get("function") or {}
+                _name = _fn_pick.get("name") if isinstance(_fn_pick, dict) else None
+                if isinstance(_name, str) and _name:
+                    responses_tool_choice = {"type": "function", "name": _name}
+
+        if enabled_tools or responses_user_function_tools:
+            tools_array: list[dict[str, Any]] = list(responses_user_function_tools)
+            if enabled_tools and "web_search" in enabled_tools:
                 tools_array.append({"type": "web_search"})
             if code_execution_enabled_openai:
                 # `container_auto` lets OpenAI auto-create a fresh
@@ -4069,6 +4410,8 @@ class ExternalProviderClient:
                 tools_array.append({"type": "image_generation"})
             if tools_array:
                 body["tools"] = tools_array
+        if responses_tool_choice is not None:
+            body["tool_choice"] = responses_tool_choice
 
         url = f"{self.base_url}/responses"
         completion_id = f"chatcmpl-openai-{model.replace('/', '-')}"
@@ -4082,9 +4425,11 @@ class ExternalProviderClient:
             first attempt.
             """
             attempt_body = dict(body)
-            if enabled_tools:
-                tools_array_attempt: list[dict[str, Any]] = []
-                if "web_search" in enabled_tools:
+            if enabled_tools or responses_user_function_tools:
+                tools_array_attempt: list[dict[str, Any]] = list(
+                    responses_user_function_tools
+                )
+                if enabled_tools and "web_search" in enabled_tools:
                     tools_array_attempt.append({"type": "web_search"})
                 if code_execution_enabled_openai:
                     if container_id_for_this_attempt:
@@ -4103,6 +4448,8 @@ class ExternalProviderClient:
                     attempt_body["tools"] = tools_array_attempt
                 else:
                     attempt_body.pop("tools", None)
+            if responses_tool_choice is not None:
+                attempt_body["tool_choice"] = responses_tool_choice
             return attempt_body
 
         def _is_openai_container_expired_error(error_text: str) -> bool:
@@ -4164,6 +4511,15 @@ class ExternalProviderClient:
                     done_emitted = False
                     reasoning_open = False
                     reasoning_emitted = False
+                    # Track caller-supplied function tool calls so the
+                    # final chunk reports finish_reason="tool_calls"
+                    # instead of "stop" when the model invoked a user
+                    # function on the Responses path. function_call_index
+                    # advances per emit so parallel calls land on
+                    # distinct delta.tool_calls[].index slots (matches
+                    # the Gemini branch's distinct-index pattern).
+                    saw_function_call = False
+                    function_call_index = 0
                     # Latched from response.completed / response.incomplete so
                     # the final log can surface input_tokens_details.cached_tokens —
                     # the field that proves prompt_cache_retention="24h" is
@@ -4214,6 +4570,7 @@ class ExternalProviderClient:
                     container_id_emitted = False
 
                     def _emit_tool_event(payload: dict[str, Any]) -> str:
+                        _stamp_server_tool_marker(payload)
                         chunk = {
                             "id": completion_id,
                             "object": "chat.completion.chunk",
@@ -4592,6 +4949,62 @@ class ExternalProviderClient:
                                             "background": item.get("background"),
                                         }
                                     )
+                                elif item.get("type") == "function_call":
+                                    # Caller-supplied function tool result.
+                                    # Responses API returns
+                                    #   {type:"function_call", id, call_id,
+                                    #    name, arguments(JSON string)}
+                                    # See
+                                    # https://platform.openai.com/docs/guides/function-calling?api-mode=responses
+                                    # Translate to the Chat Completions
+                                    # delta.tool_calls shape so the
+                                    # frontend's existing tool-call
+                                    # accumulator can execute the function.
+                                    fn_call_id = (
+                                        item.get("call_id")
+                                        or item.get("id")
+                                        or f"call_{time.time_ns()}"
+                                    )
+                                    fn_name = item.get("name") or ""
+                                    fn_args = item.get("arguments") or ""
+                                    if not isinstance(fn_args, str):
+                                        try:
+                                            fn_args = _json.dumps(fn_args)
+                                        except Exception:
+                                            fn_args = ""
+                                    _tc_index = function_call_index
+                                    function_call_index += 1
+                                    yield (
+                                        "data: "
+                                        + _json.dumps(
+                                            {
+                                                "id": completion_id,
+                                                "object": "chat.completion.chunk",
+                                                "choices": [
+                                                    {
+                                                        "index": 0,
+                                                        "delta": {
+                                                            "tool_calls": [
+                                                                {
+                                                                    "index": _tc_index,
+                                                                    "id": fn_call_id,
+                                                                    "type": "function",
+                                                                    "function": {
+                                                                        "name": fn_name,
+                                                                        "arguments": (
+                                                                            fn_args
+                                                                        ),
+                                                                    },
+                                                                }
+                                                            ],
+                                                        },
+                                                        "finish_reason": None,
+                                                    }
+                                                ],
+                                            }
+                                        )
+                                    )
+                                    saw_function_call = True
 
                             elif (
                                 isinstance(event_type, str)
@@ -4681,7 +5094,11 @@ class ExternalProviderClient:
                                         {
                                             "index": 0,
                                             "delta": {},
-                                            "finish_reason": "stop",
+                                            "finish_reason": (
+                                                "tool_calls"
+                                                if saw_function_call
+                                                else "stop"
+                                            ),
                                         }
                                     ],
                                 }

@@ -541,6 +541,14 @@ class ChatMessage(BaseModel):
         None,
         description = "OpenAI tool-result messages: name of the tool whose result this is.",
     )
+    extra_content: Optional[dict] = Field(
+        None,
+        description = (
+            "Provider-specific extra fields the translator may read. "
+            "Gemini reads `extra_content.google.thought_signature` "
+            "from assistant messages to replay text-part signatures."
+        ),
+    )
 
     @model_validator(mode = "after")
     def _validate_role_shape(self) -> "ChatMessage":
@@ -738,9 +746,13 @@ class ChatCompletionRequest(BaseModel):
         stay opt-out."""
         if isinstance(value, str):
             lowered = value.strip().lower()
-            if lowered in ("true", "1", "yes"):
+            # Match Pydantic v1's BooleanField coercion table (yes/y/on/t/1
+            # and no/n/off/f/0) so opt-outs that used to parse still parse.
+            # Anything else is preserved as a string for Gemini's
+            # cachedContent resource path.
+            if lowered in ("true", "t", "1", "yes", "y", "on"):
                 return True
-            if lowered in ("false", "0", "no"):
+            if lowered in ("false", "f", "0", "no", "n", "off"):
                 return False
         return value
 

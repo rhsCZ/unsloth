@@ -411,13 +411,31 @@ def test_thinking_default_omits_thinking_config(monkeypatch):
 
 def test_nano_banana_alias_routes_through_image_modalities(monkeypatch):
     """`nano-banana-pro-preview` is an alias for the Pro image model and
-    must set responseModalities=[TEXT,IMAGE] same as the `*-image` ids."""
+    must set responseModalities=[TEXT,IMAGE] when the Images pill is on
+    (enabled_tools includes "image_generation")."""
     captured = _capture_body(
         monkeypatch,
         model = "nano-banana-pro-preview",
+        enabled_tools = ["image_generation"],
     )
     gc = captured["body"]["generationConfig"]
     assert gc.get("responseModalities") == ["TEXT", "IMAGE"], gc
+
+
+def test_image_capable_model_without_image_pill_stays_text_only(monkeypatch):
+    """When the Images pill is off (enabled_tools has no
+    image_generation), an image-capable model id (gemini-2.5-flash-image)
+    must force responseModalities=["TEXT"]. Google's image models
+    default to text+image when responseModalities is omitted, so
+    omitting it would silently bill image output the UI says is
+    disabled."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash-image",
+        enabled_tools = [],
+    )
+    gc = captured["body"]["generationConfig"]
+    assert gc.get("responseModalities") == ["TEXT"], gc
 
 
 def test_image_models_skip_thinking_config(monkeypatch):
@@ -435,6 +453,7 @@ def test_image_models_skip_thinking_config(monkeypatch):
             model = model,
             reasoning_effort = "high",
             enable_thinking = False,
+            enabled_tools = ["image_generation"],
         )
         gc = captured["body"]["generationConfig"]
         assert "thinkingConfig" not in gc, (model, gc)
@@ -454,7 +473,7 @@ def test_image_models_drop_code_execution(monkeypatch):
         captured = _capture_body(
             monkeypatch,
             model = model,
-            enabled_tools = ["code_execution"],
+            enabled_tools = ["image_generation", "code_execution"],
         )
         tools_arr = captured["body"].get("tools") or []
         names = [list(t.keys())[0] for t in tools_arr]
@@ -486,7 +505,7 @@ def test_gemini3_image_models_allow_google_search(monkeypatch):
         captured = _capture_body(
             monkeypatch,
             model = model,
-            enabled_tools = ["web_search", "code_execution"],
+            enabled_tools = ["image_generation", "web_search", "code_execution"],
         )
         tools_arr = captured["body"].get("tools") or []
         names = [list(t.keys())[0] for t in tools_arr]
@@ -500,7 +519,7 @@ def test_legacy_image_models_block_google_search(monkeypatch):
     captured = _capture_body(
         monkeypatch,
         model = "gemini-2.5-flash-image",
-        enabled_tools = ["web_search", "code_execution"],
+        enabled_tools = ["image_generation", "web_search", "code_execution"],
     )
     assert "tools" not in captured["body"], captured["body"].get("tools")
 
@@ -640,7 +659,7 @@ def test_image_models_suppress_phantom_web_search_card(monkeypatch):
         monkeypatch,
         sse,
         model = "gemini-2.5-flash-image",
-        enabled_tools = ["web_search", "code_execution"],
+        enabled_tools = ["image_generation", "web_search", "code_execution"],
     )
     chunks = _parse_chunks(lines)
     tool_evs = [
@@ -773,6 +792,7 @@ def test_image_model_sets_response_modalities(monkeypatch):
     captured = _capture_body(
         monkeypatch,
         model = "gemini-2.5-flash-image",
+        enabled_tools = ["image_generation"],
     )
     assert captured["body"]["generationConfig"]["responseModalities"] == [
         "TEXT",
@@ -1778,6 +1798,85 @@ def test_inline_image_tool_end_carries_thought_signature(monkeypatch):
     ]
     assert image_ends, tool_events
     assert image_ends[0]["google"]["thought_signature"] == "SIG-IMG"
+    # Multi-turn image edit must replay the original inlineData part with
+    # its thoughtSignature; the outbound translator reads
+    # google.native_part.inlineData, so stow it on the tool_end too.
+    native = image_ends[0]["google"]["native_part"]
+    assert native["inlineData"]["mimeType"] == "image/png"
+    assert native["inlineData"]["data"] == base64.b64encode(b"PNG").decode()
+    assert native["thoughtSignature"] == "SIG-IMG"
+
+
+def test_code_execution_plot_attaches_inline_image_native_part(monkeypatch):
+    """A code_execution turn that returns a matplotlib plot must stow
+    the plot's inlineData on the secondary tool_end so the follow-up
+    turn can replay the image alongside executableCode and
+    codeExecutionResult."""
+    plot_data = base64.b64encode(b"PLOT").decode()
+    sse = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "executableCode": {
+                                    "id": "code_a",
+                                    "language": "PYTHON",
+                                    "code": "plt.plot([0,1])",
+                                },
+                            },
+                            {
+                                "codeExecutionResult": {
+                                    "id": "result_a",
+                                    "outcome": "OUTCOME_OK",
+                                    "output": "",
+                                },
+                            },
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": plot_data,
+                                },
+                            },
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 4,
+            },
+        }
+    ]
+    lines = _collect(
+        monkeypatch,
+        sse,
+        enabled_tools = ["code_execution"],
+    )
+    chunks = _parse_chunks(lines)
+    tool_events = [c["_toolEvent"] for c in chunks if "_toolEvent" in c]
+    code_ends = [
+        e
+        for e in tool_events
+        if e.get("type") == "tool_end" and e.get("tool_call_id") == "code_a"
+    ]
+    # Two tool_end events on the same id: one for codeExecutionResult,
+    # one merging in the inlineData plot. The plot one must carry the
+    # native inlineData under google.native_part so the frontend
+    # tool_end merge union joins it with the prior executableCode and
+    # codeExecutionResult parts on the same card.
+    assert len(code_ends) == 2, code_ends
+    image_end = next(
+        (e for e in code_ends if "__IMAGES__:" in (e.get("result") or "")),
+        None,
+    )
+    assert image_end is not None, code_ends
+    native = image_end["google"]["native_part"]
+    assert native["inlineData"]["mimeType"] == "image/png"
+    assert native["inlineData"]["data"] == plot_data
 
 
 def test_text_chunk_carries_thought_signature(monkeypatch):
@@ -1940,12 +2039,287 @@ def test_code_exec_inline_image_attaches_to_code_execution_card(monkeypatch):
     assert "data:image/png;base64," in final_result, code_ends
 
 
+def test_code_execution_tool_call_replays_native_executable_code(monkeypatch):
+    """An assistant tool_call with toolName=code_execution and
+    extra_content.google.native_part containing the originally-emitted
+    `executableCode` + `codeExecutionResult` must round-trip as native
+    Gemini parts (not a generic functionCall) on the next turn."""
+    captured = _capture_body(
+        monkeypatch,
+        messages = [
+            {"role": "user", "content": "compute 2+2"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "code_a",
+                        "type": "function",
+                        "function": {
+                            "name": "code_execution",
+                            "arguments": "{}",
+                        },
+                        "extra_content": {
+                            "google": {
+                                "native_part": {
+                                    "executableCode": {
+                                        "id": "code_a",
+                                        "language": "PYTHON",
+                                        "code": "print(2+2)",
+                                    },
+                                    "codeExecutionResult": {
+                                        "outcome": "OUTCOME_OK",
+                                        "output": "4\n",
+                                    },
+                                    "thoughtSignature": "SIG-CODE",
+                                },
+                            },
+                        },
+                    },
+                ],
+            },
+            {"role": "user", "content": "what was that result"},
+        ],
+    )
+    assistant_turn = captured["body"]["contents"][1]
+    assert assistant_turn["role"] == "model"
+    parts = assistant_turn["parts"]
+    native_keys = [list(p.keys())[0] for p in parts if isinstance(p, dict)]
+    assert "executableCode" in native_keys, parts
+    assert "codeExecutionResult" in native_keys, parts
+    assert not any(
+        "functionCall" in p
+        and (p["functionCall"] or {}).get("name") == "code_execution"
+        for p in parts
+    ), parts
+    exec_part = next(p for p in parts if "executableCode" in p)
+    assert exec_part.get("thoughtSignature") == "SIG-CODE", exec_part
+
+
+def test_image_generation_tool_call_replays_native_inline_data(monkeypatch):
+    """An assistant tool_call with toolName=image_generation and
+    extra_content.google.native_part.inlineData must replay the prior
+    image as a native Gemini inlineData part (not a generic
+    functionCall) so multi-turn image editing keeps the image
+    context."""
+    pixel = base64.b64encode(b"PNG").decode()
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash-image",
+        messages = [
+            {"role": "user", "content": "make a circle"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "img_a",
+                        "type": "function",
+                        "function": {
+                            "name": "image_generation",
+                            "arguments": "{}",
+                        },
+                        "extra_content": {
+                            "google": {
+                                "native_part": {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": pixel,
+                                    },
+                                    "thoughtSignature": "SIG-IMG",
+                                },
+                            },
+                        },
+                    },
+                ],
+            },
+            {"role": "user", "content": "now make it blue"},
+        ],
+    )
+    assistant_turn = captured["body"]["contents"][1]
+    assert assistant_turn["role"] == "model"
+    parts = assistant_turn["parts"]
+    inline_parts = [p for p in parts if "inlineData" in p]
+    assert inline_parts, parts
+    assert inline_parts[0]["inlineData"]["mimeType"] == "image/png"
+    assert inline_parts[0]["inlineData"]["data"] == pixel
+    assert inline_parts[0].get("thoughtSignature") == "SIG-IMG", inline_parts
+    assert not any(
+        "functionCall" in p
+        and (p["functionCall"] or {}).get("name") == "image_generation"
+        for p in parts
+    ), parts
+
+
+def test_assistant_text_thought_signature_replays_on_outbound_text_part(monkeypatch):
+    """Assistant text with extra_content.google.thought_signature must
+    attach `thoughtSignature` to the LAST text part of the replayed
+    Gemini history. Gemini 3 strict function-calling rejects history
+    that drops returned signatures, so the frontend stows the latest
+    signed-text signature and the backend pins it on the next turn."""
+    captured = _capture_body(
+        monkeypatch,
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                ],
+                "extra_content": {
+                    "google": {"thought_signature": "SIG-TEXT"},
+                },
+            },
+            {"role": "user", "content": "again"},
+        ],
+    )
+    assistant_turn = captured["body"]["contents"][1]
+    assert assistant_turn["role"] == "model"
+    parts = assistant_turn["parts"]
+    text_parts = [p for p in parts if "text" in p]
+    assert text_parts, parts
+    assert text_parts[-1].get("thoughtSignature") == "SIG-TEXT", text_parts
+
+
+def test_function_declarations_strip_openai_only_schema_keys(monkeypatch):
+    """OpenAI strict tools commonly include `additionalProperties`,
+    `$schema`, `$defs`, `strict`, etc. Gemini's Schema rejects those
+    with INVALID_ARGUMENT, so the translator must strip them while
+    keeping properties.<field>.type intact."""
+    captured = _capture_body(
+        monkeypatch,
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Look up a value.",
+                    "parameters": {
+                        "type": "object",
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "additionalProperties": False,
+                        "strict": True,
+                        "properties": {
+                            "key": {
+                                "type": "string",
+                                "additionalProperties": False,
+                            },
+                        },
+                        "required": ["key"],
+                    },
+                },
+            }
+        ],
+    )
+    tools_arr = captured["body"].get("tools") or []
+    decls = next(
+        (
+            t.get("functionDeclarations")
+            for t in tools_arr
+            if "functionDeclarations" in t
+        ),
+        None,
+    )
+    assert decls is not None, captured["body"]
+    params = decls[0]["parameters"]
+    assert "additionalProperties" not in params
+    assert "$schema" not in params
+    assert "strict" not in params
+    assert params["type"] == "object"
+    assert params["properties"]["key"]["type"] == "string"
+    assert "additionalProperties" not in params["properties"]["key"]
+    assert params["required"] == ["key"]
+
+
+def test_chat_message_extra_content_round_trips_through_validation():
+    """Round 9: ChatMessage was missing `extra_content`, so Pydantic
+    discarded the field during request validation and the text-part
+    signature replay path read nothing. The field must survive
+    model_validate and pass through _build_external_messages."""
+    from models.inference import ChatCompletionRequest
+    from routes.inference import _build_external_messages
+
+    req = ChatCompletionRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                    ],
+                    "extra_content": {
+                        "google": {"thought_signature": "SIG-TEXT"},
+                    },
+                },
+                {"role": "user", "content": "again"},
+            ],
+            "max_tokens": 64,
+            "stream": True,
+        }
+    )
+    assistant_msg = req.messages[1]
+    assert assistant_msg.extra_content == {
+        "google": {"thought_signature": "SIG-TEXT"},
+    }
+    built = _build_external_messages(
+        req.messages,
+        supports_vision = True,
+        provider_type = "gemini",
+        base_url = "https://generativelanguage.googleapis.com/v1beta",
+    )
+    assistant_out = built[1]
+    assert assistant_out["extra_content"] == {
+        "google": {"thought_signature": "SIG-TEXT"},
+    }
+    # Non-Gemini providers must NOT receive extra_content; Google's
+    # thought_signature field is unknown to OpenAI / Mistral / etc.
+    built_openai = _build_external_messages(
+        req.messages,
+        supports_vision = True,
+        provider_type = "openai",
+    )
+    assert "extra_content" not in built_openai[1], built_openai[1]
+    # Custom non-Google Gemini bases (LiteLLM / OAI-compat gateways)
+    # also must not receive Gemini-only extra_content because the
+    # backend dispatches them through /chat/completions.
+    built_custom = _build_external_messages(
+        req.messages,
+        supports_vision = True,
+        provider_type = "gemini",
+        base_url = "https://litellm.example/v1",
+    )
+    assert "extra_content" not in built_custom[1], built_custom[1]
+
+
+def test_image_picker_model_with_search_off_pill_strips_text_tools(monkeypatch):
+    """Round 11: image-tier model id rejects text-only tools and
+    thinkingConfig at the model level regardless of whether the Images
+    pill is on. Selecting gemini-2.5-flash-image + enabled_tools=
+    ["web_search"] with no image_generation must NOT forward
+    googleSearch or thinkingConfig (Gemini 400s on text tools for
+    legacy image ids)."""
+    captured = _capture_body(
+        monkeypatch,
+        model = "gemini-2.5-flash-image",
+        enabled_tools = ["web_search"],
+        reasoning_effort = "high",
+    )
+    body = captured["body"]
+    assert "tools" not in body, body.get("tools")
+    assert "thinkingConfig" not in body.get("generationConfig", {}), body[
+        "generationConfig"
+    ]
+
+
 def test_image_models_drop_function_declarations(monkeypatch):
     """Image-mode requests cannot mix tools with responseModalities so
     user-supplied function declarations must be dropped."""
     captured = _capture_body(
         monkeypatch,
         model = "gemini-2.5-flash-image",
+        enabled_tools = ["image_generation"],
         tools = [
             {
                 "type": "function",

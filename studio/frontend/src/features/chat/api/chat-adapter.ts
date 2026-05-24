@@ -7,7 +7,10 @@ import { toast } from "@/lib/toast";
 import type { MessageTiming, ToolCallMessagePart } from "@assistant-ui/core";
 import type { ChatModelAdapter } from "@assistant-ui/react";
 import {
+  CODEX_DEFAULT_PARALLEL_CALLS,
+  clampCodexParallelCalls,
   getExternalProviderApiKey,
+  isCodexProviderType,
   isCustomProviderType,
   isPromptCacheTtl,
   loadExternalProviders,
@@ -862,12 +865,18 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
         throw new Error("Connection not found.");
       }
       // Local providers (llama.cpp / vLLM / Ollama) allow an empty key — only block hosted providers.
+      // Codex dispatches via the local CLI / SDK, no HTTP API key.
       const externalProviderIsCustom = externalProvider
         ? isCustomProviderType(externalProvider.providerType)
         : false;
-      if (isExternalRequest && !externalApiKey && !externalProviderIsCustom) {
+      const externalProviderIsCodex = externalProvider
+        ? isCodexProviderType(externalProvider.providerType)
+        : false;
+      const externalProviderNeedsApiKey =
+        isExternalRequest && !externalProviderIsCustom && !externalProviderIsCodex;
+      if (externalProviderNeedsApiKey && !externalApiKey) {
         toast.error("Missing API key for selected connection.", {
-          description: "Open Settings → Connections and set the API key again.",
+          description: "Open Settings > Connections and set the API key again.",
         });
         throw new Error("Missing connection API key.");
       }
@@ -1122,6 +1131,50 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
       let cumulativeText = "";
       let reasoningStartAt: number | null = null;
       let reasoningDuration = 0;
+      // Per-tab buffer for Codex parallel-calls fan-out. The backend
+      // emits N independent streams concurrently, so chunks for tab 2
+      // can land between chunks for tab 1 in arrival order. Keeping a
+      // dict keyed by tab_id and re-assembling cumulativeText from
+      // scratch on every codex event puts each tab's text under its
+      // own header regardless of arrival interleaving.
+      const codexTabBuffers = new Map<number, string>();
+      const codexTabClosed = new Set<number>();
+      const codexTabError = new Map<number, string>();
+      let codexTotalTabs = 0;
+      let codexGatherEmitted = false;
+
+      function renderCodexBuffer(): string {
+        if (codexTabBuffers.size === 0 && !codexGatherEmitted) return "";
+        const lines: string[] = [];
+        const ids = [...codexTabBuffers.keys()].sort((a, b) => a - b);
+        for (const id of ids) {
+          const header = codexTotalTabs
+            ? `[Codex tab ${id}/${codexTotalTabs}]`
+            : `[Codex tab ${id}]`;
+          lines.push(`\n\n${header}\n${codexTabBuffers.get(id) ?? ""}`);
+          if (codexTabError.has(id)) {
+            lines.push(`\n[Codex tab ${id} error: ${codexTabError.get(id)}]\n`);
+          }
+          if (codexTabClosed.has(id)) {
+            lines.push("\n");
+          }
+        }
+        if (codexGatherEmitted) {
+          lines.push("\n--- Synthesis ---\n");
+        }
+        return lines.join("");
+      }
+
+      // All chat-content yields go through this so the Codex per-tab
+      // output is always concatenated with the normal SSE text. The
+      // synthesis is emitted by the backend BOTH as a `codex_gather`
+      // tool event AND as a normal content delta; rendering both
+      // would duplicate it. Render the tabs above (header / tab text)
+      // separately from cumulativeText (which carries the synthesis
+      // content delta) so the user sees `[tabs] ... [synthesis]`.
+      function renderFullContent(): string {
+        return cumulativeText + renderCodexBuffer();
+      }
       // Tracks whether we are currently inside a `<think>` block opened by
       // a `delta.reasoning_content` chunk. Kimi (kimi-k2.6, kimi-k2-thinking)
       // and DeepSeek's reasoner stream their thinking as a separate
@@ -1489,6 +1542,19 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                         }
                   : { enable_thinking: reasoningEnabled }
                 : {}),
+              // Codex provider only: ask the backend to fan the turn out
+              // across N parallel Codex tasks and synthesise a unified
+              // answer. The picker UI uses the provider config's
+              // `codexParallelCalls` field; default of 1 keeps the
+              // single-call path. Backend clamps to [1, 20].
+              ...(externalProviderIsCodex
+                ? {
+                    parallel_calls: clampCodexParallelCalls(
+                      externalProvider.codexParallelCalls ??
+                        CODEX_DEFAULT_PARALLEL_CALLS,
+                    ),
+                  }
+                : {}),
             };
           }
 
@@ -1563,6 +1629,57 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                 chunk as unknown as { _toolEvent?: Record<string, unknown> }
               )._toolEvent;
               if (toolEvent !== undefined) {
+                // Codex parallel-calls fan-out events: route chunks
+                // into per-tab buffers keyed by tab_id, then render
+                // the whole codex block from scratch each event so
+                // concurrent tabs cannot interleave under the wrong
+                // header. `codex_gather` carries the synthesis
+                // payload which the backend also emits as a normal
+                // content delta later in the same SSE stream, so we
+                // only render a divider here to avoid duplicating
+                // the synthesis text.
+                if (typeof toolEvent.type === "string" && toolEvent.type.startsWith("codex_")) {
+                  if (toolEvent.type === "codex_tab_open") {
+                    const tabId = Number(toolEvent.tab_id);
+                    const total = Number(toolEvent.total_tabs);
+                    if (Number.isFinite(tabId)) {
+                      if (!codexTabBuffers.has(tabId)) {
+                        codexTabBuffers.set(tabId, "");
+                      }
+                      if (Number.isFinite(total) && total > codexTotalTabs) {
+                        codexTotalTabs = total;
+                      }
+                    }
+                  } else if (toolEvent.type === "codex_tab_chunk") {
+                    const tabId = Number(toolEvent.tab_id);
+                    const text = typeof toolEvent.text === "string" ? toolEvent.text : "";
+                    if (Number.isFinite(tabId) && text) {
+                      const prev = codexTabBuffers.get(tabId) ?? "";
+                      codexTabBuffers.set(tabId, prev + text);
+                    }
+                  } else if (toolEvent.type === "codex_tab_error") {
+                    const tabId = Number(toolEvent.tab_id);
+                    const err = typeof toolEvent.error === "string" ? toolEvent.error : "error";
+                    if (Number.isFinite(tabId)) {
+                      codexTabError.set(tabId, err);
+                      if (!codexTabBuffers.has(tabId)) {
+                        codexTabBuffers.set(tabId, "");
+                      }
+                    }
+                  } else if (toolEvent.type === "codex_tab_close") {
+                    const tabId = Number(toolEvent.tab_id);
+                    if (Number.isFinite(tabId)) {
+                      codexTabClosed.add(tabId);
+                    }
+                  } else if (toolEvent.type === "codex_gather") {
+                    codexGatherEmitted = true;
+                  }
+                  const codexParts = parseAssistantContent(renderFullContent());
+                  yield {
+                    content: [...toolCallParts, ...codexParts],
+                  };
+                  continue;
+                }
                 // OpenAI shell-tool container persistence — see
                 // ThreadRecord.openaiCodeExecContainerId. The backend
                 // emits these synthetic events on the OpenAI Responses
@@ -1674,8 +1791,12 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                     };
                   }
                 }
-                // Yield cumulative state so tool UI updates (tools first, text after)
-                const textParts = parseAssistantContent(cumulativeText);
+                // Yield cumulative state so tool UI updates (tools first, text after).
+                // Use renderFullContent() so any Codex per-tab text accumulated
+                // in earlier _toolEvent frames is preserved when the synthesis
+                // delta arrives -- without this the tabs would briefly appear
+                // and then vanish when the regular content path overwrote them.
+                const textParts = parseAssistantContent(renderFullContent());
                 yield {
                   content: [...toolCallParts, ...textParts],
                   metadata: {
@@ -1805,7 +1926,9 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                   "",
                 );
               }
-              const parts = parseAssistantContent(cumulativeText);
+              // renderFullContent() preserves any Codex per-tab text the
+              // fan-out branch accumulated into codexTabBuffers.
+              const parts = parseAssistantContent(renderFullContent());
 
               if (
                 parts.some((part) => part.type === "reasoning") &&
@@ -1909,7 +2032,10 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
         yield {
           content: [
             ...toolCallParts,
-            ...parseAssistantContent(cumulativeText),
+            // renderFullContent() ensures the Codex per-tab text is in
+            // the FINAL message too -- otherwise the synthesis delta on
+            // the regular content path would have erased it.
+            ...parseAssistantContent(renderFullContent()),
             ...sourceParts,
           ],
           metadata: {

@@ -4,10 +4,11 @@
 """
 Codex SDK chat provider.
 
-This module wraps the ``codex_app_server`` async SDK so a chat request
-routed at ``provider_type="codex"`` can dispatch through the user's
-local Codex CLI. The contract back to the frontend is the standard
-OpenAI Chat Completions SSE shape, exactly like every other entry in
+This module wraps the OpenAI Codex async Python SDK (``openai_codex``
+canonical, ``codex_app_server`` legacy alias) so a chat request routed
+at ``provider_type="codex"`` can dispatch through the user's local
+Codex CLI. The contract back to the frontend is the standard OpenAI
+Chat Completions SSE shape, exactly like every other entry in
 ``external_provider.py``.
 
 The two interesting features here:
@@ -23,14 +24,14 @@ The two interesting features here:
   emit per-tab ``_toolEvent`` markers so the frontend can render each
   result in its own tab. A final ``codex_gather`` synthesis tab runs a
   single Codex call that takes the N outputs and produces a unified
-  answer.
+  answer. Workers cancel cleanly when the SSE consumer disconnects so
+  cancelled fan-outs never leave zombie Codex calls running.
 
 The SDK is imported lazily (inside the helpers that actually need it)
-because the spec calls out that ``codex_app_server`` may not even be
-importable on the build host. The availability probe in
-``codex_availability.py`` is what the frontend uses to gate the
-provider entirely; this module just refuses to run if the import
-fails at request time.
+because the SDK may not be importable on the build host. The
+availability probe in ``codex_availability.py`` is what the frontend
+uses to gate the provider entirely; this module just refuses to run
+if the import fails at request time.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ import asyncio
 import importlib
 import importlib.util
 import json
+import sys
 import time
 from typing import Any, AsyncGenerator, Optional
 
@@ -53,8 +55,15 @@ logger = structlog.get_logger(__name__)
 MAX_PARALLEL_CALLS = 20
 
 
+# Names the upstream Python SDK has shipped under. ``openai_codex`` is
+# the canonical package at ``openai/codex/sdk/python``; ``codex_app_server``
+# is kept as a forward-compat alias because the Rust crate uses that name.
+# Order matters: first hit wins, so the canonical name is tried first.
+_SDK_MODULE_NAMES: tuple[str, ...] = ("openai_codex", "codex_app_server")
+
+
 class CodexUnavailableError(RuntimeError):
-    """Raised when ``codex_app_server`` is not importable at runtime.
+    """Raised when the Codex Python SDK is not importable at runtime.
 
     The availability probe is supposed to hide the provider before any
     request lands here, but we still raise a typed error so the route
@@ -63,63 +72,252 @@ class CodexUnavailableError(RuntimeError):
     """
 
 
+def _codex_sdk_env_override() -> dict[str, str]:
+    """Return an env update dict that scrubs sensitive vars from the
+    codex app-server subprocess env.
+
+    The upstream openai_codex SDK's `AppServerConfig.env` is merged on
+    top of `os.environ.copy()` (see openai/codex/sdk/python/src/openai_codex/client.py),
+    so providing an empty-string mapping for every non-safe key
+    effectively overrides them in the spawn env. Combined with
+    `_codex_subprocess_env()` (used for direct CLI calls) this gives
+    parity between the CLI and SDK code paths: neither sees HF_TOKEN,
+    GH_TOKEN, WANDB_API_KEY, ANTHROPIC_API_KEY, or any other secret
+    that lives in the Studio parent environment.
+    """
+    import os
+
+    from core.inference.codex_availability import _SAFE_CODEX_ENV_KEYS
+
+    safe = set(_SAFE_CODEX_ENV_KEYS)
+    return {key: "" for key in os.environ if key not in safe}
+
+
+_SCRUBBED_ENV_LOCK = asyncio.Lock()
+_SCRUBBED_ENV_REFCOUNT: dict[str, int] = {}
+
+
+class _ScrubbedEnvAsyncCodex:
+    """Async-context wrapper that swaps `os.environ` for the lifetime
+    of a Codex SDK session.
+
+    Used as the fail-closed fallback when the SDK does not expose
+    `AppServerConfig(env=...)`. The SDK starts its app-server with
+    `env = os.environ.copy()`, so removing secrets from the parent
+    process env right before construction keeps them out of the child.
+
+    Concurrency model: a process-wide asyncio lock serialises the
+    enter/exit critical section, and a per-key refcount tracks how
+    many concurrent wrappers are currently "holding" the scrub. A
+    key is only restored when the last wrapper using it exits. This
+    fixes two issues round 6 caught:
+
+    1. Two concurrent fan-out workers used to race: wrapper A could
+       restore `HF_TOKEN` while wrapper B was still inside SDK
+       startup, letting B's spawned app-server inherit the secret.
+       The refcount keeps the key scrubbed for the full overlap
+       window.
+    2. If the SDK constructor raised before `__aenter__` returned,
+       Python never called `__aexit__`, so the deleted keys leaked
+       permanently. Construction now happens INSIDE the try/except
+       in `__aenter__`, and the scrub is rolled back on failure.
+    """
+
+    def __init__(self, async_codex_cls: Any):
+        self._async_codex_cls = async_codex_cls
+        self._inner: Any = None
+        # Keys this wrapper instance contributed to the refcount, so
+        # __aexit__ knows exactly which counters to decrement (avoids
+        # racing with concurrent wrappers that scrub a different set).
+        self._held_keys: list[str] = []
+        # Snapshot of the original values at the time of the FIRST
+        # wrapper that scrubbed each key, so restoration uses the
+        # real pre-scrub value.
+        self._restored_via_us: dict[str, str] = {}
+
+    async def __aenter__(self) -> Any:
+        import os
+
+        overrides = _codex_sdk_env_override()
+        async with _SCRUBBED_ENV_LOCK:
+            for key in overrides:
+                if key not in os.environ and _SCRUBBED_ENV_REFCOUNT.get(key, 0) == 0:
+                    continue
+                if _SCRUBBED_ENV_REFCOUNT.get(key, 0) == 0:
+                    # First wrapper to scrub this key -- save the
+                    # original so the very last wrapper to release it
+                    # can restore the right value.
+                    self._restored_via_us[key] = os.environ[key]
+                    del os.environ[key]
+                _SCRUBBED_ENV_REFCOUNT[key] = _SCRUBBED_ENV_REFCOUNT.get(key, 0) + 1
+                self._held_keys.append(key)
+        try:
+            self._inner = self._async_codex_cls()
+            return await self._inner.__aenter__()
+        except BaseException:
+            # Roll back the scrub if SDK construction / enter fails;
+            # otherwise the deleted env vars would leak permanently.
+            await self._release_held_keys()
+            raise
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if self._inner is not None:
+                return await self._inner.__aexit__(exc_type, exc, tb)
+        finally:
+            await self._release_held_keys()
+
+    async def _release_held_keys(self) -> None:
+        import os
+
+        async with _SCRUBBED_ENV_LOCK:
+            for key in self._held_keys:
+                current = _SCRUBBED_ENV_REFCOUNT.get(key, 0)
+                if current <= 0:
+                    continue
+                _SCRUBBED_ENV_REFCOUNT[key] = current - 1
+                if current - 1 == 0:
+                    # Last wrapper holding this key -- restore the
+                    # original value if WE were the first to scrub it,
+                    # or pull from any other wrapper's saved snapshot.
+                    if key in self._restored_via_us:
+                        os.environ.setdefault(key, self._restored_via_us[key])
+            self._held_keys.clear()
+            self._restored_via_us.clear()
+
+
+def _open_async_codex(async_codex_cls: Any) -> Any:
+    """Construct an AsyncCodex whose spawned app-server cannot see
+    Studio's secrets.
+
+    Preferred path: `AsyncCodex(config=AppServerConfig(env=...))`
+    which scopes the override to the spawned subprocess only.
+    Fail-closed fallback: `_ScrubbedEnvAsyncCodex` swaps `os.environ`
+    for the lifetime of the session so the SDK's internal
+    `os.environ.copy()` spawn never sees HF_TOKEN / GH_TOKEN /
+    WANDB_API_KEY / etc. There is no code path that lets the SDK
+    inherit those secrets.
+    """
+    try:
+        sdk_mod = sys.modules.get("openai_codex") or sys.modules.get("codex_app_server")
+        if sdk_mod is not None:
+            app_server_config = getattr(sdk_mod, "AppServerConfig", None)
+            if app_server_config is not None:
+                return async_codex_cls(
+                    config = app_server_config(env = _codex_sdk_env_override()),
+                )
+    except TypeError:
+        # Older SDK: AppServerConfig may not accept the env kwarg yet.
+        # Fall through to the os.environ-swap wrapper.
+        pass
+    except Exception as exc:
+        logger.warning(
+            "codex_provider.env_scrub_config_failed",
+            exc_type = type(exc).__name__,
+            error = str(exc),
+        )
+    return _ScrubbedEnvAsyncCodex(async_codex_cls)
+
+
 def _import_codex() -> Any:
-    """Return the imported ``codex_app_server`` module or raise.
+    """Return the imported Codex SDK module or raise CodexUnavailableError.
 
     Imported lazily so the rest of the backend keeps starting cleanly
-    on hosts that don't have the SDK installed. The frontend calls
-    ``GET /api/codex/status`` first and hides the provider when the
-    spec isn't importable, so this branch is reached only when the
-    user (a) explicitly forces the provider via a stale stored config
-    or (b) the install state changes between status probe and chat
-    submit.
+    on hosts that don't have the SDK installed. Probes ``openai_codex``
+    first (canonical upstream name), then ``codex_app_server`` (Rust-
+    crate-style alias) for forward compatibility. The frontend calls
+    ``GET /api/codex/status`` first and hides the provider when no
+    name resolves, so this branch is reached only when (a) the user
+    explicitly forces the provider via a stale stored config or (b)
+    the install state changes between status probe and chat submit.
     """
-    if importlib.util.find_spec("codex_app_server") is None:
-        raise CodexUnavailableError(
-            "codex_app_server is not installed on this host. "
-            "Install the Codex Python SDK or use a different provider."
-        )
-    return importlib.import_module("codex_app_server")
+    for name in _SDK_MODULE_NAMES:
+        if importlib.util.find_spec(name) is not None:
+            return importlib.import_module(name)
+    raise CodexUnavailableError(
+        "Codex Python SDK is not installed on this host. "
+        "Install with `pip install openai-codex` (canonical upstream "
+        "name, imports as `openai_codex`; legacy alias `codex_app_server` "
+        "is also accepted), or use a different provider."
+    )
+
+
+def _stringify_content(content: Any) -> str:
+    """Flatten an OpenAI-style content field into one plain-text block.
+
+    Multimodal entries (images, documents) are described inline rather
+    than embedded since the Codex SDK input shape is text-first.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") == "text":
+                parts.append(str(entry.get("text") or ""))
+            elif entry.get("type") == "image_url":
+                url = (entry.get("image_url") or {}).get("url") or ""
+                parts.append(f"[image: {url[:80]}]" if url else "[image]")
+            elif entry.get("type") == "input_document":
+                name = entry.get("filename") or "document"
+                parts.append(f"[document: {name}]")
+        return "\n".join(p for p in parts if p)
+    return ""
 
 
 def _last_user_prompt(messages: list[dict[str, Any]]) -> str:
-    """Extract the most recent user-role message as a plain string.
+    """Render the conversation as a single prompt for Codex.
 
-    Codex's ``thread.run`` accepts a string (per the docs note
-    "plain strings are accepted anywhere a turn input is accepted").
-    Studio's chat history is a full OpenAI-style messages array, so
-    we flatten it: walk from the end, find the last ``role=user``
-    message, and stringify any structured content parts into a
-    newline-joined block. Multimodal content (images) is described
-    rather than embedded; Codex SDK input shape is text-first.
-
-    This is intentionally conservative -- we don't try to replay the
-    whole conversation through Codex per turn because the SDK is
-    designed around a stateful ``thread`` object. The thread itself
-    holds context across runs; we only need to feed the latest user
+    Studio's chat history is a full OpenAI-style messages array. Codex
+    opens a fresh ``thread`` per chat-completion request (we have no
+    way to cache the SDK ``thread`` keyed on Studio's session id from
+    here -- the inference route is stateless), so we MUST serialise the
+    full transcript into the prompt or the model loses every prior
     turn.
+
+    Layout:
+        User: <user_1>
+        Assistant: <assistant_1>
+        User: <user_2>
+        ...
+        Assistant:
+
+    The trailing ``Assistant:`` cue tells Codex this is its turn. When
+    there is exactly one user message and no assistant history we drop
+    the cue and emit the plain text -- matches the historical single-
+    shot behaviour.
     """
-    for msg in reversed(messages):
-        if msg.get("role") != "user":
+    # Filter to user / assistant only; system is handled separately by
+    # `_system_prompt` and passed to thread_start when supported.
+    convo: list[tuple[str, str]] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
             continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for entry in content:
-                if not isinstance(entry, dict):
-                    continue
-                if entry.get("type") == "text":
-                    parts.append(str(entry.get("text") or ""))
-                elif entry.get("type") == "image_url":
-                    url = (entry.get("image_url") or {}).get("url") or ""
-                    parts.append(f"[image: {url[:80]}]" if url else "[image]")
-                elif entry.get("type") == "input_document":
-                    name = entry.get("filename") or "document"
-                    parts.append(f"[document: {name}]")
-            return "\n".join(p for p in parts if p)
-    return ""
+        text = _stringify_content(msg.get("content"))
+        if text:
+            convo.append((role, text))
+
+    if not convo:
+        return ""
+
+    # Trivial case: a single user turn — pass it through unchanged so we
+    # don't perturb single-shot behaviour or test expectations.
+    if len(convo) == 1 and convo[0][0] == "user":
+        return convo[0][1]
+
+    # Multi-turn: render User:/Assistant: blocks then prompt the model.
+    lines: list[str] = []
+    for role, text in convo:
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"{label}: {text}")
+    # If the last turn is from the user (the common case), append an
+    # empty Assistant cue so Codex picks up from the right side.
+    if convo[-1][0] == "user":
+        lines.append("Assistant:")
+    return "\n\n".join(lines)
 
 
 def _system_prompt(messages: list[dict[str, Any]]) -> str:
@@ -217,20 +415,63 @@ def _chunk_usage(
     return f"data: {json.dumps(payload)}"
 
 
+# Event types Codex emits that carry the assistant's natural-language
+# answer (or its stream-time deltas). Other event types -- command
+# execution, file edits, tool calls, plan steps -- have their own
+# `delta` fields that the OpenAI Chat Completions surface must NOT
+# render as visible assistant text or local stdout / paths would leak
+# into the chat reply.
+_ANSWER_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "message.delta",
+        "message.completed",
+        "assistant.message.delta",
+        "assistant.message.completed",
+        "thread.message.delta",
+        "thread.message.completed",
+        "text_delta",
+        "completed",
+        # Some SDK revs use a bare "message" / "delta" wrapper without
+        # qualifying the role; we accept those too because the legacy
+        # tests rely on the shape.
+        "message",
+        "delta",
+    }
+)
+
+
 def _coerce_text(payload: Any) -> str:
     """Pull text out of a Codex streaming event or result.
 
-    The SDK shape isn't pinned across versions: events expose ``delta``
-    or ``text`` or ``content`` depending on whether the model is in
-    plan / answer / tool-use mode. Be defensive -- read whichever
-    field is present and fall back to ``str()`` so we never crash
-    while translating.
+    Only events whose ``type`` is in `_ANSWER_EVENT_TYPES` (or have no
+    ``type`` field at all, i.e. raw text containers) are translated to
+    visible text. Tool / command / plan deltas are dropped so local
+    stdout, file paths, or tool-call arguments never flow into the
+    Chat Completions content stream.
+
+    Both dict-shaped events (tests + some pre-release SDKs) AND
+    object-shaped events (the real upstream SDK's typed notification
+    classes) are gated -- if the payload exposes a `type` attribute
+    or key whose value is not in the answer-event allow-list, we
+    return the empty string regardless of whether `.delta` or `.text`
+    is present. Round 6 reviewer caught the object-shape gap: the
+    upstream SDK can emit `item/commandExecution/outputDelta`,
+    `item/fileChange/outputDelta`, etc. as typed objects, all of
+    which carry `.delta` strings containing local stdout, patches,
+    or tool arguments. Without the object-side filter those strings
+    would have flowed straight into visible assistant text.
     """
     if payload is None:
         return ""
     if isinstance(payload, str):
         return payload
     if isinstance(payload, dict):
+        # If the dict carries a typed event tag, gate on it: only
+        # answer-bearing types contribute visible text. Untyped dicts
+        # (legacy / raw text wrappers) fall through to the field walk.
+        ev_type = payload.get("type")
+        if isinstance(ev_type, str) and ev_type not in _ANSWER_EVENT_TYPES:
+            return ""
         for key in ("delta", "text", "content", "message", "final_response"):
             if key in payload:
                 value = _coerce_text(payload[key])
@@ -239,6 +480,33 @@ def _coerce_text(payload: Any) -> str:
         return ""
     if isinstance(payload, list):
         return "".join(_coerce_text(item) for item in payload)
+    # Object path: gate on `payload.type` if present, AND on the class
+    # name as a fallback (the upstream SDK uses class names like
+    # `AgentMessageDeltaNotification` / `CommandExecutionOutputDelta`
+    # so a denylist-by-substring catches typed payloads that lack a
+    # `type` attribute).
+    ev_type_obj = getattr(payload, "type", None)
+    if isinstance(ev_type_obj, str) and ev_type_obj not in _ANSWER_EVENT_TYPES:
+        return ""
+    cls_name = payload.__class__.__name__
+    # Allow only class names that contain "Message" or "Delta" without
+    # also containing a tool / command / plan / file marker.
+    cls_lower = cls_name.lower()
+    if any(
+        marker in cls_lower
+        for marker in (
+            "command",
+            "exec",
+            "file",
+            "patch",
+            "plan",
+            "tool",
+            "reason",
+            "stdout",
+            "stderr",
+        )
+    ):
+        return ""
     text_attr = getattr(payload, "text", None)
     if isinstance(text_attr, str):
         return text_attr
@@ -251,46 +519,337 @@ def _coerce_text(payload: Any) -> str:
     return ""
 
 
+def _completed_agent_message_text(payload: Any) -> str:
+    """Return the assistant text from an ``ItemCompletedNotification``.
+
+    The canonical openai_codex SDK sometimes finishes a turn without
+    emitting any ``message.delta`` events: the final answer arrives
+    only as ``ItemCompletedNotification(item=AgentMessage(text=...))``
+    at the end of the stream. Without recognising that shape,
+    ``_stream_thread_run`` would loop through the stream, see no
+    ``delta`` text, and return an empty Chat Completions response.
+
+    Returns the empty string for any other event shape so the caller
+    can ignore it. Matches by class name + structural shape so the
+    function works on both real upstream events and the dict / fake
+    shapes the tests use.
+    """
+    if payload is None:
+        return ""
+
+    # Dict shape: tests + some pre-release SDK revs.
+    if isinstance(payload, dict):
+        if payload.get("type") not in (
+            "ItemCompletedNotification",
+            "item.completed",
+            "thread.item.completed",
+        ):
+            return ""
+        item = payload.get("item")
+        # The upstream model wraps the item in a discriminated-union
+        # `root` field; some pre-release shapes drop the wrapper. Look
+        # both ways.
+        if isinstance(item, dict):
+            inner = item.get("root", item)
+            if not isinstance(inner, dict):
+                return ""
+            if inner.get("type") not in ("agentMessage", "agent_message"):
+                return ""
+            text = inner.get("text")
+            return text if isinstance(text, str) else ""
+        return ""
+
+    # Object shape: upstream events with `.item.root.text`.
+    if payload.__class__.__name__ not in (
+        "ItemCompletedNotification",
+        "ThreadItemCompletedNotification",
+    ):
+        return ""
+    item = getattr(payload, "item", None)
+    item = getattr(item, "root", item)
+    if getattr(item, "type", None) not in ("agentMessage", "agent_message"):
+        return ""
+    text = getattr(item, "text", None)
+    return text if isinstance(text, str) else ""
+
+
 async def _stream_thread_run(
     thread: Any,
     prompt: str,
 ) -> AsyncGenerator[str, None]:
     """Yield raw text chunks from a Codex thread.
 
-    Prefers ``thread.run_streaming(prompt)`` because that's what the
-    docs surface for token-by-token delivery. When the installed SDK
-    doesn't have that helper, fall back to ``await thread.run(prompt)``
-    and yield the full text once -- this still works end-to-end, just
-    without streaming feedback in the UI.
+    Tries three SDK surfaces in order:
+
+    1. ``thread.turn(prompt).stream()`` -- the canonical streaming path
+       on the upstream ``openai_codex`` SDK (see
+       ``openai/codex/sdk/python/src/openai_codex/api.py``: AsyncThread.turn
+       returns an AsyncTurnHandle whose ``.stream()`` yields events).
+    2. ``thread.run_streaming(prompt)`` -- a legacy helper exposed by
+       some earlier SDK pre-releases. Kept for forward-compat.
+    3. ``await thread.run(prompt)`` -- the always-supported buffered
+       path. Used when neither streaming helper resolves and as the
+       final fallback.
+
+    Cross-turn side-effect protection: once any chunk has been emitted
+    via a streaming helper, we never fall through to the buffered
+    ``thread.run(prompt)`` path -- a partial-stream failure would
+    otherwise re-execute the same Codex turn and duplicate side
+    effects (file writes, shell commands, etc.). The buffered path
+    runs only when streaming helpers produced zero output.
+
+    Empty-delta protection: the canonical SDK can complete a turn
+    successfully without emitting any ``message.delta`` events --
+    the final text arrives only as an ``ItemCompletedNotification``
+    whose ``item`` is an ``agentMessage``. We collect those during the
+    stream loop and emit the last one if no deltas came through, so
+    Studio never returns an empty answer for a successful turn.
     """
+    emitted_any = False
+
+    # 1. Canonical: thread.turn(prompt).stream()
+    turn_factory = getattr(thread, "turn", None)
+    if turn_factory is not None:
+        agent_message_texts: list[str] = []
+        try:
+            turn_handle = turn_factory(prompt)
+            if asyncio.iscoroutine(turn_handle):
+                turn_handle = await turn_handle
+            stream_fn = getattr(turn_handle, "stream", None)
+            if stream_fn is not None:
+                stream_obj = stream_fn()
+                if asyncio.iscoroutine(stream_obj):
+                    stream_obj = await stream_obj
+                async for event in stream_obj:
+                    payload = getattr(event, "payload", event)
+                    text = _coerce_text(payload)
+                    if text:
+                        emitted_any = True
+                        yield text
+                    else:
+                        final_text = _completed_agent_message_text(payload)
+                        if final_text:
+                            agent_message_texts.append(final_text)
+                if not emitted_any and agent_message_texts:
+                    # The stream completed cleanly but only via a final
+                    # ItemCompletedNotification -- emit the last agent
+                    # message text so the chat reply is not blank.
+                    yield agent_message_texts[-1]
+                    emitted_any = True
+                return
+        except Exception as exc:
+            logger.warning(
+                "codex_provider.turn_stream_failed_fallback",
+                exc_type = type(exc).__name__,
+                error = str(exc),
+                emitted_any = emitted_any,
+            )
+            if emitted_any:
+                # The Codex turn already ran far enough to emit text;
+                # do not re-execute via run() or run_streaming() -- the
+                # side-effects (commands / writes) would replay.
+                return
+
+    # 2. Legacy: thread.run_streaming(prompt)
     run_streaming = getattr(thread, "run_streaming", None)
     if run_streaming is not None:
         try:
             stream_obj = run_streaming(prompt)
-            # The SDK may return either an async iterator directly or a
-            # coroutine that resolves to one. Handle both shapes so a
-            # future SDK rev doesn't silently fall off the streaming
-            # path.
             if asyncio.iscoroutine(stream_obj):
                 stream_obj = await stream_obj
             async for event in stream_obj:
                 text = _coerce_text(event)
                 if text:
+                    emitted_any = True
                     yield text
             return
         except Exception as exc:
             logger.warning(
                 "codex_provider.run_streaming_failed_fallback",
+                exc_type = type(exc).__name__,
                 error = str(exc),
+                emitted_any = emitted_any,
             )
-            # Intentional fallthrough to the non-streaming path so a
-            # broken streaming helper doesn't take the whole turn down.
+            if emitted_any:
+                return
 
-    # Non-streaming fallback: await the full TurnResult, emit one chunk.
+    # 3. Buffered fallback: await the full TurnResult, emit one chunk.
+    # Only reached when no streaming helper emitted anything, so this
+    # is the first (and only) execution of the turn.
     result = await thread.run(prompt)
-    text = _coerce_text(result) or getattr(result, "final_response", "") or str(result)
+    text = _buffered_result_text(result)
     if text:
         yield text
+
+
+def _buffered_result_text(result: Any) -> str:
+    """Extract assistant text from a buffered ``TurnResult``.
+
+    The upstream SDK documents ``TurnResult.final_response`` as
+    nullable -- a turn that performs only tool work and completes
+    without a final assistant message will set it to ``None``. The
+    previous ``... or str(result)`` fallback then sent a Python
+    object repr (``TurnResult(...)``) into the chat, which surfaced
+    as visible garbage to the user. Returning the empty string for
+    that case lets the OpenAI-shape stream finish cleanly with no
+    extra content chunk -- the usage / stop / [DONE] frames still
+    fire, and the chat UI simply shows no assistant text rather
+    than a misleading object dump.
+    """
+    text = _coerce_text(result)
+    if text:
+        return text
+    final = getattr(result, "final_response", None)
+    if isinstance(final, str) and final:
+        return final
+    return ""
+
+
+def _safe_thread_safety_kwargs() -> dict[str, Any]:
+    """Return the safe ``approval_mode`` + ``sandbox`` kwargs for thread_start.
+
+    The upstream ``openai_codex.AsyncCodex.thread_start`` defaults
+    ``approval_mode`` to ``ApprovalMode.auto_review`` -- which the SDK
+    docs describe as "automatically execute tools when permission
+    escalations occur, without user intervention" -- and leaves
+    ``sandbox`` as ``None``. Studio drives Codex from a server-side
+    chat request with no per-action UI, so leaving those at the
+    defaults would let a model decide on its own to run shell
+    commands, write files, or hit the network on the operator's
+    machine.
+
+    We pin both to the strictest values the SDK exposes:
+
+    * ``approval_mode = ApprovalMode.deny_all`` -- reject any tool /
+      command request rather than auto-approving it.
+    * ``sandbox = SandboxMode.read_only`` -- the policy that bans
+      file writes and disables network access.
+
+    Probes multiple locations: ``ApprovalMode`` is exported at the
+    top-level ``openai_codex`` package, but ``SandboxMode`` lives in
+    ``openai_codex.generated.v2_all`` (re-exported into
+    ``openai_codex.api``) and is NOT in the top-level __init__.
+    Round 6 reviewer caught this -- looking only at the top-level
+    module returned ``{}``, silently degrading to the auto_review
+    default on the canonical SDK install.
+
+    Returns an empty dict only when the installed SDK is so different
+    that neither path resolves -- the caller then issues a
+    structured warning and proceeds. Failing closed (refusing to
+    run) on a future SDK rev would brick users for no security gain
+    -- the auto_review default is upstream's choice, not a Studio
+    regression.
+    """
+    sdk_mod = sys.modules.get("openai_codex") or sys.modules.get("codex_app_server")
+    if sdk_mod is None:
+        return {}
+
+    # ApprovalMode: top-level export on canonical SDK.
+    approval_mode_cls = getattr(sdk_mod, "ApprovalMode", None)
+
+    # SandboxMode: try top-level, then `.api`, then `.generated.v2_all`.
+    # We do not eagerly import these submodules because the SDK may
+    # not expose them and we do not want to crash the request on an
+    # ImportError. importlib.import_module gives us a typed failure.
+    sandbox_mode_cls = getattr(sdk_mod, "SandboxMode", None)
+    if sandbox_mode_cls is None:
+        for sub in ("api", "generated.v2_all"):
+            mod_name = getattr(sdk_mod, "__name__", "")
+            if not mod_name:
+                continue
+            try:
+                submod = importlib.import_module(f"{mod_name}.{sub}")
+            except Exception:
+                continue
+            sandbox_mode_cls = getattr(submod, "SandboxMode", None)
+            if sandbox_mode_cls is not None:
+                break
+
+    if approval_mode_cls is None or sandbox_mode_cls is None:
+        return {}
+    deny_all = getattr(approval_mode_cls, "deny_all", None)
+    read_only = getattr(sandbox_mode_cls, "read_only", None)
+    if deny_all is None or read_only is None:
+        return {}
+    return {"approval_mode": deny_all, "sandbox": read_only}
+
+
+async def _start_thread_with_system(
+    codex: Any,
+    model: str,
+    system: str,
+    prompt: str,
+) -> tuple[Any, str]:
+    """Start a Codex thread carrying the system prompt and safe defaults.
+
+    Upstream ``openai_codex.AsyncCodex.thread_start`` accepts the system
+    prompt under the kwarg ``base_instructions``. Some pre-release / alias
+    SDK revisions historically used ``system`` instead. We try the
+    canonical kwarg first, then the legacy one, then drop both and
+    prepend the system text to the user prompt so the model still sees
+    it. The returned (thread, prompt) tuple lets the caller use the
+    possibly-rewritten prompt.
+
+    We always pin ``approval_mode`` to ``deny_all`` and ``sandbox`` to
+    ``read_only`` when the SDK exposes them (see
+    ``_safe_thread_safety_kwargs``) -- the upstream defaults would let
+    a model decide on its own to execute shell commands or write to
+    the operator's filesystem, which is not appropriate for a
+    server-side chat surface with no per-action approval UI. If the
+    installed SDK rev cannot expose those enums we fail closed by
+    default (raise ``CodexUnavailableError``) rather than silently
+    falling through to upstream's ``auto_review`` default. Power
+    users on a dev install can set ``UNSLOTH_CODEX_ALLOW_UNSAFE_DEFAULTS=1``
+    to override -- the variable name is deliberately long and explicit
+    so it does not creep into production environments by accident.
+    """
+    import os as _os
+
+    safety_kwargs = _safe_thread_safety_kwargs()
+    if not safety_kwargs:
+        allow_unsafe = _os.environ.get(
+            "UNSLOTH_CODEX_ALLOW_UNSAFE_DEFAULTS", ""
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if not allow_unsafe:
+            # Fail closed: the user sees a clear 503 with a typed
+            # error rather than discovering after the fact that
+            # Codex ran with auto_review approvals.
+            raise CodexUnavailableError(
+                "Installed openai_codex SDK does not expose ApprovalMode "
+                "/ SandboxMode, so Studio cannot pin the safe deny_all / "
+                "read_only defaults required for a server-side chat "
+                "surface. Upgrade openai_codex to a build that exports "
+                "those enums, or set "
+                "UNSLOTH_CODEX_ALLOW_UNSAFE_DEFAULTS=1 to opt in to the "
+                "SDK's auto_review default on a trusted dev host."
+            )
+        logger.warning(
+            "codex_provider.safety_kwargs_unavailable_override",
+            note = (
+                "UNSLOTH_CODEX_ALLOW_UNSAFE_DEFAULTS is set; Codex "
+                "threads will use the SDK auto_review default with no "
+                "explicit sandbox. This should only be enabled on a "
+                "trusted dev host."
+            ),
+        )
+    base_kwargs: dict[str, Any] = {"model": model, **safety_kwargs}
+
+    if not system:
+        thread = await codex.thread_start(**base_kwargs)
+        return thread, prompt
+
+    for kw_name in ("base_instructions", "system"):
+        try:
+            thread = await codex.thread_start(**base_kwargs, **{kw_name: system})
+            return thread, prompt
+        except TypeError:
+            continue
+        except Exception:
+            raise
+    # Last-resort fallback: inline the system text in the user prompt so
+    # the role intent reaches Codex even on an SDK with no kwarg for it.
+    thread = await codex.thread_start(**base_kwargs)
+    return thread, f"{system}\n\n{prompt}"
 
 
 async def _stream_codex_single(
@@ -304,31 +863,22 @@ async def _stream_codex_single(
     async_codex_cls = getattr(sdk, "AsyncCodex", None)
     if async_codex_cls is None:
         raise CodexUnavailableError(
-            "codex_app_server is installed but AsyncCodex is missing -- "
-            "upgrade the SDK."
+            "Codex SDK is installed but AsyncCodex is missing -- " "upgrade the SDK."
         )
 
     completion_text_chars = 0
 
-    async with async_codex_cls() as codex:
+    async with _open_async_codex(async_codex_cls) as codex:
         # ``thread_start`` accepts a model id; system prompts are
         # passed when supported by the SDK rev (older revs ignore the
-        # extra kwarg). Be tolerant about kwargs that may not exist.
-        thread_kwargs: dict[str, Any] = {"model": model}
-        if system:
-            # Try the canonical kwargs first; the SDK shapes vary
-            # across versions and we'd rather accept the system prompt
-            # being dropped than crash on a missing kwarg.
-            thread_kwargs["system"] = system
-        try:
-            thread = await codex.thread_start(**thread_kwargs)
-        except TypeError:
-            # Older SDK: only the ``model`` kwarg is accepted. Drop
-            # extras and retry; the system prompt then lives only in
-            # the prompt itself (we prepend it below).
-            thread = await codex.thread_start(model = model)
-            if system:
-                prompt = f"{system}\n\n{prompt}"
+        # Upstream `openai_codex.AsyncCodex.thread_start` uses
+        # `base_instructions` for the system prompt (see
+        # openai/codex/sdk/python/src/openai_codex/api.py). Older / alias
+        # SDKs may use `system` instead. We try `base_instructions`
+        # first, then `system`, and finally fall through to inlining
+        # the system text in the user prompt if neither kwarg is
+        # accepted.
+        thread, prompt = await _start_thread_with_system(codex, model, system, prompt)
         async for text in _stream_thread_run(thread, prompt):
             completion_text_chars += len(text)
             yield _chunk_text(completion_id, text)
@@ -443,17 +993,10 @@ async def _stream_codex_parallel(
         try:
             sdk = _import_codex()
             async_codex_cls = getattr(sdk, "AsyncCodex")
-            async with async_codex_cls() as codex:
-                thread_kwargs: dict[str, Any] = {"model": model}
-                if system:
-                    thread_kwargs["system"] = system
-                inner_prompt = prompt
-                try:
-                    thread = await codex.thread_start(**thread_kwargs)
-                except TypeError:
-                    thread = await codex.thread_start(model = model)
-                    if system:
-                        inner_prompt = f"{system}\n\n{prompt}"
+            async with _open_async_codex(async_codex_cls) as codex:
+                thread, inner_prompt = await _start_thread_with_system(
+                    codex, model, system, prompt
+                )
                 async for text in _stream_thread_run(thread, inner_prompt):
                     collected.append(text)
                     await queue.put(
@@ -467,10 +1010,23 @@ async def _stream_codex_parallel(
                         )
                     )
         except Exception as exc:
+            # CodeQL: never echo str(exc) in client-facing SSE events.
+            # Log full reason server-side; surface a generic message plus
+            # an exception_type discriminator so the UI can still group
+            # failures without leaking file paths / env vars from the
+            # SDK traceback. CodexUnavailableError is the one exception
+            # we DO surface verbatim because it's a user-actionable
+            # install hint with no sensitive content.
             logger.warning(
                 "codex_provider.parallel_tab_failed",
                 tab_id = tab_id,
+                exc_type = type(exc).__name__,
                 error = str(exc),
+            )
+            public_error = (
+                str(exc)
+                if isinstance(exc, CodexUnavailableError)
+                else "Codex tab failed"
             )
             await queue.put(
                 _chunk_tool_event(
@@ -478,7 +1034,8 @@ async def _stream_codex_parallel(
                     {
                         "type": "codex_tab_error",
                         "tab_id": tab_id,
-                        "error": str(exc),
+                        "error": public_error,
+                        "exception_type": type(exc).__name__,
                     },
                 )
             )
@@ -520,20 +1077,46 @@ async def _stream_codex_parallel(
 
     drain_task = asyncio.create_task(_drain_when_done())
 
-    while True:
-        line = await queue.get()
-        if line is None:
-            break
-        yield line
-
-    # Drain finished; per_tab_texts is now populated by the helper
-    # coroutine above. We already shielded individual errors as
-    # ``codex_tab_error`` events, so nothing should leak here -- but
-    # log defensively in case a worker future itself raised.
-    await drain_task
+    cancelled = False
+    try:
+        while True:
+            line = await queue.get()
+            if line is None:
+                break
+            yield line
+    except (asyncio.CancelledError, GeneratorExit):
+        cancelled = True
+        # Cancel every in-flight worker so the Codex SDK calls release
+        # their quota / sockets instead of running to completion against
+        # a disconnected client. Workers shield themselves in `_worker`'s
+        # own try/finally so we just signal cancellation and bail.
+        for w in workers:
+            if not w.done():
+                w.cancel()
+        drain_task.cancel()
+        # Best-effort gather so cancellation propagates and we don't
+        # leave coroutines hanging on the event loop.
+        try:
+            await asyncio.gather(*workers, drain_task, return_exceptions = True)
+        except Exception:
+            pass
+        raise
+    finally:
+        # If we exited normally, drain_task is already done (it put None
+        # on the queue right after gather). On the cancellation path we
+        # already gathered above, so this await is a fast no-op.
+        if not cancelled:
+            try:
+                await drain_task
+            except Exception as exc:
+                logger.warning(
+                    "codex_provider.parallel_drain_failed",
+                    error = str(exc),
+                )
 
     synthesis_text = await _run_codex_synthesis(
         model = model,
+        system = system,
         prompt = prompt,
         tab_outputs = per_tab_texts,
     )
@@ -555,10 +1138,22 @@ async def _stream_codex_parallel(
     if synthesis_text:
         yield _chunk_text(completion_id, synthesis_text)
 
+    # Account for ALL Codex turns the fan-out spawned: N parallel
+    # workers each ran the same prompt (≈ N * prompt_tokens), and the
+    # synthesis turn re-sent the prompt plus every tab's output. Without
+    # this the cost / context display is off by the fan-out factor and
+    # users see a wildly inaccurate token count for the request.
+    total_tab_completion_chars = sum(len(t) for t in per_tab_texts)
+    synthesis_prompt_chars = sum(len(t) for t in per_tab_texts) + len(prompt)
     yield _chunk_usage(
         completion_id,
-        prompt_tokens = max(1, len(prompt) // 4),
-        completion_tokens = max(0, len(synthesis_text) // 4),
+        # n worker prompts (same prompt each) + synthesis prompt (which
+        # carries the prompt again plus every tab's output).
+        prompt_tokens = max(1, (n * len(prompt) + synthesis_prompt_chars) // 4),
+        # Sum of every worker's output plus the synthesis text.
+        completion_tokens = max(
+            0, (total_tab_completion_chars + len(synthesis_text)) // 4
+        ),
     )
     yield _chunk_stop(completion_id)
 
@@ -566,13 +1161,16 @@ async def _stream_codex_parallel(
 async def _run_codex_synthesis(
     *,
     model: str,
+    system: str,
     prompt: str,
     tab_outputs: list[str],
 ) -> str:
     """Run one extra Codex call that consumes the N per-tab outputs and
     returns a unified synthesis. Returns the empty string on failure --
     the caller already surfaced the per-tab outputs so an empty
-    synthesis is recoverable.
+    synthesis is recoverable. The Studio system prompt is forwarded to
+    the synthesis thread so style/role instructions like "Always answer
+    in Spanish" survive the fan-out.
     """
     if not tab_outputs:
         return ""
@@ -592,15 +1190,15 @@ async def _run_codex_synthesis(
     try:
         sdk = _import_codex()
         async_codex_cls = getattr(sdk, "AsyncCodex")
-        async with async_codex_cls() as codex:
-            try:
-                thread = await codex.thread_start(model = model)
-            except TypeError:
-                thread = await codex.thread_start()
+        async with _open_async_codex(async_codex_cls) as codex:
+            thread, synthesis_prompt = await _start_thread_with_system(
+                codex, model, system, synthesis_prompt
+            )
             result = await thread.run(synthesis_prompt)
-        return (
-            _coerce_text(result) or getattr(result, "final_response", "") or str(result)
-        )
+        # Use the same buffered extraction as `_stream_thread_run` so a
+        # synthesis turn whose `final_response` is None returns an empty
+        # string instead of a `TurnResult(...)` Python object repr.
+        return _buffered_result_text(result)
     except Exception as exc:
         logger.warning("codex_provider.synthesis_failed", error = str(exc))
         return ""
@@ -610,45 +1208,115 @@ async def _run_codex_synthesis(
 
 
 async def stream_codex_device_login() -> AsyncGenerator[dict[str, Any], None]:
-    """Run ``codex auth login --device-auth`` and yield progress events.
+    """Run ``codex login --device-auth`` and yield progress events.
 
     Yields dicts (NOT SSE lines) that the route layer wraps in SSE.
     First event is always ``{type: "device_url", url: "..."}`` once we
-    detect a verification URL in the CLI output. Subsequent events
-    forward CLI stdout/stderr line-by-line as ``{type: "log", line: ...}``
-    so the UI can show progress. A final ``{type: "done", ok: bool}``
+    detect a verification URL in the CLI output. The one-time code is
+    emitted as ``{type: "device_code", code: "ABCD-EFGH"}`` so the UI
+    can show it next to the URL (upstream CLI prints both on separate
+    lines). Subsequent CLI stdout/stderr lines forward as
+    ``{type: "log", line: ...}``. A final ``{type: "done", ok: bool}``
     signals completion.
 
-    The URL extraction matches the CLI's actual output shape (the CLI
-    prints something like ``Open https://auth.openai.com/device/...``
-    on the device-auth path). We scan every line for the first
-    https:// URL containing ``device``; that has historically been
-    stable across CLI versions.
+    Subprocess lifecycle: started in its own process group via
+    ``start_new_session=True`` (Unix) so cancellation can SIGTERM the
+    whole group and reach any child processes the codex CLI spawns.
+    On Windows a fallback uses ``CREATE_NEW_PROCESS_GROUP``. When the
+    SSE consumer disconnects, the generator's cleanup terminates the
+    process group within a 5s budget then SIGKILL's as a last resort,
+    so the CLI never lingers consuming a device-auth session.
+
+    URL handling: upstream ``codex login --device-auth`` prints the URL
+    wrapped in ANSI escape sequences (``\x1b[34m...\x1b[0m``). We strip
+    ANSI before regex matching so the URL emitted to the frontend is
+    clean and clickable.
     """
+    import os
     import re
+    import signal
 
     cli_path = "codex"
-    args = ["auth", "login", "--device-auth"]
+    args = ["login", "--device-auth"]
+
+    # Detach the subprocess into a new process group on Unix so we can
+    # SIGTERM the whole group on cancel without sending it to ourselves.
+    # On Windows, ``creationflags=CREATE_NEW_PROCESS_GROUP`` (0x200) gives
+    # an equivalent isolation for ``proc.send_signal(signal.CTRL_BREAK_EVENT)``.
+    # Env is scrubbed to the codex safe-list (see codex_availability) so a
+    # shimmed `codex` on PATH does not inherit other provider secrets.
+    from core.inference.codex_availability import _codex_subprocess_env
+
+    spawn_kwargs: dict[str, Any] = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.STDOUT,
+        "env": _codex_subprocess_env(),
+    }
+    if os.name == "posix":
+        spawn_kwargs["start_new_session"] = True
+    elif os.name == "nt":
+        spawn_kwargs["creationflags"] = 0x00000200  # CREATE_NEW_PROCESS_GROUP
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            cli_path,
-            *args,
-            stdout = asyncio.subprocess.PIPE,
-            stderr = asyncio.subprocess.STDOUT,
-        )
+        proc = await asyncio.create_subprocess_exec(cli_path, *args, **spawn_kwargs)
     except FileNotFoundError:
         yield {"type": "error", "message": "codex CLI not found on PATH"}
         yield {"type": "done", "ok": False}
         return
     except Exception as exc:
-        yield {"type": "error", "message": str(exc)}
+        logger.warning("codex_provider.login_spawn_failed", error = str(exc))
+        yield {"type": "error", "message": "Failed to start codex CLI"}
         yield {"type": "done", "ok": False}
         return
 
-    url_re = re.compile(r"https?://\S*device\S*", re.IGNORECASE)
+    # Strip ANSI control sequences (the upstream login command wraps the
+    # URL and code in `\x1b[34m...\x1b[0m`) before pattern matching.
+    ansi_re = re.compile(r"\x1b\[[0-9;]*[mGKHF]")
+    # Accept any plausible device-auth URL the CLI prints. Upstream has
+    # used `.../codex/device`, `chatgpt.com/activate`, and
+    # `auth.openai.com/device`; rather than guess we look for any
+    # https URL whose path mentions `device`, `activate`, or `verify`.
+    url_re = re.compile(
+        r"https?://[^\s\x1b]+/(?:codex/)?(?:device|activate|verify)\b[^\s\x1b]*",
+        re.IGNORECASE,
+    )
+    # One-time-code format from upstream device_code_auth.rs: 4 chars,
+    # dash, 4 chars. Pattern is tolerant of any uppercase alphanum.
+    code_re = re.compile(r"\b([A-Z0-9]{4}-[A-Z0-9]{4})\b")
+
     url_emitted = False
+    code_emitted = False
     rc: int = -1
+    cancelled = False
+
+    # Allow-list of substrings the upstream `codex login --device-auth`
+    # command prints during the normal flow. Anything outside this list
+    # is treated as opaque and not forwarded to the browser, so a
+    # shimmed binary that prints auth JSON, refresh tokens, local
+    # config paths, or unexpected stderr cannot leak that content
+    # through Studio's authenticated SSE stream. The URL and code
+    # extracted above are emitted separately as `device_url` /
+    # `device_code` events and are not affected by this filter.
+    safe_log_patterns: tuple[str, ...] = (
+        "welcome to codex",
+        "initializing",
+        "open this",
+        "open:",
+        "open the",
+        "verification",
+        "enter this one-time code",
+        "enter the code",
+        "waiting",
+        "successfully logged in",
+        "logged in",
+        "signed in",
+        "browser opened",
+        "press ctrl",
+    )
+
+    def _safe_to_forward(text: str) -> bool:
+        lowered = text.lower()
+        return any(pat in lowered for pat in safe_log_patterns)
 
     try:
         assert proc.stdout is not None
@@ -656,16 +1324,61 @@ async def stream_codex_device_login() -> AsyncGenerator[dict[str, Any], None]:
             line_b = await proc.stdout.readline()
             if not line_b:
                 break
-            line = line_b.decode("utf-8", errors = "replace").rstrip()
+            raw = line_b.decode("utf-8", errors = "replace").rstrip()
+            line = ansi_re.sub("", raw)
             if not url_emitted:
                 match = url_re.search(line)
                 if match:
                     yield {"type": "device_url", "url": match.group(0)}
                     url_emitted = True
-            yield {"type": "log", "line": line}
+            if not code_emitted:
+                cm = code_re.search(line)
+                if cm:
+                    yield {"type": "device_code", "code": cm.group(1)}
+                    code_emitted = True
+            # Only forward lines from the known safe vocabulary; opaque
+            # output (file paths, tokens, JSON, error messages) stays in
+            # backend logs only.
+            if line and _safe_to_forward(line):
+                yield {"type": "log", "line": line}
+    except (asyncio.CancelledError, GeneratorExit):
+        cancelled = True
+        raise
     finally:
+        # Tear the subprocess down even on cancellation. Unix: kill the
+        # whole process group; Windows: ``CTRL_BREAK_EVENT`` followed by
+        # ``terminate()``. Bounded wait so cleanup never deadlocks the
+        # SSE close path.
+        if proc.returncode is None:
+            try:
+                if os.name == "posix":
+                    try:
+                        pgid = os.getpgid(proc.pid)
+                        os.killpg(pgid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    try:
+                        proc.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+                    except Exception:
+                        proc.terminate()
+            except Exception as exc:
+                logger.warning(
+                    "codex_provider.login_terminate_failed",
+                    error = str(exc),
+                )
+            try:
+                await asyncio.wait_for(proc.wait(), timeout = 5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                try:
+                    proc.kill()
+                    await asyncio.wait_for(proc.wait(), timeout = 2.0)
+                except Exception:
+                    pass
         try:
-            rc = await proc.wait()
+            rc = proc.returncode if proc.returncode is not None else -1
         except Exception:
             rc = -1
+    if cancelled:
+        return
     yield {"type": "done", "ok": rc == 0, "return_code": rc}

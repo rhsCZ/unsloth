@@ -19,7 +19,7 @@
  * probe and flip back into the "ready" state automatically.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   streamCodexDeviceLogin,
@@ -37,6 +37,7 @@ export function CodexLoginButton({ onLoggedIn }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [deviceUrl, setDeviceUrl] = useState<string | null>(null);
+  const [deviceCode, setDeviceCode] = useState<string | null>(null);
   // Track the active stream's abort controller so a second click
   // (or an unmount) tears the SSE reader down cleanly. Without this
   // the long-running login subprocess would keep streaming into a
@@ -49,9 +50,15 @@ export function CodexLoginButton({ onLoggedIn }: Props) {
     setError(null);
     setLogs([]);
     setDeviceUrl(null);
+    setDeviceCode(null);
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
+    // Track the specific backend error inside the closure so the
+    // generic fallback message does not overwrite it: setError is
+    // async and reading `error` after `setError(event.message)` would
+    // still see the stale pre-stream value.
+    let lastStreamError: string | null = null;
     try {
       let lastOk: boolean | undefined;
       for await (const event of streamCodexDeviceLogin(
@@ -59,17 +66,20 @@ export function CodexLoginButton({ onLoggedIn }: Props) {
       ) as AsyncGenerator<CodexLoginEvent>) {
         if (event.type === "device_url" && event.url) {
           setDeviceUrl(event.url);
-          // Open the verification page eagerly so the user doesn't
-          // have to copy the URL out of the log surface. ``noopener``
-          // prevents the auth-tab from controlling the Studio window.
-          try {
-            window.open(event.url, "_blank", "noopener,noreferrer");
-          } catch {
-            // Ignore -- the URL is still visible in the log.
-          }
+          // Do NOT auto-open the verification URL with `window.open`.
+          // The click handler that started this flow has already
+          // awaited an SSE event, so the call is no longer in a user
+          // gesture and most browsers (Firefox, Safari, Chrome with
+          // strict popup settings) will silently block the popup.
+          // The URL is rendered as a prominent link below so the
+          // user can open it in one click without depending on the
+          // popup heuristic.
+        } else if (event.type === "device_code" && event.code) {
+          setDeviceCode(event.code);
         } else if (event.type === "log" && event.line) {
           setLogs((prev) => [...prev, event.line as string]);
         } else if (event.type === "error" && event.message) {
+          lastStreamError = event.message;
           setError(event.message);
         } else if (event.type === "done") {
           lastOk = event.ok;
@@ -77,7 +87,7 @@ export function CodexLoginButton({ onLoggedIn }: Props) {
       }
       if (lastOk) {
         onLoggedIn?.();
-      } else if (!error) {
+      } else if (!lastStreamError) {
         setError("Codex login did not complete -- see log for details.");
       }
     } catch (exc) {
@@ -87,7 +97,16 @@ export function CodexLoginButton({ onLoggedIn }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [busy, error, onLoggedIn]);
+  }, [busy, onLoggedIn]);
+
+  // Abort the in-flight SSE stream on unmount so the underlying
+  // `codex login --device-auth` subprocess does not keep streaming
+  // (and consuming a device-auth session) after the dialog closes.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   return (
     <div className="space-y-2">
@@ -95,16 +114,34 @@ export function CodexLoginButton({ onLoggedIn }: Props) {
         {busy ? "Signing in to Codex…" : "Sign in to Codex"}
       </Button>
       {deviceUrl && (
-        <p className="text-xs text-muted-foreground">
-          Verification URL:{" "}
-          <a
-            href={deviceUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
+        <div className="space-y-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            asChild
           >
-            {deviceUrl}
-          </a>
+            {/* Opens via a real anchor click so popup blockers cannot
+                interfere -- the popup-block path used to apply when
+                `window.open` was triggered from inside an awaited
+                event handler instead of a fresh user gesture. */}
+            <a
+              href={deviceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open verification page
+            </a>
+          </Button>
+          <p className="break-all text-[11px] text-muted-foreground">
+            Or copy: {deviceUrl}
+          </p>
+        </div>
+      )}
+      {deviceCode && (
+        <p className="text-xs text-muted-foreground">
+          One-time code:{" "}
+          <code className="font-mono text-foreground">{deviceCode}</code>
         </p>
       )}
       {error && (

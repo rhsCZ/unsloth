@@ -60,6 +60,36 @@ export interface ProviderCapabilities {
   parallelToolCalls: boolean;
 }
 
+/**
+ * Per-provider stop-sequence max count. Resolved by
+ * `getProviderStopMax(providerType)`. Mirrors the backend's
+ * `provider_info.stop_max` for the same provider type.
+ *   - openai:     4   (Chat Completions hard cap; Responses drops stop)
+ *   - anthropic:  16  (client-side guard; docs publish no max)
+ *   - kimi:       5   (https://platform.kimi.ai/docs/api/chat)
+ *   - deepseek:   16  (https://api-docs.deepseek.com/api/create-chat-completion)
+ *   - mistral:    16  (no documented max; widen to permissive default)
+ *   - gemini:     4   (https://ai.google.dev/gemini-api/docs/openai inherits OAI cap)
+ *   - openrouter: 4   (normalises to OpenAI's chat schema)
+ *   - default:    16  (covers ollama, vllm, llama.cpp, custom)
+ */
+const PROVIDER_STOP_MAX: Record<string, number> = {
+  openai: 4,
+  anthropic: 16,
+  kimi: 5,
+  deepseek: 16,
+  mistral: 16,
+  gemini: 4,
+  openrouter: 4,
+};
+
+export function getProviderStopMax(
+  providerType: string | null | undefined,
+): number {
+  if (!providerType) return 16; // local backends
+  return PROVIDER_STOP_MAX[providerType] ?? 16;
+}
+
 export type ServiceTierOption =
   | "auto"
   | "default"
@@ -69,15 +99,13 @@ export type ServiceTierOption =
   | "standard_only";
 
 /**
- * Legal `service_tier` values per provider, sourced from each upstream's
- * docs. Anthropic exposes only `auto` and `standard_only`. OpenAI in
- * Studio is routed through `/v1/responses` (not Chat Completions); the
- * live `openai-python` SDK declares the Responses-side service_tier as
- * `Literal["auto", "default", "flex", "scale", "priority"]`
- * (`src/openai/types/responses/response_create_params.py`), so the
- * full set is exposed. Other providers fall through to a permissive
- * `auto` / `default` pair so the picker stays usable for
- * OpenAI-compat backends.
+ * Legal `service_tier` values per provider. Anthropic exposes only
+ * `auto` and `standard_only`. OpenAI in Studio is routed through
+ * `/v1/responses`, which the live docs list as
+ * `auto|default|flex|priority`; `scale` is excluded here even though
+ * the openai-python SDK type happens to include it. Other providers
+ * fall through to a permissive `auto` / `default` pair so the picker
+ * stays usable for OpenAI-compat backends.
  */
 export function getServiceTierOptions(
   providerType: string | null | undefined,
@@ -86,7 +114,7 @@ export function getServiceTierOptions(
     return ["auto", "standard_only"] as const;
   }
   if (providerType === "openai") {
-    return ["auto", "default", "flex", "scale", "priority"] as const;
+    return ["auto", "default", "flex", "priority"] as const;
   }
   return ["auto", "default"] as const;
 }
@@ -412,12 +440,15 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
   },
   mistral: OPENAI_COMPAT_BASE,
   gemini: OPENAI_COMPAT_BASE,
-  // Kimi k2.5/k2.6 are reasoning-class — the API locks temperature and
-  // top_p to fixed defaults and 400s on any other value:
+  // Kimi k2.5/k2.6 are reasoning-class; the API locks temperature
+  // and top_p to fixed defaults and 400s on any other value:
   //   "invalid temperature: only 1 is allowed for this model".
   // Hide both sliders so the user is not offered knobs the model
   // silently overrides. Backend additionally strips these fields via
-  // PROVIDER_REGISTRY['kimi']['body_omit'].
+  // PROVIDER_REGISTRY['kimi']['body_omit']. seed and parallel_tool_
+  // calls are not in Kimi's documented Chat Completion schema
+  // (https://platform.kimi.ai/docs/api/chat); hide them so users are
+  // not offered controls that the upstream may silently drop or 400.
   kimi: {
     temperature: false,
     topP: false,
@@ -425,11 +456,14 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     minP: false,
     repetitionPenalty: false,
     presencePenalty: true,
-    frequencyPenalty: true,
-    seed: true,
+    // K2.5/K2.6 lock sampling the same way temperature/top_p are
+    // locked; reviewers report non-default frequency_penalty 400s
+    // upstream, so hide the slider and strip the field in body_omit.
+    frequencyPenalty: false,
+    seed: false,
     stop: true,
     serviceTier: false,
-    parallelToolCalls: true,
+    parallelToolCalls: false,
   },
   // DeepSeek deprecated presence/frequency penalty in their current docs.
   deepseek: {

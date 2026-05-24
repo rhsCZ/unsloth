@@ -88,6 +88,11 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             r"gemini-3\.1-pro-preview|gemini-pro-latest|"
             r"gemini-flash-latest|gemini-flash-lite-latest)$"
         ),
+        # Gemini's OpenAI-compatible layer inherits OpenAI's 4-stop cap
+        # (https://ai.google.dev/gemini-api/docs/openai). Without the
+        # explicit cap the default 16 leaks through and the upstream
+        # silently drops the overflow.
+        "stop_max": 4,
     },
     "deepseek": {
         "display_name": "DeepSeek",
@@ -131,6 +136,9 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             r"mistral-(?:large|medium|small|tiny)-latest|"
             r"mistral-vibe-cli-latest)$"
         ),
+        # Mistral renames OpenAI's `seed` to `random_seed` on
+        # /v1/chat/completions. https://docs.mistral.ai/api/endpoint/chat
+        "seed_field": "random_seed",
     },
     "kimi": {
         "display_name": "Kimi",
@@ -154,11 +162,24 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "auth_prefix": "Bearer ",
         "notes": "Moonshot API key. China: use base URL https://api.moonshot.cn/v1",
         "model_id_allowlist": re.compile(r"^kimi-k2\.[56]$"),
-        # Both k2.6 and k2.5 are reasoning-class. The API rejects custom
-        # sampling: "invalid temperature: only 1 is allowed for this model"
-        # (and the same shape for top_p). Strip both fields from the
-        # outbound body so the server falls back to its required defaults.
-        "body_omit": ("temperature", "top_p"),
+        # Both k2.6 and k2.5 are reasoning-class. The API rejects
+        # custom sampling ("invalid temperature: only 1 is allowed for
+        # this model", same for top_p). frequency_penalty follows the
+        # same lock on those models. seed and parallel_tool_calls are
+        # not in Kimi's documented chat schema; strip them too so a
+        # stale client or direct API caller cannot smuggle them onto
+        # the wire and 400 the request.
+        "body_omit": (
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "seed",
+            "parallel_tool_calls",
+        ),
+        # Kimi accepts at most 5 stop strings (each <= 32 bytes) per
+        # https://platform.kimi.ai/docs/api/chat
+        "stop_max": 5,
+        "stop_max_bytes": 32,
     },
     "qwen": {
         "display_name": "Qwen",
@@ -305,6 +326,9 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         },
         "notes": "Unified gateway to 300+ models across all major providers. HTTP-Referer and X-Title headers sent for attribution.",
         "model_list_mode": "curated",
+        # OpenRouter normalises to OpenAI's chat schema and inherits
+        # the 4-entry stop cap.
+        "stop_max": 4,
     },
 }
 

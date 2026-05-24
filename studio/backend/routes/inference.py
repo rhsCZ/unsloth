@@ -427,9 +427,17 @@ _TOOL_ACTION_NUDGE = (
     " Do NOT output code blocks -- use the python tool instead."
 )
 
-# Regex for stripping leaked tool-call XML from assistant messages/stream
+# Strip tool-call XML the speculative buffer in core/inference/llama_cpp.py
+# split across the visible/DRAIN boundary. Four leak shapes:
+#   1. well-formed `<tool_call>...</tool_call>` / `<function=...>...</function>`
+#   2. orphan opening to EOF (close was DRAINED)
+#   3. bare orphan close (open was DRAINED)
+#   4. tail-only `</parameter>` (outer close truncated by EOS); anchored to
+#      `\Z` so mid-text `<parameter>` in user code samples survives.
 _TOOL_XML_RE = _re.compile(
-    r"<tool_call>.*?</tool_call>|<function=\w+>.*?</function>",
+    r"<(?:tool_call|function=\w+)>.*?(?:</(?:tool_call|function)>|\Z)"
+    r"|</(?:tool_call|function)>"
+    r"|</parameter>\s*\Z",
     _re.DOTALL,
 )
 logger = get_logger(__name__)
@@ -2474,6 +2482,13 @@ async def openai_chat_completions(
                     max_tokens = payload.max_tokens,
                     repetition_penalty = payload.repetition_penalty,
                     presence_penalty = payload.presence_penalty,
+                    stop = payload.stop
+                    if isinstance(payload.stop, list)
+                    else (
+                        [payload.stop]
+                        if isinstance(payload.stop, str) and payload.stop
+                        else None
+                    ),
                     cancel_event = cancel_event,
                     enable_thinking = payload.enable_thinking,
                     reasoning_effort = payload.reasoning_effort,
@@ -2488,6 +2503,9 @@ async def openai_chat_completions(
                     if payload.tool_call_timeout is not None
                     else 300,
                     session_id = payload.session_id,
+                    frequency_penalty = payload.frequency_penalty,
+                    seed = payload.seed,
+                    parallel_tool_calls = payload.parallel_tool_calls,
                 )
 
             _tool_sentinel = object()
@@ -2653,10 +2671,20 @@ async def openai_chat_completions(
                 max_tokens = payload.max_tokens,
                 repetition_penalty = payload.repetition_penalty,
                 presence_penalty = payload.presence_penalty,
+                stop = payload.stop
+                if isinstance(payload.stop, list)
+                else (
+                    [payload.stop]
+                    if isinstance(payload.stop, str) and payload.stop
+                    else None
+                ),
                 cancel_event = cancel_event,
                 enable_thinking = payload.enable_thinking,
                 reasoning_effort = payload.reasoning_effort,
                 preserve_thinking = payload.preserve_thinking,
+                frequency_penalty = payload.frequency_penalty,
+                seed = payload.seed,
+                parallel_tool_calls = payload.parallel_tool_calls,
             )
 
         _gguf_sentinel = object()
@@ -3780,12 +3808,9 @@ def _build_chat_request(
         chat_kwargs["top_p"] = payload.top_p
     if payload.max_output_tokens is not None:
         chat_kwargs["max_tokens"] = payload.max_output_tokens
-    # `parallel_tool_calls` is now a first-class field on
-    # ChatCompletionRequest (PR #5711) and the OpenAI-compat
-    # passthrough builder forwards it. Translate it here so a Responses
-    # API caller (e.g. OpenAI Codex SDK) that sets
-    # `parallel_tool_calls=false` actually sees the preference reach
-    # llama-server instead of getting silently dropped at the bridge.
+    # parallel_tool_calls is first-class on ChatCompletionRequest and
+    # the OpenAI-compat passthrough builder forwards it. Translate it
+    # so a Responses API caller's preference reaches llama-server.
     if payload.parallel_tool_calls is not None:
         chat_kwargs["parallel_tool_calls"] = payload.parallel_tool_calls
 
@@ -4444,6 +4469,16 @@ async def anthropic_messages(
     if openai_tool_choice is None:
         openai_tool_choice = "auto"
 
+    # Anthropic nests `disable_parallel_tool_use` inside `tool_choice`
+    # (https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use).
+    # Flip it into the OpenAI-shaped `parallel_tool_calls` toggle so the
+    # local GGUF tool loop respects clients that opt out of parallel calls.
+    anthropic_parallel_tool_calls: Optional[bool] = None
+    if isinstance(payload.tool_choice, dict):
+        _disable = payload.tool_choice.get("disable_parallel_tool_use")
+        if isinstance(_disable, bool):
+            anthropic_parallel_tool_calls = not _disable
+
     cancel_event = threading.Event()
 
     # ── Tool routing ──────────────────────────────────────────
@@ -4540,6 +4575,7 @@ async def anthropic_messages(
                 repetition_penalty = repetition_penalty,
                 presence_penalty = presence_penalty,
                 tool_choice = openai_tool_choice,
+                parallel_tool_calls = anthropic_parallel_tool_calls,
                 session_id = payload.session_id,
                 cancel_id = payload.cancel_id,
             )
@@ -4558,6 +4594,7 @@ async def anthropic_messages(
             repetition_penalty = repetition_penalty,
             presence_penalty = presence_penalty,
             tool_choice = openai_tool_choice,
+            parallel_tool_calls = anthropic_parallel_tool_calls,
         )
 
     if server_tools:
@@ -4649,6 +4686,7 @@ async def anthropic_messages(
                 auto_heal_tool_calls = True,
                 tool_call_timeout = 300,
                 session_id = payload.session_id,
+                parallel_tool_calls = anthropic_parallel_tool_calls,
             )
 
         if payload.stream:
@@ -4934,12 +4972,9 @@ def _build_passthrough_payload(
         body["repeat_penalty"] = repetition_penalty
     if presence_penalty is not None:
         body["presence_penalty"] = presence_penalty
-    # New per-provider sampling extensions (PR #5711). llama-server's
-    # /v1/chat/completions endpoint accepts the standard OpenAI fields,
-    # so forward them straight through. parallel_tool_calls is a no-op
-    # on llama-server today (the upstream always dispatches sequentially)
-    # but forward it anyway so a future llama-server release that
-    # implements it picks up the user's preference automatically.
+    # llama-server's /v1/chat/completions accepts the standard OpenAI
+    # fields. parallel_tool_calls is a no-op on llama-server today but
+    # is forwarded so a future release picks it up automatically.
     if frequency_penalty is not None:
         body["frequency_penalty"] = frequency_penalty
     if seed is not None:
@@ -4977,6 +5012,7 @@ async def _anthropic_passthrough_stream(
     repetition_penalty = None,
     presence_penalty = None,
     tool_choice = "auto",
+    parallel_tool_calls = None,
     session_id = None,
     cancel_id = None,
 ):
@@ -4995,6 +5031,7 @@ async def _anthropic_passthrough_stream(
         min_p = min_p,
         repetition_penalty = repetition_penalty,
         presence_penalty = presence_penalty,
+        parallel_tool_calls = parallel_tool_calls,
         tool_choice = tool_choice,
         backend_ctx = llama_backend.context_length,
     )
@@ -5129,6 +5166,7 @@ async def _anthropic_passthrough_non_streaming(
     repetition_penalty = None,
     presence_penalty = None,
     tool_choice = "auto",
+    parallel_tool_calls = None,
 ):
     """Non-streaming client-side pass-through."""
     target_url = f"{llama_backend.base_url}/v1/chat/completions"
@@ -5144,6 +5182,7 @@ async def _anthropic_passthrough_non_streaming(
         min_p = min_p,
         repetition_penalty = repetition_penalty,
         presence_penalty = presence_penalty,
+        parallel_tool_calls = parallel_tool_calls,
         tool_choice = tool_choice,
         backend_ctx = llama_backend.context_length,
     )

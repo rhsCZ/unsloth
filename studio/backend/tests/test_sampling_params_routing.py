@@ -171,11 +171,10 @@ def test_anthropic_disable_parallel_tool_use_nested_under_tool_choice(monkeypatc
     """
     captured = _install_mock(monkeypatch)
     body = _drive_anthropic_with_tools(captured, parallel_tool_calls = False)
-    # Top-level fields must not carry the flag — Anthropic 400s otherwise.
+    # Top-level placement is rejected with 400.
     assert "disable_parallel_tool_use" not in body, body
     assert "parallel_tool_calls" not in body, body
-    # The flag is set on tool_choice. Default type is "auto" when the
-    # user didn't pick one explicitly.
+    # Flag lives on tool_choice; default type is "auto".
     tc = body.get("tool_choice")
     assert isinstance(tc, dict), body
     assert tc.get("disable_parallel_tool_use") is True, body
@@ -183,9 +182,8 @@ def test_anthropic_disable_parallel_tool_use_nested_under_tool_choice(monkeypatc
 
 
 def test_anthropic_disable_parallel_tool_use_skipped_without_tools(monkeypatch):
-    """Without any tools defined, `disable_parallel_tool_use` is a
-    no-op upstream — skip it so the request body stays minimal and the
-    flag never lands at top level either.
+    """Without tools the flag is a no-op upstream; keep the body
+    minimal and never emit it at top level either.
     """
     captured = _install_mock(monkeypatch)
     body = _drive_anthropic(captured, parallel_tool_calls = False)
@@ -271,7 +269,64 @@ def test_openai_compat_forwards_frequency_penalty(monkeypatch):
 def test_openai_compat_forwards_seed(monkeypatch):
     captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
     body = _drive_openai_compat(captured, seed = 12345)
-    assert body.get("seed") == 12345, body
+    # Default OAI-compat provider (mistral here) renames seed to
+    # random_seed via provider registry's seed_field.
+    assert body.get("random_seed") == 12345, body
+    assert "seed" not in body, body
+
+
+def test_openai_compat_seed_field_default_is_seed(monkeypatch):
+    """Providers without a seed_field override get the OpenAI default."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "deepseek",
+            base_url = "https://api.deepseek.com/v1",
+            api_key = "ds-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "deepseek-chat",
+            temperature = 0.5,
+            top_p = 0.9,
+            max_tokens = 64,
+            seed = 7,
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert body.get("seed") == 7, body
+    assert "random_seed" not in body, body
+
+
+def test_openai_compat_deepseek_stop_cap_is_16(monkeypatch):
+    """DeepSeek docs allow up to 16 stop sequences; the previous
+    4-cap silently truncated valid configs."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "deepseek",
+            base_url = "https://api.deepseek.com/v1",
+            api_key = "ds-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "deepseek-chat",
+            temperature = 0.5,
+            top_p = 0.9,
+            max_tokens = 64,
+            stop = [f"S{i}" for i in range(20)],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert len(body.get("stop", [])) == 16, body
 
 
 def test_openai_compat_forwards_stop_array(monkeypatch):
@@ -282,14 +337,18 @@ def test_openai_compat_forwards_stop_array(monkeypatch):
     assert "stop_sequences" not in body, body
 
 
-def test_openai_compat_truncates_stop_to_four(monkeypatch):
+def test_openai_compat_truncates_stop_to_default_cap(monkeypatch):
+    """Default OAI-compat cap is 16 (DeepSeek and Mistral both accept
+    that many); only OpenAI Chat has a tighter 4-entry hard limit."""
     captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
-    body = _drive_openai_compat(captured, stop = ["a", "b", "c", "d", "e", "f"])
-    assert body.get("stop") == ["a", "b", "c", "d"], body
+    body = _drive_openai_compat(captured, stop = [f"s{i}" for i in range(20)])
+    assert len(body.get("stop", [])) == 16, body
+    assert body["stop"][0] == "s0"
+    assert body["stop"][-1] == "s15"
 
 
 def test_openai_compat_stop_dedup_and_drop_empties(monkeypatch):
-    """Duplicates and empties shouldn't eat into the 4-entry cap."""
+    """Duplicates and empties shouldn't eat into the cap."""
     captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
     body = _drive_openai_compat(captured, stop = ["END", "", "END", "DONE", "FIN", "END"])
     assert body.get("stop") == ["END", "DONE", "FIN"], body
@@ -301,10 +360,16 @@ def test_openai_compat_empty_stop_omitted(monkeypatch):
     assert "stop" not in body, body
 
 
-def test_openai_compat_forwards_service_tier(monkeypatch):
+def test_openai_compat_drops_service_tier_by_default(monkeypatch):
+    """Generic OAI-compat providers (mistral, deepseek, openrouter, ...)
+    do not document a `service_tier` field. The dispatcher must drop
+    it unless the provider registry explicitly opts in with
+    `accepts_service_tier=True`; otherwise a stale frontend could
+    smuggle Anthropic/OpenAI-Responses-only values onto unrelated
+    providers."""
     captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
     body = _drive_openai_compat(captured, service_tier = "flex")
-    assert body.get("service_tier") == "flex", body
+    assert "service_tier" not in body, body
 
 
 def test_openai_compat_forwards_parallel_tool_calls(monkeypatch):
@@ -385,22 +450,23 @@ def test_openai_responses_forwards_service_tier(monkeypatch):
     assert body.get("service_tier") == "priority", body
 
 
-@pytest.mark.parametrize("value", ["auto", "default", "flex", "scale", "priority"])
-def test_openai_responses_accepts_full_service_tier_enum(monkeypatch, value):
-    """`openai-python`'s ResponseCreateParams declares
-    `Optional[Literal["auto", "default", "flex", "scale", "priority"]]`
-    so every value in that set forwards untouched."""
+@pytest.mark.parametrize("value", ["auto", "default", "flex", "priority"])
+def test_openai_responses_forwards_documented_service_tiers(monkeypatch, value):
+    """The live OpenAI Responses API reference lists `service_tier` as
+    `auto|default|flex|priority` for /v1/responses. Pin that every value
+    in the documented enum forwards untouched."""
     captured = _install_mock(monkeypatch, sse_payload = _responses_done_payload())
     body = _drive_openai_responses(captured, service_tier = value)
     assert body.get("service_tier") == value, body
 
 
-def test_openai_responses_drops_anthropic_only_service_tier(monkeypatch):
-    """`standard_only` is Anthropic-only and Responses has never accepted
-    it. Drop it client-side so a stale frontend cannot 400 the request.
-    """
+@pytest.mark.parametrize("bogus", ["scale", "standard_only", "bogus", ""])
+def test_openai_responses_drops_undocumented_service_tier(monkeypatch, bogus):
+    """`scale` and `standard_only` are not in the documented Responses
+    request enum; drop them client-side so a stale frontend never
+    sends an upstream-rejected value."""
     captured = _install_mock(monkeypatch, sse_payload = _responses_done_payload())
-    body = _drive_openai_responses(captured, service_tier = "standard_only")
+    body = _drive_openai_responses(captured, service_tier = bogus)
     assert "service_tier" not in body, body
 
 
@@ -477,12 +543,10 @@ def test_chat_completion_request_clamps_frequency_penalty_range():
 
 
 def test_kimi_web_search_bypass_forwards_new_sampling_fields(monkeypatch):
-    """The Kimi `enabled_tools=["web_search"]` path takes an early
-    return into `_stream_kimi_web_search` BEFORE the default OAI-compat
-    body builder runs. PR #5711 added new sampling fields to the
-    default builder; this test pins that the web-search bypass also
-    forwards them so Kimi-with-search and Kimi-without-search behave
-    consistently."""
+    """The Kimi $web_search path takes an early return into
+    `_stream_kimi_web_search` before the default OAI-compat body
+    builder runs; forwarding here keeps Kimi-with-search and
+    Kimi-without-search in lockstep."""
     captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
 
     async def run():
@@ -509,24 +573,191 @@ def test_kimi_web_search_bypass_forwards_new_sampling_fields(monkeypatch):
 
     _drive(run())
     body = captured["body"]
-    assert body.get("frequency_penalty") == 1.25, body
-    assert body.get("seed") == 7, body
-    assert body.get("stop") == ["END"], body
-    assert body.get("parallel_tool_calls") is False, body
-    assert body.get("presence_penalty") == 0.5, body
-    # body_omit still strips temperature / top_p for Kimi.
+    # Kimi locks these: stripped by body_omit in providers.py.
+    assert "frequency_penalty" not in body, body
     assert "temperature" not in body, body
     assert "top_p" not in body, body
+    assert "seed" not in body, body
+    assert "parallel_tool_calls" not in body, body
+    # Knobs not on Kimi's drop-list forward through the bypass.
+    assert body.get("stop") == ["END"], body
+    assert body.get("presence_penalty") == 0.5, body
+
+
+def test_kimi_web_search_uses_kimi_stop_cap_5(monkeypatch):
+    """Kimi documents a 5-stop max; the web-search bypass must honour
+    `provider_info["stop_max"]` rather than the OpenAI 4-cap or the
+    permissive default."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "kimi",
+            base_url = "https://api.moonshot.ai/v1",
+            api_key = "kimi-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "kimi-k2.6",
+            temperature = 1.0,
+            top_p = 1.0,
+            max_tokens = 256,
+            enabled_tools = ["web_search"],
+            stop = [f"S{i}" for i in range(10)],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert len(body.get("stop", [])) == 5, body
+    assert body["stop"] == ["S0", "S1", "S2", "S3", "S4"], body
+
+
+def test_openrouter_stop_cap_is_4(monkeypatch):
+    """OpenRouter normalises to OpenAI's chat schema and inherits the
+    4-entry stop cap; the default 16-cap is too permissive for it."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "openrouter",
+            base_url = "https://openrouter.ai/api/v1",
+            api_key = "or-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "openai/gpt-4o",
+            temperature = 0.5,
+            top_p = 0.9,
+            max_tokens = 64,
+            stop = [f"S{i}" for i in range(10)],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert len(body.get("stop", [])) == 4, body
+    assert body["stop"] == ["S0", "S1", "S2", "S3"], body
+
+
+def test_gemini_stop_cap_is_4(monkeypatch):
+    """Gemini's OpenAI-compatible layer inherits OpenAI's 4-entry stop
+    cap (https://ai.google.dev/gemini-api/docs/openai). The default
+    16-cap is too permissive."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "gemini",
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key = "gemini-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "gemini-3.1-pro-preview",
+            temperature = 0.5,
+            top_p = 0.9,
+            max_tokens = 64,
+            stop = [f"S{i}" for i in range(10)],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert len(body.get("stop", [])) == 4, body
+    assert body["stop"] == ["S0", "S1", "S2", "S3"], body
+
+
+def test_kimi_drops_stop_strings_over_32_bytes(monkeypatch):
+    """Kimi limits each stop string to <= 32 bytes per
+    https://platform.kimi.ai/docs/api/chat. Drop overlong entries
+    client-side so a stale UI cannot 400 the request."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "kimi",
+            base_url = "https://api.moonshot.ai/v1",
+            api_key = "kimi-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "kimi-k2.6",
+            temperature = 1.0,
+            top_p = 1.0,
+            max_tokens = 256,
+            stop = ["END", "x" * 33, "DONE"],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert body.get("stop") == ["END", "DONE"], body
+
+
+def test_kimi_web_search_drops_stop_strings_over_32_bytes(monkeypatch):
+    """Same byte cap applies to the Kimi web-search bypass."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "kimi",
+            base_url = "https://api.moonshot.ai/v1",
+            api_key = "kimi-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "kimi-k2.6",
+            temperature = 1.0,
+            top_p = 1.0,
+            max_tokens = 256,
+            enabled_tools = ["web_search"],
+            stop = ["END", "x" * 40, "DONE"],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert body.get("stop") == ["END", "DONE"], body
+
+
+def test_kimi_default_path_uses_kimi_stop_cap_5(monkeypatch):
+    """The normal Kimi path must also honour the documented 5-cap."""
+    captured = _install_mock(monkeypatch, sse_payload = _oai_done_payload())
+
+    async def run():
+        client = ExternalProviderClient(
+            provider_type = "kimi",
+            base_url = "https://api.moonshot.ai/v1",
+            api_key = "kimi-test",
+        )
+        async for _ in client.stream_chat_completion(
+            messages = [{"role": "user", "content": "hi"}],
+            model = "kimi-k2.6",
+            temperature = 1.0,
+            top_p = 1.0,
+            max_tokens = 256,
+            stop = [f"S{i}" for i in range(10)],
+        ):
+            pass
+        await client.close()
+
+    _drive(run())
+    body = captured["body"]
+    assert len(body.get("stop", [])) == 5, body
 
 
 # ── Local OpenAI passthrough forwards new sampling fields ──────────────
 
 
 def test_local_openai_passthrough_forwards_new_sampling_fields():
-    """Round 1 reviewers (10/20) flagged that
-    `_build_openai_passthrough_body` dropped frequency_penalty / seed /
-    parallel_tool_calls when forwarding to llama-server. Pin the
-    extended contract."""
+    """`_build_openai_passthrough_body` forwards frequency_penalty,
+    seed, stop, and parallel_tool_calls to llama-server."""
     from models.inference import ChatCompletionRequest
     from routes.inference import _build_openai_passthrough_body
 
@@ -551,11 +782,9 @@ def test_local_openai_passthrough_forwards_new_sampling_fields():
 
 
 def test_responses_to_chat_bridge_preserves_parallel_tool_calls():
-    """Round 3 reviewers flagged that `_build_chat_request` (the
-    /v1/responses → /v1/chat/completions translator) dropped
-    `parallel_tool_calls`, so a Responses-API caller that set
-    `parallel_tool_calls=false` never saw the flag reach llama-server.
-    Pin the translation."""
+    """`_build_chat_request` (the /v1/responses to /v1/chat/completions
+    translator) must forward parallel_tool_calls so a Responses-API
+    caller's preference reaches llama-server."""
     from models.inference import ChatMessage, ResponsesRequest
     from routes.inference import _build_chat_request, _build_openai_passthrough_body
 
@@ -575,9 +804,9 @@ def test_responses_to_chat_bridge_preserves_parallel_tool_calls():
 
 
 def test_responses_to_chat_bridge_omits_unset_parallel_tool_calls():
-    """Unset `parallel_tool_calls` (None) must not appear on the
-    translated body — the upstream default is `true` everywhere, so
-    forwarding `parallel_tool_calls=None` would over-specify."""
+    """Unset parallel_tool_calls (None) must not appear on the
+    translated body; the upstream default is true everywhere so
+    forwarding None would over-specify."""
     from models.inference import ChatMessage, ResponsesRequest
     from routes.inference import _build_chat_request, _build_openai_passthrough_body
 
@@ -596,9 +825,9 @@ def test_responses_to_chat_bridge_omits_unset_parallel_tool_calls():
 
 
 def test_chat_settings_payload_accepts_new_sampling_keys():
-    """Round 1 reviewers flagged that `ChatSettingsPayload.extra="forbid"`
-    with the old field list 422'd every settings save that contained
-    any of the new keys. Pin that the new keys round-trip."""
+    """ChatSettingsPayload has extra="forbid" so the new keys must be
+    listed explicitly; otherwise every settings save with any of them
+    422s. Pin the round-trip."""
     from routes.chat_history import ChatSettingsPayload
 
     parsed = ChatSettingsPayload.model_validate(
@@ -619,3 +848,86 @@ def test_chat_settings_payload_accepts_new_sampling_keys():
     assert ip.stop == ["END"]
     assert ip.serviceTier == "standard_only"
     assert ip.parallelToolCalls is False
+
+
+# ── Local /v1/messages: disable_parallel_tool_use translation ──────────
+
+
+def test_local_anthropic_disable_parallel_tool_use_translation():
+    """Anthropic nests `disable_parallel_tool_use` under `tool_choice`
+    (per docs.claude.com). The local /v1/messages GGUF tool path must
+    invert it into OpenAI-shaped `parallel_tool_calls` so third-party
+    clients (Claude SDK, LiteLLM in passthrough mode) opt out of
+    parallel calls successfully even on the local model."""
+
+    # Mirror the extraction logic in routes/inference.py:anthropic_messages.
+    def _extract(tc):
+        if isinstance(tc, dict):
+            v = tc.get("disable_parallel_tool_use")
+            if isinstance(v, bool):
+                return not v
+        return None
+
+    assert _extract({"type": "auto", "disable_parallel_tool_use": True}) is False
+    assert _extract({"type": "any", "disable_parallel_tool_use": False}) is True
+    assert _extract({"type": "auto"}) is None
+    assert _extract(None) is None
+    assert _extract("auto") is None  # string form (non-dict) → no opinion
+    assert _extract({"type": "auto", "disable_parallel_tool_use": "yes"}) is None
+
+
+def test_gguf_tool_loop_enforces_parallel_tool_calls_false():
+    """llama.cpp's `parallel_tool_calls` flag is not enforced by every
+    jinja template (see ggml-org/llama.cpp#22043), so when the caller
+    opted out we must cap tool_calls to the first entry before the
+    agentic loop executes them. The cap is a single-line slice in
+    `generate_chat_completion_with_tools`; pin the contract."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "core/inference/llama_cpp.py"
+    text = src.read_text()
+    assert "if parallel_tool_calls is False and tool_calls" in text, (
+        "GGUF tool loop must enforce parallel_tool_calls=False by "
+        "truncating tool_calls before assistant_msg is built; that "
+        "is the client-side guarantee llama-server's flag does not "
+        "give us. See routes/inference.py and chat-adapter.ts for "
+        "the wire-side forwarding of the same flag."
+    )
+    assert "tool_calls = tool_calls[:1]" in text
+
+
+def test_local_anthropic_passthrough_helpers_accept_parallel_tool_calls():
+    """The Anthropic-compat client-tool passthrough helpers
+    (`_anthropic_passthrough_stream` /
+    `_anthropic_passthrough_non_streaming`) must accept and forward
+    `parallel_tool_calls` through `_build_passthrough_payload` so the
+    `disable_parallel_tool_use` translation works on the client-tool
+    branch the same way it does on the server-tool loop. Verified by
+    introspecting the signatures and confirming the field reaches the
+    body via the shared payload builder."""
+    import inspect
+
+    from routes import inference as route_mod
+
+    for fn in (
+        route_mod._anthropic_passthrough_stream,
+        route_mod._anthropic_passthrough_non_streaming,
+    ):
+        params = inspect.signature(fn).parameters
+        assert "parallel_tool_calls" in params, (
+            f"{fn.__name__} must accept parallel_tool_calls so the "
+            "Anthropic disable_parallel_tool_use translation reaches "
+            "the llama-server body on the client-tool branch"
+        )
+
+    body = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = [{"type": "function", "function": {"name": "x"}}],
+        temperature = 0.7,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+        parallel_tool_calls = False,
+    )
+    assert body.get("parallel_tool_calls") is False, body

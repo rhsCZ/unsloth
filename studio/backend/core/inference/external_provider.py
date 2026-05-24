@@ -27,6 +27,50 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
+def _normalize_stop_for_provider(
+    stop: Optional[Union[str, list[str]]],
+    provider_info: dict[str, Any],
+) -> Optional[Union[str, list[str]]]:
+    """Apply per-provider stop_max / stop_max_bytes caps and dedup.
+
+    Returns None when nothing survives the filter so callers can omit
+    the field. Single strings are returned verbatim when they fit.
+    """
+    if not stop:
+        return None
+
+    stop_max = int(provider_info.get("stop_max", 16))
+    stop_max_bytes_raw = provider_info.get("stop_max_bytes")
+    stop_max_bytes = int(stop_max_bytes_raw) if stop_max_bytes_raw is not None else None
+
+    def allowed(s: str) -> bool:
+        if not s:
+            return False
+        if stop_max_bytes is not None and len(s.encode("utf-8")) > stop_max_bytes:
+            logger.warning(
+                "dropping stop sequence longer than %d bytes",
+                stop_max_bytes,
+            )
+            return False
+        return True
+
+    if isinstance(stop, str):
+        return stop if allowed(stop) else None
+    if isinstance(stop, list):
+        sequences = list(
+            dict.fromkeys(s for s in stop if isinstance(s, str) and allowed(s))
+        )
+        if len(sequences) > stop_max:
+            logger.warning(
+                "stop sequences truncated to %d entries (received %d)",
+                stop_max,
+                len(sequences),
+            )
+            sequences = sequences[:stop_max]
+        return sequences or None
+    return None
+
+
 # Claude 4.7 (Opus/Sonnet/Haiku) removed temperature, top_p, and top_k —
 # the API returns 400 "<param> is deprecated for this model" if any of
 # them is set to a non-default value. The "Sampling parameters removed"
@@ -459,51 +503,34 @@ class ExternalProviderClient:
             else:
                 body["max_tokens"] = max_tokens
 
-        # Optional sampling extensions (added in #5XXX). Only forwarded
-        # when the caller passed a value. Each upstream provider that
-        # 400s on the field appears in `body_omit` (see providers.py)
-        # so the registry-driven drop loop below removes them before
-        # the request hits the wire. The Responses path
-        # (_stream_openai_responses) drops these explicitly because it
-        # never reaches this body construction.
+        # Optional sampling extensions. Only forwarded when the caller
+        # passed a value. Per-provider rename / cap is applied via
+        # `seed_field` and `stop_max` on the provider registry below,
+        # and body_omit strips fields the upstream rejects.
+        from core.inference.providers import get_provider_info
+
+        provider_info = get_provider_info(self.provider_type) or {}
         if frequency_penalty is not None:
             body["frequency_penalty"] = frequency_penalty
         if seed is not None:
-            body["seed"] = seed
-        if stop:
-            # OpenAI Chat caps the list at 4 entries. Dedupe + drop
-            # empties first so users entering chips with whitespace or
-            # accidental repeats don't waste budget against the cap or
-            # trip a 400.
-            if isinstance(stop, str):
-                body["stop"] = stop
-            elif isinstance(stop, list):
-                sequences = list(
-                    dict.fromkeys(s for s in stop if isinstance(s, str) and s)
-                )
-                if len(sequences) > 4:
-                    logger.warning(
-                        "stop sequences truncated to 4 entries "
-                        "(received %d, OpenAI's hard cap is 4)",
-                        len(sequences),
-                    )
-                    body["stop"] = sequences[:4]
-                elif sequences:
-                    body["stop"] = sequences
-        if service_tier is not None:
+            # Mistral renames `seed` to `random_seed` on /v1/chat/completions.
+            seed_field = provider_info.get("seed_field", "seed")
+            body[seed_field] = seed
+        normalized_stop = _normalize_stop_for_provider(stop, provider_info)
+        if normalized_stop:
+            body["stop"] = normalized_stop
+        # service_tier is OpenAI Chat-only on the generic OAI-compat
+        # branch; opt-in via `accepts_service_tier=True` on the registry
+        # entry. Anthropic and Responses handle it in their own helpers.
+        if service_tier is not None and provider_info.get(
+            "accepts_service_tier", False
+        ):
             body["service_tier"] = service_tier
         if parallel_tool_calls is not None:
             body["parallel_tool_calls"] = parallel_tool_calls
 
-        # Strip body fields a provider's registry entry declares unusable —
-        # reasoning-class models that lock these to fixed defaults (e.g.
-        # Kimi k2.5/k2.6 only accept temperature=1, top_p=1) 400 otherwise.
-        # The frontend capability map already hides the matching sliders;
-        # this is the matching guard for the pydantic default that the
-        # route layer would otherwise still fill in.
-        from core.inference.providers import get_provider_info
-
-        provider_info = get_provider_info(self.provider_type) or {}
+        # Drop body fields the provider's registry entry locks down
+        # (e.g. Kimi k2.5/k2.6 only accept temperature=1, top_p=1).
         for field in provider_info.get("body_omit", ()):
             body.pop(field, None)
 
@@ -900,48 +927,27 @@ class ExternalProviderClient:
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
 
-        # Forward the new optional sampling extensions (#5711) on the
-        # web-search bypass too. The default OAI-compat body construction
-        # (which adds these) is skipped because this helper returns
-        # early; forwarding here ensures kimi-with-search honours the
-        # same sampling controls as kimi-without-search.
+        # The default OAI-compat body construction is skipped because
+        # this helper returns early. Apply the same provider-aware
+        # sampling / stop logic here so kimi-with-search matches
+        # kimi-without-search.
+        from core.inference.providers import get_provider_info
+
+        provider_info = get_provider_info(self.provider_type) or {}
         if presence_penalty is not None:
             body["presence_penalty"] = presence_penalty
         if frequency_penalty is not None:
             body["frequency_penalty"] = frequency_penalty
         if seed is not None:
-            body["seed"] = seed
-        if stop:
-            # Mirror the default OAI-compat path's stop handling exactly
-            # so Kimi-with-search and Kimi-without-search apply the
-            # same rules — a single string is forwarded verbatim and
-            # lists are deduped + truncated to OpenAI's 4-entry cap.
-            # Earlier the bypass dropped whitespace-only strings here
-            # while the normal path forwarded them, which was an
-            # asymmetric provider-path fix.
-            if isinstance(stop, str):
-                body["stop"] = stop
-            elif isinstance(stop, list):
-                sequences = list(
-                    dict.fromkeys(s for s in stop if isinstance(s, str) and s)
-                )
-                if len(sequences) > 4:
-                    logger.warning(
-                        "stop sequences truncated to 4 entries "
-                        "(received %d, OpenAI's hard cap is 4)",
-                        len(sequences),
-                    )
-                    body["stop"] = sequences[:4]
-                elif sequences:
-                    body["stop"] = sequences
+            seed_field = provider_info.get("seed_field", "seed")
+            body[seed_field] = seed
+        normalized_stop = _normalize_stop_for_provider(stop, provider_info)
+        if normalized_stop:
+            body["stop"] = normalized_stop
         if parallel_tool_calls is not None:
             body["parallel_tool_calls"] = parallel_tool_calls
 
-        # Strip body fields the Kimi registry declares unusable
-        # (temperature/top_p — see body_omit in providers.py).
-        from core.inference.providers import get_provider_info
-
-        provider_info = get_provider_info(self.provider_type) or {}
+        # Drop body fields the provider's registry entry locks down.
         for field in provider_info.get("body_omit", ()):
             body.pop(field, None)
 
@@ -1453,32 +1459,26 @@ class ExternalProviderClient:
             body["top_k"] = top_k
 
         # Optional sampling extensions. Anthropic has no
-        # frequency_penalty / seed / logprobs equivalents, so those are
-        # silently dropped by virtue of not being forwarded from
-        # stream_chat_completion. The two body-level knobs Anthropic
-        # does accept land here:
-        #   stop                  → stop_sequences (renamed, ws-stripped)
-        #   service_tier          → service_tier (auto|standard_only only)
-        # parallel_tool_calls inversion is applied AFTER the tools
-        # wiring below, because Anthropic requires it nested under
-        # tool_choice (top-level placement is rejected with
-        # `extraneous key [disable_parallel_tool_use] is not permitted`).
+        # frequency_penalty / seed / logprobs equivalents so they are
+        # never forwarded here. The two body-level knobs Anthropic
+        # accepts land here:
+        #   stop          -> stop_sequences (renamed, ws-stripped)
+        #   service_tier  -> service_tier (auto|standard_only only)
+        # parallel_tool_calls inversion is applied after the tools
+        # wiring below because Anthropic requires it nested under
+        # tool_choice.
         if stop:
             sequences: list[str]
             if isinstance(stop, str):
                 sequences = [stop] if stop.strip() else []
             else:
-                # Dedupe + drop whitespace-only entries. Anthropic 400s
-                # on any sequence that contains no non-whitespace char:
-                # `stop_sequences: each stop sequence must contain
-                # non-whitespace`. That rejects empty strings, " ", and
-                # — critically — common defaults like "\n" / "\n\n".
-                # The truncation cap below (16) is a client-side guard;
-                # the Anthropic Messages API does not publish a max
-                # array length but every SDK we have inspected treats
-                # 16 as a sane ceiling (Bedrock's hard cap is 8191, so
-                # this only matters when callers paste pathologically
-                # long lists by accident).
+                # Dedupe + drop whitespace-only entries. Anthropic
+                # rejects any sequence with no non-whitespace char
+                # ("stop_sequences: each stop sequence must contain
+                # non-whitespace"), so "", " ", "\n", "\n\n" are all
+                # filtered. The 16-cap is a client-side guard; the
+                # docs do not publish a max, but every SDK treats 16
+                # as a sane ceiling (Bedrock is the outlier at 8191).
                 sequences = list(
                     dict.fromkeys(s for s in stop if isinstance(s, str) and s.strip())
                 )
@@ -1723,15 +1723,11 @@ class ExternalProviderClient:
             if anthropic_code_exec_container_id:
                 body["container"] = anthropic_code_exec_container_id
 
-        # parallel_tool_calls=false → disable_parallel_tool_use=true,
-        # nested under tool_choice (NOT top-level). The Anthropic
-        # Messages API only accepts `disable_parallel_tool_use` as a
-        # property on the `tool_choice` object (ToolChoiceAuto /
-        # ToolChoiceAny / ToolChoiceTool). Top-level placement is
-        # rejected with `extraneous key [disable_parallel_tool_use]
-        # is not permitted`. Without any tools the flag is also a
-        # no-op upstream — skip it to keep the request body minimal.
-        # See
+        # parallel_tool_calls=False maps to disable_parallel_tool_use=
+        # True nested under tool_choice. Top-level placement is
+        # rejected with "extraneous key [disable_parallel_tool_use]
+        # is not permitted". Without tools the flag is a no-op so the
+        # block is skipped to keep the body minimal. See
         #   https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
         if parallel_tool_calls is False and body.get("tools"):
             tc = body.get("tool_choice")
@@ -2831,18 +2827,12 @@ class ExternalProviderClient:
             "input": input_items,
             "stream": True,
         }
-        # Responses accepts the same service_tier enum set as Chat
-        # Completions (auto|default|flex|scale|priority) per the live
-        # `openai-python` SDK
-        # (`src/openai/types/responses/response_create_params.py`
-        # declares `Optional[Literal["auto", "default", "flex",
-        # "scale", "priority"]]`). parallel_tool_calls follows the same
-        # shape (default true). The frontend capability gate
-        # (provider-capabilities.ts) already filters per-provider, so
-        # we just forward whatever value the dispatcher hands us, with
-        # `standard_only` (Anthropic-only) being the one value Responses
-        # has never accepted.
-        if service_tier in ("auto", "default", "flex", "scale", "priority"):
+        # Responses accepts auto|default|flex|priority per the live
+        # docs. The openai-python SDK type happens to include "scale"
+        # too but the public Responses reference does not, so drop it
+        # here to avoid a 400. Scale Tier is still selectable on Chat
+        # Completions backends. parallel_tool_calls default is true.
+        if service_tier in ("auto", "default", "flex", "priority"):
             body["service_tier"] = service_tier
         if parallel_tool_calls is not None:
             body["parallel_tool_calls"] = bool(parallel_tool_calls)

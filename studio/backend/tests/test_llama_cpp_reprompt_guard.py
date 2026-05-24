@@ -749,6 +749,454 @@ def test_artifact_regex_rejects_shorter_commonmark_closing_fence():
         assert _would_reprompt(content), content
 
 
+def test_artifact_regex_accepts_longer_commonmark_closing_fence():
+    """CommonMark allows the closing fence to have MORE delimiters than
+    the opener. A 3-backtick opener with a 4-backtick close, or a
+    3-tilde opener with a 4-tilde close, is still a complete artifact."""
+    samples = [
+        "First, let me show.\n```python\nprint('hi')\n````",
+        "First, let me show.\n````python\nprint('``` inside')\n`````",
+        "First, let me show.\n~~~python\nprint('hi')\n~~~~",
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_reprompts_on_explicit_plan_header_numbered_list():
+    """``Here's my plan`` / ``Here's my approach`` is a strong stand-alone
+    plan signal. The following numbered list is the plan itself, not a
+    final answer, even when no narrow tool-action verb appears."""
+    samples = [
+        "Here's my plan:\n1. Analyze the request.\n2. Draft the answer.",
+        "Here's my plan:\n1. Create the Python file.\n2. Add the game loop.\n3. Test.",
+        "Here's my approach:\n1. Outline.\n2. Write.\n3. Review.",
+        "Here's the plan:\n1. Define the variables.\n2. Return the result.",
+    ]
+    for s in samples:
+        assert _would_reprompt(s), s
+
+
+def test_reprompts_on_numbered_plan_with_python_tool_wording():
+    """``use python (tool) to ...`` / ``use the python tool`` / ``use the
+    search tool`` in a numbered plan still re-prompts."""
+    samples = [
+        "Here's my plan:\n1. Use Python to calculate the answer.\n2. Return.",
+        "First, I'll do this:\n1. Use the python tool to parse the file.\n2. Summarize.",
+        "Here's my plan:\n1. Use the search tool.\n2. Summarize.",
+    ]
+    for s in samples:
+        assert _would_reprompt(s), s
+
+
+def test_no_reprompt_on_lesson_plan_answer_without_explicit_header():
+    """A final answer with a ``Plan:`` heading (no ``Here's my``
+    possessive) and no tool framing must STILL count as an answer.
+    Common cases: lesson plan, workout plan, meal plan."""
+    samples = [
+        (
+            "Plan:\n"
+            "1. Warm up for 5 minutes.\n"
+            "2. Run for 20 minutes.\n"
+            "3. Cool down with stretching."
+        ),
+        (
+            "My weekly plan:\n"
+            "1. Monday: rest.\n"
+            "2. Tuesday: jog.\n"
+            "3. Wednesday: swim."
+        ),
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_reprompts_on_direct_intent_numbered_local_action_plan():
+    """Direct first-person intent (``I'll do this``, ``Let me do this``,
+    etc.) followed by a numbered list of work/tool actions is a plan
+    stall, not a final answer. Even when no narrow lookup verb appears
+    in the items, the model is announcing actions it has not yet
+    taken."""
+    samples = [
+        (
+            "First, I'll do this:\n"
+            "1. Load the uploaded CSV.\n"
+            "2. Compute the total revenue.\n"
+            "3. Return the answer."
+        ),
+        (
+            "Let me do this:\n"
+            "1. Parse the pasted JSON.\n"
+            "2. Calculate the average.\n"
+            "3. Explain the result."
+        ),
+        (
+            "First, I'll create a Python game:\n"
+            "1. Set up pygame.\n"
+            "2. Add the game loop."
+        ),
+        (
+            "First, I'll do these:\n"
+            "1. Create the Python file.\n"
+            "2. Add the game loop.\n"
+            "3. Test it."
+        ),
+    ]
+    for content in samples:
+        assert _would_reprompt(content), content
+
+
+def test_no_reprompt_on_let_me_explain_numbered_answer():
+    """``Let me explain`` / ``Let me show`` followed by a numbered
+    answer must NOT be misclassified as a plan stall. The verb after
+    the intent phrase is not in the work/tool whitelist."""
+    samples = [
+        (
+            "Let me explain in steps:\n"
+            "1. Apples are red.\n"
+            "2. Bananas are yellow.\n"
+            "3. Cherries are red."
+        ),
+        (
+            "Let me show the matches:\n"
+            "1. Maroon 5 - Animals.\n"
+            "2. Hozier - Take Me to Church."
+        ),
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_same_line_open_fence_with_numbered_body_still_reprompts():
+    """An OPEN code fence on the same line as preceding prose ("First,
+    let me write it. ``\\u00e0``text\\n...") still gates the numbered-list
+    fallback. The unclosed-fence helper now uses ``search`` so inline
+    openers are tracked, not just openers at column 0."""
+    content = (
+        "First, let me write it. ```text\n" "1. Install dependencies\n" "2. Run the app"
+    )
+    assert not _has_answer_artifact(content)
+    assert _would_reprompt(content)
+
+
+def test_reprompts_on_first_step_numbered_compute_plan():
+    """Bare ``First, [verb]`` / ``Step N: [verb]`` followed by a numbered
+    list is a plan stall when the verb implies compute / tool work
+    (analyze, parse, calculate, create, etc.). Distinct from
+    ``First, use binary search:`` (verb ``use`` not in whitelist)."""
+    samples = [
+        (
+            "First, analyze the uploaded CSV:\n"
+            "1. Load the rows.\n"
+            "2. Compute the average revenue."
+        ),
+        (
+            "First, parse the pasted JSON:\n"
+            "1. Load the object.\n"
+            "2. Calculate the total."
+        ),
+        (
+            "First, create the Python game:\n"
+            "1. Set up pygame.\n"
+            "2. Add the game loop."
+        ),
+        (
+            "Step 1: analyze the uploaded CSV:\n"
+            "1. Load rows.\n"
+            "2. Compute the total."
+        ),
+        ("I'll look that up:\n" "1. Search the docs.\n" "2. Summarize the result."),
+    ]
+    for content in samples:
+        assert _would_reprompt(content), content
+
+
+def test_reprompts_on_incomplete_html_with_inner_numbered_list():
+    """Partial markup (open <html> with no </html>) plus a numbered
+    list must NOT be treated as a final answer; the markup is still
+    being streamed."""
+    samples = [
+        (
+            "First, I'll draft a page.\n"
+            "<html><body>\n"
+            "1. Section one.\n"
+            "2. Section two.\n"
+        ),
+        ("Let me design a chart.\n" "<svg width='100'>\n" "1. circle.\n" "2. rect."),
+    ]
+    for content in samples:
+        assert not _has_answer_artifact(content), content
+        assert _would_reprompt(content), content
+
+
+def test_complete_html_with_trailing_prose_tag_still_counts():
+    """A complete <html> answer followed by prose that mentions <html>
+    or <svg> tags (explanatory text) stays a complete artifact. The
+    unbalanced-tag count is skipped once a real artifact exists so
+    common explanatory prose does not falsely wipe valid answers."""
+    samples = [
+        "Here is the page:\n<html><body>1</body></html>\nUse the <html> tag for the root.",
+        "Here is the SVG: <svg width='10'><circle/></svg> Place it inside an <html> page.",
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_reprompts_on_empty_html_or_svg_skeleton_mention():
+    """``<html></html>`` / ``<svg></svg>`` with no body content is a
+    plan-only mention, not a substantive answer."""
+    samples = [
+        "First, I'll create an <html></html> skeleton, then add CSS.",
+        "First, I'll draft a <svg></svg> icon, then add shapes.",
+    ]
+    for content in samples:
+        assert not _has_answer_artifact(content), content
+        assert _would_reprompt(content), content
+
+
+def test_no_reprompt_on_code_fence_containing_markup_literal():
+    """A closed code fence whose body contains literal ``<html>``,
+    ``<svg>``, ``<body>`` strings is still a complete code answer.
+    The unclosed-markup cross-check operates on text with closed
+    fences stripped out so code literals do not falsely trip it."""
+    samples = [
+        (
+            "First, let me write the scraper.\n"
+            "```python\n"
+            "html = '<html><body>'\n"
+            "svg = \"<svg width='100'>\"\n"
+            "print(html, svg)\n"
+            "```"
+        ),
+        (
+            "First, let me write the parser.\n"
+            "```javascript\n"
+            "const open = '<html>';\n"
+            "const fragment = '<svg width=\"10\">';\n"
+            "console.log(open, fragment);\n"
+            "```"
+        ),
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_reprompts_on_take_or_follow_steps_numbered_plan():
+    """``I'll take these steps:`` / ``I will follow these steps:`` +
+    numbered list of work items is a plan stall."""
+    samples = [
+        (
+            "I'll take these steps:\n"
+            "1. Open the URL.\n"
+            "2. Read the page.\n"
+            "3. Summarize the answer."
+        ),
+        (
+            "I will follow these steps:\n"
+            "1. Open the current docs.\n"
+            "2. Read the relevant section.\n"
+            "3. Answer."
+        ),
+    ]
+    for content in samples:
+        assert not _has_answer_artifact(content), content
+        assert _would_reprompt(content), content
+
+
+def test_no_reprompt_on_prose_mention_of_triple_backticks_after_code():
+    """Closed code fence followed by prose that describes triple-
+    backtick syntax (with leading space after the ticks) must NOT be
+    treated as an unclosed fence."""
+    content = (
+        "Here is the snippet:\n"
+        "```python\n"
+        "print(1)\n"
+        "```\n"
+        "Use ``` to start a markdown code fence in your reply."
+    )
+    assert _has_answer_artifact(content)
+    assert not _would_reprompt(content)
+
+
+def test_reprompts_on_direct_first_person_read_check_open_plan():
+    """Direct first-person intent + open/read/check/review/inspect verbs
+    + numbered list is a tool stall. The broader verb set applies to
+    first-person intent only; bare ``First, ...`` and ``Step N: ...``
+    keep their narrower verb whitelist."""
+    samples = [
+        (
+            "Let me read the uploaded file:\n"
+            "1. Identify the columns.\n"
+            "2. Return the total."
+        ),
+        ("I will check the docs:\n" "1. Gather relevant sections.\n" "2. Answer."),
+        (
+            "First, I'll review the repository:\n"
+            "1. Open the relevant file.\n"
+            "2. Read the implementation.\n"
+            "3. Suggest a fix."
+        ),
+        (
+            "Let me examine the log file:\n"
+            "1. Open the log.\n"
+            "2. Read the errors.\n"
+            "3. Summarize."
+        ),
+    ]
+    for content in samples:
+        assert not _has_answer_artifact(content), content
+        assert _would_reprompt(content), content
+
+
+def test_no_reprompt_on_html_with_inner_svg_or_self_closing_tag():
+    """Complete <html> answers that contain nested SVG / self-closing
+    tags are still complete pages. The unbalanced-count cross-check is
+    skipped when a real artifact already exists."""
+    samples = [
+        "<html><body><svg width='10'/></body></html>",
+        "<html><body>"
+        + "<script>const s = '<svg width=10>';</script>"
+        + "</body></html>",
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_no_reprompt_on_complete_artifact_with_prose_tag_mention():
+    """Complete code/markup artifacts followed by ordinary prose that
+    mentions ``<html>`` or ``<svg>`` tags are not mid-stream output."""
+    samples = [
+        "<html><body>hi</body></html>\nUse the <html> tag as the root.",
+        (
+            "First, here is the SVG: <svg width='10'><circle/></svg>\n"
+            "Put it inside an <html> page if needed."
+        ),
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_no_reprompt_on_html_containing_backtick_literal():
+    """A complete <html> answer whose body contains a JS string with
+    literal backticks is still a complete page. The unclosed-fence
+    cross-check operates on text with closed markup stripped out."""
+    content = (
+        "First, here is the page.\n"
+        "<html><body><script>const fence = '```';</script></body></html>"
+    )
+    assert _has_answer_artifact(content)
+    assert not _would_reprompt(content)
+
+
+def test_empty_markup_before_real_artifact_still_counts_real_artifact():
+    """An empty <html></html> / <svg></svg> skeleton that PRECEDES a
+    real complete artifact must not hide it. _looks_like_real_artifact
+    iterates every match."""
+    samples = [
+        (
+            "First, the minimal skeleton is <html></html>. "
+            "Here is the full page: <html><body><h1>Hello</h1></body></html>"
+        ),
+        (
+            "First, the icon skeleton is <svg></svg>. "
+            "Here is the full SVG: "
+            "<svg width='10'><circle cx='5' cy='5' r='4'/></svg>"
+        ),
+    ]
+    for content in samples:
+        assert _has_answer_artifact(content), content
+        assert not _would_reprompt(content), content
+
+
+def test_doctype_empty_html_skeleton_still_reprompts():
+    """``<!doctype html><html></html>`` is an empty skeleton even with
+    a doctype prefix; the artifact check must reject it."""
+    content = (
+        "First, I'll create a <!doctype html><html></html> skeleton, then add CSS."
+    )
+    assert not _has_answer_artifact(content)
+    assert _would_reprompt(content)
+
+
+def test_reprompts_on_bare_intent_colon_numbered_plan():
+    """Bare ``I'll:`` / ``Let me:`` immediately followed by a numbered
+    list of work verbs is a tool stall regardless of whether the verbs
+    sit before or in the list."""
+    samples = [
+        "I'll:\n1. Open the URL.\n2. Read the page.\n3. Summarize the answer.",
+        "First, I'll:\n1. Create the Python file.\n2. Build the game loop.\n3. Test it.",
+        "Let me:\n1. Parse the JSON.\n2. Calculate the average.",
+    ]
+    for content in samples:
+        assert not _has_answer_artifact(content), content
+        assert _would_reprompt(content), content
+
+
+def test_reprompts_on_intent_plus_numbered_action_items():
+    """``First, I'll:\\n1. Load CSV\\n2. Compute total`` is a plan stall:
+    the work verbs are in the list ITEMS even though no work verb
+    appears between the intent phrase and the list. Verbs are taken
+    from the narrow _LOCAL_ACTION_VERBS set (load, parse, calculate,
+    compute, analyze, run, execute, fetch, download, query, inspect,
+    extract). Bare ``read`` / ``search`` / ``check`` are NOT in the
+    set because they appear in non-plan answers too."""
+    samples = [
+        "First, I'll:\n1. Load the uploaded CSV.\n2. Compute the total revenue.",
+        "Let me:\n1. Parse the JSON.\n2. Calculate the average.",
+        "Now I:\n1. Inspect the file.\n2. Analyze the rows.",
+        "I'll:\n1. Fetch the latest data.\n2. Compute the totals.",
+    ]
+    for content in samples:
+        assert _would_reprompt(content), content
+
+
+def test_reprompts_on_numbered_compare_or_review_lookup_plan():
+    """Freshness-gated ``compare`` / ``review`` lookups read as tool
+    plans and STILL re-prompt as numbered plans."""
+    samples = [
+        "Here's my plan:\n1. Compare the latest release sources.\n2. Summarise.",
+        "First, I'll do this:\n1. Review the current documentation.\n2. Answer.",
+    ]
+    for s in samples:
+        assert _would_reprompt(s), s
+
+
+def test_no_reprompt_on_first_use_binary_search_answer():
+    """``First, use binary search:`` is an ordinary algorithm answer.
+    ``use`` is not in the direct-numbered-plan verb whitelist so the
+    following list stays an answer."""
+    content = (
+        "First, use binary search:\n"
+        "1. Search the left half.\n"
+        "2. Search the right half."
+    )
+    assert _has_answer_artifact(content)
+    assert not _would_reprompt(content)
+
+
+def test_reprompts_when_later_fence_is_open_after_closed_fence():
+    """A response with a complete code fence followed by a SECOND,
+    unclosed fence is still mid-stream and must re-prompt. The
+    `_has_unclosed_code_fence` cross-check must short-circuit even
+    after `_HAS_ANSWER_ARTIFACT` finds the first complete fence."""
+    content = (
+        "First, let me provide two files:\n"
+        "```python\n"
+        "print('main')\n"
+        "```\n"
+        "```python\n"
+        "print('utils')"
+    )
+    assert not _has_answer_artifact(content)
+    assert _would_reprompt(content)
+
+
 def test_open_fence_with_inner_numbered_list_still_reprompts():
     """A response that opens a code fence and emits numbered lines INSIDE
     must NOT count those lines as a completed numbered-list answer."""

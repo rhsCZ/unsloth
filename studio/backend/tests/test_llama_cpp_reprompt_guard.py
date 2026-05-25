@@ -985,9 +985,64 @@ def test_no_reprompt_on_code_fence_containing_markup_literal():
         assert not _would_reprompt(content), content
 
 
-def test_reprompts_on_take_or_follow_steps_numbered_plan():
-    """``I'll take these steps:`` / ``I will follow these steps:`` +
-    numbered list of work items is a plan stall."""
+def test_reprompts_on_i_will_gather_identify_numbered_plan():
+    """First-person + gather/identify verbs in list items is a tool
+    stall when the intent appears directly before the list."""
+    content = "I'll:\n" "1. Gather the relevant files.\n" "2. Identify the issue."
+    assert not _has_answer_artifact(content), content
+    assert _would_reprompt(content), content
+
+
+def test_no_reprompt_on_bare_i_need_to_clarification():
+    """Bare ``I need to`` clarification or prose answers must NOT
+    trigger the re-prompt. The phrase is too common in plain answers."""
+    samples = [
+        "I need to know your operating system before giving the install command.",
+        "I need to be clear: the answer is Paris.",
+        'The sentence is: "I need to leave early today."',
+    ]
+    for content in samples:
+        assert not _would_reprompt(content), content
+
+
+def test_reprompts_on_visit_or_access_numbered_plan():
+    """First-person + browser/navigation verbs (visit/access/navigate)
+    + numbered list is a tool stall."""
+    samples = [
+        (
+            "I'll visit the official site:\n"
+            "1. Open the homepage.\n"
+            "2. Read the release notes.\n"
+            "3. Summarize."
+        ),
+        (
+            "Let me access the GitHub repo:\n"
+            "1. Open the README.\n"
+            "2. Identify the install instructions."
+        ),
+    ]
+    for content in samples:
+        assert not _has_answer_artifact(content), content
+        assert _would_reprompt(content), content
+
+
+def test_no_reprompt_on_inline_backtick_python_prose_after_code():
+    """``Use ```python to start a Python fence.`` is prose after a
+    completed answer; it must NOT be treated as an unclosed fence."""
+    content = (
+        "Here is the snippet:\n"
+        "```python\n"
+        "print(1)\n"
+        "```\n"
+        "Use ```python to start a Python block in your reply."
+    )
+    assert _has_answer_artifact(content)
+    assert not _would_reprompt(content)
+
+
+def test_reprompts_on_take_follow_complete_steps_numbered_plan():
+    """``I'll take/follow/complete these steps:`` + numbered list of
+    work items is a plan stall."""
     samples = [
         (
             "I'll take these steps:\n"
@@ -1000,6 +1055,11 @@ def test_reprompts_on_take_or_follow_steps_numbered_plan():
             "1. Open the current docs.\n"
             "2. Read the relevant section.\n"
             "3. Answer."
+        ),
+        (
+            "Let me complete these steps:\n"
+            "1. Read the uploaded CSV.\n"
+            "2. Check the totals."
         ),
     ]
     for content in samples:

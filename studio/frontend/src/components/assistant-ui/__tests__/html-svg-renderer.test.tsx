@@ -26,18 +26,29 @@ describe("HtmlSvgRenderer", () => {
     ) as HTMLIFrameElement;
     expect(iframe.tagName).toBe("IFRAME");
     // SECURITY: allow-scripts + allow-modals leave script / alert /
-    // confirm operative IF the inherited host CSP ever permits inline;
-    // NEVER allow-same-origin or allow-top-navigation -- those would let
-    // the preview read parent.document and exfiltrate session data.
+    // confirm operative if the inherited host CSP ever permits inline.
+    // allow-popups lets ``<base target="_blank">`` links open without
+    // being silently dropped, BUT the popups INHERIT the sandbox
+    // (allow-popups-to-escape-sandbox is intentionally absent) so a
+    // tab opened from a malicious assistant link cannot use
+    // window.opener.top.location.* to tabnab the Studio tab.
+    // allow-same-origin and allow-top-navigation are NEVER granted.
     const sandbox = iframe.getAttribute("sandbox") ?? "";
-    expect(sandbox.split(/\s+/)).toContain("allow-scripts");
+    const sandboxTokens = sandbox.split(/\s+/);
+    expect(sandboxTokens).toContain("allow-scripts");
+    expect(sandboxTokens).toContain("allow-modals");
+    expect(sandboxTokens).toContain("allow-popups");
+    expect(sandboxTokens).not.toContain("allow-popups-to-escape-sandbox");
     expect(sandbox).not.toContain("allow-same-origin");
     expect(sandbox).not.toContain("allow-top-navigation");
-    // srcdoc carries the assistant HTML plus a defense-in-depth meta CSP
-    // that adds ``connect-src 'none'`` and ``frame-src 'none'`` on top of
-    // the inherited host CSP. Inline ``<script>`` does NOT execute (the
-    // host CSP ``script-src 'self'`` strips it); the iframe is here to
-    // render layout/markup, not to run assistant JS.
+    // srcdoc carries the assistant HTML plus a defense-in-depth meta
+    // CSP (connect-src 'none', frame-src 'none', img-src data: blob:
+    // only). Inline <script> / on* handlers do NOT execute today
+    // because Chromium inherits the host CSP for srcdoc iframes
+    // (also for blob: and data: -- empirically reproduced) and the
+    // host enforces ``script-src 'self'``. The preview is for layout
+    // / styles / images / source viewing; interactive demos are a
+    // documented follow-up that needs a same-origin backend route.
     expect(iframe.getAttribute("src")).toBeNull();
     const srcdoc = (iframe.getAttribute("srcdoc") ?? iframe.srcdoc) ?? "";
     expect(srcdoc).toContain("hello");
@@ -117,6 +128,23 @@ describe("HtmlSvgRenderer", () => {
     // see the streaming tokens without flicker.
     const previewTab = screen.getByRole("tab", { name: /preview/i });
     expect(previewTab.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("srcdoc payload carries the defense-in-depth meta CSP", () => {
+    const html = "<button onclick=\"alert('x')\">go</button>";
+    render(<HtmlSvgRenderer language="html" source={html} />);
+    const iframe = screen.getByTestId(
+      "html-svg-renderer-iframe",
+    ) as HTMLIFrameElement;
+    const doc = (iframe.getAttribute("srcdoc") ?? iframe.srcdoc) ?? "";
+    expect(doc).toContain("<button");
+    expect(doc).toContain('http-equiv="Content-Security-Policy"');
+    // Network egress is blocked regardless of script execution.
+    expect(doc).toContain("connect-src 'none'");
+    expect(doc).toContain("frame-src 'none'");
+    // ``<base target="_blank">`` keeps link clicks from replacing the
+    // iframe content with a navigation away from the preview.
+    expect(doc).toContain('<base target="_blank">');
   });
 
   it("wires tabs to their panels with aria-controls / aria-labelledby", () => {

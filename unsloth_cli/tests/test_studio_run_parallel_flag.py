@@ -3,15 +3,12 @@
 
 """Tests for the `unsloth studio run --parallel` CLI flag.
 
-Before this commit, `unsloth studio run` always set
-``llama_parallel_slots=4`` (hardcoded). Engine + KV-cache math already
-supported any N, but the knob was not user-reachable.
+Pre-PR `llama_parallel_slots` was hardcoded to 4. These tests pin
+the typer Option (aliases, default 4, 1..64 range), the
+typer/denylist subset invariant, and re-exec forwarding.
 
-These tests pin:
-  1. The Typer option exists with the documented aliases.
-  2. The default value matches the previous hardcoded value (4),
-     so behaviour is unchanged for existing users.
-  3. The range guards reject out-of-band values.
+See ``test_studio_run_short_alias_clashes.py`` for the argv
+canonicaliser and the legacy `-m` / `-hfr` / `-f` shim.
 """
 
 from __future__ import annotations
@@ -29,11 +26,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 def _load_run_command():
-    """Import the `run` typer command without triggering server start.
-
-    The CLI module pulls in heavy backend imports at function call
-    time; we only need the Typer command object to introspect options.
-    """
+    """Import `studio` without triggering server start; backend imports
+    are lazy inside run()."""
     from unsloth_cli.commands import studio as _studio
 
     return _studio
@@ -49,10 +43,8 @@ def test_parallel_option_is_registered():
     assert "parallel" in sig.parameters, "missing `parallel` parameter on run()"
 
     param = sig.parameters["parallel"]
-    # typer.OptionInfo lives in the default value
-    opt = param.default
+    opt = param.default  # typer.OptionInfo
     flags = set()
-    # OptionInfo stores param_decls in .param_decls (typer >=0.4)
     decls = getattr(opt, "param_decls", None) or []
     for d in decls:
         flags.add(d)
@@ -84,30 +76,42 @@ def test_parallel_range_guards_are_set():
     assert getattr(opt, "max", None) == 64, "max must be 64 (KV split sanity cap)"
 
 
-def test_run_kwargs_use_parallel_value(monkeypatch):
-    """run_kwargs passed to run_server must reflect the --parallel value
-    (no hardcoded 4 remaining after the flag was added)."""
+def test_typer_parallel_aliases_are_subset_of_backend_denylist():
+    """Every typer alias for --parallel must be denied on the backend
+    too; otherwise HTTP /load could smuggle the value via
+    `llama_extra_args` and desync llama_parallel_slots from the
+    running llama-server."""
     studio_mod = _load_run_command()
-    import textwrap
+    import inspect
+    import sys as _sys
 
-    src = textwrap.dedent(Path(studio_mod.__file__).read_text())
-    # Pre-fix line was: run_kwargs = dict(... llama_parallel_slots = 4)
-    assert "llama_parallel_slots = 4" not in src, (
-        "found hardcoded `llama_parallel_slots = 4` after the parallel "
-        "flag landed -- run_kwargs must pull from the typer option"
+    backend = Path(__file__).resolve().parents[2] / "studio" / "backend"
+    if str(backend) not in _sys.path:
+        _sys.path.insert(0, str(backend))
+    from core.inference.llama_server_args import _DENYLIST_GROUPS
+
+    parallel_group = next((g for g in _DENYLIST_GROUPS if "--parallel" in g), None)
+    assert parallel_group is not None, "denylist must include a --parallel group"
+
+    sig = inspect.signature(studio_mod.run)
+    opt = sig.parameters["parallel"].default
+    typer_aliases = set(getattr(opt, "param_decls", []) or [])
+    missing = typer_aliases - parallel_group
+    assert not missing, (
+        f"typer aliases {missing!r} are not in the backend denylist; "
+        f"add them to _DENYLIST_GROUPS to keep /load from desyncing "
+        f"llama_parallel_slots."
     )
-    assert (
-        "llama_parallel_slots = parallel" in src
-    ), "run_kwargs must use the parallel variable from the typer option"
 
 
-# Re-exec arg-builder coverage. `unsloth studio run` is normally invoked
-# outside the Studio venv; run() rebuilds argv and re-execs into the
-# Studio venv via os.execvp (POSIX) or subprocess.Popen (Windows).
-# Typer claims --parallel/--n-parallel/-np in the outer process, so
-# without explicit forwarding the child re-execs at the typer default 4
-# (silently dropping any user value -- including pre-PR `-np N` users
-# who relied on llama-server pass-through).
+# test_in_venv_path_passes_parallel_to_run_server (below) is the runtime
+# equivalent of the retired source-text guard for hardcoded
+# `llama_parallel_slots = 4`.
+
+
+# Re-exec arg-builder coverage. run() re-execs into the studio venv
+# (execvp on POSIX, Popen on Windows). Without explicit forwarding the
+# child reverts to typer defaults and silently drops the user's value.
 
 
 class _ExecCaptured(SystemExit):
@@ -220,22 +224,21 @@ def test_reexec_argv_is_consistent_across_platforms(monkeypatch, platform):
 
 
 def test_reexec_np_is_first_class_alias(monkeypatch):
-    """`-np` is now a first-class `--parallel` alias and must reach the
-    re-exec'd child as --parallel <N>. Pre-PR `-np 8` was clustered by
-    Click as `-p 8` (port=8) + stray `-n`, silently breaking the port
-    binding, so this also pins the no-collision behaviour."""
+    """`-np` must reach the child as --parallel <N>. Pre-PR Click
+    clustered `-np 8` as `-p 8` (port=8) + stray `-n`; also pin that
+    --port is no longer collateral damage."""
     result, captured = _invoke_run(monkeypatch, _BASE + ["-np", "8"])
     assert len(captured) == 1
     argv = captured[0]["argv"]
     assert (
         _value_after(argv, "--parallel") == "8"
     ), f"-np 8 silently became 4 after re-exec; argv = {argv}"
-    # Confirm `-np 8` did not collide with --port either way.
+    # `-np 8` must not clobber --port (default 8888).
     assert _value_after(argv, "--port") == "8888", argv
 
 
 def test_reexec_mixed_parallel_with_passthrough(monkeypatch):
-    """--parallel (typer-claimed) + pass-through llama-server flags must both reach the child."""
+    """--parallel + llama-server pass-through flags must all reach the child."""
     result, captured = _invoke_run(
         monkeypatch,
         _BASE + ["--parallel", "8", "--top-k", "20", "--temp", "0.7"],
@@ -247,11 +250,40 @@ def test_reexec_mixed_parallel_with_passthrough(monkeypatch):
     assert _value_after(argv, "--temp") == "0.7", argv
 
 
-# Runtime behaviour test: bypass the re-exec branch by faking sys.prefix
-# into the studio venv, then assert run_server gets the typer --parallel
-# value as llama_parallel_slots. Complements the source-text check in
-# test_run_kwargs_use_parallel_value so refactors of the call site that
-# preserve runtime semantics don't trip a false failure.
+@pytest.mark.parametrize(
+    "user_flag,expected_in_child",
+    [
+        ("--load-in-4bit", "--load-in-4bit"),
+        ("--no-load-in-4bit", "--no-load-in-4bit"),
+        (None, "--load-in-4bit"),  # default True
+    ],
+)
+def test_reexec_forwards_load_in_4bit_in_both_directions(
+    monkeypatch, user_flag, expected_in_child
+):
+    """Re-exec must emit the chosen polarity (or the typer default),
+    so a future default flip on one layer can't silently invert
+    behaviour for users who never typed the flag."""
+    extras = [user_flag] if user_flag else []
+    result, captured = _invoke_run(monkeypatch, _BASE + extras)
+    assert len(captured) == 1
+    argv = captured[0]["argv"]
+    other_polarity = (
+        "--no-load-in-4bit"
+        if expected_in_child == "--load-in-4bit"
+        else "--load-in-4bit"
+    )
+    assert (
+        expected_in_child in argv
+    ), f"expected {expected_in_child} in child argv; got {argv}"
+    assert (
+        other_polarity not in argv
+    ), f"unexpected {other_polarity} in child argv; got {argv}"
+
+
+# Runtime check: fake sys.prefix into the studio venv to bypass
+# re-exec, then assert run_server receives --parallel as
+# llama_parallel_slots.
 
 
 class _RunServerCaptured(SystemExit):
@@ -266,37 +298,74 @@ def _types_module(name):
     return _types.ModuleType(name)
 
 
+def test_studio_default_rejects_parallel_when_subcommand_invoked():
+    """`unsloth studio --parallel 8 run ...` would silently drop the 8
+    (typer doesn't forward parent options to subcommands). The
+    callback rejects with exit 2 and points at the subcommand flag."""
+    studio_mod = _load_run_command()
+    import typer as _typer
+
+    app = _typer.Typer()
+    app.add_typer(studio_mod.studio_app, name = "studio")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["studio", "--parallel", "8", "run", "--model", "X"])
+    assert result.exit_code == 2, (
+        f"expected exit 2 when --parallel is on studio group with a "
+        f"subcommand invoked; got {result.exit_code}; output={result.output!r}"
+    )
+    combined = (result.output or "") + (getattr(result, "stderr", "") or "")
+    assert "--parallel" in combined, combined
+    assert (
+        "run --parallel 8" in combined
+    ), f"error message must show the corrected invocation; got: {combined}"
+
+
+def test_studio_default_default_parallel_with_subcommand_does_not_error():
+    """Omitting --parallel on the group must still let subcommands
+    run; the group's default 1 is benign."""
+    studio_mod = _load_run_command()
+    import typer as _typer
+
+    app = _typer.Typer()
+    app.add_typer(studio_mod.studio_app, name = "studio")
+    runner = CliRunner()
+    result = runner.invoke(app, ["studio", "--help"])
+    assert result.exit_code == 0, result.output
+
+
 def test_studio_default_exposes_parallel_option():
-    """Plain `unsloth studio` (no `run`) must also expose --parallel so
-    the API-only / bare-server path has a way to raise concurrency
-    (since pass-through --parallel via llama_extra_args is denied)."""
+    """Plain `unsloth studio` exposes --parallel too so the API-only
+    path can raise concurrency without going through the denied
+    pass-through. Default stays at 1 (pre-PR); `run` keeps its 4."""
     studio_mod = _load_run_command()
     import inspect
 
     sig = inspect.signature(studio_mod.studio_default)
     assert "parallel" in sig.parameters, (
-        "studio_default missing `parallel` parameter; API-only path "
-        "has no first-class way to set llama_parallel_slots"
+        "studio_default missing `parallel`; API-only path can't set "
+        "llama_parallel_slots"
     )
     opt = sig.parameters["parallel"].default
     decls = set(getattr(opt, "param_decls", []) or [])
     assert "--parallel" in decls
     assert "--n-parallel" in decls
-    assert getattr(opt, "default", None) == 4
+    assert (
+        getattr(opt, "default", None) == 1
+    ), "studio_default --parallel must default to 1 (pre-PR); `run` is 4"
     assert getattr(opt, "min", None) == 1
     assert getattr(opt, "max", None) == 64
 
 
 @pytest.mark.parametrize("value", [1, 4, 8, 64])
 def test_in_venv_path_passes_parallel_to_run_server(monkeypatch, value):
-    """When already in the studio venv, run() must forward --parallel to
-    run_server(llama_parallel_slots=N) instead of hardcoding 4."""
+    """In-venv path must forward --parallel to
+    run_server(llama_parallel_slots=N), not the old hardcoded 4."""
     studio_mod = _load_run_command()
 
     fake_venv = Path("/fake/studio/venv/unsloth_studio")
     monkeypatch.setattr(sys, "prefix", str(fake_venv))
-    # sys.prefix.startswith(STUDIO_HOME / "unsloth_studio") gates the
-    # in-venv path; pin STUDIO_HOME so the predicate is true.
+    # Pin STUDIO_HOME so sys.prefix.startswith() picks the in-venv branch.
     monkeypatch.setattr(studio_mod, "STUDIO_HOME", fake_venv.parent)
 
     from unsloth_cli import _tool_policy as _tp_mod

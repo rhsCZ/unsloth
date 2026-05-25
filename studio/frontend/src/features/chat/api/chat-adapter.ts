@@ -92,6 +92,52 @@ type RunMessage = RunMessages[number];
 /** Tracks which user messages were sent with an audio file (messageId → filename). */
 export const sentAudioNames = new Map<string, string>();
 
+// Canonical names for synthetic provider-side tool cards (Gemini
+// grounding/code/image, Anthropic web_search/web_fetch/code_execution,
+// OpenAI hosted code/image). The backend stamps these with
+// args._server_tool so we can drop them from outbound history without
+// also dropping a user function that happens to share the name. Keep
+// in sync with _SERVER_SIDE_BUILTIN_TOOL_NAMES on the backend.
+const SERVER_SIDE_BUILTIN_TOOL_NAMES = new Set<string>([
+  "web_search",
+  "web_fetch",
+  "code_execution",
+  "image_generation",
+]);
+
+/**
+ * Decide whether a persisted tool-call part is a provider-side
+ * synthetic card (Gemini grounding, Anthropic / OpenAI hosted tools)
+ * that should be stripped from outbound history rather than replayed
+ * as a real user function call.
+ *
+ * Rules in priority order:
+ *   1. Marker present (`args._server_tool === true`) → server-side.
+ *      The backend always stamps new synthetic events with this.
+ *   2. Gemini `native_part` payload present in `args.google` →
+ *      server-side. Gemini code_execution / image_generation always
+ *      stow `executableCode` / `codeExecutionResult` / `inlineData`
+ *      here so the native translator can replay them.
+ *
+ * No shape heuristic on `args.kind` / `args.command` / `args.prompt`:
+ * those can legitimately appear in a user-declared function with one
+ * of the canonical builtin names, and dropping a real user function
+ * call from chat history breaks function-calling round-trips. Old
+ * pre-PR persisted hosted cards lacking the marker now leak through
+ * to a non-native provider on a provider switch, which is the lesser
+ * of the two evils.
+ */
+function isServerSideBuiltinToolPart(
+  toolNameLower: string,
+  _argsObj: Record<string, unknown> | null,
+  hasServerToolMarker: boolean,
+  hasNativePart: boolean,
+): boolean {
+  if (!SERVER_SIDE_BUILTIN_TOOL_NAMES.has(toolNameLower)) return false;
+  if (hasServerToolMarker) return true;
+  return hasNativePart;
+}
+
 /**
  * Match error messages that indicate the request filled or would fill
  * the KV cache, so the UI can show a dedicated toast pointing at the
@@ -375,17 +421,18 @@ function collectAssistantToolCalls(
         typeof argsGoogle.native_part === "object" &&
         argsGoogle.native_part !== null,
     );
-    // Server-side provider builtins (Gemini grounding, Anthropic /
-    // OpenAI hosted tools) are tagged with args._server_tool by the
-    // backend so we can tell them apart from real user-declared
-    // functions or local llama.cpp tools that happen to share the
-    // name. web_search has no replay path (grounding rides in the
-    // assistant text); code_execution / image_generation only
-    // round-trip when the backend stowed args.google.native_part.
-    const isServerSideBuiltin = Boolean(
+    const hasServerToolMarker = Boolean(
       argsObj && (argsObj as Record<string, unknown>)._server_tool === true,
     );
+    const isServerSideBuiltin = isServerSideBuiltinToolPart(
+      toolNameLower,
+      argsObj,
+      hasServerToolMarker,
+      hasNativePart,
+    );
     if (isServerSideBuiltin) {
+      // Gemini code_execution / image_generation still need to round-
+      // trip the native_part payload for native replay; drop the rest.
       if (!hasNativePart) continue;
     }
     const argumentsStr =
@@ -436,21 +483,45 @@ function collectToolResultMessages(
     if (part.type !== "tool-call") continue;
     const tc = part as ToolCallMessagePart;
     const result = (tc as { result?: unknown }).result;
-    // Skip provider-side builtins (tagged with args._server_tool by
-    // the backend). User-declared functions and local llama.cpp
-    // tools have no marker so they round-trip their result
-    // normally.
+    // Skip provider-side builtins (marker, native_part, or legacy
+    // shape heuristic). See `isServerSideBuiltinToolPart` for the
+    // exact rules; in particular, unmarked `web_search` / `web_fetch`
+    // are NOT dropped because a user function may legitimately share
+    // the name.
     const argsObj =
       tc.args && typeof tc.args === "object"
         ? (tc.args as Record<string, unknown>)
         : null;
-    if (argsObj && argsObj._server_tool === true) {
+    const argsGoogle =
+      argsObj && typeof argsObj.google === "object" && argsObj.google !== null
+        ? (argsObj.google as Record<string, unknown>)
+        : null;
+    const toolNameLower = (tc.toolName ?? "").toLowerCase();
+    const hasServerToolMarker = Boolean(
+      argsObj && argsObj._server_tool === true,
+    );
+    const hasNativePart = Boolean(
+      argsGoogle &&
+        typeof argsGoogle.native_part === "object" &&
+        argsGoogle.native_part !== null,
+    );
+    if (
+      isServerSideBuiltinToolPart(
+        toolNameLower,
+        argsObj,
+        hasServerToolMarker,
+        hasNativePart,
+      )
+    ) {
       continue;
     }
     if (result === undefined || result === null) continue;
     let content: string;
     if (typeof result === "string") {
-      content = result;
+      // Backend ChatMessage validator rejects role="tool" with empty
+      // content; serialise a sentinel JSON so legitimately empty tool
+      // outputs still round-trip the follow-up turn to the provider.
+      content = result.length > 0 ? result : JSON.stringify({ result: "" });
     } else {
       try {
         content = JSON.stringify(result);
@@ -1445,6 +1516,7 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                 {
                   isReasoningProvider:
                     externalProvider.isReasoningModel === true,
+                  baseUrl: externalProvider.baseUrl ?? null,
                 },
               )
             : {
@@ -1917,8 +1989,10 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                     // outbound translator can replay both the
                     // executableCode (tool_start) and the
                     // codeExecutionResult / inlineData (tool_end) on
-                    // the same assistant turn. Without this, follow-up
-                    // Gemini turns lose the prior execution result.
+                    // the same assistant turn. Concatenate the `parts`
+                    // list so each entry keeps its own per-part
+                    // `thoughtSignature` (Gemini 3 strict validators
+                    // reject a signature placed on the wrong part).
                     const endGoogle = (
                       toolEvent as { google?: { native_part?: unknown } }
                     ).google;
@@ -1941,12 +2015,61 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                           string,
                           unknown
                         >) ?? {};
+                      const endNative = endGoogle.native_part as Record<
+                        string,
+                        unknown
+                      >;
+                      // Extract part entries from either the new
+                      // `parts: [...]` shape or a legacy single-object
+                      // native_part. Legacy entries had at most one of
+                      // executableCode/codeExecutionResult/inlineData
+                      // plus an optional `thoughtSignature` sibling,
+                      // and on Gemini 3 that signature was always
+                      // emitted on `executableCode`, so move it onto
+                      // that key only when we synthesise a part.
+                      const collectParts = (
+                        native: Record<string, unknown>,
+                      ): Record<string, unknown>[] => {
+                        if (Array.isArray(native.parts)) {
+                          return (native.parts as unknown[]).filter(
+                            (entry): entry is Record<string, unknown> =>
+                              Boolean(entry) &&
+                              typeof entry === "object" &&
+                              !Array.isArray(entry),
+                          );
+                        }
+                        const out: Record<string, unknown>[] = [];
+                        const legacySig =
+                          typeof native.thoughtSignature === "string"
+                            ? native.thoughtSignature
+                            : typeof native.thought_signature === "string"
+                              ? (native.thought_signature as string)
+                              : null;
+                        for (const key of [
+                          "executableCode",
+                          "codeExecutionResult",
+                          "inlineData",
+                        ] as const) {
+                          const sub = native[key];
+                          if (sub && typeof sub === "object") {
+                            const entry: Record<string, unknown> = {
+                              [key]: sub,
+                            };
+                            if (key === "executableCode" && legacySig) {
+                              entry.thoughtSignature = legacySig;
+                            }
+                            out.push(entry);
+                          }
+                        }
+                        return out;
+                      };
+                      const mergedParts = [
+                        ...collectParts(existingNative),
+                        ...collectParts(endNative),
+                      ];
                       argsObj.google = {
                         ...existingGoogle,
-                        native_part: {
-                          ...existingNative,
-                          ...(endGoogle.native_part as Record<string, unknown>),
-                        },
+                        native_part: { parts: mergedParts },
                       };
                     }
                     toolCallParts[idx] = {

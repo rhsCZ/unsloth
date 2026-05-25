@@ -690,11 +690,24 @@ function resolveGeminiReasoningCapabilities(
     // Image generation; no thinking knob.
     return withEnableThinkingStyle();
   }
-  // Gemini 2.5 Flash-Lite has no native thinking knob; check it BEFORE
-  // the broader `gemini-2.5-flash` prefix so it does not fall into the
-  // Flash branch.
+  // Gemini 2.5 Flash-Lite supports `thinkingBudget` with `0` = off and
+  // a positive range starting at 512 (the backend maps "minimal" to
+  // that floor at external_provider._stream_gemini). Check this branch
+  // BEFORE the broader `gemini-2.5-flash` prefix.
+  // https://ai.google.dev/gemini-api/docs/thinking
   if (m.startsWith("gemini-2.5-flash-lite")) {
-    return withEnableThinkingStyle();
+    return withReasoningEffortStyle({
+      supportsReasoning: true,
+      supportsReasoningOff: true,
+      reasoningEffortLevels: [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "max",
+      ] as const,
+    });
   }
   if (GEMINI3_PRO_PREFIXES.some((p) => m.startsWith(p))) {
     // Gemini 3.x Pro: thinkingLevel supports low/medium/high per
@@ -770,6 +783,8 @@ function resolveMistralReasoningCapabilities(modelId: string): ExternalReasoning
 export interface ExternalReasoningResolveOptions {
   /** vLLM connection flagged as a reasoning model in provider config. */
   isReasoningProvider?: boolean;
+  /** Provider base URL; used to detect custom Gemini OAI-compat gateways. */
+  baseUrl?: string | null;
 }
 
 // vLLM has no per-model reasoning signal on OpenAI-compat — pin via user toggle.
@@ -846,6 +861,13 @@ export function getExternalReasoningCapabilities(
   if (isKimiProvider) return resolveKimiReasoningCapabilities(modelForMatching);
   if (isMistralProvider) return resolveMistralReasoningCapabilities(modelForMatching);
   if (normalizedProvider === "gemini") {
+    // Custom Gemini OAI-compat gateways (LiteLLM, proxies) route
+    // through /chat/completions which drops the Gemini-native
+    // thinkingConfig payload. Hide the native thinking ladder so the
+    // UI does not advertise a control the backend cannot honor.
+    if (isGeminiCustomOpenAICompatBase(options?.baseUrl)) {
+      return withEnableThinkingStyle();
+    }
     return resolveGeminiReasoningCapabilities(modelForMatching);
   }
   if (!isOpenAIProvider && !isAnthropicProvider) {

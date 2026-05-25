@@ -365,8 +365,18 @@ export function ChatProvidersSettings({
     // providers and local OpenAI-compat presets stay empty until the user
     // clicks "Load available models".
     const seedDefaults = entry.model_list_mode === "curated";
-    setAvailableModels(seedDefaults ? [...entry.default_models] : []);
-    setSelectedModelIds([]);
+    const defaults = seedDefaults ? [...entry.default_models] : [];
+    setAvailableModels(defaults);
+    // Codex is a local CLI, not a metered cloud account, so checking all of
+    // the SDK's default model ids by default is safe and avoids the
+    // first-run UX trap where users create the connection, never check any
+    // model, and then the "Connected" tab silently never appears in the
+    // chat model picker. Anthropic / OpenAI / etc. still need explicit
+    // model selection because the choice has billing and capability
+    // consequences.
+    setSelectedModelIds(
+      providerType === CODEX_PROVIDER_TYPE ? defaults : [],
+    );
     setManualModelIds("");
     setModelSearchQuery("");
     setBaseUrlDraft("");
@@ -546,7 +556,20 @@ export function ChatProvidersSettings({
     resetForm();
     const entry = providerType ? registryByType.get(providerType) : null;
     if (entry?.model_list_mode === "curated") {
-      setAvailableModels([...entry.default_models]);
+      const defaults = [...entry.default_models];
+      setAvailableModels(defaults);
+      // Mirror the providerType-change effect's first-run behavior:
+      // Codex is the local CLI so pre-checking the default models lets
+      // the user click Save without re-ticking anything. Without this
+      // the resetForm above would zero selectedModelIds and the form
+      // would fail the "Add at least one model ID" save guard even
+      // though the round 7 Codex auto-enable effect would have
+      // populated them. Triggered when the user clicks Add connection
+      // while Codex was already the providerType (e.g. after closing
+      // and reopening the form).
+      setSelectedModelIds(
+        providerType === CODEX_PROVIDER_TYPE ? defaults : [],
+      );
     }
     setPage("form");
   }

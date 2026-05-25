@@ -44,10 +44,52 @@ import shutil
 import sys
 import time
 from typing import Any, AsyncGenerator, Optional
+from urllib.parse import urlparse
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+# Device-auth verification URLs the upstream codex CLI prints during
+# `codex login --device-auth`. Only these hosts are forwarded to the
+# browser as "Open verification page". A shimmed codex earlier on PATH
+# can still print a phishing URL that matches the regex used to fish
+# the verification URL out of stdout (`/device`, `/activate`,
+# `/verify`), but Studio refuses to surface anything not on this list,
+# so the malicious URL never reaches the user.
+_ALLOWED_DEVICE_AUTH_HOSTS: frozenset[str] = frozenset(
+    {
+        "auth.openai.com",
+        "chatgpt.com",
+    }
+)
+
+
+def _safe_host(url: str) -> Optional[str]:
+    """Return the lower-case host of ``url`` or None if it cannot be parsed."""
+    try:
+        return (urlparse(url).hostname or "").lower() or None
+    except Exception:
+        return None
+
+
+def _is_allowed_device_url(url: str) -> bool:
+    """Return True iff ``url`` looks like a real codex device-auth URL.
+
+    Requires https, a parseable URL, and a host on the allowlist above.
+    Codex login URLs are always https in the wild; downgrade to http
+    is a strong signal of a malicious shim, so we drop both at the
+    same gate.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in _ALLOWED_DEVICE_AUTH_HOSTS
 
 
 # Hard cap on parallel Codex fan-out. Picked to match the upper bound
@@ -96,6 +138,14 @@ def _codex_sdk_env_override() -> dict[str, str]:
 
 _SCRUBBED_ENV_LOCK = asyncio.Lock()
 _SCRUBBED_ENV_REFCOUNT: dict[str, int] = {}
+# Saved originals shared across all wrappers. The first wrapper to scrub
+# a key records its pre-scrub value here; later wrappers that pick up the
+# same key while it is already absent from os.environ inherit the same
+# saved value so the very last wrapper to release a key still restores
+# the right thing. Kept module-level (not per-instance) because two
+# concurrent wrappers must agree on what the original was even though
+# only one of them actually saw it in os.environ.
+_SCRUBBED_ENV_ORIGINALS: dict[str, str] = {}
 
 
 class _ScrubbedEnvAsyncCodex:
@@ -111,7 +161,7 @@ class _ScrubbedEnvAsyncCodex:
     enter/exit critical section, and a per-key refcount tracks how
     many concurrent wrappers are currently "holding" the scrub. A
     key is only restored when the last wrapper using it exits. This
-    fixes two issues round 6 caught:
+    fixes three issues:
 
     1. Two concurrent fan-out workers used to race: wrapper A could
        restore `HF_TOKEN` while wrapper B was still inside SDK
@@ -122,6 +172,15 @@ class _ScrubbedEnvAsyncCodex:
        Python never called `__aexit__`, so the deleted keys leaked
        permanently. Construction now happens INSIDE the try/except
        in `__aenter__`, and the scrub is rolled back on failure.
+    3. ``_codex_sdk_env_override()`` only enumerates keys currently
+       in ``os.environ``, so a wrapper B entering AFTER wrapper A
+       already scrubbed (say) ``HF_TOKEN`` would never see that key
+       in its overrides dict, never bump its refcount, and miss the
+       scrub for HF_TOKEN entirely. When A then exited it would
+       restore HF_TOKEN while B was still mid-session. Wrapper B
+       now also picks up every key currently refcounted by an
+       earlier wrapper (read under the lock) so the refcount
+       reflects the true set of holders for every scrubbed key.
     """
 
     def __init__(self, async_codex_cls: Any):
@@ -131,26 +190,32 @@ class _ScrubbedEnvAsyncCodex:
         # __aexit__ knows exactly which counters to decrement (avoids
         # racing with concurrent wrappers that scrub a different set).
         self._held_keys: list[str] = []
-        # Snapshot of the original values at the time of the FIRST
-        # wrapper that scrubbed each key, so restoration uses the
-        # real pre-scrub value.
-        self._restored_via_us: dict[str, str] = {}
 
     async def __aenter__(self) -> Any:
         import os
 
-        overrides = _codex_sdk_env_override()
         async with _SCRUBBED_ENV_LOCK:
-            for key in overrides:
-                if key not in os.environ and _SCRUBBED_ENV_REFCOUNT.get(key, 0) == 0:
-                    continue
-                if _SCRUBBED_ENV_REFCOUNT.get(key, 0) == 0:
+            # Keys this session would scrub if it were entering first.
+            keys_to_scrub = set(_codex_sdk_env_override())
+            # Plus every key still held by an earlier wrapper -- without
+            # this we would miss keys that are already absent from
+            # os.environ but ARE still scrubbed and refcounted.
+            keys_to_scrub.update(
+                key for key, count in _SCRUBBED_ENV_REFCOUNT.items() if count > 0
+            )
+            for key in keys_to_scrub:
+                current = _SCRUBBED_ENV_REFCOUNT.get(key, 0)
+                if current == 0:
                     # First wrapper to scrub this key -- save the
-                    # original so the very last wrapper to release it
-                    # can restore the right value.
-                    self._restored_via_us[key] = os.environ[key]
+                    # original. If the key is somehow not in os.environ
+                    # right now (deleted between override-snapshot and
+                    # here, or simply never set), skip it: nothing to
+                    # scrub and nothing to restore.
+                    if key not in os.environ:
+                        continue
+                    _SCRUBBED_ENV_ORIGINALS[key] = os.environ[key]
                     del os.environ[key]
-                _SCRUBBED_ENV_REFCOUNT[key] = _SCRUBBED_ENV_REFCOUNT.get(key, 0) + 1
+                _SCRUBBED_ENV_REFCOUNT[key] = current + 1
                 self._held_keys.append(key)
         try:
             self._inner = self._async_codex_cls()
@@ -176,15 +241,18 @@ class _ScrubbedEnvAsyncCodex:
                 current = _SCRUBBED_ENV_REFCOUNT.get(key, 0)
                 if current <= 0:
                     continue
-                _SCRUBBED_ENV_REFCOUNT[key] = current - 1
-                if current - 1 == 0:
+                next_count = current - 1
+                if next_count == 0:
                     # Last wrapper holding this key -- restore the
-                    # original value if WE were the first to scrub it,
-                    # or pull from any other wrapper's saved snapshot.
-                    if key in self._restored_via_us:
-                        os.environ.setdefault(key, self._restored_via_us[key])
+                    # original snapshot recorded when it was first
+                    # scrubbed, regardless of which wrapper saved it.
+                    _SCRUBBED_ENV_REFCOUNT.pop(key, None)
+                    original = _SCRUBBED_ENV_ORIGINALS.pop(key, None)
+                    if original is not None:
+                        os.environ.setdefault(key, original)
+                else:
+                    _SCRUBBED_ENV_REFCOUNT[key] = next_count
             self._held_keys.clear()
-            self._restored_via_us.clear()
 
 
 def _resolve_codex_bin() -> Optional[str]:
@@ -651,12 +719,16 @@ async def _stream_thread_run(
        path. Used when neither streaming helper resolves and as the
        final fallback.
 
-    Cross-turn side-effect protection: once any chunk has been emitted
-    via a streaming helper, we never fall through to the buffered
-    ``thread.run(prompt)`` path -- a partial-stream failure would
-    otherwise re-execute the same Codex turn and duplicate side
-    effects (file writes, shell commands, etc.). The buffered path
-    runs only when streaming helpers produced zero output.
+    Cross-turn side-effect protection: once a turn has STARTED (any
+    SDK event was received, including ones that ``_coerce_text``
+    drops -- command/file/tool/plan events), we never fall through
+    to the buffered ``thread.run(prompt)`` path. A partial-stream
+    failure mid-turn must not re-execute the same Codex turn
+    because the side effects (file writes, shell commands, etc.)
+    would replay. Tracking only ``emitted_any`` (visible text) is
+    not enough -- a turn that crashes after running shell commands
+    but before producing answer text would otherwise replay because
+    no visible chunk was emitted.
 
     Empty-delta protection: the canonical SDK can complete a turn
     successfully without emitting any ``message.delta`` events --
@@ -666,6 +738,11 @@ async def _stream_thread_run(
     Studio never returns an empty answer for a successful turn.
     """
     emitted_any = False
+    # True once ANY event has been observed from a streaming helper.
+    # Even when ``_coerce_text`` filters the event out, the turn has
+    # demonstrably started executing on the Codex side, so a later
+    # error must not trigger a buffered ``thread.run`` replay.
+    turn_started = False
 
     # 1. Canonical: thread.turn(prompt).stream()
     turn_factory = getattr(thread, "turn", None)
@@ -673,6 +750,12 @@ async def _stream_thread_run(
         agent_message_texts: list[str] = []
         try:
             turn_handle = turn_factory(prompt)
+            # Asking the SDK for the turn handle is itself enough to
+            # start the turn on the upstream side; mark turn_started
+            # before we even start iterating so a crash inside the
+            # stream factory below does not look like a never-started
+            # turn that is safe to replay.
+            turn_started = True
             if asyncio.iscoroutine(turn_handle):
                 turn_handle = await turn_handle
             stream_fn = getattr(turn_handle, "stream", None)
@@ -681,6 +764,7 @@ async def _stream_thread_run(
                 if asyncio.iscoroutine(stream_obj):
                     stream_obj = await stream_obj
                 async for event in stream_obj:
+                    turn_started = True
                     payload = getattr(event, "payload", event)
                     text = _coerce_text(payload)
                     if text:
@@ -703,11 +787,16 @@ async def _stream_thread_run(
                 exc_type = type(exc).__name__,
                 error = str(exc),
                 emitted_any = emitted_any,
+                turn_started = turn_started,
             )
-            if emitted_any:
-                # The Codex turn already ran far enough to emit text;
-                # do not re-execute via run() or run_streaming() -- the
-                # side-effects (commands / writes) would replay.
+            if turn_started:
+                # The Codex turn has executed at least one event on
+                # the upstream side (it may have launched shell
+                # commands or written files via tool events that
+                # _coerce_text filtered out). Re-executing via
+                # run_streaming / run() would duplicate those side
+                # effects, so stop here even if no visible text was
+                # yielded.
                 return
 
     # 2. Legacy: thread.run_streaming(prompt)
@@ -715,9 +804,14 @@ async def _stream_thread_run(
     if run_streaming is not None:
         try:
             stream_obj = run_streaming(prompt)
+            # Same reasoning as the canonical path above: calling the
+            # streaming helper is enough to start the turn on the SDK
+            # side, so a later crash must NOT replay via buffered run.
+            turn_started = True
             if asyncio.iscoroutine(stream_obj):
                 stream_obj = await stream_obj
             async for event in stream_obj:
+                turn_started = True
                 text = _coerce_text(event)
                 if text:
                     emitted_any = True
@@ -729,13 +823,16 @@ async def _stream_thread_run(
                 exc_type = type(exc).__name__,
                 error = str(exc),
                 emitted_any = emitted_any,
+                turn_started = turn_started,
             )
-            if emitted_any:
+            if turn_started:
                 return
 
     # 3. Buffered fallback: await the full TurnResult, emit one chunk.
-    # Only reached when no streaming helper emitted anything, so this
-    # is the first (and only) execution of the turn.
+    # Only reached when no streaming helper ran at all (no turn /
+    # run_streaming attributes on the thread, or both raised before
+    # observing any event / starting the turn), so this is the first
+    # and only execution of the turn.
     result = await thread.run(prompt)
     text = _buffered_result_text(result)
     if text:
@@ -1357,26 +1454,44 @@ async def stream_codex_device_login() -> AsyncGenerator[dict[str, Any], None]:
     # through Studio's authenticated SSE stream. The URL and code
     # extracted above are emitted separately as `device_url` /
     # `device_code` events and are not affected by this filter.
-    safe_log_patterns: tuple[str, ...] = (
-        "welcome to codex",
-        "initializing",
-        "open this",
-        "open:",
-        "open the",
-        "verification",
-        "enter this one-time code",
-        "enter the code",
-        "waiting",
-        "successfully logged in",
-        "logged in",
-        "signed in",
-        "browser opened",
-        "press ctrl",
+    # Anchored regexes so the line must START with one of the upstream
+    # `codex login --device-auth` phrases. A substring match like the
+    # old "logged in" check is too loose: a malicious shim could print
+    # `Not logged in: refresh_token=rt_LEAK auth.json=/home/u/.codex/`
+    # and the substring `logged in` would let the line through, leaking
+    # auth artefacts into the browser. Start anchors plus a blocklist
+    # of known sensitive substrings close that hole.
+    safe_log_res: tuple[Any, ...] = (
+        re.compile(r"^welcome to codex\b", re.IGNORECASE),
+        re.compile(r"^initializing\b", re.IGNORECASE),
+        re.compile(r"^open (?:this|the verification)", re.IGNORECASE),
+        re.compile(r"^open:\s*https?://", re.IGNORECASE),
+        re.compile(r"^enter (?:this one-time code|the code)\b", re.IGNORECASE),
+        re.compile(r"^waiting\b", re.IGNORECASE),
+        re.compile(r"^successfully (?:logged|signed) in\b", re.IGNORECASE),
+        re.compile(r"^(?:logged|signed) in\b", re.IGNORECASE),
+        re.compile(r"^browser opened\b", re.IGNORECASE),
+        re.compile(r"^press ctrl", re.IGNORECASE),
+    )
+    # Strict blocklist: any of these substrings in the line means the
+    # log entry contains sensitive auth state, a path under the codex
+    # config dir, or an explicit "not logged in" failure -- none of
+    # which the user-facing SSE stream should mirror, regardless of
+    # whether some other prefix matched.
+    unsafe_log_re = re.compile(
+        r"\bnot\s+(?:logged|signed)\s+in\b|"
+        r"\bnot\s+authenticated\b|"
+        r"refresh[_-]?token|access[_-]?token|"
+        r"\bapi[_-]?key\b|\bsecret\b|"
+        r"\bauth\.json\b|"
+        r"/\.codex/|\\\.codex\\",
+        re.IGNORECASE,
     )
 
     def _safe_to_forward(text: str) -> bool:
-        lowered = text.lower()
-        return any(pat in lowered for pat in safe_log_patterns)
+        if unsafe_log_re.search(text):
+            return False
+        return any(pattern.search(text) for pattern in safe_log_res)
 
     try:
         assert proc.stdout is not None
@@ -1389,8 +1504,20 @@ async def stream_codex_device_login() -> AsyncGenerator[dict[str, Any], None]:
             if not url_emitted:
                 match = url_re.search(line)
                 if match:
-                    yield {"type": "device_url", "url": match.group(0)}
-                    url_emitted = True
+                    candidate = match.group(0)
+                    if _is_allowed_device_url(candidate):
+                        yield {"type": "device_url", "url": candidate}
+                        url_emitted = True
+                    else:
+                        # A shimmed codex on PATH could print a phishing
+                        # URL that matches the regex but points at an
+                        # attacker host (e.g. https://evil.example/activate
+                        # ?code=ABCD). Drop it rather than surfacing
+                        # "Open verification page" to a real user.
+                        logger.warning(
+                            "codex_provider.login_url_rejected",
+                            host = (_safe_host(candidate) or "<unparsable>"),
+                        )
             if not code_emitted:
                 cm = code_re.search(line)
                 if cm:

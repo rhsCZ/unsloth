@@ -44,6 +44,31 @@ export interface InferenceParams {
    * upstream defaults across all three.
    */
   parallelToolCalls: boolean;
+  /**
+   * Locally typical sampling (llama.cpp `typ_p`). Local llama-server
+   * only — no SaaS provider currently accepts this. 1.0 disables (and
+   * is the llama-server default). `null` = unset (not forwarded).
+   */
+  typicalP: number | null;
+  /** llama.cpp `top_n_sigma`. -1 disables. `null` = unset. */
+  topNSigma: number | null;
+  /** llama.cpp `repeat_last_n`. 0 disables, -1 = ctx-size. `null` = unset. */
+  repeatLastN: number | null;
+  /** llama.cpp `dynatemp_range`. 0.0 disables. `null` = unset. */
+  dynatempRange: number | null;
+  /** llama.cpp `dynatemp_exponent`. `null` = unset. */
+  dynatempExponent: number | null;
+  /** llama.cpp `mirostat` mode (0/1/2). 0 disables. `null` = unset. */
+  mirostat: number | null;
+  /** llama.cpp `mirostat_tau` target entropy. `null` = unset. */
+  mirostatTau: number | null;
+  /** llama.cpp `mirostat_eta` learning rate. `null` = unset. */
+  mirostatEta: number | null;
+  /**
+   * OpenRouter `top_a` alternate dynamic-top-P. OpenRouter-only.
+   * Range [0, 1]. `null` = unset.
+   */
+  topA: number | null;
   maxSeqLength: number;
   maxTokens: number;
   systemPrompt: string;
@@ -70,6 +95,15 @@ export const DEFAULT_INFERENCE_PARAMS: InferenceParams = {
   stop: [],
   serviceTier: null,
   parallelToolCalls: true,
+  typicalP: null,
+  topNSigma: null,
+  repeatLastN: null,
+  dynatempRange: null,
+  dynatempExponent: null,
+  mirostat: null,
+  mirostatTau: null,
+  mirostatEta: null,
+  topA: null,
   maxSeqLength: 4096,
   maxTokens: 8192,
   systemPrompt: "",

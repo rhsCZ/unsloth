@@ -60,7 +60,9 @@ _INTENT_SIGNAL = re.compile(
     # Handles both straight and curly apostrophes.
     # Excludes "I can", "I should", "I want to", "let's" which
     # appear frequently in direct answers / explanations.
-    r"\b(i['\u2019](ll|m going to|m gonna)|i am (going to|gonna)|i will|i shall|let me|allow me)\b"
+    # Negative lookahead drops negated forms ("I will not", "I'll never")
+    # so a refusal doesn't trigger a re-prompt.
+    r"\b(i['\u2019](ll|m going to|m gonna)|i am (going to|gonna)|i will|i shall|let me|allow me)\b(?!\s+(?:not|never)\b)"
     r"|"
     # Step/plan framing: "First ...", "Step 1:", "Here's my plan"
     r"\b(?:first\b|step \d+:?|here['\u2019]?s (?:my |the |a )?(?:plan|approach))"
@@ -4248,6 +4250,14 @@ class LlamaCppBackend:
         frequency_penalty: Optional[float] = None,
         seed: Optional[int] = None,
         parallel_tool_calls: Optional[bool] = None,
+        typical_p: Optional[float] = None,
+        top_n_sigma: Optional[float] = None,
+        repeat_last_n: Optional[int] = None,
+        dynatemp_range: Optional[float] = None,
+        dynatemp_exponent: Optional[float] = None,
+        mirostat: Optional[int] = None,
+        mirostat_tau: Optional[float] = None,
+        mirostat_eta: Optional[float] = None,
     ) -> Generator[str | dict, None, None]:
         """
         Send a chat completion request to llama-server and stream tokens back.
@@ -4306,6 +4316,28 @@ class LlamaCppBackend:
             payload["seed"] = seed
         if parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = parallel_tool_calls
+        # Locally typical sampling. llama-server default 1.0 disables it;
+        # the field is llama.cpp-specific (no cloud provider accepts it),
+        # so we only forward it when the caller explicitly sets one.
+        if typical_p is not None:
+            payload["typical_p"] = typical_p
+        # Extended llama.cpp sampler chain (top_n_sigma, repeat_last_n,
+        # dynatemp_*, mirostat_*). All llama.cpp-specific; the frontend
+        # capability map gates them to local backends only.
+        if top_n_sigma is not None:
+            payload["top_n_sigma"] = top_n_sigma
+        if repeat_last_n is not None:
+            payload["repeat_last_n"] = repeat_last_n
+        if dynatemp_range is not None:
+            payload["dynatemp_range"] = dynatemp_range
+        if dynatemp_exponent is not None:
+            payload["dynatemp_exponent"] = dynatemp_exponent
+        if mirostat is not None:
+            payload["mirostat"] = mirostat
+        if mirostat_tau is not None:
+            payload["mirostat_tau"] = mirostat_tau
+        if mirostat_eta is not None:
+            payload["mirostat_eta"] = mirostat_eta
         payload["stream_options"] = {"include_usage": True}
 
         url = f"{self.base_url}/v1/chat/completions"
@@ -4451,6 +4483,14 @@ class LlamaCppBackend:
         frequency_penalty: Optional[float] = None,
         seed: Optional[int] = None,
         parallel_tool_calls: Optional[bool] = None,
+        typical_p: Optional[float] = None,
+        top_n_sigma: Optional[float] = None,
+        repeat_last_n: Optional[int] = None,
+        dynatemp_range: Optional[float] = None,
+        dynatemp_exponent: Optional[float] = None,
+        mirostat: Optional[int] = None,
+        mirostat_tau: Optional[float] = None,
+        mirostat_eta: Optional[float] = None,
     ) -> Generator[dict, None, None]:
         """
         Agentic loop: let the model call tools, execute them, and continue.
@@ -4548,6 +4588,22 @@ class LlamaCppBackend:
                 payload["seed"] = seed
             if parallel_tool_calls is not None:
                 payload["parallel_tool_calls"] = parallel_tool_calls
+            if typical_p is not None:
+                payload["typical_p"] = typical_p
+            if top_n_sigma is not None:
+                payload["top_n_sigma"] = top_n_sigma
+            if repeat_last_n is not None:
+                payload["repeat_last_n"] = repeat_last_n
+            if dynatemp_range is not None:
+                payload["dynatemp_range"] = dynatemp_range
+            if dynatemp_exponent is not None:
+                payload["dynatemp_exponent"] = dynatemp_exponent
+            if mirostat is not None:
+                payload["mirostat"] = mirostat
+            if mirostat_tau is not None:
+                payload["mirostat_tau"] = mirostat_tau
+            if mirostat_eta is not None:
+                payload["mirostat_eta"] = mirostat_eta
 
             try:
                 _auth_headers = (
@@ -5240,6 +5296,22 @@ class LlamaCppBackend:
             stream_payload["seed"] = seed
         if parallel_tool_calls is not None:
             stream_payload["parallel_tool_calls"] = parallel_tool_calls
+        if typical_p is not None:
+            stream_payload["typical_p"] = typical_p
+        if top_n_sigma is not None:
+            stream_payload["top_n_sigma"] = top_n_sigma
+        if repeat_last_n is not None:
+            stream_payload["repeat_last_n"] = repeat_last_n
+        if dynatemp_range is not None:
+            stream_payload["dynatemp_range"] = dynatemp_range
+        if dynatemp_exponent is not None:
+            stream_payload["dynatemp_exponent"] = dynatemp_exponent
+        if mirostat is not None:
+            stream_payload["mirostat"] = mirostat
+        if mirostat_tau is not None:
+            stream_payload["mirostat_tau"] = mirostat_tau
+        if mirostat_eta is not None:
+            stream_payload["mirostat_eta"] = mirostat_eta
         stream_payload["stream_options"] = {"include_usage": True}
 
         cumulative = ""

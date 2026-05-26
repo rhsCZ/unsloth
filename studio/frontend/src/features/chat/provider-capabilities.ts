@@ -13,6 +13,10 @@
  * a null capability — every knob renders for them.
  */
 
+// NB: when adding a new sampling knob, default it to `false` on every
+// SaaS provider in PROVIDER_CAPABILITIES below (only local backends
+// + the permissive {custom, vllm, ollama, llama_cpp, openrouter}
+// providers should expose llama.cpp-specific samplers).
 export interface ProviderCapabilities {
   /**
    * Temperature sampling. Reasoning-class models (OpenAI's gpt-5.x / o3 via
@@ -58,6 +62,55 @@ export interface ProviderCapabilities {
    * `disable_parallel_tool_use: true` on Anthropic (inverted).
    */
   parallelToolCalls: boolean;
+  /**
+   * llama.cpp `typ_p` (locally typical sampling). Local llama-server
+   * only — no SaaS provider currently accepts this field. Default is
+   * `false` for every external provider and `true` only for the local
+   * permissive {custom, vllm, ollama, llama_cpp} buckets.
+   */
+  typicalP: boolean;
+  /**
+   * llama.cpp `top_n_sigma` sampler (newer top-sigma cutoff). Local
+   * only; -1 disables.
+   * https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
+   */
+  topNSigma: boolean;
+  /**
+   * llama.cpp repetition window (`repeat_last_n`). Pairs with
+   * `repeat_penalty`. Local only; 0 disables, -1 = ctx-size.
+   */
+  repeatLastN: boolean;
+  /**
+   * llama.cpp dynamic temperature range (`dynatemp_range`). Local
+   * only; 0.0 disables.
+   */
+  dynatempRange: boolean;
+  /**
+   * llama.cpp dynamic temperature exponent (`dynatemp_exponent`).
+   * Local only. Paired with dynatempRange.
+   */
+  dynatempExponent: boolean;
+  /**
+   * llama.cpp Mirostat sampling mode (`mirostat`). Local only.
+   * 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0.
+   */
+  mirostat: boolean;
+  /**
+   * llama.cpp Mirostat target entropy (`mirostat_tau`). Local only.
+   * Only meaningful when mirostat != 0.
+   */
+  mirostatTau: boolean;
+  /**
+   * llama.cpp Mirostat learning rate (`mirostat_eta`). Local only.
+   * Only meaningful when mirostat != 0.
+   */
+  mirostatEta: boolean;
+  /**
+   * OpenRouter `top_a` (alternate dynamic-top-P). Documented at
+   * https://openrouter.ai/docs/api/reference/parameters. Other
+   * gateways silently drop it; we surface it only for openrouter.
+   */
+  topA: boolean;
 }
 
 /**
@@ -159,17 +212,94 @@ export function clampReasoningEffortToLevels(
 }
 
 /**
- * Output-token cap for any external provider request. Picked to stay below the
- * tightest declared limit across the providers we ship (Anthropic Claude Opus
- * tops out at 128k, GPT-5.x ~128k, Gemini 2.5 ~65k, DeepSeek 8k) while staying
- * well above what a typical chat reply needs. The local-model path is not
- * subject to this — local backends honour whatever the loaded context allows.
- *
- * If a user's stored maxTokens (e.g. carried over from a prior local-model
- * session with a 128k+ context) exceeds this, chat-adapter clamps the
- * outbound request so the provider does not 400 on it.
+ * Fallback cap for unknown providers / models. Prefer
+ * `getExternalMaxOutputTokens(providerType, modelId)` for the real cap.
  */
 export const EXTERNAL_MAX_OUTPUT_TOKENS = 32768;
+
+/**
+ * Per-model max-output caps from each provider's docs:
+ *   OpenAI:    developers.openai.com/api/docs/models/gpt-5.5
+ *   Anthropic: platform.claude.com/docs/en/about-claude/models
+ *   Gemini:    ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview
+ *   DeepSeek:  api-docs.deepseek.com/quick_start/pricing (V4 family)
+ * Local-model path is unaffected.
+ */
+const EXTERNAL_MAX_OUTPUT_TOKENS_BY_MODEL: Array<{
+  providerType: string;
+  prefixes: readonly string[];
+  cap: number;
+}> = [
+  // OpenAI
+  { providerType: "openai", prefixes: ["gpt-5.5-pro", "gpt-5.5"], cap: 128000 },
+  { providerType: "openai", prefixes: ["gpt-5.4-pro", "gpt-5.4"], cap: 65536 },
+  { providerType: "openai", prefixes: ["gpt-5.3"], cap: 16384 },
+  // Anthropic
+  {
+    providerType: "anthropic",
+    prefixes: ["claude-opus-4-7"],
+    cap: 128000,
+  },
+  {
+    providerType: "anthropic",
+    prefixes: [
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-opus-4-5",
+      "claude-sonnet-4-5",
+      "claude-haiku-4-5",
+    ],
+    cap: 64000,
+  },
+  // Gemini
+  {
+    providerType: "gemini",
+    prefixes: ["gemini-3", "gemini-pro", "gemini-flash"],
+    cap: 65536,
+  },
+  // DeepSeek (V4: deepseek-chat / deepseek-reasoner alias V4-flash).
+  { providerType: "deepseek", prefixes: ["deepseek"], cap: 384000 },
+];
+
+/**
+ * Documented per-model output cap; unknown ids fall back to
+ * `EXTERNAL_MAX_OUTPUT_TOKENS` (32k). OpenRouter ids are
+ * `provider/model`; the prefix is stripped before matching.
+ */
+export function getExternalMaxOutputTokens(
+  providerType: string | null | undefined,
+  modelId: string | null | undefined,
+): number {
+  if (!providerType || !modelId) return EXTERNAL_MAX_OUTPUT_TOKENS;
+  const normalized = modelId.trim().toLowerCase();
+  if (!normalized) return EXTERNAL_MAX_OUTPUT_TOKENS;
+  const stripped =
+    providerType === "openrouter" && normalized.includes("/")
+      ? normalized.split("/").slice(-1)[0]
+      : normalized;
+  const effectiveProvider =
+    providerType === "openrouter"
+      ? _inferProviderFromOpenrouterId(normalized) ?? providerType
+      : providerType;
+  for (const entry of EXTERNAL_MAX_OUTPUT_TOKENS_BY_MODEL) {
+    if (entry.providerType !== effectiveProvider) continue;
+    if (entry.prefixes.some((prefix) => stripped.startsWith(prefix))) {
+      return entry.cap;
+    }
+  }
+  return EXTERNAL_MAX_OUTPUT_TOKENS;
+}
+
+function _inferProviderFromOpenrouterId(
+  normalizedId: string,
+): string | null {
+  // Map OpenRouter `provider/model` prefix to our internal providerType.
+  if (normalizedId.startsWith("openai/")) return "openai";
+  if (normalizedId.startsWith("anthropic/")) return "anthropic";
+  if (normalizedId.startsWith("google/")) return "gemini";
+  if (normalizedId.startsWith("deepseek/")) return "deepseek";
+  return null;
+}
 
 /**
  * Whether the external provider offers a built-in web-search tool that the
@@ -295,15 +425,21 @@ const OPENAI_CODE_EXECUTION_MODEL_PREFIXES = [
 
 /**
  * Strict check that a provider configuration points at OpenAI's
- * managed cloud (api.openai.com), as opposed to a custom OpenAI-compat
- * backend (ollama / llama.cpp / vLLM / generic "custom" preset). The
- * shell tool ONLY exists on OpenAI cloud; sending it to anything else
- * 400s the request. Mirror of the backend's
- * `is_openai_cloud = "api.openai.com" in self.base_url` guard.
+ * managed cloud (api.openai.com) or Azure OpenAI Foundry
+ * (*.openai.azure.com), as opposed to a custom OpenAI-compat backend
+ * (ollama / llama.cpp / vLLM / generic "custom" preset). The shell and
+ * image-generation tools only exist on cloud backends; sending them to
+ * anything else 400s the request. Mirror of the backend's
+ * `_is_openai_family_cloud` host check.
  */
 function isOpenAICloudBaseUrl(baseUrl: string | null | undefined): boolean {
   if (!baseUrl) return true; // No override → uses the default openai.com base.
-  return baseUrl.trim().toLowerCase().includes("api.openai.com");
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "api.openai.com" || host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
 }
 
 export function providerSupportsBuiltinCodeExecution(
@@ -401,9 +537,22 @@ const OPENAI_COMPAT_BASE: ProviderCapabilities = {
   stop: true,
   serviceTier: false,
   parallelToolCalls: true,
+  typicalP: false,
+  topNSigma: false,
+  repeatLastN: false,
+  dynatempRange: false,
+  dynatempExponent: false,
+  mirostat: false,
+  mirostatTau: false,
+  mirostatEta: false,
+  topA: false,
 };
 
-const ALL_SUPPORTED: ProviderCapabilities = {
+// Local llama.cpp-style backends (own llama-server, vLLM with extended
+// sampler support, Ollama). Exposes the full llama.cpp sampler chain
+// (typical_p / top_n_sigma / mirostat / dynatemp / repeat_last_n) but
+// not OpenRouter's gateway-specific top_a.
+const LOCAL_LLAMA_CAPABILITIES: ProviderCapabilities = {
   temperature: true,
   topP: true,
   topK: true,
@@ -415,6 +564,45 @@ const ALL_SUPPORTED: ProviderCapabilities = {
   stop: true,
   serviceTier: false,
   parallelToolCalls: true,
+  typicalP: true,
+  topNSigma: true,
+  repeatLastN: true,
+  dynatempRange: true,
+  dynatempExponent: true,
+  mirostat: true,
+  mirostatTau: true,
+  mirostatEta: true,
+  topA: false,
+};
+
+// OpenRouter is a router-of-routers: the gateway accepts a wider set
+// of OpenAI-style sampling fields than any single upstream supports
+// and silently drops what the chosen route does not, per
+// https://openrouter.ai/docs/api/reference/parameters. Surface the
+// router's full documented set (incl. top_a) and leave the
+// llama.cpp-only knobs off (the docs don't list them, so we don't
+// either even though many openrouter routes terminate at llama.cpp).
+const OPENROUTER_CAPABILITIES: ProviderCapabilities = {
+  temperature: true,
+  topP: true,
+  topK: true,
+  minP: true,
+  repetitionPenalty: true,
+  presencePenalty: true,
+  frequencyPenalty: true,
+  seed: true,
+  stop: true,
+  serviceTier: false,
+  parallelToolCalls: true,
+  typicalP: false,
+  topNSigma: false,
+  repeatLastN: false,
+  dynatempRange: false,
+  dynatempExponent: false,
+  mirostat: false,
+  mirostatTau: false,
+  mirostatEta: false,
+  topA: true,
 };
 
 // Reasoning-class OpenAI models served via /v1/responses fix temperature
@@ -437,6 +625,15 @@ const OPENAI_REASONING_CAPABILITIES: ProviderCapabilities = {
   stop: false,
   serviceTier: true,
   parallelToolCalls: true,
+  typicalP: false,
+  topNSigma: false,
+  repeatLastN: false,
+  dynatempRange: false,
+  dynatempExponent: false,
+  mirostat: false,
+  mirostatTau: false,
+  mirostatEta: false,
+  topA: false,
 };
 const OPENAI_CHAT_CAPABILITIES: ProviderCapabilities = {
   temperature: true,
@@ -452,6 +649,15 @@ const OPENAI_CHAT_CAPABILITIES: ProviderCapabilities = {
   stop: false,
   serviceTier: true,
   parallelToolCalls: true,
+  typicalP: false,
+  topNSigma: false,
+  repeatLastN: false,
+  dynatempRange: false,
+  dynatempExponent: false,
+  mirostat: false,
+  mirostatTau: false,
+  mirostatEta: false,
+  topA: false,
 };
 
 // Prefix list for OpenAI reasoning-class model ids. Kept in sync with
@@ -493,6 +699,23 @@ function isClaude47SamplingRemoved(modelId: string | null | undefined): boolean 
   return ANTHROPIC_4_7_SAMPLING_REMOVED_REGEX.test(normalized);
 }
 
+// DeepSeek reasoning-class models silently ignore temperature, top_p,
+// presence_penalty, frequency_penalty and 400 on logprobs/top_logprobs.
+// `deepseek-reasoner` is the dedicated thinking model;
+// `deepseek-v4-flash` runs reasoning-mode under the same flag as well.
+// Match by prefix so future revisions (deepseek-reasoner-2027 etc.)
+// continue to gate correctly.
+const DEEPSEEK_REASONING_MODEL_PREFIXES = [
+  "deepseek-reasoner",
+  "deepseek-r1",
+] as const;
+
+function isDeepSeekReasoningModelId(modelId: string | null | undefined): boolean {
+  const normalized = modelId?.trim().toLowerCase() ?? "";
+  if (!normalized) return false;
+  return DEEPSEEK_REASONING_MODEL_PREFIXES.some((p) => normalized.startsWith(p));
+}
+
 const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
   // Default OpenAI bucket is reasoning-class (current registry only ships
   // gpt-5.x / o3 ids), but per-model resolution in getProviderCapabilities
@@ -520,6 +743,15 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     stop: true,
     serviceTier: true,
     parallelToolCalls: true,
+    typicalP: false,
+    topNSigma: false,
+    repeatLastN: false,
+    dynatempRange: false,
+    dynatempExponent: false,
+    mirostat: false,
+    mirostatTau: false,
+    mirostatEta: false,
+    topA: false,
   },
   mistral: OPENAI_COMPAT_BASE,
   gemini: OPENAI_COMPAT_BASE,
@@ -547,8 +779,25 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     stop: true,
     serviceTier: false,
     parallelToolCalls: false,
+    typicalP: false,
+    topNSigma: false,
+    repeatLastN: false,
+    dynatempRange: false,
+    dynatempExponent: false,
+    mirostat: false,
+    mirostatTau: false,
+    mirostatEta: false,
+    topA: false,
   },
   // DeepSeek deprecated presence/frequency penalty in their current docs.
+  // Chat-class defaults (deepseek-chat / deepseek-v4-flash non-thinking):
+  // accept temperature, top_p, seed, stop. Reasoning class
+  // (deepseek-reasoner / deepseek-v4-flash thinking-mode) ignores
+  // temperature, top_p, presence_penalty, frequency_penalty entirely and
+  // 400s on logprobs — see
+  // https://api-docs.deepseek.com/guides/reasoning_model. Per-model
+  // resolution in getProviderCapabilities downshifts reasoner ids onto
+  // DEEPSEEK_REASONING_CAPABILITIES.
   deepseek: {
     temperature: true,
     topP: true,
@@ -561,19 +810,30 @@ const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     stop: true,
     serviceTier: false,
     parallelToolCalls: true,
+    typicalP: false,
+    topNSigma: false,
+    repeatLastN: false,
+    dynatempRange: false,
+    dynatempExponent: false,
+    mirostat: false,
+    mirostatTau: false,
+    mirostatEta: false,
+    topA: false,
   },
   qwen: OPENAI_COMPAT_BASE,
   huggingface: OPENAI_COMPAT_BASE,
-  // OpenRouter silently drops params the target model does not support, so we
-  // surface every knob and let the gateway handle the per-model fan-out.
-  openrouter: ALL_SUPPORTED,
-  // Local OpenAI-compatible connections are proxied through the OpenAI backend
-  // path, but vLLM/Ollama/llama.cpp users often want top_k / min_p /
-  // repetition controls, so be permissive.
-  custom: ALL_SUPPORTED,
-  vllm: ALL_SUPPORTED,
-  ollama: ALL_SUPPORTED,
-  llama_cpp: ALL_SUPPORTED,
+  // OpenRouter surfaces the gateway's documented sampling field set
+  // (incl. top_a). llama.cpp-specific knobs (typical_p, mirostat,
+  // dynatemp, top_n_sigma, repeat_last_n) are gated off because the
+  // OpenRouter API docs do not list them; they would be silently
+  // dropped on most underlying models.
+  openrouter: OPENROUTER_CAPABILITIES,
+  // Local OpenAI-compatible connections terminate at llama-server-
+  // style backends — full llama.cpp sampler chain available.
+  custom: LOCAL_LLAMA_CAPABILITIES,
+  vllm: LOCAL_LLAMA_CAPABILITIES,
+  ollama: LOCAL_LLAMA_CAPABILITIES,
+  llama_cpp: LOCAL_LLAMA_CAPABILITIES,
 };
 
 const DEFAULT_EXTERNAL_CAPABILITIES = OPENAI_COMPAT_BASE;
@@ -591,6 +851,8 @@ const DEFAULT_EXTERNAL_CAPABILITIES = OPENAI_COMPAT_BASE;
  *     (OPENAI_REASONING_CAPABILITIES).
  *   - anthropic + claude-*-4-7: temperature/top_p/top_k stripped to
  *     match the backend 400-avoidance regex.
+ *   - deepseek + reasoning model (deepseek-reasoner / r1): hides
+ *     temperature/top_p (silently ignored upstream).
  */
 export function getProviderCapabilities(
   providerType: string | null | undefined,
@@ -603,6 +865,9 @@ export function getProviderCapabilities(
   }
   if (providerType === "anthropic" && isClaude47SamplingRemoved(modelId)) {
     return { ...base, temperature: false, topP: false, topK: false };
+  }
+  if (providerType === "deepseek" && isDeepSeekReasoningModelId(modelId)) {
+    return { ...base, temperature: false, topP: false };
   }
   return base;
 }

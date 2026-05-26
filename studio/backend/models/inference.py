@@ -299,7 +299,11 @@ class InferenceStatusResponse(BaseModel):
     """Current inference backend status"""
 
     active_model: Optional[str] = Field(
-        None, description = "Currently active model identifier"
+        None, description = "Currently active model display identifier"
+    )
+    model_identifier: Optional[str] = Field(
+        None,
+        description = "Loadable identifier for the active model.",
     )
     is_vision: bool = Field(
         False, description = "Whether the active model is a vision model"
@@ -471,6 +475,40 @@ class InputDocumentContentPart(BaseModel):
     )
 
 
+class OpenAIReasoningContentPart(BaseModel):
+    """OpenAI Responses reasoning item paired with a tool output.
+
+    Reasoning models can require the previous ``reasoning`` output item
+    to be replayed immediately before an ``image_generation_call`` id
+    when manually managing Responses context. This part is OpenAI-only;
+    routes strip it for every other provider before proxying.
+    """
+
+    type: Literal["reasoning"]
+    id: str = Field(..., description = "OpenAI reasoning output item id.")
+    summary: list[dict[str, Any]] = Field(default_factory = list)
+    status: Optional[Literal["in_progress", "completed", "incomplete"]] = None
+
+
+class ImageGenerationCallContentPart(BaseModel):
+    """OpenAI Responses image_generation call reference.
+
+    OpenAI accepts prior ``image_generation_call`` items in the next
+    Responses ``input`` array so follow-up prompts can edit or refine a
+    generated image without resending the base64 payload. The frontend
+    forwards this as a synthetic assistant content part when building
+    the next OpenAI Responses request; ``external_provider`` translates
+    it back to the provider-specific top-level input item.
+    """
+
+    type: Literal["image_generation_call"]
+    id: str = Field(..., description = "OpenAI image_generation_call output item id.")
+    response_id: Optional[str] = Field(
+        None,
+        description = "OpenAI Responses response id to use as previous_response_id for follow-up edits.",
+    )
+
+
 class CompactionContentPart(BaseModel):
     """Anthropic server-side compaction state, attached to an assistant
     message for round-tripping on the next turn.
@@ -504,6 +542,8 @@ ContentPart = Annotated[
         Annotated[TextContentPart, Tag("text")],
         Annotated[ImageContentPart, Tag("image_url")],
         Annotated[InputDocumentContentPart, Tag("input_document")],
+        Annotated[OpenAIReasoningContentPart, Tag("reasoning")],
+        Annotated[ImageGenerationCallContentPart, Tag("image_generation_call")],
         Annotated[CompactionContentPart, Tag("compaction")],
     ],
     Discriminator(_content_part_discriminator),
@@ -826,6 +866,73 @@ class ChatCompletionRequest(BaseModel):
             "inverted into `disable_parallel_tool_use` on the Messages "
             "body. Default `None` preserves each provider's upstream "
             "default (which is `true` everywhere today)."
+        ),
+    )
+    typical_p: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = (
+            "Locally typical sampling (llama.cpp `typ_p`). 1.0 disables. "
+            "Local llama-server only — no SaaS provider currently accepts "
+            "this field, so the frontend capability map gates it off for "
+            "every external provider and the local path forwards it on "
+            "/v1/chat/completions."
+        ),
+    )
+    top_n_sigma: Optional[float] = Field(
+        None,
+        description = (
+            "llama.cpp `top_n_sigma` sampler. -1.0 disables (server "
+            "default). Local only — no SaaS provider accepts it."
+        ),
+    )
+    repeat_last_n: Optional[int] = Field(
+        None,
+        description = (
+            "llama.cpp `repeat_last_n`. 0 disables, -1 = ctx-size. "
+            "Pairs with repetition_penalty. Local only."
+        ),
+    )
+    dynatemp_range: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        description = ("llama.cpp `dynatemp_range`. 0.0 disables. Local only."),
+    )
+    dynatemp_exponent: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        description = (
+            "llama.cpp `dynatemp_exponent`. Local only; pairs with " "dynatemp_range."
+        ),
+    )
+    mirostat: Optional[int] = Field(
+        None,
+        ge = 0,
+        le = 2,
+        description = (
+            "llama.cpp `mirostat` mode. 0 = disabled, 1 = Mirostat, "
+            "2 = Mirostat 2.0. Local only."
+        ),
+    )
+    mirostat_tau: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        description = "llama.cpp `mirostat_tau` target entropy. Local only.",
+    )
+    mirostat_eta: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        description = "llama.cpp `mirostat_eta` learning rate. Local only.",
+    )
+    top_a: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = (
+            "OpenRouter `top_a` alternate dynamic-top-P. Documented at "
+            "https://openrouter.ai/docs/api/reference/parameters. "
+            "OpenRouter-only; other gateways silently drop it."
         ),
     )
     fast_mode: Optional[bool] = Field(

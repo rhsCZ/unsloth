@@ -1001,6 +1001,95 @@ def test_local_anthropic_passthrough_helpers_accept_parallel_tool_calls():
     assert body.get("parallel_tool_calls") is False, body
 
 
+def test_local_passthrough_forwards_extended_llama_cpp_samplers():
+    """The local llama.cpp passthrough payload builder must forward
+    the extended sampler chain when set: top_n_sigma, repeat_last_n,
+    dynatemp_range/exponent, mirostat/mirostat_tau/mirostat_eta. Each
+    is gated `is not None` so a default-off value (e.g. mirostat=0) is
+    still forwarded explicitly when the caller opted in.
+    """
+    from routes import inference as route_mod
+
+    body = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+        top_n_sigma = 1.5,
+        repeat_last_n = 128,
+        dynatemp_range = 0.2,
+        dynatemp_exponent = 1.5,
+        mirostat = 2,
+        mirostat_tau = 5.0,
+        mirostat_eta = 0.1,
+    )
+    assert body.get("top_n_sigma") == 1.5
+    assert body.get("repeat_last_n") == 128
+    assert body.get("dynatemp_range") == 0.2
+    assert body.get("dynatemp_exponent") == 1.5
+    assert body.get("mirostat") == 2
+    assert body.get("mirostat_tau") == 5.0
+    assert body.get("mirostat_eta") == 0.1
+
+    # Unset = absent from body so llama-server falls back to defaults.
+    body2 = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+    )
+    for key in (
+        "top_n_sigma",
+        "repeat_last_n",
+        "dynatemp_range",
+        "dynatemp_exponent",
+        "mirostat",
+        "mirostat_tau",
+        "mirostat_eta",
+    ):
+        assert key not in body2, body2
+
+
+def test_local_passthrough_forwards_typical_p_when_set():
+    """`typical_p` is a llama.cpp-specific sampler (`typ_p` in the
+    sampler chain). The local-llama-cpp passthrough payload builder must
+    forward it when set so the chat-adapter can opt in for local
+    backends without the field bleeding into external providers (whose
+    capability map gates it off)."""
+    from routes import inference as route_mod
+
+    body = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+        typical_p = 0.7,
+    )
+    assert body.get("typical_p") == 0.7, body
+
+    # When unset, the field is omitted entirely so llama-server falls
+    # back to its 1.0 default.
+    body2 = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+    )
+    assert "typical_p" not in body2, body2
+
+
 def test_anthropic_4_7_sampling_removed_regex_matches_expected_ids():
     """Pin the canonical Claude 4.7 model-id shape so the frontend
     ANTHROPIC_4_7_SAMPLING_REMOVED_REGEX in

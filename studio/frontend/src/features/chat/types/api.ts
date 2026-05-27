@@ -357,6 +357,55 @@ export interface OpenAIChatCompletionsRequest {
    * https://platform.claude.com/docs/en/build-with-claude/fast-mode
    */
   fast_mode?: boolean | null;
+  /**
+   * llama.cpp DRY (Don't Repeat Yourself) sampler family. All four
+   * fields documented at
+   * https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
+   * 0.0 / null on `dry_multiplier` disables the whole chain. Local only.
+   */
+  dry_multiplier?: number;
+  /** llama.cpp DRY base. Default 1.75. Local only. */
+  dry_base?: number;
+  /** llama.cpp DRY allowed length threshold. Default 2. Local only. */
+  dry_allowed_length?: number;
+  /** llama.cpp DRY penalty scan window. 0 disables, -1 = ctx-size. Local only. */
+  dry_penalty_last_n?: number;
+  /** llama.cpp XTC sampler probability. 0.0 disables. Local only. */
+  xtc_probability?: number;
+  /** llama.cpp XTC sampler threshold. Default 0.1. Local only. */
+  xtc_threshold?: number;
+  /** llama.cpp `min_keep` (force min N tokens past filters). Local only. */
+  min_keep?: number;
+  /**
+   * Continue generating past the model's EOS token. llama.cpp + vLLM only.
+   * `false` matches each backend's upstream default.
+   */
+  ignore_eos?: boolean;
+  /**
+   * Minimum output tokens before stop / EOS can fire. vLLM + llama.cpp only.
+   * 0 disables.
+   */
+  min_tokens?: number;
+  /** vLLM `skip_special_tokens` — default true; forward only when false. */
+  skip_special_tokens?: boolean;
+  /** vLLM `spaces_between_special_tokens` — default true; forward only when false. */
+  spaces_between_special_tokens?: boolean;
+  /** vLLM `include_stop_str_in_output` — default false; forward only when true. */
+  include_stop_str_in_output?: boolean;
+  /** vLLM `truncate_prompt_tokens` — left-truncate the prompt. > 0 only. */
+  truncate_prompt_tokens?: number;
+  /** llama.cpp `n_keep` — tokens to retain on context overflow. -1 = all. */
+  n_keep?: number;
+  /** llama.cpp `n_probs` — return top-N token probabilities. > 0 only. */
+  n_probs?: number;
+  /** llama.cpp `cache_prompt` — KV-cache reuse. Default true upstream; forward only when false. */
+  cache_prompt?: boolean;
+  /** llama.cpp `return_tokens` — include raw token IDs in response. Default false. */
+  return_tokens?: boolean;
+  /** llama.cpp `timings_per_token` — include per-token speed metrics. Default false. */
+  timings_per_token?: boolean;
+  /** llama.cpp `post_sampling_probs` — token probs after the sampler chain. Default false. */
+  post_sampling_probs?: boolean;
 }
 
 export interface OpenAIChatDelta {

@@ -1806,6 +1806,108 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
               params.topA > 0
                 ? { top_a: params.topA }
                 : {}),
+              // llama.cpp DRY sampler. dry_multiplier=0 disables the
+              // whole chain; only forward the paired fields when the
+              // master is set to a meaningful value.
+              ...(externalCapabilities?.dryMultiplier &&
+              params.dryMultiplier !== null &&
+              params.dryMultiplier > 0
+                ? {
+                    dry_multiplier: params.dryMultiplier,
+                    ...(externalCapabilities?.dryBase &&
+                    params.dryBase !== null
+                      ? { dry_base: params.dryBase }
+                      : {}),
+                    ...(externalCapabilities?.dryAllowedLength &&
+                    params.dryAllowedLength !== null
+                      ? { dry_allowed_length: params.dryAllowedLength }
+                      : {}),
+                    ...(externalCapabilities?.dryPenaltyLastN &&
+                    params.dryPenaltyLastN !== null
+                      ? { dry_penalty_last_n: params.dryPenaltyLastN }
+                      : {}),
+                  }
+                : {}),
+              // llama.cpp XTC sampler. xtc_probability=0 disables.
+              ...(externalCapabilities?.xtcProbability &&
+              params.xtcProbability !== null &&
+              params.xtcProbability > 0
+                ? {
+                    xtc_probability: params.xtcProbability,
+                    ...(externalCapabilities?.xtcThreshold &&
+                    params.xtcThreshold !== null
+                      ? { xtc_threshold: params.xtcThreshold }
+                      : {}),
+                  }
+                : {}),
+              // llama.cpp `min_keep` (force min N tokens past filters).
+              // 0 is the upstream default; only forward when set higher.
+              ...(externalCapabilities?.minKeep &&
+              params.minKeep !== null &&
+              params.minKeep > 0
+                ? { min_keep: params.minKeep }
+                : {}),
+              // Continue past EOS. llama.cpp + vLLM only; forward only
+              // when explicitly true (false matches upstream default).
+              ...(externalCapabilities?.ignoreEos && params.ignoreEos === true
+                ? { ignore_eos: true }
+                : {}),
+              // Minimum output tokens before stop / EOS can fire.
+              // 0 = upstream default; only forward when set higher.
+              ...(externalCapabilities?.minTokens &&
+              params.minTokens !== null &&
+              params.minTokens > 0
+                ? { min_tokens: params.minTokens }
+                : {}),
+              // vLLM output-shape knobs. Upstream defaults:
+              //   skip_special_tokens=true, spaces_between_special_tokens=true,
+              //   include_stop_str_in_output=false. Forward only when user
+              //   opted away from the default to avoid no-op wire bloat.
+              ...(externalCapabilities?.skipSpecialTokens &&
+              params.skipSpecialTokens === false
+                ? { skip_special_tokens: false }
+                : {}),
+              ...(externalCapabilities?.spacesBetweenSpecialTokens &&
+              params.spacesBetweenSpecialTokens === false
+                ? { spaces_between_special_tokens: false }
+                : {}),
+              ...(externalCapabilities?.includeStopStrInOutput &&
+              params.includeStopStrInOutput === true
+                ? { include_stop_str_in_output: true }
+                : {}),
+              ...(externalCapabilities?.truncatePromptTokens &&
+              params.truncatePromptTokens !== null &&
+              params.truncatePromptTokens > 0
+                ? { truncate_prompt_tokens: params.truncatePromptTokens }
+                : {}),
+              // llama.cpp-only context / KV-cache / instrumentation knobs.
+              // n_keep accepts -1 (= keep all) so the gate is != 0.
+              ...(externalCapabilities?.nKeep &&
+              params.nKeep !== null &&
+              params.nKeep !== 0
+                ? { n_keep: params.nKeep }
+                : {}),
+              ...(externalCapabilities?.nProbs &&
+              params.nProbs !== null &&
+              params.nProbs > 0
+                ? { n_probs: params.nProbs }
+                : {}),
+              ...(externalCapabilities?.cachePrompt &&
+              params.cachePrompt === false
+                ? { cache_prompt: false }
+                : {}),
+              ...(externalCapabilities?.returnTokens &&
+              params.returnTokens === true
+                ? { return_tokens: true }
+                : {}),
+              ...(externalCapabilities?.timingsPerToken &&
+              params.timingsPerToken === true
+                ? { timings_per_token: true }
+                : {}),
+              ...(externalCapabilities?.postSamplingProbs &&
+              params.postSamplingProbs === true
+                ? { post_sampling_probs: true }
+                : {}),
               // Built-in tools: Search pill maps to provider-side
               // web_search (currently OpenAI / Anthropic / OpenRouter /
               // Kimi); Code pill maps to Anthropic's server-side
@@ -1958,6 +2060,69 @@ export function createOpenAIStreamAdapter(): ChatModelAdapter {
                     ? { mirostat_eta: params.mirostatEta }
                     : {}),
                 }
+              : {}),
+            // llama.cpp DRY sampler — dry_multiplier=0 disables the chain.
+            ...(params.dryMultiplier !== null && params.dryMultiplier > 0
+              ? {
+                  dry_multiplier: params.dryMultiplier,
+                  ...(params.dryBase !== null
+                    ? { dry_base: params.dryBase }
+                    : {}),
+                  ...(params.dryAllowedLength !== null
+                    ? { dry_allowed_length: params.dryAllowedLength }
+                    : {}),
+                  ...(params.dryPenaltyLastN !== null
+                    ? { dry_penalty_last_n: params.dryPenaltyLastN }
+                    : {}),
+                }
+              : {}),
+            // llama.cpp XTC sampler — xtc_probability=0 disables.
+            ...(params.xtcProbability !== null && params.xtcProbability > 0
+              ? {
+                  xtc_probability: params.xtcProbability,
+                  ...(params.xtcThreshold !== null
+                    ? { xtc_threshold: params.xtcThreshold }
+                    : {}),
+                }
+              : {}),
+            ...(params.minKeep !== null && params.minKeep > 0
+              ? { min_keep: params.minKeep }
+              : {}),
+            // ignore_eos / min_tokens are shared with vLLM but local
+            // llama-server accepts them too.
+            ...(params.ignoreEos === true ? { ignore_eos: true } : {}),
+            ...(params.minTokens !== null && params.minTokens > 0
+              ? { min_tokens: params.minTokens }
+              : {}),
+            // Local llama-server / vLLM / Ollama route. Per-backend
+            // capability gating handles the silent-drop story; here we
+            // forward only when the value diverges from upstream default.
+            ...(params.skipSpecialTokens === false
+              ? { skip_special_tokens: false }
+              : {}),
+            ...(params.spacesBetweenSpecialTokens === false
+              ? { spaces_between_special_tokens: false }
+              : {}),
+            ...(params.includeStopStrInOutput === true
+              ? { include_stop_str_in_output: true }
+              : {}),
+            ...(params.truncatePromptTokens !== null &&
+            params.truncatePromptTokens > 0
+              ? { truncate_prompt_tokens: params.truncatePromptTokens }
+              : {}),
+            ...(params.nKeep !== null && params.nKeep !== 0
+              ? { n_keep: params.nKeep }
+              : {}),
+            ...(params.nProbs !== null && params.nProbs > 0
+              ? { n_probs: params.nProbs }
+              : {}),
+            ...(params.cachePrompt === false ? { cache_prompt: false } : {}),
+            ...(params.returnTokens === true ? { return_tokens: true } : {}),
+            ...(params.timingsPerToken === true
+              ? { timings_per_token: true }
+              : {}),
+            ...(params.postSamplingProbs === true
+              ? { post_sampling_probs: true }
               : {}),
             parallel_tool_calls: params.parallelToolCalls,
             image_base64: imageBase64,

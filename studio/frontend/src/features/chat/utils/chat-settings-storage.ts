@@ -203,11 +203,41 @@ function sanitizeInferenceParams(
     "mirostatTau",
     "mirostatEta",
     "topA",
+    "dryMultiplier",
+    "dryBase",
+    "dryAllowedLength",
+    "dryPenaltyLastN",
+    "xtcProbability",
+    "xtcThreshold",
+    "minKeep",
+    "minTokens",
+    "truncatePromptTokens",
+    "nKeep",
+    "nProbs",
   ] as const) {
     const raw = value[key];
     if (raw === null) {
       (params as Record<string, unknown>)[key] = null;
     } else if (typeof raw === "number" && Number.isFinite(raw)) {
+      (params as Record<string, unknown>)[key] = raw;
+    }
+  }
+  // Nullable booleans (ignoreEos, skip/spaces special-tokens, include-stop,
+  // cache_prompt, return_tokens, timings_per_token, post_sampling_probs).
+  for (const key of [
+    "ignoreEos",
+    "skipSpecialTokens",
+    "spacesBetweenSpecialTokens",
+    "includeStopStrInOutput",
+    "cachePrompt",
+    "returnTokens",
+    "timingsPerToken",
+    "postSamplingProbs",
+  ] as const) {
+    const raw = value[key];
+    if (raw === null) {
+      (params as Record<string, unknown>)[key] = null;
+    } else if (typeof raw === "boolean") {
       (params as Record<string, unknown>)[key] = raw;
     }
   }

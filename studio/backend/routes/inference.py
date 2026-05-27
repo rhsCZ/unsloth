@@ -2579,6 +2579,25 @@ async def openai_chat_completions(
                     seed = payload.seed,
                     parallel_tool_calls = payload.parallel_tool_calls,
                     typical_p = payload.typical_p,
+                    dry_multiplier = payload.dry_multiplier,
+                    dry_base = payload.dry_base,
+                    dry_allowed_length = payload.dry_allowed_length,
+                    dry_penalty_last_n = payload.dry_penalty_last_n,
+                    xtc_probability = payload.xtc_probability,
+                    xtc_threshold = payload.xtc_threshold,
+                    min_keep = payload.min_keep,
+                    ignore_eos = payload.ignore_eos,
+                    min_tokens = payload.min_tokens,
+                    skip_special_tokens = payload.skip_special_tokens,
+                    spaces_between_special_tokens = payload.spaces_between_special_tokens,
+                    include_stop_str_in_output = payload.include_stop_str_in_output,
+                    truncate_prompt_tokens = payload.truncate_prompt_tokens,
+                    n_keep = payload.n_keep,
+                    n_probs = payload.n_probs,
+                    cache_prompt = payload.cache_prompt,
+                    return_tokens = payload.return_tokens,
+                    timings_per_token = payload.timings_per_token,
+                    post_sampling_probs = payload.post_sampling_probs,
                     top_n_sigma = payload.top_n_sigma,
                     repeat_last_n = payload.repeat_last_n,
                     dynatemp_range = payload.dynatemp_range,
@@ -2760,6 +2779,25 @@ async def openai_chat_completions(
                 seed = payload.seed,
                 parallel_tool_calls = payload.parallel_tool_calls,
                 typical_p = payload.typical_p,
+                dry_multiplier = payload.dry_multiplier,
+                dry_base = payload.dry_base,
+                dry_allowed_length = payload.dry_allowed_length,
+                dry_penalty_last_n = payload.dry_penalty_last_n,
+                xtc_probability = payload.xtc_probability,
+                xtc_threshold = payload.xtc_threshold,
+                min_keep = payload.min_keep,
+                ignore_eos = payload.ignore_eos,
+                min_tokens = payload.min_tokens,
+                skip_special_tokens = payload.skip_special_tokens,
+                spaces_between_special_tokens = payload.spaces_between_special_tokens,
+                include_stop_str_in_output = payload.include_stop_str_in_output,
+                truncate_prompt_tokens = payload.truncate_prompt_tokens,
+                n_keep = payload.n_keep,
+                n_probs = payload.n_probs,
+                cache_prompt = payload.cache_prompt,
+                return_tokens = payload.return_tokens,
+                timings_per_token = payload.timings_per_token,
+                post_sampling_probs = payload.post_sampling_probs,
                 top_n_sigma = payload.top_n_sigma,
                 repeat_last_n = payload.repeat_last_n,
                 dynatemp_range = payload.dynatemp_range,
@@ -5048,6 +5086,25 @@ def _build_passthrough_payload(
     mirostat = None,
     mirostat_tau = None,
     mirostat_eta = None,
+    dry_multiplier = None,
+    dry_base = None,
+    dry_allowed_length = None,
+    dry_penalty_last_n = None,
+    xtc_probability = None,
+    xtc_threshold = None,
+    min_keep = None,
+    ignore_eos = None,
+    min_tokens = None,
+    skip_special_tokens = None,
+    spaces_between_special_tokens = None,
+    include_stop_str_in_output = None,
+    truncate_prompt_tokens = None,
+    n_keep = None,
+    n_probs = None,
+    cache_prompt = None,
+    return_tokens = None,
+    timings_per_token = None,
+    post_sampling_probs = None,
     tool_choice = "auto",
     response_format = None,
     chat_template_kwargs = None,
@@ -5120,6 +5177,52 @@ def _build_passthrough_payload(
         body["mirostat_tau"] = mirostat_tau
     if mirostat_eta is not None:
         body["mirostat_eta"] = mirostat_eta
+    # DRY / XTC / min_keep / ignore_eos / min_tokens — llama-server
+    # specific (DRY+XTC+min_keep) plus vLLM-shared (ignore_eos+min_tokens).
+    # Forwarded `is not None` so explicit 0 / False values still reach
+    # the wire; the OAI translator on Ollama drops these silently.
+    if dry_multiplier is not None:
+        body["dry_multiplier"] = dry_multiplier
+    if dry_base is not None:
+        body["dry_base"] = dry_base
+    if dry_allowed_length is not None:
+        body["dry_allowed_length"] = dry_allowed_length
+    if dry_penalty_last_n is not None:
+        body["dry_penalty_last_n"] = dry_penalty_last_n
+    if xtc_probability is not None:
+        body["xtc_probability"] = xtc_probability
+    if xtc_threshold is not None:
+        body["xtc_threshold"] = xtc_threshold
+    if min_keep is not None:
+        body["min_keep"] = min_keep
+    if ignore_eos is not None:
+        body["ignore_eos"] = ignore_eos
+    if min_tokens is not None:
+        body["min_tokens"] = min_tokens
+    # vLLM output-shape knobs + llama.cpp context / KV / instrumentation
+    # knobs. Per-backend capability gating on the frontend prevents these
+    # from being forwarded to wires that don't recognise them; here we
+    # only enforce the `is not None` rule so explicit defaults still pass.
+    if skip_special_tokens is not None:
+        body["skip_special_tokens"] = skip_special_tokens
+    if spaces_between_special_tokens is not None:
+        body["spaces_between_special_tokens"] = spaces_between_special_tokens
+    if include_stop_str_in_output is not None:
+        body["include_stop_str_in_output"] = include_stop_str_in_output
+    if truncate_prompt_tokens is not None:
+        body["truncate_prompt_tokens"] = truncate_prompt_tokens
+    if n_keep is not None:
+        body["n_keep"] = n_keep
+    if n_probs is not None:
+        body["n_probs"] = n_probs
+    if cache_prompt is not None:
+        body["cache_prompt"] = cache_prompt
+    if return_tokens is not None:
+        body["return_tokens"] = return_tokens
+    if timings_per_token is not None:
+        body["timings_per_token"] = timings_per_token
+    if post_sampling_probs is not None:
+        body["post_sampling_probs"] = post_sampling_probs
     if response_format is not None:
         # llama-server applies a GBNF grammar derived from the JSON schema
         # when response_format is present. Field is documented flat at the

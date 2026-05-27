@@ -1056,6 +1056,135 @@ def test_local_passthrough_forwards_extended_llama_cpp_samplers():
         assert key not in body2, body2
 
 
+def test_local_passthrough_forwards_dry_xtc_min_keep_eos_min_tokens():
+    """The local llama.cpp passthrough payload builder must forward the
+    DRY (4-field) + XTC (2-field) + min_keep + ignore_eos + min_tokens
+    chain when set. Each is gated `is not None` so an explicit
+    upstream-default value (e.g. min_keep=0, ignore_eos=False) still
+    reaches the wire when the caller opted in.
+    """
+    from routes import inference as route_mod
+
+    body = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+        dry_multiplier = 0.8,
+        dry_base = 1.75,
+        dry_allowed_length = 3,
+        dry_penalty_last_n = -1,
+        xtc_probability = 0.5,
+        xtc_threshold = 0.1,
+        min_keep = 1,
+        ignore_eos = True,
+        min_tokens = 16,
+    )
+    assert body.get("dry_multiplier") == 0.8
+    assert body.get("dry_base") == 1.75
+    assert body.get("dry_allowed_length") == 3
+    assert body.get("dry_penalty_last_n") == -1
+    assert body.get("xtc_probability") == 0.5
+    assert body.get("xtc_threshold") == 0.1
+    assert body.get("min_keep") == 1
+    assert body.get("ignore_eos") is True
+    assert body.get("min_tokens") == 16
+
+    # Unset = absent from body. Matches the upstream "use default"
+    # contract — llama-server / vLLM apply their own defaults instead.
+    body2 = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+    )
+    for key in (
+        "dry_multiplier",
+        "dry_base",
+        "dry_allowed_length",
+        "dry_penalty_last_n",
+        "xtc_probability",
+        "xtc_threshold",
+        "min_keep",
+        "ignore_eos",
+        "min_tokens",
+    ):
+        assert key not in body2, body2
+
+
+def test_local_passthrough_forwards_vllm_output_and_llama_cpp_instrumentation():
+    """Round-trip the 10 extra knobs added in round 4:
+    skip_special_tokens / spaces_between_special_tokens /
+    include_stop_str_in_output / truncate_prompt_tokens (vLLM
+    SamplingParams) + n_keep / n_probs / cache_prompt / return_tokens /
+    timings_per_token / post_sampling_probs (llama-server README).
+    Each is gated `is not None` so explicit upstream-default values
+    (skip_special_tokens=True, cache_prompt=True, etc) still reach the
+    wire when the caller opted in.
+    """
+    from routes import inference as route_mod
+
+    body = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+        skip_special_tokens = False,
+        spaces_between_special_tokens = False,
+        include_stop_str_in_output = True,
+        truncate_prompt_tokens = 4096,
+        n_keep = -1,
+        n_probs = 5,
+        cache_prompt = False,
+        return_tokens = True,
+        timings_per_token = True,
+        post_sampling_probs = True,
+    )
+    assert body.get("skip_special_tokens") is False
+    assert body.get("spaces_between_special_tokens") is False
+    assert body.get("include_stop_str_in_output") is True
+    assert body.get("truncate_prompt_tokens") == 4096
+    assert body.get("n_keep") == -1
+    assert body.get("n_probs") == 5
+    assert body.get("cache_prompt") is False
+    assert body.get("return_tokens") is True
+    assert body.get("timings_per_token") is True
+    assert body.get("post_sampling_probs") is True
+
+    # Unset = absent from body so each backend applies its own default.
+    body2 = route_mod._build_passthrough_payload(
+        openai_messages = [{"role": "user", "content": "hi"}],
+        openai_tools = None,
+        temperature = 0.6,
+        top_p = 0.95,
+        top_k = 20,
+        max_tokens = 64,
+        stream = True,
+    )
+    for key in (
+        "skip_special_tokens",
+        "spaces_between_special_tokens",
+        "include_stop_str_in_output",
+        "truncate_prompt_tokens",
+        "n_keep",
+        "n_probs",
+        "cache_prompt",
+        "return_tokens",
+        "timings_per_token",
+        "post_sampling_probs",
+    ):
+        assert key not in body2, body2
+
+
 def test_local_passthrough_forwards_typical_p_when_set():
     """`typical_p` is a llama.cpp-specific sampler (`typ_p` in the
     sampler chain). The local-llama-cpp passthrough payload builder must
@@ -1129,3 +1258,32 @@ def test_anthropic_4_7_sampling_removed_regex_matches_expected_ids():
         assert RX.match(mid), f"{mid!r} should match 4.7 sampling-removed regex"
     for mid in should_not_match:
         assert not RX.match(mid), f"{mid!r} should NOT match 4.7 regex"
+
+
+def test_deepseek_payload_omits_seed_and_parallel_tool_calls():
+    """DeepSeek's published /chat/completions schema lists
+    messages/model/thinking/max_tokens/response_format/stop/stream/
+    temperature/top_p/tools/tool_choice/logprobs/top_logprobs/user_id
+    only. `seed` and `parallel_tool_calls` are not in the schema; the
+    capability bucket hides them so the chat-adapter never sends them.
+    Source:
+        https://api-docs.deepseek.com/api/create-chat-completion
+    """
+    # Frontend capability flags are the source of truth. Re-derive them
+    # by reading the TS file as text (the backend has no JS engine) and
+    # confirm the deepseek bucket has seed:false + parallelToolCalls:false.
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "features"
+        / "chat"
+        / "provider-capabilities.ts"
+    ).read_text(encoding = "utf-8")
+    deepseek_idx = src.index("  deepseek: {")
+    end = src.index("},", deepseek_idx)
+    bucket = src[deepseek_idx:end]
+    assert "seed: false" in bucket, bucket
+    assert "parallelToolCalls: false" in bucket, bucket

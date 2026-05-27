@@ -935,6 +935,161 @@ class ChatCompletionRequest(BaseModel):
             "OpenRouter-only; other gateways silently drop it."
         ),
     )
+    dry_multiplier: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        description = (
+            "llama.cpp DRY (Don't Repeat Yourself) penalty multiplier. "
+            "0.0 disables (server default). Master switch for the 4-field "
+            "DRY family — backend only forwards dry_base / dry_allowed_"
+            "length / dry_penalty_last_n when multiplier > 0. Local only."
+        ),
+    )
+    dry_base: Optional[float] = Field(
+        None,
+        ge = 1.0,
+        description = (
+            "llama.cpp DRY base value (exponential growth base). Default "
+            "1.75. Local only; only meaningful when dry_multiplier > 0."
+        ),
+    )
+    dry_allowed_length: Optional[int] = Field(
+        None,
+        ge = 0,
+        description = (
+            "llama.cpp DRY allowed-length threshold. Default 2. Local "
+            "only; only meaningful when dry_multiplier > 0."
+        ),
+    )
+    dry_penalty_last_n: Optional[int] = Field(
+        None,
+        description = (
+            "llama.cpp DRY penalty scan window. 0 disables, -1 = ctx-size. "
+            "Local only; only meaningful when dry_multiplier > 0."
+        ),
+    )
+    xtc_probability: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = (
+            "llama.cpp XTC (eXclude Top Choice) sampler probability. "
+            "0.0 disables. Master switch for xtc_threshold. Local only."
+        ),
+    )
+    xtc_threshold: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = (
+            "llama.cpp XTC sampler probability threshold. Default 0.1. "
+            "Local only; only meaningful when xtc_probability > 0."
+        ),
+    )
+    min_keep: Optional[int] = Field(
+        None,
+        ge = 0,
+        description = (
+            "llama.cpp `min_keep` — force min N tokens past every "
+            "sampler filter. 0 disables (server default). Local only."
+        ),
+    )
+    ignore_eos: Optional[bool] = Field(
+        None,
+        description = (
+            "Continue generation past the model's EOS token. Accepted by "
+            "llama.cpp + vLLM; Ollama's OAI translator drops it. False "
+            "matches each backend's upstream default."
+        ),
+    )
+    min_tokens: Optional[int] = Field(
+        None,
+        ge = 0,
+        description = (
+            "Minimum output tokens before stop sequences / EOS can fire. "
+            "Accepted by llama.cpp + vLLM; Ollama's OAI translator drops "
+            "it. 0 disables (server default)."
+        ),
+    )
+    skip_special_tokens: Optional[bool] = Field(
+        None,
+        description = (
+            "vLLM `skip_special_tokens` (default true). Forward only when "
+            "false — i.e. user wants raw special tokens in the output. "
+            "vLLM only; llama-server / Ollama do not document this field."
+        ),
+    )
+    spaces_between_special_tokens: Optional[bool] = Field(
+        None,
+        description = (
+            "vLLM `spaces_between_special_tokens` (default true). Forward "
+            "only when false. vLLM only."
+        ),
+    )
+    include_stop_str_in_output: Optional[bool] = Field(
+        None,
+        description = (
+            "vLLM `include_stop_str_in_output` (default false). Forward "
+            "only when true — useful for agentic tools that need the "
+            "matched stop string echoed back. vLLM only."
+        ),
+    )
+    truncate_prompt_tokens: Optional[int] = Field(
+        None,
+        ge = 1,
+        description = (
+            "vLLM `truncate_prompt_tokens` — left-truncate the prompt to "
+            "this many tokens. Useful for long-context overflow. vLLM "
+            "only; llama-server / Ollama drop this on the OAI path."
+        ),
+    )
+    n_keep: Optional[int] = Field(
+        None,
+        description = (
+            "llama.cpp `n_keep` — tokens to retain when context overflows. "
+            "0 disables (server default), -1 keeps the whole prompt. "
+            "Local llama-server only."
+        ),
+    )
+    n_probs: Optional[int] = Field(
+        None,
+        ge = 0,
+        description = (
+            "llama.cpp `n_probs` — return top-N token probabilities per "
+            "generated token. 0 disables (server default). Local only."
+        ),
+    )
+    cache_prompt: Optional[bool] = Field(
+        None,
+        description = (
+            "llama.cpp `cache_prompt` — reuse KV cache across requests "
+            "with a shared prefix. Default true upstream; forward only "
+            "when explicitly false (e.g. deterministic benchmarks). "
+            "Local llama-server only."
+        ),
+    )
+    return_tokens: Optional[bool] = Field(
+        None,
+        description = (
+            "llama.cpp `return_tokens` — include raw token IDs in the "
+            "response. Debug. Local only."
+        ),
+    )
+    timings_per_token: Optional[bool] = Field(
+        None,
+        description = (
+            "llama.cpp `timings_per_token` — include per-token speed "
+            "metrics in the streaming response. Local only."
+        ),
+    )
+    post_sampling_probs: Optional[bool] = Field(
+        None,
+        description = (
+            "llama.cpp `post_sampling_probs` — return token probabilities "
+            "AFTER the sampler chain runs (useful for sampler-tuning). "
+            "Local only."
+        ),
+    )
     fast_mode: Optional[bool] = Field(
         None,
         description = (

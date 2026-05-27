@@ -4258,6 +4258,25 @@ class LlamaCppBackend:
         mirostat: Optional[int] = None,
         mirostat_tau: Optional[float] = None,
         mirostat_eta: Optional[float] = None,
+        dry_multiplier: Optional[float] = None,
+        dry_base: Optional[float] = None,
+        dry_allowed_length: Optional[int] = None,
+        dry_penalty_last_n: Optional[int] = None,
+        xtc_probability: Optional[float] = None,
+        xtc_threshold: Optional[float] = None,
+        min_keep: Optional[int] = None,
+        ignore_eos: Optional[bool] = None,
+        min_tokens: Optional[int] = None,
+        skip_special_tokens: Optional[bool] = None,
+        spaces_between_special_tokens: Optional[bool] = None,
+        include_stop_str_in_output: Optional[bool] = None,
+        truncate_prompt_tokens: Optional[int] = None,
+        n_keep: Optional[int] = None,
+        n_probs: Optional[int] = None,
+        cache_prompt: Optional[bool] = None,
+        return_tokens: Optional[bool] = None,
+        timings_per_token: Optional[bool] = None,
+        post_sampling_probs: Optional[bool] = None,
     ) -> Generator[str | dict, None, None]:
         """
         Send a chat completion request to llama-server and stream tokens back.
@@ -4338,6 +4357,50 @@ class LlamaCppBackend:
             payload["mirostat_tau"] = mirostat_tau
         if mirostat_eta is not None:
             payload["mirostat_eta"] = mirostat_eta
+        # DRY / XTC / min_keep / ignore_eos / min_tokens — same llama.cpp-
+        # only fields as above. Each is gated `is not None` so explicit
+        # 0 / False values still reach the wire.
+        if dry_multiplier is not None:
+            payload["dry_multiplier"] = dry_multiplier
+        if dry_base is not None:
+            payload["dry_base"] = dry_base
+        if dry_allowed_length is not None:
+            payload["dry_allowed_length"] = dry_allowed_length
+        if dry_penalty_last_n is not None:
+            payload["dry_penalty_last_n"] = dry_penalty_last_n
+        if xtc_probability is not None:
+            payload["xtc_probability"] = xtc_probability
+        if xtc_threshold is not None:
+            payload["xtc_threshold"] = xtc_threshold
+        if min_keep is not None:
+            payload["min_keep"] = min_keep
+        if ignore_eos is not None:
+            payload["ignore_eos"] = ignore_eos
+        if min_tokens is not None:
+            payload["min_tokens"] = min_tokens
+        # vLLM output-shape knobs — forwarded `is not None` so user
+        # opt-outs (skip_special_tokens=False etc) still reach the wire.
+        if skip_special_tokens is not None:
+            payload["skip_special_tokens"] = skip_special_tokens
+        if spaces_between_special_tokens is not None:
+            payload["spaces_between_special_tokens"] = spaces_between_special_tokens
+        if include_stop_str_in_output is not None:
+            payload["include_stop_str_in_output"] = include_stop_str_in_output
+        if truncate_prompt_tokens is not None:
+            payload["truncate_prompt_tokens"] = truncate_prompt_tokens
+        # llama.cpp context / KV-cache / instrumentation knobs.
+        if n_keep is not None:
+            payload["n_keep"] = n_keep
+        if n_probs is not None:
+            payload["n_probs"] = n_probs
+        if cache_prompt is not None:
+            payload["cache_prompt"] = cache_prompt
+        if return_tokens is not None:
+            payload["return_tokens"] = return_tokens
+        if timings_per_token is not None:
+            payload["timings_per_token"] = timings_per_token
+        if post_sampling_probs is not None:
+            payload["post_sampling_probs"] = post_sampling_probs
         payload["stream_options"] = {"include_usage": True}
 
         url = f"{self.base_url}/v1/chat/completions"
@@ -4491,6 +4554,25 @@ class LlamaCppBackend:
         mirostat: Optional[int] = None,
         mirostat_tau: Optional[float] = None,
         mirostat_eta: Optional[float] = None,
+        dry_multiplier: Optional[float] = None,
+        dry_base: Optional[float] = None,
+        dry_allowed_length: Optional[int] = None,
+        dry_penalty_last_n: Optional[int] = None,
+        xtc_probability: Optional[float] = None,
+        xtc_threshold: Optional[float] = None,
+        min_keep: Optional[int] = None,
+        ignore_eos: Optional[bool] = None,
+        min_tokens: Optional[int] = None,
+        skip_special_tokens: Optional[bool] = None,
+        spaces_between_special_tokens: Optional[bool] = None,
+        include_stop_str_in_output: Optional[bool] = None,
+        truncate_prompt_tokens: Optional[int] = None,
+        n_keep: Optional[int] = None,
+        n_probs: Optional[int] = None,
+        cache_prompt: Optional[bool] = None,
+        return_tokens: Optional[bool] = None,
+        timings_per_token: Optional[bool] = None,
+        post_sampling_probs: Optional[bool] = None,
     ) -> Generator[dict, None, None]:
         """
         Agentic loop: let the model call tools, execute them, and continue.
@@ -4604,6 +4686,44 @@ class LlamaCppBackend:
                 payload["mirostat_tau"] = mirostat_tau
             if mirostat_eta is not None:
                 payload["mirostat_eta"] = mirostat_eta
+            if dry_multiplier is not None:
+                payload["dry_multiplier"] = dry_multiplier
+            if dry_base is not None:
+                payload["dry_base"] = dry_base
+            if dry_allowed_length is not None:
+                payload["dry_allowed_length"] = dry_allowed_length
+            if dry_penalty_last_n is not None:
+                payload["dry_penalty_last_n"] = dry_penalty_last_n
+            if xtc_probability is not None:
+                payload["xtc_probability"] = xtc_probability
+            if xtc_threshold is not None:
+                payload["xtc_threshold"] = xtc_threshold
+            if min_keep is not None:
+                payload["min_keep"] = min_keep
+            if ignore_eos is not None:
+                payload["ignore_eos"] = ignore_eos
+            if min_tokens is not None:
+                payload["min_tokens"] = min_tokens
+            if skip_special_tokens is not None:
+                payload["skip_special_tokens"] = skip_special_tokens
+            if spaces_between_special_tokens is not None:
+                payload["spaces_between_special_tokens"] = spaces_between_special_tokens
+            if include_stop_str_in_output is not None:
+                payload["include_stop_str_in_output"] = include_stop_str_in_output
+            if truncate_prompt_tokens is not None:
+                payload["truncate_prompt_tokens"] = truncate_prompt_tokens
+            if n_keep is not None:
+                payload["n_keep"] = n_keep
+            if n_probs is not None:
+                payload["n_probs"] = n_probs
+            if cache_prompt is not None:
+                payload["cache_prompt"] = cache_prompt
+            if return_tokens is not None:
+                payload["return_tokens"] = return_tokens
+            if timings_per_token is not None:
+                payload["timings_per_token"] = timings_per_token
+            if post_sampling_probs is not None:
+                payload["post_sampling_probs"] = post_sampling_probs
 
             try:
                 _auth_headers = (
@@ -5312,6 +5432,46 @@ class LlamaCppBackend:
             stream_payload["mirostat_tau"] = mirostat_tau
         if mirostat_eta is not None:
             stream_payload["mirostat_eta"] = mirostat_eta
+        if dry_multiplier is not None:
+            stream_payload["dry_multiplier"] = dry_multiplier
+        if dry_base is not None:
+            stream_payload["dry_base"] = dry_base
+        if dry_allowed_length is not None:
+            stream_payload["dry_allowed_length"] = dry_allowed_length
+        if dry_penalty_last_n is not None:
+            stream_payload["dry_penalty_last_n"] = dry_penalty_last_n
+        if xtc_probability is not None:
+            stream_payload["xtc_probability"] = xtc_probability
+        if xtc_threshold is not None:
+            stream_payload["xtc_threshold"] = xtc_threshold
+        if min_keep is not None:
+            stream_payload["min_keep"] = min_keep
+        if ignore_eos is not None:
+            stream_payload["ignore_eos"] = ignore_eos
+        if min_tokens is not None:
+            stream_payload["min_tokens"] = min_tokens
+        if skip_special_tokens is not None:
+            stream_payload["skip_special_tokens"] = skip_special_tokens
+        if spaces_between_special_tokens is not None:
+            stream_payload["spaces_between_special_tokens"] = (
+                spaces_between_special_tokens
+            )
+        if include_stop_str_in_output is not None:
+            stream_payload["include_stop_str_in_output"] = include_stop_str_in_output
+        if truncate_prompt_tokens is not None:
+            stream_payload["truncate_prompt_tokens"] = truncate_prompt_tokens
+        if n_keep is not None:
+            stream_payload["n_keep"] = n_keep
+        if n_probs is not None:
+            stream_payload["n_probs"] = n_probs
+        if cache_prompt is not None:
+            stream_payload["cache_prompt"] = cache_prompt
+        if return_tokens is not None:
+            stream_payload["return_tokens"] = return_tokens
+        if timings_per_token is not None:
+            stream_payload["timings_per_token"] = timings_per_token
+        if post_sampling_probs is not None:
+            stream_payload["post_sampling_probs"] = post_sampling_probs
         stream_payload["stream_options"] = {"include_usage": True}
 
         cumulative = ""

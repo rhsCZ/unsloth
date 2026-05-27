@@ -23,6 +23,7 @@ import {
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { ToolGroup } from "@/components/assistant-ui/tool-group";
 import { CodeExecutionToolUI } from "@/components/assistant-ui/tool-ui-code-execution";
+import { CodexParallelToolUI } from "@/components/assistant-ui/tool-ui-codex-parallel";
 import { ImageGenerationToolUI } from "@/components/assistant-ui/tool-ui-image-generation";
 import { PythonToolUI } from "@/components/assistant-ui/tool-ui-python";
 import { TerminalToolUI } from "@/components/assistant-ui/tool-ui-terminal";
@@ -802,6 +803,7 @@ const ReasoningToggle: FC = () => {
           {
             isReasoningProvider:
               selectedExternalProvider?.isReasoningModel === true,
+            baseUrl: selectedExternalProvider?.baseUrl ?? null,
           },
         )
       : null;
@@ -1314,6 +1316,7 @@ const AssistantMessage: FC = () => {
                 python: PythonToolUI,
                 terminal: TerminalToolUI,
                 code_execution: CodeExecutionToolUI,
+                codex_parallel: CodexParallelToolUI,
                 image_generation: ImageGenerationToolUI,
               },
               Fallback: ToolFallback,

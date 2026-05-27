@@ -27,6 +27,7 @@ export const CHAT_REASONING_ENABLED_KEY = "unsloth_chat_reasoning_enabled";
 export const CHAT_TOOLS_ENABLED_KEY = "unsloth_chat_tools_enabled";
 export const CHAT_CODE_TOOLS_ENABLED_KEY = "unsloth_chat_code_tools_enabled";
 export const CHAT_IMAGE_TOOLS_ENABLED_KEY = "unsloth_chat_image_tools_enabled";
+export const CHAT_MCP_ENABLED_KEY = "unsloth_chat_mcp_enabled";
 export const CHAT_WEB_FETCH_TOOLS_ENABLED_KEY =
   "unsloth_chat_web_fetch_tools_enabled";
 
@@ -282,6 +283,7 @@ type ChatRuntimeStore = {
   toolsEnabled: boolean;
   codeToolsEnabled: boolean;
   imageToolsEnabled: boolean;
+  mcpEnabledForChat: boolean;
   /**
    * Fetch pill state, independent of `toolsEnabled` (Search). Only
    * consulted when `providerSupportsBuiltinWebFetch` is true.
@@ -349,6 +351,7 @@ type ChatRuntimeStore = {
   setToolsEnabled: (enabled: boolean, options?: { persist?: boolean }) => void;
   setCodeToolsEnabled: (enabled: boolean) => void;
   setImageToolsEnabled: (enabled: boolean) => void;
+  setMcpEnabledForChat: (enabled: boolean) => void;
   setWebFetchToolsEnabled: (enabled: boolean) => void;
   setToolStatus: (status: string | null) => void;
   setGeneratingStatus: (status: string | null) => void;
@@ -413,6 +416,35 @@ const PERSISTED_INFERENCE_PARAM_KEYS = [
   "systemPrompt",
   "trustRemoteCode",
   "fastMode",
+  // Extended llama.cpp / vLLM / OpenRouter samplers exposed by PR #5711.
+  "typicalP",
+  "topNSigma",
+  "repeatLastN",
+  "dynatempRange",
+  "dynatempExponent",
+  "mirostat",
+  "mirostatTau",
+  "mirostatEta",
+  "topA",
+  "dryMultiplier",
+  "dryBase",
+  "dryAllowedLength",
+  "dryPenaltyLastN",
+  "xtcProbability",
+  "xtcThreshold",
+  "minKeep",
+  "ignoreEos",
+  "minTokens",
+  "skipSpecialTokens",
+  "spacesBetweenSpecialTokens",
+  "includeStopStrInOutput",
+  "truncatePromptTokens",
+  "nKeep",
+  "nProbs",
+  "cachePrompt",
+  "returnTokens",
+  "timingsPerToken",
+  "postSamplingProbs",
 ] as const satisfies readonly PersistedInferenceParamKey[];
 
 const SCALAR_SETTING_KEYS = [
@@ -604,6 +636,7 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
   toolsEnabled: loadBool(CHAT_TOOLS_ENABLED_KEY, false),
   codeToolsEnabled: loadBool(CHAT_CODE_TOOLS_ENABLED_KEY, false),
   imageToolsEnabled: loadBool(CHAT_IMAGE_TOOLS_ENABLED_KEY, false),
+  mcpEnabledForChat: loadBool(CHAT_MCP_ENABLED_KEY, false),
   webFetchToolsEnabled: loadBool(CHAT_WEB_FETCH_TOOLS_ENABLED_KEY, false),
   toolStatus: null,
   generatingStatus: null,
@@ -879,6 +912,11 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
     set(() => {
       saveBool(CHAT_IMAGE_TOOLS_ENABLED_KEY, imageToolsEnabled);
       return { imageToolsEnabled };
+    }),
+  setMcpEnabledForChat: (mcpEnabledForChat) =>
+    set(() => {
+      saveBool(CHAT_MCP_ENABLED_KEY, mcpEnabledForChat);
+      return { mcpEnabledForChat };
     }),
   setWebFetchToolsEnabled: (webFetchToolsEnabled) =>
     set(() => {

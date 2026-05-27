@@ -240,12 +240,9 @@ studio_router = APIRouter()
 
 
 def _clean_local_stop_list(stop) -> Optional[list[str]]:
-    """Strip empty / non-string entries from a stop sequence input.
-
-    Mirrors `_normalize_stop_for_provider` (external_provider.py) so
-    local llama-server callers cannot ship `stop=["", "END"]` and
-    get a 400. Returns `None` when nothing survives, so the caller
-    can omit the field entirely.
+    """Strip empty/non-string stop entries; returns None when empty so
+    callers can omit. Mirrors `_normalize_stop_for_provider` so
+    `stop=["", "END"]` cannot 400 llama-server.
     """
     if isinstance(stop, str):
         return [stop] if stop else None
@@ -451,7 +448,9 @@ _TOOL_ACTION_NUDGE = (
 #   4. tail-only `</parameter>` (outer close truncated by EOS); anchored to
 #      `\Z` so mid-text `<parameter>` in user code samples survives.
 _TOOL_XML_RE = _re.compile(
-    r"<(?:tool_call|function=\w+)>.*?(?:</(?:tool_call|function)>|\Z)"
+    # Hyphen in the name char-class matches MCP tool names with dashes
+    # (mcp__srv__list-issues) which would otherwise leak past this strip.
+    r"<(?:tool_call|function=[\w-]+)>.*?(?:</(?:tool_call|function)>|\Z)"
     r"|</(?:tool_call|function)>"
     r"|</parameter>\s*\Z",
     _re.DOTALL,
@@ -2169,6 +2168,34 @@ async def _proxy_to_external_provider(
             tools = payload.tools,
             tool_choice = payload.tool_choice,
             fast_mode = payload.fast_mode,
+            typical_p = payload.typical_p,
+            top_n_sigma = payload.top_n_sigma,
+            repeat_last_n = payload.repeat_last_n,
+            dynatemp_range = payload.dynatemp_range,
+            dynatemp_exponent = payload.dynatemp_exponent,
+            mirostat = payload.mirostat,
+            mirostat_tau = payload.mirostat_tau,
+            mirostat_eta = payload.mirostat_eta,
+            top_a = payload.top_a,
+            dry_multiplier = payload.dry_multiplier,
+            dry_base = payload.dry_base,
+            dry_allowed_length = payload.dry_allowed_length,
+            dry_penalty_last_n = payload.dry_penalty_last_n,
+            xtc_probability = payload.xtc_probability,
+            xtc_threshold = payload.xtc_threshold,
+            min_keep = payload.min_keep,
+            ignore_eos = payload.ignore_eos,
+            min_tokens = payload.min_tokens,
+            skip_special_tokens = payload.skip_special_tokens,
+            spaces_between_special_tokens = payload.spaces_between_special_tokens,
+            include_stop_str_in_output = payload.include_stop_str_in_output,
+            truncate_prompt_tokens = payload.truncate_prompt_tokens,
+            n_keep = payload.n_keep,
+            n_probs = payload.n_probs,
+            cache_prompt = payload.cache_prompt,
+            return_tokens = payload.return_tokens,
+            timings_per_token = payload.timings_per_token,
+            post_sampling_probs = payload.post_sampling_probs,
             stream = payload.stream,
         )
         try:
@@ -2669,17 +2696,29 @@ async def openai_chat_completions(
         # ── Tool-calling path (agentic loop) ──────────────────
         # `_effective_enable_tools` lets `unsloth run --enable-tools/--disable-tools`
         # hard-override the per-request value. Without a CLI override, falls
-        # back to `payload.enable_tools` (existing behavior).
+        # back to `payload.enable_tools` (existing behavior). `mcp_enabled=true`
+        # also opens the tool loop so MCP-only callers do not have to flip a
+        # second flag, BUT must still honor a CLI `--disable-tools` policy --
+        # checking the raw policy here keeps `mcp_enabled` from re-enabling
+        # tools that the operator explicitly forbade.
+        from state.tool_policy import get_tool_policy as _get_tool_policy_g
+
+        _cli_policy = _get_tool_policy_g()
+        _tools_on = _effective_enable_tools(payload)
+        _mcp_allowed = bool(payload.mcp_enabled) and _cli_policy is not False
         use_tools = (
-            _effective_enable_tools(payload)
+            (_tools_on or _mcp_allowed)
             and llama_backend.supports_tools
             and not has_gguf_image
         )
 
         if use_tools:
-            from core.inference.tools import ALL_TOOLS
+            from core.inference.tools import ALL_TOOLS, get_enabled_mcp_tools
 
-            if payload.enabled_tools is not None:
+            if not _tools_on:
+                # MCP-only request: skip built-ins, leave room for MCP tools.
+                tools_to_use = []
+            elif payload.enabled_tools is not None:
                 tools_to_use = [
                     t
                     for t in ALL_TOOLS
@@ -2688,6 +2727,19 @@ async def openai_chat_completions(
             else:
                 tools_to_use = ALL_TOOLS
 
+            if _mcp_allowed:
+                tools_to_use = tools_to_use + await get_enabled_mcp_tools()
+
+            # Skip the tool loop when no tool actually survived, so the
+            # safetensors loop's "empty = allow all" semantic cannot reach
+            # built-in tools the caller did not opt into. Existing callers
+            # who omit enabled_tools still get ALL_TOOLS here, so this
+            # only suppresses the loop when discovery + opt-in left it
+            # genuinely empty.
+            if not tools_to_use:
+                use_tools = False
+
+        if use_tools:
             # ── Tool-use system prompt nudge ──────────────────────
             _tool_names = {t["function"]["name"] for t in tools_to_use}
             _has_web = "web_search" in _tool_names
@@ -3225,8 +3277,15 @@ async def openai_chat_completions(
         else 25
     )
 
+    # Match the GGUF path: mcp_enabled also opens the tool loop on its own
+    # but must still honor a CLI `--disable-tools` policy.
+    from state.tool_policy import get_tool_policy as _get_tool_policy_sf
+
+    _sf_cli_policy = _get_tool_policy_sf()
+    _sf_tools_on = _effective_enable_tools(payload)
+    _sf_mcp_allowed = bool(payload.mcp_enabled) and _sf_cli_policy is not False
     _sf_use_tools = (
-        _effective_enable_tools(payload)
+        (_sf_tools_on or _sf_mcp_allowed)
         and _sf_features.get("supports_tools", False)
         and image is None
         and not _sf_is_gptoss
@@ -3234,15 +3293,27 @@ async def openai_chat_completions(
     )
 
     if _sf_use_tools:
-        from core.inference.tools import ALL_TOOLS
+        from core.inference.tools import ALL_TOOLS, get_enabled_mcp_tools
 
-        if payload.enabled_tools is not None:
+        if not _sf_tools_on:
+            _sf_tools_to_use = []
+        elif payload.enabled_tools is not None:
             _sf_tools_to_use = [
                 t for t in ALL_TOOLS if t["function"]["name"] in payload.enabled_tools
             ]
         else:
             _sf_tools_to_use = ALL_TOOLS
 
+        if _sf_mcp_allowed:
+            _sf_tools_to_use = _sf_tools_to_use + await get_enabled_mcp_tools()
+
+        # Mirror the GGUF path: refuse to enter the tool loop when nothing
+        # survived, so a model-emitted built-in call cannot piggy-back on
+        # the empty allow-list.
+        if not _sf_tools_to_use:
+            _sf_use_tools = False
+
+    if _sf_use_tools:
         _sf_tool_names = {t["function"]["name"] for t in _sf_tools_to_use}
         _sf_has_web = "web_search" in _sf_tool_names
         _sf_has_code = "python" in _sf_tool_names or "terminal" in _sf_tool_names
@@ -4139,9 +4210,7 @@ def _build_chat_request(
         chat_kwargs["top_p"] = payload.top_p
     if payload.max_output_tokens is not None:
         chat_kwargs["max_tokens"] = payload.max_output_tokens
-    # parallel_tool_calls is first-class on ChatCompletionRequest and
-    # the OpenAI-compat passthrough builder forwards it. Translate it
-    # so a Responses API caller's preference reaches llama-server.
+    # Forward parallel_tool_calls from Responses caller through to llama-server.
     if payload.parallel_tool_calls is not None:
         chat_kwargs["parallel_tool_calls"] = payload.parallel_tool_calls
 
@@ -4204,9 +4273,8 @@ async def _responses_non_streaming(
         msg = choices[0].get("message", {}) or {}
         text = msg.get("content", "") or ""
         tool_calls = msg.get("tool_calls") or []
-    # Match the cap applied on GGUF / Anthropic / safetensors tool
-    # paths: when the caller opted out of parallel tool calls, surface
-    # at most one. llama.cpp may not enforce the flag.
+    # parallel_tool_calls=False -> cap to 1 (llama.cpp flag isn't enforced;
+    # mirrors GGUF/Anthropic/safetensors paths).
     if payload.parallel_tool_calls is False and tool_calls:
         tool_calls = tool_calls[:1]
 
@@ -4330,10 +4398,9 @@ async def _responses_stream(
         tool_call_state: dict[int, dict] = {}
         # Text message lives at output_index 0; tool calls claim 1, 2, ...
         next_output_index = 1
-        # When the caller opted out of parallel tool calls, latch the
-        # first index we see and drop subsequent siblings — mirrors the
-        # GGUF agentic-loop / Anthropic-passthrough caps; llama.cpp may
-        # not enforce the upstream flag (ggml-org/llama.cpp#22043).
+        # parallel_tool_calls=False: latch the first tc index, drop the
+        # rest; llama.cpp flag isn't enforced by every jinja template
+        # (ggml-org/llama.cpp#22043).
         serial_tool_calls = payload.parallel_tool_calls is False
         first_serial_idx: Optional[int] = None
 
@@ -4826,10 +4893,9 @@ async def anthropic_messages(
     if openai_tool_choice is None:
         openai_tool_choice = "auto"
 
-    # Anthropic nests `disable_parallel_tool_use` inside `tool_choice`
-    # (https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use).
-    # Flip it into the OpenAI-shaped `parallel_tool_calls` toggle so the
-    # local GGUF tool loop respects clients that opt out of parallel calls.
+    # Anthropic nests `disable_parallel_tool_use` under `tool_choice`;
+    # flip to OAI `parallel_tool_calls` so the local GGUF tool loop honors it.
+    # https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
     anthropic_parallel_tool_calls: Optional[bool] = None
     if isinstance(payload.tool_choice, dict):
         _disable = payload.tool_choice.get("disable_parallel_tool_use")
@@ -5347,10 +5413,8 @@ def _build_passthrough_payload(
         else (backend_ctx or _DEFAULT_MAX_TOKENS_FLOOR)
     )
     body["t_max_predict_ms"] = _DEFAULT_T_MAX_PREDICT_MS
-    # Strip empty / non-string stop entries before forwarding to
-    # llama-server; the external-provider helper does this via
-    # `_normalize_stop_for_provider`, and the local path needs the same
-    # defensive shape so a stale `stop=["", "END"]` cannot 400 upstream.
+    # Strip empty stop entries (mirrors `_normalize_stop_for_provider`);
+    # stale `stop=["", "END"]` would 400 llama-server.
     if stop:
         if isinstance(stop, str):
             if stop:
@@ -5366,12 +5430,9 @@ def _build_passthrough_payload(
         body["repeat_penalty"] = repetition_penalty
     if presence_penalty is not None:
         body["presence_penalty"] = presence_penalty
-    # llama-server's /v1/chat/completions accepts the standard OpenAI
-    # fields. parallel_tool_calls is a no-op on llama-server today but
-    # forwarded so a future release picks it up automatically.
-    # Each field below gated `is not None` so explicit 0 / False reach
-    # the wire; llama-server silently ignores unknown fields, Ollama's
-    # OAI translator drops everything outside the OAI subset.
+    # parallel_tool_calls is a no-op on llama-server today but forwarded
+    # for future support. `is not None` gate lets explicit 0/False through;
+    # llama-server ignores unknowns, Ollama drops non-OAI fields.
     if frequency_penalty is not None:
         body["frequency_penalty"] = frequency_penalty
     if seed is not None:
@@ -5659,11 +5720,8 @@ async def _anthropic_passthrough_non_streaming(
             content_blocks.append(AnthropicResponseTextBlock(text = text))
 
     tool_calls = message.get("tool_calls") or []
-    # Mirror the GGUF agentic-loop client-side cap: when the caller
-    # opted out of parallel tool calls, surface at most one tool_use
-    # block even if llama-server returned more than one. llama.cpp may
-    # not enforce the flag on every jinja template (see
-    # ggml-org/llama.cpp#22043).
+    # parallel_tool_calls=False: cap to 1 tool_use block; llama.cpp flag
+    # isn't enforced by every jinja template (ggml-org/llama.cpp#22043).
     if parallel_tool_calls is False and tool_calls:
         tool_calls = tool_calls[:1]
     for tc in tool_calls:
@@ -5979,6 +6037,25 @@ def _build_openai_passthrough_body(payload, backend_ctx = None) -> dict:
         mirostat = payload.mirostat,
         mirostat_tau = payload.mirostat_tau,
         mirostat_eta = payload.mirostat_eta,
+        dry_multiplier = payload.dry_multiplier,
+        dry_base = payload.dry_base,
+        dry_allowed_length = payload.dry_allowed_length,
+        dry_penalty_last_n = payload.dry_penalty_last_n,
+        xtc_probability = payload.xtc_probability,
+        xtc_threshold = payload.xtc_threshold,
+        min_keep = payload.min_keep,
+        ignore_eos = payload.ignore_eos,
+        min_tokens = payload.min_tokens,
+        skip_special_tokens = payload.skip_special_tokens,
+        spaces_between_special_tokens = payload.spaces_between_special_tokens,
+        include_stop_str_in_output = payload.include_stop_str_in_output,
+        truncate_prompt_tokens = payload.truncate_prompt_tokens,
+        n_keep = payload.n_keep,
+        n_probs = payload.n_probs,
+        cache_prompt = payload.cache_prompt,
+        return_tokens = payload.return_tokens,
+        timings_per_token = payload.timings_per_token,
+        post_sampling_probs = payload.post_sampling_probs,
         tool_choice = tool_choice,
         response_format = _extract_response_format(payload),
         chat_template_kwargs = tpl_kwargs,

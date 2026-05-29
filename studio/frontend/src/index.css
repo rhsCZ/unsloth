@@ -818,6 +818,122 @@
 		font-family: var(--font-sans);
 	}
 
+	/* Gemini-style pill composer. Own classes so compare-mode keeps the
+	   stacked .chat-composer-surface layout. Plain background. */
+	.gemini-composer-surface {
+		@apply relative flex w-full flex-col rounded-[26px] bg-background dark:bg-card px-1.5 py-1.5 outline-none transition-shadow;
+		font-family: var(--font-sans);
+		border: 1px solid oklch(0.92 0 0 / 1);
+		background-clip: padding-box;
+		box-shadow:
+			0 1px 2px oklch(0 0 0 / 0.05),
+			0 10px 28px oklch(0 0 0 / 0.08),
+			0 2px 6px oklch(0 0 0 / 0.04);
+	}
+
+	.gemini-composer-surface:focus-within {
+		box-shadow:
+			0 1px 2px oklch(0 0 0 / 0.06),
+			0 14px 34px oklch(0 0 0 / 0.1),
+			0 2px 8px oklch(0 0 0 / 0.05);
+	}
+
+	.dark .gemini-composer-surface {
+		border-color: #34363a;
+		box-shadow: 0 -6px 36px -14px rgba(0, 0, 0, 0.18);
+	}
+
+	/* Composer row. Empty: one centered line. With content: two rows (input on
+	   top, controls below) via flex order/wrap so the textarea never remounts. */
+	.gemini-composer-line {
+		@apply flex w-full flex-wrap items-center gap-1 px-1;
+	}
+
+	.gemini-composer-left {
+		@apply flex shrink-0 items-center gap-0.5;
+		order: 1;
+	}
+
+	.gemini-composer-line .gemini-composer-input {
+		order: 2;
+	}
+
+	.gemini-composer-line .aui-composer-action-wrapper {
+		order: 3;
+		margin-left: auto;
+	}
+
+	.gemini-composer-line[data-expanded="true"] .gemini-composer-input {
+		order: 1;
+		flex-basis: 100%;
+		width: 100%;
+	}
+
+	.gemini-composer-line[data-expanded="true"] .gemini-composer-left {
+		order: 2;
+	}
+
+	.gemini-composer-input {
+		@apply min-h-[40px] min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-2 py-2 text-[15px] font-[450] leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0;
+	}
+
+	.gemini-composer-plus {
+		@apply flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted-foreground/15 disabled:cursor-not-allowed disabled:opacity-40;
+	}
+
+	.gemini-composer-plus[data-state="open"] {
+		@apply bg-muted-foreground/15;
+	}
+
+	/* Welcome heading: force Hellix SemiBold. The chat container (.aui-thread-root)
+	   resets --font-heading to the sans stack, so the family must be set
+	   explicitly here to override that inheritance. */
+	.gemini-welcome-title {
+		font-family: "Hellix", "Space Grotesk Variable", var(--font-sans);
+		font-weight: 600;
+	}
+
+	/* Right-side Thinking pill (toggle or dropdown). */
+	.gemini-thinking-pill {
+		@apply inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted-foreground/10 disabled:cursor-not-allowed disabled:opacity-40;
+	}
+
+	.gemini-thinking-pill[data-active="true"] {
+		@apply bg-primary/10 text-primary;
+	}
+
+	.gemini-thinking-pill[data-state="open"] {
+		@apply bg-muted-foreground/10;
+	}
+
+	/* Smaller tick for selected Thinking options. */
+	.gemini-tick {
+		width: 0.8rem !important;
+		height: 0.8rem !important;
+	}
+
+	/* Compact plus menu (smaller text/icons). Also set on each portaled
+	   sub-content. */
+	.gemini-plus-menu :is(
+			[data-slot="dropdown-menu-item"],
+			[data-slot="dropdown-menu-sub-trigger"]
+		) {
+		@apply gap-2.5 px-2.5 py-1.5 text-[13px];
+	}
+
+	.gemini-plus-menu [data-slot="dropdown-menu-label"] {
+		@apply px-2.5 py-1.5 text-[11px];
+	}
+
+	.gemini-plus-menu :is(
+			[data-slot="dropdown-menu-item"],
+			[data-slot="dropdown-menu-sub-trigger"]
+		)
+		svg {
+		width: 0.95rem;
+		height: 0.95rem;
+	}
+
 	/* Fine-tuning Studio: equal default height, expandable when needed (md+) */
 	.min-h-studio-config-column {
 		@apply md:min-h-[470px];

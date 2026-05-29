@@ -23,6 +23,8 @@ import { getImageInputUnavailableReason } from "./utils/image-input-support";
 import { useAui } from "@assistant-ui/react";
 import {
   ArrowUpIcon,
+  CheckIcon,
+  ChevronDownIcon,
   DownloadIcon,
   GlobeIcon,
   HeadphonesIcon,
@@ -428,6 +430,10 @@ export function SharedComposer({
   const reasoningDisabled = !modelLoaded || !effectiveSupportsReasoning;
   const showReasoningControl =
     effectiveSupportsReasoning || effectiveReasoningAlwaysOn;
+  const isEffort = effectiveReasoningStyle === "reasoning_effort";
+  const thinkingActiveLook = isEffort
+    ? reasoningLockedOn || (effectiveReasoningVisualEnabled && !reasoningDisabled)
+    : reasoningLockedOn || (effectiveReasoningEnabled && !reasoningDisabled);
   // Two-pill gating: Search pill lights up when the runtime has either
   // a local tool runtime (supportsTools, gives us our Code/python + local
   // web_search) OR a server-side web_search the provider runs for us
@@ -952,158 +958,179 @@ export function SharedComposer({
             </>
           )}
           {showReasoningControl ? (
-            effectiveReasoningStyle === "reasoning_effort" ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild={true}>
-                <button
-                  type="button"
-                  disabled={reasoningDisabled}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-full px-1.5 py-1.5 text-[13px] font-medium text-muted-foreground/70 transition-colors",
-                    reasoningDisabled
-                      ? "cursor-not-allowed opacity-40"
-                      : effectiveReasoningVisualEnabled
-                        ? "text-primary hover:bg-primary/10 dark:hover:bg-white/[0.08]"
-                        : "hover:bg-primary/10 dark:hover:bg-white/[0.08]",
-                  )}
-                  aria-label={thinkEffortAriaLabel({
-                    modelLoaded,
-                    reasoningDisabled,
-                    reasoningEffort,
-                  })}
-                >
-                  {effectiveReasoningVisualEnabled ? (
-                    <LightbulbIcon className="size-3.5" />
-                  ) : (
-                    <LightbulbOffIcon className="size-3.5" />
-                  )}
-                  <span>
-                    Think:{" "}
-                    {effectiveReasoningVisualEnabled
-                      ? formatReasoningEffortLabel(
-                          reasoningEffort,
-                          externalSelection?.modelId,
-                        )
-                      : formatReasoningDisabledLabel(
-                          effectiveSupportsReasoningOff,
-                          isExternalOpenAIReasoning,
-                          checkpoint,
-                        )}
-                  </span>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {effectiveSupportsReasoningOff && (
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      setReasoningEnabled(false);
-                      applyQwenThinkingParams(false);
-                    }}
+            isEffort || supportsPreserveThinking ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild={true}>
+                  <button
+                    type="button"
+                    disabled={reasoningDisabled}
+                    className="gemini-thinking-pill"
+                    data-active={thinkingActiveLook ? "true" : "false"}
+                    aria-label={thinkEffortAriaLabel({
+                      modelLoaded,
+                      reasoningDisabled,
+                      reasoningEffort,
+                    })}
                   >
-                    {formatReasoningDisabledLabel(
-                      effectiveSupportsReasoningOff,
-                      isExternalOpenAIReasoning,
-                      checkpoint,
+                    {thinkingActiveLook ? (
+                      <LightbulbIcon className="size-3.5" />
+                    ) : (
+                      <LightbulbOffIcon className="size-3.5" />
                     )}
-                    {!effectiveReasoningVisualEnabled ? " \u2713" : ""}
-                  </DropdownMenuItem>
-                )}
-                {effectiveReasoningEffortLevels
-                  .filter((level) => level !== "none")
-                  .map((level) => (
-                  <DropdownMenuItem
-                    key={level}
-                    onSelect={() => {
-                      setReasoningEffort(level);
-                      setReasoningEnabled(true);
-                      applyQwenThinkingParams(true);
-                      // Mutual exclusion: turning thinking on for a
-                      // Kimi model forces the web_search builtin off.
-                      if (isKimiExternal && toolsEnabled) {
-                        setToolsEnabled(false, { persist: false });
-                      }
-                    }}
-                  >
-                    {formatReasoningEffortLabel(level, externalSelection?.modelId)}
-                    {effectiveReasoningVisualEnabled && reasoningEffort === level ? " \u2713" : ""}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
-            <button
-              type="button"
-              disabled={reasoningDisabled || reasoningLockedOn}
-              aria-disabled={reasoningDisabled || reasoningLockedOn}
-              title={
-                reasoningLockedOn
-                  ? "This model requires reasoning to stay on."
-                  : undefined
-              }
-              onClick={() => {
-                if (reasoningLockedOn) return;
-                const next = !reasoningEnabled;
-                setReasoningEnabled(next);
-                applyQwenThinkingParams(next);
-                // Mutual exclusion: Kimi's $web_search builtin
-                // requires thinking off, so turning thinking on flips
-                // the Search pill off (and vice versa).
-                if (isKimiExternal && next && toolsEnabled) {
-                  setToolsEnabled(false, { persist: false });
+                    {thinkingActiveLook ? (
+                      <span>
+                        {isEffort
+                          ? `Thinking \u00b7 ${formatReasoningEffortLabel(
+                              reasoningEffort,
+                              externalSelection?.modelId,
+                            )}`
+                          : "Thinking"}
+                      </span>
+                    ) : null}
+                    <ChevronDownIcon className="size-3.5 opacity-60" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  side="top"
+                  align="end"
+                  className="gemini-plus-menu min-w-44"
+                >
+                  {isEffort ? (
+                    <>
+                      {effectiveSupportsReasoningOff && (
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            setReasoningEnabled(false);
+                            applyQwenThinkingParams(false);
+                          }}
+                        >
+                          <CheckIcon
+                            className={cn(
+                              "gemini-tick size-4",
+                              effectiveReasoningVisualEnabled && "opacity-0",
+                            )}
+                          />
+                          {formatReasoningDisabledLabel(
+                            effectiveSupportsReasoningOff,
+                            isExternalOpenAIReasoning,
+                            checkpoint,
+                          )}
+                        </DropdownMenuItem>
+                      )}
+                      {effectiveReasoningEffortLevels
+                        .filter((level) => level !== "none")
+                        .map((level) => (
+                          <DropdownMenuItem
+                            key={level}
+                            onSelect={() => {
+                              setReasoningEffort(level);
+                              setReasoningEnabled(true);
+                              applyQwenThinkingParams(true);
+                              // Mutual exclusion: turning thinking on for a
+                              // Kimi model forces the web_search builtin off.
+                              if (isKimiExternal && toolsEnabled) {
+                                setToolsEnabled(false, { persist: false });
+                              }
+                            }}
+                          >
+                            <CheckIcon
+                              className={cn(
+                                "gemini-tick size-4",
+                                !(
+                                  effectiveReasoningVisualEnabled &&
+                                  reasoningEffort === level
+                                ) && "opacity-0",
+                              )}
+                            />
+                            {formatReasoningEffortLabel(
+                              level,
+                              externalSelection?.modelId,
+                            )}
+                          </DropdownMenuItem>
+                        ))}
+                    </>
+                  ) : (
+                    effectiveSupportsReasoningOff &&
+                    !reasoningLockedOn && (
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          const next = !reasoningEnabled;
+                          setReasoningEnabled(next);
+                          applyQwenThinkingParams(next);
+                          if (isKimiExternal && next && toolsEnabled) {
+                            setToolsEnabled(false, { persist: false });
+                          }
+                        }}
+                      >
+                        <CheckIcon
+                          className={cn(
+                            "gemini-tick size-4",
+                            !effectiveReasoningEnabled && "opacity-0",
+                          )}
+                        />
+                        Thinking
+                      </DropdownMenuItem>
+                    )
+                  )}
+                  {supportsPreserveThinking && (
+                    <DropdownMenuItem
+                      disabled={!modelLoaded}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setPreserveThinking(!preserveThinking);
+                      }}
+                    >
+                      <CheckIcon
+                        className={cn(
+                          "gemini-tick size-4",
+                          !preserveThinking && "opacity-0",
+                        )}
+                      />
+                      Preserve thinking
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <button
+                type="button"
+                disabled={reasoningDisabled || reasoningLockedOn}
+                aria-disabled={reasoningDisabled || reasoningLockedOn}
+                title={
+                  reasoningLockedOn
+                    ? "This model requires reasoning to stay on."
+                    : undefined
                 }
-              }}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full px-1.5 py-1.5 text-[13px] font-medium text-muted-foreground/70 transition-colors",
-                reasoningLockedOn
-                  ? "cursor-not-allowed text-primary"
-                  : reasoningDisabled
-                    ? "cursor-not-allowed opacity-40"
-                    : effectiveReasoningEnabled
-                      ? "text-primary hover:bg-primary/10 dark:hover:bg-white/[0.08]"
-                      : "hover:bg-primary/10 dark:hover:bg-white/[0.08]",
-              )}
-              aria-label={thinkToggleAriaLabel({
-                reasoningLockedOn,
-                modelLoaded,
-                reasoningDisabled,
-                effectiveReasoningEnabled,
-              })}
-            >
-              {reasoningLockedOn ||
-              (effectiveReasoningEnabled && !reasoningDisabled) ? (
-                <LightbulbIcon className="size-3.5" />
-              ) : (
-                <LightbulbOffIcon className="size-3.5" />
-              )}
-              <span>Think</span>
-            </button>
+                onClick={() => {
+                  if (reasoningLockedOn) return;
+                  const next = !reasoningEnabled;
+                  setReasoningEnabled(next);
+                  applyQwenThinkingParams(next);
+                  // Mutual exclusion: Kimi's $web_search builtin
+                  // requires thinking off, so turning thinking on flips
+                  // the Search pill off (and vice versa).
+                  if (isKimiExternal && next && toolsEnabled) {
+                    setToolsEnabled(false, { persist: false });
+                  }
+                }}
+                className="gemini-thinking-pill"
+                data-active={thinkingActiveLook ? "true" : "false"}
+                aria-label={thinkToggleAriaLabel({
+                  reasoningLockedOn,
+                  modelLoaded,
+                  reasoningDisabled,
+                  effectiveReasoningEnabled,
+                })}
+              >
+                {thinkingActiveLook ? (
+                  <LightbulbIcon className="size-3.5" />
+                ) : (
+                  <LightbulbOffIcon className="size-3.5" />
+                )}
+                {thinkingActiveLook ? <span>Thinking</span> : null}
+              </button>
             )
           ) : null}
-          {supportsPreserveThinking && (
-            <button
-              type="button"
-              disabled={!modelLoaded}
-              onClick={() => setPreserveThinking(!preserveThinking)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full px-1.5 py-1.5 text-[13px] font-medium text-muted-foreground/70 transition-colors",
-                !modelLoaded
-                  ? "cursor-not-allowed opacity-40"
-                  : preserveThinking
-                    ? "text-primary hover:bg-primary/10 dark:hover:bg-white/[0.08]"
-                    : "hover:bg-primary/10 dark:hover:bg-white/[0.08]",
-              )}
-              aria-label={
-                preserveThinking ? "Disable preserve think" : "Enable preserve think"
-              }
-            >
-              {preserveThinking && modelLoaded ? (
-                <LightbulbIcon className="size-3.5" />
-              ) : (
-                <LightbulbOffIcon className="size-3.5" />
-              )}
-              <span>Preserve Think</span>
-            </button>
-          )}
           <button
             type="button"
             disabled={searchDisabled}

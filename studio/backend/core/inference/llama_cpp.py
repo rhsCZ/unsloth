@@ -955,6 +955,27 @@ class LlamaCppBackend:
     # ── Binary discovery ──────────────────────────────────────────
 
     @staticmethod
+    def _nvidia_available() -> bool:
+        """Return True when a local NVIDIA GPU is visible.
+
+        Used only to break ties between CPU and CUDA llama.cpp builds on
+        Windows. Keep this lightweight: binary discovery runs before the
+        heavy inference stack is initialized.
+        """
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "-L"],
+                capture_output = True,
+                text = True,
+                timeout = 5,
+                check = False,
+                **_windows_hidden_subprocess_kwargs(),
+            )
+            return result.returncode == 0 and "GPU" in (result.stdout or "")
+        except Exception:
+            return False
+
+    @staticmethod
     def _find_llama_server_binary() -> Optional[str]:
         """
         Locate the llama-server binary.
@@ -964,7 +985,10 @@ class LlamaCppBackend:
         1b. UNSLOTH_LLAMA_CPP_PATH env var (custom llama.cpp install dir)
         2.  ~/.unsloth/llama.cpp/llama-server        (make build, root dir)
         3.  ~/.unsloth/llama.cpp/build/bin/llama-server  (cmake build, Linux)
-        4.  ~/.unsloth/llama.cpp/build/bin/Release/llama-server.exe  (cmake build, Windows)
+        4a. ~/.unsloth/llama.cpp/build-cuda/bin/Release/llama-server.exe
+            (cmake CUDA build, Windows, preferred when NVIDIA is present)
+        4b. ~/.unsloth/llama.cpp/build/bin/Release/llama-server.exe
+            (cmake build / prebuilt layout, Windows)
         5.  ./llama.cpp/llama-server                 (legacy: make build, root dir)
         6.  ./llama.cpp/build/bin/llama-server        (legacy: cmake in-tree build)
         7.  llama-server on PATH                     (system install)
@@ -977,23 +1001,45 @@ class LlamaCppBackend:
         if env_path and Path(env_path).is_file():
             return env_path
 
+        prefer_windows_cuda = (
+            sys.platform == "win32" and LlamaCppBackend._nvidia_available()
+        )
+        cuda_candidates = ()
+        if prefer_windows_cuda:
+            cuda_candidates = (
+                Path("build-cuda") / "bin" / "Release" / binary_name,
+                Path("build-cuda") / "bin" / binary_name,
+            )
+        windows_release_candidates = ()
+        if sys.platform == "win32":
+            windows_release_candidates = (
+                Path("build") / "bin" / "Release" / binary_name,
+            )
+        install_candidates = (
+            *cuda_candidates,
+            Path(binary_name),
+            Path("build") / "bin" / binary_name,
+            *windows_release_candidates,
+        )
+
+        def first_binary_under(root: Path) -> Optional[str]:
+            for relative_path in install_candidates:
+                candidate = root / relative_path
+                if candidate.is_file():
+                    if relative_path.parts[0] == "build-cuda":
+                        logger.info(
+                            "Preferring CUDA llama-server build over CPU build: %s",
+                            candidate,
+                        )
+                    return str(candidate)
+            return None
+
         # 1b. UNSLOTH_LLAMA_CPP_PATH — custom llama.cpp install directory
         custom_llama_cpp = os.environ.get("UNSLOTH_LLAMA_CPP_PATH")
         if custom_llama_cpp:
-            custom_dir = Path(custom_llama_cpp)
-            # Root dir (make builds)
-            root_bin = custom_dir / binary_name
-            if root_bin.is_file():
-                return str(root_bin)
-            # build/bin/ (cmake builds on Linux)
-            cmake_bin = custom_dir / "build" / "bin" / binary_name
-            if cmake_bin.is_file():
-                return str(cmake_bin)
-            # build/bin/Release/ (cmake builds on Windows)
-            if sys.platform == "win32":
-                win_bin = custom_dir / "build" / "bin" / "Release" / binary_name
-                if win_bin.is_file():
-                    return str(win_bin)
+            custom_bin = first_binary_under(Path(custom_llama_cpp))
+            if custom_bin:
+                return custom_bin
 
         # 2-4. Match installer layout: env-mode -> $STUDIO_HOME/llama.cpp;
         # default/HOME-redirect -> ~/.unsloth/llama.cpp (sibling of studio).
@@ -1025,33 +1071,15 @@ class LlamaCppBackend:
                 _seen_roots.add(k)
                 _unique_roots.append(r)
         for unsloth_home in _unique_roots:
-            home_root = unsloth_home / binary_name
-            if home_root.is_file():
-                return str(home_root)
-            home_linux = unsloth_home / "build" / "bin" / binary_name
-            if home_linux.is_file():
-                return str(home_linux)
-            if sys.platform == "win32":
-                home_win = unsloth_home / "build" / "bin" / "Release" / binary_name
-                if home_win.is_file():
-                    return str(home_win)
+            home_bin = first_binary_under(unsloth_home)
+            if home_bin:
+                return home_bin
 
         # 5–6. Legacy: in-tree build (older setup.sh / setup.ps1 versions)
         project_root = Path(__file__).resolve().parents[4]
-        # Root dir (make builds)
-        root_path = project_root / "llama.cpp" / binary_name
-        if root_path.is_file():
-            return str(root_path)
-        # build/bin/ (cmake builds)
-        build_path = project_root / "llama.cpp" / "build" / "bin" / binary_name
-        if build_path.is_file():
-            return str(build_path)
-        if sys.platform == "win32":
-            win_path = (
-                project_root / "llama.cpp" / "build" / "bin" / "Release" / binary_name
-            )
-            if win_path.is_file():
-                return str(win_path)
+        legacy_bin = first_binary_under(project_root / "llama.cpp")
+        if legacy_bin:
+            return legacy_bin
 
         # 7. System PATH
         system_path = shutil.which("llama-server")

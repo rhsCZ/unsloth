@@ -121,6 +121,56 @@ def test_exact_output_try_block():
     assert out == expected
 
 
+def test_exact_output_multiple_consecutive_imports():
+    # Pins that only the blank after the LAST import in a run is dropped and
+    # both imports are kept (the loose \n\n heuristic above does not pin this).
+    src = "def f():\n    import a\n    import b\n\n    return a, b\n"
+    expected = "def f():\n    import a\n    import b\n    return a, b\n"
+    out, changed = remove_blank_after_short_import(src)
+    assert changed is True
+    assert out == expected
+
+
+def test_multiple_blank_lines_in_gap_all_removed():
+    src = "def f():\n    import a\n\n\n    return a\n"
+    expected = "def f():\n    import a\n    return a\n"
+    out, changed = remove_blank_after_short_import(src)
+    assert changed is True
+    assert out == expected
+    out2, changed2 = remove_blank_after_short_import(out)
+    assert out2 == out and changed2 is False
+
+
+def test_multiline_import_internal_blank_preserved():
+    # A blank line INSIDE a parenthesized import is part of the import span, not
+    # the gap, so it must survive; only the trailing blank before code is dropped.
+    src = (
+        "def g():\n"
+        "    from mod import (\n"
+        "        a,\n"
+        "\n"
+        "        b,\n"
+        "    )\n"
+        "\n"
+        "    return a, b\n"
+    )
+    expected = (
+        "def g():\n"
+        "    from mod import (\n"
+        "        a,\n"
+        "\n"
+        "        b,\n"
+        "    )\n"
+        "    return a, b\n"
+    )
+    out, changed = remove_blank_after_short_import(src)
+    assert changed is True
+    assert out == expected
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+    out2, changed2 = remove_blank_after_short_import(out)
+    assert out2 == out and changed2 is False
+
+
 def test_syntax_error_is_left_alone():
     src = "def f(:\n    import a\n\n    return a\n"
     out, changed = remove_blank_after_short_import(src)

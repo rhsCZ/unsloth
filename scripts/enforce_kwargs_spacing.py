@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Ensure keyword arguments use spaces around '=', prune redundant pass statements."""
+"""Ensure keyword arguments use spaces around '=', prune redundant pass statements,
+drop the blank line after a short indented import block."""
 
 from __future__ import annotations
 
@@ -160,6 +161,62 @@ def remove_redundant_passes(text: str) -> tuple[str, bool]:
     return "".join(result_lines), changed
 
 
+def remove_blank_after_short_import(text: str) -> tuple[str, bool]:
+    """Drop blank line(s) after an import block in a *small* nested suite.
+
+    Inside an indented suite of <= 3 statements (function/try/if/with/etc., never
+    module level), when a run of consecutive ``import`` / ``from ... import``
+    statements is directly followed -- across one or more blank lines and nothing
+    else -- by another statement in the same suite, remove those blank lines so
+    the import sits next to the code that uses it. A comment in the gap blocks the
+    rule. Removing blank lines never changes the AST, so this is always
+    semantics-preserving.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return text, False
+
+    lines = text.splitlines(keepends=True)
+    import_types = (ast.Import, ast.ImportFrom)
+    drop: set[int] = set()  # 1-based physical line numbers to delete
+
+    def suites_of(node: ast.AST) -> list[list[ast.stmt]]:
+        if isinstance(node, ast.Module):
+            return []  # module-level import spacing is left alone
+        out: list[list[ast.stmt]] = []
+        for attr in ("body", "orelse", "finalbody"):
+            val = getattr(node, attr, None)
+            if isinstance(val, list) and val and all(isinstance(s, ast.stmt) for s in val):
+                out.append(val)
+        return out
+
+    for node in ast.walk(tree):
+        for suite in suites_of(node):
+            if len(suite) > 3:  # only small blocks
+                continue
+            i = 0
+            while i < len(suite):
+                if not isinstance(suite[i], import_types):
+                    i += 1
+                    continue
+                j = i
+                while j + 1 < len(suite) and isinstance(suite[j + 1], import_types):
+                    j += 1
+                if j + 1 < len(suite):  # an import block followed by another statement
+                    last_imp, nxt = suite[j], suite[j + 1]
+                    gap = range((last_imp.end_lineno or last_imp.lineno) + 1, nxt.lineno)
+                    nums = [n for n in gap if 1 <= n <= len(lines)]
+                    if nums and all(lines[n - 1].strip() == "" for n in nums):
+                        drop.update(nums)
+                i = j + 1
+
+    if not drop:
+        return text, False
+    kept = [ln for idx, ln in enumerate(lines, start=1) if idx not in drop]
+    return "".join(kept), True
+
+
 def process_file(path: Path) -> bool:
     try:
         with tokenize.open(path) as handle:
@@ -170,8 +227,9 @@ def process_file(path: Path) -> bool:
         return False
 
     updated, changed = enforce_spacing(original)
+    updated, blanked = remove_blank_after_short_import(updated)
     updated, removed = remove_redundant_passes(updated)
-    if changed or removed:
+    if changed or blanked or removed:
         _atomic_write_text(path, updated, encoding)
         return True
     return False

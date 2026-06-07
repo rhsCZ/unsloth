@@ -512,9 +512,7 @@ def test_build_external_messages_passes_input_document_for_anthropic_and_openai(
         )
     ]
     for provider in ("anthropic", "openai"):
-        out = _build_external_messages(
-            msgs, supports_vision = True, provider_type = provider
-        )
+        out = _build_external_messages(msgs, supports_vision = True, provider_type = provider)
         assert len(out) == 1, (provider, out)
         parts = out[0]["content"]
         assert parts[0] == {"type": "text", "text": "summarise"}, provider
@@ -550,9 +548,7 @@ def test_build_external_messages_strips_input_document_for_unmapped_providers():
         )
     ]
     for provider in ("gemini", "mistral", "kimi", "openrouter", "deepseek", "qwen"):
-        out = _build_external_messages(
-            msgs, supports_vision = True, provider_type = provider
-        )
+        out = _build_external_messages(msgs, supports_vision = True, provider_type = provider)
         assert len(out) == 1, (provider, out)
         parts = out[0]["content"]
         types = [p.get("type") for p in parts if isinstance(p, dict)]

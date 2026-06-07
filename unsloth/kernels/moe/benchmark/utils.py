@@ -71,9 +71,7 @@ def create_kernel_configs(args: argparse.Namespace, permute_x: bool, permute_y: 
     block_n_range = power_of_two_range(args.BLOCK_SIZE_N[0], args.BLOCK_SIZE_N[1])
     block_k_range = power_of_two_range(args.BLOCK_SIZE_K[0], args.BLOCK_SIZE_K[1])
     num_warps_range = multiples_of_range(args.num_warps[0], args.num_warps[1], step = 2)
-    num_stages_range = multiples_of_range(
-        args.num_stages[0], args.num_stages[1], step = 1
-    )
+    num_stages_range = multiples_of_range(args.num_stages[0], args.num_stages[1], step = 1)
 
     mode = args.mode
     kernel_configs = []
@@ -177,9 +175,7 @@ def save_autotune_results(autotune_cache, mode, ref_time, fused_time, results_di
         os.makedirs(save_dir)
 
     for key, config in autotune_cache.items():
-        key = [
-            str(k) if not "torch" in str(k) else str(k.split("torch.")[-1]) for k in key
-        ]
+        key = [str(k) if not "torch" in str(k) else str(k.split("torch.")[-1]) for k in key]
         filename = "_".join(key)
         save_path = f"{save_dir}/{filename}.json"
         print(f"Saving autotune results to {save_path}")
@@ -195,22 +191,18 @@ def save_autotune_results(autotune_cache, mode, ref_time, fused_time, results_di
 def get_autotuner(mode):
     if mode == "forward":
         from grouped_gemm.kernels.forward import _autotuned_grouped_gemm_forward_kernel
-
         return _autotuned_grouped_gemm_forward_kernel
     elif mode == "dW":
         from grouped_gemm.kernels.backward import _autotuned_grouped_gemm_dW_kernel
-
         return _autotuned_grouped_gemm_dW_kernel
     elif mode == "dX":
         from grouped_gemm.kernels.backward import _autotuned_grouped_gemm_dX_kernel
-
         return _autotuned_grouped_gemm_dX_kernel
     elif mode == "backward":
         from grouped_gemm.kernels.backward import (
             _autotuned_grouped_gemm_dW_kernel,
             _autotuned_grouped_gemm_dX_kernel,
         )
-
         return _autotuned_grouped_gemm_dW_kernel, _autotuned_grouped_gemm_dX_kernel
     else:
         raise ValueError(f"Invalid mode: {mode}")

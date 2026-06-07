@@ -539,7 +539,5 @@ def test_expired_container_retries_only_once(monkeypatch):
     # infinite loop.
     assert call_count["n"] == 2
     # The second failure surfaces normally as an error SSE line.
-    error_lines = [
-        line for line in lines if '"error"' in line and "_toolEvent" not in line
-    ]
+    error_lines = [line for line in lines if '"error"' in line and "_toolEvent" not in line]
     assert len(error_lines) >= 1

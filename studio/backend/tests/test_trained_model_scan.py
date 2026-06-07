@@ -28,9 +28,7 @@ from utils.models.model_config import (
 )
 
 
-def test_scan_trained_models_includes_lora_and_full_finetune_outputs(
-    tmp_path: Path, monkeypatch
-):
+def test_scan_trained_models_includes_lora_and_full_finetune_outputs(tmp_path: Path, monkeypatch):
     # resolve_output_dir refuses absolutes outside outputs_root; point it at tmp_path.
     from utils.models import model_config as _mc
     from utils.paths import storage_roots as _sr
@@ -53,8 +51,7 @@ def test_scan_trained_models_includes_lora_and_full_finetune_outputs(
     (full_dir / "model.safetensors").write_bytes(b"")
 
     found = {
-        name: (path, model_type)
-        for name, path, model_type in scan_trained_models(str(tmp_path))
+        name: (path, model_type) for name, path, model_type in scan_trained_models(str(tmp_path))
     }
 
     assert found[lora_dir.name] == (str(lora_dir), "lora")
@@ -90,9 +87,7 @@ def test_model_config_full_finetune_local_path_is_not_lora(
     _mock_audio_input,
     tmp_path: Path,
 ):
-    (tmp_path / "config.json").write_text(
-        json.dumps({"_name_or_path": "unsloth/Qwen3-4B"})
-    )
+    (tmp_path / "config.json").write_text(json.dumps({"_name_or_path": "unsloth/Qwen3-4B"}))
     (tmp_path / "model.safetensors").write_bytes(b"")
 
     config = ModelConfig.from_identifier(str(tmp_path))

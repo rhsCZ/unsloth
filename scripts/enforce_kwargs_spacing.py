@@ -124,9 +124,7 @@ def remove_redundant_passes(text: str) -> tuple[str, bool]:
     lines = text.splitlines(keepends=True)
     changed = False
 
-    for node in sorted(
-        redundant, key=lambda item: (item.lineno, item.col_offset), reverse=True
-    ):
+    for node in sorted(redundant, key=lambda item: (item.lineno, item.col_offset), reverse=True):
         start = node.lineno - 1
         end = (node.end_lineno or node.lineno) - 1
         if start >= len(lines):

@@ -383,10 +383,7 @@ class TestSourcePatternsSh:
         assert '_DEFAULT_LLAMA_PR_FORCE=""' in self.content
 
     def test_has_default_source(self):
-        assert (
-            '_DEFAULT_LLAMA_SOURCE="https://github.com/ggml-org/llama.cpp"'
-            in self.content
-        )
+        assert '_DEFAULT_LLAMA_SOURCE="https://github.com/ggml-org/llama.cpp"' in self.content
 
     def test_has_pr_force_env_read(self):
         assert "UNSLOTH_LLAMA_PR_FORCE" in self.content
@@ -416,8 +413,7 @@ class TestSourcePatternsSh:
     def test_clone_urls_parameterized_pr_path(self):
         """PR clone path uses ${_LLAMA_SOURCE}.git, not hardcoded URL."""
         pr_clone_idx = self.content.index(
-            'if [ -n "$_LLAMA_PR" ]; then\n'
-            '            run_quiet_no_exit "clone llama.cpp"'
+            'if [ -n "$_LLAMA_PR" ]; then\n' '            run_quiet_no_exit "clone llama.cpp"'
         )
         else_idx = self.content.index("else\n", pr_clone_idx)
         pr_block = self.content[pr_clone_idx:else_idx]
@@ -437,9 +433,7 @@ class TestSourcePatternsSh:
         lines = self.content.splitlines()
         for i, line in enumerate(lines, 1):
             if "git clone" in line and "ggml-org/llama.cpp.git" in line:
-                pytest.fail(
-                    f"Line {i} has hardcoded ggml-org clone URL: {line.strip()}"
-                )
+                pytest.fail(f"Line {i} has hardcoded ggml-org clone URL: {line.strip()}")
 
 
 # =========================================================================
@@ -456,10 +450,7 @@ class TestSourcePatternsPs1:
         assert '$DefaultLlamaPrForce = ""' in self.content
 
     def test_has_default_source(self):
-        assert (
-            '$DefaultLlamaSource = "https://github.com/ggml-org/llama.cpp"'
-            in self.content
-        )
+        assert '$DefaultLlamaSource = "https://github.com/ggml-org/llama.cpp"' in self.content
 
     def test_has_pr_force_env_read(self):
         assert "$env:UNSLOTH_LLAMA_PR_FORCE" in self.content
@@ -469,10 +460,7 @@ class TestSourcePatternsPs1:
         assert "$LlamaSource = $DefaultLlamaSource" in self.content
 
     def test_release_repo_override_removed(self):
-        assert (
-            "$HelperReleaseRepo = if ($env:UNSLOTH_LLAMA_RELEASE_REPO)"
-            not in self.content
-        )
+        assert "$HelperReleaseRepo = if ($env:UNSLOTH_LLAMA_RELEASE_REPO)" not in self.content
         assert '$HelperReleaseRepo = "ggml-org/llama.cpp"' in self.content
 
     def test_force_compile_skips_prebuilt_resolution_early(self):
@@ -491,9 +479,7 @@ class TestSourcePatternsPs1:
 
     def test_clone_urls_parameterized_pr_path(self):
         """PR clone path uses $LlamaSource.git, not hardcoded URL."""
-        pr_idx = self.content.index(
-            "if ($LlamaPr) {\n", self.content.index("Cloning llama.cpp")
-        )
+        pr_idx = self.content.index("if ($LlamaPr) {\n", self.content.index("Cloning llama.cpp"))
         else_idx = self.content.index("} else {", pr_idx)
         pr_block = self.content[pr_idx:else_idx]
         assert '"$LlamaSource.git"' in pr_block
@@ -511,9 +497,7 @@ class TestSourcePatternsPs1:
         lines = self.content.splitlines()
         for i, line in enumerate(lines, 1):
             if "git clone" in line and "ggml-org/llama.cpp.git" in line:
-                pytest.fail(
-                    f"Line {i} has hardcoded ggml-org clone URL: {line.strip()}"
-                )
+                pytest.fail(f"Line {i} has hardcoded ggml-org clone URL: {line.strip()}")
 
 
 # =========================================================================

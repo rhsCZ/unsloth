@@ -33,64 +33,42 @@ class TestHasBlackwellGpu:
 
     def test_returns_true_for_sm_100(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
-            mock.patch.object(
-                wheel_utils.subprocess, "run", return_value = _smi_result("10.0\n")
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
+            mock.patch.object(wheel_utils.subprocess, "run", return_value = _smi_result("10.0\n")),
         ):
             assert wheel_utils.has_blackwell_gpu() is True
 
     def test_returns_true_for_sm_120(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
-            mock.patch.object(
-                wheel_utils.subprocess, "run", return_value = _smi_result("12.0\n")
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
+            mock.patch.object(wheel_utils.subprocess, "run", return_value = _smi_result("12.0\n")),
         ):
             assert wheel_utils.has_blackwell_gpu() is True
 
     def test_returns_true_for_sm_121(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
-            mock.patch.object(
-                wheel_utils.subprocess, "run", return_value = _smi_result("12.1\n")
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
+            mock.patch.object(wheel_utils.subprocess, "run", return_value = _smi_result("12.1\n")),
         ):
             assert wheel_utils.has_blackwell_gpu() is True
 
     def test_returns_false_for_sm_90(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
-            mock.patch.object(
-                wheel_utils.subprocess, "run", return_value = _smi_result("9.0\n")
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
+            mock.patch.object(wheel_utils.subprocess, "run", return_value = _smi_result("9.0\n")),
         ):
             assert wheel_utils.has_blackwell_gpu() is False
 
     def test_returns_false_for_sm_89(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
-            mock.patch.object(
-                wheel_utils.subprocess, "run", return_value = _smi_result("8.9\n")
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
+            mock.patch.object(wheel_utils.subprocess, "run", return_value = _smi_result("8.9\n")),
         ):
             assert wheel_utils.has_blackwell_gpu() is False
 
     def test_mixed_gpus_with_one_blackwell_returns_true(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
             mock.patch.object(
                 wheel_utils.subprocess,
                 "run",
@@ -101,9 +79,7 @@ class TestHasBlackwellGpu:
 
     def test_returns_false_when_nvidia_smi_fails(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
             mock.patch.object(
                 wheel_utils.subprocess,
                 "run",
@@ -114,9 +90,7 @@ class TestHasBlackwellGpu:
 
     def test_returns_false_on_subprocess_timeout(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
             mock.patch.object(
                 wheel_utils.subprocess,
                 "run",
@@ -127,9 +101,7 @@ class TestHasBlackwellGpu:
 
     def test_returns_false_on_malformed_output(self):
         with (
-            mock.patch.object(
-                wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"
-            ),
+            mock.patch.object(wheel_utils.shutil, "which", return_value = "/usr/bin/nvidia-smi"),
             mock.patch.object(
                 wheel_utils.subprocess,
                 "run",
@@ -161,10 +133,7 @@ class TestFlashAttnWheelSelection:
         )
         assert url is not None
         assert "v2.8.1" in url
-        assert (
-            "flash_attn-2.8.1+cu12torch2.10cxx11abiTRUE-cp313-cp313-linux_x86_64.whl"
-            in url
-        )
+        assert "flash_attn-2.8.1+cu12torch2.10cxx11abiTRUE-cp313-cp313-linux_x86_64.whl" in url
 
     def test_missing_cuda_major_disables_wheel_lookup(self):
         assert (
@@ -379,9 +348,7 @@ class TestEnsureFlashAttn:
 
         mock_probe.assert_not_called()
         mock_install_wheel.assert_not_called()
-        assert any(
-            label == "warning" and "Blackwell" in msg for label, msg in step_messages
-        )
+        assert any(label == "warning" and "Blackwell" in msg for label, msg in step_messages)
 
     def test_blackwell_gpu_on_windows_emits_blackwell_warning(self):
         step_messages: list[tuple[str, str]] = []
@@ -403,9 +370,7 @@ class TestEnsureFlashAttn:
 
         mock_probe.assert_not_called()
         mock_install_wheel.assert_not_called()
-        assert any(
-            label == "warning" and "Blackwell" in msg for label, msg in step_messages
-        )
+        assert any(label == "warning" and "Blackwell" in msg for label, msg in step_messages)
 
     def test_non_blackwell_windows_does_not_emit_blackwell_warning(self):
         step_messages: list[tuple[str, str]] = []
@@ -453,9 +418,7 @@ class TestInstallPythonStackFlashAttnIntegration:
             mock.patch("subprocess.run", side_effect = fake_run),
             mock.patch.object(ips, "_has_usable_nvidia_gpu", return_value = False),
             mock.patch.object(ips, "_has_rocm_gpu", return_value = False),
-            mock.patch.object(
-                ips, "LOCAL_DD_UNSTRUCTURED_PLUGIN", Path("/fake/plugin")
-            ),
+            mock.patch.object(ips, "LOCAL_DD_UNSTRUCTURED_PLUGIN", Path("/fake/plugin")),
             mock.patch("pathlib.Path.is_dir", return_value = True),
             mock.patch("pathlib.Path.is_file", return_value = True),
             mock.patch.dict(os.environ, {"SKIP_STUDIO_BASE": "1"}, clear = False),

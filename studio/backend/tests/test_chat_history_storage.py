@@ -231,9 +231,7 @@ def test_settings_merge_atomic_under_concurrency(tmp_path, monkeypatch):
 
 def test_settings_merge_preserves_nested_keys(tmp_path, monkeypatch):
     _reset_studio_db(tmp_path, monkeypatch)
-    studio_db.upsert_chat_settings_merge(
-        {"inferenceParams": {"temperature": 0.5, "topP": 0.8}}
-    )
+    studio_db.upsert_chat_settings_merge({"inferenceParams": {"temperature": 0.5, "topP": 0.8}})
     studio_db.upsert_chat_settings_merge({"inferenceParams": {"temperature": 0.9}})
 
     params = studio_db.list_chat_settings()["inferenceParams"]
@@ -245,9 +243,7 @@ def test_settings_merge_quarantines_corrupt_json_and_rejects_partial_patch(
     monkeypatch,
 ):
     _reset_studio_db(tmp_path, monkeypatch)
-    studio_db.upsert_chat_settings_merge(
-        {"inferenceParams": {"temperature": 0.5, "topP": 0.8}}
-    )
+    studio_db.upsert_chat_settings_merge({"inferenceParams": {"temperature": 0.5, "topP": 0.8}})
     conn = studio_db.get_connection()
     try:
         conn.execute(
@@ -295,9 +291,7 @@ def test_settings_merge_replaces_corrupt_scalar_after_quarantine(tmp_path, monke
     assert settings["autoTitle"] is True
     conn = studio_db.get_connection()
     try:
-        quarantined = conn.execute(
-            "SELECT key, reason FROM chat_settings_quarantine"
-        ).fetchall()
+        quarantined = conn.execute("SELECT key, reason FROM chat_settings_quarantine").fetchall()
     finally:
         conn.close()
     assert [(row["key"], row["reason"]) for row in quarantined] == [

@@ -159,9 +159,7 @@ class ChatSettingsPayload(BaseModel):
     inferenceParams: Optional[ChatInferenceSettings] = None
     customPresets: Optional[list[ChatPreset]] = None
     activePreset: Optional[str] = None
-    activePresetSource: Optional[Literal["builtin-default", "custom", "modified"]] = (
-        None
-    )
+    activePresetSource: Optional[Literal["builtin-default", "custom", "modified"]] = None
     autoTitle: Optional[bool] = None
     reasoningEffort: Optional[
         Literal["none", "minimal", "low", "medium", "high", "max", "xhigh"]
@@ -415,14 +413,10 @@ async def replace_thread_messages(
     payload: ChatMessageSyncRequest,
     current_subject: str = Depends(get_current_subject),
 ):
-    mismatched_ids = [
-        message.id for message in payload.messages if message.threadId != thread_id
-    ]
+    mismatched_ids = [message.id for message in payload.messages if message.threadId != thread_id]
     if mismatched_ids:
         preview = ", ".join(mismatched_ids[:5])
-        suffix = (
-            "" if len(mismatched_ids) <= 5 else f" (+{len(mismatched_ids) - 5} more)"
-        )
+        suffix = "" if len(mismatched_ids) <= 5 else f" (+{len(mismatched_ids) - 5} more)"
         raise HTTPException(
             status_code = 400,
             detail = f"Message threadId mismatch: {preview}{suffix}",

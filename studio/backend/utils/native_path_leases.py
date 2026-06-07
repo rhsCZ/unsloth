@@ -153,9 +153,7 @@ def verify_native_path_lease(
         raise NativePathLeaseError("Native path is no longer accessible.") from exc
     _reject_network_or_device_path(resolved)
     if not _same_native_path(resolved, path):
-        raise NativePathLeaseError(
-            "Native path grant no longer resolves to the selected path."
-        )
+        raise NativePathLeaseError("Native path grant no longer resolves to the selected path.")
 
     grant = NativePathGrant(
         operation = str(payload["operation"]),
@@ -219,9 +217,7 @@ def _decode_secret() -> bytes:
             if encoded is None and _SCRUB_SAVED_SECRET is not None:
                 encoded = _SCRUB_SAVED_SECRET
         if not encoded:
-            raise NativePathLeaseError(
-                "Native path grants require the managed desktop backend."
-            )
+            raise NativePathLeaseError("Native path grants require the managed desktop backend.")
         try:
             secret = _b64decode(encoded)
         except Exception as exc:
@@ -272,9 +268,7 @@ def _validate_payload(
     )
     missing = [key for key in required if key not in payload]
     if missing:
-        raise NativePathLeaseError(
-            "Native path grant payload is missing required fields."
-        )
+        raise NativePathLeaseError("Native path grant payload is missing required fields.")
     if _required_int(payload, "version") != 1:
         raise NativePathLeaseError("Native path grant version is unsupported.")
     if payload["operation"] != operation:
@@ -353,19 +347,13 @@ def _reject_network_or_device_path(path: Path) -> None:
             rest = normalized[4:]
             is_local_drive = len(rest) >= 3 and rest[0].isalpha() and rest[1:3] == ":\\"
             if not is_local_drive:
-                raise NativePathLeaseError(
-                    "Network paths are not supported for native grants."
-                )
+                raise NativePathLeaseError("Network paths are not supported for native grants.")
         elif normalized.startswith("\\\\"):
-            raise NativePathLeaseError(
-                "Network paths are not supported for native grants."
-            )
+            raise NativePathLeaseError("Network paths are not supported for native grants.")
     if os.name != "nt":
         for root in ("/dev", "/proc", "/sys"):
             if path.is_relative_to(root):
-                raise NativePathLeaseError(
-                    "Device and virtual filesystem paths are not supported."
-                )
+                raise NativePathLeaseError("Device and virtual filesystem paths are not supported.")
     if "\x00" in text:
         raise NativePathLeaseError("Native path contains invalid characters.")
 
@@ -397,9 +385,7 @@ def _optional_int(value: Any) -> int | None:
 def _required_int(payload: dict[str, Any], key: str) -> int:
     raw = payload.get(key)
     if raw is None:
-        raise NativePathLeaseError(
-            "Native path grant payload is missing required fields."
-        )
+        raise NativePathLeaseError("Native path grant payload is missing required fields.")
     try:
         return int(raw)
     except (TypeError, ValueError) as exc:

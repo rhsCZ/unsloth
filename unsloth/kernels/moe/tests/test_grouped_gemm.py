@@ -121,9 +121,7 @@ def _test_grouped_gemm_forward(
     allow_tma_store: bool = False,
     use_autograd: bool = False,
 ):
-    if not check_valid_config(
-        permute_x, permute_y, use_W1 = use_W1, fuse_mul_post = fuse_mul_post
-    ):
+    if not check_valid_config(permute_x, permute_y, use_W1 = use_W1, fuse_mul_post = fuse_mul_post):
         pytest.skip(
             f"Skipping test due to invalid config: {permute_x = } {permute_y = } {use_W1 = } {fuse_mul_post = }"
         )
@@ -193,7 +191,6 @@ def _test_grouped_gemm_forward(
     # No need to run all configs for tests, otherwise takes too long
     if autotune:
         from grouped_gemm.kernels.forward import _autotuned_grouped_gemm_forward_kernel
-
         if num_autotune_configs is not None:
             _autotuned_grouped_gemm_forward_kernel.configs = (
                 _autotuned_grouped_gemm_forward_kernel.configs[:num_autotune_configs]
@@ -202,7 +199,6 @@ def _test_grouped_gemm_forward(
     # Use autograd.Function interface
     if use_autograd:
         from grouped_gemm.interface import grouped_gemm
-
         kernel_config_fwd = KernelConfigForward(
             BLOCK_SIZE_M = BLOCK_SIZE_M,
             BLOCK_SIZE_N = BLOCK_SIZE_N,
@@ -330,15 +326,9 @@ def test_grouped_gemm_forward_manual_autograd(
     )
 
 
-@pytest.mark.parametrize(
-    "num_autotune_configs", [10], ids = lambda x: f"num_autotune_configs={x}"
-)
-@pytest.mark.parametrize(
-    "permute_x", [True, False], ids = lambda x: "permute_x" if x else ""
-)
-@pytest.mark.parametrize(
-    "permute_y", [True, False], ids = lambda x: "permute_y" if x else ""
-)
+@pytest.mark.parametrize("num_autotune_configs", [10], ids = lambda x: f"num_autotune_configs={x}")
+@pytest.mark.parametrize("permute_x", [True, False], ids = lambda x: "permute_x" if x else "")
+@pytest.mark.parametrize("permute_y", [True, False], ids = lambda x: "permute_y" if x else "")
 @pytest.mark.parametrize(
     "model_config",
     [LLAMA_MODEL_CONFIG, QWEN_MODEL_CONFIG],
@@ -368,15 +358,9 @@ def test_grouped_gemm_forward_autotune(
     )
 
 
-@pytest.mark.parametrize(
-    "num_autotune_configs", [10], ids = lambda x: f"num_autotune_configs={x}"
-)
-@pytest.mark.parametrize(
-    "permute_x", [True, False], ids = lambda x: "permute_x" if x else ""
-)
-@pytest.mark.parametrize(
-    "permute_y", [True, False], ids = lambda x: "permute_y" if x else ""
-)
+@pytest.mark.parametrize("num_autotune_configs", [10], ids = lambda x: f"num_autotune_configs={x}")
+@pytest.mark.parametrize("permute_x", [True, False], ids = lambda x: "permute_x" if x else "")
+@pytest.mark.parametrize("permute_y", [True, False], ids = lambda x: "permute_y" if x else "")
 @pytest.mark.parametrize(
     "model_config",
     [LLAMA_MODEL_CONFIG, QWEN_MODEL_CONFIG],
@@ -469,11 +453,7 @@ def _test_grouped_gemm_backward_dX(
     if use_tma_store and not allow_tma_store:
         pytest.skip("TMA store needs to be debugged due to non-deterministic behavior")
 
-    if (
-        autotune
-        and model_config.intermediate_size <= 128
-        and model_config.hidden_size <= 128
-    ):
+    if autotune and model_config.intermediate_size <= 128 and model_config.hidden_size <= 128:
         pytest.skip("Skipping autotuning for small model configs")
 
     # Prevent OOM for large intermediate sizes
@@ -558,11 +538,10 @@ def _test_grouped_gemm_backward_dX(
     if autotune:
         # No need to run all configs for autotuning
         from grouped_gemm.kernels.backward import _autotuned_grouped_gemm_dX_kernel
-
         if num_autotune_configs is not None:
-            _autotuned_grouped_gemm_dX_kernel.configs = (
-                _autotuned_grouped_gemm_dX_kernel.configs[:num_autotune_configs]
-            )
+            _autotuned_grouped_gemm_dX_kernel.configs = _autotuned_grouped_gemm_dX_kernel.configs[
+                :num_autotune_configs
+            ]
 
     if use_autograd:
         from grouped_gemm.interface import grouped_gemm
@@ -594,9 +573,7 @@ def _test_grouped_gemm_backward_dX(
                     _autotuned_grouped_gemm_dX_kernel.configs[:num_autotune_configs]
                 )
                 _autotuned_grouped_gemm_forward_kernel.configs = (
-                    _autotuned_grouped_gemm_forward_kernel.configs[
-                        :num_autotune_configs
-                    ]
+                    _autotuned_grouped_gemm_forward_kernel.configs[:num_autotune_configs]
                 )
 
             kernel_config_fwd = None
@@ -761,15 +738,9 @@ def test_grouped_gemm_backward_dX_manual_autograd(
     )
 
 
-@pytest.mark.parametrize(
-    "num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}"
-)
-@pytest.mark.parametrize(
-    "permute_x", [True, False], ids = lambda x: "permute_x" if x else ""
-)
-@pytest.mark.parametrize(
-    "permute_y", [True, False], ids = lambda x: "permute_y" if x else ""
-)
+@pytest.mark.parametrize("num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}")
+@pytest.mark.parametrize("permute_x", [True, False], ids = lambda x: "permute_x" if x else "")
+@pytest.mark.parametrize("permute_y", [True, False], ids = lambda x: "permute_y" if x else "")
 @pytest.mark.parametrize(
     "model_config",
     [LLAMA_MODEL_CONFIG, QWEN_MODEL_CONFIG],
@@ -800,15 +771,9 @@ def test_grouped_gemm_backward_dX_autotune(
     )
 
 
-@pytest.mark.parametrize(
-    "num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}"
-)
-@pytest.mark.parametrize(
-    "permute_x", [True, False], ids = lambda x: "permute_x" if x else ""
-)
-@pytest.mark.parametrize(
-    "permute_y", [True, False], ids = lambda x: "permute_y" if x else ""
-)
+@pytest.mark.parametrize("num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}")
+@pytest.mark.parametrize("permute_x", [True, False], ids = lambda x: "permute_x" if x else "")
+@pytest.mark.parametrize("permute_y", [True, False], ids = lambda x: "permute_y" if x else "")
 @pytest.mark.parametrize(
     "model_config",
     [LLAMA_MODEL_CONFIG, QWEN_MODEL_CONFIG],
@@ -957,11 +922,10 @@ def _test_grouped_gemm_backward_dW(
 
     if autotune:
         from grouped_gemm.kernels.backward import _autotuned_grouped_gemm_dW_kernel
-
         if num_autotune_configs is not None:
-            _autotuned_grouped_gemm_dW_kernel.configs = (
-                _autotuned_grouped_gemm_dW_kernel.configs[:num_autotune_configs]
-            )
+            _autotuned_grouped_gemm_dW_kernel.configs = _autotuned_grouped_gemm_dW_kernel.configs[
+                :num_autotune_configs
+            ]
 
     if use_autograd:
         from grouped_gemm.interface import grouped_gemm
@@ -996,9 +960,7 @@ def _test_grouped_gemm_backward_dW(
 
             if num_autotune_configs is not None:
                 _autotuned_grouped_gemm_forward_kernel.configs = (
-                    _autotuned_grouped_gemm_forward_kernel.configs[
-                        :num_autotune_configs
-                    ]
+                    _autotuned_grouped_gemm_forward_kernel.configs[:num_autotune_configs]
                 )
                 _autotuned_grouped_gemm_dW_kernel.configs = (
                     _autotuned_grouped_gemm_dW_kernel.configs[:num_autotune_configs]
@@ -1067,9 +1029,7 @@ def _test_grouped_gemm_backward_dW(
                 print(f"Expert {i} diff: {expert_diff:.6f}")
 
             diff = (W.grad - dW_test).abs().max().item()
-            assert (
-                False
-            ), f"Grouped gemm manual backward_dW outputs mismatch: {diff:.6f}"
+            assert False, f"Grouped gemm manual backward_dW outputs mismatch: {diff:.6f}"
     else:
         diff = (W.grad - dW_test).abs().max().item()
         assert torch.allclose(
@@ -1137,15 +1097,9 @@ def test_grouped_gemm_backward_dW_manual_autograd(
     )
 
 
-@pytest.mark.parametrize(
-    "num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}"
-)
-@pytest.mark.parametrize(
-    "permute_x", [True, False], ids = lambda x: "permute_x" if x else ""
-)
-@pytest.mark.parametrize(
-    "permute_y", [True, False], ids = lambda x: "permute_y" if x else ""
-)
+@pytest.mark.parametrize("num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}")
+@pytest.mark.parametrize("permute_x", [True, False], ids = lambda x: "permute_x" if x else "")
+@pytest.mark.parametrize("permute_y", [True, False], ids = lambda x: "permute_y" if x else "")
 @pytest.mark.parametrize(
     "model_config",
     [LLAMA_MODEL_CONFIG, QWEN_MODEL_CONFIG],
@@ -1175,15 +1129,9 @@ def test_grouped_gemm_backward_dW_autotune(
     )
 
 
-@pytest.mark.parametrize(
-    "num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}"
-)
-@pytest.mark.parametrize(
-    "permute_x", [True, False], ids = lambda x: "permute_x" if x else ""
-)
-@pytest.mark.parametrize(
-    "permute_y", [True, False], ids = lambda x: "permute_y" if x else ""
-)
+@pytest.mark.parametrize("num_autotune_configs", [20], ids = lambda x: f"num_autotune_configs={x}")
+@pytest.mark.parametrize("permute_x", [True, False], ids = lambda x: "permute_x" if x else "")
+@pytest.mark.parametrize("permute_y", [True, False], ids = lambda x: "permute_y" if x else "")
 @pytest.mark.parametrize(
     "model_config",
     [LLAMA_MODEL_CONFIG, QWEN_MODEL_CONFIG],

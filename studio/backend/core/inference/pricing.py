@@ -141,8 +141,7 @@ def calculate_cost(
     # Clamp tokens >=0 so corrupted payloads can't produce a negative bill.
     cache_creation = max(0, int(usage.get("cache_creation_input_tokens") or 0))
     cache_read_native_present = (
-        "cache_read_input_tokens" in usage
-        and usage.get("cache_read_input_tokens") is not None
+        "cache_read_input_tokens" in usage and usage.get("cache_read_input_tokens") is not None
     )
     cache_read = max(0, int(usage.get("cache_read_input_tokens") or 0))
     # Fallback to mirrored prompt_tokens_details only when the native
@@ -226,14 +225,10 @@ def calculate_cost(
         if cc_5m + cc_1h == 0 and cache_creation > 0:
             # No breakdown -- assume default 5m pool.
             cc_5m = cache_creation
-        out["cache_write_usd"] = (
-            cc_5m / 1_000_000.0
-        ) * base * ANTHROPIC_CACHE_5M_WRITE_MULT + (
+        out["cache_write_usd"] = (cc_5m / 1_000_000.0) * base * ANTHROPIC_CACHE_5M_WRITE_MULT + (
             cc_1h / 1_000_000.0
         ) * base * ANTHROPIC_CACHE_1H_WRITE_MULT
-        out["cache_read_usd"] = (
-            (cache_read / 1_000_000.0) * base * ANTHROPIC_CACHE_READ_MULT
-        )
+        out["cache_read_usd"] = (cache_read / 1_000_000.0) * base * ANTHROPIC_CACHE_READ_MULT
         # Server-tool surcharges.
         srv = usage.get("server_tool_use") or {}
         if isinstance(srv, dict):
@@ -250,9 +245,7 @@ def calculate_cost(
         if cache_read > 0:
             non_cached_input = max(0, input_tokens - cache_read)
             out["input_usd"] = (non_cached_input / 1_000_000.0) * base
-            out["cache_read_usd"] = (
-                (cache_read / 1_000_000.0) * base * OPENAI_CACHE_READ_MULT
-            )
+            out["cache_read_usd"] = (cache_read / 1_000_000.0) * base * OPENAI_CACHE_READ_MULT
         # OpenAI server-tool surcharges arrive under `openai_tool_use`
         # (normalised by the SSE finaliser from output array items).
         srv = usage.get("openai_tool_use") or {}

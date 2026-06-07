@@ -20,12 +20,7 @@ import pytest
 # full backend chain (fastapi / structlog / loggers / utils.hardware)
 # via core/inference/__init__.py. The validator is intentionally
 # dependency-free and unit-tests should reflect that.
-_LSA_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "core"
-    / "inference"
-    / "llama_server_args.py"
-)
+_LSA_PATH = Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_server_args.py"
 _spec = importlib.util.spec_from_file_location("_lsa_test_only", _LSA_PATH)
 _lsa = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_lsa)
@@ -505,9 +500,7 @@ def test_strip_shadowing_flags_jinja_boolean_preserves_positional():
 
 
 def test_strip_shadowing_flags_no_jinja_boolean_preserves_positional():
-    out = strip_shadowing_flags(
-        ["--no-jinja", "trailing-positional"], strip_template = True
-    )
+    out = strip_shadowing_flags(["--no-jinja", "trailing-positional"], strip_template = True)
     assert out == ["trailing-positional"]
 
 

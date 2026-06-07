@@ -49,13 +49,7 @@ import time
 from pathlib import Path
 
 
-SOURCE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "studio"
-    / "backend"
-    / "routes"
-    / "inference.py"
-)
+SOURCE_PATH = Path(__file__).resolve().parents[2] / "studio" / "backend" / "routes" / "inference.py"
 SRC = SOURCE_PATH.read_text()
 _TREE = ast.parse(SRC)
 
@@ -674,8 +668,7 @@ def test_unsloth_stream_loop_emits_zero_tokens_on_preset_cancel():
         f"(pending-replay path); got {seen}"
     )
     assert next_calls[0] == 0, (
-        f"loop must not call next() at all on pre-set cancel; got "
-        f"{next_calls[0]} calls"
+        f"loop must not call next() at all on pre-set cancel; got " f"{next_calls[0]} calls"
     )
     assert reset_calls[0] == 1, (
         f"backend.reset_generation_state() must still fire exactly once "
@@ -713,6 +706,5 @@ def test_audio_stream_emits_zero_chunks_on_preset_cancel():
     seen = asyncio.run(_loop())
     assert seen == [], f"audio loop must emit zero chunks on pre-set cancel; got {seen}"
     assert next_calls[0] == 0, (
-        f"audio loop must not call next() on pre-set cancel; got "
-        f"{next_calls[0]} calls"
+        f"audio loop must not call next() on pre-set cancel; got " f"{next_calls[0]} calls"
     )

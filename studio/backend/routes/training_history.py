@@ -42,10 +42,7 @@ async def list_training_runs(
     """List training runs, newest first."""
     result = list_runs(limit = limit, offset = offset)
     return TrainingRunListResponse(
-        runs = [
-            TrainingRunSummary(**{**r, "can_resume": can_resume_run(r)})
-            for r in result["runs"]
-        ],
+        runs = [TrainingRunSummary(**{**r, "can_resume": can_resume_run(r)}) for r in result["runs"]],
         total = result["total"],
     )
 
@@ -118,9 +115,7 @@ async def delete_training_run(
     if run is None:
         raise HTTPException(status_code = 404, detail = f"Run {run_id} not found")
     if run["status"] == "running":
-        raise HTTPException(
-            status_code = 409, detail = "Cannot delete a running training run"
-        )
+        raise HTTPException(status_code = 409, detail = "Cannot delete a running training run")
     logger.info("Deleting training run %s", run_id)
     delete_run(run_id)
     return TrainingRunDeleteResponse(

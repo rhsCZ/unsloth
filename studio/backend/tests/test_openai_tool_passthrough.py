@@ -316,9 +316,7 @@ class TestChatCompletionRequestToolFields:
         req = self._make()
         assert req.stream is False
 
-    def test_post_without_stream_field_decodes_to_stream_false_over_http(
-        self, monkeypatch
-    ):
+    def test_post_without_stream_field_decodes_to_stream_false_over_http(self, monkeypatch):
         # Wire-level guard for the same default: a POST body that omits
         # `stream` entirely (the exact shape naive curl / .NET clients
         # send) must deserialise into stream=False *and* the response
@@ -419,9 +417,7 @@ class TestAnthropicToolChoiceToOpenAI:
         assert anthropic_tool_choice_to_openai({"type": "none"}) == "none"
 
     def test_tool_named(self):
-        result = anthropic_tool_choice_to_openai(
-            {"type": "tool", "name": "get_weather"}
-        )
+        result = anthropic_tool_choice_to_openai({"type": "tool", "name": "get_weather"})
         assert result == {
             "type": "function",
             "function": {"name": "get_weather"},
@@ -528,15 +524,11 @@ class TestFriendlyErrorHttpx:
         # Non-httpx exceptions still fall through to the existing substring
         # heuristics — a context-size message must still produce the
         # "Message too long" path.
-        ctx_msg = (
-            "request (4096 tokens) exceeds the available context size (2048 tokens)"
-        )
+        ctx_msg = "request (4096 tokens) exceeds the available context size (2048 tokens)"
         assert "Message too long" in _friendly_error(ValueError(ctx_msg))
 
     def test_generic_exception_returns_generic_message(self):
-        assert (
-            _friendly_error(RuntimeError("unrelated")) == "An internal error occurred"
-        )
+        assert _friendly_error(RuntimeError("unrelated")) == "An internal error occurred"
 
 
 from routes.inference import (  # noqa: E402
@@ -707,9 +699,7 @@ class TestGgufVisionMessages:
             "text": "describe this image",
         }
         assert messages[0]["content"][1]["type"] == "image_url"
-        assert messages[0]["content"][1]["image_url"]["url"].startswith(
-            "data:image/png;base64,"
-        )
+        assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
     def test_rejects_image_parts_for_text_only_gguf(self):
         req = ChatCompletionRequest(
@@ -775,9 +765,7 @@ class TestGgufVisionMessages:
             {"role": "user", "content": "now"},
         ]
 
-        updated = _set_or_prepend_system_message(
-            messages, "Mid instructions.\n\nUse tools."
-        )
+        updated = _set_or_prepend_system_message(messages, "Mid instructions.\n\nUse tools.")
 
         assert [m["role"] for m in updated] == ["system", "user", "user"]
         assert updated[0]["content"] == "Mid instructions.\n\nUse tools."
@@ -838,8 +826,7 @@ class TestGgufVisionToolRouting:
                             "type": "image_url",
                             "image_url": {
                                 "url": (
-                                    "data:image/png;base64,"
-                                    f"{TestGgufVisionMessages._PNG_B64}"
+                                    "data:image/png;base64," f"{TestGgufVisionMessages._PNG_B64}"
                                 ),
                             },
                         },
@@ -849,9 +836,7 @@ class TestGgufVisionToolRouting:
         )
 
         response = self._drive(
-            openai_chat_completions(
-                payload, request = self._Request(), current_subject = "test"
-            )
+            openai_chat_completions(payload, request = self._Request(), current_subject = "test")
         )
         self._consume_response(response)
 

@@ -149,8 +149,7 @@ def _siblings(items: dict[str, int]):
     """Mock ``hf_model_info(...).siblings`` payload."""
     return _types.SimpleNamespace(
         siblings = [
-            _types.SimpleNamespace(rfilename = name, size = size)
-            for name, size in items.items()
+            _types.SimpleNamespace(rfilename = name, size = size) for name, size in items.items()
         ],
     )
 
@@ -174,12 +173,8 @@ class TestIterHfCacheSnapshots:
         assert list(_iter_hf_cache_snapshots("unsloth/bare")) == []
 
     def test_yields_newest_first(self, hf_cache):
-        old = _build_cache(
-            hf_cache, "unsloth/multi", {"x.gguf": 1}, snapshot_sha = "a" * 40
-        )
-        new = _build_cache(
-            hf_cache, "unsloth/multi", {"y.gguf": 1}, snapshot_sha = "b" * 40
-        )
+        old = _build_cache(hf_cache, "unsloth/multi", {"x.gguf": 1}, snapshot_sha = "a" * 40)
+        new = _build_cache(hf_cache, "unsloth/multi", {"y.gguf": 1}, snapshot_sha = "b" * 40)
         os.utime(old, (1000, 1000))
         os.utime(new, (2000, 2000))
         out = list(_iter_hf_cache_snapshots("unsloth/multi"))
@@ -218,9 +213,7 @@ class TestListGgufVariantsFromCache:
 
 
 class TestListGgufVariantsOffline:
-    def test_offline_env_short_circuits_api(
-        self, hf_cache, clean_offline_env, monkeypatch
-    ):
+    def test_offline_env_short_circuits_api(self, hf_cache, clean_offline_env, monkeypatch):
         _build_cache(hf_cache, "unsloth/a", {"a-UD-Q4_K_XL.gguf": 1})
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
@@ -655,9 +648,7 @@ class TestListGgufVariantsPermanentErrors:
                 list_gguf_variants("u/gated-gguf")
         assert type(exc_info.value).__name__ == "GatedRepoError"
 
-    def test_transient_error_still_falls_back_to_cache(
-        self, hf_cache, clean_offline_env
-    ):
+    def test_transient_error_still_falls_back_to_cache(self, hf_cache, clean_offline_env):
         from utils.models.model_config import list_gguf_variants
 
         _build_cache(hf_cache, "u/transient-gguf", {"foo-Q4_K_M.gguf": 1})
@@ -676,7 +667,6 @@ class TestDetectGgufFromCacheExcludesMmproj:
 
     def test_mmproj_only_returns_none(self, hf_cache):
         from utils.models.model_config import _detect_gguf_from_hf_cache
-
         _build_cache(
             hf_cache,
             "u/vision-only-mmproj",
@@ -739,7 +729,6 @@ class TestProbeDnsDeadNoGlobalTimeoutMutation:
         # Simulate a wedged resolver: thread blocks forever.
         def wedged(host):
             import threading
-
             threading.Event().wait()
 
         monkeypatch.setattr(_socket, "gethostbyname", wedged)

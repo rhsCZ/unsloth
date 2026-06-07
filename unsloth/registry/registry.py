@@ -33,7 +33,9 @@ class ModelInfo:
     base_name: str
     version: str
     size: int
-    name: str = None  # full model name, constructed from base_name, version, and size unless provided
+    name: str = (
+        None  # full model name, constructed from base_name, version, and size unless provided
+    )
     is_multimodal: bool = False
     instruct_tag: str = None
     quant_type: QuantType = None
@@ -61,9 +63,7 @@ class ModelInfo:
         return key
 
     @classmethod
-    def construct_model_name(
-        cls, base_name, version, size, quant_type, instruct_tag, key = ""
-    ):
+    def construct_model_name(cls, base_name, version, size, quant_type, instruct_tag, key = ""):
         key = cls.append_instruct_tag(key, instruct_tag)
         key = cls.append_quant_type(key, quant_type)
         return key
@@ -83,9 +83,7 @@ class ModelMeta:
     model_info_cls: type[ModelInfo]
     model_sizes: list[str] = field(default_factory = list)
     instruct_tags: list[str] = field(default_factory = list)
-    quant_types: list[QuantType] | dict[str, list[QuantType]] = field(
-        default_factory = list
-    )
+    quant_types: list[QuantType] | dict[str, list[QuantType]] = field(default_factory = list)
     is_multimodal: bool = False
 
 
@@ -113,9 +111,7 @@ def register_model(
     key = f"{org}/{name}"
 
     if key in MODEL_REGISTRY:
-        raise ValueError(
-            f"Model {key} already registered, current keys: {MODEL_REGISTRY.keys()}"
-        )
+        raise ValueError(f"Model {key} already registered, current keys: {MODEL_REGISTRY.keys()}")
 
     MODEL_REGISTRY[key] = model_info_cls(
         org = org,

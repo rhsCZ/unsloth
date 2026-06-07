@@ -125,9 +125,7 @@ def anthropic_messages_to_openai(
                     tc = b.get("content", "")
                     if isinstance(tc, list):
                         tc = " ".join(
-                            p["text"]
-                            for p in tc
-                            if isinstance(p, dict) and p.get("type") == "text"
+                            p["text"] for p in tc if isinstance(p, dict) and p.get("type") == "text"
                         )
                     tool_results.append(
                         {

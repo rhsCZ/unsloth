@@ -103,9 +103,7 @@ def test_new_dep_with_postinstall_exits_1(tmp_path: Path):
     head_pkgs = dict(base_pkgs)
     head_pkgs["node_modules/evil-postinstall"] = {
         "version": "1.0.0",
-        "resolved": (
-            "https://registry.npmjs.org/evil-postinstall/-/evil-postinstall-1.0.0.tgz"
-        ),
+        "resolved": ("https://registry.npmjs.org/evil-postinstall/-/evil-postinstall-1.0.0.tgz"),
         "integrity": "sha512-fake",
         "hasInstallScript": True,
     }
@@ -166,8 +164,7 @@ def test_v2_v3_lockfile_format_support(tmp_path: Path):
         "node_modules/v2-postinstall-dep": {
             "version": "2.0.0",
             "resolved": (
-                "https://registry.npmjs.org/v2-postinstall-dep/-/"
-                "v2-postinstall-dep-2.0.0.tgz"
+                "https://registry.npmjs.org/v2-postinstall-dep/-/" "v2-postinstall-dep-2.0.0.tgz"
             ),
             "integrity": "sha512-fake",
             "hasInstallScript": True,
@@ -177,8 +174,7 @@ def test_v2_v3_lockfile_format_support(tmp_path: Path):
         "v2-postinstall-dep": {
             "version": "2.0.0",
             "resolved": (
-                "https://registry.npmjs.org/v2-postinstall-dep/-/"
-                "v2-postinstall-dep-2.0.0.tgz"
+                "https://registry.npmjs.org/v2-postinstall-dep/-/" "v2-postinstall-dep-2.0.0.tgz"
             ),
             "integrity": "sha512-fake",
         },
@@ -187,8 +183,7 @@ def test_v2_v3_lockfile_format_support(tmp_path: Path):
     head = _write(tmp_path / "head.json", _v2_lockfile(head_pkgs, head_deps))
     result = _run(base, head)
     assert result.returncode == 1, (
-        f"expected exit 1 for v2 lockfile, got {result.returncode}; "
-        f"stderr:\n{result.stderr}"
+        f"expected exit 1 for v2 lockfile, got {result.returncode}; " f"stderr:\n{result.stderr}"
     )
     assert "v2-postinstall-dep" in result.stderr
 

@@ -132,8 +132,7 @@ def _walk_yaml_diff(b: Any, a: Any, prefix: str = "") -> None:
     """Print a path-keyed summary of the first structural / scalar diff."""
     if type(b) is not type(a):
         print(
-            f"     type-diff at {prefix or '/'}: "
-            f"{type(b).__name__} -> {type(a).__name__}",
+            f"     type-diff at {prefix or '/'}: " f"{type(b).__name__} -> {type(a).__name__}",
         )
         return
     if isinstance(b, dict):

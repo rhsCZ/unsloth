@@ -77,9 +77,7 @@ def _enc_kv_string(key: str, value: str) -> bytes:
 
 
 def _enc_kv_uint32(key: str, value: int) -> bytes:
-    return (
-        _enc_string(key) + struct.pack("<I", _VTYPE_UINT32) + struct.pack("<I", value)
-    )
+    return _enc_string(key) + struct.pack("<I", _VTYPE_UINT32) + struct.pack("<I", value)
 
 
 def _write_minimal_gguf(
@@ -532,8 +530,7 @@ def test_probe_server_capabilities_detects_renamed_mtp(tmp_path):
     # Renamed upstream: draft-mtp -> mtp.
     fake = _make_fake_llama_server(
         tmp_path / "llama-server",
-        "--spec-type [none|mtp|ngram-cache|ngram-simple|ngram-map-k|"
-        "ngram-map-k4v|ngram-mod]",
+        "--spec-type [none|mtp|ngram-cache|ngram-simple|ngram-map-k|" "ngram-map-k4v|ngram-mod]",
     )
     _clear_caps_cache()
     caps = LlamaCppBackend.probe_server_capabilities(str(fake))
@@ -672,9 +669,7 @@ def test_build_ngram_mod_flags_empty_when_unsupported():
 
 
 def test_build_ngram_mod_flags_respects_custom_values():
-    flags = _build_ngram_mod_flags(
-        {"ngram_mod_flavor": "new"}, n_match = 16, n_min = 24, n_max = 32
-    )
+    flags = _build_ngram_mod_flags({"ngram_mod_flavor": "new"}, n_match = 16, n_min = 24, n_max = 32)
     assert flags == [
         "--spec-ngram-mod-n-match",
         "16",

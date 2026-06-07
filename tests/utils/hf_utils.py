@@ -82,8 +82,7 @@ def generate_responses(
     inputs = [tokenizer(prompt, return_tensors = "pt") for _ in range(num_generations)]
     keys = inputs[0].keys()
     batched_inputs = {
-        key: torch.cat([input[key] for input in inputs], dim = 0).to(model.device)
-        for key in keys
+        key: torch.cat([input[key] for input in inputs], dim = 0).to(model.device) for key in keys
     }
 
     if dtype is not None:
@@ -160,9 +159,7 @@ def setup_model(
     model = prepare_model_for_kbit_training(model) if quantize else model
 
     if peft_config is not None:
-        model = get_peft_model(
-            model, peft_config, autocast_adapter_dtype = autocast_adapter
-        )
+        model = get_peft_model(model, peft_config, autocast_adapter_dtype = autocast_adapter)
 
     return model
 

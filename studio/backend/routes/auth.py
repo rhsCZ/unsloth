@@ -227,9 +227,7 @@ async def auth_status() -> AuthStatusResponse:
     return AuthStatusResponse(
         initialized = storage.is_initialized(),
         default_username = storage.DEFAULT_ADMIN_USERNAME,
-        requires_password_change = storage.requires_password_change(
-            storage.DEFAULT_ADMIN_USERNAME
-        )
+        requires_password_change = storage.requires_password_change(storage.DEFAULT_ADMIN_USERNAME)
         if storage.is_initialized()
         else True,
     )
@@ -246,10 +244,7 @@ async def login(payload: AuthLoginRequest, request: Request) -> Token:
             status_code = status.HTTP_429_TOO_MANY_REQUESTS,
             # IP is intentionally not interpolated into the body; behind a
             # proxy or NAT it is either misleading or an info leak.
-            detail = (
-                f"Too many failed login attempts. "
-                f"Try again in {blocked_for} seconds."
-            ),
+            detail = (f"Too many failed login attempts. " f"Try again in {blocked_for} seconds."),
             headers = {"Retry-After": str(blocked_for)},
         )
 
@@ -335,9 +330,7 @@ async def refresh(payload: RefreshTokenRequest) -> Token:
         access_token = new_access_token,
         refresh_token = new_refresh_token,
         token_type = "bearer",
-        must_change_password = False
-        if is_desktop
-        else storage.requires_password_change(username),
+        must_change_password = False if is_desktop else storage.requires_password_change(username),
     )
 
 

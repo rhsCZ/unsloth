@@ -16,9 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 QUANT_4BIT_FACTOR = 16 / 5
-DOUBLE_QUANT_4BIT_FACTOR = (
-    3.6  # bnb_4bit_use_double_quant; see VRAM_ESTIMATION.md section 1
-)
+DOUBLE_QUANT_4BIT_FACTOR = 3.6  # bnb_4bit_use_double_quant; see VRAM_ESTIMATION.md section 1
 CUDA_OVERHEAD_BYTES = int(1.4 * 1024**3)  # calibrated on RTX 5070 Ti
 NON_FLASH_ATTENTION_FACTOR = (
     12.0  # eager attention score+workspace overhead; see VRAM_ESTIMATION.md section 5
@@ -148,12 +146,7 @@ class VramBreakdown:
         Weights/LoRA/optimizer/gradients shard across GPUs.
         Activations do NOT shard (the GPU running a layer holds them).
         """
-        shardable = (
-            self.model_weights
-            + self.lora_adapters
-            + self.optimizer_states
-            + self.gradients
-        )
+        shardable = self.model_weights + self.lora_adapters + self.optimizer_states + self.gradients
         per_gpu_fixed = self.activations + self.cuda_overhead
         return shardable // max(n_gpus, 1) + per_gpu_fixed
 
@@ -194,9 +187,7 @@ def _compute_dense_layer_indices(text_config, total_layers: int) -> tuple:
     layer_types = getattr(text_config, "mlp_layer_types", None)
     if layer_types:
         return tuple(
-            i
-            for i, t in enumerate(layer_types[:total_layers])
-            if str(t).lower() == "dense"
+            i for i, t in enumerate(layer_types[:total_layers]) if str(t).lower() == "dense"
         )
 
     # why: Llama4TextConfig.__init__ auto-populates self.moe_layers from
@@ -234,9 +225,7 @@ def _compute_dense_layer_indices(text_config, total_layers: int) -> tuple:
     if sparse_step is not None and sparse_step > 0:
         mlp_only_set = {int(i) for i in mlp_only}
         return tuple(
-            i
-            for i in range(total_layers)
-            if i in mlp_only_set or (i + 1) % sparse_step != 0
+            i for i in range(total_layers) if i in mlp_only_set or (i + 1) % sparse_step != 0
         )
     return ()
 
@@ -264,8 +253,7 @@ def extract_arch_config(hf_config) -> Optional[ModelArchConfig]:
         intermediate_size = hidden_size * 4
 
     if not all(
-        v is not None
-        for v in (hidden_size, num_layers, num_heads, intermediate_size, vocab_size)
+        v is not None for v in (hidden_size, num_layers, num_heads, intermediate_size, vocab_size)
     ):
         return None
     if num_heads <= 0:
@@ -330,9 +318,7 @@ def extract_arch_config(hf_config) -> Optional[ModelArchConfig]:
     # per MoE layer (modeling_llama4.py).
     intermediate_size_mlp_raw = _first_scalar(_moe_attr("intermediate_size_mlp"))
     dense_intermediate_size = (
-        int(intermediate_size_mlp_raw)
-        if intermediate_size_mlp_raw is not None
-        else None
+        int(intermediate_size_mlp_raw) if intermediate_size_mlp_raw is not None else None
     )
     if (
         intermediate_size_mlp_raw is not None
@@ -391,9 +377,7 @@ def extract_arch_config(hf_config) -> Optional[ModelArchConfig]:
             None,
         )
         or 0,
-        quantization_skip_modules = list(
-            quantization_config.get("llm_int8_skip_modules", []) or []
-        ),
+        quantization_skip_modules = list(quantization_config.get("llm_int8_skip_modules", []) or []),
         quant_4bit_factor = quant_4bit_factor,
         moe_has_dense_mlp = bool(getattr(text_config, "enable_moe_block", False)),
         dense_layer_indices = dense_layer_indices,
@@ -487,11 +471,7 @@ def _per_layer_input_lora_params(
     pli = arch.hidden_size_per_layer_input
     if pli <= 0:
         return 0
-    targets = (
-        {target_modules}
-        if isinstance(target_modules, str)
-        else set(target_modules or [])
-    )
+    targets = {target_modules} if isinstance(target_modules, str) else set(target_modules or [])
     n_layers = arch.num_hidden_layers
     hd = arch.hidden_size
     total = 0
@@ -508,11 +488,7 @@ def _layer_attention_dims(arch: ModelArchConfig, layer_idx: int) -> tuple:
     layer_types = _layer_types(arch)
     layer_type = layer_types[layer_idx]
     is_sliding = layer_type == "sliding_attention"
-    head_dim = (
-        arch.global_head_dim
-        if not is_sliding and arch.global_head_dim
-        else _head_dim(arch)
-    )
+    head_dim = arch.global_head_dim if not is_sliding and arch.global_head_dim else _head_dim(arch)
     use_alt_attention = arch.attention_k_eq_v and not is_sliding
     num_kv_heads = (
         arch.num_global_key_value_heads
@@ -620,12 +596,8 @@ def _build_text_module_elements(
     for layer_idx in range(arch.num_hidden_layers):
         layer_modules: Dict[str, int] = {}
         dims = _text_linear_dims(arch, layer_idx)
-        attn_dims = {
-            name: dim for name, dim in dims.items() if name in ATTENTION_TARGET_MODULES
-        }
-        mlp_dims = {
-            name: dim for name, dim in dims.items() if name in MLP_TARGET_MODULES
-        }
+        attn_dims = {name: dim for name, dim in dims.items() if name in ATTENTION_TARGET_MODULES}
+        mlp_dims = {name: dim for name, dim in dims.items() if name in MLP_TARGET_MODULES}
 
         if is_mla:
             # why: _text_linear_dims uses (hd, hd) for q/o; MLA actually splits
@@ -677,10 +649,7 @@ def _build_text_module_elements(
                     )
         else:
             layer_modules.update(
-                {
-                    f"mlp.{name}": in_dim * out_dim
-                    for name, (in_dim, out_dim) in mlp_dims.items()
-                }
+                {f"mlp.{name}": in_dim * out_dim for name, (in_dim, out_dim) in mlp_dims.items()}
             )
 
         if pli > 0:
@@ -704,10 +673,7 @@ def _build_text_module_elements(
             for name, value in layer_modules.items()
             if (
                 name == "mlp"
-                or (
-                    name.startswith("mlp.")
-                    and not (is_sibling_experts and name == "mlp.experts")
-                )
+                or (name.startswith("mlp.") and not (is_sibling_experts and name == "mlp.experts"))
             )
         )
         experts_total = layer_modules.get("mlp.experts", 0) if is_sibling_experts else 0
@@ -764,10 +730,7 @@ def _compute_skipped_quantizable_elements(arch: ModelArchConfig) -> int:
     pruned = {
         canonical
         for canonical in matched
-        if not any(
-            canonical != parent and canonical.startswith(f"{parent}.")
-            for parent in matched
-        )
+        if not any(canonical != parent and canonical.startswith(f"{parent}.") for parent in matched)
     }
     return sum(module_elements[canonical] for canonical in pruned)
 
@@ -900,9 +863,7 @@ def _compute_layer_elements(arch: ModelArchConfig):
         mlp_total = _compute_dense_mlp_elements(arch) * n_layers
 
     layernorms = 2 * hd
-    per_layer_embed = (
-        arch.vocab_size_per_layer_input * arch.hidden_size_per_layer_input * n_layers
-    )
+    per_layer_embed = arch.vocab_size_per_layer_input * arch.hidden_size_per_layer_input * n_layers
     ple_text_linear = _per_layer_input_quantizable(arch)
     ple_norms = _per_layer_input_norm_elements(arch)
     embed_tokens = arch.vocab_size * hd + per_layer_embed + ple_norms
@@ -926,9 +887,7 @@ def compute_model_weights_bytes(
         )
         quantized = total_quantizable - skipped_quantizable
         return int(
-            quantized * 2 / arch.quant_4bit_factor
-            + skipped_quantizable * 2
-            + non_quantizable * 2
+            quantized * 2 / arch.quant_4bit_factor + skipped_quantizable * 2 + non_quantizable * 2
         )
 
     return int((total_quantizable + non_quantizable) * 2)
@@ -1062,11 +1021,7 @@ def compute_lora_params(
                 mlp_total = moe_mlp * n_moe + dense_only
         else:
             mlp_total = structured_dense_mlp
-        return (
-            attn_total
-            + mlp_total
-            + _per_layer_input_lora_params(arch, r, target_modules)
-        )
+        return attn_total + mlp_total + _per_layer_input_lora_params(arch, r, target_modules)
     elif n_experts > 1:
         attn_total = _lora_attn_elements(arch, r, selected_modules) * n_layers
         n_dense = arch.num_dense_layers
@@ -1118,9 +1073,7 @@ def compute_lora_params(
             * n_layers
         )
 
-    return (
-        attn_total + mlp_total + _per_layer_input_lora_params(arch, r, target_modules)
-    )
+    return attn_total + mlp_total + _per_layer_input_lora_params(arch, r, target_modules)
 
 
 def compute_lora_adapter_bytes(lora_params: int) -> int:
@@ -1204,9 +1157,7 @@ def _per_layer_activation_bytes(
     # is set; see gemma4/modular_gemma4.py:1141-1145.
     pli = arch.hidden_size_per_layer_input
     activation_ple = seq_len * batch_size * (arch.hidden_size + pli) if pli > 0 else 0
-    return int(
-        (activation_qkv + residual_memory + activation_mlp + activation_ple) * 2 * 1.25
-    )
+    return int((activation_qkv + residual_memory + activation_mlp + activation_ple) * 2 * 1.25)
 
 
 def compute_activation_bytes(
@@ -1227,14 +1178,12 @@ def compute_activation_bytes(
     if gc_multiplier is None:
         effective_layers = n_layers
         linear_bytes = sum(
-            _per_layer_activation_bytes(arch, i, batch_size, seq_len)
-            for i in range(n_layers)
+            _per_layer_activation_bytes(arch, i, batch_size, seq_len) for i in range(n_layers)
         )
     else:
         effective_layers = gc_multiplier
         max_layer_bytes = max(
-            _per_layer_activation_bytes(arch, i, batch_size, seq_len)
-            for i in range(n_layers)
+            _per_layer_activation_bytes(arch, i, batch_size, seq_len) for i in range(n_layers)
         )
         linear_bytes = int(max_layer_bytes * effective_layers)
 

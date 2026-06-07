@@ -159,9 +159,7 @@ def _wait_for_health(port: int, timeout: float) -> dict:
         except (urllib.error.URLError, ConnectionError, OSError) as e:
             last_err = e
         time.sleep(HEALTH_POLL_INTERVAL_S)
-    raise TestFailure(
-        f"port {port}: /api/health never returned 200 (last_err={last_err})"
-    )
+    raise TestFailure(f"port {port}: /api/health never returned 200 (last_err={last_err})")
 
 
 def _http_status(port: int, path: str, timeout: float = 5.0) -> int:
@@ -211,9 +209,7 @@ def _check_install_layout(label: str, studio_home: Path) -> dict:
         raise TestFailure(f"[{label}] launch-studio.sh kept @@DATA_DIR@@ placeholder")
     expected_data_dir_line = f"DATA_DIR='{studio_home}/share'"
     if expected_data_dir_line not in launcher:
-        raise TestFailure(
-            f"[{label}] launch-studio.sh missing {expected_data_dir_line!r}"
-        )
+        raise TestFailure(f"[{label}] launch-studio.sh missing {expected_data_dir_line!r}")
 
     return {"label": label, "studio_home": str(studio_home), "install_id": install_id}
 
@@ -230,9 +226,7 @@ def _check_fake_home_clean(fake_home: Path) -> None:
     ]
     leaked = [str(p) for p in forbidden if (fake_home / p).exists()]
     if leaked:
-        raise TestFailure(
-            f"redirected HOME picked up persistent install pollution: {leaked}"
-        )
+        raise TestFailure(f"redirected HOME picked up persistent install pollution: {leaked}")
 
 
 def _backend_pid_python(pid: int) -> Path | None:
@@ -346,8 +340,7 @@ def run(n_installs: int, keep: bool) -> int:
                 raise TestFailure(f"[{label}] chat_only is not true under --no-torch")
             if health["studio_root_id"] in seen_root_ids:
                 raise TestFailure(
-                    f"[{label}] studio_root_id collision at runtime: "
-                    f"{health['studio_root_id']}"
+                    f"[{label}] studio_root_id collision at runtime: " f"{health['studio_root_id']}"
                 )
             seen_root_ids.add(health["studio_root_id"])
 
@@ -358,9 +351,7 @@ def run(n_installs: int, keep: bool) -> int:
 
             exe = _backend_pid_python(proc.pid)
             if exe is not None:
-                expected_python = (
-                    studio_home / "unsloth_studio" / "bin" / "python"
-                ).resolve()
+                expected_python = (studio_home / "unsloth_studio" / "bin" / "python").resolve()
                 if exe != expected_python:
                     raise TestFailure(
                         f"[{label}] PID {proc.pid} exe={exe}, expected {expected_python}"
@@ -370,10 +361,7 @@ def run(n_installs: int, keep: bool) -> int:
         if len(versions) != 1:
             raise TestFailure(f"version mismatch across installs: {versions}")
 
-        _log(
-            f"PASS: all install + runtime invariants hold "
-            f"(version={next(iter(versions))})"
-        )
+        _log(f"PASS: all install + runtime invariants hold " f"(version={next(iter(versions))})")
         return 0
 
     except TestFailure as e:

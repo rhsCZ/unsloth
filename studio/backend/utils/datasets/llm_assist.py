@@ -68,9 +68,7 @@ def precache_helper_gguf():
         return
 
     repo = os.environ.get("UNSLOTH_HELPER_MODEL_REPO", DEFAULT_HELPER_MODEL_REPO)
-    variant = os.environ.get(
-        "UNSLOTH_HELPER_MODEL_VARIANT", DEFAULT_HELPER_MODEL_VARIANT
-    )
+    variant = os.environ.get("UNSLOTH_HELPER_MODEL_VARIANT", DEFAULT_HELPER_MODEL_VARIANT)
 
     try:
         from huggingface_hub import HfApi, hf_hub_download
@@ -86,9 +84,7 @@ def precache_helper_gguf():
 
         # Find all GGUF files matching the variant (may be split into shards)
         variant_lower = variant.lower().replace("-", "_")
-        matching = sorted(
-            f for f in gguf_files if variant_lower in f.lower().replace("-", "_")
-        )
+        matching = sorted(f for f in gguf_files if variant_lower in f.lower().replace("-", "_"))
 
         if matching:
             logger.info(
@@ -119,9 +115,7 @@ def _run_with_helper(prompt: str, max_tokens: int = 256) -> Optional[str]:
         return None
 
     repo = os.environ.get("UNSLOTH_HELPER_MODEL_REPO", DEFAULT_HELPER_MODEL_REPO)
-    variant = os.environ.get(
-        "UNSLOTH_HELPER_MODEL_VARIANT", DEFAULT_HELPER_MODEL_VARIANT
-    )
+    variant = os.environ.get("UNSLOTH_HELPER_MODEL_VARIANT", DEFAULT_HELPER_MODEL_VARIANT)
 
     backend = None
     try:
@@ -143,9 +137,7 @@ def _run_with_helper(prompt: str, max_tokens: int = 256) -> Optional[str]:
             return None
 
         messages = [{"role": "user", "content": prompt}]
-        logger.info(
-            "Helper model request: enable_thinking=False (per-request override)"
-        )
+        logger.info("Helper model request: enable_thinking=False (per-request override)")
         cumulative = ""
         for chunk in backend.generate_chat_completion(
             messages = messages,
@@ -294,7 +286,6 @@ def llm_classify_columns(
     except json.JSONDecodeError:
         # Try to find JSON object in the response
         import re
-
         match = re.search(r"\{[^}]+\}", text)
         if match:
             try:
@@ -313,11 +304,7 @@ def llm_classify_columns(
     valid_roles = {"user", "assistant", "system", "metadata"}
     cleaned = {}
     for col, role in mapping.items():
-        if (
-            col in column_names
-            and isinstance(role, str)
-            and role.lower() in valid_roles
-        ):
+        if col in column_names and isinstance(role, str) and role.lower() in valid_roles:
             cleaned[col] = role.lower()
 
     if not cleaned:
@@ -480,9 +467,7 @@ def fetch_hf_dataset_card(
                 if val is not None:
                     metadata[key] = val
 
-        logger.info(
-            f"Fetched dataset card: {len(readme)} chars, {len(metadata)} metadata fields"
-        )
+        logger.info(f"Fetched dataset card: {len(readme)} chars, {len(metadata)} metadata fields")
         return readme, metadata
 
     except Exception as e:
@@ -509,9 +494,7 @@ def _run_multi_pass_advisor(
         return None
 
     repo = os.environ.get("UNSLOTH_HELPER_MODEL_REPO", DEFAULT_HELPER_MODEL_REPO)
-    variant = os.environ.get(
-        "UNSLOTH_HELPER_MODEL_VARIANT", DEFAULT_HELPER_MODEL_VARIANT
-    )
+    variant = os.environ.get("UNSLOTH_HELPER_MODEL_VARIANT", DEFAULT_HELPER_MODEL_VARIANT)
 
     backend = None
     try:
@@ -541,9 +524,7 @@ def _run_multi_pass_advisor(
             samples_text += f"Row {i}:\n" + "\n".join(parts) + "\n"
 
         metadata_str = (
-            json.dumps(dataset_metadata, indent = 2, default = str)[:500]
-            if dataset_metadata
-            else "N/A"
+            json.dumps(dataset_metadata, indent = 2, default = str)[:500] if dataset_metadata else "N/A"
         )
         card_excerpt = (dataset_card or "")[:1200] or "N/A"
 
@@ -745,9 +726,7 @@ def _run_multi_pass_advisor(
         # Validate: must have at least one user AND one assistant
         roles_present = set(column_roles.values())
         if "user" not in roles_present or "assistant" not in roles_present:
-            logger.warning(
-                f"Pass 2 sanity fail: missing user or assistant role: {column_roles}"
-            )
+            logger.warning(f"Pass 2 sanity fail: missing user or assistant role: {column_roles}")
             return None  # triggers fallback to simple classification
 
         # ── Pass 3: System prompt (non-conversational datasets only) ──

@@ -35,9 +35,7 @@ def _fg_kernel(
 ):
     block_idx = tl.program_id(0)
     if LONG_INDEXING:
-        offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(
-            tl.int64
-        )
+        offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
         n_elements = tl.cast(n_elements, tl.int64)
     else:
         offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -93,9 +91,7 @@ def _DWf_DW_dfg_kernel(
     """
     block_idx = tl.program_id(0)
     if LONG_INDEXING:
-        offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(
-            tl.int64
-        )
+        offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
         n_elements = tl.cast(n_elements, tl.int64)
     else:
         offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)

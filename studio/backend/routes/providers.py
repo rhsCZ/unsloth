@@ -220,9 +220,7 @@ async def test_provider(
         try:
             api_key = decrypt_api_key(payload.encrypted_api_key)
         except Exception as exc:
-            logger.warning(
-                "Failed to decrypt API key (%s): %s", type(exc).__name__, exc
-            )
+            logger.warning("Failed to decrypt API key (%s): %s", type(exc).__name__, exc)
             raise HTTPException(
                 status_code = 400,
                 detail = "Failed to decrypt API key. The public key may have changed — try refreshing the page.",
@@ -289,9 +287,7 @@ async def list_provider_models(
         try:
             api_key = decrypt_api_key(payload.encrypted_api_key)
         except Exception as exc:
-            logger.warning(
-                "Failed to decrypt API key (%s): %s", type(exc).__name__, exc
-            )
+            logger.warning("Failed to decrypt API key (%s): %s", type(exc).__name__, exc)
             raise HTTPException(
                 status_code = 400,
                 detail = "Failed to decrypt API key. The public key may have changed — try refreshing the page.",
@@ -332,7 +328,6 @@ async def list_provider_models(
         if payload.provider_type == "gemini":
             try:
                 from urllib.parse import urlparse as _urlparse
-
                 _host = (_urlparse(base_url).hostname or "").lower()
             except Exception:
                 _host = ""
@@ -343,9 +338,7 @@ async def list_provider_models(
             if allow_prefixes is not None:
                 prefix_tuple = tuple(str(p) for p in allow_prefixes if str(p))
                 if prefix_tuple:
-                    models = [
-                        m for m in models if m.get("id", "").startswith(prefix_tuple)
-                    ]
+                    models = [m for m in models if m.get("id", "").startswith(prefix_tuple)]
             allowlist = info.get("model_id_allowlist")
             if allowlist is not None:
                 models = [m for m in models if allowlist.match(m.get("id", ""))]

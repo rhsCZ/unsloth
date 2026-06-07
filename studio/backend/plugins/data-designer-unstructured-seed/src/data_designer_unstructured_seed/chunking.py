@@ -49,9 +49,7 @@ def build_unstructured_preview_rows(
     try:
         import pandas as pd
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            f"pandas is required for unstructured seed processing: {exc}"
-        ) from exc
+        raise RuntimeError(f"pandas is required for unstructured seed processing: {exc}") from exc
 
     dataframe = pd.read_parquet(parquet_path).head(count)
     return [
@@ -148,9 +146,7 @@ def materialize_unstructured_seed_dataset(
     try:
         import pandas as pd
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            f"pandas is required for unstructured seed processing: {exc}"
-        ) from exc
+        raise RuntimeError(f"pandas is required for unstructured seed processing: {exc}") from exc
 
     tmp_path = _CACHE_DIR / f"{key}.tmp.parquet"
     pd.DataFrame(rows).to_parquet(tmp_path, index = False)

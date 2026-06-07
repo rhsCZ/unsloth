@@ -239,9 +239,7 @@ class Fast_RMS_Layernorm(torch.autograd.Function):
 def fast_rms_layernorm(layernorm, X: torch.Tensor, gemma: bool = False):
     W: torch.Tensor = layernorm.weight
     eps: float = (
-        layernorm.variance_epsilon
-        if hasattr(layernorm, "variance_epsilon")
-        else layernorm.eps
+        layernorm.variance_epsilon if hasattr(layernorm, "variance_epsilon") else layernorm.eps
     )
     out = Fast_RMS_Layernorm.apply(X, W, eps, gemma)
     return out
@@ -257,7 +255,6 @@ class Unsloth_LlamaRMSNorm(LlamaRMSNorm):
 
 try:
     from transformers.models.mllama.modeling_mllama import MllamaTextRMSNorm
-
     class Unsloth_MllamaTextRMSNorm(MllamaTextRMSNorm):
         def forward(self, X):
             return fast_rms_layernorm(self, X, gemma = False)
@@ -273,10 +270,7 @@ def patch_rms_layernorm():
     transformers.models.llama.modeling_llama.LlamaRMSNorm = Unsloth_LlamaRMSNorm
     try:
         import transformers.models.mllama.modeling_mllama
-
-        transformers.models.mllama.modeling_mllama.MllamaTextRMSNorm = (
-            Unsloth_MllamaTextRMSNorm
-        )
+        transformers.models.mllama.modeling_mllama.MllamaTextRMSNorm = Unsloth_MllamaTextRMSNorm
     except:
         pass
     return
@@ -288,7 +282,6 @@ def unpatch_rms_layernorm():
     transformers.models.llama.modeling_llama.LlamaRMSNorm = LlamaRMSNorm
     try:
         import transformers.models.mllama.modeling_mllama
-
         transformers.models.mllama.modeling_mllama.MllamaTextRMSNorm = MllamaTextRMSNorm
     except:
         pass

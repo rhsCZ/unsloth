@@ -201,9 +201,7 @@ def test_no_code_execution_tool_when_pill_off(monkeypatch):
     assert all("code_execution" not in (t.get("type") or "") for t in tools)
     # Beta header must NOT mention code-execution when the tool isn't on
     # -- that flag is opt-in only.
-    assert "code-execution-2025-08-25" not in captured["headers"].get(
-        "anthropic-beta", ""
-    )
+    assert "code-execution-2025-08-25" not in captured["headers"].get("anthropic-beta", "")
 
 
 def test_bash_code_execution_emits_tool_start_and_end(monkeypatch):
@@ -308,8 +306,7 @@ def test_text_editor_create_emits_kind_and_status(monkeypatch):
             "delta": {
                 "type": "input_json_delta",
                 "partial_json": (
-                    '{"command": "create", "path": "new_file.txt", '
-                    '"file_text": "hi"}'
+                    '{"command": "create", "path": "new_file.txt", ' '"file_text": "hi"}'
                 ),
             },
         },

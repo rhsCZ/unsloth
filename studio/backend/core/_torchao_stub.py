@@ -118,7 +118,6 @@ def install_torchao_windows_rocm_stub() -> None:
     if sys.platform == "win32":
         try:
             import torch as _torch_probe
-
             _is_win32_rocm = bool(
                 getattr(getattr(_torch_probe, "version", None), "hip", None)
                 or "rocm" in getattr(_torch_probe, "__version__", "").lower()

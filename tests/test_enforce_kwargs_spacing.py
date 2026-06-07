@@ -44,9 +44,7 @@ _MUST_CHANGE = {
         "\n"
         "        regions = locators.regions()\n"
     ),
-    "multiple_consecutive_imports": (
-        "def f():\n    import a\n    import b\n\n    return a, b\n"
-    ),
+    "multiple_consecutive_imports": ("def f():\n    import a\n    import b\n\n    return a, b\n"),
     "type_checking_block": (
         "def f():\n"
         "    if TYPE_CHECKING:\n"
@@ -55,9 +53,7 @@ _MUST_CHANGE = {
         "        y = x\n"
         "        return y\n"
     ),
-    "with_block": (
-        "def f():\n    with ctx():\n        import a\n\n        return a.run()\n"
-    ),
+    "with_block": ("def f():\n    with ctx():\n        import a\n\n        return a.run()\n"),
 }
 
 # Sources that MUST be left byte-for-byte unchanged.
@@ -71,9 +67,7 @@ _MUST_NOT_CHANGE = {
         "    y = transform(x)\n"
         "    return y\n"
     ),
-    "comment_between": (
-        "def f():\n    import a\n\n    # keep separated\n    return a.value\n"
-    ),
+    "comment_between": ("def f():\n    import a\n\n    # keep separated\n    return a.value\n"),
     "import_is_last_stmt": "def f():\n    if cond:\n        import a\n\n",
     "no_blank_already": "def f():\n    import a\n    return a\n",
 }

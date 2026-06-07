@@ -106,8 +106,7 @@ def test_blocked_npm_versions_complete():
     table = snp.BLOCKED_NPM_VERSIONS
     tanstack_keys = [k for k in table if k.startswith("@tanstack/")]
     assert len(tanstack_keys) == 42, (
-        f"expected 42 @tanstack/* entries, got {len(tanstack_keys)}: "
-        f"{sorted(tanstack_keys)}"
+        f"expected 42 @tanstack/* entries, got {len(tanstack_keys)}: " f"{sorted(tanstack_keys)}"
     )
     assert "@opensearch-project/opensearch" in table
     assert table["@opensearch-project/opensearch"] == {

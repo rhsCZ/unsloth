@@ -33,12 +33,8 @@ def _build_gpu_metrics(
 ) -> dict[str, Any]:
     return {
         **extra,
-        "vram_used_gb": round(vram_used_mb / 1024, 2)
-        if vram_used_mb is not None
-        else None,
-        "vram_total_gb": round(vram_total_mb / 1024, 2)
-        if vram_total_mb is not None
-        else None,
+        "vram_used_gb": round(vram_used_mb / 1024, 2) if vram_used_mb is not None else None,
+        "vram_total_gb": round(vram_total_mb / 1024, 2) if vram_total_mb is not None else None,
         "vram_utilization_pct": round((vram_used_mb / vram_total_mb) * 100, 1)
         if vram_used_mb is not None and vram_total_mb and vram_total_mb > 0
         else None,
@@ -188,9 +184,7 @@ def get_visible_gpu_utilization(
                 index = idx,
                 index_kind = "physical",
                 visible_ordinal = (
-                    visible_ordinals[idx]
-                    if visible_ordinals is not None
-                    else len(devices)
+                    visible_ordinals[idx] if visible_ordinals is not None else len(devices)
                 ),
                 gpu_utilization_pct = _parse_smi_value(parts[1]),
                 temperature_c = _parse_smi_value(parts[2]),
@@ -274,9 +268,7 @@ def get_backend_visible_gpu_info(
                 "index": idx,
                 "index_kind": "physical",
                 "visible_ordinal": (
-                    visible_ordinals[idx]
-                    if visible_ordinals is not None
-                    else len(devices)
+                    visible_ordinals[idx] if visible_ordinals is not None else len(devices)
                 ),
                 "name": name,
                 "memory_total_gb": round(mem_total_mb / 1024, 2),

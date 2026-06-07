@@ -68,7 +68,6 @@ async def load_checkpoint(
         # before loading the export checkpoint (they'd compete for VRAM).
         try:
             from core.inference import get_inference_backend
-
             inf = get_inference_backend()
             if inf.active_model_name:
                 logger.info(
@@ -83,7 +82,6 @@ async def load_checkpoint(
 
         try:
             from core.training import get_training_backend
-
             trn = get_training_backend()
             if trn.is_training_active():
                 logger.info("Stopping active training to free GPU memory for export")
@@ -94,12 +92,9 @@ async def load_checkpoint(
                     if not trn.is_training_active():
                         break
                     import time
-
                     time.sleep(0.5)
                 else:
-                    logger.warning(
-                        "Training subprocess did not exit within 30s, proceeding anyway"
-                    )
+                    logger.warning("Training subprocess did not exit within 30s, proceeding anyway")
         except Exception as e:
             logger.warning("Could not stop training: %s", e)
 

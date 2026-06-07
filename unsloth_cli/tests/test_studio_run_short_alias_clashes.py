@@ -34,7 +34,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 def _studio_mod():
     from unsloth_cli.commands import studio as _s
-
     return _s
 
 
@@ -87,9 +86,7 @@ def _install_capture(monkeypatch):
     captured = []
     monkeypatch.setattr(sys, "prefix", "/nonexistent/outer/venv")
     fake_bin = Path("/fake/studio/venv/unsloth_studio/bin/unsloth")
-    monkeypatch.setattr(
-        studio_mod, "_studio_venv_python", lambda: fake_bin.parent / "python"
-    )
+    monkeypatch.setattr(studio_mod, "_studio_venv_python", lambda: fake_bin.parent / "python")
     real_is_file = Path.is_file
     monkeypatch.setattr(
         Path,
@@ -227,9 +224,7 @@ def test_legacy_frontend_alias_still_promotes_to_frontend(monkeypatch):
 def test_legacy_model_alias_conflicts_with_long_form(monkeypatch):
     """`--model X` plus `-m Y` is ambiguous; must error pre-re-exec."""
     captured = _invoke(monkeypatch, ["--model", "X", "-m", "Y"])
-    assert (
-        len(captured) == 0
-    ), f"expected error before re-exec, got launch with argv = {captured}"
+    assert len(captured) == 0, f"expected error before re-exec, got launch with argv = {captured}"
 
 
 def test_clustered_tokens_are_not_promoted(monkeypatch):
@@ -262,9 +257,7 @@ def test_legacy_m_with_repo_variant_syntax(monkeypatch):
 def test_missing_model_after_preprocessor_errors(monkeypatch):
     """Neither --model nor a legacy alias → clean exit(2) before re-exec."""
     captured = _invoke(monkeypatch, ["--parallel", "8"])
-    assert (
-        len(captured) == 0
-    ), f"expected exit before re-exec, got launch with argv = {captured}"
+    assert len(captured) == 0, f"expected exit before re-exec, got launch with argv = {captured}"
 
 
 def test_legacy_m_inline_value_form(monkeypatch):
@@ -317,7 +310,6 @@ def test_consume_helper_leaves_clusters_alone():
 def test_consume_helper_value_already_set_raises():
     helper = _studio_mod()._consume_legacy_short_aliases
     import typer as _typer
-
     with pytest.raises(_typer.BadParameter):
         helper(["-m", "Y"], ("-m",), "X", "--model")
 
@@ -325,7 +317,6 @@ def test_consume_helper_value_already_set_raises():
 def test_consume_helper_missing_value_raises():
     helper = _studio_mod()._consume_legacy_short_aliases
     import typer as _typer
-
     with pytest.raises(_typer.BadParameter):
         helper(["-m"], ("-m",), None, "--model")
 
@@ -430,9 +421,7 @@ def test_expand_np_handles_signed_attached_forms(monkeypatch, attached, expected
     "attached,expected_suffix",
     [("-np8x", "8x"), ("-np-1foo", "-1foo"), ("-np9bar", "9bar")],
 )
-def test_expand_np_rewrites_numeric_prefix_even_with_junk(
-    monkeypatch, attached, expected_suffix
-):
+def test_expand_np_rewrites_numeric_prefix_even_with_junk(monkeypatch, attached, expected_suffix):
     """`-np8x` would surface as a baffling --port error; rewriting to
     `-np 8x` makes typer report against `-np` where it was typed."""
     monkeypatch.setattr(sys, "argv", ["unsloth", "run", attached])
@@ -465,9 +454,7 @@ def test_consume_helper_rejects_empty_inline_value():
         "unsloth-cli.py",
     ],
 )
-def test_third_party_importers_do_not_trigger_np_rewrite(
-    monkeypatch, third_party_argv0
-):
+def test_third_party_importers_do_not_trigger_np_rewrite(monkeypatch, third_party_argv0):
     """Only the `unsloth` / `unsloth.exe` console-script may run the
     canonicaliser; third-party scripts must keep their argv intact."""
     import os as _os

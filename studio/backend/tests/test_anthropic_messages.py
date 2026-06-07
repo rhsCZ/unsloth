@@ -529,9 +529,7 @@ class TestAnthropicToolsToOpenAI:
         ]
 
     def test_pydantic_model_input(self):
-        tool = AnthropicTool(
-            name = "test", description = "desc", input_schema = {"type": "object"}
-        )
+        tool = AnthropicTool(name = "test", description = "desc", input_schema = {"type": "object"})
         result = anthropic_tools_to_openai([tool])
         assert result[0]["function"]["name"] == "test"
 
@@ -631,12 +629,8 @@ class TestAnthropicStreamEmitter:
             }
         )
 
-        first_payloads = [
-            json.loads(event.split("data: ")[1]) for event in first_events
-        ]
-        second_payloads = [
-            json.loads(event.split("data: ")[1]) for event in second_events
-        ]
+        first_payloads = [json.loads(event.split("data: ")[1]) for event in first_events]
+        second_payloads = [json.loads(event.split("data: ")[1]) for event in second_events]
 
         tool_starts = [
             payload
@@ -652,9 +646,7 @@ class TestAnthropicStreamEmitter:
                 "index": tool_starts[0]["index"],
                 "delta": {
                     "type": "input_json_delta",
-                    "partial_json": json.dumps(
-                        {"code": "<!doctype html><html></html>"}
-                    ),
+                    "partial_json": json.dumps({"code": "<!doctype html><html></html>"}),
                 },
             }
         ]
@@ -811,9 +803,7 @@ class TestAnthropicToolNonStreaming:
 
         response = asyncio.run(_anthropic_tool_non_streaming(_run_gen, "msg_1", "m"))
         body = json.loads(response.body)
-        tool_blocks = [
-            block for block in body["content"] if block["type"] == "tool_use"
-        ]
+        tool_blocks = [block for block in body["content"] if block["type"] == "tool_use"]
 
         assert tool_blocks == [
             {
@@ -919,26 +909,14 @@ class TestAnthropicPassthroughEmitter:
         events1 = e.feed_chunk(
             {
                 "choices": [
-                    {
-                        "delta": {
-                            "tool_calls": [
-                                {"index": 0, "function": {"arguments": '{"cmd'}}
-                            ]
-                        }
-                    }
+                    {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"cmd'}}]}}
                 ]
             }
         )
         events2 = e.feed_chunk(
             {
                 "choices": [
-                    {
-                        "delta": {
-                            "tool_calls": [
-                                {"index": 0, "function": {"arguments": '": "ls"}'}}
-                            ]
-                        }
-                    }
+                    {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '": "ls"}'}}]}}
                 ]
             }
         )
@@ -1331,9 +1309,7 @@ class TestAnthropicMessagesToolRouting:
         assert exc.value.status_code == 400
         assert "Mixing Anthropic server tools" in exc.value.detail
 
-    def test_mixed_rejected_when_client_tool_name_collides_with_server_alias(
-        self, monkeypatch
-    ):
+    def test_mixed_rejected_when_client_tool_name_collides_with_server_alias(self, monkeypatch):
         # Regression: a client tool sharing a name with a mapped server
         # tool (e.g. user defines their own "web_search") must still
         # trigger the mixed-mode 400 — the post-name filter would
@@ -1392,9 +1368,7 @@ class TestAnthropicMessagesToolRouting:
         assert exc.value.status_code == 400
         assert "name" in exc.value.detail
 
-    def test_alias_named_client_tool_without_schema_rejected_with_400(
-        self, monkeypatch
-    ):
+    def test_alias_named_client_tool_without_schema_rejected_with_400(self, monkeypatch):
         # Regression: a typo'd client tool whose name happens to collide
         # with a Studio alias (e.g. user meant a custom "python" tool but
         # forgot input_schema) must surface a 400, not silently switch

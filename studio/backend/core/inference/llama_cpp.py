@@ -2422,9 +2422,11 @@ class LlamaCppBackend:
     # GGUF ``general.architecture`` values for diffusion / image models.
     # llama.cpp has no such architectures, so loading one as a chat model dies
     # with "unknown model architecture: '<arch>'". These match the patched
-    # stable-diffusion.cpp / ComfyUI-GGUF enums. Matched exactly (not a
-    # substring) so a chat arch containing "wan"/"sd1" (e.g. "taiwan") isn't
-    # misrouted to Images.
+    # stable-diffusion.cpp / ComfyUI-GGUF enums. Unsloth publishes FLUX and
+    # Qwen-Image GGUFs under
+    # https://huggingface.co/collections/unsloth/unsloth-diffusion-ggufs.
+    # Matched exactly (not a substring) so a chat arch containing "wan"/"sd1"
+    # (e.g. "taiwan") isn't misrouted to Images.
     _DIFFUSION_ARCHES = frozenset(
         (
             "qwen_image",
@@ -3329,6 +3331,10 @@ class LlamaCppBackend:
           gpt-oss-120b code refactor      | 181 t/s | 446 t/s | 2.5x
           Qwen3-235B offloaded            |  12 t/s |  21 t/s | 1.8x
           gpt-oss-120b repeat (92% accept)| 181 t/s | 814 t/s | 4.5x
+        Refs: https://github.com/ggml-org/llama.cpp/blob/master/docs/speculative.md
+              https://github.com/ggml-org/llama.cpp/pull/19164
+              https://github.com/ggml-org/llama.cpp/pull/18471
+              MTP guide: unsloth.ai/docs/models/qwen3.6#mtp-guide
 
         Sub-3B dense MTP regresses vs spec-off: the draft head's per-token
         cost exceeds the acceptance savings at this scale. Q4_K_XL clean

@@ -1398,6 +1398,7 @@ def test_model_wants_tilelang_normalizes_separators(monkeypatch):
 # clang-20 picks it and fails ('cstdlib' not found) building causal-conv1d.
 # _hipcc_gcc_install_dir() finds a gcc dir with both halves; the HIP branch of
 # _install_package_wheel_first passes it via HIPCC_COMPILE_FLAGS_APPEND.
+# Parallels bbf004c's setup.sh fix for the llama.cpp HIP build (PR #5301).
 
 
 def _isdir_for_layout(*existing: str):

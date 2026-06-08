@@ -1437,6 +1437,24 @@ def get_tokenizer_info(tokenizer) -> dict:
     Collects key properties into a JSON-safe dict for logging, debugging, or the
     Studio UI. Missing attributes fall back to ``None`` rather than raising.
 
+    Example output::
+
+        {
+            "name_or_path": "unsloth/Llama-3.2-1B-Instruct",
+            "tokenizer_class": "PreTrainedTokenizerFast",
+            "is_fast": True,
+            "vocab_size": 128000,
+            "added_tokens_count": 256,
+            "model_max_length": 131072,
+            "padding_side": "right",
+            "bos_token": "<|begin_of_text|>",
+            "eos_token": "<|eot_id|>",
+            "pad_token": "<|finetune_right_pad_id|>",
+            "unk_token": None,
+            "has_chat_template": True,
+            "special_tokens_count": 3,
+        }
+
     Args:
         tokenizer: Any HuggingFace ``PreTrainedTokenizer(Fast)`` instance.
 

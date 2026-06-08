@@ -164,6 +164,8 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         # Surface only the two SoTA multimodal models (kimi-k2.6/k2.5);
         # moonshot-v1-* and dated k2 previews are filtered by the allowlist.
         # Docs: https://platform.kimi.ai/docs/models
+        # Listing/overview: https://platform.kimi.ai/docs/api/list-models
+        #                   https://platform.kimi.ai/docs/api/overview
         "default_models": [
             "kimi-k2.6",
             "kimi-k2.5",

@@ -183,7 +183,7 @@ def Qwen3Attention_fast_forward_inference(
     QK^T splits into 4 chunks; the mask zeroes Qk^T and softmax is row-wise, so
     softmax(QK^T)V is just the prior step's attention. We therefore only compute
     the final row: pass one row of Q while remembering K and V (the KV cache).
-    Ref: transformers llama modeling_llama.py.
+    Ref: https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L406
     """
     Xn = hidden_states
     bsz, _, hd = hidden_states.size()

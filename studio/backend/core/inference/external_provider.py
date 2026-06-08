@@ -3613,7 +3613,8 @@ class ExternalProviderClient:
             and code_execution_allowed
         ):
             tools_array.append({"codeExecution": {}})
-        # OpenAI function declarations -> Gemini functionDeclarations. Gemini's
+        # OpenAI function declarations -> Gemini functionDeclarations
+        # (https://ai.google.dev/gemini-api/docs/function-calling#step_1). Gemini's
         # Schema accepts only the OpenAPI 3.0 subset; OpenAI strict tools include
         # keys (additionalProperties, $schema, $defs, ...) that 400 as
         # INVALID_ARGUMENT, so strip recursively. Ref:
@@ -4691,6 +4692,7 @@ class ExternalProviderClient:
                             )
                     elif part_type == "input_document":
                         # Map Studio's `input_document` onto Responses' `input_file`.
+                        # https://developers.openai.com/api/docs/guides/images-vision
                         file_url = part.get("file_url")
                         file_data = part.get("file_data")
                         filename = part.get("filename")
@@ -5975,7 +5977,8 @@ class ExternalProviderClient:
         """GET /models to discover available models.
 
         Returns dicts with at least 'id'. All providers expose /models with the
-        OpenAI {"data": [...]} shape (Anthropic included).
+        OpenAI {"data": [...]} shape (Anthropic included:
+        https://api.anthropic.com/v1/models).
         """
         try:
             response = await _http_client.get(

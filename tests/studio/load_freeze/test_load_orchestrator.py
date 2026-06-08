@@ -103,7 +103,13 @@ def _free_port() -> int:
 
 
 class _UvicornServerThread:
-    def __init__(self, app, *, host: str = "127.0.0.1", port: int) -> None:
+    def __init__(
+        self,
+        app,
+        *,
+        host: str = "127.0.0.1",
+        port: int,
+    ) -> None:
         import uvicorn
 
         self.host = host
@@ -167,7 +173,12 @@ def _build_app(backend, *, wrap_in_thread: bool):
     return app
 
 
-def _drive_concurrent_probe_and_health(base_url, *, n_health = 12, gap = 0.05):
+def _drive_concurrent_probe_and_health(
+    base_url,
+    *,
+    n_health = 12,
+    gap = 0.05,
+):
     elapsed = -1.0
     latencies: list[float] = []
 

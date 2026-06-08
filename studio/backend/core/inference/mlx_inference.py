@@ -548,7 +548,10 @@ class MLXInferenceBackend:
                     )
 
     def generate_with_adapter_control(
-        self, use_adapter = None, cancel_event = None, **gen_kwargs
+        self,
+        use_adapter = None,
+        cancel_event = None,
+        **gen_kwargs,
     ) -> Generator[str, None, None]:
         # MLX LoRA adapter toggling not yet supported — generate normally
         yield from self.generate_chat_response(cancel_event = cancel_event, **gen_kwargs)

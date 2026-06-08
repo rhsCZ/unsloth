@@ -1008,7 +1008,11 @@ def _title(msg: str) -> str:
 _RULE = "\u2500" * 52
 
 
-def _step(label: str, value: str, color_fn = None) -> None:
+def _step(
+    label: str,
+    value: str,
+    color_fn = None,
+) -> None:
     """Print a single step line in the column format."""
     if color_fn is None:
         color_fn = _green
@@ -1034,7 +1038,12 @@ def _progress(label: str) -> None:
         pass
 
 
-def run(label: str, cmd: list[str], *, quiet: bool = True) -> subprocess.CompletedProcess[bytes]:
+def run(
+    label: str,
+    cmd: list[str],
+    *,
+    quiet: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
     """Run a command; on failure print output and exit."""
     if VERBOSE:
         _step(_LABEL, f"{label}...", _dim)

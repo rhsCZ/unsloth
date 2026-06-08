@@ -459,11 +459,7 @@ def _per_layer_input_norm_elements(arch: ModelArchConfig) -> int:
     return hd * n_layers + pli
 
 
-def _per_layer_input_lora_params(
-    arch: ModelArchConfig,
-    r: int,
-    target_modules,
-) -> int:
+def _per_layer_input_lora_params(arch: ModelArchConfig, r: int, target_modules) -> int:
     # why: Unsloth's get_peft_regex (unsloth_zoo/peft_utils.py) requires module
     # names to contain a component tag (mlp/attn/...); PLE module names lack
     # any tag, so all-linear training does NOT attach LoRA to them. Only count
@@ -508,10 +504,7 @@ def _layer_mlp_size(arch: ModelArchConfig, layer_idx: int) -> int:
     return _dense_mlp_size(arch)
 
 
-def _text_linear_dims(
-    arch: ModelArchConfig,
-    layer_idx: int,
-) -> Dict[str, tuple[int, int]]:
+def _text_linear_dims(arch: ModelArchConfig, layer_idx: int) -> Dict[str, tuple[int, int]]:
     hd = arch.hidden_size
     if _uses_structured_layer_shapes(arch):
         q_size, kv_size, has_k, has_v = _layer_attention_dims(arch, layer_idx)
@@ -565,11 +558,7 @@ def _module_path_matches(skip_module: str, alias: str) -> bool:
     return ".".join(prefix_parts) in _SKIP_MODULE_TEXT_PREFIXES
 
 
-def _add_module_aliases(
-    aliases: Dict[str, str],
-    canonical: str,
-    suffix: str,
-) -> None:
+def _add_module_aliases(aliases: Dict[str, str], canonical: str, suffix: str) -> None:
     for prefix in (
         "",
         "model",
@@ -583,9 +572,7 @@ def _add_module_aliases(
         aliases[alias] = canonical
 
 
-def _build_text_module_elements(
-    arch: ModelArchConfig,
-) -> tuple[Dict[str, int], Dict[str, str]]:
+def _build_text_module_elements(arch: ModelArchConfig) -> tuple[Dict[str, int], Dict[str, str]]:
     elements: Dict[str, int] = {}
     aliases: Dict[str, str] = {}
 
@@ -872,9 +859,7 @@ def _compute_layer_elements(arch: ModelArchConfig):
 
 
 def compute_model_weights_bytes(
-    arch: ModelArchConfig,
-    training_method: str,
-    load_in_4bit: bool,
+    arch: ModelArchConfig, training_method: str, load_in_4bit: bool
 ) -> int:
     total_quantizable, layernorms, embed_tokens, lm_head = _compute_layer_elements(arch)
     n_layers = arch.num_hidden_layers
@@ -899,11 +884,7 @@ def compute_total_params(arch: ModelArchConfig) -> int:
     return total_quantizable + layernorms * n_layers + embed_tokens + lm_head
 
 
-def _lora_attn_elements(
-    arch: ModelArchConfig,
-    r: int,
-    target_modules: list,
-) -> int:
+def _lora_attn_elements(arch: ModelArchConfig, r: int, target_modules: list) -> int:
     hd = arch.hidden_size
     if arch.q_lora_rank is not None:
         # MLA: q_proj->q_b, k_proj->kv_a, v_proj->kv_b, o_proj->o
@@ -933,11 +914,7 @@ def _lora_attn_elements(
 
 
 def _lora_mlp_elements(
-    hd: int,
-    mlp_size: int,
-    r: int,
-    target_modules: list,
-    expert_mult: int,
+    hd: int, mlp_size: int, r: int, target_modules: list, expert_mult: int
 ) -> int:
     module_ab = {
         "gate_proj": (hd * r, r * mlp_size),
@@ -951,11 +928,7 @@ def _lora_mlp_elements(
     return total
 
 
-def compute_lora_params(
-    arch: ModelArchConfig,
-    lora_rank: int,
-    target_modules: list,
-) -> int:
+def compute_lora_params(arch: ModelArchConfig, lora_rank: int, target_modules: list) -> int:
     all_linear = _targets_all_linear(target_modules)
     selected_modules = list(DEFAULT_TARGET_MODULES) if all_linear else target_modules
     hd = arch.hidden_size
@@ -1097,10 +1070,7 @@ def _is_linear_attention(attention_implementation: Optional[str]) -> bool:
 
 
 def _compute_non_flash_attention_bytes(
-    arch: ModelArchConfig,
-    batch_size: int,
-    seq_len: int,
-    effective_layers: float,
+    arch: ModelArchConfig, batch_size: int, seq_len: int, effective_layers: float
 ) -> int:
     score_elements = batch_size * arch.num_attention_heads * seq_len * seq_len
     return int(score_elements * 2 * NON_FLASH_ATTENTION_FACTOR * effective_layers)
@@ -1143,10 +1113,7 @@ def _layer_qkv_mlp_sizes(arch: ModelArchConfig, layer_idx: int) -> tuple:
 
 
 def _per_layer_activation_bytes(
-    arch: ModelArchConfig,
-    layer_idx: int,
-    batch_size: int,
-    seq_len: int,
+    arch: ModelArchConfig, layer_idx: int, batch_size: int, seq_len: int
 ) -> int:
     qkv_size, mlp_size = _layer_qkv_mlp_sizes(arch, layer_idx)
     activation_qkv = seq_len * batch_size * qkv_size
@@ -1206,10 +1173,7 @@ def compute_activation_bytes(
     )
 
 
-def estimate_training_vram(
-    arch: ModelArchConfig,
-    config: TrainingVramConfig,
-) -> VramBreakdown:
+def estimate_training_vram(arch: ModelArchConfig, config: TrainingVramConfig) -> VramBreakdown:
     method = config.training_method.lower()
     is_lora = method in ("qlora", "lora")
     load_in_4bit = config.load_in_4bit or method == "qlora"

@@ -35,7 +35,10 @@ requires_pwsh = pytest.mark.skipif(not PWSH_AVAILABLE, reason = "pwsh not availa
 # Helpers
 # ---------------------------------------------------------------------------
 def run_bash(
-    script: str, *, timeout: int = 60, env: dict | None = None
+    script: str,
+    *,
+    timeout: int = 60,
+    env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a bash script fragment and return the CompletedProcess.
     60s default tolerates slow shell startup on heavily-loaded CI
@@ -53,7 +56,10 @@ def run_bash(
 
 
 def run_pwsh(
-    script: str, *, timeout: int = 60, env: dict | None = None
+    script: str,
+    *,
+    timeout: int = 60,
+    env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a PowerShell script fragment and return the CompletedProcess.
     60s default tolerates slow pwsh startup on heavily-loaded CI
@@ -413,7 +419,7 @@ class TestSourcePatternsSh:
     def test_clone_urls_parameterized_pr_path(self):
         """PR clone path uses ${_LLAMA_SOURCE}.git, not hardcoded URL."""
         pr_clone_idx = self.content.index(
-            'if [ -n "$_LLAMA_PR" ]; then\n' '            run_quiet_no_exit "clone llama.cpp"'
+            'if [ -n "$_LLAMA_PR" ]; then\n            run_quiet_no_exit "clone llama.cpp"'
         )
         else_idx = self.content.index("else\n", pr_clone_idx)
         pr_block = self.content[pr_clone_idx:else_idx]

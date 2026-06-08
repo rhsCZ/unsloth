@@ -234,7 +234,7 @@ def diff_new_install_scripts(base_lock: dict, head_lock: dict) -> list[Finding]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description = (
-            "Diff two package-lock.json files and refuse any newly-" "added install-script dep."
+            "Diff two package-lock.json files and refuse any newly-added install-script dep."
         ),
     )
     parser.add_argument(

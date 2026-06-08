@@ -41,7 +41,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _send_raw(
-        self, status: int, body: bytes, *, content_type: str = "application/json"
+        self,
+        status: int,
+        body: bytes,
+        *,
+        content_type: str = "application/json",
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)

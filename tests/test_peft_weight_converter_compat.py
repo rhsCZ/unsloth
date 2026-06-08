@@ -85,7 +85,11 @@ def _make_modern_converter():
     return _ModernConverter(["src.*"], ["tgt.*"], [])
 
 
-def _build_that_calls_init(weight_conversions, adapter_name, peft_config = None):
+def _build_that_calls_init(
+    weight_conversions,
+    adapter_name,
+    peft_config = None,
+):
     out = []
     for c in weight_conversions or []:
         out.append(
@@ -147,7 +151,11 @@ def test_class_init_restored_after_call():
 
 
 def test_class_init_restored_after_original_build_raises():
-    def _raise(weight_conversions, adapter_name, peft_config = None):
+    def _raise(
+        weight_conversions,
+        adapter_name,
+        peft_config = None,
+    ):
         raise RuntimeError("simulated PEFT failure")
 
     twc = _install_fake_peft({"build_peft_weight_mapping": _raise})
@@ -209,7 +217,11 @@ def test_idempotent_install_does_not_double_wrap():
 def test_concurrent_legacy_calls_no_typeerror():
     import time
 
-    def _slow_build(weight_conversions, adapter_name, peft_config = None):
+    def _slow_build(
+        weight_conversions,
+        adapter_name,
+        peft_config = None,
+    ):
         time.sleep(0.05)
         return _build_that_calls_init(weight_conversions, adapter_name, peft_config)
 

@@ -159,17 +159,12 @@ def _recipe_has_llm_columns(recipe: dict[str, Any]) -> bool:
     return False
 
 
-def _validate_recipe_runtime_support(
-    recipe: dict[str, Any],
-    model_providers: list[Any],
-) -> None:
+def _validate_recipe_runtime_support(recipe: dict[str, Any], model_providers: list[Any]) -> None:
     if _recipe_has_llm_columns(recipe) and not model_providers:
         raise ValueError("Add a Provider connection block before running this recipe.")
 
 
-def build_mcp_providers(
-    recipe: dict[str, Any],
-) -> list:
+def build_mcp_providers(recipe: dict[str, Any]) -> list:
     from data_designer.config.mcp import LocalStdioMCPProvider, MCPProvider  # pyright: ignore[reportMissingImports]
 
     # Same gate as the chat MCP path: stdio providers spawn a local subprocess,
@@ -279,11 +274,7 @@ def build_config_builder(recipe: dict[str, Any]):
     return builder
 
 
-def create_data_designer(
-    recipe: dict[str, Any],
-    *,
-    artifact_path: str | None = None,
-):
+def create_data_designer(recipe: dict[str, Any], *, artifact_path: str | None = None):
     _apply_data_designer_image_context_patch()
     from data_designer.interface.data_designer import DataDesigner  # pyright: ignore[reportMissingImports]
 
@@ -319,8 +310,7 @@ def validate_recipe(recipe: dict[str, Any]) -> None:
 
 
 def preview_recipe(
-    recipe: dict[str, Any],
-    num_records: int,
+    recipe: dict[str, Any], num_records: int
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, Any] | None]:
     builder = build_config_builder(recipe)
     designer = create_data_designer(recipe)

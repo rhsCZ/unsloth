@@ -52,7 +52,12 @@ def make_macos_host(macos_version, *, arm64 = True):
     )
 
 
-def thin_macho(minos = (14, 0), *, cputype = _CPU_TYPE_ARM64, build_version = True):
+def thin_macho(
+    minos = (14, 0),
+    *,
+    cputype = _CPU_TYPE_ARM64,
+    build_version = True,
+):
     """Synthesize a minimal little-endian 64-bit Mach-O carrying a macOS
     minimum-version load command."""
     encoded = (minos[0] << 16) | (minos[1] << 8)
@@ -137,10 +142,7 @@ class TestMachoMinimumMacos:
             )
         )
         assert ILP.macho_minimum_macos(path, make_macos_host((14, 0))) == (14, 0)
-        assert ILP.macho_minimum_macos(path, make_macos_host((26, 0), arm64 = False)) == (
-            26,
-            0,
-        )
+        assert ILP.macho_minimum_macos(path, make_macos_host((26, 0), arm64 = False)) == (26, 0)
 
     def test_non_macho_returns_none(self, tmp_path):
         path = tmp_path / "script.sh"

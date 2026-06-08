@@ -15,7 +15,13 @@ from core.training import worker
 def _missing_flash_attn_import():
     real_import = builtins.__import__
 
-    def fake_import(name, globals = None, locals = None, fromlist = (), level = 0):
+    def fake_import(
+        name,
+        globals = None,
+        locals = None,
+        fromlist = (),
+        level = 0,
+    ):
         if name == "flash_attn":
             raise ImportError
         return real_import(name, globals, locals, fromlist, level)
@@ -26,7 +32,13 @@ def _missing_flash_attn_import():
 def _missing_module_import(missing: str):
     real_import = builtins.__import__
 
-    def fake_import(name, globals = None, locals = None, fromlist = (), level = 0):
+    def fake_import(
+        name,
+        globals = None,
+        locals = None,
+        fromlist = (),
+        level = 0,
+    ):
         if name == missing:
             raise ImportError
         return real_import(name, globals, locals, fromlist, level)
@@ -103,7 +115,12 @@ def test_runtime_flash_attn_falls_back_to_pypi(monkeypatch):
     )
     monkeypatch.setattr(worker, "install_wheel", mock.Mock())
 
-    def fake_run(cmd, stdout = None, stderr = None, text = None):
+    def fake_run(
+        cmd,
+        stdout = None,
+        stderr = None,
+        text = None,
+    ):
         calls.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, "")
 
@@ -1332,7 +1349,13 @@ def test_discover_fla_model_types_handles_missing_transformers(monkeypatch):
 
     real_import = builtins.__import__
 
-    def fake_import(name, globals = None, locals = None, fromlist = (), level = 0):
+    def fake_import(
+        name,
+        globals = None,
+        locals = None,
+        fromlist = (),
+        level = 0,
+    ):
         if name == "transformers":
             raise ImportError("transformers not installed")
         return real_import(name, globals, locals, fromlist, level)

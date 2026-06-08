@@ -93,9 +93,7 @@ def _build_model_config(config: dict):
     return mc
 
 
-def _get_hf_download_state(
-    model_names: list[str] | None = None,
-) -> tuple[int, bool] | None:
+def _get_hf_download_state(model_names: list[str] | None = None) -> tuple[int, bool] | None:
     """Return (total_bytes, has_incomplete) for the HF Hub cache, or None on error.
 
     When *model_names* is provided, only those models' ``blobs/``
@@ -396,12 +394,7 @@ def _handle_load(backend, config: dict, resp_queue: Any) -> None:
         )
 
 
-def _handle_generate(
-    backend,
-    cmd: dict,
-    resp_queue: Any,
-    cancel_event,
-) -> None:
+def _handle_generate(backend, cmd: dict, resp_queue: Any, cancel_event) -> None:
     """Handle a generate command: stream tokens back via resp_queue.
 
     cancel_event is an mp.Event shared with the parent process.
@@ -499,11 +492,7 @@ def _handle_generate(
         )
 
 
-def _handle_generate_audio(
-    backend,
-    cmd: dict,
-    resp_queue: Any,
-) -> None:
+def _handle_generate_audio(backend, cmd: dict, resp_queue: Any) -> None:
     """Handle TTS audio generation — returns WAV bytes + sample_rate."""
     request_id = cmd.get("request_id", "")
     try:
@@ -546,12 +535,7 @@ def _handle_generate_audio(
         )
 
 
-def _handle_generate_audio_input(
-    backend,
-    cmd: dict,
-    resp_queue: Any,
-    cancel_event,
-) -> None:
+def _handle_generate_audio_input(backend, cmd: dict, resp_queue: Any, cancel_event) -> None:
     """Handle audio input generation (ASR/Whisper) — streams text tokens back."""
     request_id = cmd.get("request_id", "")
 
@@ -653,13 +637,7 @@ def _handle_unload(backend, cmd: dict, resp_queue: Any) -> None:
         )
 
 
-def run_inference_process(
-    *,
-    cmd_queue: Any,
-    resp_queue: Any,
-    cancel_event,
-    config: dict,
-) -> None:
+def run_inference_process(*, cmd_queue: Any, resp_queue: Any, cancel_event, config: dict) -> None:
     """Subprocess entrypoint. Persistent — runs command loop until shutdown.
 
     Args:

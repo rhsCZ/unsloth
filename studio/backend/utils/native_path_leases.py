@@ -68,9 +68,7 @@ def native_path_leases_supported() -> bool:
     return True
 
 
-def child_env_without_native_path_secret(
-    env: Mapping[str, str] | None = None,
-) -> dict[str, str]:
+def child_env_without_native_path_secret(env: Mapping[str, str] | None = None) -> dict[str, str]:
     """Return a child-process env with the native path lease secret removed."""
 
     if env is None:
@@ -82,11 +80,7 @@ def child_env_without_native_path_secret(
     return cleaned
 
 
-def run_without_native_path_secret(
-    target: Callable[..., Any],
-    *args: Any,
-    **kwargs: Any,
-) -> Any:
+def run_without_native_path_secret(target: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Run a multiprocessing child target without the native path lease secret."""
 
     global _CACHED_LEASE_SECRET, _SCRUB_SAVED_SECRET

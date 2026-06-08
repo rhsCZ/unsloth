@@ -275,7 +275,12 @@ def spoof_hardware(monkeypatch):
             # it via a meta_path finder that raises ImportError for any
             # `mlx` / `mlx.*` import while this profile is active.
             class _BlockMLXFinder:
-                def find_spec(self_inner, name, path = None, target = None):
+                def find_spec(
+                    self_inner,
+                    name,
+                    path = None,
+                    target = None,
+                ):
                     if name == "mlx" or name.startswith("mlx."):
                         raise ImportError(
                             f"mlx import blocked by spoof_hardware " f"(profile={profile.name})"

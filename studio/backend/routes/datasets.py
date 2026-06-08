@@ -315,8 +315,7 @@ def _sanitize_filename(filename: str) -> str:
 
 @router.post("/upload", response_model = UploadDatasetResponse)
 async def upload_dataset(
-    file: UploadFile,
-    current_subject: str = Depends(get_current_subject),
+    file: UploadFile, current_subject: str = Depends(get_current_subject)
 ) -> UploadDatasetResponse:
     filename = _sanitize_filename(file.filename or "dataset_upload")
     ext = Path(filename).suffix.lower()
@@ -453,10 +452,7 @@ async def get_dataset_download_progress(
 
 
 @router.post("/check-format", response_model = CheckFormatResponse)
-def check_format(
-    request: CheckFormatRequest,
-    current_subject: str = Depends(get_current_subject),
-):
+def check_format(request: CheckFormatRequest, current_subject: str = Depends(get_current_subject)):
     """
     Check if a dataset requires manual column mapping.
 
@@ -635,8 +631,7 @@ def check_format(
 
 @router.post("/ai-assist-mapping", response_model = AiAssistMappingResponse)
 def ai_assist_mapping(
-    request: AiAssistMappingRequest,
-    current_subject: str = Depends(get_current_subject),
+    request: AiAssistMappingRequest, current_subject: str = Depends(get_current_subject)
 ):
     """
     Run LLM-assisted dataset conversion advisor (user-triggered).

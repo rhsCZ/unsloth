@@ -262,7 +262,7 @@ class LoadProgressResponse(BaseModel):
     bytes_loaded: int = Field(
         0,
         description = (
-            "Bytes of the model already resident in the llama-server " "process (VmRSS on Linux)."
+            "Bytes of the model already resident in the llama-server process (VmRSS on Linux)."
         ),
     )
     bytes_total: int = Field(

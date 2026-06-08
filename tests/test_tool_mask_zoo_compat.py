@@ -36,7 +36,11 @@ def _load_local_align_completion_tool_mask():
 
     calls = []
 
-    def align_logprobs_with_mask(logprob_tensor, completion_mask, pad_value = None):
+    def align_logprobs_with_mask(
+        logprob_tensor,
+        completion_mask,
+        pad_value = None,
+    ):
         calls.append((logprob_tensor, completion_mask, pad_value))
         return torch.tensor(
             [[1, 0, 1], [0, 1, 1]],

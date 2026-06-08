@@ -674,9 +674,7 @@ def _request_matches_loaded_settings(request: LoadRequest, llama_backend: LlamaC
 
 
 def _resolve_model_identifier_for_request(
-    request: LoadRequest | ValidateModelRequest,
-    *,
-    operation: str,
+    request: LoadRequest | ValidateModelRequest, *, operation: str
 ) -> tuple[str, str, bool]:
     if not request.native_path_lease:
         return request.model_path, request.model_path, False
@@ -904,7 +902,7 @@ async def load_model(
                 )
                 if not same_source:
                     logger.info(
-                        "Not inheriting llama_extra_args: stored args came " "from %s, loading %s",
+                        "Not inheriting llama_extra_args: stored args came from %s, loading %s",
                         source,
                         (model_identifier, resolved_variant),
                     )
@@ -1218,8 +1216,7 @@ async def load_model(
 
 @router.post("/validate", response_model = ValidateModelResponse)
 async def validate_model(
-    request: ValidateModelRequest,
-    current_subject: str = Depends(get_current_subject),
+    request: ValidateModelRequest, current_subject: str = Depends(get_current_subject)
 ):
     """
     Lightweight validation endpoint for model identifiers.
@@ -1294,10 +1291,7 @@ async def validate_model(
 
 
 @router.post("/unload", response_model = UnloadResponse)
-async def unload_model(
-    request: UnloadRequest,
-    current_subject: str = Depends(get_current_subject),
-):
+async def unload_model(request: UnloadRequest, current_subject: str = Depends(get_current_subject)):
     """
     Unload a model from memory.
     Routes to the correct backend (llama-server for GGUF, Unsloth otherwise).
@@ -1326,10 +1320,7 @@ async def unload_model(
 
 
 @studio_router.post("/cancel")
-async def cancel_inference(
-    request: Request,
-    current_subject: str = Depends(get_current_subject),
-):
+async def cancel_inference(request: Request, current_subject: str = Depends(get_current_subject)):
     """Cancel in-flight inference requests.
 
     Body (JSON, at least one key required):
@@ -1369,8 +1360,7 @@ async def cancel_inference(
 
 @router.post("/generate/stream")
 async def generate_stream(
-    request: GenerateRequest,
-    current_subject: str = Depends(get_current_subject),
+    request: GenerateRequest, current_subject: str = Depends(get_current_subject)
 ):
     """
     Generate a chat response with Server-Sent Events (SSE) streaming.
@@ -1440,9 +1430,7 @@ async def generate_stream(
 
 
 @router.get("/status", response_model = InferenceStatusResponse)
-async def get_status(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_status(current_subject: str = Depends(get_current_subject)):
     """
     Get current inference backend status.
     Reports whichever backend (Unsloth or llama-server) is currently active.
@@ -1574,9 +1562,7 @@ async def get_status(
 
 
 @router.get("/load-progress", response_model = LoadProgressResponse)
-async def get_load_progress(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_load_progress(current_subject: str = Depends(get_current_subject)):
     """
     Return the active GGUF load's mmap/upload progress.
 
@@ -1728,9 +1714,7 @@ def _decode_audio_base64(b64: str) -> np.ndarray:
     return waveform.squeeze(0).numpy()
 
 
-def _extract_content_parts(
-    messages: list,
-) -> tuple[str, list[dict], "Optional[str]"]:
+def _extract_content_parts(messages: list) -> tuple[str, list[dict], "Optional[str]"]:
     """
     Parse OpenAI-format messages into components the inference backend expects.
 
@@ -2118,8 +2102,7 @@ def _build_external_messages(
 
 
 async def _proxy_to_external_provider(
-    payload: ChatCompletionRequest,
-    request: Request,
+    payload: ChatCompletionRequest, request: Request
 ) -> StreamingResponse:
     """
     Proxy a chat completion request to an external LLM provider.
@@ -2257,9 +2240,7 @@ async def _proxy_to_external_provider(
 # ── OpenAI shell-tool container management ───────────────────────
 
 
-def _resolve_openai_cloud_client(
-    body: OpenAIContainerRequest,
-) -> ExternalProviderClient:
+def _resolve_openai_cloud_client(body: OpenAIContainerRequest) -> ExternalProviderClient:
     """
     Decrypt the API key + validate the base URL points at OpenAI cloud,
     then build an ExternalProviderClient for the three container CRUD
@@ -2316,8 +2297,7 @@ def _summarize_container(raw: dict) -> OpenAIContainerSummary:
     response_model = ListOpenAIContainersResponse,
 )
 async def list_openai_containers(
-    body: OpenAIContainerRequest,
-    current_subject: str = Depends(get_current_subject),
+    body: OpenAIContainerRequest, current_subject: str = Depends(get_current_subject)
 ) -> ListOpenAIContainersResponse:
     """List the user's OpenAI shell-tool containers."""
     client = _resolve_openai_cloud_client(body)
@@ -2354,8 +2334,7 @@ async def list_openai_containers(
     response_model = OpenAIContainerSummary,
 )
 async def create_openai_container(
-    body: CreateOpenAIContainerBody,
-    current_subject: str = Depends(get_current_subject),
+    body: CreateOpenAIContainerBody, current_subject: str = Depends(get_current_subject)
 ) -> OpenAIContainerSummary:
     """Create a named container with the user-chosen idle TTL."""
     client = _resolve_openai_cloud_client(body)
@@ -2388,8 +2367,7 @@ async def create_openai_container(
 
 @router.post("/external/openai/containers/delete", status_code = 204)
 async def delete_openai_container(
-    body: DeleteOpenAIContainerBody,
-    current_subject: str = Depends(get_current_subject),
+    body: DeleteOpenAIContainerBody, current_subject: str = Depends(get_current_subject)
 ) -> None:
     """Delete a named container by id."""
     logger.info(
@@ -3808,9 +3786,7 @@ async def serve_sandbox_file(
 
 
 @router.get("/models")
-async def openai_list_models(
-    current_subject: str = Depends(get_current_subject),
-):
+async def openai_list_models(current_subject: str = Depends(get_current_subject)):
     """
     OpenAI-compatible model listing endpoint.
 
@@ -3850,10 +3826,7 @@ async def openai_list_models(
 
 
 @router.post("/completions")
-async def openai_completions(
-    request: Request,
-    current_subject: str = Depends(get_current_subject),
-):
+async def openai_completions(request: Request, current_subject: str = Depends(get_current_subject)):
     """
     OpenAI-compatible text completions endpoint (non-chat).
 
@@ -3927,10 +3900,7 @@ async def openai_completions(
 
 
 @router.post("/embeddings")
-async def openai_embeddings(
-    request: Request,
-    current_subject: str = Depends(get_current_subject),
-):
+async def openai_embeddings(request: Request, current_subject: str = Depends(get_current_subject)):
     """
     OpenAI-compatible embeddings endpoint.
 
@@ -3963,9 +3933,7 @@ async def openai_embeddings(
 # =====================================================================
 
 
-def _translate_responses_tools_to_chat(
-    tools: Optional[list[dict]],
-) -> Optional[list[dict]]:
+def _translate_responses_tools_to_chat(tools: Optional[list[dict]]) -> Optional[list[dict]]:
     """Translate Responses-shape function tools to the Chat Completions nested shape.
 
     Responses uses a flat shape per tool entry::
@@ -4239,9 +4207,7 @@ def _chat_tool_calls_to_responses_output(tool_calls: list[dict]) -> list[dict]:
 
 
 async def _responses_non_streaming(
-    payload: ResponsesRequest,
-    messages: list[ChatMessage],
-    request: Request,
+    payload: ResponsesRequest, messages: list[ChatMessage], request: Request
 ) -> JSONResponse:
     """Handle a non-streaming Responses API call."""
     chat_req = _build_chat_request(payload, messages, stream = False)
@@ -4307,9 +4273,7 @@ async def _responses_non_streaming(
 
 
 async def _responses_stream(
-    payload: ResponsesRequest,
-    messages: list[ChatMessage],
-    request: Request,
+    payload: ResponsesRequest, messages: list[ChatMessage], request: Request
 ):
     """Handle a streaming Responses API call, emitting named SSE events.
 
@@ -4726,9 +4690,7 @@ def _anthropic_requested_studio_tools(tools: Optional[list]) -> set[str]:
 
 
 def _select_anthropic_server_tools(
-    all_tools: list[dict],
-    requested_studio_tools: set[str],
-    enabled_tools: Optional[list[str]],
+    all_tools: list[dict], requested_studio_tools: set[str], enabled_tools: Optional[list[str]]
 ) -> list[dict]:
     """Select Studio tools requested through Anthropic tools and extensions."""
     if not requested_studio_tools and enabled_tools is None:
@@ -5122,13 +5084,7 @@ async def anthropic_messages(
     )
 
 
-async def _anthropic_tool_stream(
-    request,
-    cancel_event,
-    run_gen,
-    message_id,
-    model_name,
-):
+async def _anthropic_tool_stream(request, cancel_event, run_gen, message_id, model_name):
     """Streaming response for the tool-calling path."""
     _sentinel = object()
 
@@ -5169,13 +5125,7 @@ async def _anthropic_tool_stream(
     )
 
 
-async def _anthropic_plain_stream(
-    request,
-    cancel_event,
-    run_gen,
-    message_id,
-    model_name,
-):
+async def _anthropic_plain_stream(request, cancel_event, run_gen, message_id, model_name):
     """Streaming response for the no-tool path."""
     _sentinel = object()
 
@@ -5891,12 +5841,7 @@ def _build_openai_passthrough_body(payload, backend_ctx = None) -> dict:
 
 
 async def _openai_passthrough_stream(
-    request,
-    cancel_event,
-    llama_backend,
-    payload,
-    model_name,
-    completion_id,
+    request, cancel_event, llama_backend, payload, model_name, completion_id
 ):
     """Streaming client-side pass-through for /v1/chat/completions.
 
@@ -6048,11 +5993,7 @@ async def _openai_passthrough_stream(
         raise
 
 
-async def _openai_passthrough_non_streaming(
-    llama_backend,
-    payload,
-    model_name,
-):
+async def _openai_passthrough_non_streaming(llama_backend, payload, model_name):
     """Non-streaming client-side pass-through for /v1/chat/completions.
 
     Returns llama-server's JSON response verbatim (via JSONResponse) so the

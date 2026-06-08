@@ -1114,9 +1114,7 @@ def _parse_chat_setting_json(key: str, value_json: str) -> tuple[bool, Any]:
         return False, None
 
 
-def _load_chat_settings_for_merge(
-    conn: sqlite3.Connection,
-) -> tuple[dict[str, Any], set[str]]:
+def _load_chat_settings_for_merge(conn: sqlite3.Connection) -> tuple[dict[str, Any], set[str]]:
     rows = conn.execute("SELECT key, value_json FROM chat_settings").fetchall()
     current: dict[str, Any] = {}
     corrupt: set[str] = set()
@@ -1143,9 +1141,7 @@ def _load_chat_settings_for_merge(
 
 
 def _raise_if_chat_message_thread_conflicts(
-    conn: sqlite3.Connection,
-    thread_id: str,
-    message_ids: list[str],
+    conn: sqlite3.Connection, thread_id: str, message_ids: list[str]
 ) -> None:
     unique_ids = list(dict.fromkeys(message_ids))
     if not unique_ids:

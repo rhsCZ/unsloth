@@ -403,7 +403,11 @@ def fast_save_pickle(shard, name):
     return
 
 
-def _preserve_tokenizer_eos_token(tokenizer, save_directory, filename_prefix = None):
+def _preserve_tokenizer_eos_token(
+    tokenizer,
+    save_directory,
+    filename_prefix = None,
+):
     """Restore tokenizer_config.json eos_token from the tokenizer passed to save.
 
     Some merge paths may re-save or mutate tokenizer metadata after the tokenizer
@@ -526,7 +530,7 @@ def unsloth_save_model(
             username = whoami(token = token)["name"]
         except:
             raise RuntimeError(
-                "Unsloth: Please supply a token!\n" "Go to https://huggingface.co/settings/tokens"
+                "Unsloth: Please supply a token!\nGo to https://huggingface.co/settings/tokens"
             )
 
     assert maximum_memory_usage > 0 and maximum_memory_usage <= 0.95

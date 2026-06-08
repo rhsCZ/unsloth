@@ -2031,7 +2031,11 @@ class TestResolveInstallReleasePlans:
 class TestWindowsCudaAttempts:
     TAG = "b8508"
 
-    def _upstream(self, *runtime_versions, current_names: bool = False):
+    def _upstream(
+        self,
+        *runtime_versions,
+        current_names: bool = False,
+    ):
         assets = {}
         for rv in runtime_versions:
             if current_names:
@@ -2428,11 +2432,7 @@ class TestDirectUpstreamBlackwellPin:
         )
         plan = direct_upstream_release_plan(self._release(), host, UPSTREAM_REPO, "latest")
         order = [(a.tag, a.runtime_line or a.install_kind) for a in plan.attempts]
-        assert order == [
-            ("b9360", "cuda13"),
-            (self.TAG, "cuda12"),
-            (self.TAG, "windows-cpu"),
-        ]
+        assert order == [("b9360", "cuda13"), (self.TAG, "cuda12"), (self.TAG, "windows-cpu")]
         assert plan.attempts[0].name == "llama-b9360-bin-win-cuda-13.1-x64.zip"
         # Direct/upstream path stays unverified-by-manifest (no approved hashes).
         assert plan.approved_checksums.artifacts == {}
@@ -2915,7 +2915,11 @@ class TestResolveSimpleMacosPin:
                 ],
             }
 
-        def fake_iter(repo, published_release_tag = "", requested_tag = ""):
+        def fake_iter(
+            repo,
+            published_release_tag = "",
+            requested_tag = "",
+        ):
             calls.append((repo, published_release_tag, requested_tag))
             # Emulate the real iterator: a specific tag yields only that release.
             if requested_tag and requested_tag != "latest":

@@ -815,10 +815,7 @@ def studio_update_status(_current_subject: str = Depends(get_current_subject)):
 
 
 @app.post("/api/shutdown")
-async def shutdown_server(
-    request: Request,
-    current_subject: str = Depends(get_current_subject),
-):
+async def shutdown_server(request: Request, current_subject: str = Depends(get_current_subject)):
     """Gracefully shut down the Unsloth Studio server.
 
     Called by the frontend quit dialog so users can stop the server from the UI
@@ -842,9 +839,7 @@ async def shutdown_server(
 
 
 @app.get("/api/system")
-async def get_system_info(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_system_info(current_subject: str = Depends(get_current_subject)):
     """Get system information.
 
     Gated behind auth: the response includes platform, Python version,
@@ -885,16 +880,12 @@ async def get_system_info(
 
 
 @app.get("/api/system/gpu-visibility")
-async def get_gpu_visibility(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_gpu_visibility(current_subject: str = Depends(get_current_subject)):
     return get_backend_visible_gpu_info()
 
 
 @app.get("/api/system/hardware")
-async def get_hardware_info(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_hardware_info(current_subject: str = Depends(get_current_subject)):
     """Return GPU name, total VRAM, and key ML package versions.
 
     Gated behind auth alongside /api/system -- same fingerprinting

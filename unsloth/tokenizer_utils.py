@@ -135,10 +135,7 @@ def get_sorted_dict(dictionary):
     return sorted_dictionary
 
 
-def convert_to_fast_tokenizer(
-    slow_tokenizer,
-    temporary_location = "_unsloth_sentencepiece_temp",
-):
+def convert_to_fast_tokenizer(slow_tokenizer, temporary_location = "_unsloth_sentencepiece_temp"):
     is_fast = getattr(slow_tokenizer, "is_fast", False)
     if is_fast:
         return slow_tokenizer
@@ -688,7 +685,11 @@ _RE_ENDIF = re.compile(r"\{%(-?)\s*endif\s*(-?)%\}")
 _RE_JINJA_COMMENT = re.compile(r"\{#.*?#\}", flags = re.DOTALL)
 
 
-def _find_end_position(template, endfor = None, endif = None):
+def _find_end_position(
+    template,
+    endfor = None,
+    endif = None,
+):
     """Rightmost {% endfor %}/{% endif %} (any dash variant), as a dict
     with start/end/text/dash_left/dash_right. Tokens inside Jinja comments
     are ignored. `endfor`/`endif` kwargs kept for back-compat, ignored."""
@@ -1201,7 +1202,12 @@ class _VariantTokenizerProxy:
     preserved; falls back to bare Jinja for read-only stubs.
     """
 
-    def __init__(self, base_tokenizer, variant_template, variant_label = ""):
+    def __init__(
+        self,
+        base_tokenizer,
+        variant_template,
+        variant_label = "",
+    ):
         self._base = base_tokenizer
         self._template = variant_template
         base_name = getattr(base_tokenizer, "name_or_path", "unknown")

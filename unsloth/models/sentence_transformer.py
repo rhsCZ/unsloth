@@ -631,7 +631,11 @@ class FastSentenceTransformer(FastModel):
         modeling_mpnet.MPNetModel.supports_gradient_checkpointing = True
 
         # add _set_gradient_checkpointing method
-        def _set_gradient_checkpointing(self, module = None, value = True):
+        def _set_gradient_checkpointing(
+            self,
+            module = None,
+            value = True,
+        ):
             if module is None:
                 module = self.encoder
             if isinstance(module, modeling_mpnet.MPNetEncoder):
@@ -722,7 +726,11 @@ class FastSentenceTransformer(FastModel):
         modeling_mpnet.MPNetModel.supports_gradient_checkpointing = True
 
         # add _set_gradient_checkpointing method
-        def _set_gradient_checkpointing(self, module = None, value = True):
+        def _set_gradient_checkpointing(
+            self,
+            module = None,
+            value = True,
+        ):
             if module is None:
                 module = self.encoder
             if isinstance(module, modeling_mpnet.MPNetEncoder):
@@ -937,7 +945,11 @@ class FastSentenceTransformer(FastModel):
         modeling_distilbert.DistilBertModel.forward = forward
 
     @staticmethod
-    def _add_unsloth_tags(repo_id, token, tags = None):
+    def _add_unsloth_tags(
+        repo_id,
+        token,
+        tags = None,
+    ):
         """
         Add Unsloth and sentence-transformers tags to the Hugging Face Hub repository.
         """
@@ -1011,13 +1023,7 @@ class FastSentenceTransformer(FastModel):
             return None
 
     @staticmethod
-    def _create_transformer_module(
-        model_name,
-        model,
-        tokenizer,
-        max_seq_length,
-        trust_remote_code,
-    ):
+    def _create_transformer_module(model_name, model, tokenizer, max_seq_length, trust_remote_code):
         """Helper to create and configure a Transformer module."""
         from sentence_transformers.models import Transformer
 

@@ -103,7 +103,11 @@ def require_package(package_name, executable_name = None):
 # require_package("ffmpeg", "ffmpeg")
 
 
-def require_python_package(package_name, import_name = None, pip_name = None):
+def require_python_package(
+    package_name,
+    import_name = None,
+    pip_name = None,
+):
     """Require a Python package to be installed, exit if not found"""
     if import_name is None:
         import_name = package_name

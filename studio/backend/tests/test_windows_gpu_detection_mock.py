@@ -169,7 +169,9 @@ def _populate_studio_install(install_dir: Path, runtime: str = "13.1") -> None:
 
 
 def _build_path_dirs_like_start_llama_server(
-    binary_dir: Path, prefix: Path, cuda_path: str = ""
+    binary_dir: Path,
+    prefix: Path,
+    cuda_path: str = "",
 ) -> list[str]:
     """Path-friendly wrapper around LlamaCppBackend._build_windows_path_dirs.
     Asserting against the staticmethod (not a hand-copy) is the point:

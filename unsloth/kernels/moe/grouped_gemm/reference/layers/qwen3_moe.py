@@ -49,11 +49,7 @@ class GroupedGEMMResult:
 
 class Qwen3MoeGroupedGEMMBlock(torch.nn.Module):
     def __init__(
-        self,
-        config,
-        gate: torch.Tensor,
-        gate_up_proj: torch.Tensor,
-        down_proj: torch.Tensor,
+        self, config, gate: torch.Tensor, gate_up_proj: torch.Tensor, down_proj: torch.Tensor
     ):
         super().__init__()
         self.num_experts = config.num_experts

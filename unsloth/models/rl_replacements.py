@@ -239,7 +239,7 @@ def dpo_trainer_vision_signature_columns(function_name, function):
 
     _extra_columns = "".join(f'                "{_k}",\n' for _k in _DPO_VISION_KEYS)
     new_function = function.replace(
-        '                "image_sizes",\n' '                "token_type_ids",\n',
+        '                "image_sizes",\n                "token_type_ids",\n',
         f'                "image_sizes",\n'
         f"{_extra_columns}"
         f'                "token_type_ids",\n',
@@ -247,7 +247,7 @@ def dpo_trainer_vision_signature_columns(function_name, function):
     if new_function != function:
         return new_function
     return function.replace(
-        '                "image_sizes",\n' '                "ref_chosen_logps",\n',
+        '                "image_sizes",\n                "ref_chosen_logps",\n',
         f'                "image_sizes",\n'
         f"{_extra_columns}"
         f'                "ref_chosen_logps",\n',
@@ -489,7 +489,13 @@ def sft_trainer_compute_loss(function_name, function):
     if function_name != "compute_loss":
         return function
 
-    def compute_loss(self, model, inputs, return_outputs = False, num_items_in_batch = None):
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs = False,
+        num_items_in_batch = None,
+    ):
         outputs = super().compute_loss(
             model,
             inputs,
@@ -778,7 +784,7 @@ def grpo_trainer__generate_and_score_completions(function_name, function):
 
     # Always between max_prompt_length and use_vllm
     found = re.findall(
-        r"\n(([ ]{8,})if self\.max_prompt_length is not None:.*?" r"\2if self\.use_vllm:)",
+        r"\n(([ ]{8,})if self\.max_prompt_length is not None:.*?\2if self\.use_vllm:)",
         function,
         flags = re.DOTALL | re.MULTILINE,
     )
@@ -1058,7 +1064,12 @@ def grpo_trainer__get_per_token_logps(function_name, function):
         return function
 
     def _get_per_token_logps(
-        self, model, input_ids, attention_mask, logits_to_keep, compute_efficient = False
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        compute_efficient = False,
     ):
         if True:  # os.environ.get('UNSLOTH_USE_NEW_MODEL', '0') == '0':
             return None  # Unsloth efficient GRPO
@@ -1488,7 +1499,13 @@ def grpo_trainer_compute_loss(function_name, function):
     if function_name != "compute_loss":
         return function
 
-    def compute_loss(self, model, inputs, return_outputs = False, num_items_in_batch = None):
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs = False,
+        num_items_in_batch = None,
+    ):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
         # Compute the per-token log probabilities for the model

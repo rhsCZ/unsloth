@@ -398,7 +398,12 @@ def _maybe_fake_quantize_activations(X: torch.Tensor, proj: torch.nn.Module) -> 
 if DEVICE_TYPE == "xpu" and HAS_XPU_STREAM:
 
     @torch.inference_mode
-    def fast_dequantize(W, quant_state = None, out = None, use_global_buffer = False):
+    def fast_dequantize(
+        W,
+        quant_state = None,
+        out = None,
+        use_global_buffer = False,
+    ):
         # TODO: After adding XPU BNB support, check this function
         if isinstance(W, Float8Tensor):
             return W.dequantize()
@@ -505,7 +510,12 @@ if DEVICE_TYPE == "xpu" and HAS_XPU_STREAM:
 elif DEVICE_TYPE in ("cuda", "hip") and HAS_CUDA_STREAM:
 
     @torch.inference_mode
-    def fast_dequantize(W, quant_state = None, out = None, use_global_buffer = False):
+    def fast_dequantize(
+        W,
+        quant_state = None,
+        out = None,
+        use_global_buffer = False,
+    ):
         if isinstance(W, Float8Tensor):
             return W.dequantize()
         if quant_state is None:
@@ -615,7 +625,12 @@ elif DEVICE_TYPE in ("cuda", "hip") and HAS_CUDA_STREAM:
 else:
 
     @torch.inference_mode
-    def fast_dequantize(W, quant_state = None, out = None, use_global_buffer = False):
+    def fast_dequantize(
+        W,
+        quant_state = None,
+        out = None,
+        use_global_buffer = False,
+    ):
         if isinstance(W, Float8Tensor):
             return W.dequantize()
         if quant_state is None:
@@ -690,7 +705,12 @@ else:
 # INTEL GPU Specific Logic
 if DEVICE_TYPE == "xpu" and HAS_XPU_STREAM:
 
-    def fast_gemv(X, W, quant_state, out = None):
+    def fast_gemv(
+        X,
+        W,
+        quant_state,
+        out = None,
+    ):
         if quant_state is None:
             return torch_matmul(X, W, out = out)
         # For fast X @ W where seq_len == 1
@@ -794,7 +814,12 @@ if DEVICE_TYPE == "xpu" and HAS_XPU_STREAM:
 
 elif DEVICE_TYPE in ("cuda", "hip") and HAS_CUDA_STREAM:
 
-    def fast_gemv(X, W, quant_state, out = None):
+    def fast_gemv(
+        X,
+        W,
+        quant_state,
+        out = None,
+    ):
         if quant_state is None:
             return torch_matmul(X, W, out = out)
         # For fast X @ W where seq_len == 1
@@ -897,7 +922,12 @@ elif DEVICE_TYPE in ("cuda", "hip") and HAS_CUDA_STREAM:
     pass
 else:
 
-    def fast_gemv(X, W, quant_state, out = None):
+    def fast_gemv(
+        X,
+        W,
+        quant_state,
+        out = None,
+    ):
         if quant_state is None:
             return torch_matmul(X, W, out = out)
         # For fast X @ W where seq_len == 1
@@ -992,7 +1022,12 @@ else:
     pass
 
 
-def fast_linear_forward(proj, X, temp_lora = None, out = None):
+def fast_linear_forward(
+    proj,
+    X,
+    temp_lora = None,
+    out = None,
+):
     W, W_quant, lora_A, lora_B, lora_S, bias = get_lora_parameters_bias(proj)
     bsz, q_len, in_dim = X.shape
     if q_len != 1:
@@ -1033,7 +1068,15 @@ def fast_linear_forward(proj, X, temp_lora = None, out = None):
     return out
 
 
-def matmul_lora(X, W, W_quant, A, B, s, out = None):
+def matmul_lora(
+    X,
+    W,
+    W_quant,
+    A,
+    B,
+    s,
+    out = None,
+):
     dtype = X.dtype
 
     if X.dim() == 3:

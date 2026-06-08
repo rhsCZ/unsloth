@@ -232,7 +232,11 @@ class UnslothTrainer(SFTTrainer):
             )
         return self.optimizer
 
-    def _create_q_galore_optimizer(self, config: "QGaloreConfig", embedding_lr = None):
+    def _create_q_galore_optimizer(
+        self,
+        config: "QGaloreConfig",
+        embedding_lr = None,
+    ):
         """Build the Q-GaLore optimizer from a QGaloreConfig."""
         from unsloth.optimizers.q_galore_adamw import (
             QGaLoreAdamW8bit,
@@ -510,7 +514,7 @@ def _patch_sft_trainer_auto_packing(trl_module):
                 reason = "vision-language model"
             elif is_unsupported_model:
                 reason = f"unsupported model type(s): {', '.join(model_types)}"
-            message = "Unsloth: Sample packing skipped " f"({reason} detected)."
+            message = f"Unsloth: Sample packing skipped ({reason} detected)."
             print(message)
 
         packing_active = False

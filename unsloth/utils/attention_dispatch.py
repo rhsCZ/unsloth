@@ -102,12 +102,7 @@ def select_attention_backend(use_varlen: bool = False) -> str:
 
 
 def run_attention(
-    *,
-    config: AttentionConfig,
-    context: AttentionContext,
-    Q: Tensor,
-    K: Tensor,
-    V: Tensor,
+    *, config: AttentionConfig, context: AttentionContext, Q: Tensor, K: Tensor, V: Tensor
 ) -> Tensor:
     """
     Run attention using config / context info.

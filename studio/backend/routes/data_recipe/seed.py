@@ -118,7 +118,9 @@ def _select_best_file(data_files: list[str], split: str = DEFAULT_SPLIT) -> str 
 
 
 def _resolve_seed_hf_path(
-    dataset_name: str, data_files: list[str], split: str = DEFAULT_SPLIT
+    dataset_name: str,
+    data_files: list[str],
+    split: str = DEFAULT_SPLIT,
 ) -> str | None:
     selected = _select_best_file(data_files, split)
     if not selected:
@@ -158,10 +160,7 @@ def _build_stream_load_kwargs(
 
 
 def _load_preview_rows(
-    *,
-    load_dataset_fn,
-    load_kwargs: dict[str, Any],
-    preview_size: int,
+    *, load_dataset_fn, load_kwargs: dict[str, Any], preview_size: int
 ) -> list[dict[str, Any]]:
     streamed_ds = load_dataset_fn(**load_kwargs)
     return [row for row in islice(streamed_ds, preview_size)]
@@ -233,11 +232,7 @@ def _read_preview_rows_from_local_file(path: Path, preview_size: int) -> list[di
 
 
 def _read_preview_rows_from_unstructured_file(
-    *,
-    path: Path,
-    preview_size: int,
-    chunk_size: int | None,
-    chunk_overlap: int | None,
+    *, path: Path, preview_size: int, chunk_size: int | None, chunk_overlap: int | None
 ) -> list[dict[str, Any]]:
     if resolve_chunking is None or build_unstructured_preview_rows is None:
         raise HTTPException(
@@ -407,8 +402,7 @@ def _get_block_total_size(block_dir: Path) -> int:
 
 @router.post("/seed/upload-unstructured-file")
 async def upload_unstructured_file(
-    file: UploadFile = FastAPIFile(...),
-    block_id: str = Form(...),
+    file: UploadFile = FastAPIFile(...), block_id: str = Form(...)
 ) -> UnstructuredFileUploadResponse:
     _validate_safe_id(block_id, "block_id")
 

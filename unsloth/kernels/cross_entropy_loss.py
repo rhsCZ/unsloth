@@ -290,7 +290,13 @@ MAX_FUSED_SIZE = 65536  # 2**16
 
 class Fast_CrossEntropyLoss(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, logits, labels, logit_softcapping: float = 0, logit_scaling: float = 0):
+    def forward(
+        ctx,
+        logits,
+        labels,
+        logit_softcapping: float = 0,
+        logit_scaling: float = 0,
+    ):
         n_rows: int
         vocab_size: int
         n_rows, vocab_size = logits.shape

@@ -50,7 +50,12 @@ SEED = 0
 # permute_y => permute the output of the grouped GEMM, only done for the second grouped GEMM
 # fuse_mul_post => fuse the multiplication of topk weights in the epilogue of the second grouped GEMM; only used for inference, not currently tested
 def check_valid_config(
-    permute_x, permute_y, use_W1, fuse_mul_post = False, is_backward = False, verbose = False
+    permute_x,
+    permute_y,
+    use_W1,
+    fuse_mul_post = False,
+    is_backward = False,
+    verbose = False,
 ):
     use_W2 = not use_W1
 

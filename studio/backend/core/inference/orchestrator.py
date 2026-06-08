@@ -270,7 +270,11 @@ class InferenceOrchestrator:
         except (EOFError, OSError, ValueError):
             return None
 
-    def _wait_response(self, expected_type: str, timeout: float = 300.0) -> dict:
+    def _wait_response(
+        self,
+        expected_type: str,
+        timeout: float = 300.0,
+    ) -> dict:
         """Block until a response of the expected type arrives.
 
         Also handles 'status' and 'error' events during the wait.
@@ -548,7 +552,11 @@ class InferenceOrchestrator:
             with self._mailbox_lock:
                 self._mailboxes.pop(request_id, None)
 
-    def _drain_mailbox(self, mailbox: queue.Queue, timeout: float = 5.0) -> None:
+    def _drain_mailbox(
+        self,
+        mailbox: queue.Queue,
+        timeout: float = 5.0,
+    ) -> None:
         """Drain a mailbox until gen_done/gen_error, discarding tokens."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -675,7 +683,7 @@ class InferenceOrchestrator:
                     # First stall and Xet was enabled -> retry with Xet disabled
                     if attempt == 0 and not disable_xet:
                         logger.warning(
-                            "Download stalled for '%s' -- retrying with " "HF_HUB_DISABLE_XET=1",
+                            "Download stalled for '%s' -- retrying with HF_HUB_DISABLE_XET=1",
                             model_name,
                         )
                         self._shutdown_subprocess(timeout = 5)
@@ -1297,7 +1305,11 @@ class InferenceOrchestrator:
     # Local helpers (no subprocess needed)
     # ------------------------------------------------------------------
 
-    def resize_image(self, img, max_size: int = 800):
+    def resize_image(
+        self,
+        img,
+        max_size: int = 800,
+    ):
         """Resize image while maintaining aspect ratio.
         No ML imports needed — runs locally in parent process.
         """

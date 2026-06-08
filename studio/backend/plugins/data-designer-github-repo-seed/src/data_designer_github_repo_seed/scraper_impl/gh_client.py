@@ -81,7 +81,11 @@ class GitHubClient:
         self.calls_rest = 0
         self.retry_count = 0
 
-    def _sleep_until(self, reset_ts: int, buffer_s: int = 10) -> None:
+    def _sleep_until(
+        self,
+        reset_ts: int,
+        buffer_s: int = 10,
+    ) -> None:
         now = int(time.time())
         wait = max(0, reset_ts - now) + buffer_s
         log.warning("Rate limit hit. Sleeping %ds until reset.", wait)
@@ -280,7 +284,10 @@ class GitHubClient:
         raise RuntimeError(f"REST failed after {max_retries} retries: {last_err}")
 
     def rest_paginate(
-        self, path: str, params: Optional[Dict[str, Any]] = None, per_page: int = 100
+        self,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        per_page: int = 100,
     ) -> Iterator[dict]:
         params = dict(params or {})
         params.setdefault("per_page", per_page)

@@ -1880,9 +1880,7 @@ def apply_gpu_ids(gpu_ids) -> None:
         logger.info("Applied gpu_ids: CUDA_VISIBLE_DEVICES='%s'", value)
 
 
-def get_device_map(
-    gpu_ids: Optional[list[int]] = None,
-) -> str:
+def get_device_map(gpu_ids: Optional[list[int]] = None) -> str:
     """Return the Hugging Face ``device_map`` string for model loading.
 
     Returns ``"balanced"`` (shard evenly across GPUs) when:
@@ -1926,7 +1924,11 @@ def get_offloaded_device_map_entries(model) -> dict[str, str]:
     }
 
 
-def raise_if_offloaded(model, device_map: str, context: str = "Loading") -> None:
+def raise_if_offloaded(
+    model,
+    device_map: str,
+    context: str = "Loading",
+) -> None:
     """Raise ``ValueError`` if *model* has modules offloaded to CPU or disk."""
     offloaded = get_offloaded_device_map_entries(model)
     if not offloaded:

@@ -55,7 +55,11 @@ def get_expert_metadata(model_id: str):
     return metadata.files_metadata
 
 
-def clone_experts(moe_block: Qwen3MoeSparseMoeBlock, config: Qwen3MoeConfig, copy: bool = True):
+def clone_experts(
+    moe_block: Qwen3MoeSparseMoeBlock,
+    config: Qwen3MoeConfig,
+    copy: bool = True,
+):
     down_projs = torch.empty(config.num_experts, config.hidden_size, config.moe_intermediate_size)
     up_projs = torch.empty(config.num_experts, config.moe_intermediate_size, config.hidden_size)
     gate_projs = torch.empty(config.num_experts, config.moe_intermediate_size, config.hidden_size)
@@ -281,7 +285,11 @@ def check_grouped_gemm_results(
         ), f"{field.name} diff: {diff.detach().cpu().item():.6f}"
 
 
-def run_forward(model: nn.Module, X: torch.Tensor, is_grouped_gemm: bool = False):
+def run_forward(
+    model: nn.Module,
+    X: torch.Tensor,
+    is_grouped_gemm: bool = False,
+):
     X = X.detach().clone().requires_grad_(True)
     output, router_logits = model(X)
     if is_grouped_gemm:
@@ -386,7 +394,11 @@ class Qwen3MoeFusedGroupedGEMMBlock(Qwen3MoeGroupedGEMMBlock):
             kernel_config_bwd_dX = kernel_config_bwd_dX,
         )
 
-    def forward(self, hidden_states: torch.Tensor, debug: bool = False) -> torch.Tensor:
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        debug: bool = False,
+    ) -> torch.Tensor:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         num_tokens = batch_size * sequence_length
         total_tokens = num_tokens * self.top_k

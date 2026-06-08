@@ -80,7 +80,11 @@ class AudioCodecManager:
         self._snac_model = SNAC.from_pretrained("hubertsiuzdak/snac_24khz").to(device).eval()
         logger.info("Loaded SNAC codec (24kHz)")
 
-    def _load_bicodec(self, device: str, model_repo_path: Optional[str] = None) -> None:
+    def _load_bicodec(
+        self,
+        device: str,
+        model_repo_path: Optional[str] = None,
+    ) -> None:
         if self._bicodec_tokenizer is not None:
             return
         import os

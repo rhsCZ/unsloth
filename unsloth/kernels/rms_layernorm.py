@@ -161,7 +161,13 @@ def _gemma_rms_layernorm_forward(
 
 class Fast_RMS_Layernorm(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, X: torch.Tensor, W: torch.Tensor, eps: float, gemma: bool = False):
+    def forward(
+        ctx,
+        X: torch.Tensor,
+        W: torch.Tensor,
+        eps: float,
+        gemma: bool = False,
+    ):
         shape = X.shape
         dim: int = shape[-1]
         X = X.reshape(-1, dim)
@@ -236,7 +242,11 @@ class Fast_RMS_Layernorm(torch.autograd.Function):
 
 # [TODO] Unsure why RMS Layernorm is not torch.compiling properly
 @torch.compiler.disable
-def fast_rms_layernorm(layernorm, X: torch.Tensor, gemma: bool = False):
+def fast_rms_layernorm(
+    layernorm,
+    X: torch.Tensor,
+    gemma: bool = False,
+):
     W: torch.Tensor = layernorm.weight
     eps: float = (
         layernorm.variance_epsilon if hasattr(layernorm, "variance_epsilon") else layernorm.eps

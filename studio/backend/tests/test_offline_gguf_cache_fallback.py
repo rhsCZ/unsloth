@@ -225,11 +225,7 @@ class TestListGgufVariantsOffline:
         assert len(variants) == 1
         assert variants[0].quant == "UD-Q4_K_XL"
 
-    def test_api_exception_falls_back_to_cache(
-        self,
-        hf_cache,
-        clean_offline_env,
-    ):
+    def test_api_exception_falls_back_to_cache(self, hf_cache, clean_offline_env):
         _build_cache(hf_cache, "unsloth/a", {"a-Q4_K_M.gguf": 1})
 
         def boom(*a, **k):
@@ -295,12 +291,7 @@ class TestDetectGgufFromCache:
 
 
 class TestDetectGgufModelRemoteOffline:
-    def test_offline_env_short_circuits_retries(
-        self,
-        hf_cache,
-        clean_offline_env,
-        monkeypatch,
-    ):
+    def test_offline_env_short_circuits_retries(self, hf_cache, clean_offline_env, monkeypatch):
         _build_cache(hf_cache, "unsloth/a", {"a-Q4_K_M.gguf": 1})
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
@@ -324,11 +315,7 @@ class TestDetectGgufModelRemoteOffline:
             out = detect_gguf_model_remote("unsloth/a")
         assert out == "a-Q4_K_M.gguf"
 
-    def test_repository_not_found_does_not_consult_cache(
-        self,
-        hf_cache,
-        clean_offline_env,
-    ):
+    def test_repository_not_found_does_not_consult_cache(self, hf_cache, clean_offline_env):
         # Cache has a file but the API explicitly says repo is gone.
         _build_cache(hf_cache, "unsloth/a", {"a-Q4_K_M.gguf": 1})
 
@@ -423,12 +410,7 @@ class TestHfOfflineIfDnsDead:
             assert did_set is False
             assert "HF_HUB_OFFLINE" not in os.environ
 
-    def test_user_set_hf_hub_offline_is_preserved(
-        self,
-        dns,
-        clean_offline_env,
-        monkeypatch,
-    ):
+    def test_user_set_hf_hub_offline_is_preserved(self, dns, clean_offline_env, monkeypatch):
         # User explicitly set offline before launching Studio.
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
         dns.fail()
@@ -438,12 +420,7 @@ class TestHfOfflineIfDnsDead:
         # Helper must not pop a variable it did not set.
         assert os.environ.get("HF_HUB_OFFLINE") == "1"
 
-    def test_user_set_transformers_offline_is_preserved(
-        self,
-        dns,
-        clean_offline_env,
-        monkeypatch,
-    ):
+    def test_user_set_transformers_offline_is_preserved(self, dns, clean_offline_env, monkeypatch):
         monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
         dns.fail()
         with _hf_offline_if_dns_dead():
@@ -454,11 +431,7 @@ class TestHfOfflineIfDnsDead:
         # TRANSFORMERS_OFFLINE pre-existed -> preserved.
         assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
 
-    def test_exception_inside_block_still_restores_env(
-        self,
-        dns,
-        clean_offline_env,
-    ):
+    def test_exception_inside_block_still_restores_env(self, dns, clean_offline_env):
         dns.fail()
         with pytest.raises(RuntimeError, match = "boom"):
             with _hf_offline_if_dns_dead():
@@ -496,10 +469,7 @@ class TestDownloadMmprojOfflineCacheFallback:
     offline vision GGUF load path returns ``None`` even when the mmproj
     is present in cache."""
 
-    def test_cache_lookup_returns_cached_mmproj_when_list_repo_files_fails(
-        self,
-        hf_cache,
-    ):
+    def test_cache_lookup_returns_cached_mmproj_when_list_repo_files_fails(self, hf_cache):
         _build_cache(
             hf_cache,
             "unsloth/vision-GGUF",
@@ -513,7 +483,12 @@ class TestDownloadMmprojOfflineCacheFallback:
         def boom_list(*a, **k):
             raise OSError("offline")
 
-        def fake_download(*, repo_id, filename, token = None):
+        def fake_download(
+            *,
+            repo_id,
+            filename,
+            token = None,
+        ):
             # Echo back so the test can verify the cache-resolved filename
             return f"/fake/cache/{repo_id}/{filename}"
 
@@ -544,7 +519,12 @@ class TestDownloadMmprojOfflineCacheFallback:
 
         captured = {}
 
-        def fake_download(*, repo_id, filename, token = None):
+        def fake_download(
+            *,
+            repo_id,
+            filename,
+            token = None,
+        ):
             captured["filename"] = filename
             return f"/fake/{filename}"
 

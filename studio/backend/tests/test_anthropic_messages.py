@@ -372,10 +372,7 @@ class TestAnthropicMessagesToOpenAI:
         ]
         result = anthropic_messages_to_openai(msgs)
         parts = result[0]["content"]
-        assert parts[1] == {
-            "type": "image_url",
-            "image_url": {"url": "https://x/y.png"},
-        }
+        assert parts[1] == {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
 
     def test_image_only_user_message_emits_no_text_part(self):
         msgs = [
@@ -440,12 +437,7 @@ class TestAnthropicMessagesToOpenAI:
         ]
         result = anthropic_messages_to_openai(msgs)
         parts = result[0]["content"]
-        assert [p["type"] for p in parts] == [
-            "text",
-            "image_url",
-            "text",
-            "image_url",
-        ]
+        assert [p["type"] for p in parts] == ["text", "image_url", "text", "image_url"]
         assert parts[0]["text"] == "before"
         assert parts[2]["text"] == "after"
         assert parts[1]["image_url"]["url"] == "data:image/png;base64,AA"
@@ -523,10 +515,7 @@ class TestAnthropicToolsToOpenAI:
             enabled_tools = ["python"],
         )
 
-        assert [tool["function"]["name"] for tool in result] == [
-            "web_search",
-            "python",
-        ]
+        assert [tool["function"]["name"] for tool in result] == ["web_search", "python"]
 
     def test_pydantic_model_input(self):
         tool = AnthropicTool(name = "test", description = "desc", input_schema = {"type": "object"})

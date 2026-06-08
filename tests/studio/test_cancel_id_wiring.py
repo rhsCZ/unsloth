@@ -45,9 +45,9 @@ def test_chat_completion_request_has_cancel_id_field():
         for n in cls.body
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
     }
-    assert "cancel_id" in fields, (
-        "ChatCompletionRequest must expose a cancel_id field for per-run " "cancellation routing"
-    )
+    assert (
+        "cancel_id" in fields
+    ), "ChatCompletionRequest must expose a cancel_id field for per-run cancellation routing"
 
 
 def test_cancel_route_matches_cancel_id_exclusively_when_present():

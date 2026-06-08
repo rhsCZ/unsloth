@@ -72,7 +72,12 @@ def make_host(*, system: str) -> HostInfo:
 BASH = "/bin/bash"
 
 
-def run_bash(script: str, *, timeout: int = 10, env: dict | None = None) -> str:
+def run_bash(
+    script: str,
+    *,
+    timeout: int = 10,
+    env: dict | None = None,
+) -> str:
     """Run a bash script fragment and return its stdout."""
     run_env = os.environ.copy()
     if env:
@@ -289,7 +294,11 @@ class TestResolveRequestedLlamaTag:
     ):
         captured = {}
 
-        def fake_resolve(requested_tag, published_repo, published_release_tag = ""):
+        def fake_resolve(
+            requested_tag,
+            published_repo,
+            published_release_tag = "",
+        ):
             captured["requested_tag"] = requested_tag
             captured["published_repo"] = published_repo
             captured["published_release_tag"] = published_release_tag
@@ -577,11 +586,7 @@ class TestLatestTagResolution:
     """)
 
     def _run_resolve(
-        self,
-        tmp_path: Path,
-        requested_tag: str,
-        resolved_tag: str,
-        resolve_status: int,
+        self, tmp_path: Path, requested_tag: str, resolved_tag: str, resolve_status: int
     ) -> str:
         script = self.RESOLVE_TEMPLATE.format(
             requested_tag = requested_tag,

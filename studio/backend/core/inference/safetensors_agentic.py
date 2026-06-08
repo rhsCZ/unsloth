@@ -96,7 +96,12 @@ def _detect_render_html_tool_start(content: str) -> bool:
     return False
 
 
-def _coerce_arguments(raw_args, *, heal: bool, tool_name: str = "") -> dict:
+def _coerce_arguments(
+    raw_args,
+    *,
+    heal: bool,
+    tool_name: str = "",
+) -> dict:
     """Normalise tool ``arguments`` to a dict.
 
     Some templates emit a JSON string, others a bare query string. With

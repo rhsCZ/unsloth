@@ -834,7 +834,11 @@ class TrainingBackend:
     # Plot generation (unchanged from original)
     # ------------------------------------------------------------------
 
-    def _create_loss_plot(self, progress: TrainingProgress, theme: str = "light") -> plt.Figure:
+    def _create_loss_plot(
+        self,
+        progress: TrainingProgress,
+        theme: str = "light",
+    ) -> plt.Figure:
         """Create training loss plot with theme-aware styling."""
         plt.close("all")
 

@@ -75,9 +75,7 @@ def _openai_image_replay_requires_reasoning(model: str) -> bool:
     return normalized.startswith("gpt-5") or normalized.startswith("o")
 
 
-def _sanitize_openai_reasoning_replay_item(
-    item: Any,
-) -> Optional[dict[str, Any]]:
+def _sanitize_openai_reasoning_replay_item(item: Any) -> Optional[dict[str, Any]]:
     """Return a Responses input-safe reasoning item, if ``item`` is one.
 
     OpenAI's image-generation docs allow follow-up edits by sending the
@@ -126,9 +124,7 @@ _OPENAI_CITATION_MARKER = re.compile(
 )
 
 
-def _build_citation_lookup(
-    url_citations: list[dict[str, Any]],
-) -> dict[str, tuple[int, str]]:
+def _build_citation_lookup(url_citations: list[dict[str, Any]]) -> dict[str, tuple[int, str]]:
     """Map every known ``source_id`` alias to ``(citation_index, url)``.
 
     Accepts singular ``source_id`` and plural ``source_ids``. First-seen
@@ -151,10 +147,7 @@ def _build_citation_lookup(
     return by_source
 
 
-def _replace_openai_citation_markers(
-    text: str,
-    url_citations: list[dict[str, Any]],
-) -> str:
+def _replace_openai_citation_markers(text: str, url_citations: list[dict[str, Any]]) -> str:
     """Rewrite `\\ue200cite\\ue202SOURCE_ID[\\ue202LOCATOR]\\ue201` markers into
     `[[N]](URL)` per resolvable id. Multi-source markers expand to one link
     per id; unresolved tokens drop silently. Idempotent on text without
@@ -183,8 +176,7 @@ def _replace_openai_citation_markers(
 
 
 def _rewrite_citation_markers_partial(
-    text: str,
-    url_citations: list[dict[str, Any]],
+    text: str, url_citations: list[dict[str, Any]]
 ) -> tuple[str, bool]:
     """Like ``_replace_openai_citation_markers`` but also reports whether
     any marker referenced a source_id not yet in ``url_citations``.
@@ -738,9 +730,7 @@ def _stamp_server_tool_marker(payload: dict[str, Any]) -> None:
 
 
 def _build_kimi_tool_end(
-    synthetic_chunk_fn: Any,
-    tool_call_id: str,
-    citations: list[dict[str, str]],
+    synthetic_chunk_fn: Any, tool_call_id: str, citations: list[dict[str, str]]
 ) -> str:
     """Format Kimi web_search citations into the tool_end payload.
 
@@ -1305,10 +1295,7 @@ class ExternalProviderClient:
             )
 
     async def _stream_kimi_web_search(
-        self,
-        messages: list[dict[str, Any]],
-        model: str,
-        max_tokens: Optional[int],
+        self, messages: list[dict[str, Any]], model: str, max_tokens: Optional[int]
     ) -> AsyncGenerator[str, None]:
         """
         Kimi $web_search round-trip.
@@ -1460,7 +1447,7 @@ class ExternalProviderClient:
         ]
         if not search_calls:
             logger.info(
-                "Kimi $web_search: model did not invoke search; " "falling back to plain stream"
+                "Kimi $web_search: model did not invoke search; falling back to plain stream"
             )
             fallback_body = dict(body)
             fallback_body.pop("tools", None)
@@ -2377,9 +2364,7 @@ class ExternalProviderClient:
                     }
                     return f"data: {_json.dumps(chunk)}"
 
-                def _format_web_search_results(
-                    results: list[Any],
-                ) -> str:
+                def _format_web_search_results(results: list[Any]) -> str:
                     blocks: list[str] = []
                     for r in results:
                         if not isinstance(r, dict):
@@ -2443,9 +2428,7 @@ class ExternalProviderClient:
                         parts.append(f"Snippet: {snippet}")
                     return "\n".join(parts) if parts else "(fetch complete)"
 
-                def _format_code_execution_result(
-                    inner: dict[str, Any],
-                ) -> str:
+                def _format_code_execution_result(inner: dict[str, Any]) -> str:
                     """Render an Anthropic code-execution result block as
                     the preformatted text payload the frontend's
                     CodeExecutionToolUI displays inside a <pre>. Handles
@@ -4040,7 +4023,7 @@ class ExternalProviderClient:
         completion_id = f"chatcmpl-gemini-{model.replace('/', '-')}"
 
         logger.info(
-            "Proxying Gemini streamGenerateContent to %s (model=%s, " "tools=%s, image=%s)",
+            "Proxying Gemini streamGenerateContent to %s (model=%s, tools=%s, image=%s)",
             url,
             model,
             [list(t.keys())[0] for t in tools_array] if tools_array else [],
@@ -5541,8 +5524,7 @@ class ExternalProviderClient:
                         return existing
 
                     def _image_generation_arguments(
-                        prompt: str,
-                        raw_item_id: Any,
+                        prompt: str, raw_item_id: Any
                     ) -> dict[str, Any]:
                         arguments: dict[str, Any] = {"kind": "image", "prompt": prompt}
                         if isinstance(raw_item_id, str) and raw_item_id:
@@ -6483,11 +6465,7 @@ class ExternalProviderClient:
         )
         return result
 
-    async def create_openai_container(
-        self,
-        name: str,
-        ttl_minutes: int,
-    ) -> dict[str, Any]:
+    async def create_openai_container(self, name: str, ttl_minutes: int) -> dict[str, Any]:
         """
         POST /v1/containers with ``expires_after.anchor="last_active_at"``.
         ``ttl_minutes`` is the idle timeout — every API call that
@@ -6608,9 +6586,7 @@ def _error_sse_line(status_code: int, message: str, provider_type: str) -> str:
 
 
 def _build_usage_chunk(
-    completion_id: str,
-    provider: Literal["anthropic", "openai"],
-    last_usage: Optional[dict],
+    completion_id: str, provider: Literal["anthropic", "openai"], last_usage: Optional[dict]
 ) -> Optional[str]:
     """Build an OpenAI ``include_usage``-style SSE chunk that carries the
     upstream prompt-cache accounting back to the client.

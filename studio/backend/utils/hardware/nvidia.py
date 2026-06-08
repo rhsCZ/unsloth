@@ -25,11 +25,7 @@ def _parse_smi_value(raw: str):
 
 
 def _build_gpu_metrics(
-    vram_used_mb,
-    vram_total_mb,
-    power_draw,
-    power_limit,
-    **extra,
+    vram_used_mb, vram_total_mb, power_draw, power_limit, **extra
 ) -> dict[str, Any]:
     return {
         **extra,
@@ -46,9 +42,7 @@ def _build_gpu_metrics(
     }
 
 
-def _visible_ordinal_map(
-    parent_visible_ids: Optional[list[int]],
-) -> Optional[dict[int, int]]:
+def _visible_ordinal_map(parent_visible_ids: Optional[list[int]]) -> Optional[dict[int, int]]:
     if parent_visible_ids is None:
         return None
     return {gpu_id: ordinal for ordinal, gpu_id in enumerate(parent_visible_ids)}
@@ -114,8 +108,7 @@ def get_primary_gpu_utilization() -> dict[str, Any]:
 
 
 def get_visible_gpu_utilization(
-    parent_visible_ids: Optional[list[int]],
-    parent_cuda_visible_devices: Optional[str] = None,
+    parent_visible_ids: Optional[list[int]], parent_cuda_visible_devices: Optional[str] = None
 ) -> dict[str, Any]:
     # When parent_visible_ids is None (UUID/MIG mask), we cannot safely
     # map nvidia-smi rows to the process's visible devices. Return empty
@@ -201,8 +194,7 @@ def get_visible_gpu_utilization(
 
 
 def get_backend_visible_gpu_info(
-    parent_visible_ids: Optional[list[int]],
-    backend_cuda_visible_devices: Optional[str],
+    parent_visible_ids: Optional[list[int]], backend_cuda_visible_devices: Optional[str]
 ) -> dict[str, Any]:
     # When parent_visible_ids is None (UUID/MIG mask), we cannot safely
     # map nvidia-smi rows to the process's visible devices.

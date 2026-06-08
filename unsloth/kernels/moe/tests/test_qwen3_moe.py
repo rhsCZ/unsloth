@@ -79,7 +79,12 @@ def config(model_id: str):
 
 
 @contextmanager
-def annotated_context(prelude, epilogue = "Passed!", char = "-", num_chars = 80):
+def annotated_context(
+    prelude,
+    epilogue = "Passed!",
+    char = "-",
+    num_chars = 80,
+):
     print(char * num_chars)
     print(prelude)
     yield

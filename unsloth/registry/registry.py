@@ -63,15 +63,21 @@ class ModelInfo:
         return key
 
     @classmethod
-    def construct_model_name(cls, base_name, version, size, quant_type, instruct_tag, key = ""):
+    def construct_model_name(
+        cls,
+        base_name,
+        version,
+        size,
+        quant_type,
+        instruct_tag,
+        key = "",
+    ):
         key = cls.append_instruct_tag(key, instruct_tag)
         key = cls.append_quant_type(key, quant_type)
         return key
 
     @property
-    def model_path(
-        self,
-    ) -> str:
+    def model_path(self) -> str:
         return f"{self.org}/{self.name}"
 
 

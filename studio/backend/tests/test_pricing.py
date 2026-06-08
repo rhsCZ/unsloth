@@ -21,7 +21,11 @@ from core.inference.pricing import (
 )
 
 
-def _isclose(a, b, tol = 1e-6):
+def _isclose(
+    a,
+    b,
+    tol = 1e-6,
+):
     return math.isclose(a, b, rel_tol = tol, abs_tol = tol)
 
 
@@ -595,10 +599,7 @@ def test_openai_chat_style_envelope_reads_cache_from_prompt_tokens_details():
     )
     # Both envelopes must price identically.
     assert _isclose(chat_style["input_usd"], raw["input_usd"]), (chat_style, raw)
-    assert _isclose(chat_style["cache_read_usd"], raw["cache_read_usd"]), (
-        chat_style,
-        raw,
-    )
+    assert _isclose(chat_style["cache_read_usd"], raw["cache_read_usd"]), (chat_style, raw)
     # 80k at 0.1x base, 20k at full.
     assert _isclose(
         chat_style["cache_read_usd"],

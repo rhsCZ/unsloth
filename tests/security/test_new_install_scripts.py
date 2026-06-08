@@ -18,7 +18,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check_new_install_scripts.py"
 
 
-def _run(base: Path, head: Path, *, timeout: int = 30) -> subprocess.CompletedProcess:
+def _run(
+    base: Path,
+    head: Path,
+    *,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
@@ -164,7 +169,7 @@ def test_v2_v3_lockfile_format_support(tmp_path: Path):
         "node_modules/v2-postinstall-dep": {
             "version": "2.0.0",
             "resolved": (
-                "https://registry.npmjs.org/v2-postinstall-dep/-/" "v2-postinstall-dep-2.0.0.tgz"
+                "https://registry.npmjs.org/v2-postinstall-dep/-/v2-postinstall-dep-2.0.0.tgz"
             ),
             "integrity": "sha512-fake",
             "hasInstallScript": True,
@@ -174,7 +179,7 @@ def test_v2_v3_lockfile_format_support(tmp_path: Path):
         "v2-postinstall-dep": {
             "version": "2.0.0",
             "resolved": (
-                "https://registry.npmjs.org/v2-postinstall-dep/-/" "v2-postinstall-dep-2.0.0.tgz"
+                "https://registry.npmjs.org/v2-postinstall-dep/-/v2-postinstall-dep-2.0.0.tgz"
             ),
             "integrity": "sha512-fake",
         },

@@ -144,12 +144,7 @@ _PREVIOUSLY_BROKEN = [
 
 
 @pytest.mark.parametrize("flag,value,llama_long_name", _PREVIOUSLY_BROKEN)
-def test_previously_broken_short_flag_now_passes_through(
-    monkeypatch,
-    flag,
-    value,
-    llama_long_name,
-):
+def test_previously_broken_short_flag_now_passes_through(monkeypatch, flag, value, llama_long_name):
     """Each of these was eaten by typer pre-cleanup; must pass through verbatim now."""
     extras = [flag] if value is None else [flag, value]
     captured = _invoke(monkeypatch, ["--model", "X"] + extras)
@@ -194,11 +189,7 @@ def test_dash_hf_documented_alias_still_works(monkeypatch):
         (["-hfr=unsloth/Qwen3-1.7B-GGUF"], "unsloth/Qwen3-1.7B-GGUF"),
     ],
 )
-def test_legacy_model_aliases_still_promote_to_model(
-    monkeypatch,
-    legacy_args,
-    expected_model,
-):
+def test_legacy_model_aliases_still_promote_to_model(monkeypatch, legacy_args, expected_model):
     """Pre-PR `-m X` / `-hfr X` set --model X; preprocessor preserves that."""
     captured = _invoke(monkeypatch, legacy_args)
     assert len(captured) == 1, f"parent did not re-exec for {legacy_args}"
@@ -356,15 +347,7 @@ def test_expand_np_rewrites_attached_form(monkeypatch):
         ["unsloth", "studio", "run", "--model", "X", "-np8"],
     )
     _studio_mod()._expand_attached_np_short()
-    assert sys.argv == [
-        "unsloth",
-        "studio",
-        "run",
-        "--model",
-        "X",
-        "-np",
-        "8",
-    ]
+    assert sys.argv == ["unsloth", "studio", "run", "--model", "X", "-np", "8"]
 
 
 @pytest.mark.parametrize("value", ["1", "8", "64", "999"])

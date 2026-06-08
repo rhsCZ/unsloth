@@ -28,7 +28,11 @@ def create_instruction_dataset(messages: list[dict] = DEFAULT_MESSAGES):
     return dataset
 
 
-def create_dataset(tokenizer, num_examples: int = None, messages: list[dict] = None):
+def create_dataset(
+    tokenizer,
+    num_examples: int = None,
+    messages: list[dict] = None,
+):
     dataset = create_instruction_dataset(messages)
 
     def _apply_chat_template(example):
@@ -138,7 +142,11 @@ def describe_peft_weights(model):
         yield name, describe_param(param, as_str = True)
 
 
-def check_responses(responses: list[str], answer: str, prompt: str = None) -> bool:
+def check_responses(
+    responses: list[str],
+    answer: str,
+    prompt: str = None,
+) -> bool:
     for i, response in enumerate(responses, start = 1):
         if answer in response:
             print(f"\u2713 response {i} contains answer")

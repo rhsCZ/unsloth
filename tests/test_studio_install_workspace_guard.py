@@ -44,7 +44,11 @@ def _extract_install_sh_guard_block() -> str:
     return m.group(1) + "fi\n"
 
 
-def _build_install_guard_script(studio_home: Path, redirect: str, block: str | None = None) -> str:
+def _build_install_guard_script(
+    studio_home: Path,
+    redirect: str,
+    block: str | None = None,
+) -> str:
     """Build a self-contained bash script that exercises the extracted
     guard block. Includes stubs for substep / _start_studio_venv_replacement
     so the snippet runs without install.sh's full rollback machinery."""
@@ -661,9 +665,7 @@ def test_install_sh_shim_uses_atomic_replace():
     ), "the explicit rm + ln pair must be replaced by atomic ln -sfn"
 
 
-def test_install_sh_create_shortcuts_seeds_id_from_csprng_with_python_fallback(
-    tmp_path,
-):
+def test_install_sh_create_shortcuts_seeds_id_from_csprng_with_python_fallback(tmp_path):
     """_create_shortcuts must seed new ids from /dev/urandom first (no
     interpreter spawn cost on the install hot path) and fall back to
     `python3 -c 'secrets.token_hex(32)'` only when urandom is unreadable.

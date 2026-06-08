@@ -157,7 +157,11 @@ def PatchRL(FastLanguageModel):
             from contextlib import contextmanager as _cm
 
             @_cm
-            def unwrap_model_for_generation(model, accelerator, gather_deepspeed3_params = True):
+            def unwrap_model_for_generation(
+                model,
+                accelerator,
+                gather_deepspeed3_params = True,
+            ):
                 unwrapped_model = accelerator.unwrap_model(model)
                 is_gc = getattr(unwrapped_model, "is_gradient_checkpointing", False)
                 if is_gc:
@@ -224,13 +228,7 @@ def PatchRL(FastLanguageModel):
     from transformers.trainer_pt_utils import nested_detach
 
     @torch.no_grad()
-    def unsloth_prediction_step(
-        self,
-        model,
-        inputs,
-        prediction_loss_only,
-        ignore_keys,
-    ):
+    def unsloth_prediction_step(self, model, inputs, prediction_loss_only, ignore_keys):
         """
         Perform an evaluation step on `model` using `inputs`.
         Subclass and override to inject custom behavior.
@@ -355,8 +353,7 @@ align_completion_tool_mask = RL_REPLACEMENTS.get("align_completion_tool_mask")
 if align_completion_tool_mask is None:
 
     def align_completion_tool_mask(
-        tool_mask: torch.Tensor,
-        completion_mask: torch.Tensor,
+        tool_mask: torch.Tensor, completion_mask: torch.Tensor
     ) -> torch.Tensor:
         if tool_mask is None:
             return completion_mask
@@ -1940,7 +1937,7 @@ def patch_functions(RLTrainer, trainer_file, RLTrainer_name, all_imports, import
 
         # Get SamplingParams
         sampling_params = re.findall(
-            r"\n[\s]{4,}(self\.[^\s]{1,}[\s]{0,}\=[\s]{0,}" r"SamplingParams\(.+?\))",
+            r"\n[\s]{4,}(self\.[^\s]{1,}[\s]{0,}\=[\s]{0,}SamplingParams\(.+?\))",
             new_vllm_part,
             flags = re.MULTILINE | re.DOTALL,
         )

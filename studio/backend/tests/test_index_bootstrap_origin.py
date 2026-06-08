@@ -13,7 +13,11 @@ from unittest.mock import MagicMock
 import pytest
 
 
-def _build_request(host: str, origin: str | None, scheme: str = "http") -> MagicMock:
+def _build_request(
+    host: str,
+    origin: str | None,
+    scheme: str = "http",
+) -> MagicMock:
     request = MagicMock()
     request.url.scheme = scheme
     request.url.netloc = host

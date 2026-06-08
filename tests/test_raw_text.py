@@ -64,7 +64,12 @@ def test_raw_text_loader():
             self.eos_token = "</s>"
             self.eos_token_id = 2  # Mock EOS token ID
 
-        def __call__(self, text, return_tensors = None, add_special_tokens = False):
+        def __call__(
+            self,
+            text,
+            return_tensors = None,
+            add_special_tokens = False,
+        ):
             words = text.split()
             token_ids = list(range(len(words)))
 
@@ -86,7 +91,11 @@ def test_raw_text_loader():
                 return {"input_ids": [MockTensor(token_ids)]}
             return {"input_ids": token_ids}
 
-        def decode(self, token_ids, skip_special_tokens = False):
+        def decode(
+            self,
+            token_ids,
+            skip_special_tokens = False,
+        ):
             return " ".join([f"word_{i}" for i in token_ids])
 
     # Create test file
@@ -169,9 +178,9 @@ def test_raw_text_loader():
 
         # Mixed paragraph + Unicode whitespace realistic input
         mixed = preprocessor.clean_text("Section\u00a01\r\n\r\nBody\ftext\u202fhere")
-        assert mixed == "Section 1\n\nBody text here", (
-            "Should preserve paragraph breaks and normalize Unicode " "whitespace simultaneously"
-        )
+        assert (
+            mixed == "Section 1\n\nBody text here"
+        ), "Should preserve paragraph breaks and normalize Unicode whitespace simultaneously"
 
         # Tabs should collapse to a single space
         assert preprocessor.clean_text("a\tb") == "a b"

@@ -1023,7 +1023,7 @@ class TestLiveRegression:
             [
                 "bash",
                 "-c",
-                "nvidia-smi -L 2>/dev/null | " "awk '/^GPU[[:space:]]+[0-9]+:/{f=1} END{exit !f}'",
+                "nvidia-smi -L 2>/dev/null | awk '/^GPU[[:space:]]+[0-9]+:/{f=1} END{exit !f}'",
             ],
             capture_output = True,
         )

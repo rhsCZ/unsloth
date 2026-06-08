@@ -86,7 +86,7 @@ RE_SUBPROCESS = re.compile(
 
 # Encoding / obfuscation
 RE_BASE64 = re.compile(
-    r"\bbase64\s*\.\s*(b64decode|decodebytes|b32decode|b16decode)\b" r"|\bcodecs\s*\.\s*decode\b",
+    r"\bbase64\s*\.\s*(b64decode|decodebytes|b32decode|b16decode)\b|\bcodecs\s*\.\s*decode\b",
 )
 
 # exec / eval
@@ -959,7 +959,11 @@ def check_py_file(content: str, filename: str, package: str) -> list[Finding]:
     return findings
 
 
-def _extract_evidence(content: str, pattern: re.Pattern, max_matches: int = 3) -> str:
+def _extract_evidence(
+    content: str,
+    pattern: re.Pattern,
+    max_matches: int = 3,
+) -> str:
     """Pull matching lines as evidence snippets."""
     lines = content.splitlines()
     matches = []
@@ -1374,9 +1378,7 @@ def scan_archive(archive_path: str, package: str) -> list[Finding]:
 _RE_PYPI_SPEC_VERSION = re.compile(r"==\s*([A-Za-z0-9_.\-+!]+)")
 
 
-def _check_blocked_pypi_versions(
-    specs: list[str],
-) -> tuple[list[str], list[Finding]]:
+def _check_blocked_pypi_versions(specs: list[str]) -> tuple[list[str], list[Finding]]:
     """Filter ``specs`` against ``BLOCKED_PYPI_VERSIONS``.
 
     Returns ``(safe_specs, findings)``. Each blocked spec emits a CRITICAL
@@ -1905,11 +1907,7 @@ def update_req_file(filepath: str, updates: dict[int, str]) -> None:
         raise
 
 
-def _run_fix(
-    critical_pkgs: set[str],
-    entries: list[dict],
-    max_search: int,
-) -> None:
+def _run_fix(critical_pkgs: set[str], entries: list[dict], max_search: int) -> None:
     """Run the --fix flow: find safe versions, update requirements files."""
     # Map package names to their entries for source tracking
     pkg_entries: dict[str, list[dict]] = {}
@@ -2189,7 +2187,7 @@ def main() -> int:
         for err in download_errors:
             print(f"  [ERROR] {err}", file = sys.stderr)
         print(
-            "  Refusing to report 'all clean' on a partial scan; " "exiting 2.",
+            "  Refusing to report 'all clean' on a partial scan; exiting 2.",
             file = sys.stderr,
         )
         return 2

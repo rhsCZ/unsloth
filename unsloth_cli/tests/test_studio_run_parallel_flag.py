@@ -176,7 +176,12 @@ def _install_reexec_capture(monkeypatch, *, platform):
     return captured
 
 
-def _invoke_run(monkeypatch, args, *, platform = "linux"):
+def _invoke_run(
+    monkeypatch,
+    args,
+    *,
+    platform = "linux",
+):
     import typer as _typer
 
     studio_mod = _load_run_command()
@@ -340,9 +345,9 @@ def test_studio_default_exposes_parallel_option():
     import inspect
 
     sig = inspect.signature(studio_mod.studio_default)
-    assert "parallel" in sig.parameters, (
-        "studio_default missing `parallel`; API-only path can't set " "llama_parallel_slots"
-    )
+    assert (
+        "parallel" in sig.parameters
+    ), "studio_default missing `parallel`; API-only path can't set llama_parallel_slots"
     opt = sig.parameters["parallel"].default
     decls = set(getattr(opt, "param_decls", []) or [])
     assert "--parallel" in decls

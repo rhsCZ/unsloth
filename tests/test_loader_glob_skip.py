@@ -15,7 +15,12 @@ class TestGlobSkippedWhenNotBothConfigs(unittest.TestCase):
     """Verify HfFileSystem.glob is not called when is_model or is_peft is False."""
 
     def _run_both_exist_block(
-        self, is_model, is_peft, supports_llama32, model_name, is_local_dir = False
+        self,
+        is_model,
+        is_peft,
+        supports_llama32,
+        model_name,
+        is_local_dir = False,
     ):
         """Simulate the both_exist detection block from loader.py.
 

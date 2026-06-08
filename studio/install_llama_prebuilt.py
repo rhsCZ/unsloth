@@ -70,7 +70,12 @@ def windows_hidden_subprocess_kwargs() -> dict[str, object]:
     return kwargs
 
 
-def env_int(name: str, default: int, *, minimum: int | None = None) -> int:
+def env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int | None = None,
+) -> int:
     raw = os.environ.get(name)
     if raw is None:
         value = default
@@ -810,9 +815,7 @@ def windows_cuda_upstream_asset_names(llama_tag: str, runtime: str) -> list[str]
 
 
 def windows_cuda_asset_aliases(
-    asset_name: str,
-    *,
-    compatibility_tag: str | None = None,
+    asset_name: str, *, compatibility_tag: str | None = None
 ) -> list[str]:
     aliases: list[str] = []
     legacy_match = re.fullmatch(
@@ -884,7 +887,12 @@ class DownloadProgress:
         self.last_milestone_bytes = 0
         self.has_rendered_tty_progress = False
 
-    def _render(self, downloaded_bytes: int, *, final: bool = False) -> str:
+    def _render(
+        self,
+        downloaded_bytes: int,
+        *,
+        final: bool = False,
+    ) -> str:
         elapsed = max(time.monotonic() - self.start_time, 1e-6)
         speed = downloaded_bytes / elapsed
         speed_text = f"{format_byte_count(speed)}/s"
@@ -1090,11 +1098,7 @@ def download_file(url: str, destination: Path) -> None:
 
 
 def download_file_verified(
-    url: str,
-    destination: Path,
-    *,
-    expected_sha256: str | None,
-    label: str,
+    url: str, destination: Path, *, expected_sha256: str | None, label: str
 ) -> None:
     normalized_expected = normalize_sha256_digest(expected_sha256)
     if not normalized_expected:
@@ -1342,10 +1346,7 @@ def parse_direct_linux_release_bundle(
 
 
 def direct_linux_release_plan(
-    release: dict[str, Any],
-    host: HostInfo,
-    repo: str,
-    requested_tag: str,
+    release: dict[str, Any], host: HostInfo, repo: str, requested_tag: str
 ) -> InstallReleasePlan | None:
     bundle = parse_direct_linux_release_bundle(repo, release)
     if bundle is None:
@@ -1427,10 +1428,7 @@ def direct_linux_release_plan(
 
 
 def direct_upstream_release_plan(
-    release: dict[str, Any],
-    host: HostInfo,
-    repo: str,
-    requested_tag: str,
+    release: dict[str, Any], host: HostInfo, repo: str, requested_tag: str
 ) -> InstallReleasePlan | None:
     release_tag = release.get("tag_name")
     if not isinstance(release_tag, str) or not release_tag:
@@ -1722,9 +1720,7 @@ def parse_cuda_visible_devices(value: str | None) -> list[str] | None:
     return [token.strip() for token in raw.split(",") if token.strip()]
 
 
-def supports_explicit_visible_device_matching(
-    visible_devices: list[str] | None,
-) -> bool:
+def supports_explicit_visible_device_matching(visible_devices: list[str] | None) -> bool:
     if not visible_devices:
         return False
     for token in visible_devices:
@@ -1736,8 +1732,7 @@ def supports_explicit_visible_device_matching(
 
 
 def select_visible_gpu_rows(
-    gpu_rows: Iterable[tuple[str, str, str]],
-    visible_devices: list[str] | None,
+    gpu_rows: Iterable[tuple[str, str, str]], visible_devices: list[str] | None
 ) -> list[tuple[str, str, str]]:
     rows = list(gpu_rows)
     if visible_devices is None:
@@ -1775,9 +1770,7 @@ def dir_provides_exact_library(directory: str | Path, library: str) -> bool:
     return candidate.exists() and (candidate.is_file() or candidate.is_symlink())
 
 
-def linux_runtime_dirs_for_required_libraries(
-    required_libraries: Iterable[str],
-) -> list[str]:
+def linux_runtime_dirs_for_required_libraries(required_libraries: Iterable[str]) -> list[str]:
     required = [library for library in required_libraries if library]
     candidates: list[str | Path] = []
 
@@ -2038,9 +2031,7 @@ def parse_published_release_bundle(
 
 
 def parse_approved_release_checksums(
-    repo: str,
-    release_tag: str,
-    payload: Any,
+    repo: str, release_tag: str, payload: Any
 ) -> ApprovedReleaseChecksums:
     if not isinstance(payload, dict):
         raise RuntimeError(
@@ -2582,9 +2573,7 @@ def resolve_requested_install_tag(
     ).bundle.upstream_tag
 
 
-def exact_source_archive_hash(
-    checksums: ApprovedReleaseChecksums,
-) -> ApprovedArtifactHash | None:
+def exact_source_archive_hash(checksums: ApprovedReleaseChecksums) -> ApprovedArtifactHash | None:
     if not checksums.source_commit:
         return None
     return checksums.artifacts.get(exact_source_archive_logical_name(checksums.source_commit))
@@ -2594,9 +2583,7 @@ def source_clone_url_from_checksums(checksums: ApprovedReleaseChecksums) -> str 
     return source_repo_clone_url(checksums.source_repo, checksums.source_repo_url)
 
 
-def source_build_plan_for_release(
-    release: ResolvedPublishedRelease,
-) -> SourceBuildPlan:
+def source_build_plan_for_release(release: ResolvedPublishedRelease) -> SourceBuildPlan:
     checksums = release.checksums
     exact_source = exact_source_archive_hash(checksums)
     source_repo = checksums.source_repo or release.bundle.source_repo
@@ -3362,9 +3349,7 @@ def _augment_checksums_with_pin(
 
 
 def _with_pinned_windows_cuda_fallback(
-    host: HostInfo,
-    attempts: list[AssetChoice],
-    checksums: ApprovedReleaseChecksums,
+    host: HostInfo, attempts: list[AssetChoice], checksums: ApprovedReleaseChecksums
 ) -> tuple[list[AssetChoice], ApprovedReleaseChecksums]:
     """Insert the Blackwell pin ahead of the Windows CUDA attempts and keep it
     through apply_approved_hashes, or return the inputs unchanged when dormant.
@@ -3503,8 +3488,7 @@ def resolve_linux_cuda_choice(
 
 
 def published_asset_choice_for_kind(
-    release: PublishedReleaseBundle,
-    install_kind: str,
+    release: PublishedReleaseBundle, install_kind: str
 ) -> AssetChoice | None:
     candidates = sorted(
         (artifact for artifact in release.artifacts if artifact.install_kind == install_kind),
@@ -4079,11 +4063,7 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
         return candidates[0][len(prefix) :]
 
     def safe_link_target(
-        base: Path,
-        member_name: str,
-        link_name: str,
-        target: Path,
-        archive_names: set[str],
+        base: Path, member_name: str, link_name: str, target: Path, archive_names: set[str]
     ) -> tuple[str, Path]:
         normalized = link_name.replace("\\", "/")
         repaired = _try_repair_missing_slash(member_name, normalized, archive_names)
@@ -4191,7 +4171,11 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
 
 
 def copy_globs(
-    source_dir: Path, destination: Path, patterns: list[str], *, required: bool = True
+    source_dir: Path,
+    destination: Path,
+    patterns: list[str],
+    *,
+    required: bool = True,
 ) -> None:
     destination.mkdir(parents = True, exist_ok = True)
     matched_sources: dict[str, Path] = {}
@@ -4838,7 +4822,7 @@ def validated_validation_model_bytes(data: bytes) -> bytes:
     digest = hashlib.sha256(data).hexdigest()
     if digest != TEST_MODEL_SHA256:
         raise RuntimeError(
-            "validation model checksum mismatch: " f"expected={TEST_MODEL_SHA256} actual={digest}"
+            f"validation model checksum mismatch: expected={TEST_MODEL_SHA256} actual={digest}"
         )
     return data
 
@@ -5156,9 +5140,7 @@ def looks_like_macos_incompatibility(text: str) -> bool:
 
 
 def macos_binary_minos_issues(
-    binaries: Iterable[Path],
-    install_dir: Path,
-    host: HostInfo,
+    binaries: Iterable[Path], install_dir: Path, host: HostInfo
 ) -> list[str]:
     """Issue strings for every installed Mach-O whose minimum macOS exceeds the
     host. Scans the given executables plus every bundled .dylib next to them --
@@ -5188,9 +5170,7 @@ def macos_binary_minos_issues(
 
 
 def preflight_macos_installed_binaries(
-    binaries: Iterable[Path],
-    install_dir: Path,
-    host: HostInfo,
+    binaries: Iterable[Path], install_dir: Path, host: HostInfo
 ) -> None:
     """Reject a macos prebuilt whose minimum-OS is newer than the host. The
     upstream selector pins a loadable release up front, so here this is the
@@ -5206,9 +5186,7 @@ def preflight_macos_installed_binaries(
 
 
 def preflight_linux_installed_binaries(
-    binaries: Iterable[Path],
-    install_dir: Path,
-    host: HostInfo,
+    binaries: Iterable[Path], install_dir: Path, host: HostInfo
 ) -> None:
     if not host.is_linux:
         return
@@ -5270,8 +5248,7 @@ def windows_runtime_dirs() -> list[str]:
 
 
 def windows_runtime_dirs_for_patterns(
-    required_patterns: Iterable[str],
-    candidate_dirs: Iterable[str] | None = None,
+    required_patterns: Iterable[str], candidate_dirs: Iterable[str] | None = None
 ) -> list[str]:
     directories = list(candidate_dirs) if candidate_dirs is not None else windows_runtime_dirs()
     matching_dirs: list[str] = []
@@ -5597,8 +5574,7 @@ def collect_system_report(host: HostInfo, choice: AssetChoice | None, install_di
 
 
 def apply_approved_hashes(
-    attempts: Iterable[AssetChoice],
-    checksums: ApprovedReleaseChecksums,
+    attempts: Iterable[AssetChoice], checksums: ApprovedReleaseChecksums
 ) -> list[AssetChoice]:
     def approved_hash_for_attempt(attempt: AssetChoice) -> ApprovedArtifactHash | None:
         candidate_names = [attempt.name]
@@ -5706,8 +5682,7 @@ def preferred_source_archive(
 
 
 def selected_source_archive_metadata(
-    checksums: ApprovedReleaseChecksums,
-    llama_tag: str,
+    checksums: ApprovedReleaseChecksums, llama_tag: str
 ) -> tuple[str, str | None]:
     _source_repo, _source_ref, source_archive, _exact_source = preferred_source_archive(
         checksums, llama_tag
@@ -5718,10 +5693,7 @@ def selected_source_archive_metadata(
 
 
 def resolve_install_attempts(
-    llama_tag: str,
-    host: HostInfo,
-    published_repo: str,
-    published_release_tag: str,
+    llama_tag: str, host: HostInfo, published_repo: str, published_release_tag: str
 ) -> tuple[str, str, list[AssetChoice], ApprovedReleaseChecksums]:
     requested_tag, plans = resolve_install_release_plans(
         llama_tag,
@@ -6071,9 +6043,7 @@ def existing_install_matches_choice(
 
 
 def existing_install_matches_plan(
-    install_dir: Path,
-    host: HostInfo,
-    plan: InstallReleasePlan,
+    install_dir: Path, host: HostInfo, plan: InstallReleasePlan
 ) -> bool:
     if not plan.attempts:
         return False

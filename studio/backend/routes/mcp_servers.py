@@ -105,16 +105,13 @@ def _row_to_response(row: dict) -> McpServerResponse:
 
 
 @router.get("/", response_model = list[McpServerResponse])
-async def list_mcp_servers(
-    current_subject: str = Depends(get_current_subject),
-):
+async def list_mcp_servers(current_subject: str = Depends(get_current_subject)):
     return [_row_to_response(row) for row in mcp_servers_db.list_servers()]
 
 
 @router.post("/", response_model = McpServerResponse, status_code = 201)
 async def create_mcp_server(
-    payload: McpServerCreate,
-    current_subject: str = Depends(get_current_subject),
+    payload: McpServerCreate, current_subject: str = Depends(get_current_subject)
 ):
     display_name = (payload.display_name or "").strip()
     if not display_name:
@@ -198,10 +195,7 @@ async def update_mcp_server(
 
 
 @router.delete("/{server_id}", status_code = 204)
-async def delete_mcp_server(
-    server_id: str,
-    current_subject: str = Depends(get_current_subject),
-):
+async def delete_mcp_server(server_id: str, current_subject: str = Depends(get_current_subject)):
     old = mcp_servers_db.get_server(server_id)
     if not old:
         raise HTTPException(status_code = 404, detail = "MCP server not found")
@@ -212,8 +206,7 @@ async def delete_mcp_server(
 
 @router.post("/{server_id}/refresh", response_model = McpServerProbeResult)
 async def refresh_mcp_server_tools(
-    server_id: str,
-    current_subject: str = Depends(get_current_subject),
+    server_id: str, current_subject: str = Depends(get_current_subject)
 ):
     server = mcp_servers_db.get_server(server_id)
     if not server:
@@ -240,8 +233,7 @@ async def refresh_mcp_server_tools(
 
 @router.post("/test", response_model = McpServerProbeResult)
 async def test_mcp_server(
-    payload: McpServerTestRequest,
-    current_subject: str = Depends(get_current_subject),
+    payload: McpServerTestRequest, current_subject: str = Depends(get_current_subject)
 ):
     # URL/header validation must surface as 400 like create/update so the
     # frontend's create-form pre-flight gets the same error semantics as

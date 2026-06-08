@@ -291,7 +291,11 @@ def _config_items(config):
     return ()
 
 
-def _config_get(config, field_name, default = None):
+def _config_get(
+    config,
+    field_name,
+    default = None,
+):
     if isinstance(config, dict):
         return config.get(field_name, default)
     return getattr(config, field_name, default)
@@ -625,7 +629,12 @@ class ReplaceWarningMessage:
     _installed = False
 
     @classmethod
-    def add_rule(cls, match_text, replacement, category = None):
+    def add_rule(
+        cls,
+        match_text,
+        replacement,
+        category = None,
+    ):
         cls._rules.append((match_text, replacement, category))
         if not cls._installed:
             cls._install()
@@ -635,7 +644,14 @@ class ReplaceWarningMessage:
         cls._original_showwarning = warnings.showwarning
         cls._installed = True
 
-        def _patched_showwarning(message, category, filename, lineno, file = None, line = None):
+        def _patched_showwarning(
+            message,
+            category,
+            filename,
+            lineno,
+            file = None,
+            line = None,
+        ):
             msg_str = str(message)
             for match_text, replacement, match_category in cls._rules:
                 if match_text in msg_str and (match_category is None or category is match_category):
@@ -1559,7 +1575,11 @@ import socket
 
 
 @functools.lru_cache(1)
-def has_internet(host = "8.8.8.8", port = 53, timeout = 3):
+def has_internet(
+    host = "8.8.8.8",
+    port = 53,
+    timeout = 3,
+):
     if os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1":
         return False
 
@@ -1824,7 +1844,12 @@ transformers.utils.quantization_config.BitsAndBytesConfig.__init__ = _BitsAndByt
 import pickle
 
 
-def offload_to_disk(W, model, name, temporary_location: str = "_unsloth_temporary_saved_buffers"):
+def offload_to_disk(
+    W,
+    model,
+    name,
+    temporary_location: str = "_unsloth_temporary_saved_buffers",
+):
     file_location = os.path.join(temporary_location, model.config._name_or_path)
     if not os.path.exists(file_location):
         os.makedirs(file_location)
@@ -2744,8 +2769,7 @@ def _untie_input_output_embeddings(model: torch.nn.Module) -> None:
 
 
 def _filter_fn_to_fqns(
-    model: torch.nn.Module,
-    filter_fn: Callable[[torch.nn.Module, str], bool],
+    model: torch.nn.Module, filter_fn: Callable[[torch.nn.Module, str], bool]
 ) -> Iterator[str]:
     """
     Given a model and a filter function (m, fqn) -> bool,

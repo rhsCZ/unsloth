@@ -638,38 +638,38 @@ def compare(before_src: str, after_src: str, path: str) -> list[tuple[str, str]]
 _SELF_TESTS = {
     "dangling_alias": (
         # before: inline aliased import, used as _b
-        "import os\n" "def f():\n" "    import glob as _b\n" "    return _b.glob('*')\n",
+        "import os\ndef f():\n    import glob as _b\n    return _b.glob('*')\n",
         # after: hoisted to canonical, but reference NOT normalized -> _b dangles
-        "import os\n" "import glob\n" "def f():\n" "    return _b.glob('*')\n",
+        "import os\nimport glob\ndef f():\n    return _b.glob('*')\n",
         "BLOCKER",
     ),
     "rename_clash": (
         # before: _b is a deliberate alias; `b` already means something else
-        "import re as _b\n" "b = 123\n" "def f():\n" "    return _b.compile('x'), b\n",
+        "import re as _b\nb = 123\ndef f():\n    return _b.compile('x'), b\n",
         # after: someone normalized _b -> b ; now f().b is the int, re is lost
-        "import re\n" "b = 123\n" "def f():\n" "    return b.compile('x'), b\n",
+        "import re\nb = 123\ndef f():\n    return b.compile('x'), b\n",
         "BLOCKER",  # TARGET-MISSING from:.. or import:re in f
     ),
     "clean_rename": (
-        "def f():\n" "    import glob as _g\n" "    return _g.glob('*')\n",
-        "import glob\n" "def f():\n" "    return glob.glob('*')\n",
+        "def f():\n    import glob as _g\n    return _g.glob('*')\n",
+        "import glob\ndef f():\n    return glob.glob('*')\n",
         None,  # expect NO blocker
     ),
     "clean_dedup_redundant": (
-        "import sys\n" "def f():\n" "    import sys\n" "    return sys.argv\n",
-        "import sys\n" "def f():\n" "    return sys.argv\n",
+        "import sys\ndef f():\n    import sys\n    return sys.argv\n",
+        "import sys\ndef f():\n    return sys.argv\n",
         None,
     ),
     "from_import_dangling": (
         # from-import alias left un-normalized
-        "def f():\n" "    from importlib.metadata import version as _v\n" "    return _v('x')\n",
-        "from importlib.metadata import version\n" "def f():\n" "    return _v('x')\n",
+        "def f():\n    from importlib.metadata import version as _v\n    return _v('x')\n",
+        "from importlib.metadata import version\ndef f():\n    return _v('x')\n",
         "BLOCKER",
     ),
     "local_var_clash": (
         # _b renamed to b, but b is a LOCAL variable in f -> import silently unused
-        "def f(b):\n" "    import re as _b\n" "    return _b.compile(b)\n",
-        "import re\n" "def f(b):\n" "    return b.compile(b)\n",  # 'b' is the param, not the module
+        "def f(b):\n    import re as _b\n    return _b.compile(b)\n",
+        "import re\ndef f(b):\n    return b.compile(b)\n",  # 'b' is the param, not the module
         "BLOCKER",
     ),
     "substring_safe": (
@@ -686,8 +686,8 @@ _SELF_TESTS = {
     ),
     "attr_access_not_a_use": (
         # x._b is attribute access, not a use of name _b; removing import _b is fine
-        "import os\n" "def f(x):\n" "    import sys as _b\n" "    return x._b + _b.argv[0]\n",
-        "import os\n" "import sys\n" "def f(x):\n" "    return x._b + sys.argv[0]\n",
+        "import os\ndef f(x):\n    import sys as _b\n    return x._b + _b.argv[0]\n",
+        "import os\nimport sys\ndef f(x):\n    return x._b + sys.argv[0]\n",
         None,
     ),
 }

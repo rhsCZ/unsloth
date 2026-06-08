@@ -354,14 +354,7 @@ def test_strip_shadowing_flags_keeps_cache_when_cache_disabled():
         ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0", "--top-k", "20"],
         strip_cache = False,
     )
-    assert out == [
-        "--cache-type-k",
-        "q8_0",
-        "--cache-type-v",
-        "q8_0",
-        "--top-k",
-        "20",
-    ]
+    assert out == ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0", "--top-k", "20"]
 
 
 def test_strip_shadowing_flags_keeps_spec_when_spec_disabled():
@@ -369,14 +362,7 @@ def test_strip_shadowing_flags_keeps_spec_when_spec_disabled():
         ["--spec-type", "ngram-mod", "--draft-min", "48", "--top-k", "20"],
         strip_spec = False,
     )
-    assert out == [
-        "--spec-type",
-        "ngram-mod",
-        "--draft-min",
-        "48",
-        "--top-k",
-        "20",
-    ]
+    assert out == ["--spec-type", "ngram-mod", "--draft-min", "48", "--top-k", "20"]
 
 
 def test_strip_shadowing_flags_drops_mtp_flags_when_requested():

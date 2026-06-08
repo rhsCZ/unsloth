@@ -203,10 +203,7 @@ def Glm4MoeLiteMoE_fast_forward(self, hidden_states):
 
 
 def Glm4MoeLiteNaiveMoe_fast_forward(
-    self,
-    hidden_states: torch.Tensor,
-    top_k_index: torch.Tensor,
-    top_k_weights: torch.Tensor,
+    self, hidden_states: torch.Tensor, top_k_index: torch.Tensor, top_k_weights: torch.Tensor
 ) -> torch.Tensor:
     """
     Optimized expert forward using grouped GEMM.

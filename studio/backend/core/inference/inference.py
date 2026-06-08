@@ -68,7 +68,13 @@ class HarmonyTextStreamer:
         _re.DOTALL,
     )
 
-    def __init__(self, tokenizer, *, skip_prompt: bool = True, timeout: float = 0.2):
+    def __init__(
+        self,
+        tokenizer,
+        *,
+        skip_prompt: bool = True,
+        timeout: float = 0.2,
+    ):
         import queue
 
         self.tokenizer = tokenizer
@@ -1344,7 +1350,9 @@ class InferenceBackend:
             yield f"Error: {str(e)}"
 
     def generate_whisper_response(
-        self, audio_array, cancel_event = None
+        self,
+        audio_array,
+        cancel_event = None,
     ) -> Generator[str, None, None]:
         """Whisper ASR — takes audio numpy array, yields transcribed text.
 
@@ -1591,14 +1599,7 @@ class InferenceBackend:
                 raise RuntimeError(f"Unknown audio_type: {audio_type}")
 
     def _generate_snac(
-        self,
-        model,
-        tokenizer,
-        text,
-        temperature,
-        top_p,
-        max_new_tokens,
-        repetition_penalty,
+        self, model, tokenizer, text, temperature, top_p, max_new_tokens, repetition_penalty
     ):
         """Generate audio using SNAC codec (Orpheus)."""
         device = model.device
@@ -1759,7 +1760,11 @@ class InferenceBackend:
             preserve_thinking = preserve_thinking,
         )
 
-    def format_chat_prompt(self, messages: list, system_prompt: str = None) -> str:
+    def format_chat_prompt(
+        self,
+        messages: list,
+        system_prompt: str = None,
+    ) -> str:
         if not self.active_model_name or self.active_model_name not in self.models:
             logger.error("No active model available")
             return ""
@@ -2005,7 +2010,11 @@ class InferenceBackend:
         except Exception as e:
             logger.warning(f"Could not fully reset generation state: {e}")
 
-    def resize_image(self, img, max_size: int = 800):
+    def resize_image(
+        self,
+        img,
+        max_size: int = 800,
+    ):
         """Resize image while maintaining aspect ratio if either dimension exceeds max_size"""
         if img is None:
             return None

@@ -132,7 +132,11 @@ def _install_uvicorn_startup_log_rewrite(bind_host: str, display_host: str) -> N
         logging.getLogger(name).addFilter(f)
 
 
-def _local_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+def _local_port_open(
+    host: str,
+    port: int,
+    timeout: float = 1.0,
+) -> bool:
     """Return True iff a TCP connection to (host, port) succeeds within timeout."""
     import socket
     try:
@@ -491,7 +495,11 @@ def _is_port_free(host: str, port: int) -> bool:
     return True
 
 
-def _find_free_port(host: str, start: int, max_attempts: int = 20) -> int:
+def _find_free_port(
+    host: str,
+    start: int,
+    max_attempts: int = 20,
+) -> int:
     """Find a free port starting from `start`, trying up to max_attempts ports."""
     for offset in range(max_attempts):
         candidate = start + offset

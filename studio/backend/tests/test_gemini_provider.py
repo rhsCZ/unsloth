@@ -683,10 +683,7 @@ def test_image_generation_tool_on_image_model_drops_text_tools(monkeypatch):
         ],
     )
     assert "tools" not in captured["body"], captured["body"]
-    assert captured["body"]["generationConfig"].get("responseModalities") == [
-        "TEXT",
-        "IMAGE",
-    ]
+    assert captured["body"]["generationConfig"].get("responseModalities") == ["TEXT", "IMAGE"]
 
 
 def test_prompt_feedback_block_reason_surfaces_as_error(monkeypatch):
@@ -788,10 +785,7 @@ def test_image_model_sets_response_modalities(monkeypatch):
         model = "gemini-2.5-flash-image",
         enabled_tools = ["image_generation"],
     )
-    assert captured["body"]["generationConfig"]["responseModalities"] == [
-        "TEXT",
-        "IMAGE",
-    ]
+    assert captured["body"]["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
 
 
 def test_image_generation_tool_sets_response_modalities_on_image_model(monkeypatch):
@@ -804,10 +798,7 @@ def test_image_generation_tool_sets_response_modalities_on_image_model(monkeypat
         model = "gemini-2.5-flash-image",
         enabled_tools = ["image_generation"],
     )
-    assert captured["body"]["generationConfig"]["responseModalities"] == [
-        "TEXT",
-        "IMAGE",
-    ]
+    assert captured["body"]["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
 
 
 def test_image_response_emits_image_b64_tool_event(monkeypatch):
@@ -1264,10 +1255,7 @@ def test_vision_data_url_translates_to_inline_data(monkeypatch):
     parts = captured["body"]["contents"][0]["parts"]
     inline_parts = [p for p in parts if "inlineData" in p]
     assert len(inline_parts) == 1, parts
-    assert inline_parts[0]["inlineData"] == {
-        "mimeType": "image/jpeg",
-        "data": fake,
-    }
+    assert inline_parts[0]["inlineData"] == {"mimeType": "image/jpeg", "data": fake}
 
 
 # ── finish reason mapping ────────────────────────────────────────────
@@ -1399,14 +1387,8 @@ def test_custom_gemini_proxy_uses_openai_dispatch():
         )
         assert client._is_openai_compatible() is True, base
         headers = client._auth_headers()
-        assert "x-goog-api-key" not in {k.lower() for k in headers}, (
-            base,
-            headers,
-        )
-        assert headers["Authorization"] == "Bearer AIza-test-key", (
-            base,
-            headers,
-        )
+        assert "x-goog-api-key" not in {k.lower() for k in headers}, (base, headers)
+        assert headers["Authorization"] == "Bearer AIza-test-key", (base, headers)
 
 
 def test_google_hosted_gemini_still_uses_native_dispatch():
@@ -1480,9 +1462,7 @@ def test_text_model_image_generation_tool_silently_dropped(monkeypatch):
     assert "responseModalities" not in gc, gc
 
 
-def test_empty_text_part_with_thought_signature_emits_extra_content(
-    monkeypatch,
-):
+def test_empty_text_part_with_thought_signature_emits_extra_content(monkeypatch):
     """Gemini 3 can ship a content-free fragment whose only payload is
     `thoughtSignature`. The translator must still surface that signature
     on a delta.extra_content envelope so the next turn can replay it."""
@@ -1571,7 +1551,11 @@ def test_remote_image_url_downloads_and_inlines_as_base64(monkeypatch):
     inline them as base64 inlineData."""
     image_bytes = b"FAKEPNGBYTES"
 
-    async def fake_fetch(url, fallback_mime, max_bytes = None):
+    async def fake_fetch(
+        url,
+        fallback_mime,
+        max_bytes = None,
+    ):
         assert url == "https://cdn.example.com/diagram.png"
         return ("image/png", base64.b64encode(image_bytes).decode("ascii"))
 
@@ -1607,7 +1591,11 @@ def test_remote_image_url_dropped_when_fetch_returns_none(monkeypatch):
     image part is silently dropped instead of forwarding raw bytes
     or a fileData fallback."""
 
-    async def fake_fetch_reject(url, fallback_mime, max_bytes = None):
+    async def fake_fetch_reject(
+        url,
+        fallback_mime,
+        max_bytes = None,
+    ):
         return None
 
     monkeypatch.setattr(ep_mod, "_safe_fetch_image_for_gemini", fake_fetch_reject)
@@ -2513,9 +2501,7 @@ def test_function_declarations_self_referential_schema_terminates(monkeypatch):
     assert root.get("properties", {}).get("value", {}).get("type") == "string"
 
 
-def test_gemini_native_skips_orphan_function_response_for_dropped_builtin(
-    monkeypatch,
-):
+def test_gemini_native_skips_orphan_function_response_for_dropped_builtin(monkeypatch):
     """Round 26: when the assistant-side synthetic web_search/web_fetch
     tool_call is dropped from native Gemini history, the matching
     role="tool" follow-up must also be dropped. Otherwise the outbound
@@ -2569,9 +2555,7 @@ def test_gemini_native_skips_orphan_function_response_for_dropped_builtin(
                 assert fr.get("name") != "web_search", contents
 
 
-def test_gemini_native_skips_orphan_function_response_for_native_part_replay(
-    monkeypatch,
-):
+def test_gemini_native_skips_orphan_function_response_for_native_part_replay(monkeypatch):
     """Round 26: code_execution / image_generation tool_calls are
     replayed as Gemini-native executableCode / codeExecutionResult /
     inlineData parts. The matching role="tool" follow-up must NOT then
@@ -2780,9 +2764,7 @@ def test_chat_message_extra_content_round_trips_through_validation():
         }
     )
     assistant_msg = req.messages[1]
-    assert assistant_msg.extra_content == {
-        "google": {"thought_signature": "SIG-TEXT"},
-    }
+    assert assistant_msg.extra_content == {"google": {"thought_signature": "SIG-TEXT"}}
     built = _build_external_messages(
         req.messages,
         supports_vision = True,
@@ -2790,9 +2772,7 @@ def test_chat_message_extra_content_round_trips_through_validation():
         base_url = "https://generativelanguage.googleapis.com/v1beta",
     )
     assistant_out = built[1]
-    assert assistant_out["extra_content"] == {
-        "google": {"thought_signature": "SIG-TEXT"},
-    }
+    assert assistant_out["extra_content"] == {"google": {"thought_signature": "SIG-TEXT"}}
     # Non-Gemini providers must NOT receive extra_content; Google's
     # thought_signature field is unknown to OpenAI / Mistral / etc.
     built_openai = _build_external_messages(
@@ -2938,10 +2918,7 @@ def test_image_models_drop_function_declarations(monkeypatch):
         ],
     )
     assert captured["body"].get("tools") is None
-    assert captured["body"]["generationConfig"]["responseModalities"] == [
-        "TEXT",
-        "IMAGE",
-    ]
+    assert captured["body"]["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
 
 
 def test_safe_fetch_image_rejects_malformed_bracketed_url():
@@ -2952,9 +2929,7 @@ def test_safe_fetch_image_rejects_malformed_bracketed_url():
     assert res is None
 
 
-def test_safe_fetch_image_pins_validated_ip_no_hostname_in_request(
-    monkeypatch,
-):
+def test_safe_fetch_image_pins_validated_ip_no_hostname_in_request(monkeypatch):
     """Round 17: the fetch helper must pin the validated IP into the
     outgoing request URL (with a Host header carrying the original
     hostname). A second hostname-style getaddrinfo after the validate
@@ -2997,7 +2972,11 @@ def test_safe_fetch_image_pins_validated_ip_no_hostname_in_request(
             return b"PNG"
 
     class _StubOpener:
-        def open(self, req, timeout = None):
+        def open(
+            self,
+            req,
+            timeout = None,
+        ):
             captured["requests"].append(
                 {
                     "url": req.full_url,
@@ -3052,7 +3031,11 @@ def test_safe_fetch_image_redirect_to_private_host_rejected(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
     class _StubOpener:
-        def open(self, req, timeout = None):
+        def open(
+            self,
+            req,
+            timeout = None,
+        ):
             # Simulate a 302 to a private host.
             raise urllib.error.HTTPError(
                 req.full_url,
@@ -3077,7 +3060,11 @@ def test_files_api_substring_url_not_misclassified_as_filedata(monkeypatch):
     captured_outbound: dict = {}
     fetch_calls: list[str] = []
 
-    async def fake_fetch(url, fallback_mime, max_bytes = None):
+    async def fake_fetch(
+        url,
+        fallback_mime,
+        max_bytes = None,
+    ):
         fetch_calls.append(url)
         return "image/png", base64.b64encode(b"DATA").decode("ascii")
 
@@ -3210,9 +3197,7 @@ def test_legacy_gemini3_pro_medium_coerced_to_high(monkeypatch):
         model = "gemini-3-pro-preview",
         reasoning_effort = "medium",
     )
-    assert captured["body"]["generationConfig"]["thinkingConfig"] == {
-        "thinkingLevel": "high",
-    }
+    assert captured["body"]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "high"}
 
 
 def test_gemini_3_1_pro_medium_passes_through(monkeypatch):
@@ -3223,9 +3208,7 @@ def test_gemini_3_1_pro_medium_passes_through(monkeypatch):
         model = "gemini-3.1-pro-preview",
         reasoning_effort = "medium",
     )
-    assert captured["body"]["generationConfig"]["thinkingConfig"] == {
-        "thinkingLevel": "medium",
-    }
+    assert captured["body"]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "medium"}
 
 
 def test_tool_calls_extra_content_stripped_for_non_native_gemini():
@@ -3440,9 +3423,7 @@ def test_gemini_tool_choice_none_disables_function_declarations(monkeypatch):
     assert captured["body"].get("tools") is None, captured["body"]
 
 
-def test_schema_anyof_multitype_with_null_keeps_anyof_and_nullable(
-    monkeypatch,
-):
+def test_schema_anyof_multitype_with_null_keeps_anyof_and_nullable(monkeypatch):
     """Round 18: multi-branch unions with null (e.g.
     `Union[str, int, None]`) must keep the slim anyOf without the null
     branch and add `nullable: true`; Gemini rejects
@@ -3507,7 +3488,11 @@ def test_safe_fetch_image_redirect_malformed_url_no_crash(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
     class _StubOpener:
-        def open(self, req, timeout = None):
+        def open(
+            self,
+            req,
+            timeout = None,
+        ):
             raise urllib.error.HTTPError(
                 req.full_url,
                 302,
@@ -3567,7 +3552,11 @@ def test_safe_fetch_image_missing_content_type_uses_fallback(monkeypatch):
             return b"PNG"
 
     class _StubOpener:
-        def open(self, req, timeout = None):
+        def open(
+            self,
+            req,
+            timeout = None,
+        ):
             return _StubResp()
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_args, **_kw: _StubOpener())
@@ -4033,7 +4022,11 @@ def test_remote_image_fetch_attempt_cap_includes_failures(monkeypatch):
     failing/slow URLs runs 100 fetches each up to the 15s timeout."""
     fetch_calls: list[str] = []
 
-    async def fake_fetch(url, fallback_mime, max_bytes = None):
+    async def fake_fetch(
+        url,
+        fallback_mime,
+        max_bytes = None,
+    ):
         fetch_calls.append(url)
         return None
 
@@ -4204,7 +4197,11 @@ def test_invalid_gemini_model_rejected_before_image_fetch(monkeypatch):
     runs."""
     fetch_calls: list[str] = []
 
-    async def fake_fetch(url, fallback_mime, max_bytes = None):
+    async def fake_fetch(
+        url,
+        fallback_mime,
+        max_bytes = None,
+    ):
         fetch_calls.append(url)
         return None
 
@@ -4340,9 +4337,7 @@ def test_role_tool_dropped_when_matching_synthetic_call_filtered():
     assert roles == ["user"], result
 
 
-def test_openrouter_no_synthetic_web_search_event_on_tool_choice_none(
-    monkeypatch,
-):
+def test_openrouter_no_synthetic_web_search_event_on_tool_choice_none(monkeypatch):
     """Round 20: OpenRouter dispatcher must not emit synthetic
     web_search tool_start / tool_end events when tool_choice="none";
     otherwise the chat UI shows a search card for a search that
@@ -4401,9 +4396,7 @@ def test_openrouter_no_synthetic_web_search_event_on_tool_choice_none(
     assert all(e.get("tool_name") != "web_search" for e in captured_events), captured_events
 
 
-def test_anthropic_role_tool_list_content_translates_to_tool_result(
-    monkeypatch,
-):
+def test_anthropic_role_tool_list_content_translates_to_tool_result(monkeypatch):
     """Round 20: an OpenAI-shape role=tool message with list content
     (`content=[{"type":"text","text":"result"}]`) must be translated
     into Anthropic's native tool_result block, not forwarded as an
@@ -4525,9 +4518,7 @@ def test_youtube_filedata_uses_video_mime(monkeypatch):
     assert yt["fileData"]["mimeType"].startswith("video/"), yt
 
 
-def test_openai_responses_assistant_text_serialized_before_function_call(
-    monkeypatch,
-):
+def test_openai_responses_assistant_text_serialized_before_function_call(monkeypatch):
     """Round 20: in OpenAI Responses history, the assistant's
     visible text for a turn that ALSO emitted a function_call must
     serialize BEFORE the function_call item, matching the prior
@@ -4596,13 +4587,7 @@ def test_openai_responses_assistant_text_serialized_before_function_call(
     #   function_call (get_weather)
     #   function_call_output (sunny)
     #   user ("thanks")
-    assert types == [
-        "user",
-        "assistant",
-        "function_call",
-        "function_call_output",
-        "user",
-    ], items
+    assert types == ["user", "assistant", "function_call", "function_call_output", "user"], items
 
 
 def test_gemini_tool_choice_none_disables_image_generation(monkeypatch):
@@ -4672,9 +4657,7 @@ def test_gemini_forced_function_tool_choice_drops_image_generation(monkeypatch):
     assert body["generationConfig"].get("responseModalities") == ["TEXT"], body
 
 
-def test_gemini_code_execution_native_part_list_replays_per_part_signatures(
-    monkeypatch,
-):
+def test_gemini_code_execution_native_part_list_replays_per_part_signatures(monkeypatch):
     """Round 21: merged code-execution history must replay per-part
     `thoughtSignature`s, not fan one top-level signature across every
     native subpart. Gemini 3 strict validators reject a signature
@@ -4739,9 +4722,7 @@ def test_gemini_code_execution_native_part_list_replays_per_part_signatures(
     assert "thoughtSignature" not in result_parts[0], result_parts[0]
 
 
-def test_gemini_code_execution_legacy_merged_signature_only_on_executable(
-    monkeypatch,
-):
+def test_gemini_code_execution_legacy_merged_signature_only_on_executable(monkeypatch):
     """Round 21: backward compatibility for pre-round-21 persisted
     history that stored merged `native_part` as a single object plus a
     top-level `thoughtSignature`. The replay branch must attach that
@@ -4885,7 +4866,11 @@ def test_safe_fetch_image_threads_per_request_byte_budget(monkeypatch):
             return b"\x00" * (5 * 1024 * 1024)
 
     class _StubOpener:
-        def open(self, req, timeout = None):
+        def open(
+            self,
+            req,
+            timeout = None,
+        ):
             return _StubResp()
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_args, **_kw: _StubOpener())
@@ -5343,9 +5328,7 @@ def test_strip_provider_synthetic_tool_history_drops_empty_assistant():
     assert roles == ["user", "user"], out
 
 
-def test_openrouter_no_synthetic_web_search_event_on_forced_function_tool_choice(
-    monkeypatch,
-):
+def test_openrouter_no_synthetic_web_search_event_on_forced_function_tool_choice(monkeypatch):
     """Round 22 sibling of the round-20 `tool_choice='none'` test: when
     the caller forces a specific function via `tool_choice={"type":
     "function", ...}` AND passes `enabled_tools=["web_search"]`, the

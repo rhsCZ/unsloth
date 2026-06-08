@@ -109,12 +109,7 @@ def test_blocked_npm_versions_complete():
         f"expected 42 @tanstack/* entries, got {len(tanstack_keys)}: " f"{sorted(tanstack_keys)}"
     )
     assert "@opensearch-project/opensearch" in table
-    assert table["@opensearch-project/opensearch"] == {
-        "3.5.3",
-        "3.6.2",
-        "3.7.0",
-        "3.8.0",
-    }
+    assert table["@opensearch-project/opensearch"] == {"3.5.3", "3.6.2", "3.7.0", "3.8.0"}
     squawk = [k for k in table if k.startswith("@squawk/")]
     assert len(squawk) >= 22, (
         f"expected at least 22 @squawk/* entries (full safedep.io enumeration), "

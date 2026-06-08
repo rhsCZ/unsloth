@@ -316,12 +316,7 @@ class JobManager:
             return {"error": f"dataset load failed: {exc}"}
 
     @staticmethod
-    def _load_dataset_page(
-        *,
-        parquet_dir: Path,
-        limit: int,
-        offset: int,
-    ) -> dict[str, Any]:
+    def _load_dataset_page(*, parquet_dir: Path, limit: int, offset: int) -> dict[str, Any]:
         dataset_page = JobManager._load_dataset_page_with_duckdb(
             parquet_dir = parquet_dir,
             limit = limit,
@@ -337,10 +332,7 @@ class JobManager:
 
     @staticmethod
     def _load_dataset_page_with_duckdb(
-        *,
-        parquet_dir: Path,
-        limit: int,
-        offset: int,
+        *, parquet_dir: Path, limit: int, offset: int
     ) -> dict[str, Any] | None:
         parquet_glob = str((parquet_dir / "*.parquet").resolve())
         try:
@@ -379,10 +371,7 @@ class JobManager:
 
     @staticmethod
     def _load_dataset_page_with_data_designer(
-        *,
-        parquet_dir: Path,
-        limit: int,
-        offset: int,
+        *, parquet_dir: Path, limit: int, offset: int
     ) -> dict[str, Any]:
         from data_designer.config.utils.io_helpers import read_parquet_dataset
 
@@ -391,7 +380,12 @@ class JobManager:
         rows = dataframe.iloc[offset : offset + limit].to_dict(orient = "records")
         return {"dataset": to_preview_jsonable(rows), "total": total}
 
-    def subscribe(self, job_id: str, *, after_seq: int | None = None) -> Subscription | None:
+    def subscribe(
+        self,
+        job_id: str,
+        *,
+        after_seq: int | None = None,
+    ) -> Subscription | None:
         """SSE subscribe: get replay buffer + live events stream."""
         with self._lock:
             if self._job is None or self._job.job_id != job_id:

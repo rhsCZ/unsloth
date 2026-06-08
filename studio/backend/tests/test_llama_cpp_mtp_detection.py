@@ -495,7 +495,7 @@ def test_unload_resets_nextn_predict_layers():
 
 def _make_fake_llama_server(path: Path, help_text: str) -> Path:
     """Bash stub that prints `help_text` on --help."""
-    path.write_text("#!/usr/bin/env bash\n" f"cat <<'EOF'\n{help_text}\nEOF\n")
+    path.write_text(f"#!/usr/bin/env bash\ncat <<'EOF'\n{help_text}\nEOF\n")
     path.chmod(0o755)
     return path
 
@@ -530,7 +530,7 @@ def test_probe_server_capabilities_detects_renamed_mtp(tmp_path):
     # Renamed upstream: draft-mtp -> mtp.
     fake = _make_fake_llama_server(
         tmp_path / "llama-server",
-        "--spec-type [none|mtp|ngram-cache|ngram-simple|ngram-map-k|" "ngram-map-k4v|ngram-mod]",
+        "--spec-type [none|mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
     )
     _clear_caps_cache()
     caps = LlamaCppBackend.probe_server_capabilities(str(fake))
@@ -652,14 +652,7 @@ def test_build_ngram_mod_flags_new():
 
 def test_build_ngram_mod_flags_legacy():
     flags = _build_ngram_mod_flags({"ngram_mod_flavor": "legacy"})
-    assert flags == [
-        "--spec-ngram-size-n",
-        "24",
-        "--draft-min",
-        "48",
-        "--draft-max",
-        "64",
-    ]
+    assert flags == ["--spec-ngram-size-n", "24", "--draft-min", "48", "--draft-max", "64"]
 
 
 def test_build_ngram_mod_flags_empty_when_unsupported():
@@ -821,9 +814,7 @@ def _patch_probe(monkeypatch, ngram_supported):
     )
 
 
-def test_already_in_target_state_sub_3b_falls_back_to_ngram_mod_when_supported(
-    monkeypatch,
-):
+def test_already_in_target_state_sub_3b_falls_back_to_ngram_mod_when_supported(monkeypatch):
     # 0.8B MTP request -- load_model would have promoted to ngram-mod
     # (no MTP head); reload check must match a ngram-mod backend.
     _patch_probe(monkeypatch, ngram_supported = True)
@@ -1006,7 +997,12 @@ def test_canonicalize_spec_mode(value, expected):
 # ── _build_speculative_flags resolver matrix ──────────────────────
 
 
-def _resolver_backend(monkeypatch, *, ngram_supported = True, mtp_token = "draft-mtp"):
+def _resolver_backend(
+    monkeypatch,
+    *,
+    ngram_supported = True,
+    mtp_token = "draft-mtp",
+):
     """Backend with a deterministic probe so the resolver is hermetic."""
     fake = {
         "found": True,
@@ -1088,13 +1084,7 @@ _SUB_3B_MTP_MODEL = "unsloth/Qwen3.5-0.8B-MTP-GGUF"
     ],
 )
 def test_build_speculative_flags_matrix(
-    monkeypatch,
-    requested,
-    gpus,
-    model,
-    expect_spec_type,
-    expect_n_max,
-    expect_ngram_knobs,
+    monkeypatch, requested, gpus, model, expect_spec_type, expect_n_max, expect_ngram_knobs
 ):
     backend = _resolver_backend(monkeypatch)
     flags = backend._build_speculative_flags(

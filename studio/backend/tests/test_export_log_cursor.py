@@ -69,7 +69,11 @@ def orchestrator():
     return ExportOrchestrator()
 
 
-def _append(orch, line: str, stream: str = "stdout") -> None:
+def _append(
+    orch,
+    line: str,
+    stream: str = "stdout",
+) -> None:
     """Shortcut for simulating a worker log message."""
     orch._append_log({"type": "log", "stream": stream, "line": line, "ts": 0.0})
 

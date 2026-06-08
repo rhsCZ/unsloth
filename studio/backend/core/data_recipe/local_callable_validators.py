@@ -81,9 +81,7 @@ def split_oxc_local_callable_validators(
 
 
 def register_oxc_local_callable_validators(
-    *,
-    builder,
-    specs: list[OxcLocalCallableValidatorSpec],
+    *, builder, specs: list[OxcLocalCallableValidatorSpec]
 ) -> None:
     if not specs:
         return
@@ -114,10 +112,7 @@ def register_oxc_local_callable_validators(
         )
 
 
-def _parse_oxc_spec(
-    *,
-    column: dict[str, Any],
-) -> OxcLocalCallableValidatorSpec | None:
+def _parse_oxc_spec(*, column: dict[str, Any]) -> OxcLocalCallableValidatorSpec | None:
     if str(column.get("column_type") or "").strip() != "validation":
         return None
     if str(column.get("validator_type") or "").strip() != "local_callable":
@@ -222,11 +217,7 @@ def _build_oxc_validation_function(lang: str, validation_mode: str, code_shape: 
 
 
 def _run_oxc_batch(
-    *,
-    node_lang: str,
-    validation_mode: str,
-    code_shape: str,
-    code_values: list[str],
+    *, node_lang: str, validation_mode: str, code_shape: str, code_values: list[str]
 ) -> list[dict[str, Any]]:
     if not _OXC_RUNNER_PATH.exists():
         return _fallback_results(

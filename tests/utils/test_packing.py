@@ -245,10 +245,7 @@ def test_enable_sample_packing():
 
     # packed lengths are aggregated into a single tensor
     assert "packed_seq_lengths" in batch
-    assert torch.equal(
-        batch["packed_seq_lengths"],
-        torch.tensor([2, 1, 3], dtype = torch.int32),
-    )
+    assert torch.equal(batch["packed_seq_lengths"], torch.tensor([2, 1, 3], dtype = torch.int32))
 
     assert batch["input_ids"].shape == (1, 6)
     expected_positions = torch.tensor([0, 1, 0, 0, 1, 2], dtype = torch.long)
@@ -277,10 +274,7 @@ def test_enable_sample_packing_trl_collator(tmp_path):
     batch = trainer.data_collator.torch_call(examples)
 
     assert batch["input_ids"].shape == (1, 6)
-    assert torch.equal(
-        batch["packed_seq_lengths"],
-        torch.tensor([2, 1, 3], dtype = torch.int32),
-    )
+    assert torch.equal(batch["packed_seq_lengths"], torch.tensor([2, 1, 3], dtype = torch.int32))
 
     expected_positions = torch.tensor([0, 1, 0, 0, 1, 2], dtype = torch.long)
     assert torch.equal(batch["position_ids"].view(-1)[:6], expected_positions)
@@ -310,10 +304,7 @@ def test_enable_padding_free_metadata():
         {"input_ids": [3, 4]},
     ]
     batch = collator.torch_call(examples)
-    assert torch.equal(
-        batch["packed_seq_lengths"],
-        torch.tensor([3, 2], dtype = torch.int32),
-    )
+    assert torch.equal(batch["packed_seq_lengths"], torch.tensor([3, 2], dtype = torch.int32))
     assert trainer.args.remove_unused_columns is False
 
 
@@ -347,7 +338,13 @@ def test_packing_sdpa(tmp_path):
     mask_calls = []
     captured_loss_labels = {}
 
-    def _capture_mask(seq_info, dtype, device, *, sliding_window = None):
+    def _capture_mask(
+        seq_info,
+        dtype,
+        device,
+        *,
+        sliding_window = None,
+    ):
         mask_calls.append(tuple(seq_info[0].tolist()))
         return original_mask(
             seq_info,

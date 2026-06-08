@@ -108,7 +108,11 @@ async def clear_oauth_tokens_async(url: str) -> None:
         logger.warning("Failed to clear OAuth tokens for %s: %s", url, exc)
 
 
-def _client(url: str, headers: Optional[dict], use_oauth: bool = False):
+def _client(
+    url: str,
+    headers: Optional[dict],
+    use_oauth: bool = False,
+):
     from fastmcp import Client
 
     if is_stdio(url):

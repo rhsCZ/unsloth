@@ -75,7 +75,11 @@ def calculate_topk(
 
 
 @torch.no_grad()
-def get_routing_indices(selected_experts, num_experts, return_scatter_indices: bool = False):
+def get_routing_indices(
+    selected_experts,
+    num_experts,
+    return_scatter_indices: bool = False,
+):
     """
     Returns:
         token_counts_by_expert: [num_experts]
@@ -99,7 +103,12 @@ def get_routing_indices(selected_experts, num_experts, return_scatter_indices: b
         return token_counts_by_expert, gather_indices
 
 
-def torch_grouped_gemm(X, W, m_sizes, transpose = True):
+def torch_grouped_gemm(
+    X,
+    W,
+    m_sizes,
+    transpose = True,
+):
     """
     X: [M, K] if forward, else [M, N]
     W: [E, N, K]

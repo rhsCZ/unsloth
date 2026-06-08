@@ -212,7 +212,12 @@ def _collect_events(generator, max_events = 200):
     return events
 
 
-def _make_loop(*, turns, exec_results = None, **kwargs):
+def _make_loop(
+    *,
+    turns,
+    exec_results = None,
+    **kwargs,
+):
     """Build a configured loop with a multi-turn fake generator.
 
     ``turns`` is a list of chunk-lists; iteration N yields chunks from
@@ -340,9 +345,7 @@ class TestLoopBasic:
         assert exec_fn.calls[0][0] == "render_html"
         assert "<!doctype html>" in exec_fn.calls[0][1]["code"]
 
-    def test_python_tool_containing_render_html_signal_does_not_emit_provisional_start(
-        self,
-    ):
+    def test_python_tool_containing_render_html_signal_does_not_emit_provisional_start(self):
         loop, exec_fn = _make_loop(
             turns = [
                 [
@@ -394,10 +397,7 @@ class TestLoopBasic:
         tool_starts = [e for e in events if e["type"] == "tool_start"]
 
         assert exec_fn.calls == [("render_html", {"code": "<html>one</html>"})]
-        assert [e["arguments"] for e in tool_starts] == [
-            {},
-            {"code": "<html>one</html>"},
-        ]
+        assert [e["arguments"] for e in tool_starts] == [{}, {"code": "<html>one</html>"}]
 
     def test_truncated_unclosed_tool_call(self):
         loop, exec_fn = _make_loop(
@@ -566,7 +566,7 @@ class TestLoopControl:
         events = list(
             run_safetensors_tool_loop(
                 single_turn = _const_stream(
-                    '<tool_call>{"name":"web_search",' '"arguments":{"query":"x"}}</tool_call>'
+                    '<tool_call>{"name":"web_search","arguments":{"query":"x"}}</tool_call>'
                 ),
                 messages = [{"role": "user", "content": "hi"}],
                 tools = [],
@@ -670,7 +670,12 @@ class TestChatTemplateHelper:
             self.last_kwargs = None
 
         def apply_chat_template(
-            self, messages, *, tokenize = False, add_generation_prompt = True, **kw
+            self,
+            messages,
+            *,
+            tokenize = False,
+            add_generation_prompt = True,
+            **kw,
         ):
             self.call_count += 1
             unknown = set(kw) - self.accepted
@@ -804,10 +809,7 @@ class TestGuardrails:
             max_tool_iterations = 4,
         )
         events = _collect_events(loop)
-        assert exec_fn.calls == [
-            ("web_search", {"query": "A"}),
-            ("web_search", {"query": "B"}),
-        ]
+        assert exec_fn.calls == [("web_search", {"query": "A"}), ("web_search", {"query": "B"})]
         tool_ends = [e for e in events if e["type"] == "tool_end"]
         assert "already made this exact call" in tool_ends[-1]["result"]
 

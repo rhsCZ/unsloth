@@ -42,8 +42,7 @@ def _anthropic_image_block_to_openai_part(block: dict) -> Optional[dict]:
 
 
 def anthropic_messages_to_openai(
-    messages: list[dict],
-    system: Optional[Union[str, list]] = None,
+    messages: list[dict], system: Optional[Union[str, list]] = None
 ) -> list[dict]:
     """Convert Anthropic messages + system to OpenAI-format message dicts.
 

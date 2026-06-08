@@ -422,7 +422,7 @@ def test_tool_healing_strip_handles_hyphenated_function_names():
     from core.tool_healing import strip_tool_call_markup
 
     out = strip_tool_call_markup(
-        "before <function=mcp__srv__list-issues>" "<parameter=q>x</parameter></function> after"
+        "before <function=mcp__srv__list-issues><parameter=q>x</parameter></function> after"
     )
     assert out == "before  after"
 
@@ -540,7 +540,7 @@ def test_tool_xml_parser_handles_hyphenated_function_names():
     from core.inference.tool_call_parser import parse_tool_calls_from_text
 
     calls = parse_tool_calls_from_text(
-        "<function=mcp__srv__list-issues>" "<parameter=repo>octocat/hello</parameter>" "</function>"
+        "<function=mcp__srv__list-issues><parameter=repo>octocat/hello</parameter></function>"
     )
     assert len(calls) == 1
     assert calls[0]["function"]["name"] == "mcp__srv__list-issues"
@@ -564,7 +564,7 @@ def test_tool_xml_strip_handles_hyphenated_function_names():
     rx = ns["_TOOL_XML_RE"]
     stripped = rx.sub(
         "",
-        "before <function=mcp__srv__list-issues>" "<parameter=q>x</parameter></function> after",
+        "before <function=mcp__srv__list-issues><parameter=q>x</parameter></function> after",
     )
     assert stripped == "before  after"
 

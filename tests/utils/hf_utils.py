@@ -37,32 +37,19 @@ from trl import SFTTrainer
 
 class PeftWeightCallback(TrainerCallback):
     def on_log(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        logs,
-        **kwargs,
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs, **kwargs
     ):
         print(f"DEBUG::CALLBACK::on_log::{state.log_history}")
 
     def on_train_begin(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs
     ):
         model = kwargs.get("model")
         assert model is not None
         print(f"DEBUG::CALLBACK::on_train_begin::{kwargs.keys()}")
 
     def on_step_end(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs
     ):
         print(f"DEBUG::CALLBACK::on_step_end::{state.global_step}")
 
@@ -243,9 +230,7 @@ def fix_llama3_tokenizer(tokenizer, padding_side = "right"):
 
 
 def replace_module(
-    module: torch.nn.Module,
-    target_module_type: torch.nn.Module,
-    conversion_func: Callable,
+    module: torch.nn.Module, target_module_type: torch.nn.Module, conversion_func: Callable
 ):
     for child_name, child_module in module.named_children():
         if isinstance(child_module, target_module_type):

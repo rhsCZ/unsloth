@@ -7,7 +7,11 @@ import sys
 import warnings
 
 
-def clear_memory(variables_to_clear = None, verbose = False, clear_all_caches = True):
+def clear_memory(
+    variables_to_clear = None,
+    verbose = False,
+    clear_all_caches = True,
+):
     """
     Comprehensive memory clearing for persistent memory leaks.
 

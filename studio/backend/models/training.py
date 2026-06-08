@@ -41,9 +41,7 @@ def _parse_lr(v: Any) -> float:
     except (TypeError, ValueError):
         raise ValueError(f"learning_rate must be parseable as float (got {v!r})")
     if not (lr > 0.0):
-        raise ValueError(
-            f"learning_rate must be > 0 (got {lr!r}); " "typical range is 1e-6 .. 1e-3"
-        )
+        raise ValueError(f"learning_rate must be > 0 (got {lr!r}); typical range is 1e-6 .. 1e-3")
     if lr >= _MAX_LR_VALUE:
         raise ValueError(
             f"learning_rate must be < 1.0 (got {lr!r}); "

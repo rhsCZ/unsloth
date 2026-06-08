@@ -1330,9 +1330,7 @@ def _iter_hf_cache_snapshots(repo_id: str):
     yield from snap_dirs
 
 
-def _list_gguf_variants_from_hf_cache(
-    repo_id: str,
-) -> Optional[tuple[list[GgufVariantInfo], bool]]:
+def _list_gguf_variants_from_hf_cache(repo_id: str) -> Optional[tuple[list[GgufVariantInfo], bool]]:
     """Variants from the local HF cache snapshot, or None if not cached."""
     for snap in _iter_hf_cache_snapshots(repo_id):
         variants, has_vision = list_local_gguf_variants(str(snap))
@@ -1342,8 +1340,7 @@ def _list_gguf_variants_from_hf_cache(
 
 
 def list_gguf_variants(
-    repo_id: str,
-    hf_token: Optional[str] = None,
+    repo_id: str, hf_token: Optional[str] = None
 ) -> tuple[list[GgufVariantInfo], bool]:
     """
     List all GGUF quantization variants in a HuggingFace repo.
@@ -1446,9 +1443,7 @@ def _resolve_gguf_dir(p: Path) -> Optional[Path]:
     return None
 
 
-def list_local_gguf_variants(
-    directory: str,
-) -> tuple[list[GgufVariantInfo], bool]:
+def list_local_gguf_variants(directory: str) -> tuple[list[GgufVariantInfo], bool]:
     """List GGUF quantization variants in a local directory.
 
     Mirrors :func:`list_gguf_variants` but reads from the filesystem
@@ -1541,10 +1536,7 @@ def _detect_gguf_from_hf_cache(repo_id: str) -> Optional[str]:
     return None
 
 
-def detect_gguf_model_remote(
-    repo_id: str,
-    hf_token: Optional[str] = None,
-) -> Optional[str]:
+def detect_gguf_model_remote(repo_id: str, hf_token: Optional[str] = None) -> Optional[str]:
     """
     Check if a HuggingFace repo contains GGUF files.
 
@@ -1733,9 +1725,7 @@ def _looks_like_lora_adapter(model_dir: Path) -> bool:
     )
 
 
-def scan_trained_models(
-    outputs_dir: str = str(outputs_root()),
-) -> List[Tuple[str, str, str]]:
+def scan_trained_models(outputs_dir: str = str(outputs_root())) -> List[Tuple[str, str, str]]:
     """
     Scan outputs folder for trained Studio models.
 
@@ -2139,7 +2129,9 @@ class ModelConfig:
 
     @classmethod
     def from_lora_path(
-        cls, lora_path: str, hf_token: Optional[str] = None
+        cls,
+        lora_path: str,
+        hf_token: Optional[str] = None,
     ) -> Optional["ModelConfig"]:
         """
         Create ModelConfig from a local LoRA adapter path.

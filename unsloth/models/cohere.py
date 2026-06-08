@@ -59,7 +59,11 @@ except:
     CohereFlashAttention2 = CohereAttention
 
 
-def fast_layernorm_inference(self, X, out_weight = None):
+def fast_layernorm_inference(
+    self,
+    X,
+    out_weight = None,
+):
     XX = X.to(torch.float32, copy = True)
     XX -= X.mean(-1, keepdim = True)
     variance = XX.square().mean(-1, keepdim = True)

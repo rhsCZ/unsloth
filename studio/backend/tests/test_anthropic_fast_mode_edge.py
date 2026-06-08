@@ -60,7 +60,11 @@ def _refusal_sse(model: str = "claude-opus-4-7") -> bytes:
     )
 
 
-def _capture(monkeypatch, sse: bytes = b"", **kwargs) -> tuple[dict, list[str]]:
+def _capture(
+    monkeypatch,
+    sse: bytes = b"",
+    **kwargs,
+) -> tuple[dict, list[str]]:
     """Install a MockTransport, drive one streamed call, return body+lines."""
     captured: dict = {}
 

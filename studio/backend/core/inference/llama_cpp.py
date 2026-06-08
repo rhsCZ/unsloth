@@ -457,10 +457,7 @@ def detect_reasoning_flags(
     return flags
 
 
-def _is_mtp_model_name(
-    model_identifier: Optional[str],
-    gguf_path: Optional[str] = None,
-) -> bool:
+def _is_mtp_model_name(model_identifier: Optional[str], gguf_path: Optional[str] = None) -> bool:
     """Name-based MTP detector. Fallback for the metadata signal."""
     for cand in (model_identifier, Path(gguf_path).name if gguf_path else None):
         if cand and "-mtp" in cand.lower():
@@ -1523,8 +1520,7 @@ class LlamaCppBackend:
 
     @staticmethod
     def _select_gpus(
-        model_size_bytes: int,
-        gpus: list[tuple[int, int]],
+        model_size_bytes: int, gpus: list[tuple[int, int]]
     ) -> tuple[Optional[list[int]], bool]:
         """Pick GPU(s) for a model based on estimated VRAM and free memory.
 
@@ -2490,10 +2486,7 @@ class LlamaCppBackend:
             return None
 
     def _resolve_launch_mmproj_path(
-        self,
-        *,
-        model_path: str,
-        mmproj_path: Optional[str],
+        self, *, model_path: str, mmproj_path: Optional[str]
     ) -> Optional[str]:
         """Return mmproj_path iff it exists on disk AND matches the model family.
 
@@ -2547,9 +2540,7 @@ class LlamaCppBackend:
 
     @staticmethod
     def _classify_llama_start_failure(
-        output: str,
-        gguf_path: Optional[str],
-        model_identifier: Optional[str],
+        output: str, gguf_path: Optional[str], model_identifier: Optional[str]
     ) -> str:
         """Explain *why* llama-server failed to start, from its output.
 
@@ -2792,11 +2783,9 @@ class LlamaCppBackend:
                 cache_override = parse_cache_override(extra_args)
                 cache_type_kv = resolve_cache_type_kv(extra_args, cache_type_kv)
                 if ctx_override is not None and ctx_override > 0:
-                    logger.info(f"User --ctx-size {ctx_override} honored; " "skipping auto-reduce")
+                    logger.info(f"User --ctx-size {ctx_override} honored; skipping auto-reduce")
                 if cache_override is not None:
-                    logger.info(
-                        f"User --cache-type-k/-v {cache_override} " "honored for KV estimate"
-                    )
+                    logger.info(f"User --cache-type-k/-v {cache_override} honored for KV estimate")
                 effective_ctx = requested_ctx if requested_ctx > 0 else (self._context_length or 0)
                 max_available_ctx = self._context_length or effective_ctx
                 gpus: list[tuple[int, int]] = []
@@ -3773,9 +3762,7 @@ class LlamaCppBackend:
         return True
 
     def _classify_gpu_offload(
-        self,
-        expected_gpu: bool,
-        detected_gpus: list[tuple[int, int]],
+        self, expected_gpu: bool, detected_gpus: list[tuple[int, int]]
     ) -> Optional[bool]:
         """True if a GPU model buffer was allocated, False if only CPU
         buffers landed despite GPU intent, None when there's no signal
@@ -4080,7 +4067,11 @@ class LlamaCppBackend:
         """atexit handler to ensure llama-server is terminated."""
         self._kill_process()
 
-    def _wait_for_health(self, timeout: float = 120.0, interval: float = 0.5) -> bool:
+    def _wait_for_health(
+        self,
+        timeout: float = 120.0,
+        interval: float = 0.5,
+    ) -> bool:
         """
         Poll llama-server's /health endpoint until it responds 200.
 
@@ -4133,10 +4124,7 @@ class LlamaCppBackend:
         return _shared_parse_tool_calls_from_text(content)
 
     @staticmethod
-    def _build_openai_messages(
-        messages: list[dict],
-        image_b64: Optional[str] = None,
-    ) -> list[dict]:
+    def _build_openai_messages(messages: list[dict], image_b64: Optional[str] = None) -> list[dict]:
         """
         Build OpenAI-format messages, optionally injecting an image_url
         content part into the last user message for vision models.
@@ -4171,8 +4159,7 @@ class LlamaCppBackend:
 
     @staticmethod
     def _iter_text_cancellable(
-        response: "httpx.Response",
-        cancel_event: Optional[threading.Event] = None,
+        response: "httpx.Response", cancel_event: Optional[threading.Event] = None
     ) -> Generator[str, None, None]:
         """Iterate over an httpx streaming response with cancel support.
 

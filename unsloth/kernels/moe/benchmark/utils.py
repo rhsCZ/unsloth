@@ -38,11 +38,7 @@ def create_merged_results(
 
 
 def post_process_results(
-    results: list[KernelResult],
-    mode: str,
-    seqlen: int,
-    dtype: torch.dtype,
-    autotune: bool,
+    results: list[KernelResult], mode: str, seqlen: int, dtype: torch.dtype, autotune: bool
 ):
     df = KernelResult.to_dataframe(results, sort_by = "speedup")
     df = create_merged_results(df, mode, seqlen, dtype, autotune)
@@ -50,12 +46,7 @@ def post_process_results(
 
 
 def save_results(
-    df: pd.DataFrame,
-    results_dir: str,
-    mode: str,
-    seqlen: int,
-    dtype: torch.dtype,
-    autotune: bool,
+    df: pd.DataFrame, results_dir: str, mode: str, seqlen: int, dtype: torch.dtype, autotune: bool
 ):
     dt = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     save_dir = f"{results_dir}/{mode}"
@@ -159,7 +150,11 @@ def power_of_two_range(start, end):
     return [2**i for i in range(int(start), int(end) + 1)]
 
 
-def multiples_of_range(start, end, step = 1):
+def multiples_of_range(
+    start,
+    end,
+    step = 1,
+):
     return list(range(start, end + step, step))
 
 

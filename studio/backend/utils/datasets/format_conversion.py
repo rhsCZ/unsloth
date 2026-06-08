@@ -140,7 +140,11 @@ def standardize_chat_format(
     return dataset.map(_standardize_dataset, **dataset_map_kwargs)
 
 
-def convert_chatml_to_alpaca(dataset, batch_size = 1000, num_proc = None):
+def convert_chatml_to_alpaca(
+    dataset,
+    batch_size = 1000,
+    num_proc = None,
+):
     """
     Converts ChatML format (messages OR conversations) to Alpaca format.
     Handles both standardized and ShareGPT formats.
@@ -210,7 +214,11 @@ def convert_chatml_to_alpaca(dataset, batch_size = 1000, num_proc = None):
     return dataset.map(_convert, **dataset_map_kwargs)
 
 
-def convert_alpaca_to_chatml(dataset, batch_size = 1000, num_proc = None):
+def convert_alpaca_to_chatml(
+    dataset,
+    batch_size = 1000,
+    num_proc = None,
+):
     """
     Converts Alpaca format to ChatML format.
 

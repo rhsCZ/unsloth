@@ -35,7 +35,13 @@ SUPPORTED_FORMATS = {
 
 
 class RawTextDataLoader:
-    def __init__(self, tokenizer, chunk_size = 2048, stride = 512, return_tokenized = True):
+    def __init__(
+        self,
+        tokenizer,
+        chunk_size = 2048,
+        stride = 512,
+        return_tokenized = True,
+    ):
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
         if stride >= chunk_size:
@@ -50,7 +56,11 @@ class RawTextDataLoader:
         extension = Path(file_path).suffix.lower()
         return SUPPORTED_FORMATS.get(extension, "plain_text")
 
-    def load_from_file(self, file_path, return_tokenized = None):
+    def load_from_file(
+        self,
+        file_path,
+        return_tokenized = None,
+    ):
         """Load raw text and convert to dataset"""
         if return_tokenized is None:
             return_tokenized = self.return_tokenized
@@ -61,7 +71,11 @@ class RawTextDataLoader:
         chunks = self.smart_chunk_text(text_content, self.chunk_size, self.stride, return_tokenized)
         return self.create_causal_dataset(chunks)
 
-    def load_from_files(self, file_paths, return_tokenized = None):
+    def load_from_files(
+        self,
+        file_paths,
+        return_tokenized = None,
+    ):
         """Load multiple text files"""
         if return_tokenized is None:
             return_tokenized = self.return_tokenized
@@ -75,7 +89,11 @@ class RawTextDataLoader:
             all_chunks.extend(chunks)
         return self.create_causal_dataset(all_chunks)
 
-    def chunk_text(self, text, return_tokenized = None):
+    def chunk_text(
+        self,
+        text,
+        return_tokenized = None,
+    ):
         """Split text into overlapping chunks"""
         if return_tokenized is None:
             return_tokenized = self.return_tokenized
@@ -101,7 +119,13 @@ class RawTextDataLoader:
             # If chunks are text strings (backward compatibility)
             return Dataset.from_dict({"text": chunks})
 
-    def smart_chunk_text(self, text, chunk_size, stride, return_tokenized = True):
+    def smart_chunk_text(
+        self,
+        text,
+        chunk_size,
+        stride,
+        return_tokenized = True,
+    ):
         """
         Intelligent chunking that:
         1. Respects sentence/paragraph boundaries

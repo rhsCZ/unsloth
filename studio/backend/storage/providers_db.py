@@ -62,12 +62,7 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
-def create_provider(
-    id: str,
-    provider_type: str,
-    display_name: str,
-    base_url: str,
-) -> None:
+def create_provider(id: str, provider_type: str, display_name: str, base_url: str) -> None:
     """Insert a new provider configuration."""
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()

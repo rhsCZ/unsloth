@@ -86,12 +86,7 @@ def _free_port() -> int:
 
 
 def _run_one_install(
-    label: str,
-    repo: Path,
-    studio_home: Path,
-    fake_home: Path,
-    uv_cache: Path,
-    log_path: Path,
+    label: str, repo: Path, studio_home: Path, fake_home: Path, uv_cache: Path, log_path: Path
 ) -> tuple[str, int]:
     studio_home.mkdir(parents = True, exist_ok = True)
     fake_home.mkdir(parents = True, exist_ok = True)
@@ -162,7 +157,11 @@ def _wait_for_health(port: int, timeout: float) -> dict:
     raise TestFailure(f"port {port}: /api/health never returned 200 (last_err={last_err})")
 
 
-def _http_status(port: int, path: str, timeout: float = 5.0) -> int:
+def _http_status(
+    port: int,
+    path: str,
+    timeout: float = 5.0,
+) -> int:
     url = f"http://127.0.0.1:{port}{path}"
     try:
         with urllib.request.urlopen(url, timeout = timeout) as r:
@@ -250,9 +249,7 @@ def run(n_installs: int, keep: bool) -> int:
 
     repo = PACKAGE_ROOT
     if not (repo / "install.sh").is_file():
-        raise TestFailure(
-            f"install.sh not found at {repo}; " "run from a clone of unslothai/unsloth"
-        )
+        raise TestFailure(f"install.sh not found at {repo}; run from a clone of unslothai/unsloth")
 
     test_root = Path(tempfile.mkdtemp(prefix = "unsloth_studio_clash_"))
     _log(f"test root: {test_root}")

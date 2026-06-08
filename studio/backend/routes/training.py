@@ -91,9 +91,7 @@ def _validate_local_dataset_paths(paths: list[str], label: str = "Local dataset"
 
 
 @router.get("/hardware")
-async def get_hardware_utilization(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_hardware_utilization(current_subject: str = Depends(get_current_subject)):
     """
     Get a live snapshot of GPU hardware utilization.
 
@@ -105,17 +103,14 @@ async def get_hardware_utilization(
 
 
 @router.get("/hardware/visible")
-async def get_visible_hardware_utilization(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_visible_hardware_utilization(current_subject: str = Depends(get_current_subject)):
     from utils.hardware import get_visible_gpu_utilization
     return get_visible_gpu_utilization()
 
 
 @router.post("/start")
 async def start_training(
-    request: TrainingStartRequest,
-    current_subject: str = Depends(get_current_subject),
+    request: TrainingStartRequest, current_subject: str = Depends(get_current_subject)
 ):
     """
     Start a training job.
@@ -345,9 +340,7 @@ async def stop_training(
 
 
 @router.post("/reset")
-async def reset_training(
-    current_subject: str = Depends(get_current_subject),
-):
+async def reset_training(current_subject: str = Depends(get_current_subject)):
     """
     Reset training state so the user can return to configuration.
     """
@@ -396,9 +389,7 @@ async def reset_training(
 
 
 @router.get("/status")
-async def get_training_status(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_training_status(current_subject: str = Depends(get_current_subject)):
     """
     Get the current training status.
     """
@@ -484,9 +475,7 @@ async def get_training_status(
 
 
 @router.get("/metrics", response_model = TrainingMetricsResponse)
-async def get_training_metrics(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_training_metrics(current_subject: str = Depends(get_current_subject)):
     """
     Get training metrics (loss, learning rate, steps).
     """
@@ -523,8 +512,7 @@ async def get_training_metrics(
 
 @router.get("/progress")
 async def stream_training_progress(
-    request: Request,
-    current_subject: str = Depends(get_current_subject),
+    request: Request, current_subject: str = Depends(get_current_subject)
 ):
     """
     Stream training progress updates using Server-Sent Events (SSE).

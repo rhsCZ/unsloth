@@ -52,10 +52,7 @@ def _window_cache_key(sliding_window: Optional[int]) -> int:
     return int(sliding_window)
 
 
-def _get_cached_block_mask(
-    lengths: Tuple[int, ...],
-    sliding_window: Optional[int],
-):
+def _get_cached_block_mask(lengths: Tuple[int, ...], sliding_window: Optional[int]):
     if _XFormersBlockMask is None:
         return None
 
@@ -222,8 +219,7 @@ def enable_padding_free_metadata(model, trainer):
 
 
 def get_packed_info_from_kwargs(
-    kwargs: dict,
-    device: torch.device,
+    kwargs: dict, device: torch.device
 ) -> Optional[Tuple[torch.Tensor, torch.Tensor, int]]:
     """Return packed sequence metadata expected by the attention kernels."""
 
@@ -332,11 +328,7 @@ def build_sdpa_packed_attention_mask(
     return result
 
 
-def _normalize_packed_lengths(
-    seq_lengths: Any,
-    *,
-    device: torch.device,
-) -> Optional[torch.Tensor]:
+def _normalize_packed_lengths(seq_lengths: Any, *, device: torch.device) -> Optional[torch.Tensor]:
     if seq_lengths is None:
         return None
     if isinstance(seq_lengths, torch.Tensor):

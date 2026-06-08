@@ -317,11 +317,7 @@ def test_openai_base64_pdf_becomes_input_file(monkeypatch):
     user_msg = captured["body"]["input"][0]
     parts = user_msg["content"]
     fileblk = next(p for p in parts if p.get("type") == "input_file")
-    assert fileblk == {
-        "type": "input_file",
-        "file_data": _PDF_DATA_URI,
-        "filename": "paper.pdf",
-    }
+    assert fileblk == {"type": "input_file", "file_data": _PDF_DATA_URI, "filename": "paper.pdf"}
 
 
 def test_openai_url_pdf_becomes_input_file(monkeypatch):
@@ -344,10 +340,7 @@ def test_openai_url_pdf_becomes_input_file(monkeypatch):
     )
     parts = captured["body"]["input"][0]["content"]
     fileblk = next(p for p in parts if p.get("type") == "input_file")
-    assert fileblk == {
-        "type": "input_file",
-        "file_url": "https://example.com/doc.pdf",
-    }
+    assert fileblk == {"type": "input_file", "file_url": "https://example.com/doc.pdf"}
 
 
 def test_openai_empty_data_uri_falls_back_to_file_url(monkeypatch):

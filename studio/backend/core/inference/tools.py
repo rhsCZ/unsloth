@@ -839,7 +839,11 @@ def _validate_and_resolve_host(hostname: str, port: int) -> tuple[bool, str, str
     return True, "", first_ip
 
 
-def _fetch_page_text(url: str, max_chars: int = _MAX_PAGE_CHARS, timeout: int = 30) -> str:
+def _fetch_page_text(
+    url: str,
+    max_chars: int = _MAX_PAGE_CHARS,
+    timeout: int = 30,
+) -> str:
     """Fetch a URL and return plain text content (HTML tags stripped).
 
     Blocks private/loopback/link-local targets (SSRF protection) and caps
@@ -1992,7 +1996,11 @@ def _kill_process_tree(proc) -> None:
         pass
 
 
-def _cancel_watcher(proc, cancel_event, poll_interval = 0.2):
+def _cancel_watcher(
+    proc,
+    cancel_event,
+    poll_interval = 0.2,
+):
     """Daemon thread that kills a process when cancel_event is set."""
     while proc.poll() is None:
         if cancel_event is not None and cancel_event.is_set():

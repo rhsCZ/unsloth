@@ -261,7 +261,11 @@ class ExportOrchestrator:
         except (EOFError, OSError, ValueError):
             return None
 
-    def _wait_response(self, expected_type: str, timeout: float = 3600.0) -> dict:
+    def _wait_response(
+        self,
+        expected_type: str,
+        timeout: float = 3600.0,
+    ) -> dict:
         """Block until a response of the expected type arrives.
 
         Export operations can take a very long time — GGUF conversion for

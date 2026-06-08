@@ -362,12 +362,7 @@ def _handle_cleanup(backend, resp_queue: Any) -> None:
         )
 
 
-def run_export_process(
-    *,
-    cmd_queue: Any,
-    resp_queue: Any,
-    config: dict,
-) -> None:
+def run_export_process(*, cmd_queue: Any, resp_queue: Any, config: dict) -> None:
     """Subprocess entrypoint. Persistent — runs command loop until shutdown.
 
     Args:

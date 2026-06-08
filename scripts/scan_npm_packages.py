@@ -958,7 +958,11 @@ def safe_extract(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _evidence(text: str, pat: re.Pattern, max_chars: int = 200) -> str:
+def _evidence(
+    text: str,
+    pat: re.Pattern,
+    max_chars: int = 200,
+) -> str:
     m = pat.search(text)
     if not m:
         return ""
@@ -973,11 +977,7 @@ def _evidence(text: str, pat: re.Pattern, max_chars: int = 200) -> str:
 LIFECYCLE_HOOKS = ("preinstall", "install", "postinstall", "prepare")
 
 
-def scan_package_json(
-    pkg: PackageEntry,
-    rel: str,
-    text: str,
-) -> list[Finding]:
+def scan_package_json(pkg: PackageEntry, rel: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
     try:
         meta = json.loads(text)
@@ -1110,11 +1110,7 @@ def _host_in_outbound_context(text: str, host: str) -> bool:
     return False
 
 
-def scan_text_blob(
-    pkg: PackageEntry,
-    rel: str,
-    text: str,
-) -> list[Finding]:
+def scan_text_blob(pkg: PackageEntry, rel: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
 
     # IOC substrings (literal, case-sensitive).
@@ -1183,9 +1179,7 @@ def scan_text_blob(
                 filename = rel,
                 pattern = "js-fetch-eval",
                 evidence = _evidence(text, _JS_FETCH_EVAL),
-                detail = (
-                    "Function/eval against base64-decoded payload " "(obfuscated dropper shape)"
-                ),
+                detail = ("Function/eval against base64-decoded payload (obfuscated dropper shape)"),
             )
         )
     if _JS_ENV_TOKEN.search(text):
@@ -1239,10 +1233,7 @@ _TEXT_SUFFIXES = (
 )
 
 
-def scan_extracted_tree(
-    pkg: PackageEntry,
-    root: Path,
-) -> list[Finding]:
+def scan_extracted_tree(pkg: PackageEntry, root: Path) -> list[Finding]:
     findings: list[Finding] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -1296,10 +1287,7 @@ def scan_extracted_tree(
 # ─────────────────────────────────────────────────────────────────────
 
 
-def scan_one(
-    pkg: PackageEntry,
-    workspace: Path,
-) -> tuple[list[Finding], str | None]:
+def scan_one(pkg: PackageEntry, workspace: Path) -> tuple[list[Finding], str | None]:
     """Download + extract + scan a single package. Cleans up its dir.
 
     Returns (findings, error). `error` is non-None only on hard

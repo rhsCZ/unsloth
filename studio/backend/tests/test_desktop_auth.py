@@ -468,8 +468,7 @@ def test_health_response_reports_desktop_capability_fields(monkeypatch):
 
 
 def test_provision_desktop_auth_writes_secret_and_creates_db_without_backend_deps(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     auth_dir = tmp_path / "auth"
     auth_dir.mkdir()

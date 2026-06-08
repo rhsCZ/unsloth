@@ -10,7 +10,11 @@ the ``localhost`` vs ``127.0.0.1`` distinct-origin rule.
 from unittest.mock import MagicMock
 
 
-def _build_request(host: str, origin, scheme: str = "http") -> MagicMock:
+def _build_request(
+    host: str,
+    origin,
+    scheme: str = "http",
+) -> MagicMock:
     request = MagicMock()
     request.url.scheme = scheme
     request.url.netloc = host

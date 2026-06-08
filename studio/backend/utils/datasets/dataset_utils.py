@@ -202,7 +202,11 @@ _CHATML_ROLE_ORDER = ("system", "user", "assistant")
 _CHATML_TO_ALPACA = {"user": "instruction", "system": "input", "assistant": "output"}
 
 
-def _apply_user_mapping(dataset, mapping: dict, batch_size: int = 1000):
+def _apply_user_mapping(
+    dataset,
+    mapping: dict,
+    batch_size: int = 1000,
+):
     """
     Apply user-provided column mapping to convert dataset to conversations format.
 
@@ -278,7 +282,12 @@ def _extract_column_value(val, col: str, label_mapping: dict) -> str:
     return str_val
 
 
-def _apply_template_mapping(dataset, column_roles: dict, meta: dict, batch_size: int = 1000):
+def _apply_template_mapping(
+    dataset,
+    column_roles: dict,
+    meta: dict,
+    batch_size: int = 1000,
+):
     """
     Apply advisor-driven mapping for non-conversational datasets.
 
@@ -345,7 +354,11 @@ def _apply_template_mapping(dataset, column_roles: dict, meta: dict, batch_size:
     )
 
 
-def _apply_user_mapping_alpaca(dataset, mapping: dict, batch_size: int = 1000):
+def _apply_user_mapping_alpaca(
+    dataset,
+    mapping: dict,
+    batch_size: int = 1000,
+):
     """
     Apply user-provided column mapping to convert dataset to Alpaca format.
 

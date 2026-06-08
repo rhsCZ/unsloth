@@ -77,7 +77,10 @@ def weight_dequant_kernel(x_ptr, s_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
 
 
 def weight_dequant_block(
-    x: torch.Tensor, s: torch.Tensor, block_size: int = 128, dtype = torch.bfloat16
+    x: torch.Tensor,
+    s: torch.Tensor,
+    block_size: int = 128,
+    dtype = torch.bfloat16,
 ) -> torch.Tensor:
     if not x.is_contiguous():
         x = x.contiguous()
@@ -94,7 +97,11 @@ def weight_dequant_block(
     return y
 
 
-def weight_dequant(x: torch.Tensor, s: torch.Tensor, dtype = torch.bfloat16):
+def weight_dequant(
+    x: torch.Tensor,
+    s: torch.Tensor,
+    dtype = torch.bfloat16,
+):
     # Per-tensor scale: single value for entire weight matrix
     if s.numel() == 1:
         return x.to(dtype) * s.view(1, 1).to(dtype)
@@ -384,7 +391,13 @@ def fp8_torch_block_quant_forward(X, weight, weight_scale):
 
 class FbgemmFp8Linear_matmul(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, weight, weight_scale, bias = None):
+    def forward(
+        ctx,
+        x,
+        weight,
+        weight_scale,
+        bias = None,
+    ):
         if weight.shape[0] == weight_scale.shape[0] and (
             weight.shape[0] % 8 == 0 and weight.shape[1] % 8 == 0
         ):
@@ -449,13 +462,24 @@ class FbgemmFp8Linear_matmul(torch.autograd.Function):
 
 
 @torch_compile
-def fbgemm_fp8_linear(X, weight, weight_scale, bias = None):
+def fbgemm_fp8_linear(
+    X,
+    weight,
+    weight_scale,
+    bias = None,
+):
     return FbgemmFp8Linear_matmul.apply(X, weight, weight_scale, bias)
 
 
 class FP8_fbgemm_block_linear(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, X, weight, weight_scale, bias = None):
+    def forward(
+        ctx,
+        X,
+        weight,
+        weight_scale,
+        bias = None,
+    ):
         orig_shape = X.shape
         X = X.view(-1, X.shape[-1])
 
@@ -506,7 +530,12 @@ class FP8_fbgemm_block_linear(torch.autograd.Function):
 
 
 @torch_compile
-def fp8_fbgemm_block_linear(X, weight, weight_scale, bias = None):
+def fp8_fbgemm_block_linear(
+    X,
+    weight,
+    weight_scale,
+    bias = None,
+):
     return FP8_fbgemm_block_linear.apply(X, weight, weight_scale, bias)
 
 
@@ -585,7 +614,12 @@ except:
 
 
 @torch_compile
-def fp8_linear(X, weight, weight_scale, bias = None):
+def fp8_linear(
+    X,
+    weight,
+    weight_scale,
+    bias = None,
+):
     # Per-tensor quantization: single scalar scale for entire weight
     # Block quantized FP8: 2D scale tensor with multiple columns
     if weight_scale.numel() == 1 or (weight_scale.ndim == 2 and weight_scale.shape[1] > 1):

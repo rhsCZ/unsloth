@@ -232,10 +232,7 @@ def llm_generate_vlm_instruction(
     }
 
 
-def llm_classify_columns(
-    column_names: list[str],
-    samples: list[dict],
-) -> Optional[dict[str, str]]:
+def llm_classify_columns(column_names: list[str], samples: list[dict]) -> Optional[dict[str, str]]:
     """
     Ask a helper LLM to classify dataset columns into roles.
 
@@ -407,7 +404,11 @@ def _parse_json_response(text: str) -> Optional[dict]:
     return None
 
 
-def _generate_with_backend(backend, messages: list[dict], max_tokens: int = 512) -> str:
+def _generate_with_backend(
+    backend,
+    messages: list[dict],
+    max_tokens: int = 512,
+) -> str:
     """Run one chat completion on an already-loaded backend. Returns raw text."""
     logger.info("Advisor request: enable_thinking=False (per-request override)")
     cumulative = ""

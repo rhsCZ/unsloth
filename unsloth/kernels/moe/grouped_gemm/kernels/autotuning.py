@@ -307,11 +307,7 @@ def get_dW_kernel_configs(
 
 
 def estimate_smem_reqs(
-    num_stages: int,
-    BLOCK_SIZE_M: int,
-    BLOCK_SIZE_N: int,
-    BLOCK_SIZE_K: int,
-    dtype: torch.dtype,
+    num_stages: int, BLOCK_SIZE_M: int, BLOCK_SIZE_N: int, BLOCK_SIZE_K: int, dtype: torch.dtype
 ):
     num_bytes = dtype.itemsize
     return (

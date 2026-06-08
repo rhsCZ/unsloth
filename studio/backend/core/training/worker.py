@@ -40,9 +40,7 @@ from utils.wheel_utils import (
 )
 
 
-def _output_dir_from_resume_checkpoint(
-    resume_from_checkpoint: str | None,
-) -> str | None:
+def _output_dir_from_resume_checkpoint(resume_from_checkpoint: str | None) -> str | None:
     if not resume_from_checkpoint:
         return None
     path = Path(resume_from_checkpoint)
@@ -1304,7 +1302,7 @@ def _run_mlx_training(event_queue, stop_queue, config):
         _send(
             "status",
             status_message = (
-                "MLX vision image resize ignored for DeepSeek OCR " "(uses fixed Gundam preset)."
+                "MLX vision image resize ignored for DeepSeek OCR (uses fixed Gundam preset)."
             ),
         )
         vision_image_size = None
@@ -1751,12 +1749,7 @@ def _run_mlx_training(event_queue, stop_queue, config):
             pass
 
 
-def run_training_process(
-    *,
-    event_queue: Any,
-    stop_queue: Any,
-    config: dict,
-) -> None:
+def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> None:
     """Subprocess entrypoint. Fresh Python — no stale module state.
 
     Args:
@@ -2156,7 +2149,13 @@ def run_training_process(
 
                     _gm_lib = _torch_for_rocm.library.Library("aten", "IMPL")
 
-                    def _grouped_mm_safe_impl(self, mat2, offs = None, bias = None, out_dtype = None):
+                    def _grouped_mm_safe_impl(
+                        self,
+                        mat2,
+                        offs = None,
+                        bias = None,
+                        out_dtype = None,
+                    ):
                         """Python mm/bmm fallback for _grouped_mm on gfx1200 (null HIP kernel, ROCm ≤ 7.12)."""
                         _t = _torch_for_rocm
                         if offs is None:
@@ -3077,7 +3076,14 @@ def _run_embedding_training(event_queue: Any, stop_queue: Any, config: dict) -> 
     class _EmbeddingProgressCallback(TrainerCallback):
         """Sends training progress events to the parent process via event_queue."""
 
-        def on_log(self, args, state, control, logs = None, **kwargs):
+        def on_log(
+            self,
+            args,
+            state,
+            control,
+            logs = None,
+            **kwargs,
+        ):
             if not logs:
                 return
             loss_value = logs.get("loss", logs.get("train_loss", None))

@@ -41,7 +41,7 @@ except ImportError:
 def _require_bnb():
     if not _HAS_BNB:
         raise ImportError(
-            "Unsloth: Q-GaLore requires bitsandbytes. " "Install it with: pip install bitsandbytes"
+            "Unsloth: Q-GaLore requires bitsandbytes. Install it with: pip install bitsandbytes"
         )
 
 

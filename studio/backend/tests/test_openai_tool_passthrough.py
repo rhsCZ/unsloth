@@ -271,10 +271,7 @@ class TestChatCompletionRequestToolFields:
         assert self._make(stop = "\nUser:").stop == "\nUser:"
 
     def test_stop_list(self):
-        assert self._make(stop = ["\nUser:", "\nAssistant:"]).stop == [
-            "\nUser:",
-            "\nAssistant:",
-        ]
+        assert self._make(stop = ["\nUser:", "\nAssistant:"]).stop == ["\nUser:", "\nAssistant:"]
 
     def test_tools_default_none(self):
         req = self._make()
@@ -418,10 +415,7 @@ class TestAnthropicToolChoiceToOpenAI:
 
     def test_tool_named(self):
         result = anthropic_tool_choice_to_openai({"type": "tool", "name": "get_weather"})
-        assert result == {
-            "type": "function",
-            "function": {"name": "get_weather"},
-        }
+        assert result == {"type": "function", "function": {"name": "get_weather"}}
 
     def test_tool_missing_name_returns_none(self):
         assert anthropic_tool_choice_to_openai({"type": "tool"}) is None
@@ -546,10 +540,7 @@ class TestDropEmptyAssistantSentinels:
             {"role": "user", "content": "again"},
         ]
         out = _drop_empty_assistant_sentinels(msgs)
-        assert out == [
-            {"role": "user", "content": "hi"},
-            {"role": "user", "content": "again"},
-        ]
+        assert out == [{"role": "user", "content": "hi"}, {"role": "user", "content": "again"}]
 
     def test_drops_assistant_with_no_content_key(self):
         # exclude_none=True strips the content key entirely; filter must catch this.
@@ -559,10 +550,7 @@ class TestDropEmptyAssistantSentinels:
             {"role": "user", "content": "ok"},
         ]
         out = _drop_empty_assistant_sentinels(msgs)
-        assert out == [
-            {"role": "user", "content": "hi"},
-            {"role": "user", "content": "ok"},
-        ]
+        assert out == [{"role": "user", "content": "hi"}, {"role": "user", "content": "ok"}]
 
     def test_preserves_assistant_with_text(self):
         msgs = [
@@ -662,16 +650,10 @@ class TestGgufVisionMessages:
         messages, has_image = _openai_messages_for_gguf_chat(req, is_vision = True)
 
         assert has_image is True
-        assert messages[0]["content"][0] == {
-            "type": "text",
-            "text": "describe image one",
-        }
+        assert messages[0]["content"][0] == {"type": "text", "text": "describe image one"}
         assert messages[0]["content"][1]["type"] == "image_url"
         assert len(messages[0]["content"]) == 2
-        assert messages[2]["content"][0] == {
-            "type": "text",
-            "text": "describe image two",
-        }
+        assert messages[2]["content"][0] == {"type": "text", "text": "describe image two"}
         assert messages[2]["content"][1]["type"] == "image_url"
         assert len(messages[2]["content"]) == 2
         assert isinstance(messages[1]["content"], str)
@@ -694,10 +676,7 @@ class TestGgufVisionMessages:
         messages, has_image = _openai_messages_for_gguf_chat(req, is_vision = True)
 
         assert has_image is True
-        assert messages[0]["content"][0] == {
-            "type": "text",
-            "text": "describe this image",
-        }
+        assert messages[0]["content"][0] == {"type": "text", "text": "describe this image"}
         assert messages[0]["content"][1]["type"] == "image_url"
         assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
@@ -825,9 +804,7 @@ class TestGgufVisionToolRouting:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": (
-                                    "data:image/png;base64," f"{TestGgufVisionMessages._PNG_B64}"
-                                ),
+                                "url": (f"data:image/png;base64,{TestGgufVisionMessages._PNG_B64}"),
                             },
                         },
                     ],

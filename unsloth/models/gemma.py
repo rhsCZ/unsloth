@@ -318,7 +318,12 @@ class GemmaFixedRotaryEmbedding(torch.nn.Module):
         self.multi_gpu_sin_cached[device.index] = sin
         return cos, sin
 
-    def forward(self, x, position_ids = None, seq_len = None):
+    def forward(
+        self,
+        x,
+        position_ids = None,
+        seq_len = None,
+    ):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len is not None and seq_len > self.current_rope_size:
             self._set_cos_sin_cache(seq_len = seq_len, device = x.device, dtype = x.dtype)
@@ -330,7 +335,11 @@ class GemmaFixedRotaryEmbedding(torch.nn.Module):
             self.multi_gpu_sin_cached[device_index][:seq_len],
         )
 
-    def get_cached(self, seq_len = None, device_index = None):
+    def get_cached(
+        self,
+        seq_len = None,
+        device_index = None,
+    ):
         if device_index is None:
             device_index = torch.cuda.current_device()
         return self.multi_gpu_cos_cached[device_index], self.multi_gpu_sin_cached[device_index]
@@ -426,7 +435,11 @@ class FastGemmaModel(FastLlamaModel):
         return
 
     @staticmethod
-    def post_patch(model, tokenizer, correct_dtype = None):
+    def post_patch(
+        model,
+        tokenizer,
+        correct_dtype = None,
+    ):
         # Gemma does not downcast RoPE
         model, tokenizer = patch_model_and_tokenizer(
             model, tokenizer, downcast_rope = False, correct_dtype = correct_dtype

@@ -634,7 +634,11 @@ def _print_summary_header(stats: dict, fmt: str) -> bool:
     return True
 
 
-def print_report(stats: dict, fmt: str, summary_only: bool = False):
+def print_report(
+    stats: dict,
+    fmt: str,
+    summary_only: bool = False,
+):
     """Print a human-readable summary, optionally with full findings list."""
     has_findings = _print_summary_header(stats, fmt)
     if not has_findings or summary_only:
@@ -665,7 +669,12 @@ def print_report(stats: dict, fmt: str, summary_only: bool = False):
     print(f"{'=' * 64}")
 
 
-def show_row(dataset: Dataset, row_indices: list[int], fmt: str, col: str = None):
+def show_row(
+    dataset: Dataset,
+    row_indices: list[int],
+    fmt: str,
+    col: str = None,
+):
     """Print the full contents of specific rows for inspection.
 
     Used by test_codex_fixes.py to verify row rendering behaviour.

@@ -349,13 +349,7 @@ def test_normal_path_streams_all_tokens():
     # when cancel_event is unset.
     ev = threading.Event()
     chunks = asyncio.run(_consume(_post_fix_gguf_loop(ev)))
-    assert chunks == [
-        "first_chunk",
-        "cumulative-1",
-        "cumulative-2",
-        "final_chunk",
-        "[DONE]",
-    ]
+    assert chunks == ["first_chunk", "cumulative-1", "cumulative-2", "final_chunk", "[DONE]"]
 
 
 def test_cancel_during_streaming_stops_iteration_promptly():

@@ -529,9 +529,7 @@ def test_simple_linux_direct_release_honors_torch_cudart_preference(
     ],
 )
 def test_simple_linux_direct_release_rejects_branch_without_exact_source_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-    mutate,
-    expected_match,
+    monkeypatch: pytest.MonkeyPatch, mutate, expected_match
 ):
     source_commit = "25b1bc9c2f9aa0a390b968ee1ffd9ff01340a3fe"
     release = {
@@ -785,9 +783,7 @@ def test_validate_prebuilt_choice_creates_repo_shaped_windows_install(
 
 
 def test_activate_install_tree_restores_existing_install_after_activation_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
@@ -836,9 +832,7 @@ def test_activate_install_tree_restores_existing_install_after_activation_failur
 
 
 def test_activate_install_tree_cleans_all_paths_when_rollback_restore_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
@@ -1466,9 +1460,7 @@ def test_existing_install_matches_plan_windows_cuda_requires_cuda_dll(tmp_path: 
     assert existing_install_matches_plan(install_dir, host, plan) is False
 
 
-def test_existing_install_matches_plan_windows_cuda_paired_requires_cudart(
-    tmp_path: Path,
-):
+def test_existing_install_matches_plan_windows_cuda_paired_requires_cudart(tmp_path: Path):
     """When the choice ships a paired cudart bundle (#5106), the install
     is considered stale unless cudart64_*.dll and cublas64_*.dll are
     actually on disk. Otherwise existing broken installs would keep
@@ -1584,9 +1576,7 @@ def test_existing_install_matches_plan_windows_cuda_paired_requires_cudart(
     assert existing_install_matches_plan(install_dir, host, plan) is False
 
 
-def test_existing_install_matches_plan_windows_cuda_unpaired_skips_cudart_check(
-    tmp_path: Path,
-):
+def test_existing_install_matches_plan_windows_cuda_unpaired_skips_cudart_check(tmp_path: Path):
     """If the choice has no paired runtime archive (manifest dropped it,
     or upstream did not ship cudart), legacy installs without cudart on
     disk must still pass the health check -- otherwise the installer
@@ -1666,9 +1656,7 @@ def test_existing_install_matches_plan_windows_cuda_unpaired_skips_cudart_check(
     assert existing_install_matches_plan(install_dir, host, plan) is True
 
 
-def test_existing_install_fingerprint_changes_when_cudart_pair_added(
-    tmp_path: Path,
-):
+def test_existing_install_fingerprint_changes_when_cudart_pair_added(tmp_path: Path):
     """Existing pre-#5322 Windows CUDA installs (no paired cudart) must
     be treated as stale once the choice gains a runtime archive,
     otherwise the fingerprint match would keep skipping the reinstall
@@ -2477,10 +2465,7 @@ def test_install_prebuilt_same_tag_upstream_failure_uses_older_unsloth_release_p
 
     install_prebuilt(install_dir, "latest", "unslothai/llama.cpp", "")
 
-    assert attempted == [
-        ("b9002", "release-2", "upstream"),
-        ("b9001", "release-1", "upstream"),
-    ]
+    assert attempted == [("b9002", "release-2", "upstream"), ("b9001", "release-1", "upstream")]
     assert activated["install_dir"] == install_dir
 
 
@@ -2489,7 +2474,11 @@ def io_bytes(data: bytes):
 
 
 def add_bytes_to_tar(
-    archive: tarfile.TarFile, name: str, data: bytes, *, mode: int = 0o644
+    archive: tarfile.TarFile,
+    name: str,
+    data: bytes,
+    *,
+    mode: int = 0o644,
 ) -> None:
     info = tarfile.TarInfo(name)
     info.size = len(data)
@@ -2504,9 +2493,7 @@ def add_symlink_to_tar(archive: tarfile.TarFile, name: str, target: str) -> None
     archive.addfile(info)
 
 
-def test_existing_install_matches_choice_fails_when_install_tree_incomplete(
-    tmp_path: Path,
-):
+def test_existing_install_matches_choice_fails_when_install_tree_incomplete(tmp_path: Path):
     """confirm_install_tree guard rejects installs missing critical files."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
@@ -2595,9 +2582,7 @@ def test_existing_install_matches_choice_fails_when_install_tree_incomplete(
     )
 
 
-def test_existing_install_matches_choice_fails_when_install_tree_incomplete_macos(
-    tmp_path: Path,
-):
+def test_existing_install_matches_choice_fails_when_install_tree_incomplete_macos(tmp_path: Path):
     """confirm_install_tree guard rejects macOS arm64 installs missing critical files."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
@@ -2734,9 +2719,7 @@ def test_paired_runtime_dll_patterns_excludes_executables() -> None:
         assert paired_runtime_dll_patterns(non_windows) == []
 
 
-def test_runtime_overlay_cannot_overwrite_main_archive_payload(
-    tmp_path: Path,
-) -> None:
+def test_runtime_overlay_cannot_overwrite_main_archive_payload(tmp_path: Path) -> None:
     """End-to-end: a malformed runtime archive containing
     ``llama-server.exe`` alongside the real cudart DLLs must NOT
     replace the main archive's ``llama-server.exe``.
@@ -2800,7 +2783,14 @@ def test_runtime_overlay_cannot_overwrite_main_archive_payload(
 
     orig_download = INSTALL_LLAMA_PREBUILT.download_file_verified
 
-    def fake_download(url, target_path, *, expected_sha256 = None, label = None, **kw):
+    def fake_download(
+        url,
+        target_path,
+        *,
+        expected_sha256 = None,
+        label = None,
+        **kw,
+    ):
         src = main_zip if "cudart" not in url else runtime_zip
         _shutil.copy2(src, target_path)
         if expected_sha256:
@@ -2824,9 +2814,7 @@ def test_runtime_overlay_cannot_overwrite_main_archive_payload(
         assert (release_dir / name).exists(), f"missing {name}"
 
 
-def test_linux_runtime_overlay_copies_llama_tool_impl_libraries(
-    tmp_path: Path,
-) -> None:
+def test_linux_runtime_overlay_copies_llama_tool_impl_libraries(tmp_path: Path) -> None:
     install_from_archives = INSTALL_LLAMA_PREBUILT.install_from_archives
 
     work = tmp_path / "work"
@@ -2890,7 +2878,14 @@ def test_linux_runtime_overlay_copies_llama_tool_impl_libraries(
 
     orig_download = INSTALL_LLAMA_PREBUILT.download_file_verified
 
-    def fake_download(url, target_path, *, expected_sha256 = None, label = None, **kw):
+    def fake_download(
+        url,
+        target_path,
+        *,
+        expected_sha256 = None,
+        label = None,
+        **kw,
+    ):
         _shutil.copy2(bundle, target_path)
         if expected_sha256:
             actual = hashlib.sha256(Path(target_path).read_bytes()).hexdigest()

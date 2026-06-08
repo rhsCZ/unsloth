@@ -202,12 +202,7 @@ def _get_new_mapper():
 
 
 def _resolve_with_mappers(
-    model_name,
-    load_in_4bit,
-    load_in_fp8,
-    int_to_float,
-    float_to_int,
-    map_to_unsloth_16bit,
+    model_name, load_in_4bit, load_in_fp8, int_to_float, float_to_int, map_to_unsloth_16bit
 ):
     return __get_model_name(
         model_name = model_name,

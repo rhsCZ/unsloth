@@ -40,7 +40,12 @@ def _make_client() -> ExternalProviderClient:
     )
 
 
-def _capture(monkeypatch, model: str, threshold, tools = None) -> dict:
+def _capture(
+    monkeypatch,
+    model: str,
+    threshold,
+    tools = None,
+) -> dict:
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -147,10 +152,7 @@ def test_unsupported_model_silently_drops_compaction(monkeypatch):
     captured = _capture(monkeypatch, "claude-haiku-4-5-20251001", 150_000)
     assert "context_management" not in captured["body"]
     # The beta header must not carry compact-2026-01-12 either.
-    assert "compact-2026-01-12" not in captured["headers"].get(
-        "anthropic-beta",
-        "",
-    )
+    assert "compact-2026-01-12" not in captured["headers"].get("anthropic-beta", "")
 
 
 # ── omitted threshold leaves body untouched ─────────────────────────
@@ -159,10 +161,7 @@ def test_unsupported_model_silently_drops_compaction(monkeypatch):
 def test_omitted_threshold_no_body_field(monkeypatch):
     captured = _capture(monkeypatch, "claude-opus-4-7", None)
     assert "context_management" not in captured["body"]
-    assert "compact-2026-01-12" not in captured["headers"].get(
-        "anthropic-beta",
-        "",
-    )
+    assert "compact-2026-01-12" not in captured["headers"].get("anthropic-beta", "")
 
 
 # ── ChatCompletionRequest schema accepts sub-50k threshold ──────────

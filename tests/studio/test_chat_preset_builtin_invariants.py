@@ -40,7 +40,7 @@ def _require_node():
 def _ensure_harness():
     TEMP.mkdir(parents = True, exist_ok = True)
     (TEMP / "register.mjs").write_text(
-        "import { register } from 'node:module';\n" "register('./loader.mjs', import.meta.url);\n"
+        "import { register } from 'node:module';\nregister('./loader.mjs', import.meta.url);\n"
     )
     (TEMP / "loader.mjs").write_text(
         "export function resolve(specifier, context, next) {\n"

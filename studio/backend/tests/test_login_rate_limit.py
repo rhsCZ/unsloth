@@ -45,7 +45,11 @@ def env_trust_proxy(monkeypatch):
 
 
 class _FakeRequest:
-    def __init__(self, client_host = "127.0.0.1", headers = None):
+    def __init__(
+        self,
+        client_host = "127.0.0.1",
+        headers = None,
+    ):
         from starlette.datastructures import Headers
         self.client = type("Client", (), {"host": client_host})()
         self.headers = Headers(headers or {})

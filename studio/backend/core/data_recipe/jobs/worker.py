@@ -72,12 +72,7 @@ def _build_dataset_name(*, run_name: str | None, job_id: str, artifact_root: Pat
     return candidate
 
 
-def run_job_process(
-    *,
-    event_queue,
-    recipe: dict[str, Any],
-    run: dict[str, Any],
-) -> None:
+def run_job_process(*, event_queue, recipe: dict[str, Any], run: dict[str, Any]) -> None:
     """
     Subprocess entrypoint.
     Sends events to `event_queue`.

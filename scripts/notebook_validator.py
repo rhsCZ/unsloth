@@ -798,9 +798,7 @@ POLICY_CLAUSES_DEFAULT = [
 ]
 
 
-def extract_policy_clauses(
-    update_script: pathlib.Path,
-) -> list[tuple[str, re.Pattern[str], Any]]:
+def extract_policy_clauses(update_script: pathlib.Path) -> list[tuple[str, re.Pattern[str], Any]]:
     """Best-effort: scan update_all_notebooks.py for canonical phrases used by
     multiple templates. Falls back to POLICY_CLAUSES_DEFAULT.
 

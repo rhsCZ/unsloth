@@ -24,7 +24,11 @@ max_seq_length = 2048  # Can increase for longer reasoning traces
 lora_rank = 64  # Larger rank = smarter, but slower
 
 
-def evaluate_merged_model(result_queue, load_in_4bit = False, load_in_8bit = False):
+def evaluate_merged_model(
+    result_queue,
+    load_in_4bit = False,
+    load_in_8bit = False,
+):
     from unsloth import FastLanguageModel
     from tests.utils.aime_eval import evaluate_model_aime
 
@@ -179,7 +183,11 @@ def training_run(result_queue):
         print(f"Prompt lengths - Min: {min_length}, Max: {max_length}, Avg: {avg_length:.1f}")
         return max_length, avg_length
 
-    def extract_unsloth_answer(text, start_tag = "<SOLUTION>", end_tag = "</SOLUTION>"):
+    def extract_unsloth_answer(
+        text,
+        start_tag = "<SOLUTION>",
+        end_tag = "</SOLUTION>",
+    ):
         """Extract answer from Unsloth SOLUTION tags"""
         pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
         matches = re.findall(pattern, text, re.DOTALL)

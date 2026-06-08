@@ -280,8 +280,7 @@ async def login(payload: AuthLoginRequest, request: Request) -> Token:
 
 @router.post("/logout", status_code = status.HTTP_204_NO_CONTENT)
 async def logout(
-    request: Request,
-    current_subject: str = Depends(get_current_subject_allow_password_change),
+    request: Request, current_subject: str = Depends(get_current_subject_allow_password_change)
 ) -> Response:
     """Revoke refresh tokens for the subject; the access token is stateless and expires on its own."""
     try:
@@ -395,8 +394,7 @@ def _row_to_api_key_response(row: dict) -> ApiKeyResponse:
 
 @router.post("/api-keys", response_model = CreateApiKeyResponse)
 async def create_api_key(
-    payload: CreateApiKeyRequest,
-    current_subject: str = Depends(get_current_subject),
+    payload: CreateApiKeyRequest, current_subject: str = Depends(get_current_subject)
 ) -> CreateApiKeyResponse:
     """Create a new API key. The raw key is returned once and cannot be retrieved later."""
     expires_at = None
@@ -417,9 +415,7 @@ async def create_api_key(
 
 
 @router.get("/api-keys", response_model = ApiKeyListResponse)
-async def list_api_keys(
-    current_subject: str = Depends(get_current_subject),
-) -> ApiKeyListResponse:
+async def list_api_keys(current_subject: str = Depends(get_current_subject)) -> ApiKeyListResponse:
     """List all API keys for the authenticated user (raw keys are never exposed)."""
     rows = storage.list_api_keys(current_subject)
     return ApiKeyListResponse(
@@ -428,10 +424,7 @@ async def list_api_keys(
 
 
 @router.delete("/api-keys/{key_id}")
-async def revoke_api_key(
-    key_id: int,
-    current_subject: str = Depends(get_current_subject),
-) -> dict:
+async def revoke_api_key(key_id: int, current_subject: str = Depends(get_current_subject)) -> dict:
     """Revoke (soft-delete) an API key."""
     if not storage.revoke_api_key(current_subject, key_id):
         raise HTTPException(

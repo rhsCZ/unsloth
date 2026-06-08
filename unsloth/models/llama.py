@@ -585,7 +585,12 @@ torch_nn_functional_silu = torch.nn.functional.silu
 
 
 def fast_swiglu_inference(
-    self, X, temp_gate = None, temp_up = None, gate_multiplier = None, down_multiplier = None
+    self,
+    X,
+    temp_gate = None,
+    temp_up = None,
+    gate_multiplier = None,
+    down_multiplier = None,
 ):
     # gate = self.gate_proj(X)
     # up   = self.up_proj(X)
@@ -616,7 +621,13 @@ torch_square = torch.square
 torch_mean = torch.mean
 
 
-def fast_rms_layernorm_inference(self, X, XX = None, XX2 = None, variance = None):
+def fast_rms_layernorm_inference(
+    self,
+    X,
+    XX = None,
+    XX2 = None,
+    variance = None,
+):
     old_dtype = X.dtype
     if XX is None:
         XX = X.to(torch.float32)
@@ -636,7 +647,11 @@ def fast_rms_layernorm_inference(self, X, XX = None, XX2 = None, variance = None
     return X
 
 
-def fast_rms_layernorm_inference_gemma(self, X, out_weight = None):
+def fast_rms_layernorm_inference_gemma(
+    self,
+    X,
+    out_weight = None,
+):
     XX = X.to(torch.float32)
     variance = XX.square().mean(-1, keepdim = True)
     variance += self.variance_epsilon
@@ -1724,7 +1739,12 @@ class LlamaRotaryEmbedding(torch.nn.Module):
         self.multi_gpu_sin_cached[device.index] = sin
         return cos, sin
 
-    def forward(self, x, position_ids = None, seq_len = None):
+    def forward(
+        self,
+        x,
+        position_ids = None,
+        seq_len = None,
+    ):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len is not None and seq_len > self.current_rope_size:
             self._set_cos_sin_cache(seq_len = seq_len, device = x.device, dtype = x.dtype)
@@ -1735,7 +1755,11 @@ class LlamaRotaryEmbedding(torch.nn.Module):
             self.multi_gpu_sin_cached[device_index][:seq_len],
         )
 
-    def get_cached(self, seq_len = None, device_index = None):
+    def get_cached(
+        self,
+        seq_len = None,
+        device_index = None,
+    ):
         if device_index is None:
             device_index = get_current_device()
         return self.multi_gpu_cos_cached[device_index], self.multi_gpu_sin_cached[device_index]
@@ -1945,7 +1969,12 @@ class LongRopeRotaryEmbedding(torch.nn.Module):
         self.multi_gpu_long_sin_cached[device.index] = sin_cached
         return cos_cached, sin_cached
 
-    def forward(self, x, position_ids = None, seq_len = None):
+    def forward(
+        self,
+        x,
+        position_ids = None,
+        seq_len = None,
+    ):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len is not None and seq_len > self.current_rope_size:
             self._set_cos_sin_cache(seq_len = seq_len, device = x.device, dtype = x.dtype)
@@ -1963,7 +1992,11 @@ class LongRopeRotaryEmbedding(torch.nn.Module):
                 self.multi_gpu_long_sin_cached[device_index][:seq_len],
             )
 
-    def get_cached(self, seq_len = None, device_index = None):
+    def get_cached(
+        self,
+        seq_len = None,
+        device_index = None,
+    ):
         if device_index is None:
             device_index = get_current_device()
         if seq_len is not None and seq_len < self.original_max_position_embeddings:
@@ -1985,11 +2018,7 @@ class LongRopeRotaryEmbedding(torch.nn.Module):
             )
 
 
-def unsloth_fast_generate(
-    self,
-    *args,
-    **kwargs,
-):
+def unsloth_fast_generate(self, *args, **kwargs):
     # If the model starts out in training mode, restore training mode after generation
     restore_training_mode = self.training
     # why: snapshot the actual GC mode value (e.g. "unsloth") before for_inference
@@ -2700,7 +2729,11 @@ class FastLlamaModel:
         return model, tokenizer
 
     @staticmethod
-    def post_patch(model, tokenizer, correct_dtype = None):
+    def post_patch(
+        model,
+        tokenizer,
+        correct_dtype = None,
+    ):
         model, tokenizer = patch_model_and_tokenizer(
             model, tokenizer, downcast_rope = True, correct_dtype = correct_dtype
         )
@@ -3205,10 +3238,7 @@ class FastLlamaModel:
         return model
 
     @staticmethod
-    def patch_peft_model(
-        model,
-        use_gradient_checkpointing = "unsloth",
-    ):
+    def patch_peft_model(model, use_gradient_checkpointing = "unsloth"):
         if os.environ.get("UNSLOTH_USE_NEW_MODEL", "0") == "1":
             return FastBaseModel.patch_peft_model(
                 model = model,

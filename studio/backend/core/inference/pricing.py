@@ -106,11 +106,7 @@ def _lookup(provider: str, model: str) -> Optional[dict[str, float]]:
     return None
 
 
-def calculate_cost(
-    provider: str,
-    model: str,
-    usage: dict[str, Any],
-) -> dict[str, float]:
+def calculate_cost(provider: str, model: str, usage: dict[str, Any]) -> dict[str, float]:
     """Return a per-turn USD cost breakdown with per-bucket + total
     fields so the frontend can render either a single number or a
     tooltip without re-doing the math. When the model isn't in the

@@ -231,7 +231,11 @@ class TestEnsureFlashAttn:
         step_messages: list[tuple[str, str]] = []
         printed_failures: list[str] = []
 
-        def fake_step(label: str, value: str, color_fn = None):
+        def fake_step(
+            label: str,
+            value: str,
+            color_fn = None,
+        ):
             step_messages.append((label, value))
 
         with (
@@ -282,7 +286,11 @@ class TestEnsureFlashAttn:
     def test_wheel_missing_skips_install_at_setup_time(self):
         step_messages: list[tuple[str, str]] = []
 
-        def fake_step(label: str, value: str, color_fn = None):
+        def fake_step(
+            label: str,
+            value: str,
+            color_fn = None,
+        ):
             step_messages.append((label, value))
 
         with (
@@ -308,10 +316,7 @@ class TestEnsureFlashAttn:
             ips._ensure_flash_attn()
 
         mock_install_wheel.assert_not_called()
-        assert (
-            "warning",
-            "No published flash-attn prebuilt wheel found",
-        ) in step_messages
+        assert ("warning", "No published flash-attn prebuilt wheel found") in step_messages
 
     def test_skip_env_disables_setup_install(self):
         with (
@@ -331,7 +336,11 @@ class TestEnsureFlashAttn:
     def test_blackwell_gpu_skips_install_with_warning(self):
         step_messages: list[tuple[str, str]] = []
 
-        def fake_step(label: str, value: str, color_fn = None):
+        def fake_step(
+            label: str,
+            value: str,
+            color_fn = None,
+        ):
             step_messages.append((label, value))
 
         with (
@@ -353,7 +362,11 @@ class TestEnsureFlashAttn:
     def test_blackwell_gpu_on_windows_emits_blackwell_warning(self):
         step_messages: list[tuple[str, str]] = []
 
-        def fake_step(label: str, value: str, color_fn = None):
+        def fake_step(
+            label: str,
+            value: str,
+            color_fn = None,
+        ):
             step_messages.append((label, value))
 
         with (
@@ -375,7 +388,11 @@ class TestEnsureFlashAttn:
     def test_non_blackwell_windows_does_not_emit_blackwell_warning(self):
         step_messages: list[tuple[str, str]] = []
 
-        def fake_step(label: str, value: str, color_fn = None):
+        def fake_step(
+            label: str,
+            value: str,
+            color_fn = None,
+        ):
             step_messages.append((label, value))
 
         with (

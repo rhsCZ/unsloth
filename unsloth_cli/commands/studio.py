@@ -761,10 +761,7 @@ def _expand_attached_np_short() -> None:
 
 
 def _consume_legacy_short_aliases(
-    args: List[str],
-    aliases: tuple[str, ...],
-    current: Optional[str],
-    canonical: str,
+    args: List[str], aliases: tuple[str, ...], current: Optional[str], canonical: str
 ) -> tuple[Optional[str], List[str]]:
     """Pop exact-match legacy shorts (`-m`/`-hfr`/`-f`) from args;
     leave clusters (`-mg`/`-fa`/...) for the llama-server tail. Inline

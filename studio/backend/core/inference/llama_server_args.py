@@ -201,10 +201,7 @@ def parse_ctx_override(args: Optional[Iterable[str]]) -> Optional[int]:
     return override
 
 
-def resolve_requested_ctx(
-    args: Optional[Iterable[str]],
-    fallback_n_ctx: int,
-) -> int:
+def resolve_requested_ctx(args: Optional[Iterable[str]], fallback_n_ctx: int) -> int:
     """Return the context size load_model should treat as requested.
 
     Single source of truth for the two-line ``ctx_override = parse_ctx_override(...);
@@ -255,8 +252,7 @@ def parse_cache_override(args: Optional[Iterable[str]]) -> Optional[str]:
 
 
 def resolve_cache_type_kv(
-    args: Optional[Iterable[str]],
-    fallback_cache_type_kv: Optional[str],
+    args: Optional[Iterable[str]], fallback_cache_type_kv: Optional[str]
 ) -> Optional[str]:
     """Return the cache type load_model should treat as requested.
 

@@ -127,7 +127,11 @@ def _make_gguf_bytes(arch: str, kv_pairs: dict) -> bytes:
     return buf.getvalue()
 
 
-def _backend_from_gguf(arch: str, fields: dict, general: dict | None = None) -> LlamaCppBackend:
+def _backend_from_gguf(
+    arch: str,
+    fields: dict,
+    general: dict | None = None,
+) -> LlamaCppBackend:
     """Create a LlamaCppBackend with parsed GGUF metadata from given fields.
 
     `general` lets a test inject extra `general.*` metadata (used to

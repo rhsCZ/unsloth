@@ -48,10 +48,7 @@ async def list_training_runs(
 
 
 @router.get("/runs/{run_id}", response_model = TrainingRunDetailResponse)
-async def get_training_run_detail(
-    run_id: str,
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_training_run_detail(run_id: str, current_subject: str = Depends(get_current_subject)):
     """Get a single training run with full config and metrics."""
     run = get_run(run_id)
     if run is None:
@@ -106,10 +103,7 @@ async def update_training_run(
 
 
 @router.delete("/runs/{run_id}", response_model = TrainingRunDeleteResponse)
-async def delete_training_run(
-    run_id: str,
-    current_subject: str = Depends(get_current_subject),
-):
+async def delete_training_run(run_id: str, current_subject: str = Depends(get_current_subject)):
     """Delete a training run and its metrics (CASCADE)."""
     run = get_run(run_id)
     if run is None:

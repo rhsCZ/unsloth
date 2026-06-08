@@ -29,7 +29,15 @@ def delimiter_context():
     print_delimiter()
 
 
-def make_inputs(M, N, K, E, topk, dtype, requires_grad = False):
+def make_inputs(
+    M,
+    N,
+    K,
+    E,
+    topk,
+    dtype,
+    requires_grad = False,
+):
     X1 = torch.randn((M, K), device = "cuda", dtype = dtype, requires_grad = requires_grad) / 10
     X2 = torch.randn((M * topk, N), device = "cuda", dtype = dtype, requires_grad = requires_grad) / 10
     W1 = torch.randn((E, 2 * N, K), device = "cuda", dtype = dtype, requires_grad = requires_grad) / 10
@@ -89,7 +97,14 @@ def assert_equal(ref, tri):
         assert ref == tri, f"ref not equal to tri {ref} != {tri}"
 
 
-def assert_close(ref, tri, maxtol = None, rmstol = None, description = "--", verbose = True):
+def assert_close(
+    ref,
+    tri,
+    maxtol = None,
+    rmstol = None,
+    description = "--",
+    verbose = True,
+):
     if tri.dtype.itemsize == 1:
         ref_as_type = ref.to(tri.dtype)
         if ref.dtype == tri.dtype:

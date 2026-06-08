@@ -40,10 +40,7 @@ def _split_scope(split_name: str | None) -> str:
 
 
 def _drop_invalid_text_rows(
-    dataset: Dataset,
-    *,
-    mode_title: str,
-    split_scope: str,
+    dataset: Dataset, *, mode_title: str, split_scope: str
 ) -> tuple[Dataset, list[RawTextNotice]]:
     filtered_dataset = dataset.filter(lambda ex: isinstance(ex["text"], str))
     dropped_rows = len(dataset) - len(filtered_dataset)

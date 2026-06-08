@@ -49,7 +49,12 @@ from unsloth_zoo.utils import Version, _get_dtype
 torch_nn_functional_softmax = torch.nn.functional.softmax
 
 
-def Qwen3MoeSparseMoeBlock_fast_forward(self, X, temp_gate = None, temp_up = None):
+def Qwen3MoeSparseMoeBlock_fast_forward(
+    self,
+    X,
+    temp_gate = None,
+    temp_up = None,
+):
     # adapted from https://github.com/huggingface/transformers/pull/36878/files#diff-0855b77fc27ad9449158a1c74953f909b011c00de7125f7c8e68d0ff209c092aR356-R370
 
     bsz, seq_len, hd = X.shape

@@ -17,7 +17,11 @@ import zipfile
 from pathlib import Path
 
 
-def _atomic_write_text(path: Path, data: str, encoding: str = "utf-8") -> None:
+def _atomic_write_text(
+    path: Path,
+    data: str,
+    encoding: str = "utf-8",
+) -> None:
     """Atomic version of ``Path.write_text``.
 
     A crash or signal mid-write leaves the prior file intact; the

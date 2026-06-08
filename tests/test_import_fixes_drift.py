@@ -286,9 +286,9 @@ def test_peft_transformers_weight_conversion_importable_and_signature():
             "patch_peft_weight_converter_compatibility will silently no-op."
         )
 
-    assert hasattr(twc, "build_peft_weight_mapping"), (
-        "build_peft_weight_mapping vanished from " "peft.utils.transformers_weight_conversion."
-    )
+    assert hasattr(
+        twc, "build_peft_weight_mapping"
+    ), "build_peft_weight_mapping vanished from peft.utils.transformers_weight_conversion."
     sig = inspect.signature(twc.build_peft_weight_mapping)
     expected_params = {"weight_conversions", "adapter_name"}
     actual_params = set(sig.parameters)

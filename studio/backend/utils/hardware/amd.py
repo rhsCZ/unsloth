@@ -330,8 +330,7 @@ def get_primary_gpu_utilization() -> dict[str, Any]:
 
 
 def get_visible_gpu_utilization(
-    parent_visible_ids: Optional[list[int]],
-    parent_cuda_visible_devices: Optional[str] = None,
+    parent_visible_ids: Optional[list[int]], parent_cuda_visible_devices: Optional[str] = None
 ) -> dict[str, Any]:
     """Return utilization metrics for visible AMD GPUs."""
     if parent_visible_ids is None:
@@ -385,7 +384,7 @@ def get_visible_gpu_utilization(
         parsed_id = _parse_numeric(raw_id)
         if parsed_id is None:
             logger.warning(
-                "amd-smi GPU id %r could not be parsed; falling back to " "enumeration index %d",
+                "amd-smi GPU id %r could not be parsed; falling back to enumeration index %d",
                 raw_id,
                 fallback_idx,
             )

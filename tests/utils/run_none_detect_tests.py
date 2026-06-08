@@ -66,7 +66,11 @@ def section(title: str):
     print(f"{line}")
 
 
-def run_scan(dataset, label: str, fmt: str = "auto") -> dict | None:
+def run_scan(
+    dataset,
+    label: str,
+    fmt: str = "auto",
+) -> dict | None:
     print(f"\n--- Scanning: {label} (fmt={fmt}) ---")
     try:
         stats = scan_dataset(dataset, fmt = fmt)

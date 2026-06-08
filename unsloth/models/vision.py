@@ -271,11 +271,7 @@ except:
     torch_compiler_set_stance = None
 
 
-def unsloth_base_fast_generate(
-    self,
-    *args,
-    **kwargs,
-):
+def unsloth_base_fast_generate(self, *args, **kwargs):
     if len(args) != 0:
         input_ids = args[0]
     elif "input_ids" in kwargs:
@@ -1349,11 +1345,7 @@ class FastBaseModel:
                 finetune_mlp_modules = finetune_mlp_modules,
             )
         else:
-            assert type(target_modules) in (
-                list,
-                tuple,
-                str,
-            )
+            assert type(target_modules) in (list, tuple, str)
 
         if hasattr(model, "vllm_engine"):
             if (

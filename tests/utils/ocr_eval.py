@@ -272,7 +272,9 @@ class OCRModelEvaluator:
         self.model_comparison_results[model_name] = {"wer": wer, "cer": cer}
 
     def print_model_comparison(
-        self, save_csv: bool = True, save_plot: bool = True
+        self,
+        save_csv: bool = True,
+        save_plot: bool = True,
     ) -> Optional[pd.DataFrame]:
         """Print a comparison of all models evaluated so far."""
         if not self.model_comparison_results:
@@ -344,7 +346,13 @@ class OCRModelEvaluator:
         self.model_comparison_results.clear()
 
 
-def evaluate_ocr_model(model, processor, dataset, output_dir = "ocr_evaluation_results", **kwargs):
+def evaluate_ocr_model(
+    model,
+    processor,
+    dataset,
+    output_dir = "ocr_evaluation_results",
+    **kwargs,
+):
     """
     Convenience function that maintains backward compatibility with the original function.
     """

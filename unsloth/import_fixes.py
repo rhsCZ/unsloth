@@ -1445,7 +1445,12 @@ def _install_transformers_core_model_loading_stub():
             raise NotImplementedError
 
     class Concatenate(ConversionOps):
-        def __init__(self, dim = 0, *args, **kwargs):
+        def __init__(
+            self,
+            dim = 0,
+            *args,
+            **kwargs,
+        ):
             self.dim = dim
 
     class MergeModulelist(ConversionOps):
@@ -1453,7 +1458,13 @@ def _install_transformers_core_model_loading_stub():
             pass
 
     class Transpose(ConversionOps):
-        def __init__(self, dim0 = 0, dim1 = 1, *args, **kwargs):
+        def __init__(
+            self,
+            dim0 = 0,
+            dim1 = 1,
+            *args,
+            **kwargs,
+        ):
             self.dim0 = dim0
             self.dim1 = dim1
 
@@ -1921,7 +1932,12 @@ class _CausalConv1dImportBlockerFinder(importlib.abc.MetaPathFinder):
     def __init__(self):
         setattr(self, _CAUSAL_CONV1D_BLOCKER_SENTINEL, True)
 
-    def find_spec(self, fullname, path = None, target = None):
+    def find_spec(
+        self,
+        fullname,
+        path = None,
+        target = None,
+    ):
         if not CAUSAL_CONV1D_BROKEN or not _is_causal_conv1d_name(fullname):
             return None
         return importlib.machinery.ModuleSpec(
@@ -1950,7 +1966,12 @@ class _VllmImportBlockerFinder(importlib.abc.MetaPathFinder):
     def __init__(self):
         setattr(self, _VLLM_BLOCKER_SENTINEL, True)
 
-    def find_spec(self, fullname, path = None, target = None):
+    def find_spec(
+        self,
+        fullname,
+        path = None,
+        target = None,
+    ):
         if not VLLM_BROKEN or not _is_vllm_name(fullname):
             return None
         return importlib.machinery.ModuleSpec(

@@ -154,10 +154,7 @@ def test_responses_translates_image_parts(monkeypatch):
 
     parts = captured["body"]["input"][0]["content"]
     assert parts[0] == {"type": "input_text", "text": "What is this?"}
-    assert parts[1] == {
-        "type": "input_image",
-        "image_url": "data:image/png;base64,AAA",
-    }
+    assert parts[1] == {"type": "input_image", "image_url": "data:image/png;base64,AAA"}
     # No max_output_tokens key when caller passes max_tokens=None.
     assert "max_output_tokens" not in captured["body"]
 

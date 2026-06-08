@@ -58,9 +58,7 @@ def test_scan_trained_models_includes_lora_and_full_finetune_outputs(tmp_path: P
     assert found[full_dir.name] == (str(full_dir), "merged")
 
 
-def test_get_base_model_from_checkpoint_falls_back_to_full_finetune_config(
-    tmp_path: Path,
-):
+def test_get_base_model_from_checkpoint_falls_back_to_full_finetune_config(tmp_path: Path):
     (tmp_path / "config.json").write_text(
         json.dumps({"_name_or_path": "HuggingFaceTB/SmolLM-135M"})
     )
@@ -82,10 +80,7 @@ def test_get_base_model_from_lora_rejects_full_finetune_dirs(tmp_path: Path):
 @patch("utils.models.model_config.detect_audio_type", return_value = None)
 @patch("utils.models.model_config.is_vision_model", return_value = False)
 def test_model_config_full_finetune_local_path_is_not_lora(
-    _mock_vision,
-    _mock_audio_type,
-    _mock_audio_input,
-    tmp_path: Path,
+    _mock_vision, _mock_audio_type, _mock_audio_input, tmp_path: Path
 ):
     (tmp_path / "config.json").write_text(json.dumps({"_name_or_path": "unsloth/Qwen3-4B"}))
     (tmp_path / "model.safetensors").write_bytes(b"")

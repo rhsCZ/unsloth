@@ -161,7 +161,7 @@ def validate(payload: RecipePayload) -> ValidateResponse:
             if not (exc.name or "").startswith("data_designer"):
                 raise
             logger.debug(
-                "data_designer not installed; deferring full config " "validation to run start",
+                "data_designer not installed; deferring full config validation to run start",
                 missing_module = exc.name,
             )
         except Exception as exc:

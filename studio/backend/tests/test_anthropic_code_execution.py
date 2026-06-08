@@ -118,10 +118,7 @@ def test_code_execution_tool_appended_to_request_body(monkeypatch):
     tools = body.get("tools") or []
     # Opus 4.7 gets the newer date-pinned variant (`_20260120`) that
     # supports REPL state persistence + programmatic tool calling.
-    assert {
-        "type": "code_execution_20260120",
-        "name": "code_execution",
-    } in tools
+    assert {"type": "code_execution_20260120", "name": "code_execution"} in tools
     # No web_search entry when only code_execution is enabled.
     assert all("web_search" not in (t.get("type") or "") for t in tools)
     # Beta header still carries the documented flag; both `_20250825`
@@ -275,11 +272,7 @@ def test_bash_code_execution_emits_tool_start_and_end(monkeypatch):
     assert start["tool_call_id"] == "srvtoolu_1"
     # `_server_tool: True` marks this as a provider-side synthetic
     # tool card for the frontend's history serializer.
-    assert start["arguments"] == {
-        "kind": "bash",
-        "command": "ls -la",
-        "_server_tool": True,
-    }
+    assert start["arguments"] == {"kind": "bash", "command": "ls -la", "_server_tool": True}
 
     assert end["type"] == "tool_end"
     assert end["tool_call_id"] == "srvtoolu_1"
@@ -306,7 +299,7 @@ def test_text_editor_create_emits_kind_and_status(monkeypatch):
             "delta": {
                 "type": "input_json_delta",
                 "partial_json": (
-                    '{"command": "create", "path": "new_file.txt", ' '"file_text": "hi"}'
+                    '{"command": "create", "path": "new_file.txt", "file_text": "hi"}'
                 ),
             },
         },

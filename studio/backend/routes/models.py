@@ -140,7 +140,9 @@ logger = get_logger(__name__)
 
 
 def derive_model_type(
-    is_vision: bool, audio_type: Optional[str], is_embedding: bool = False
+    is_vision: bool,
+    audio_type: Optional[str],
+    is_embedding: bool = False,
 ) -> ModelType:
     """Collapse individual capability flags into a single model modality string."""
     if is_embedding:
@@ -200,11 +202,7 @@ def _is_model_directory(d: Path) -> bool:
         return False
 
 
-def _scan_models_dir(
-    models_dir: Path,
-    *,
-    limit: int | None = None,
-) -> List[LocalModelInfo]:
+def _scan_models_dir(models_dir: Path, *, limit: int | None = None) -> List[LocalModelInfo]:
     if not models_dir.exists() or not models_dir.is_dir():
         return []
 
@@ -445,7 +443,7 @@ def _ollama_links_dir(ollama_dir: Path) -> Optional[Path]:
         return primary
     except OSError as e:
         logger.debug(
-            "Ollama dir %s not writable for .studio_links (%s); " "falling back to Studio cache",
+            "Ollama dir %s not writable for .studio_links (%s); falling back to Studio cache",
             ollama_dir,
             e,
         )
@@ -813,9 +811,7 @@ async def list_local_models(
 
 
 @router.get("/scan-folders")
-async def get_scan_folders(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_scan_folders(current_subject: str = Depends(get_current_subject)):
     """List all registered custom model scan folders."""
     from storage.studio_db import list_scan_folders
     return {"folders": list_scan_folders()}
@@ -823,8 +819,7 @@ async def get_scan_folders(
 
 @router.post("/scan-folders", response_model = ScanFolderInfo, status_code = 201)
 async def add_scan_folder_endpoint(
-    body: AddScanFolderRequest,
-    current_subject: str = Depends(get_current_subject),
+    body: AddScanFolderRequest, current_subject: str = Depends(get_current_subject)
 ):
     """Register a new directory to scan for local models."""
     from storage.studio_db import add_scan_folder
@@ -840,8 +835,7 @@ async def add_scan_folder_endpoint(
 
 @router.delete("/scan-folders/{folder_id}")
 async def remove_scan_folder_endpoint(
-    folder_id: int,
-    current_subject: str = Depends(get_current_subject),
+    folder_id: int, current_subject: str = Depends(get_current_subject)
 ):
     """Remove a registered custom scan folder."""
     from storage.studio_db import remove_scan_folder
@@ -852,9 +846,7 @@ async def remove_scan_folder_endpoint(
 
 
 @router.get("/recommended-folders")
-async def get_recommended_folders(
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_recommended_folders(current_subject: str = Depends(get_current_subject)):
     """Return well-known model directories that exist on this machine.
 
     Lightweight alternative to ``browse-folders`` for showing quick-pick
@@ -1433,9 +1425,7 @@ def _looks_like_mlx_repo(model_id: str) -> bool:
 
 
 @router.get("/list")
-async def list_models(
-    current_subject: str = Depends(get_current_subject),
-):
+async def list_models(current_subject: str = Depends(get_current_subject)):
     """
     List available models (default models and loaded models).
 
@@ -1717,10 +1707,7 @@ def _loaded_model_matches_deleted_path(active_model: str, deleted_path: Path) ->
         return active_lower == target_lower or active_lower.startswith(f"{target_lower}{os.sep}")
 
 
-def _loading_model_matches_deleted_path(
-    loading_model: object,
-    deleted_path: Path,
-) -> bool:
+def _loading_model_matches_deleted_path(loading_model: object, deleted_path: Path) -> bool:
     if not loading_model:
         return False
     return _loaded_model_matches_deleted_path(str(loading_model), deleted_path)
@@ -2011,10 +1998,7 @@ async def delete_finetuned_model(
 
 
 @router.get("/loras/{lora_path:path}/base-model", response_model = LoRABaseModelResponse)
-async def get_lora_base_model(
-    lora_path: str,
-    current_subject: str = Depends(get_current_subject),
-):
+async def get_lora_base_model(lora_path: str, current_subject: str = Depends(get_current_subject)):
     """
     Get the base model for a LoRA adapter.
 
@@ -2042,10 +2026,7 @@ async def get_lora_base_model(
 
 
 @router.get("/check-vision/{model_name:path}", response_model = VisionCheckResponse)
-async def check_vision_model(
-    model_name: str,
-    current_subject: str = Depends(get_current_subject),
-):
+async def check_vision_model(model_name: str, current_subject: str = Depends(get_current_subject)):
     """
     Check if a model is a vision model.
 
@@ -2461,9 +2442,7 @@ def _repo_has_gguf_files(repo_info) -> bool:
 
 
 @router.get("/cached-gguf")
-async def list_cached_gguf(
-    current_subject: str = Depends(get_current_subject),
-):
+async def list_cached_gguf(current_subject: str = Depends(get_current_subject)):
     """List GGUF repos downloaded to HF cache, legacy Unsloth cache, and HF default cache."""
     try:
         cache_scans = _all_hf_cache_scans()
@@ -2498,9 +2477,7 @@ async def list_cached_gguf(
 
 
 @router.get("/cached-models")
-async def list_cached_models(
-    current_subject: str = Depends(get_current_subject),
-):
+async def list_cached_models(current_subject: str = Depends(get_current_subject)):
     """List non-GGUF model repos downloaded to HF cache, legacy Unsloth cache, and HF default cache."""
     _WEIGHT_EXTENSIONS = (".safetensors", ".bin")
 

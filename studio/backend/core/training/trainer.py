@@ -253,7 +253,14 @@ class UnslothTrainer:
         trainer_ref = self
 
         class _ProgressCallback(TrainerCallback):
-            def on_log(self, args, state, control, logs = None, **kwargs):
+            def on_log(
+                self,
+                args,
+                state,
+                control,
+                logs = None,
+                **kwargs,
+            ):
                 if not logs:
                     return
                 loss_value = logs.get("loss", logs.get("train_loss", None))
@@ -308,7 +315,13 @@ class UnslothTrainer:
         )
         return steps_per_epoch * num_epochs
 
-    def _build_audio_training_args(self, training_args, output_dir, *, extra_args = None):
+    def _build_audio_training_args(
+        self,
+        training_args,
+        output_dir,
+        *,
+        extra_args = None,
+    ):
         """Build training args dict for audio branches.
 
         Constructs the common config (batch size, lr, warmup, fp16/bf16, etc.)
@@ -363,7 +376,11 @@ class UnslothTrainer:
 
         return config
 
-    def _finalize_training(self, output_dir, label = ""):
+    def _finalize_training(
+        self,
+        output_dir,
+        label = "",
+    ):
         """Save model after training and update progress. Used by all training branches."""
         if self.should_stop and self.save_on_stop:
             self.trainer._save_checkpoint(self.trainer.model, trial = None)
@@ -428,7 +445,11 @@ class UnslothTrainer:
                 f"{len(removed_modules)} modules\n"
             )
 
-    def _resolve_audio_columns(self, dataset, custom_format_mapping: dict = None):
+    def _resolve_audio_columns(
+        self,
+        dataset,
+        custom_format_mapping: dict = None,
+    ):
         """Resolve audio, text, and speaker columns from user mapping or hardcoded fallback.
 
         Returns:
@@ -1286,7 +1307,11 @@ class UnslothTrainer:
         CsmForConditionalGeneration.forward = _fixed_csm_forward
         logger.info("Applied CSM forward fix (class + instance level)\n")
 
-    def _preprocess_csm_dataset(self, dataset, custom_format_mapping = None):
+    def _preprocess_csm_dataset(
+        self,
+        dataset,
+        custom_format_mapping = None,
+    ):
         """Preprocess dataset for CSM TTS training (exact notebook copy)."""
         from transformers import AutoProcessor
         from datasets import Audio
@@ -1401,7 +1426,11 @@ class UnslothTrainer:
         )
         return result_dataset
 
-    def _format_audio_vlm_dataset(self, dataset, custom_format_mapping = None):
+    def _format_audio_vlm_dataset(
+        self,
+        dataset,
+        custom_format_mapping = None,
+    ):
         """Format dataset as audio chat messages for multimodal models (e.g. Gemma 3N).
 
         Expects columns: audio (Audio), text (str).
@@ -1460,7 +1489,11 @@ class UnslothTrainer:
         logger.info(f"Audio VLM dataset formatted: {len(dataset)} examples\n")
         return dataset
 
-    def _preprocess_snac_dataset(self, dataset, custom_format_mapping = None):
+    def _preprocess_snac_dataset(
+        self,
+        dataset,
+        custom_format_mapping = None,
+    ):
         """Preprocess dataset for Orpheus TTS training with SNAC codec.
 
         Mirrors Orpheus_(3B)-TTS.ipynb: encode audio with SNAC (24kHz, 3 hierarchical
@@ -1645,7 +1678,11 @@ class UnslothTrainer:
         )
         return result_dataset
 
-    def _preprocess_bicodec_dataset(self, dataset, custom_format_mapping = None):
+    def _preprocess_bicodec_dataset(
+        self,
+        dataset,
+        custom_format_mapping = None,
+    ):
         """Preprocess dataset for Spark-TTS training with BiCodec tokenizer.
 
         Mirrors Spark_TTS_(0_5B).ipynb: encode audio with BiCodec (semantic + global tokens),
@@ -1860,7 +1897,11 @@ class UnslothTrainer:
         logger.info(f"Sample text length: {len(sample)} chars\n")
         return result_dataset
 
-    def _preprocess_dac_dataset(self, dataset, custom_format_mapping = None):
+    def _preprocess_dac_dataset(
+        self,
+        dataset,
+        custom_format_mapping = None,
+    ):
         """Preprocess dataset for OuteTTS training with DAC codec.
 
         Mirrors Oute_TTS_(1B).ipynb DataCreationV3: uses Whisper for word timings,
@@ -2060,7 +2101,12 @@ class UnslothTrainer:
         logger.info(f"Sample text (first 200 chars): {sample[:200]}...\n")
         return result_dataset
 
-    def _preprocess_whisper_dataset(self, dataset, eval_split = None, custom_format_mapping = None):
+    def _preprocess_whisper_dataset(
+        self,
+        dataset,
+        eval_split = None,
+        custom_format_mapping = None,
+    ):
         """Preprocess dataset for Whisper speech-to-text training.
 
         Mirrors Whisper.ipynb: extract audio features with Whisper's feature

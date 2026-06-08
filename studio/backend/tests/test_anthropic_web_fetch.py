@@ -104,11 +104,7 @@ def test_web_fetch_tool_appended_to_request_body(monkeypatch):
     body = captured["body"]
     tools = body.get("tools") or []
     # claude-opus-4-7 routes web_fetch to _20260209 (dynamic filtering).
-    assert {
-        "type": "web_fetch_20260209",
-        "name": "web_fetch",
-        "max_uses": 5,
-    } in tools
+    assert {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5} in tools
     # web_fetch is GA; no beta header is required.
     assert "web-fetch" not in captured["headers"].get("anthropic-beta", "")
 
@@ -269,10 +265,7 @@ def test_web_fetch_success_emits_tool_start_and_end(monkeypatch):
     assert start["tool_call_id"] == "srvtoolu_wf1"
     # `_server_tool: True` marks this as a provider-side synthetic
     # tool card for the frontend's history serializer.
-    assert start["arguments"] == {
-        "url": "https://example.com/article",
-        "_server_tool": True,
-    }
+    assert start["arguments"] == {"url": "https://example.com/article", "_server_tool": True}
     assert end["type"] == "tool_end"
     assert end["tool_call_id"] == "srvtoolu_wf1"
     # The source pill uses Title / URL / snippet as parseSourcesFromResult expects.

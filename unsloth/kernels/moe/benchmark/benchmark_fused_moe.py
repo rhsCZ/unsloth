@@ -49,9 +49,7 @@ def run_benchmark_forward(
     kernel_config_fwd: KernelConfigForward = None,
     bs: int = 1,
 ):
-    torch.manual_seed(
-        SEED
-    )  # Redundant under pytest (autouse fixture in conftest.py)
+    torch.manual_seed(SEED)  # Redundant under pytest (autouse fixture in conftest.py)
     device = "cuda"
     hidden_size = config.hidden_size
 
@@ -89,9 +87,7 @@ def run_benchmark_backward(
     dtype: torch.dtype,
     bs = 1,
 ):
-    torch.manual_seed(
-        SEED
-    )  # Redundant under pytest (autouse fixture in conftest.py)
+    torch.manual_seed(SEED)  # Redundant under pytest (autouse fixture in conftest.py)
     device = "cuda"
     hidden_size = config.hidden_size
 

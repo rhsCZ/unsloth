@@ -33,9 +33,7 @@ class ModelInfo:
     base_name: str
     version: str
     size: int
-    name: str = (
-        None  # constructed from base_name, version, size unless provided
-    )
+    name: str = None  # constructed from base_name, version, size unless provided
     is_multimodal: bool = False
     instruct_tag: str = None
     quant_type: QuantType = None

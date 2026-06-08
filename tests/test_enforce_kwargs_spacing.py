@@ -19,7 +19,10 @@ if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
 from enforce_kwargs_spacing import (  # noqa: E402
+    collapse_short_asserts,
     enforce_spacing,
+    merge_adjacent_string_literals,
+    normalize_def_trailing_comma,
     remove_blank_after_short_import,
 )
 
@@ -188,5 +191,238 @@ def test_enforce_spacing_pads_kwargs():
 def test_enforce_spacing_noop_when_already_spaced():
     src = "f(a = 1, b = 2)\n"
     out, changed = enforce_spacing(src)
+    assert changed is False
+    assert out == src
+
+
+# ── Rule D: def one-per-line iff >= 3 params AND a default ──────────────────
+# add comma -> force one-per-line; strip comma -> stay collapsible.
+
+# Comma must be ADDED: >= 3 params, has a default, no trailing comma yet.
+_DEF_ADD = {
+    "three_with_default": "def f(a, b, c=1):\n    return a\n",
+    "four_with_default": "def f(a, b, c, d=1):\n    return a\n",
+    "kwonly_default": "def f(a, b, *, c=1):\n    return a\n",  # 3 real params, kw default
+    "continuation_default": "def f(\n    a, b, c=1\n):\n    return a\n",
+    "starred_with_default": "def f(a, b, *args, c=1):\n    return a\n",  # 4 params
+}
+
+# Comma must be STRIPPED: NOT (>=3 params and default), but a trailing comma exists.
+_DEF_STRIP = {
+    "three_no_default_multiline": "def f(\n    a,\n    b,\n    c,\n):\n    return a\n",
+    "four_no_default_multiline": "def f(\n    a,\n    b,\n    c,\n    d,\n):\n    return a\n",
+    "two_with_default": "def f(\n    a,\n    b=1,\n):\n    return a\n",  # < 3 params -> one line
+    "single_arg": "def f(\n    a,\n):\n    return a\n",
+}
+
+# Left byte-for-byte unchanged.
+_DEF_NOCHANGE = {
+    "three_no_default_oneline": "def f(a, b, c):\n    return a\n",
+    "two_with_default_oneline": "def f(a, b=1):\n    return a\n",  # < 3 -> one line, no comma
+    "noparams": "def f():\n    return 1\n",
+    "call_site": "x = foo(\n    a,\n    b,\n    c,\n    d,\n)\n",
+    "nested_default_call": "def f(a=g(1, 2,)):\n    return a\n",  # 1 param, no def comma
+    "three_default_already_comma": "def f(\n    a,\n    b,\n    c=1,\n):\n    return a\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(_DEF_ADD))
+def test_def_comma_added(name):
+    src = _DEF_ADD[name]
+    out, changed = normalize_def_trailing_comma(src)
+    assert changed is True
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+    assert out.count(",") == src.count(",") + 1
+    out2, changed2 = normalize_def_trailing_comma(out)
+    assert out2 == out and changed2 is False
+
+
+@pytest.mark.parametrize("name", sorted(_DEF_STRIP))
+def test_def_comma_stripped(name):
+    src = _DEF_STRIP[name]
+    out, changed = normalize_def_trailing_comma(src)
+    assert changed is True
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+    assert out.count(",") == src.count(",") - 1
+    out2, changed2 = normalize_def_trailing_comma(out)
+    assert out2 == out and changed2 is False
+
+
+@pytest.mark.parametrize("name", sorted(_DEF_NOCHANGE))
+def test_def_comma_unchanged(name):
+    src = _DEF_NOCHANGE[name]
+    out, changed = normalize_def_trailing_comma(src)
+    assert changed is False
+    assert out == src
+
+
+def test_def_comma_exact_output_strip_and_add():
+    # >= 3 params + default -> add comma (force one-per-line)
+    assert normalize_def_trailing_comma("def f(a, b, c=1):\n    return a\n")[0] == (
+        "def f(a, b, c=1,):\n    return a\n"
+    )
+    # 3 params, no default -> strip comma (collapsible)
+    assert (
+        normalize_def_trailing_comma("def f(\n    a,\n    b,\n    c,\n):\n    return a\n")[0]
+        == "def f(\n    a,\n    b,\n    c\n):\n    return a\n"
+    )
+
+
+# ── Rule C: merge adjacent same-line string literals ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "src,expected",
+    [
+        ('x = "ab" "cd"\n', 'x = "abcd"\n'),
+        ('d = "newly-" "added dep."\n', 'd = "newly-added dep."\n'),
+        ('m = ("a. " "b.")\n', 'm = ("a. b.")\n'),
+        ('x = r"a\\n" r"b"\n', 'x = r"a\\nb"\n'),
+        ('x = "a\\"q" "b"\n', 'x = "a\\"qb"\n'),
+        # f + plain folds into one f-string (plain braces escaped).
+        ('x = f"a" "b"\n', 'x = f"ab"\n'),
+        (
+            'd = (f"{pkg}@{ver} is on the " "BLOCKED list")\n',
+            'd = (f"{pkg}@{ver} is on the BLOCKED list")\n',
+        ),
+        ('x = f"a{z}" "{lit}"\n', 'x = f"a{z}{{lit}}"\n'),
+        ('m = "plain " f"then {y}"\n', 'm = f"plain then {y}"\n'),  # plain + f
+    ],
+)
+def test_merge_adjacent_strings(src, expected):
+    out, changed = merge_adjacent_string_literals(src)
+    assert changed is True
+    assert out == expected
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+    out2, changed2 = merge_adjacent_string_literals(out)
+    assert out2 == out and changed2 is False
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'x = "ab"\n',  # single literal
+        "x = \"ab\" 'cd'\n",  # mixed quote style
+        'x = b"a" b"b"\n',  # bytes: left side-by-side by request
+        'x = rb"a" rb"b"\n',  # raw-bytes: also left alone
+        'm = f"a {x} " f"after {y}"\n',  # pure f + f: left side-by-side
+        'x = rf"a{z}" "b"\n',  # raw f-string: brace/backslash too subtle -> skip
+        'x = f"a{z}" "\\N{BULLET}"\n',  # named escape: AST guard rejects the fold
+        'x = (\n    "a"\n    "b"\n)\n',  # different lines, not merged
+    ],
+)
+def test_merge_adjacent_strings_skips(src):
+    out, changed = merge_adjacent_string_literals(src)
+    assert changed is False
+    assert out == src
+
+
+def test_fstring_fold_skipped_when_statement_would_not_collapse():
+    # A long f + plain assert message: folding it cannot fit the statement on one
+    # line, so ruff would re-wrap the assert condition. Leave it side-by-side.
+    src = (
+        "def f():\n"
+        "    assert some_condition_holds_here, (\n"
+        '        f"a fairly detailed message about {value} explaining " "why this failed badly"\n'
+        "    )\n"
+    )
+    out, changed = merge_adjacent_string_literals(src)
+    assert changed is False
+    assert out == src
+
+
+def test_fstring_fold_applied_when_statement_collapses():
+    # A multi-line f + plain that DOES fit on one line after folding is folded
+    # (ruff then collapses the call to a single line on the next pass).
+    src = "def f():\n    raise ValueError(\n" '        f"bad {x}: " "try again"\n' "    )\n"
+    out, changed = merge_adjacent_string_literals(src)
+    assert changed is True
+    assert 'f"bad {x}: try again"' in out
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+
+
+def test_fstring_fold_applied_inside_large_multiline_call():
+    # The fit guard only restricts asserts; an f + plain argument on its own line
+    # inside a big multi-line call (the lockfile case) folds even though the whole
+    # call cannot fit on one line.
+    src = (
+        "findings.append(\n"
+        "    Finding(\n"
+        "        path=str(path),\n"
+        "        package=key,\n"
+        '        detail=(f"{name}@{ver} is on the " "BLOCKED list"),\n'
+        "    )\n"
+        ")\n"
+    )
+    out, changed = merge_adjacent_string_literals(src)
+    assert changed is True
+    assert 'detail=(f"{name}@{ver} is on the BLOCKED list")' in out
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+
+
+# ── collapse_short_asserts: strip the magic comma holding a short assert open ──
+# The pass strips the trailing comma so ruff joins the assert onto one line on the
+# next format pass; it never changes the AST.
+
+
+@pytest.mark.parametrize(
+    "name,src",
+    [
+        (
+            "dict_eq",
+            'def t():\n    assert got == {\n        "a": 1,\n        "b": 2,\n    }\n',
+        ),
+        (
+            "list_eq",
+            'def t():\n    assert xs == [\n        "a",\n        "b",\n        "c",\n    ]\n',
+        ),
+        (
+            "membership",
+            'def t():\n    assert {\n        "type": "x",\n        "name": "y",\n    } in tools\n',
+        ),
+        (
+            "tuple_message",
+            "def t():\n    assert cond, (\n        base,\n        headers,\n    )\n",
+        ),
+        (
+            "call_args",
+            "def t():\n    assert eq(\n        a,\n        b,\n    )\n",
+        ),
+    ],
+)
+def test_collapse_short_assert_strips_trailing_comma(name, src):
+    out, changed = collapse_short_asserts(src)
+    assert changed is True
+    # The magic trailing comma is gone (so ruff will join it on the next pass).
+    assert out.count(",") == src.count(",") - 1
+    # Semantics preserved and idempotent at the strip level.
+    assert ast.dump(ast.parse(out)) == ast.dump(ast.parse(src))
+    out2, changed2 = collapse_short_asserts(out)
+    assert out2 == out and changed2 is False
+
+
+@pytest.mark.parametrize(
+    "name,src",
+    [
+        # one-element tuple message: stripping (only,) -> (only) changes meaning.
+        ("one_tuple_message", "def t():\n    assert cond, (\n        only,\n    )\n"),
+        # a comment inside keeps ruff multi-line, so collapsing would oscillate.
+        (
+            "comment_inside",
+            'def t():\n    assert x == {\n        "a": 1,  # keep\n        "b": 2,\n    }\n',
+        ),
+        # genuinely long: would not fit on one line, leave expanded.
+        (
+            "too_long",
+            "def t():\n    assert some_really_long_left_operand_name_here == {\n"
+            '        "alpha": 11111111,\n        "beta": 22222222,\n'
+            '        "gamma": 33333333,\n        "delta": 44444444,\n    }\n',
+        ),
+        # already one line: nothing to do.
+        ("one_line", 'def t():\n    assert got == {"a": 1, "b": 2}\n'),
+    ],
+)
+def test_collapse_short_assert_left_alone(name, src):
+    out, changed = collapse_short_asserts(src)
     assert changed is False
     assert out == src

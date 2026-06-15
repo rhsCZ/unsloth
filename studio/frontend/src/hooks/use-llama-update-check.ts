@@ -158,10 +158,11 @@ export function useLlamaUpdateCheck({
 
   useEffect(() => {
     if (!enabled) {
-      // Disabled mid-update: stop showing and tracking, and clear `applying`
-      // so the banner's animation loop stops too. Re-enabling re-detects a
-      // still-running job below and resumes tracking via surfaceIfAvailable.
-      setVisible(false);
+      // The returned `enabled && visible` already hides the banner while
+      // disabled, so do NOT reset `visible` here: clearing it drops the
+      // surfaced state and forces a fresh 1s re-check to re-show it, making the
+      // banner blink away then back on any transient `enabled` flip (e.g. a
+      // brief route/auth change during load). Just stop the progress animation.
       setApplying(false);
       return;
     }

@@ -7697,6 +7697,59 @@ def _drop_empty_assistant_sentinels(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _merge_user_content(a: Any, b: Any) -> Any:
+    """Join two user-message ``content`` values into one.
+
+    Plain strings join with a blank line. If either side is a multimodal
+    content-parts list, both are normalized to parts and concatenated so images
+    survive the merge.
+    """
+    if isinstance(a, str) and isinstance(b, str):
+        if not a:
+            return b
+        if not b:
+            return a
+        return a + "\n\n" + b
+
+    def _parts(c: Any) -> list:
+        if c is None:
+            return []
+        if isinstance(c, str):
+            return [{"type": "text", "text": c}] if c else []
+        if isinstance(c, list):
+            return list(c)
+        return [{"type": "text", "text": str(c)}]
+
+    return _parts(a) + _parts(b)
+
+
+def _coalesce_consecutive_user_turns(messages: list[dict]) -> list[dict]:
+    """Merge adjacent user turns so the GGUF chat history stays alternating.
+
+    Dropping an empty assistant turn -- a model that returned 0 tokens, or a
+    Stop-button sentinel (see ``_drop_empty_assistant_sentinels``) -- can leave
+    two user turns back to back. Strict chat templates (Gemma 3, some Mistral
+    variants, ...) call ``raise_exception("Conversation roles must alternate
+    ...")`` on the first role-parity break, so llama-server returns a 400 and
+    every later message in the thread is unsendable. Coalescing the orphaned
+    user turns keeps the conversation going.
+
+    Only consecutive ``user`` turns are merged; assistant/tool turns are left
+    untouched because they may carry ``tool_calls`` / ``tool_call_id`` that must
+    not be concatenated. This is a no-op for normal alternating histories, so it
+    never changes what a permissive template receives.
+    """
+    out: list[dict] = []
+    for m in messages:
+        if m.get("role") == "user" and out and out[-1].get("role") == "user":
+            prev = dict(out[-1])
+            prev["content"] = _merge_user_content(prev.get("content"), m.get("content"))
+            out[-1] = prev
+            continue
+        out.append(m)
+    return out
+
+
 _LOCAL_SERVER_BUILTIN_TOOL_NAMES = frozenset(
     {"web_search", "web_fetch", "code_execution", "image_generation"}
 )
@@ -7861,8 +7914,17 @@ def _openai_messages_for_gguf_chat(payload, is_vision: bool) -> tuple[list[dict]
     per-turn ``image_url`` parts so multi-image chat history keeps each image
     attached to its original turn.
     """
-    messages = _strip_provider_synthetic_tool_history(
-        _drop_empty_assistant_sentinels([m.model_dump(exclude_none = True) for m in payload.messages])
+    # Coalesce here (not in the shared passthrough builder): the GGUF chat path
+    # renders the model's own strict Jinja template, which 400s on a role-parity
+    # break. Merging orphaned consecutive user turns -- left behind when an empty
+    # assistant turn is dropped -- keeps that template happy so the conversation
+    # can continue. The tool path reuses this output via
+    # _set_or_prepend_system_message, so it is covered too. The passthrough path
+    # deliberately forwards messages verbatim, so it is not touched.
+    messages = _coalesce_consecutive_user_turns(
+        _strip_provider_synthetic_tool_history(
+            _drop_empty_assistant_sentinels([m.model_dump(exclude_none = True) for m in payload.messages])
+        )
     )
     has_message_image = any(
         isinstance(msg.get("content"), list)

@@ -7923,7 +7923,9 @@ def _openai_messages_for_gguf_chat(payload, is_vision: bool) -> tuple[list[dict]
     # deliberately forwards messages verbatim, so it is not touched.
     messages = _coalesce_consecutive_user_turns(
         _strip_provider_synthetic_tool_history(
-            _drop_empty_assistant_sentinels([m.model_dump(exclude_none = True) for m in payload.messages])
+            _drop_empty_assistant_sentinels(
+                [m.model_dump(exclude_none = True) for m in payload.messages]
+            )
         )
     )
     has_message_image = any(

@@ -45,13 +45,13 @@ import { Switch } from "@/components/ui/switch";
 import { useAnimatedThemeToggle } from "@/components/ui/animated-theme-toggler";
 import { cn } from "@/lib/utils";
 import {
+  Archive03Icon,
   ChefHatIcon,
   CursorInfo02Icon,
   DashboardCircleIcon,
   Delete02Icon,
   Download01Icon,
   DownloadSquare01Icon,
-  Upload01Icon,
   Edit03Icon,
   FolderAddIcon,
   FolderExportIcon,
@@ -61,10 +61,14 @@ import {
   Logout05Icon,
   MoreVerticalIcon,
   Search01Icon,
+  PinIcon,
+  PinOffIcon,
+  PlusSignIcon,
   PowerIcon,
   PencilEdit02Icon,
   LayoutAlignLeftIcon,
-  Settings02Icon,
+  Setting07Icon,
+  Sun03Icon,
   TestTube01Icon,
   ZapIcon,
 } from "@hugeicons/core-free-icons";
@@ -72,11 +76,6 @@ import {
   exportConversationRawJsonl,
   exportConversationCsv,
   exportConversationShareGPT,
-  exportBulkConversationsMerged,
-  exportBulkConversationsSeparate,
-  importConversationsFromFile,
-  EXPORT_FORMATS_LIST,
-  type ConvExportFormat,
 } from "@/features/chat/prompt-storage/prompt-storage-dialog";
 import { listStoredChatThreads } from "@/features/chat/utils/chat-history-storage";
 import {
@@ -85,10 +84,12 @@ import {
 } from "@/components/ui/tooltip";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ChevronDown, ChevronsUpDown, MoreHorizontalIcon, Moon, Sun } from "lucide-react";
+import { ChevronDown, MoreHorizontalIcon, Moon } from "lucide-react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  archiveChatItem,
   ChatSearchDialog,
+  clearNewChatDraft,
   createChatProject,
   deleteChatProject,
   deleteChatItem,
@@ -99,6 +100,8 @@ import {
   useChatProjects,
   useChatSearchStore,
   useChatSidebarItems,
+  usePinnedChatsStore,
+  useChatPreferencesStore,
   type ProjectRecord,
   type SidebarItem,
 } from "@/features/chat";
@@ -223,7 +226,7 @@ function NavItem({
           onClick={onClick}
           isActive={active}
           data-tour={dataTour}
-          className="sidebar-nav-btn h-[33px] rounded-[11px] gap-[8.5px] px-2.5 font-medium group-data-[collapsible=icon]:!w-[32px] group-data-[collapsible=icon]:!rounded-[10px] group-data-[collapsible=icon]:mx-auto"
+          className="sidebar-nav-btn h-[33px] rounded-full gap-[8.5px] pl-3 pr-2.5 font-medium group-data-[collapsible=icon]:px-2.5 group-data-[collapsible=icon]:!w-[32px] group-data-[collapsible=icon]:!rounded-full group-data-[collapsible=icon]:mx-auto"
         >
           <HugeiconsIcon icon={icon} strokeWidth={1.75} className="size-icon! shrink-0 group-hover/menu-button:animate-icon-pop" />
           <span className="text-[14.5px] leading-[19px] tracking-nav">{label}</span>
@@ -259,40 +262,6 @@ export function AppSidebar() {
   const isStudioRoute = pathname === "/studio" || pathname.startsWith("/studio/");
   const [chatOpen, setChatOpen] = useState(true);
 
-  const recentsImportInputRef = useRef<HTMLInputElement>(null);
-
-  async function handleImportToRecents(file: File) {
-    try {
-      const count = await importConversationsFromFile(file, null);
-      if (count === 0) {
-        toast.info("No conversations found in file.");
-      } else {
-        toast.success(`Imported ${count} conversation${count === 1 ? "" : "s"} to Recents.`);
-      }
-    } catch {
-      toast.error("Import failed.");
-    }
-  }
-
-  async function handleBulkExport(scope: "recents" | "all", fmt: ConvExportFormat, merged: boolean) {
-    try {
-      const threads = await listStoredChatThreads({
-        includeArchived: false,
-        ...(scope === "recents" ? { projectId: null } : {}),
-      });
-      const ids = [...new Set(threads.map((t) => t.id))];
-      if (ids.length === 0) { toast.info("No conversations to export."); return; }
-      const ts = new Date().toISOString().slice(0, 10);
-      const basename = scope === "all" ? `all-chats-${ts}` : `recents-${ts}`;
-      if (merged) {
-        await exportBulkConversationsMerged(ids, fmt, basename);
-      } else {
-        await exportBulkConversationsSeparate(ids, fmt, basename);
-      }
-    } catch {
-      toast.error("Export failed.");
-    }
-  }
   const [trainOpen, setTrainOpen] = useState(true);
   const [runsOpen, setRunsOpen] = useState(true);
 
@@ -334,11 +303,28 @@ export function AppSidebar() {
     enabled: !isStudioRoute,
     requireMessages: false,
   });
-  const recentChatItems = useMemo(
-    () => allChatItems.filter((item) => !item.projectId),
-    [allChatItems],
+  const pinnedIds = usePinnedChatsStore((s) => s.pinnedIds);
+  const togglePinnedChat = usePinnedChatsStore((s) => s.togglePin);
+  const unpinChat = usePinnedChatsStore((s) => s.unpin);
+  const confirmDeleteChats = useChatPreferencesStore(
+    (s) => s.confirmDeleteChats,
   );
-  const chatItems = allChatItems;
+  const pinnedIdSet = useMemo(() => new Set(pinnedIds), [pinnedIds]);
+  const recentChatItems = useMemo(
+    () =>
+      allChatItems.filter(
+        (item) => !item.projectId && !pinnedIdSet.has(item.id),
+      ),
+    [allChatItems, pinnedIdSet],
+  );
+  // Pinned chats, in pin order (most recent first).
+  const pinnedChatItems = useMemo(() => {
+    const byId = new Map(allChatItems.map((item) => [item.id, item]));
+    return pinnedIds
+      .map((id) => byId.get(id))
+      .filter((item): item is SidebarItem => Boolean(item));
+  }, [allChatItems, pinnedIds]);
+  const [pinnedOpen, setPinnedOpen] = useState(true);
   const storeThreadId = useChatRuntimeStore((s) => s.activeThreadId);
   const setActiveThreadId = useChatRuntimeStore((s) => s.setActiveThreadId);
   const activeThreadId = isChatRoute
@@ -388,8 +374,12 @@ export function AppSidebar() {
 
   function openNewChat(projectId = activeProjectId) {
     if (chatDisabled) return;
+    clearNewChatDraft();
     setActiveThreadId(null);
     useChatRuntimeStore.getState().setActiveProjectId(projectId);
+    // The normal new-chat affordance is always a regular, saved chat --
+    // only the toolbar toggle starts a temporary one.
+    useChatRuntimeStore.getState().setIncognito(false);
     navigate({ to: "/chat", search: chatSearchForProject(projectId) });
     closeMobileIfOpen();
   }
@@ -413,6 +403,49 @@ export function AppSidebar() {
     });
   }
 
+  // Shared chat delete: same error toast and pin cleanup whether or not the
+  // confirm dialog is used.
+  async function deleteChatWithCleanup(item: SidebarItem) {
+    try {
+      await handleDeleteThread(item);
+      unpinChat(item.id);
+    } catch (err) {
+      toast.error(translate("shell.toast.failedToDeleteChat"), {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    }
+  }
+
+  async function handleArchiveThread(item: SidebarItem) {
+    try {
+      await archiveChatItem(item, activeThreadId, (view) => {
+        navigate({
+          to: "/chat",
+          search: item.projectId
+            ? { project: item.projectId }
+            : { new: view.newThreadNonce },
+        });
+      });
+      const toastId = toast(
+        <button
+          type="button"
+          onClick={() => {
+            toast.dismiss(toastId);
+            useSettingsDialogStore.getState().openArchivedChats();
+          }}
+          className="w-full cursor-pointer text-left"
+        >
+          You can view archived chats in Settings
+        </button>,
+        { closeButton: true },
+      );
+    } catch (err) {
+      toast.error("Failed to archive chat", {
+        description: err instanceof Error ? err.message : undefined,
+      });
+    }
+  }
+
   type RenameTarget =
     | { kind: "chat"; item: SidebarItem; current: string }
     | { kind: "project"; project: ProjectRecord; current: string }
@@ -421,6 +454,19 @@ export function AppSidebar() {
     null,
   );
   const [renameDraft, setRenameDraft] = useState("");
+  // Skips the inline rename input's blur-commit when Enter/Escape already handled it.
+  const skipRenameBlurRef = useRef(false);
+  // Optimistic title shown while the debounced sidebar refresh catches up after
+  // a rename, so the old name does not flash back in.
+  const [pendingRename, setPendingRename] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
+  useEffect(() => {
+    if (!pendingRename) return;
+    const match = allChatItems.find((i) => i.id === pendingRename.id);
+    if (match && match.title === pendingRename.title) setPendingRename(null);
+  }, [allChatItems, pendingRename]);
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [projectCreateMoveTarget, setProjectCreateMoveTarget] =
@@ -451,9 +497,11 @@ export function AppSidebar() {
     if (!target || !renameDirty) return;
     setRenamingTarget(null);
     if (target.kind === "chat") {
+      setPendingRename({ id: target.item.id, title: renameTrimmed });
       try {
         await renameChatItem(target.item, renameTrimmed);
       } catch (err) {
+        setPendingRename(null);
         toast.error(translate("shell.toast.failedToRenameChat"), {
           description: err instanceof Error ? err.message : undefined,
         });
@@ -480,6 +528,33 @@ export function AppSidebar() {
     }
   }
 
+  // Inline chat rename commits on Enter or blur, cancels on Escape.
+  function handleInlineRenameKeyDown(
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      skipRenameBlurRef.current = true;
+      // Commit when changed; otherwise just close, so a no-op Enter does not
+      // leave the row stuck as an input with its blur suppressed.
+      if (renameDirty) void commitRename();
+      else setRenamingTarget(null);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      skipRenameBlurRef.current = true;
+      setRenamingTarget(null);
+    }
+  }
+
+  function handleInlineRenameBlur() {
+    if (skipRenameBlurRef.current) {
+      skipRenameBlurRef.current = false;
+      return;
+    }
+    if (renameDirty) void commitRename();
+    else setRenamingTarget(null);
+  }
+
   type DeleteTarget =
     | { kind: "chat"; item: SidebarItem }
     | { kind: "project"; project: ProjectRecord }
@@ -501,13 +576,7 @@ export function AppSidebar() {
       target.kind === "project" && deleteProjectFiles;
     setConfirmingDelete(null);
     if (target.kind === "chat") {
-      try {
-        await handleDeleteThread(target.item);
-      } catch (err) {
-        toast.error(translate("shell.toast.failedToDeleteChat"), {
-          description: err instanceof Error ? err.message : undefined,
-        });
-      }
+      await deleteChatWithCleanup(target.item);
       return;
     }
     if (target.kind === "project") {
@@ -588,6 +657,7 @@ export function AppSidebar() {
     item: SidebarItem,
     variant: "project" | "recent",
   ) {
+    const isPinned = pinnedIdSet.has(item.id);
     const itemClass =
       variant === "project"
         ? "group/project-chat-item relative"
@@ -597,12 +667,45 @@ export function AppSidebar() {
         ? "sidebar-row-action group-hover/project-chat-item:opacity-100 group-hover/project-chat-item:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
         : "sidebar-row-action group-hover/recent-item:opacity-100 group-hover/recent-item:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
     const buttonClass = cn(
-      "sidebar-nav-btn h-[33px] cursor-pointer rounded-[11px] pr-4 text-[14.5px] leading-[19px] tracking-nav font-medium",
-      variant === "project" ? "pl-[37px]" : "pl-2.5",
+      "sidebar-nav-btn h-[33px] cursor-pointer rounded-full pr-4 text-[14.5px] leading-[19px] tracking-nav font-medium",
+      // pl-3 (12px) over the content's pl-1.5 (6px) = 18px, aligning the
+      // title with the nav items above.
+      variant === "project" ? "pl-[39px]" : "pl-3",
       variant === "project"
-        ? "group-hover/project-chat-item:pr-8 group-has-[.sidebar-row-action[data-state=open]]/project-chat-item:pr-8"
-        : "group-hover/recent-item:pr-8 group-has-[.sidebar-row-action[data-state=open]]/recent-item:pr-8",
+        ? "group-hover/project-chat-item:pr-6 group-has-[.sidebar-row-action[data-state=open]]/project-chat-item:pr-6"
+        : isPinned
+          ? // Pinned rows show an extra unpin button on hover, so reserve more room
+            // (pr-8 when the menu is open keeps the unpin button clear of the title).
+            "group-hover/recent-item:pr-16 group-has-[.sidebar-row-action[data-state=open]]/recent-item:pr-8"
+          : // Hover room for the kebab only; title keeps one more character.
+            "group-hover/recent-item:pr-6 group-has-[.sidebar-row-action[data-state=open]]/recent-item:pr-6",
     );
+
+    const isRenamingThis =
+      renamingTarget?.kind === "chat" && renamingTarget.item.id === item.id;
+
+    // Inline rename edits the title in place as a rounded pill, no dialog.
+    if (isRenamingThis) {
+      return (
+        <SidebarMenuItem key={item.id} className={itemClass}>
+          <input
+            autoFocus
+            value={renameDraft}
+            onChange={(event) => setRenameDraft(event.target.value)}
+            onKeyDown={handleInlineRenameKeyDown}
+            onBlur={handleInlineRenameBlur}
+            onFocus={(event) => event.currentTarget.select()}
+            maxLength={120}
+            aria-label={translate("shell.dialog.renameChat.placeholder")}
+            className={cn(
+              // No pill or box; edit in place as plain highlighted text.
+              "text-foreground h-[33px] w-full border-0 bg-transparent pr-4 text-[14.5px] leading-[19px] font-medium tracking-nav outline-none",
+              variant === "project" ? "pl-[39px]" : "pl-3",
+            )}
+          />
+        </SidebarMenuItem>
+      );
+    }
 
     return (
       <SidebarMenuItem key={item.id} className={itemClass}>
@@ -629,7 +732,9 @@ export function AppSidebar() {
             closeMobileIfOpen();
           }}
         >
-          <span className="truncate">{item.title}</span>
+          <span className="truncate">
+            {pendingRename?.id === item.id ? pendingRename.title : item.title}
+          </span>
         </SidebarMenuButton>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -647,12 +752,16 @@ export function AppSidebar() {
           <DropdownMenuContent
             side="bottom"
             align="start"
-            sideOffset={6}
-            className="unsloth-plus-menu menu-flat-destructive w-52"
+            sideOffset={0}
+            className="unsloth-plus-menu menu-flat-destructive w-56"
           >
             <DropdownMenuItem onSelect={() => openRenameChat(item)}>
               <HugeiconsIcon icon={Edit03Icon} strokeWidth={1.75} className="size-icon" />
               <span>Rename</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => togglePinnedChat(item.id)}>
+              <HugeiconsIcon icon={isPinned ? PinOffIcon : PinIcon} strokeWidth={1.75} className="size-icon" />
+              <span>{isPinned ? "Unpin chat" : "Pin chat"}</span>
             </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
@@ -660,7 +769,7 @@ export function AppSidebar() {
                 <span>Move to project</span>
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent
-                sideOffset={8}
+                sideOffset={0}
                 alignOffset={-4}
                 className="unsloth-plus-menu w-52"
               >
@@ -719,35 +828,63 @@ export function AppSidebar() {
                     {label}
                   </DropdownMenuItem>
                 ))}
+                <DropdownMenuSeparator />
+                {/* Bulk export and import live in Settings -> Chat -> Data. */}
+                <DropdownMenuItem
+                  onSelect={() =>
+                    useSettingsDialogStore.getState().openDialog("chat")
+                  }
+                >
+                  Export all chats…
+                </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => void handleArchiveThread(item)}>
+              <HugeiconsIcon icon={Archive03Icon} strokeWidth={1.75} className="size-icon" />
+              <span>Archive</span>
+            </DropdownMenuItem>
             <DropdownMenuItem
               variant="destructive"
-              onSelect={() => setConfirmingDelete({ kind: "chat", item })}
+              onSelect={() =>
+                confirmDeleteChats
+                  ? setConfirmingDelete({ kind: "chat", item })
+                  : void deleteChatWithCleanup(item)
+              }
             >
               <HugeiconsIcon icon={Delete02Icon} strokeWidth={1.75} className="size-icon" />
               <span>Delete</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {isPinned ? (
+          <Tooltip>
+            <TooltipPrimitive.Trigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  unpinChat(item.id);
+                }}
+                aria-label="Unpin chat"
+                className={cn(actionClass, "is-unpin-action")}
+              >
+                <span className="sidebar-row-action-glyph">
+                  <HugeiconsIcon icon={PinOffIcon} strokeWidth={1.75} className="size-4" />
+                </span>
+              </button>
+            </TooltipPrimitive.Trigger>
+            <TooltipContent side="bottom" sideOffset={6} className="tooltip-compact">
+              Unpin
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
       </SidebarMenuItem>
     );
   }
 
   return (
     <>
-    {/* Hidden file inputs for chat import */}
-    <input
-      ref={recentsImportInputRef}
-      type="file"
-      accept=".jsonl,.ndjson,.csv"
-      className="hidden"
-      onChange={(e) => {
-        const file = e.target.files?.[0];
-        if (file) void handleImportToRecents(file);
-        e.target.value = "";
-      }}
-    />
     <Sidebar
       collapsible="icon"
       variant="sidebar"
@@ -827,7 +964,8 @@ export function AppSidebar() {
         )}
       </SidebarHeader>
 
-      <SidebarGroup className="group-data-[collapsible=icon]:px-0 px-2 pt-[9px] pb-px shrink-0">
+      {/* Uniform pl-1.5 pr-2 keeps every hover pill the same width, inset from the edge. */}
+      <SidebarGroup className="group-data-[collapsible=icon]:px-0 pl-1.5 pr-2 pt-[9px] pb-px shrink-0">
         <SidebarGroupContent>
           <SidebarMenu>
             <NavItem
@@ -867,7 +1005,7 @@ export function AppSidebar() {
           scrolled && "is-scrolled",
         )}
       >
-        <SidebarGroup className="group-data-[collapsible=icon]:px-0 px-2 py-0 shrink-0">
+        <SidebarGroup className="group-data-[collapsible=icon]:px-0 pl-1.5 pr-2 py-0 shrink-0">
           <SidebarGroupContent>
             <SidebarMenu>
               <NavItem
@@ -880,7 +1018,28 @@ export function AppSidebar() {
                   navigate({ to: "/projects" });
                   closeMobileIfOpen();
                 }}
-              />
+                className="group/projects-item relative"
+              >
+                <button
+                  type="button"
+                  aria-label="New project"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setProjectCreateMoveTarget(null);
+                    setProjectNameDraft("");
+                    setCreatingProject(true);
+                  }}
+                  className="sidebar-row-action group-hover/projects-item:opacity-100 group-hover/projects-item:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto group-data-[collapsible=icon]:hidden"
+                >
+                  <span className="sidebar-row-action-glyph">
+                    <HugeiconsIcon
+                      icon={PlusSignIcon}
+                      strokeWidth={1.75}
+                      className="size-4"
+                    />
+                  </span>
+                </button>
+              </NavItem>
               <NavItem
                 icon={DashboardCircleIcon}
                 label={t("shell.navigation.hub")}
@@ -918,7 +1077,7 @@ export function AppSidebar() {
               </CollapsibleTrigger>
             </SidebarGroupLabel>
             <CollapsibleContent>
-              <SidebarGroupContent className="px-2">
+              <SidebarGroupContent className="pl-1.5 pr-2">
                 <SidebarMenu>
                   <NavItem
                     icon={TestTubeOutlineIcon}
@@ -957,75 +1116,40 @@ export function AppSidebar() {
           </SidebarGroup>
         </Collapsible>
 
+        {/* Pinned chats: own section above Recents */}
+        {!isStudioRoute && pinnedChatItems.length > 0 && (
+          <Collapsible open={pinnedOpen} onOpenChange={setPinnedOpen} asChild>
+            <SidebarGroup className="group-data-[collapsible=icon]:hidden px-0 py-0">
+              <SidebarGroupLabel className={cn("sidebar-sticky-label sidebar-sticky-label-following", scrolled && "is-scrolled")} asChild>
+                <CollapsibleTrigger className="cursor-pointer flex w-full items-center gap-1 group/sb-collap">
+                  Pinned
+                  <ChevronDown className="size-3.5 opacity-0 transition-[transform,opacity] duration-200 group-hover/sb-collap:opacity-100 group-focus-visible/sb-collap:opacity-100 data-[state=open]:rotate-0 [[data-state=closed]_&]:rotate-[-90deg] [[data-state=closed]_&]:opacity-100" />
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarGroupContent className="pl-1.5 pr-2">
+                  <SidebarMenu>
+                    {pinnedChatItems.map((item) =>
+                      renderChatSidebarItem(item, "recent"),
+                    )}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </CollapsibleContent>
+            </SidebarGroup>
+          </Collapsible>
+        )}
+
         {!isStudioRoute && (
           <Collapsible open={chatOpen} onOpenChange={setChatOpen} asChild>
             <SidebarGroup className="group-data-[collapsible=icon]:hidden px-0 py-0">
               <SidebarGroupLabel className={cn("sidebar-sticky-label sidebar-sticky-label-following", scrolled && "is-scrolled")} asChild>
-                <div className="flex w-full items-center group/sb-collap">
-                  <CollapsibleTrigger className="cursor-pointer flex flex-1 items-center gap-1 min-w-0">
-                    {t("shell.navigation.recents")}
-                    <ChevronDown className="size-3.5 opacity-0 transition-[transform,opacity] duration-200 group-hover/sb-collap:opacity-100 group-focus-visible/sb-collap:opacity-100 data-[state=open]:rotate-0 [[data-state=closed]_&]:rotate-[-90deg] [[data-state=closed]_&]:opacity-100" />
-                  </CollapsibleTrigger>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        className="ml-auto flex items-center justify-center rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-0"
-                        title="Export recents"
-                      >
-                        <MoreHorizontalIcon className="size-3.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent side="bottom" align="start" className="w-56">
-                      <DropdownMenuItem onSelect={() => recentsImportInputRef.current?.click()}>
-                        <HugeiconsIcon icon={Upload01Icon} strokeWidth={1.75} className="size-icon mr-1" />
-                        Import chats
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>
-                          <HugeiconsIcon icon={Download01Icon} strokeWidth={1.75} className="size-icon mr-1" />
-                          Export Recents
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent avoidCollisions={false} className="unsloth-plus-menu w-52">
-                          {EXPORT_FORMATS_LIST.map(({ fmt, label }) => (
-                            <DropdownMenuItem key={`r-m-${fmt}`} onSelect={() => void handleBulkExport("recents", fmt, true)}>
-                              {label} — combined
-                            </DropdownMenuItem>
-                          ))}
-                          <DropdownMenuSeparator />
-                          {EXPORT_FORMATS_LIST.map(({ fmt, label }) => (
-                            <DropdownMenuItem key={`r-s-${fmt}`} onSelect={() => void handleBulkExport("recents", fmt, false)}>
-                              {label} — per chat
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>
-                          <HugeiconsIcon icon={Download01Icon} strokeWidth={1.75} className="size-icon mr-1" />
-                          Export Recents + Projects
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent avoidCollisions={false} className="unsloth-plus-menu w-52">
-                          {EXPORT_FORMATS_LIST.map(({ fmt, label }) => (
-                            <DropdownMenuItem key={`a-m-${fmt}`} onSelect={() => void handleBulkExport("all", fmt, true)}>
-                              {label} — combined
-                            </DropdownMenuItem>
-                          ))}
-                          <DropdownMenuSeparator />
-                          {EXPORT_FORMATS_LIST.map(({ fmt, label }) => (
-                            <DropdownMenuItem key={`a-s-${fmt}`} onSelect={() => void handleBulkExport("all", fmt, false)}>
-                              {label} — per chat
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                <CollapsibleTrigger className="cursor-pointer flex w-full items-center gap-1 group/sb-collap">
+                  {t("shell.navigation.recents")}
+                  <ChevronDown className="size-3.5 opacity-0 transition-[transform,opacity] duration-200 group-hover/sb-collap:opacity-100 group-focus-visible/sb-collap:opacity-100 data-[state=open]:rotate-0 [[data-state=closed]_&]:rotate-[-90deg] [[data-state=closed]_&]:opacity-100" />
+                </CollapsibleTrigger>
               </SidebarGroupLabel>
               <CollapsibleContent>
-                <SidebarGroupContent className="px-2">
+                <SidebarGroupContent className="pl-1.5 pr-2">
                   <SidebarMenu>
                     {recentChatItems.map((item) =>
                       renderChatSidebarItem(item, "recent"),
@@ -1047,7 +1171,7 @@ export function AppSidebar() {
               </CollapsibleTrigger>
             </SidebarGroupLabel>
             <CollapsibleContent>
-              <SidebarGroupContent className="px-2">
+              <SidebarGroupContent className="pl-1.5 pr-2">
                 <SidebarMenu>
                   {runItems.map((run) => {
                     // Explicit selection wins. Otherwise highlight the active
@@ -1065,7 +1189,7 @@ export function AppSidebar() {
                       >
                         <SidebarMenuButton
                           isActive={isActiveRun}
-                          className="sidebar-nav-btn h-auto flex-col items-start gap-0.5 py-[5px] rounded-[11px] pl-2.5 pr-7 text-[14.5px] tracking-nav font-medium"
+                          className="sidebar-nav-btn h-auto flex-col items-start gap-0.5 py-[5px] rounded-full pl-3 pr-7 text-[14.5px] tracking-nav font-medium"
                           onClick={() => {
                             setSelectedHistoryRunId(run.id);
                             closeMobileIfOpen();
@@ -1106,8 +1230,8 @@ export function AppSidebar() {
                           <DropdownMenuContent
                             side="bottom"
                             align="end"
-                            sideOffset={4}
-                            className="app-user-menu menu-soft-surface menu-flat-destructive ring-0 w-44 py-2 font-heading rounded-[14px] border-0"
+                            sideOffset={0}
+                            className="app-user-menu menu-soft-surface menu-flat-destructive ring-0 w-44 py-2 font-heading rounded-full border-0"
                           >
                             <DropdownMenuItem onSelect={() => openRenameRun(run)}>
                               <HugeiconsIcon icon={Edit03Icon} strokeWidth={1.75} className="size-icon" />
@@ -1154,9 +1278,9 @@ export function AppSidebar() {
                 <SidebarMenuButton
                   size="lg"
                   aria-label={t("shell.accountMenu", { name: displayTitle })}
-                  className="sidebar-nav-btn !h-[44px] gap-[9px] px-2 py-[3px] rounded-[14px]"
+                  className="sidebar-nav-btn !h-[44px] -my-[3px] gap-[9px] px-2 py-[3px] rounded-[14px]"
                 >
-                  <div className="shrink-0">
+                  <div className="flex shrink-0 items-center">
                     <UserAvatar
                       name={displayTitle}
                       imageUrl={avatarDataUrl}
@@ -1164,24 +1288,29 @@ export function AppSidebar() {
                       className="!size-[32px]"
                     />
                   </div>
-                  <div className="flex flex-col gap-0.5 leading-tight group-data-[collapsible=icon]:hidden">
+                  <div className="flex flex-col gap-px leading-tight group-data-[collapsible=icon]:hidden">
                     <span className="truncate font-heading text-[13.5px] tracking-[0.025em] dark:tracking-[0.04em] font-semibold text-nav-fg">{displayTitle}</span>
                     <span className="truncate text-[11.5px] tracking-nav text-muted-foreground">Unsloth</span>
                   </div>
-                  <ChevronsUpDown strokeWidth={1.25} className="ml-auto size-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
+                  {/* settings cog (replaces the up/down chevron) */}
+                  <HugeiconsIcon
+                    icon={Setting07Icon}
+                    strokeWidth={1.5}
+                    className="ml-auto !size-[18px] text-muted-foreground group-data-[collapsible=icon]:hidden"
+                  />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 side="top"
                 align="center"
-                sideOffset={6}
-                className="app-user-menu menu-soft-surface-up ring-0 w-[16rem] px-1.5 py-2.5 font-heading rounded-[20px] border-0"
+                sideOffset={8}
+                className="app-user-menu menu-soft-surface-up ring-0 w-[16rem] px-2.5 py-2.5 font-heading rounded-[20px] border-0"
               >
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     onSelect={() => useSettingsDialogStore.getState().openDialog()}
                   >
-                    <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.75} className="size-icon" />
+                    <HugeiconsIcon icon={Setting07Icon} strokeWidth={1.75} className="size-icon" />
                     <span>{t("shell.navigation.settings")}</span>
                     <DropdownMenuShortcut>⌘,</DropdownMenuShortcut>
                   </DropdownMenuItem>
@@ -1190,7 +1319,7 @@ export function AppSidebar() {
                   >
                     <HugeiconsIcon icon={Globe02Icon} strokeWidth={1.75} className="size-[18px]" />
                     <span>{t("shell.navigation.api")}</span>
-                    <span className="ml-auto rounded-[6px] border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-emerald-700 dark:text-emerald-300">
+                    <span className="ml-auto rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] leading-none font-semibold text-emerald-700 dark:text-emerald-300">
                       {t("common.new")}
                     </span>
                   </DropdownMenuItem>
@@ -1198,30 +1327,31 @@ export function AppSidebar() {
                     ref={anchorRef as React.Ref<HTMLDivElement>}
                     onSelect={(e) => { e.preventDefault(); toggleTheme(); }}
                   >
-                    {isDark ? <Sun strokeWidth={1.75} className="size-icon" /> : <Moon strokeWidth={1.75} className="size-icon" />}
+                    {isDark ? <HugeiconsIcon icon={Sun03Icon} strokeWidth={1.75} className="size-icon" /> : <Moon strokeWidth={1.75} className="size-icon" />}
                     <span>
                       {isDark
                         ? t("shell.navigation.lightMode")
                         : t("shell.navigation.darkMode")}
                     </span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!getTourId(pathname)}
-                    onSelect={() => {
-                      const tourId = getTourId(pathname);
-                      if (!tourId) return;
-                      window.dispatchEvent(
-                        new CustomEvent(TOUR_OPEN_EVENT, {
-                          detail: { id: tourId },
-                        }),
-                      );
-                    }}
-                  >
-                    <HugeiconsIcon icon={CursorInfo02Icon} strokeWidth={1.75} className="size-icon" />
-                    <span>{t("shell.navigation.guidedTour")}</span>
-                  </DropdownMenuItem>
+                  {getTourId(pathname) && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        const tourId = getTourId(pathname);
+                        if (!tourId) return;
+                        window.dispatchEvent(
+                          new CustomEvent(TOUR_OPEN_EVENT, {
+                            detail: { id: tourId },
+                          }),
+                        );
+                      }}
+                    >
+                      <HugeiconsIcon icon={CursorInfo02Icon} strokeWidth={1.75} className="size-icon" />
+                      <span>{t("shell.navigation.guidedTour")}</span>
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuGroup>
-                <DropdownMenuSeparator className="mx-2.5! my-2.5! h-0! border-t border-border/70 bg-transparent!" />
+                <DropdownMenuSeparator className="mx-1! my-2.5! h-0! border-t border-border/70 bg-transparent!" />
                 <DropdownMenuItem
                   onSelect={() => useSettingsDialogStore.getState().openDialog("about")}
                 >
@@ -1268,7 +1398,7 @@ export function AppSidebar() {
         }
       }}
     >
-      <DialogContent className="menu-flat-destructive corner-squircle border border-border/60 bg-background/98 shadow-none sm:max-w-md">
+      <DialogContent className="menu-flat-destructive corner-squircle dialog-soft-surface sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {confirmingDelete?.kind === "run"
@@ -1343,12 +1473,12 @@ export function AppSidebar() {
       </DialogContent>
     </Dialog>
     <Dialog
-      open={renamingTarget !== null}
+      open={renamingTarget !== null && renamingTarget.kind !== "chat"}
       onOpenChange={(open) => {
         if (!open) setRenamingTarget(null);
       }}
     >
-      <DialogContent className="corner-squircle border border-border/60 bg-background/98 shadow-none sm:max-w-md">
+      <DialogContent className="corner-squircle dialog-soft-surface sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {renamingTarget?.kind === "run"
@@ -1413,7 +1543,7 @@ export function AppSidebar() {
         }
       }}
     >
-      <DialogContent className="corner-squircle border border-border/60 bg-background/98 shadow-none sm:max-w-md">
+      <DialogContent className="corner-squircle dialog-soft-surface sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {projectCreateMoveTarget ? "Move to new project" : "New project"}

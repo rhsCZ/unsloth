@@ -63,17 +63,38 @@ if sys.platform == "win32":
     _add_rocm_dll_dirs()
     del _add_rocm_dll_dirs
 
+    # ── Windows AMD ROCm: make hipInfo.exe resolvable for subprocess probes ──
+    # bitsandbytes' get_rocm_gpu_arch() runs `hipinfo.exe` via PATH at import
+    # time; the AMD torch wheel ships it in the venv Scripts dir, which is on
+    # PATH only when the venv is activated -- Studio launches python directly.
+    # Without this, every bitsandbytes import logs a scary (but harmless)
+    # "Could not detect ROCm GPU architecture: [WinError 2]" ERROR + WARNING.
+    # Gated on the file existing: only AMD ROCm wheels ship hipInfo.exe, so
+    # NVIDIA/CPU hosts are untouched. os.add_dll_directory above does not help
+    # here -- subprocess PATH resolution ignores DLL search directories.
+    _scripts_dir = os.path.dirname(sys.executable)
+    if os.path.isfile(os.path.join(_scripts_dir, "hipInfo.exe")):
+        import shutil as _shutil
+        if not _shutil.which("hipinfo.exe"):
+            os.environ["PATH"] = _scripts_dir + os.pathsep + os.environ.get("PATH", "")
+        del _shutil
+    del _scripts_dir
+
     # ── Windows AMD ROCm: set BNB_ROCM_VERSION before any bitsandbytes import ─
     # bitsandbytes derives the rocm<ver>.dll name from torch.version.hip, but the
     # wheel ships rocm72.dll, so the server crashes ("Configured ROCm binary not
-    # found") without this. Detect the shipped DLL and fall back to "72" (mirrors
-    # worker.py). Gate on the rocm bnb DLL / HIP_PATH rather than torch.version.hip
-    # to avoid importing torch on every Windows host.
-    if "BNB_ROCM_VERSION" not in os.environ:
+    # found") without this. Detect the shipped DLL (mirrors worker.py); gate on
+    # the rocm bnb DLL rather than torch.version.hip to avoid importing torch on
+    # every Windows host.
+    # Values seeded by the installer's sitecustomize.py are redetectable
+    # defaults; explicit caller values remain authoritative.
+    if (
+        "BNB_ROCM_VERSION" not in os.environ
+        or os.environ.get("UNSLOTH_BNB_ROCM_VERSION_SOURCE") == "sitecustomize"
+    ):
         import glob as _glob
         import logging as _logging
 
-        _hip_env = bool(os.environ.get("HIP_PATH") or os.environ.get("ROCM_PATH"))
         _bnb_rocm_ver = None
         _found_rocm_bnb = False
         try:
@@ -96,17 +117,42 @@ if sys.platform == "win32":
                     _bnb_rocm_ver = max(_all_vers_main, key = lambda v: int(v))
         except Exception as _e:
             _logging.getLogger(__name__).warning(
-                "Windows ROCm: BNB DLL detection failed (%s); falling back to version '72'",
+                "Windows ROCm: BNB DLL detection failed (%s); leaving BNB_ROCM_VERSION as is",
                 _e,
             )
-        # rocm bnb DLL present, or HIP_PATH/ROCM_PATH set (DLL unparsable -> "72")
-        if _found_rocm_bnb or _hip_env:
-            _bnb_rocm_ver_final = _bnb_rocm_ver or "72"
+        # Only when a ROCm bnb DLL actually exists: HIP_PATH/ROCM_PATH alone
+        # (HIP SDK on a CUDA/CPU box) must not force a ROCm backend onto a
+        # non-ROCm bitsandbytes, which raises at import. DLL unparsable -> "72".
+        if _found_rocm_bnb:
+            _bnb_rocm_ver_final = _bnb_rocm_ver or os.environ.get("BNB_ROCM_VERSION") or "72"
             os.environ["BNB_ROCM_VERSION"] = _bnb_rocm_ver_final
+            os.environ["UNSLOTH_BNB_ROCM_VERSION_SOURCE"] = "detected"
             _logging.getLogger(__name__).info(
                 "Windows ROCm: set BNB_ROCM_VERSION=%s (from installed BNB wheel)",
                 _bnb_rocm_ver_final,
             )
+
+# ── WSL AMD Strix Halo (gfx1151): enable ROCDXG before any torch import ──────
+# In WSL the AMD GPU is reached via the ROCDXG bridge (librocdxg.so over
+# /dev/dxg), which HSA loads only when HSA_ENABLE_DXG_DETECTION=1 is set BEFORE
+# torch touches the GPU. A worker launched outside a login shell (e.g.
+# `wsl.exe -d Ubuntu-24.04 python ...`) misses the installer's persisted env
+# and silently falls back to CPU. Set it here, gated to no-op unless BOTH
+# /dev/dxg AND librocdxg.so exist -- native Linux ROCm, NVIDIA, macOS and
+# Windows are unaffected.
+elif sys.platform.startswith("linux") and "HSA_ENABLE_DXG_DETECTION" not in os.environ:
+    try:
+        if os.path.exists("/dev/dxg") and any(
+            os.path.exists(os.path.join(_p, "librocdxg.so"))
+            for _p in ("/opt/rocm/lib", "/opt/rocm/lib64")
+        ):
+            os.environ["HSA_ENABLE_DXG_DETECTION"] = "1"
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "WSL ROCm: set HSA_ENABLE_DXG_DETECTION=1 (librocdxg bridge present)"
+            )
+    except Exception:
+        pass
 
 # Put backend dir on sys.path so _platform_compat is importable when main.py
 # is launched directly (e.g. `uvicorn main:app`).
@@ -146,6 +192,11 @@ if _STUDIO_ROOT_RESOLVED != _LEGACY_STUDIO_ROOT:
         os.environ["UNSLOTH_STUDIO_HOME"] = str(_STUDIO_ROOT_RESOLVED)
     if not os.environ.get("UNSLOTH_LLAMA_CPP_PATH"):
         os.environ["UNSLOTH_LLAMA_CPP_PATH"] = str(_STUDIO_ROOT_RESOLVED / "llama.cpp")
+
+# The studio bundles unsloth_zoo; declare unsloth present (as `import unsloth`
+# does) so its lazy submodule imports (export, hardware, mlx) and the
+# DiffusionGemma runner never trip the install guard on a clean install.
+os.environ.setdefault("UNSLOTH_IS_PRESENT", "1")
 
 import hashlib
 import mimetypes
@@ -199,7 +250,7 @@ if os.getenv("ENVIRONMENT_TYPE", "production") == "production":
     # warnings.filterwarnings("ignore", category=DeprecationWarning)
     # warnings.filterwarnings("ignore", module="triton.*")
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -221,6 +272,7 @@ from routes import (
     training_history_router,
     training_router,
 )
+from routes.llama import router as llama_router
 from hub.routes import (
     inventory_router as hub_inventory_router,
     datasets_router as hub_datasets_router,
@@ -244,6 +296,7 @@ from utils.hardware import (
 import utils.hardware.hardware as _hw_module
 
 from utils.cache_cleanup import clear_unsloth_compiled_cache
+from utils.lifespan_shutdown import run_lifespan_shutdown
 from utils.native_path_leases import native_path_leases_supported
 from utils.update_status import (
     get_studio_install_source_status,
@@ -411,9 +464,12 @@ async def lifespan(app: FastAPI):
     else:
         app.state.bootstrap_password = storage.get_bootstrap_password()
     yield
-    await asyncio.to_thread(terminate_hub_downloads)
-    _hw_module.DEVICE = None
-    clear_unsloth_compiled_cache()
+
+    await run_lifespan_shutdown(
+        terminate_hub_downloads,
+        clear_unsloth_compiled_cache,
+        _hw_module,
+    )
 
 
 app = FastAPI(
@@ -759,6 +815,7 @@ app.include_router(mcp_servers_router, prefix = "/api/mcp/servers", tags = ["mcp
 app.include_router(prompts_router, prefix = "/api/prompts", tags = ["prompts"])
 app.include_router(datasets_router, prefix = "/api/datasets", tags = ["datasets"])
 app.include_router(data_recipe_router, prefix = "/api/data-recipe", tags = ["data-recipe"])
+app.include_router(llama_router, prefix = "/api/llama", tags = ["llama"])
 app.include_router(export_router, prefix = "/api/export", tags = ["export"])
 app.include_router(rag_router, prefix = "/api/rag", tags = ["rag"])
 app.include_router(training_history_router, prefix = "/api/train", tags = ["training-history"])
@@ -820,6 +877,10 @@ async def health_check(request: Request):
         "version": UNSLOTH_VERSION,
         "studio_version": STUDIO_VERSION,
         "device_type": device_type,
+        # API-screen fields (authed-only; they fingerprint how the host is exposed).
+        "cloudflare_url": getattr(request.app.state, "cloudflare_url", None),
+        "server_url": getattr(request.app.state, "server_url", None),
+        "secure": bool(getattr(request.app.state, "secure", False)),
     }
 
 
@@ -910,17 +971,40 @@ async def get_gpu_visibility(current_subject: str = Depends(get_current_subject)
 
 
 @app.get("/api/system/hardware")
-async def get_hardware_info(current_subject: str = Depends(get_current_subject)):
+def get_hardware_info(
+    include_details: bool = Query(False), current_subject: str = Depends(get_current_subject)
+):
     """Return GPU name, total VRAM, and key ML package versions.
 
     Gated behind auth alongside /api/system -- same fingerprinting concern.
     /api/system/gpu-visibility is also auth-gated.
+
+    ``include_details`` is for About/diagnostics. The default response stays
+    cheap for callers that only need the primary GPU summary, like training
+    method auto-selection. Sync def (not async): hardware/detail probes can
+    shell out, and FastAPI runs sync endpoints in a threadpool.
     """
     from utils.hardware import get_gpu_summary, get_package_versions
-    return {
+
+    body = {
         "gpu": get_gpu_summary(),
         "versions": get_package_versions(),
     }
+    if include_details:
+        from utils.llama_cpp_update import get_installed_llama_version
+
+        # All backend-visible GPUs (respects CUDA_VISIBLE_DEVICES), so multi-GPU
+        # hosts list every device -- get_gpu_summary alone reports only the primary.
+        # Sort by visible_ordinal: the nvidia-smi path returns rows in physical order,
+        # so under a reordering CUDA_VISIBLE_DEVICES (e.g. "5,3") labeling by array
+        # index would otherwise disagree with the GPU 0/1 the backend actually sees.
+        devices = get_backend_visible_gpu_info().get("devices", [])
+        body["gpus"] = [
+            {"name": d.get("name"), "vram_total_gb": d.get("memory_total_gb")}
+            for d in sorted(devices, key = lambda d: d.get("visible_ordinal", 0))
+        ]
+        body["llama_cpp"] = get_installed_llama_version()
+    return body
 
 
 # ============ Serve Frontend (Optional) ============

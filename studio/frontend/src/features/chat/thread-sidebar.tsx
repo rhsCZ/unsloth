@@ -257,6 +257,14 @@ export function ThreadSidebar({
                     isActive={activeId === item.id}
                     onClick={() => onSelect(viewForItem(item))}
                   >
+                    {item.isFork ? (
+                      <span
+                        className="mr-1 rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
+                        title="Forked from another chat"
+                      >
+                        fork
+                      </span>
+                    ) : null}
                     <span>{item.title}</span>
                   </SidebarMenuButton>
                   <DropdownMenu>
@@ -331,7 +339,7 @@ export function ThreadSidebar({
 
       {/* Rename dialog */}
       <Dialog open={renamingItem !== null} onOpenChange={(open) => { if (!open) setRenamingItem(null); }}>
-        <DialogContent className="corner-squircle border border-border/60 bg-background/98 shadow-none sm:max-w-sm">
+        <DialogContent className="corner-squircle dialog-soft-surface sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Rename chat</DialogTitle>
           </DialogHeader>

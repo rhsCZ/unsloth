@@ -2,8 +2,9 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { XIcon } from "lucide-react";
+import { Tick02Icon } from "@/lib/tick-icon";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { FileDatabaseIcon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { FileDatabaseIcon } from "@hugeicons/core-free-icons";
 import { type FC, useCallback, useEffect, useState } from "react";
 
 import {
@@ -14,7 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useRagToolAvailable } from "@/features/chat/hooks/use-rag-tool-available";
+import { useRagToolDisabled } from "@/features/chat/hooks/use-rag-tool-disabled";
 import { useChatRuntimeStore } from "@/features/chat/stores/chat-runtime-store";
 
 import { listKnowledgeBases } from "../api/rag-api";
@@ -38,8 +39,8 @@ const ArrowDownStandardIcon: FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-// Picks the retrieval source. Only rendered when retrieval is on and the loaded
-// model can run search_knowledge_base.
+// Picks the retrieval source. Shown whenever retrieval is on; dims but stays
+// interactive (so it can be turned off) while the loaded model can't run it.
 export function KnowledgeBaseComposerButton({
   side = "bottom",
 }: {
@@ -47,7 +48,7 @@ export function KnowledgeBaseComposerButton({
 } = {}) {
   const ragEnabled = useChatRuntimeStore((s) => s.ragEnabled);
   const setRagEnabled = useChatRuntimeStore((s) => s.setRagEnabled);
-  const ragAvailable = useRagToolAvailable();
+  const ragDisabled = useRagToolDisabled();
   const ragSource = useChatRuntimeStore((s) => s.ragSource);
   const setRagSource = useChatRuntimeStore((s) => s.setRagSource);
 
@@ -85,7 +86,7 @@ export function KnowledgeBaseComposerButton({
     }
   }, [kbs, kbsLoaded, ragSource, setRagSource]);
 
-  if (!ragEnabled || !ragAvailable) return null;
+  if (!ragEnabled) return null;
 
   return (
     <>
@@ -100,17 +101,24 @@ export function KnowledgeBaseComposerButton({
           <button
             type="button"
             className="composer-pill-btn"
-            data-active="true"
+            data-pill-label="RAG"
+            data-active={ragDisabled ? "false" : "true"}
             aria-label="Retrieval source"
           >
             {/* Icon doubles as an off switch: hover swaps to an X; clicking it
-                turns RAG off without opening the menu. */}
+                turns RAG off without opening the menu. In compact icon-only
+                mode the glyph is the whole button, so clicks fall through to
+                the trigger and open the menu instead. */}
             <span
               role="button"
               aria-label="Turn off retrieval"
               tabIndex={-1}
-              onPointerDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => {
+                if (e.currentTarget.closest('[data-pill-compact="true"]')) return;
+                e.stopPropagation();
+              }}
               onClick={(e) => {
+                if (e.currentTarget.closest('[data-pill-compact="true"]')) return;
                 e.stopPropagation();
                 setRagEnabled(false);
               }}

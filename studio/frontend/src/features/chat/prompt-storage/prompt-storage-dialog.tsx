@@ -11,6 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { Search01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   BookmarkIcon,
   CheckIcon,
@@ -20,7 +22,6 @@ import {
   PencilIcon,
   PlayIcon,
   PlusIcon,
-  SearchIcon,
   Trash2Icon,
   UploadIcon,
   XIcon,
@@ -48,10 +49,12 @@ import {
 } from "../api/prompts-api";
 import {
   listStoredChatMessages,
+  listStoredChatThreads,
   saveStoredChatThread,
   syncStoredChatMessages,
 } from "../utils/chat-history-storage";
 import { notifyChatHistoryUpdated } from "../api/chat-api";
+import { usePlusMenuPrefsStore } from "../stores/plus-menu-prefs-store";
 import type { ThreadRecord, MessageRecord } from "../types";
 
 function newId(): string {
@@ -331,7 +334,7 @@ function messageToOpenAI(msg: { role: unknown; content: unknown; attachments?: u
   return contentParts.length > 0 ? [{ role: role as "user" | "system", content: contentParts }] : [];
 }
 
-// ShareGPT training JSONL (human/gpt turns).
+// ShareGPT training JSONL (human/system/gpt turns).
 export async function exportConversationShareGPT(threadId: string): Promise<void> {
   const messages = await loadConversationMessages(threadId);
   if (!messages) return;
@@ -339,7 +342,7 @@ export async function exportConversationShareGPT(threadId: string): Promise<void
   const conversations: Array<{ from: string; value: string }> = [];
   for (const msg of messages) {
     const role = msg.role as string;
-    const from = role === "user" ? "human" : "gpt";
+    const from = role === "user" ? "human" : role === "system" ? "system" : "gpt";
     const value = messageToText(msg);
     if (value.trim()) conversations.push({ from, value });
   }
@@ -413,7 +416,7 @@ async function buildThreadContent(
     for (const msg of messages) {
       const role = msg.role as string;
       const value = messageToText(msg);
-      if (value.trim()) conversations.push({ from: role === "user" ? "human" : "gpt", value });
+      if (value.trim()) conversations.push({ from: role === "user" ? "human" : role === "system" ? "system" : "gpt", value });
     }
     if (conversations.length === 0) return null;
     return JSON.stringify({ conversations });
@@ -491,6 +494,36 @@ export async function exportBulkConversationsSeparate(
     `${basename}.zip`,
     "application/zip",
   );
+}
+
+// Scope-level bulk export shared by the sidebar Recents menu and
+// Settings -> Chat -> Data. "recents" = chats outside projects; "all" adds
+// project chats.
+export async function bulkExportConversationsByScope(
+  scope: "recents" | "all",
+  format: ConvExportFormat,
+  merged: boolean,
+): Promise<void> {
+  try {
+    const threads = await listStoredChatThreads({
+      includeArchived: false,
+      ...(scope === "recents" ? { projectId: null } : {}),
+    });
+    const ids = [...new Set(threads.map((t) => t.id))];
+    if (ids.length === 0) {
+      toast.info("No conversations to export.");
+      return;
+    }
+    const ts = new Date().toISOString().slice(0, 10);
+    const basename = scope === "all" ? `all-chats-${ts}` : `recents-${ts}`;
+    if (merged) {
+      await exportBulkConversationsMerged(ids, format, basename);
+    } else {
+      await exportBulkConversationsSeparate(ids, format, basename);
+    }
+  } catch {
+    toast.error("Export failed.");
+  }
 }
 
 export async function exportProjectConversations(
@@ -626,30 +659,16 @@ function sharegptToRecords(
 }
 
 function csvToRecords(csvText: string, threadId: string, baseTs: number): MessageRecord[] {
-  const lines = csvText.split(/\r?\n/);
+  // parseCsv handles quoted newlines, so multi-line message content
+  // round-trips; a naive per-line split would break those records.
+  const rows = parseCsv(csvText).slice(1);
   const records: MessageRecord[] = [];
   let prevId: string | null = null;
   let idx = 0;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    let role = "";
-    let content = "";
-    if (line.startsWith('"')) {
-      const m = line.match(/^"((?:[^"]|"")*)"\s*,\s*([\s\S]*)$/);
-      if (!m) continue;
-      role = m[1].replace(/""/g, '"');
-      content = m[2].startsWith('"')
-        ? m[2].slice(1, m[2].endsWith('"') ? -1 : undefined).replace(/""/g, '"')
-        : m[2];
-    } else {
-      const comma = line.indexOf(",");
-      if (comma === -1) continue;
-      role = line.slice(0, comma);
-      content = line.slice(comma + 1).startsWith('"')
-        ? line.slice(comma + 2, line.endsWith('"') ? -1 : undefined).replace(/""/g, '"')
-        : line.slice(comma + 1);
-    }
+  for (const row of rows) {
+    if (row.length < 2) continue;
+    const role = row[0].trim();
+    const content = row.slice(1).join(",");
     if (!content.trim()) continue;
     const validRole = role === "user" || role === "assistant" || role === "system" ? role : "user";
     const id = crypto.randomUUID();
@@ -1218,6 +1237,9 @@ function PromptCard({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(entry.name);
   const [text, setText] = useState(entry.text);
+  const pinnedPromptIds = usePlusMenuPrefsStore((s) => s.pinnedPromptIds);
+  const togglePinnedPrompt = usePlusMenuPrefsStore((s) => s.togglePinnedPrompt);
+  const isPinned = pinnedPromptIds.includes(entry.id);
 
   const handleSave = useCallback(async () => {
     const trimName = name.trim();
@@ -1264,6 +1286,9 @@ function PromptCard({
   return (
     <div className="group rounded-xl border border-border/60 bg-card p-4 flex flex-col gap-2 hover:border-border hover:shadow-sm transition-all">
       <div className="flex items-center gap-2">
+        {isPinned ? (
+          <BookmarkIcon className="size-3.5 shrink-0 fill-primary text-primary" />
+        ) : null}
         <span className="font-semibold text-sm flex-1 truncate tracking-tight">{entry.name}</span>
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
@@ -1275,6 +1300,21 @@ function PromptCard({
             <PlayIcon className="size-3" />Use
           </button>
           <div className="mx-1 h-4 w-px bg-border/60" />
+          <button
+            type="button"
+            onClick={() => togglePinnedPrompt(entry.id)}
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
+              isPinned
+                ? "text-primary hover:bg-primary/10"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+            title={isPinned ? "Unpin from + menu" : "Pin to + menu"}
+          >
+            <BookmarkIcon
+              className={cn("size-3.5", isPinned && "fill-primary")}
+            />
+          </button>
           <button
             type="button"
             onClick={() => onExport(entry)}
@@ -1840,7 +1880,7 @@ export function PromptStorageDialog({
 
             {/* */}
             <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+              <HugeiconsIcon icon={Search01Icon} strokeWidth={1.75} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -1859,7 +1899,7 @@ export function PromptStorageDialog({
                       onClick={() => { setSearchQuery(name); setShowSuggestions(false); }}
                       className="flex w-full items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left"
                     >
-                      <SearchIcon className="size-3 shrink-0 text-muted-foreground/60" />
+                      <HugeiconsIcon icon={Search01Icon} strokeWidth={1.75} className="size-3 shrink-0 text-muted-foreground/60" />
                       <span className="truncate">{name}</span>
                     </button>
                   ))}
@@ -1900,7 +1940,7 @@ export function PromptStorageDialog({
                       {searchQuery.trim() ? (
                         <>
                           <div className="flex size-12 items-center justify-center rounded-2xl bg-muted/60">
-                            <SearchIcon className="size-5 text-muted-foreground/40" />
+                            <HugeiconsIcon icon={Search01Icon} strokeWidth={1.75} className="size-5 text-muted-foreground/40" />
                           </div>
                           <div className="flex flex-col gap-1">
                             <p className="text-sm font-medium text-muted-foreground">
@@ -1964,7 +2004,7 @@ export function PromptStorageDialog({
                       {searchQuery.trim() ? (
                         <>
                           <div className="flex size-12 items-center justify-center rounded-2xl bg-muted/60">
-                            <SearchIcon className="size-5 text-muted-foreground/40" />
+                            <HugeiconsIcon icon={Search01Icon} strokeWidth={1.75} className="size-5 text-muted-foreground/40" />
                           </div>
                           <div className="flex flex-col gap-1">
                             <p className="text-sm font-medium text-muted-foreground">

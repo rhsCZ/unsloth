@@ -11,6 +11,7 @@ import {
 } from "@/components/assistant-ui/generated-image-overlay-context";
 import { downloadImagePart } from "@/components/assistant-ui/image";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { MessageHtmlArtifacts } from "@/components/assistant-ui/message-html-artifacts";
 import { MessageTiming } from "@/components/assistant-ui/message-timing";
 import { Reasoning, ReasoningGroup } from "@/components/assistant-ui/reasoning";
 import { RagSourcesGroup } from "@/components/assistant-ui/rag-sources";
@@ -19,6 +20,7 @@ import {
   thinkEffortAriaLabel,
   thinkToggleAriaLabel,
 } from "@/components/assistant-ui/think-aria-label";
+import { withToolConfirmation } from "@/components/assistant-ui/tool-confirmation-controls";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { ToolGroup } from "@/components/assistant-ui/tool-group";
 import { CodeExecutionToolUI } from "@/components/assistant-ui/tool-ui-code-execution";
@@ -36,6 +38,7 @@ import {
   useScrollThreadToBottom,
 } from "@/components/assistant-ui/use-intent-aware-autoscroll";
 import { Button } from "@/components/ui/button";
+import { MascotImg } from "@/components/mascot-img";
 import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
@@ -48,6 +51,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  CHAT_HISTORY_UPDATED_EVENT,
+  forkChatThread,
+  getForkCount,
+} from "@/features/chat/api/chat-api";
 import { sentAudioNames } from "@/features/chat/api/chat-adapter";
 import {
   PromptStorageDialog,
@@ -64,19 +72,30 @@ import { NewProjectDialog } from "@/features/chat/components/new-project-dialog"
 import { parseExternalModelId } from "@/features/chat/external-providers";
 import { McpComposerButton } from "@/features/chat/mcp-composer-button";
 import { getExternalReasoningCapabilities } from "@/features/chat/provider-capabilities";
-import { useRagToolAvailable } from "@/features/chat/hooks/use-rag-tool-available";
+import { useRagToolDisabled } from "@/features/chat/hooks/use-rag-tool-disabled";
+import { BypassPermissionsMenuItem } from "@/features/chat/bypass-permissions-menu-item";
 import { useChatRuntimeStore } from "@/features/chat/stores/chat-runtime-store";
 import { useExternalProvidersStore } from "@/features/chat/stores/external-providers-store";
+import { PROMPT_QUEUE_STOP_EVENT } from "@/features/chat/utils/prompt-queue-boundary";
+import {
+  PLUS_MENU_ORDER,
+  composerDraftKey,
+  readComposerDraft,
+  type PlusMenuItemId,
+  usePlusMenuPrefsStore,
+  writeComposerDraft,
+} from "@/features/chat";
 import { deleteThreadMessage } from "@/features/chat/utils/delete-thread-message";
+import { listThreadDocuments } from "@/features/rag/api/rag-api";
 import { ThreadDocumentsBar } from "@/features/rag/components/thread-documents-bar";
 import { KnowledgeBaseComposerButton } from "@/features/rag/components/knowledge-base-composer-button";
 import { DocumentPreviewMount } from "@/features/rag/components/document-preview-mount";
 import { useUserProfileStore } from "@/features/profile/stores/user-profile-store";
 import { applyQwenThinkingParams } from "@/features/chat/utils/qwen-params";
 import { isTauri } from "@/lib/api-base";
-import { AUDIO_ACCEPT, MAX_AUDIO_SIZE, fileToBase64 } from "@/lib/audio-utils";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { toast } from "@/lib/toast";
+import { Tick02Icon } from "@/lib/tick-icon";
 import { cn } from "@/lib/utils";
 import {
   ActionBarMorePrimitive,
@@ -106,7 +125,6 @@ import {
   Image03Icon,
   McpServerIcon,
   PencilRulerIcon,
-  Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate } from "@tanstack/react-router";
@@ -116,6 +134,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   Columns2Icon,
+  GitBranchIcon,
   GlobeIcon,
   HeadphonesIcon,
   MoreHorizontalIcon,
@@ -133,6 +152,7 @@ import {
   type KeyboardEvent,
   type DragEvent as ReactDragEvent,
   type ReactNode,
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -141,6 +161,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { create } from "zustand";
 
 // True while a file is dragged anywhere over the chat page, so the composer
 // can show its "Drop files here" affordance.
@@ -148,79 +169,421 @@ const PageDragContext = createContext(false);
 
 // Single-chat prompt queue. State lives at module level so it survives the
 // Composer remount when the first queued message creates a new thread, and
-// detection subscribes to the store's runningByThreadId rather than
-// aui.thread() (unbound on the welcome screen).
-
-import { create as _createZustand } from "zustand";
-
-// Module-level Zustand so ComposerRightControls re-renders across Composer mounts.
-interface _QueueUIState { isRunning: boolean; current: number; total: number; }
-const _useQueueUI = _createZustand<_QueueUIState>(() => ({
-  isRunning: false, current: 0, total: 0,
-}));
-
-let _qItems: string[] = [];
-let _qIndex = 0;
-let _qIsRunning = false;
-let _qPrevStoreRunning = false;
-let _qStoreUnsub: (() => void) | null = null;
-
-// Points to the current Composer's aui (updated every render), so it stays valid
-// after a remount.
-let _qGetAui: () => ReturnType<typeof useAui> = () => {
-  throw new Error("aui not initialised");
+// detection subscribes to runningByThreadId instead of aui.thread() so the
+// welcome-screen composer can queue safely before a thread is bound.
+type PromptQueueUIEntry = {
+  current: number;
+  total: number;
 };
 
-function _qStopSubscription() {
-  if (_qStoreUnsub) { _qStoreUnsub(); _qStoreUnsub = null; }
-  _qPrevStoreRunning = false;
+interface PromptQueueUIState {
+  byThreadId: Record<string, PromptQueueUIEntry>;
 }
 
-function _qAdvance() {
-  const nextIndex = _qIndex + 1;
-  if (nextIndex >= _qItems.length) {
-    _qIsRunning = false;
-    _qItems = [];
-    _qIndex = 0;
-    _qStopSubscription();
-    _useQueueUI.setState({ isRunning: false, current: 0, total: 0 });
+const usePromptQueueUI = create<PromptQueueUIState>(() => ({
+  byThreadId: {},
+}));
+
+type PromptQueueTarget = {
+  getDocumentThreadId: () => string | null;
+  getRunningThreadIds: () => string[];
+  append: (prompt: string) => void;
+  cancel: () => void;
+  isIndexing: () => boolean;
+};
+
+type PromptQueueItem = {
+  prompt: string;
+  target: PromptQueueTarget;
+};
+
+const PROMPT_QUEUE_INDEXING_RETRY_MS = 500;
+
+let promptQueueItems: PromptQueueItem[] = [];
+let promptQueueIndex = 0;
+let promptQueueIsRunning = false;
+let promptQueueGeneration = 0;
+let promptQueuePrevStoreRunning = false;
+let promptQueueWaitingForTargetIdle = false;
+let promptQueueStoreUnsub: (() => void) | null = null;
+let promptQueueRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function compactIds(ids: Array<string | null | undefined>) {
+  return Array.from(new Set(ids.filter((id): id is string => Boolean(id))));
+}
+
+function stopPromptQueueSubscription({
+  resetRunningState = true,
+}: {
+  resetRunningState?: boolean;
+} = {}) {
+  if (promptQueueStoreUnsub) {
+    promptQueueStoreUnsub();
+    promptQueueStoreUnsub = null;
+  }
+  if (resetRunningState) {
+    promptQueuePrevStoreRunning = false;
+  }
+}
+
+function resetPromptQueue(showToast = false) {
+  promptQueueGeneration += 1;
+  promptQueueIsRunning = false;
+  promptQueueItems = [];
+  promptQueueIndex = 0;
+  promptQueueWaitingForTargetIdle = false;
+  if (promptQueueRetryTimer) {
+    clearTimeout(promptQueueRetryTimer);
+    promptQueueRetryTimer = null;
+  }
+  stopPromptQueueSubscription();
+  syncPromptQueueUI();
+  if (showToast) {
     toast.success("Prompt queue complete");
+  }
+}
+
+function queueToastDescription(prompt: string) {
+  return prompt.length > 80 ? `${prompt.slice(0, 80)}...` : prompt;
+}
+
+function appendQueuedPrompt(item: PromptQueueItem) {
+  syncPromptQueueUI();
+  item.target.append(item.prompt);
+}
+
+async function targetHasIndexingDocuments(item: PromptQueueItem) {
+  if (item.target.isIndexing()) {
+    return true;
+  }
+  const state = useChatRuntimeStore.getState();
+  if (
+    !state.ragEnabled ||
+    state.ragSource.type !== "thread"
+  ) {
+    return false;
+  }
+  const threadId = item.target.getDocumentThreadId();
+  if (!threadId) {
+    return false;
+  }
+  try {
+    const documents = await listThreadDocuments(threadId);
+    return documents.some(
+      (doc) => doc.status === "pending" || doc.status === "running",
+    );
+  } catch {
+    return item.target.isIndexing();
+  }
+}
+
+function isActivePromptQueueItem(item: PromptQueueItem, generation: number) {
+  if (!promptQueueIsRunning || generation !== promptQueueGeneration) {
+    return false;
+  }
+  return promptQueueItems[Math.max(promptQueueIndex, 0)] === item;
+}
+
+function scheduleQueuedPromptDispatch(
+  item: PromptQueueItem,
+  delay: number,
+  generation = promptQueueGeneration,
+) {
+  if (promptQueueRetryTimer) {
+    clearTimeout(promptQueueRetryTimer);
+  }
+  promptQueueRetryTimer = setTimeout(() => {
+    promptQueueRetryTimer = null;
+    void dispatchQueuedPrompt(item, generation);
+  }, delay);
+}
+
+async function dispatchQueuedPrompt(
+  item: PromptQueueItem,
+  generation = promptQueueGeneration,
+) {
+  if (!isActivePromptQueueItem(item, generation)) {
     return;
   }
-  _qIndex = nextIndex;
-  _useQueueUI.setState({ current: nextIndex + 1, total: _qItems.length });
-  const next = _qItems[nextIndex];
-  toast(`Prompt ${nextIndex + 1} / ${_qItems.length}`, {
-    description: next.length > 80 ? next.slice(0, 80) + "…" : next,
-  });
-  _qPrevStoreRunning = false; // catch the next run
-  setTimeout(() => {
-    _qGetAui().thread().append({
-      role: "user",
-      content: [{ type: "text", text: next }],
-      createdAt: new Date(),
-    } as never);
-  }, 100);
+  if (
+    isPromptQueueTargetRunning(
+      item.target,
+      useChatRuntimeStore.getState().runningByThreadId,
+    )
+  ) {
+    promptQueueWaitingForTargetIdle = true;
+    promptQueuePrevStoreRunning = true;
+    syncPromptQueueUI();
+    startPromptQueueSubscription();
+    return;
+  }
+  const hasIndexingDocuments = await targetHasIndexingDocuments(item);
+  if (!isActivePromptQueueItem(item, generation)) {
+    return;
+  }
+  if (hasIndexingDocuments) {
+    scheduleQueuedPromptDispatch(item, PROMPT_QUEUE_INDEXING_RETRY_MS);
+    return;
+  }
+  if (!isActivePromptQueueItem(item, generation)) {
+    return;
+  }
+  appendQueuedPrompt(item);
 }
 
-function _qStartSubscription() {
-  _qStopSubscription();
+function createQueuedPrompt(prompt: string, target: PromptQueueTarget) {
+  return {
+    prompt,
+    target,
+  };
+}
+
+function appendTextToThread(prompt: string) {
+  return {
+    role: "user",
+    content: [{ type: "text", text: prompt }],
+    createdAt: new Date(),
+  } as never;
+}
+
+function getPromptQueueTargetIds(target: PromptQueueTarget) {
+  return compactIds([
+    ...target.getRunningThreadIds(),
+    target.getDocumentThreadId(),
+  ]);
+}
+
+function findPromptQueueEntry(
+  state: PromptQueueUIState,
+  threadIds: string[],
+) {
+  for (const threadId of threadIds) {
+    const entry = state.byThreadId[threadId];
+    if (entry) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+function syncPromptQueueUI() {
+  if (!promptQueueIsRunning || promptQueueItems.length === 0) {
+    usePromptQueueUI.setState({ byThreadId: {} });
+    return;
+  }
+
+  const activeItemIndex = Math.max(promptQueueIndex, 0);
+  const groups: Array<{
+    ids: Set<string>;
+    current: number;
+    total: number;
+    active: boolean;
+  }> = [];
+
+  for (const [index, item] of promptQueueItems.entries()) {
+    const ids = getPromptQueueTargetIds(item.target);
+    if (ids.length === 0) {
+      continue;
+    }
+    let group = groups.find((candidate) =>
+      ids.some((id) => candidate.ids.has(id)),
+    );
+    if (!group) {
+      group = {
+        ids: new Set<string>(),
+        current: 0,
+        total: 0,
+        active: false,
+      };
+      groups.push(group);
+    }
+    ids.forEach((id) => group.ids.add(id));
+    group.total += 1;
+    if (promptQueueIndex >= 0 && index <= promptQueueIndex) {
+      group.current += 1;
+    }
+    if (index === activeItemIndex) {
+      group.active = true;
+    }
+  }
+
+  const byThreadId: Record<string, PromptQueueUIEntry> = {};
+  for (const group of groups) {
+    if (!group.active && group.current >= group.total) {
+      continue;
+    }
+    const entry = {
+      current: Math.min(group.current, group.total),
+      total: group.total,
+    };
+    group.ids.forEach((id) => {
+      byThreadId[id] = entry;
+    });
+  }
+
+  usePromptQueueUI.setState({ byThreadId });
+}
+
+function isPromptQueueTargetRunning(
+  target: PromptQueueTarget,
+  runningByThreadId: Record<string, boolean>,
+) {
+  const runningIds = Object.keys(runningByThreadId);
+  if (runningIds.length === 0) {
+    return false;
+  }
+
+  const targetIds = target.getRunningThreadIds();
+  if (targetIds.length === 0) {
+    return runningIds.length > 0;
+  }
+
+  return runningIds.some((threadId) => targetIds.includes(threadId));
+}
+
+function isActivePromptQueueTargetRunning(
+  runningByThreadId: Record<string, boolean>,
+) {
+  const activeItem = promptQueueItems[Math.max(promptQueueIndex, 0)];
+  if (!activeItem) {
+    return false;
+  }
+  return isPromptQueueTargetRunning(activeItem.target, runningByThreadId);
+}
+
+function advancePromptQueue() {
+  const nextIndex = promptQueueIndex + 1;
+  if (nextIndex >= promptQueueItems.length) {
+    resetPromptQueue(true);
+    return;
+  }
+  promptQueueIndex = nextIndex;
+  syncPromptQueueUI();
+  const next = promptQueueItems[nextIndex];
+  toast(`Prompt ${nextIndex + 1} / ${promptQueueItems.length}`, {
+    description: queueToastDescription(next.prompt),
+  });
+  promptQueueWaitingForTargetIdle = false;
+  promptQueuePrevStoreRunning = false;
+  scheduleQueuedPromptDispatch(next, 100);
+}
+
+function startPromptQueueSubscription() {
+  const wasWaitingForRun = promptQueuePrevStoreRunning;
+  stopPromptQueueSubscription({ resetRunningState: false });
+  promptQueuePrevStoreRunning = wasWaitingForRun;
   // runningByThreadId tracks the actual thread (not aui.thread()), so detection
   // survives navigation.
-  _qStoreUnsub = useChatRuntimeStore.subscribe((state) => {
-    if (!_qIsRunning) { _qStopSubscription(); return; }
-    const isRunning = Object.keys(state.runningByThreadId).length > 0;
-    const wasRunning = _qPrevStoreRunning;
-    _qPrevStoreRunning = isRunning;
+  promptQueueStoreUnsub = useChatRuntimeStore.subscribe((state) => {
+    if (!promptQueueIsRunning) {
+      stopPromptQueueSubscription();
+      return;
+    }
+    const isRunning = isActivePromptQueueTargetRunning(state.runningByThreadId);
+    const wasRunning = promptQueuePrevStoreRunning;
+    promptQueuePrevStoreRunning = isRunning;
     if (wasRunning && !isRunning) {
-      _qAdvance();
+      if (promptQueueWaitingForTargetIdle) {
+        promptQueueWaitingForTargetIdle = false;
+        const activeItem = promptQueueItems[promptQueueIndex];
+        if (activeItem) {
+          scheduleQueuedPromptDispatch(activeItem, 50);
+        }
+        return;
+      }
+      advancePromptQueue();
     }
   });
+
+  const isRunningNow = isActivePromptQueueTargetRunning(
+    useChatRuntimeStore.getState().runningByThreadId,
+  );
+  if (promptQueuePrevStoreRunning && !isRunningNow) {
+    promptQueuePrevStoreRunning = false;
+    if (promptQueueWaitingForTargetIdle) {
+      promptQueueWaitingForTargetIdle = false;
+      const activeItem = promptQueueItems[promptQueueIndex];
+      if (activeItem) {
+        scheduleQueuedPromptDispatch(activeItem, 50);
+      }
+      return;
+    }
+    advancePromptQueue();
+  }
 }
 
-interface _QueueCallbacks { startQueue: (items: string[]) => void; stopQueue: () => void; }
-const PromptQueueContext = createContext<_QueueCallbacks>({
-  startQueue: () => {}, stopQueue: () => {},
+function startPromptQueue(
+  items: string[],
+  target: PromptQueueTarget,
+  waitForCurrentRun = false,
+) {
+  const filtered = items.map((item) => item.trim()).filter(Boolean);
+  if (filtered.length === 0) {
+    return;
+  }
+
+  if (promptQueueIsRunning) {
+    promptQueueItems.push(
+      ...filtered.map((prompt) => createQueuedPrompt(prompt, target)),
+    );
+    syncPromptQueueUI();
+    toast.success("Added to prompt queue", {
+      description: `${filtered.length} prompt${filtered.length === 1 ? "" : "s"} queued.`,
+    });
+    return;
+  }
+
+  const runningByThreadId = useChatRuntimeStore.getState().runningByThreadId;
+  const shouldWaitForCurrentRun =
+    waitForCurrentRun &&
+    isPromptQueueTargetRunning(target, runningByThreadId);
+  promptQueueGeneration += 1;
+  promptQueueItems = filtered.map((prompt) =>
+    createQueuedPrompt(prompt, target),
+  );
+  promptQueueIndex = shouldWaitForCurrentRun ? -1 : 0;
+  promptQueueIsRunning = true;
+  promptQueuePrevStoreRunning = shouldWaitForCurrentRun;
+  syncPromptQueueUI();
+  toast(
+    shouldWaitForCurrentRun ? "Prompt queued" : `Prompt 1 / ${filtered.length}`,
+    {
+      description: queueToastDescription(filtered[0]),
+    },
+  );
+  startPromptQueueSubscription();
+  if (!shouldWaitForCurrentRun) {
+    const first = promptQueueItems[0];
+    if (first) {
+      scheduleQueuedPromptDispatch(first, 50);
+    }
+  }
+}
+
+function stopPromptQueueRun() {
+  const activeTarget = promptQueueItems[Math.max(promptQueueIndex, 0)]?.target;
+  resetPromptQueue();
+  try {
+    activeTarget?.cancel();
+  } catch {
+    // The active run may have already ended.
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener(PROMPT_QUEUE_STOP_EVENT, () => stopPromptQueueRun());
+}
+
+interface PromptQueueCallbacks {
+  startQueue: (items: string[], waitForCurrentRun?: boolean) => void;
+  stopQueue: () => void;
+}
+const noopStartPromptQueue: PromptQueueCallbacks["startQueue"] = () =>
+  undefined;
+const noopStopPromptQueue: PromptQueueCallbacks["stopQueue"] = () => undefined;
+const PromptQueueContext = createContext<PromptQueueCallbacks>({
+  startQueue: noopStartPromptQueue,
+  stopQueue: noopStopPromptQueue,
 });
 
 // Gap (px) between last message and floating composer; bottom spacer tracks
@@ -740,8 +1103,8 @@ function buildWelcome(hour: number, name: string): Welcome {
   // Use the name on ~a third of lines (only direct salutations where it reads
   // naturally); the rest stay name-free so greetings don't feel repetitive.
   const base: Welcome[] = [
-    g(name ? `Good to see you, ${name}.` : "Good to see you.", "large sloth wave.png"),
-    g("Ready when you are.", "large sloth thumbs.png"),
+    g(name ? `Good to see you, ${name}` : "Good to see you", "large sloth wave.png"),
+    g("Ready when you are", "large sloth thumbs.png"),
     DEFAULT_WELCOME,
     g("How can I help?", "sloth sir large.png"),
   ];
@@ -772,32 +1135,39 @@ const ThreadWelcome: FC<{
   hideComposer?: boolean;
   threadId?: string | null;
 }> = ({ hideComposer, threadId }) => {
+  const incognito = useChatRuntimeStore((s) => s.incognito);
   const displayName = useUserProfileStore((s) => s.displayName);
+  const nickname = useUserProfileStore((s) => s.nickname);
   const [welcome, setWelcome] = useState<Welcome>(DEFAULT_WELCOME);
 
   useEffect(() => {
-    // First name only, for a natural greeting; blank falls back to no name.
-    const name = displayName.trim().split(/\s+/)[0] ?? "";
+    // Prefer the nickname; otherwise first name only. Blank falls back to none.
+    const name = nickname.trim() || (displayName.trim().split(/\s+/)[0] ?? "");
     setWelcome(buildWelcome(new Date().getHours(), name));
-  }, [displayName]);
+  }, [displayName, nickname]);
 
-  const currentEmojiSrc = `/Sloth emojis/${welcome.sloth}`;
+  const currentEmojiSrc = `Sloth emojis/${welcome.sloth}`;
 
   return (
     <div className="aui-thread-welcome-root mx-auto my-auto flex w-full max-w-(--thread-max-width) grow flex-col">
-      <div className="aui-thread-welcome-center flex w-full grow flex-col items-center justify-start pt-[28vh]">
+      <div className="aui-thread-welcome-center flex w-full grow flex-col items-center justify-start pt-[27.5vh]">
         <div className="aui-thread-welcome-message flex w-full flex-col justify-center gap-9 px-4">
           {/* Center the greeting (sloth + title) over the composer. */}
           <div className="flex flex-row items-center justify-center gap-[15px]">
-            <img
+            <MascotImg
               src={currentEmojiSrc}
-              alt="Sloth mascot"
               className="size-[44px] -translate-y-[2px]"
             />
             <h1 className="aui-thread-welcome-message-inner unsloth-welcome-title fade-in slide-in-from-bottom-1 animate-in text-3xl tracking-[-0.02em] duration-200">
-              {welcome.text}
+              {incognito ? "Temporary chat" : welcome.text}
             </h1>
           </div>
+          {incognito && (
+            <p className="aui-thread-welcome-message-inner fade-in -mt-2 animate-in text-center font-heading font-normal text-muted-foreground text-sm duration-200">
+              This chat won't appear in your history and isn't saved. It
+              disappears when you leave.
+            </p>
+          )}
           {!hideComposer && <ComposerAnimated threadId={threadId} />}
         </div>
       </div>
@@ -876,12 +1246,11 @@ const Composer: FC<{
   const artifactsEnabled = useChatRuntimeStore((s) => s.artifactsEnabled);
   const mcpEnabledForChat = useChatRuntimeStore((s) => s.mcpEnabledForChat);
   const ragEnabled = useChatRuntimeStore((s) => s.ragEnabled);
-  const ragToolAvailable = useRagToolAvailable();
   // More than 4 pills: collapse to icons only. Search and Code always show;
-  // Images, Canvas and MCP are conditional.
+  // Images, RAG, Canvas and MCP are conditional.
   const pillsCompact =
     2 +
-      (ragEnabled && ragToolAvailable ? 1 : 0) +
+      (ragEnabled ? 1 : 0) +
       (supportsBuiltinImageGeneration ? 1 : 0) +
       (artifactsEnabled ? 1 : 0) +
       (mcpEnabledForChat ? 1 : 0) >
@@ -891,7 +1260,7 @@ const Composer: FC<{
     (s) => s.setPendingImageEditReference,
   );
   const { inputProps, isComposing, isComposingRef } =
-    useImeComposerInputHandlers();
+    useImeComposerInputHandlers({ submitOnEnter: true });
   const composerText = useAuiState(({ composer }) => composer.text);
   // Expand only once the input wraps to a second line, not on first keystroke.
   // Latch until cleared so it can't flip-flop at the wrap boundary.
@@ -935,9 +1304,67 @@ const Composer: FC<{
   const hasPendingAudio = useChatRuntimeStore((s) =>
     Boolean(s.pendingAudioName),
   );
+  const threadIsRunning = useAuiState(({ thread }) => thread.isRunning);
+  const threadListItemId = useAuiState(
+    ({ threadListItem }) => threadListItem.id,
+  );
+  const threadListItemRemoteId = useAuiState(
+    ({ threadListItem }) => threadListItem.remoteId,
+  );
   const referenceThreadId = threadId ?? activeThreadId ?? null;
+  const promptQueueThreadIds = compactIds([
+    threadListItemId,
+    threadListItemRemoteId,
+    threadId,
+  ]);
+  const promptQueueActive = usePromptQueueUI((s) =>
+    Boolean(findPromptQueueEntry(s, promptQueueThreadIds)),
+  );
+  useEffect(() => {
+    if (threadId != null || activeThreadId != null) {
+      return;
+    }
+    stopPromptQueueRun();
+  }, [activeThreadId, threadId]);
   const hasSendableContent =
     composerText.trim().length > 0 || hasAttachments || hasPendingAudio;
+  const canQueueCurrentPrompt =
+    composerText.trim().length > 0 &&
+    !hasAttachments &&
+    !hasPendingAudio &&
+    !isComposing &&
+    !hasPendingAttachments &&
+    !disabled &&
+    !overlay;
+
+  // Per-thread draft autosave: restore on mount, then mirror composer text
+  // into localStorage (debounced) so a half-typed message survives a
+  // navigation or reload. Cleared once empty (i.e. after a send). Setting the
+  // text even when no draft exists keeps a thread from inheriting the
+  // previous thread's composer contents.
+  const draftThreadId = referenceThreadId;
+  const draftKey = draftThreadId ? composerDraftKey(draftThreadId) : null;
+  const lastDraftKeyRef = useRef(draftKey);
+  useEffect(() => {
+    const draft = draftKey ? (readComposerDraft(draftKey) ?? "") : "";
+    const composer = aui.composer();
+    if (composer.getState().isEditing) {
+      composer.setText(draft);
+    }
+  }, [draftKey, aui]);
+  useEffect(() => {
+    // After a thread switch composerText can still hold the previous
+    // thread's text; skip that cycle so it isn't saved under the new key.
+    if (lastDraftKeyRef.current !== draftKey) {
+      lastDraftKeyRef.current = draftKey;
+      return;
+    }
+    if (!draftKey) {
+      return;
+    }
+    const t = setTimeout(() => writeComposerDraft(draftKey, composerText), 300);
+    return () => clearTimeout(t);
+  }, [composerText, draftKey]);
   // Two-row layout shows once the input wraps or a tool is on. Tools can
   // pre-select before a model loads, so an active toggle expands it either way.
   const composerExpanded =
@@ -995,9 +1422,52 @@ const Composer: FC<{
   // While this thread's docs index, hold the send and fire it once they finish so
   // retrieval covers all of them.
   const [indexingActive, setIndexingActive] = useState(false);
+  const indexingActiveRef = useRef(false);
   const [pendingSend, setPendingSend] = useState(false);
   const pendingSendRef = useRef(false);
   const waitToastRef = useRef<string | number | null>(null);
+
+  const handleIndexingChange = useCallback((active: boolean) => {
+    indexingActiveRef.current = active;
+    setIndexingActive(active);
+  }, []);
+
+  const createPromptQueueTarget = useCallback((): PromptQueueTarget => {
+    const thread = aui.thread();
+    const threadListItem = aui.threadListItem();
+    const initialState = threadListItem.getState();
+    const initialRunningThreadIds = [
+      initialState.id,
+      initialState.remoteId,
+      referenceThreadId,
+    ].filter((id): id is string => Boolean(id));
+    const initialDocumentThreadId =
+      initialState.remoteId ?? referenceThreadId ?? null;
+    return {
+      getDocumentThreadId: () => {
+        const state = threadListItem.getState();
+        return state.remoteId ?? referenceThreadId ?? initialDocumentThreadId;
+      },
+      getRunningThreadIds: () => {
+        const state = threadListItem.getState();
+        return Array.from(
+          new Set(
+            [
+              ...initialRunningThreadIds,
+              state.id,
+              state.remoteId,
+              referenceThreadId,
+            ].filter((id): id is string => Boolean(id)),
+          ),
+        );
+      },
+      append: (prompt) => {
+        thread.append(appendTextToThread(prompt));
+      },
+      cancel: () => thread.cancelRun(),
+      isIndexing: () => indexingActiveRef.current,
+    };
+  }, [aui, referenceThreadId]);
 
   const dismissWaitToast = useCallback(() => {
     if (waitToastRef.current !== null) {
@@ -1072,6 +1542,39 @@ const Composer: FC<{
 
   const handleSubmit = useCallback(
     (event: Parameters<NonNullable<ComponentProps<"form">["onSubmit"]>>[0]) => {
+      if (disabled || shouldBlockSend()) {
+        event.preventDefault();
+        return;
+      }
+
+      if (threadIsRunning || promptQueueActive) {
+        event.preventDefault();
+        if (!canQueueCurrentPrompt) {
+          if (overlay || hasAttachments || hasPendingAudio) {
+            toast.error(
+              threadIsRunning
+                ? "Wait for the current response to finish"
+                : "Wait for the prompt queue to finish",
+              {
+                description:
+                  "Only text prompts can be queued while a response is running or the prompt queue is active.",
+              },
+            );
+          }
+          return;
+        }
+        const queuedPrompt = composerText.trim();
+        flushResourcesSync(() => {
+          aui.composer().setText("");
+        });
+        startPromptQueue(
+          [queuedPrompt],
+          createPromptQueueTarget(),
+          threadIsRunning,
+        );
+        return;
+      }
+
       if (interceptSend(event)) return;
 
       if (overlay) {
@@ -1118,51 +1621,36 @@ const Composer: FC<{
     },
     [
       aui,
+      canQueueCurrentPrompt,
       closeOverlay,
       composerText,
+      createPromptQueueTarget,
+      disabled,
+      hasAttachments,
+      hasPendingAudio,
       interceptSend,
       overlay,
+      promptQueueActive,
       referenceThreadId,
       setImageToolsEnabled,
       setPendingImageEditReference,
+      shouldBlockSend,
+      threadIsRunning,
     ],
   );
 
-  // Update the getter every render so the queue always calls the current
-  // Composer's aui (post-remount).
-  _qGetAui = () => aui;
-
   const stopQueue = useCallback(() => {
-    _qIsRunning = false;
-    _qStopSubscription();
-    _useQueueUI.setState({ isRunning: false, current: 0, total: 0 });
-    _qItems = [];
-    _qIndex = 0;
-    try { _qGetAui().thread().cancelRun(); } catch {}
+    stopPromptQueueRun();
   }, []);
 
-  const startQueue = useCallback((items: string[]) => {
-    const filtered = items.filter((p) => p.trim());
-    if (!filtered.length) return;
-    _qItems = filtered;
-    _qIndex = 0;
-    _qIsRunning = true;
-    _useQueueUI.setState({ isRunning: true, current: 1, total: filtered.length });
-    toast(`Prompt 1 / ${filtered.length}`, {
-      description: filtered[0].length > 80 ? filtered[0].slice(0, 80) + "…" : filtered[0],
-    });
-    // Subscribe BEFORE appending so we don't miss a very fast completion.
-    _qStartSubscription();
-    setTimeout(() => {
-      _qGetAui().thread().append({
-        role: "user",
-        content: [{ type: "text", text: filtered[0] }],
-        createdAt: new Date(),
-      } as never);
-    }, 50);
-  }, []);
+  const startQueue = useCallback(
+    (items: string[], waitForCurrentRun = threadIsRunning) => {
+      startPromptQueue(items, createPromptQueueTarget(), waitForCurrentRun);
+    },
+    [createPromptQueueTarget, threadIsRunning],
+  );
 
-  const queueContextValue: _QueueCallbacks = { startQueue, stopQueue };
+  const queueContextValue: PromptQueueCallbacks = { startQueue, stopQueue };
 
   const composerContent = (
     <>
@@ -1170,7 +1658,7 @@ const Composer: FC<{
       <PendingAudioChip />
       <ThreadDocumentsBar
         threadId={referenceThreadId}
-        onIndexingChange={setIndexingActive}
+        onIndexingChange={handleIndexingChange}
       />
       <ToolStatusDisplay />
       <div
@@ -1182,6 +1670,9 @@ const Composer: FC<{
           data-pill-compact={pillsCompact ? "true" : undefined}
         >
           <ComposerToolsMenu side={effectiveMenuSide} />
+          {/* Active-mode badge: always visible when bypass is on, even while
+              the pill row is collapsed (returns null when off). */}
+          <BypassPermissionsToggle />
           {composerExpanded ? (
             <>
               <WebSearchToggle />
@@ -1218,9 +1709,22 @@ const Composer: FC<{
             isComposing ||
             hasPendingAttachments
           }
+          queueDisabled={!canQueueCurrentPrompt}
+          onQueueClick={() => {
+            const queuedPrompt = composerText.trim();
+            if (queuedPrompt.length === 0) {
+              return;
+            }
+            flushResourcesSync(() => {
+              aui.composer().setText("");
+            });
+            startPromptQueue([queuedPrompt], createPromptQueueTarget(), true);
+          }}
           onSendClick={interceptSend}
+          onStopClick={stopQueue}
           pendingSend={pendingSend}
           menuSide={effectiveMenuSide}
+          queueThreadIds={promptQueueThreadIds}
         />
       </div>
     </>
@@ -1279,7 +1783,11 @@ function isNativeComposing(event: Event) {
 // pause but short enough to recover before the user notices Send is stuck.
 const IME_STUCK_TIMEOUT_MS = 2500;
 
-function useImeComposerInputHandlers() {
+function useImeComposerInputHandlers({
+  submitOnEnter = false,
+}: {
+  submitOnEnter?: boolean;
+} = {}) {
   const aui = useAui();
   const composingRef = useRef(false);
   const [isComposing, setIsComposing] = useState(false);
@@ -1371,10 +1879,40 @@ function useImeComposerInputHandlers() {
       if (e.nativeEvent.isComposing || e.keyCode === 229) {
         composingRef.current = true;
         refreshStuckTimer();
+        return;
+      }
+      if (composingRef.current) {
+        // Candidate-confirming Enter can arrive as non-composing; keep it gated.
+        if (e.key === "Enter") {
+          if (!e.shiftKey) {
+            e.preventDefault();
+          }
+          refreshStuckTimer();
+          return;
+        }
+        // Non-IME key while composingRef is stuck; the input method was likely
+        // switched away on macOS without firing compositionend (issue #5546
+        // pattern, but triggered by input-method switch rather than WSL).
+        // Clear immediately so Send is unblocked on the first non-IME keystroke
+        // rather than waiting for the 2500ms watchdog.
+        setCompositionState(false);
+      }
+      if (submitOnEnter && e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        e.currentTarget.form?.requestSubmit();
       }
     },
-    [refreshStuckTimer],
+    [refreshStuckTimer, setCompositionState, submitOnEnter],
   );
+
+  // On macOS, switching input methods (e.g. ABC → Pinyin) while the textarea
+  // is focused can fire compositionstart without a matching compositionend,
+  // leaving composingRef pinned and Send permanently blocked. The OS always
+  // commits or cancels any in-progress composition before surrendering focus,
+  // so blur is a safe unconditional reset point.
+  const onBlur = useCallback(() => {
+    setCompositionState(false);
+  }, [setCompositionState]);
 
   return {
     inputProps: {
@@ -1383,68 +1921,12 @@ function useImeComposerInputHandlers() {
       onCompositionEnd,
       onChange,
       onKeyDown,
+      onBlur,
     },
     isComposing,
     isComposingRef: composingRef,
   };
 }
-
-// Audio upload row, only for audio-input models.
-const ComposerAudioMenuItem: FC = () => {
-  const setPendingAudio = useChatRuntimeStore((s) => s.setPendingAudio);
-  const activeModel = useChatRuntimeStore((s) => {
-    const checkpoint = s.params.checkpoint;
-    return s.models.find((m) => m.id === checkpoint);
-  });
-
-  const handleAudioFile = useCallback(
-    async (file: File) => {
-      if (file.size > MAX_AUDIO_SIZE) {
-        return;
-      }
-      try {
-        const base64 = await fileToBase64(file);
-        setPendingAudio(base64, file.name);
-      } catch {
-        // skip
-      }
-    },
-    [setPendingAudio],
-  );
-
-  // Build the input on document.body, not in the menu: selecting the item
-  // closes the dropdown, unmounting a menu-rendered input before the OS picker
-  // returns and dropping the file.
-  const pickAudio = useCallback(() => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = AUDIO_ACCEPT;
-    input.hidden = true;
-    document.body.appendChild(input);
-    input.onchange = () => {
-      const file = input.files?.[0];
-      if (file) handleAudioFile(file);
-      document.body.removeChild(input);
-    };
-    input.oncancel = () => {
-      if (!input.files || input.files.length === 0) {
-        document.body.removeChild(input);
-      }
-    };
-    input.click();
-  }, [handleAudioFile]);
-
-  if (!activeModel?.hasAudioInput) {
-    return null;
-  }
-
-  return (
-    <DropdownMenuItem onSelect={() => pickAudio()}>
-      <HeadphonesIcon />
-      Upload audio
-    </DropdownMenuItem>
-  );
-};
 
 // Phosphor microphone. Inlined to avoid a new icon dependency.
 const MicIcon: FC<{ className?: string }> = ({ className }) => (
@@ -1826,6 +2308,7 @@ const WebSearchToggle: FC = () => {
         }
       }}
       className="composer-pill-btn"
+      data-pill-label="Search"
       data-active={toolsEnabled && !disabled ? "true" : "false"}
       aria-label={toolsEnabled ? "Disable web search" : "Enable web search"}
     >
@@ -1861,6 +2344,7 @@ const CodeToolsToggle: FC = () => {
       disabled={disabled}
       onClick={() => setCodeToolsEnabled(!codeToolsEnabled)}
       className="composer-pill-btn"
+      data-pill-label="Code"
       data-active={codeToolsEnabled && !disabled ? "true" : "false"}
       aria-label={
         codeToolsEnabled ? "Disable code execution" : "Enable code execution"
@@ -1902,6 +2386,7 @@ const ImagesToggle: FC = () => {
       disabled={disabled}
       onClick={() => setImageToolsEnabled(!imageToolsEnabled)}
       className="composer-pill-btn"
+      data-pill-label="Images"
       data-active={imageToolsEnabled && !disabled ? "true" : "false"}
       aria-label={
         imageToolsEnabled
@@ -1928,6 +2413,7 @@ const ArtifactsToggle: FC = () => {
       type="button"
       onClick={() => setArtifactsEnabled(false)}
       className="composer-pill-btn"
+      data-pill-label="Canvas"
       data-active="true"
       aria-label="Disable canvas"
     >
@@ -1939,6 +2425,30 @@ const ArtifactsToggle: FC = () => {
         />
       </PillGlyph>
       <span>Canvas</span>
+    </button>
+  );
+};
+
+// Red pill shown while Bypass Permissions is on; click to turn it off.
+// Mirror of shared-composer's badge so both composers surface the state.
+const BypassPermissionsToggle: FC = () => {
+  const bypassPermissions = useChatRuntimeStore((s) => s.bypassPermissions);
+  const setBypassPermissions = useChatRuntimeStore(
+    (s) => s.setBypassPermissions,
+  );
+  if (!bypassPermissions) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => setBypassPermissions(false)}
+      className="composer-pill-btn"
+      data-active="true"
+      data-variant="danger"
+      aria-label="Disable Bypass Permissions"
+      title="Bypass Permissions is on (no confirmation, no sandbox). Click to turn off."
+    >
+      <XIcon className="size-3" />
+      <span>Bypass Permissions</span>
     </button>
   );
 };
@@ -2001,6 +2511,21 @@ const ToolStatusDisplay: FC = () => {
 };
 // Plus menu: attachment and workflow actions. Opens downward in the welcome
 // composer; the docked composer passes side="top" to open upward.
+const AUDIO_ACCEPT_TOKEN_RE =
+  /^(audio\/|\.(?:wav|mp3|m4a|ogg|oga|flac)$)/i;
+
+function attachmentAcceptForPicker(accept: string, audioEnabled: boolean): string {
+  if (audioEnabled || accept === "*") {
+    return accept;
+  }
+  const filtered = accept
+    .split(",")
+    .map((token) => token.trim())
+    .filter((token) => token && !AUDIO_ACCEPT_TOKEN_RE.test(token))
+    .join(",");
+  return filtered || accept;
+}
+
 const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
   side = "bottom",
 }) => {
@@ -2017,13 +2542,21 @@ const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
   );
   const ragEnabled = useChatRuntimeStore((s) => s.ragEnabled);
   const setRagEnabled = useChatRuntimeStore((s) => s.setRagEnabled);
-  // Shared gate so the menu row agrees with the RAG pill and Add Files bar.
-  const ragAvailable = useRagToolAvailable();
+  // Shared gate so the menu row agrees with the RAG pill.
+  const ragDisabled = useRagToolDisabled();
   // Capability gating mirrors the visible pills so menu and pills agree on
   // what a loaded model supports (a tool the backend drops must not look on).
   const modelLoaded = useChatRuntimeStore(
     (s) => !!s.params.checkpoint && !s.modelLoading,
   );
+  const audioAttachmentsEnabled = useChatRuntimeStore((s) => {
+    const activeCheckpoint = s.params.checkpoint;
+    if (!activeCheckpoint || s.modelLoading) {
+      return false;
+    }
+    const activeModel = s.models.find((m) => m.id === activeCheckpoint);
+    return Boolean(activeModel?.hasAudioInput);
+  });
   const checkpoint = useChatRuntimeStore((s) => s.params.checkpoint);
   const supportsTools = useChatRuntimeStore((s) => s.supportsTools);
   const supportsBuiltinWebSearch = useChatRuntimeStore(
@@ -2085,21 +2618,220 @@ const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [promptStorageOpen, setPromptStorageOpen] = useState(false);
   const activeThreadId = useChatRuntimeStore((s) => s.activeThreadId);
+  const incognito = useChatRuntimeStore((s) => s.incognito);
   const aui = useAui();
-  // Disable Export chat until the thread has content.
+  const composerCanAddAttachments = useAuiState(
+    ({ composer }) => composer.isEditing,
+  );
+  const pickAttachment = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.hidden = true;
+
+    const attachmentAccept = attachmentAcceptForPicker(
+      aui.composer().getState().attachmentAccept,
+      audioAttachmentsEnabled,
+    );
+    if (attachmentAccept !== "*") {
+      input.accept = attachmentAccept;
+    }
+
+    document.body.appendChild(input);
+    input.onchange = (event) => {
+      const files = (event.target as HTMLInputElement).files;
+      if (files) {
+        for (const file of files) {
+          void aui.composer().addAttachment(file);
+        }
+      }
+      document.body.removeChild(input);
+    };
+    input.oncancel = () => {
+      if (!input.files || input.files.length === 0) {
+        document.body.removeChild(input);
+      }
+    };
+    input.click();
+  }, [aui, audioAttachmentsEnabled]);
+  // Exports are storage-backed; temporary chats intentionally never write there.
   const messageCount = useAuiState(({ thread }) => thread.messages.length);
+  const exportDisabled = incognito || !activeThreadId || messageCount === 0;
   const { startQueue } = useContext(PromptQueueContext);
+
+  const plusPins = usePlusMenuPrefsStore((s) => s.pins);
 
   const [recentPrompts, setRecentPrompts] = useState<PromptEntry[]>([]);
   const refreshRecentPrompts = useCallback(async () => {
     try {
       const rows = await listPromptEntries();
-      setRecentPrompts(
-        [...rows].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3),
-      );
+      const byRecent = [...rows].sort((a, b) => b.updatedAt - a.updatedAt);
+      // Pinned prompts take over the submenu; fall back to the 3 most recent
+      // when nothing is pinned.
+      const pinnedIds = usePlusMenuPrefsStore.getState().pinnedPromptIds;
+      const pinned = byRecent.filter((p) => pinnedIds.includes(p.id));
+      setRecentPrompts(pinned.length > 0 ? pinned : byRecent.slice(0, 3));
     } catch {
     }
   }, []);
+
+  // Adjustable "+" menu items, keyed by id. Pinned ones render at the top
+  // level; the rest fall into the "More" overflow submenu. The core items
+  // (photos, web search, code) and "More" itself are always shown and live
+  // outside this map.
+  const plusMenuNodes: Record<PlusMenuItemId, ReactNode> = {
+    chatWithFiles: (
+      <DropdownMenuItem
+        disabled={ragDisabled}
+        className={
+          ragEnabled && !ragDisabled ? "text-primary font-medium" : undefined
+        }
+        onSelect={() => setRagEnabled(!ragEnabled)}
+      >
+        <HugeiconsIcon icon={FileDatabaseIcon} strokeWidth={2} />
+        Chat with Files
+        {ragEnabled && !ragDisabled ? (
+          <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="ml-auto" />
+        ) : null}
+      </DropdownMenuItem>
+    ),
+    mcp: (
+      <DropdownMenuItem
+        disabled={mcpDisabled}
+        className={
+          mcpEnabledForChat && !mcpDisabled
+            ? "text-primary font-medium"
+            : undefined
+        }
+        onSelect={() => setMcpEnabledForChat(!mcpEnabledForChat)}
+      >
+        <HugeiconsIcon icon={McpServerIcon} strokeWidth={2} />
+        MCP
+        {mcpEnabledForChat && !mcpDisabled ? (
+          <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="ml-auto" />
+        ) : null}
+      </DropdownMenuItem>
+    ),
+    savedPrompts: (
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>
+          <HugeiconsIcon icon={Bookmark02Icon} strokeWidth={2} />
+          Saved prompts
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent
+          collisionPadding={16}
+          className="unsloth-plus-menu w-[208px]"
+        >
+          {recentPrompts.map((p) => (
+            <DropdownMenuItem
+              key={p.id}
+              onSelect={() => aui.composer().setText(p.text)}
+            >
+              <span className="truncate">{p.name}</span>
+            </DropdownMenuItem>
+          ))}
+          {recentPrompts.length > 0 ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem onSelect={() => setPromptStorageOpen(true)}>
+            All saved prompts…
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    ),
+    compareChat: (
+      <DropdownMenuItem onSelect={() => startCompare()}>
+        <Columns2Icon />
+        Compare chat
+      </DropdownMenuItem>
+    ),
+    exportChat: (
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger disabled={exportDisabled}>
+          <HugeiconsIcon icon={Download01Icon} strokeWidth={2} />
+          Export chat
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent
+          collisionPadding={16}
+          className="unsloth-plus-menu w-[208px]"
+        >
+          <DropdownMenuItem
+            onSelect={() => {
+              if (!activeThreadId) return;
+              exportConversationRawJsonl(activeThreadId).catch(() =>
+                toast.error("Export failed."),
+              );
+            }}
+          >
+            Raw JSONL
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              if (!activeThreadId) return;
+              exportConversationCsv(activeThreadId).catch(() =>
+                toast.error("Export failed."),
+              );
+            }}
+          >
+            CSV
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              if (!activeThreadId) return;
+              exportConversationShareGPT(activeThreadId).catch(() =>
+                toast.error("Export failed."),
+              );
+            }}
+          >
+            ShareGPT JSONL
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    ),
+    canvas: (
+      <DropdownMenuItem
+        className={artifactsEnabled ? "text-primary font-medium" : undefined}
+        onSelect={() => setArtifactsEnabled(!artifactsEnabled)}
+      >
+        <HugeiconsIcon icon={PencilRulerIcon} strokeWidth={2} />
+        Canvas
+        {artifactsEnabled ? (
+          <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="ml-auto" />
+        ) : null}
+      </DropdownMenuItem>
+    ),
+    bypassPermissions: <BypassPermissionsMenuItem />,
+    projects: (
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>
+          <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} />
+          Projects
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="unsloth-plus-menu w-[232px]">
+          <DropdownMenuItem onSelect={() => setNewProjectOpen(true)}>
+            <HugeiconsIcon icon={FolderAddIcon} strokeWidth={2} />
+            New project
+          </DropdownMenuItem>
+          <DropdownMenuLabel>Recents</DropdownMenuLabel>
+          {recentProjects.length > 0 ? (
+            recentProjects.map((project) => (
+              <DropdownMenuItem
+                key={project.id}
+                onSelect={() => openProject(project.id)}
+              >
+                <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} />
+                <span className="truncate">{project.name}</span>
+              </DropdownMenuItem>
+            ))
+          ) : (
+            <DropdownMenuItem disabled={true}>
+              No recent projects
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    ),
+  };
+  const pinnedPlusItems = PLUS_MENU_ORDER.filter((id) => plusPins[id]);
+  const overflowPlusItems = PLUS_MENU_ORDER.filter((id) => !plusPins[id]);
 
   return (
     <>
@@ -2131,19 +2863,19 @@ const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
       <DropdownMenuContent
         side={side}
         align="start"
-        sideOffset={2}
+        sideOffset={0}
         avoidCollisions={true}
-        className="unsloth-plus-menu w-[212px]"
+        className="unsloth-plus-menu w-[244px]"
         // Don't refocus the + on close; restored focus showed a stray ring.
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        <ComposerPrimitive.AddAttachment asChild={true}>
-          <DropdownMenuItem>
-            <HugeiconsIcon icon={AttachmentIcon} strokeWidth={2} />
-            Add photos &amp; files
-          </DropdownMenuItem>
-        </ComposerPrimitive.AddAttachment>
-        <ComposerAudioMenuItem />
+        <DropdownMenuItem
+          disabled={!composerCanAddAttachments}
+          onSelect={() => pickAttachment()}
+        >
+          <HugeiconsIcon icon={AttachmentIcon} strokeWidth={2} />
+          Add photos &amp; files
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={searchDisabled}
           className={
@@ -2180,10 +2912,11 @@ const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
           }
           onSelect={() => setCodeToolsEnabled(!codeToolsEnabled)}
         >
+          {/* Scale, not width: an oversized box pushed the label out of line. */}
           <HugeiconsIcon
             icon={CodeIcon}
             strokeWidth={2}
-            className="size-[1.175rem]!"
+            className="scale-[1.12]"
           />
           Code
           {codeToolsEnabled && !codeDisabled ? (
@@ -2216,163 +2949,22 @@ const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          disabled={!ragAvailable}
-          className={
-            ragEnabled && ragAvailable ? "text-primary font-medium" : undefined
-          }
-          onSelect={() => setRagEnabled(!ragEnabled)}
-        >
-          <HugeiconsIcon icon={FileDatabaseIcon} strokeWidth={2} />
-          RAG
-          {ragEnabled && ragAvailable ? (
-            <HugeiconsIcon
-              icon={Tick02Icon}
-              strokeWidth={2}
-              className="ml-auto"
-            />
-          ) : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={mcpDisabled}
-          className={
-            mcpEnabledForChat && !mcpDisabled
-              ? "text-primary font-medium"
-              : undefined
-          }
-          onSelect={() => setMcpEnabledForChat(!mcpEnabledForChat)}
-        >
-          <HugeiconsIcon icon={McpServerIcon} strokeWidth={2} />
-          MCP
-          {mcpEnabledForChat && !mcpDisabled ? (
-            <HugeiconsIcon
-              icon={Tick02Icon}
-              strokeWidth={2}
-              className="ml-auto"
-            />
-          ) : null}
-        </DropdownMenuItem>
-        {/* Top-level so it stays one click away (not buried in More). */}
-        <DropdownMenuItem onSelect={() => startCompare()}>
-          <Columns2Icon />
-          Compare chat
-        </DropdownMenuItem>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <HugeiconsIcon icon={Bookmark02Icon} strokeWidth={2} />
-            Saved prompts
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="unsloth-plus-menu w-[176px]">
-            {recentPrompts.map((p) => (
-              <DropdownMenuItem
-                key={p.id}
-                onSelect={() => aui.composer().setText(p.text)}
-              >
-                <span className="truncate">{p.name}</span>
-              </DropdownMenuItem>
-            ))}
-            {recentPrompts.length > 0 ? <DropdownMenuSeparator /> : null}
-            <DropdownMenuItem onSelect={() => setPromptStorageOpen(true)}>
-              All saved prompts…
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        {/* Top-level: a third-level submenu collision-flips at narrow widths
-            and is awkward to reach. */}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger disabled={!activeThreadId || messageCount === 0}>
-            <HugeiconsIcon icon={Download01Icon} strokeWidth={2} />
-            Export chat
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent
-            collisionPadding={16}
-            className="unsloth-plus-menu w-[176px]"
-          >
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeThreadId) return;
-                exportConversationRawJsonl(activeThreadId).catch(() =>
-                  toast.error("Export failed."),
-                );
-              }}
-            >
-              Raw JSONL
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeThreadId) return;
-                exportConversationCsv(activeThreadId).catch(() =>
-                  toast.error("Export failed."),
-                );
-              }}
-            >
-              CSV
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeThreadId) return;
-                exportConversationShareGPT(activeThreadId).catch(() =>
-                  toast.error("Export failed."),
-                );
-              }}
-            >
-              ShareGPT JSONL
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <MoreHorizontalIcon className="size-4" />
-            More
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-[200px]">
-            <DropdownMenuItem
-              className={
-                artifactsEnabled ? "text-primary font-medium" : undefined
-              }
-              onSelect={() => setArtifactsEnabled(!artifactsEnabled)}
-            >
-              <HugeiconsIcon icon={PencilRulerIcon} strokeWidth={2} />
-              Canvas
-              {artifactsEnabled ? (
-                <HugeiconsIcon
-                  icon={Tick02Icon}
-                  strokeWidth={2}
-                  className="ml-auto"
-                />
-              ) : null}
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSeparator />
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} />
-            Projects
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="unsloth-plus-menu w-[200px]">
-            <DropdownMenuItem onSelect={() => setNewProjectOpen(true)}>
-              <HugeiconsIcon icon={FolderAddIcon} strokeWidth={2} />
-              New project
-            </DropdownMenuItem>
-            <DropdownMenuLabel>Recents</DropdownMenuLabel>
-            {recentProjects.length > 0 ? (
-              recentProjects.map((project) => (
-                <DropdownMenuItem
-                  key={project.id}
-                  onSelect={() => openProject(project.id)}
-                >
-                  <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} />
-                  <span className="truncate">{project.name}</span>
-                </DropdownMenuItem>
-              ))
-            ) : (
-              <DropdownMenuItem disabled={true}>
-                No recent projects
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
+        {pinnedPlusItems.map((id) => (
+          <Fragment key={id}>{plusMenuNodes[id]}</Fragment>
+        ))}
+        {overflowPlusItems.length > 0 ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <MoreHorizontalIcon className="size-4" />
+              More
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="unsloth-plus-menu w-[232px]">
+              {overflowPlusItems.map((id) => (
+                <Fragment key={id}>{plusMenuNodes[id]}</Fragment>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
       <NewProjectDialog
@@ -2385,14 +2977,29 @@ const ComposerToolsMenu: FC<{ side?: "top" | "bottom" }> = ({
 
 const ComposerRightControls: FC<{
   disabled?: boolean;
+  queueDisabled?: boolean;
+  onQueueClick?: () => void;
   onSendClick?: (event: { preventDefault: () => void }) => void;
+  onStopClick?: () => void;
   pendingSend?: boolean;
   menuSide?: "top" | "bottom";
-}> = ({ disabled, onSendClick, pendingSend, menuSide }) => {
-  const isQueueRunning = _useQueueUI((s) => s.isRunning);
-  const queueCurrent = _useQueueUI((s) => s.current);
-  const queueTotal = _useQueueUI((s) => s.total);
-  const { stopQueue } = useContext(PromptQueueContext);
+  queueThreadIds: string[];
+}> = ({
+  disabled,
+  queueDisabled,
+  onQueueClick,
+  onSendClick,
+  onStopClick,
+  pendingSend,
+  menuSide,
+  queueThreadIds,
+}) => {
+  const queueEntry = usePromptQueueUI((s) =>
+    findPromptQueueEntry(s, queueThreadIds),
+  );
+  const isQueueRunning = Boolean(queueEntry);
+  const queueCurrent = queueEntry?.current ?? 0;
+  const queueTotal = queueEntry?.total ?? 0;
   return (
     <div className="aui-composer-action-wrapper flex shrink-0 items-center gap-1.5">
       <ReasoningToggle side={menuSide} />
@@ -2421,57 +3028,85 @@ const ComposerRightControls: FC<{
         </ComposerPrimitive.StopDictation>
       </ComposerPrimitive.If>
       {isQueueRunning ? (
-        <button
-          type="button"
-          onClick={stopQueue}
-          aria-label="Stop prompt queue"
-          className="ml-1.5 flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/60 px-2.5 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        <span
+          className="ml-1 flex h-7 items-center rounded-full bg-primary/10 px-2 text-[11px] font-semibold text-primary"
+          aria-live="polite"
         >
-          <SquareIcon className="size-2.5 shrink-0 fill-current" />
-          <span className="tabular-nums">
-            Stop queue {queueCurrent}/{queueTotal}
-          </span>
-        </button>
-      ) : (
-        <>
-          <AuiIf condition={({ thread }) => !thread.isRunning}>
-            <ComposerPrimitive.Send asChild={true}>
-              <TooltipIconButton
-                tooltip={pendingSend ? "Waiting for documents…" : "Send message"}
-                side="bottom"
-                type="submit"
-                variant="default"
-                size="icon"
-                // Stay clickable while docs index so a click can queue the send;
-                // disabled only once a send is parked.
-                disabled={disabled || pendingSend}
-                onClick={(event) => onSendClick?.(event)}
-                className="aui-composer-send ml-1.5 size-8 rounded-full"
-                aria-label="Send message"
-              >
-                {pendingSend ? (
-                  <Spinner className="size-[18px]" />
-                ) : (
-                  <ArrowUpIcon className="aui-composer-send-icon size-[21px] stroke-2" />
-                )}
-              </TooltipIconButton>
-            </ComposerPrimitive.Send>
-          </AuiIf>
-          <AuiIf condition={({ thread }) => thread.isRunning}>
+          <span className="tabular-nums">Queue {queueCurrent}/{queueTotal}</span>
+        </span>
+      ) : null}
+      <AuiIf condition={({ thread }) => !thread.isRunning && !isQueueRunning}>
+        <ComposerPrimitive.Send asChild={true}>
+          <TooltipIconButton
+            tooltip={pendingSend ? "Waiting for documents…" : "Send message"}
+            side="bottom"
+            type="submit"
+            variant="default"
+            size="icon"
+            // Stay clickable while docs index so a click can queue the send;
+            // disabled only once a send is parked.
+            disabled={disabled || pendingSend}
+            onClick={(event) => onSendClick?.(event)}
+            className="aui-composer-send ml-1.5 size-8 rounded-full"
+            aria-label="Send message"
+          >
+            {pendingSend ? (
+              <Spinner className="size-[18px]" />
+            ) : (
+              <ArrowUpIcon className="aui-composer-send-icon size-[21px] stroke-2" />
+            )}
+          </TooltipIconButton>
+        </ComposerPrimitive.Send>
+      </AuiIf>
+      {isQueueRunning ? (
+        <AuiIf condition={({ thread }) => !thread.isRunning}>
+          <TooltipIconButton
+            tooltip="Queue message"
+            side="bottom"
+            type="button"
+            variant="default"
+            size="icon"
+            disabled={disabled || queueDisabled}
+            onClick={onQueueClick}
+            className="aui-composer-send ml-1.5 size-8 rounded-full"
+            aria-label="Queue message"
+          >
+            <ArrowUpIcon className="aui-composer-send-icon size-[21px] stroke-2" />
+          </TooltipIconButton>
+        </AuiIf>
+      ) : null}
+      <AuiIf condition={({ thread }) => thread.isRunning}>
+        <div className="ml-1.5 flex items-center">
+          {queueDisabled ? (
             <ComposerPrimitive.Cancel asChild={true}>
               <Button
                 type="button"
                 variant="default"
                 size="icon"
-                className="aui-composer-cancel ml-1.5 size-8 rounded-full"
+                className="aui-composer-cancel size-8 rounded-full"
                 aria-label="Stop generating"
+                onClick={isQueueRunning ? onStopClick : undefined}
               >
                 <SquareIcon className="aui-composer-cancel-icon size-3 fill-current" />
               </Button>
             </ComposerPrimitive.Cancel>
-          </AuiIf>
-        </>
-      )}
+          ) : (
+            <TooltipIconButton
+              tooltip="Queue message"
+              side="bottom"
+              type="button"
+              variant="default"
+              size="icon"
+              disabled={queueDisabled}
+              onClick={onQueueClick}
+              className="aui-composer-send size-8 rounded-full"
+              aria-label="Queue message"
+            >
+              <ArrowUpIcon className="aui-composer-send-icon size-[21px] stroke-2" />
+            </TooltipIconButton>
+          )}
+        </div>
+      </AuiIf>
     </div>
   );
 };
@@ -2515,6 +3150,51 @@ const CancelledIndicator: FC = () => {
   );
 };
 
+const WebSearchToolUIConfirmable = withToolConfirmation(WebSearchToolUI);
+const KnowledgeBaseToolUIConfirmable =
+  withToolConfirmation(KnowledgeBaseToolUI);
+const PythonToolUIConfirmable = withToolConfirmation(PythonToolUI);
+const TerminalToolUIConfirmable = withToolConfirmation(TerminalToolUI);
+const CodeExecutionToolUIConfirmable =
+  withToolConfirmation(CodeExecutionToolUI);
+const ImageGenerationToolUIConfirmable = withToolConfirmation(
+  ImageGenerationToolUI,
+);
+const RenderHtmlToolUIConfirmable = withToolConfirmation(RenderHtmlToolUI);
+const ToolFallbackConfirmable = withToolConfirmation(ToolFallback);
+
+// Live in-place denoising canvas for DiffusionGemma: while generating, render the
+// latest per-step canvas snapshot in the bubble so the user watches the answer resolve
+// out of noise. Transient (store-only, cleared on run end), so the finished message
+// keeps only the committed markdown.
+const DiffusionCanvas: FC = () => {
+  const isRunning = useAuiState(
+    ({ message }) => message.status?.type === "running",
+  );
+  // A non-null canvas is set only by diffusion_frame events (diffusion models only),
+  // so it is a sufficient gate; loadedIsDiffusion can lag the first frame on a fresh load.
+  const canvas = useChatRuntimeStore((s) => s.activeDiffusionCanvas);
+  if (!isRunning || !canvas) {
+    return null;
+  }
+  const stepLabel =
+    canvas.total > 0 ? `step ${canvas.step + 1}/${canvas.total}` : "denoising";
+  return (
+    <div className="aui-diffusion-canvas my-1.5 overflow-hidden rounded-lg border border-primary/20 bg-primary/[0.03]">
+      <div className="flex items-center gap-2 border-b border-primary/10 px-3 py-1.5 text-[11px] font-medium text-primary/80">
+        <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
+        <span>Denoising</span>
+        <span className="opacity-60">
+          block {canvas.block + 1} - {stepLabel}
+        </span>
+      </div>
+      <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-[12.5px] leading-relaxed text-foreground/90">
+        {canvas.text}
+      </pre>
+    </div>
+  );
+};
+
 const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root
@@ -2524,6 +3204,7 @@ const AssistantMessage: FC = () => {
       <div className="aui-assistant-message-content wrap-break-word min-w-0 text-[#0d0d0d] dark:text-foreground leading-relaxed">
         <GeneratingIndicator />
         <CancelledIndicator />
+        <DiffusionCanvas />
         <MessagePrimitive.Parts
           components={{
             Text: MarkdownText,
@@ -2533,20 +3214,21 @@ const AssistantMessage: FC = () => {
             ToolGroup: ToolGroup,
             tools: {
               by_name: {
-                web_search: WebSearchToolUI,
-                search_knowledge_base: KnowledgeBaseToolUI,
-                python: PythonToolUI,
-                terminal: TerminalToolUI,
-                code_execution: CodeExecutionToolUI,
-                image_generation: ImageGenerationToolUI,
-                render_html: RenderHtmlToolUI,
+                web_search: WebSearchToolUIConfirmable,
+                search_knowledge_base: KnowledgeBaseToolUIConfirmable,
+                python: PythonToolUIConfirmable,
+                terminal: TerminalToolUIConfirmable,
+                code_execution: CodeExecutionToolUIConfirmable,
+                image_generation: ImageGenerationToolUIConfirmable,
+                render_html: RenderHtmlToolUIConfirmable,
               },
-              Fallback: ToolFallback,
+              Fallback: ToolFallbackConfirmable,
             },
           }}
         />
         <SourcesGroup />
         <RagSourcesGroup />
+        <MessageHtmlArtifacts />
         <MessageError />
       </div>
 
@@ -2559,6 +3241,111 @@ const AssistantMessage: FC = () => {
 };
 
 const COPY_RESET_MS = 2000;
+
+const ForkCountBadge: FC = () => {
+  const aui = useAui();
+  const messageId = useAuiState(({ message }) => message.id);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      const remoteId = aui.threadListItem().getState().remoteId;
+      if (!remoteId) {
+        if (!cancelled) setCount(0);
+        return;
+      }
+      void getForkCount(remoteId, messageId)
+        .then((n) => {
+          if (!cancelled) setCount(n);
+        })
+        .catch(() => {
+          /* swallow: badge is non-critical */
+        });
+    };
+    refresh();
+    const handler = () => refresh();
+    window.addEventListener(CHAT_HISTORY_UPDATED_EVENT, handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(CHAT_HISTORY_UPDATED_EVENT, handler);
+    };
+  }, [aui, messageId]);
+
+  if (count <= 0) return null;
+  return (
+    <span
+      className="mx-1 inline-flex items-center gap-1 rounded-sm bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+      title={`${count} fork${count === 1 ? "" : "s"} from this message`}
+    >
+      <GitBranchIcon strokeWidth={1.75} className="size-3" />
+      {count}
+    </span>
+  );
+};
+
+const useForkMessageAction = () => {
+  const aui = useAui();
+  const navigate = useNavigate();
+  const messageId = useAuiState(({ message }) => message.id);
+  const isRunning = useAuiState(({ thread }) => thread.isRunning);
+  const [pending, setPending] = useState(false);
+
+  const handleFork = async () => {
+    const remoteId = aui.threadListItem().getState().remoteId;
+    if (!remoteId) {
+      toast.error("Cannot fork an unsaved chat");
+      return;
+    }
+    setPending(true);
+    try {
+      const result = await forkChatThread(remoteId, {
+        messageId,
+        newThreadId: crypto.randomUUID(),
+        createdAt: Date.now(),
+      });
+      useChatRuntimeStore.getState().setActiveThreadId(result.thread.id);
+      navigate({
+        to: "/chat",
+        search: { thread: result.thread.id },
+        replace: false,
+      });
+      if (result.containerSnapshotWarning) {
+        toast.info("Fork created", {
+          description: result.containerSnapshotWarning,
+        });
+      } else {
+        toast.success("Fork created");
+      }
+    } catch (error) {
+      console.error("Failed to fork", error);
+      toast.error("Failed to fork", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return {
+    forkMessage: handleFork,
+    forkDisabled: isRunning || pending,
+  };
+};
+
+const ForkMessageButton: FC = () => {
+  const { forkMessage, forkDisabled } = useForkMessageAction();
+
+  return (
+    <TooltipIconButton
+      tooltip="Fork from here"
+      disabled={forkDisabled}
+      onClick={forkMessage}
+    >
+      <GitBranchIcon strokeWidth={1.75} className="size-icon" />
+    </TooltipIconButton>
+  );
+};
 
 const DeleteMessageButton: FC = () => {
   const aui = useAui();
@@ -2630,10 +3417,12 @@ const CopyButton: FC = () => {
 };
 
 const AssistantActionBar: FC = () => {
+  const { forkMessage, forkDisabled } = useForkMessageAction();
+
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning={true}
-      className="aui-assistant-action-bar-root col-start-3 row-start-2 flex items-center gap-1 text-chat-icon-fg [&_button:not([data-slot=message-timing-trigger])]:size-8 [&_button]:!rounded-[10px] [&_button:hover]:bg-chat-icon-bg-hover [&_button:hover]:text-chat-icon-fg-hover"
+      className="aui-assistant-action-bar-root col-start-3 row-start-2 flex items-center gap-1 text-chat-icon-fg [&_button:not([data-slot=message-timing-trigger])]:size-8 [&_button]:!rounded-full [&_button:hover]:bg-chat-icon-bg-hover [&_button:hover]:text-chat-icon-fg-hover"
     >
       <CopyButton />
       <ActionBarPrimitive.Reload asChild={true}>
@@ -2641,6 +3430,7 @@ const AssistantActionBar: FC = () => {
           <RefreshCwIcon strokeWidth={1.75} className="size-icon" />
         </TooltipIconButton>
       </ActionBarPrimitive.Reload>
+      <ForkCountBadge />
       <DeleteMessageButton />
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild={true}>
@@ -2655,10 +3445,18 @@ const AssistantActionBar: FC = () => {
           side="bottom"
           align="start"
           onCloseAutoFocus={(e) => e.preventDefault()}
-          className="aui-action-bar-more-content z-50 min-w-32 overflow-hidden rounded-md [--radius:1.1rem] bg-popover p-1 text-popover-foreground shadow-[0_2px_8px_-2px_rgba(27,27,31,0.16)] dark:shadow-none"
+          className="aui-action-bar-more-content z-50 min-w-32 overflow-hidden rounded-[21px] bg-popover px-[9px] py-2 text-popover-foreground shadow-[0_2px_8px_-2px_rgba(0,0,0,0.16)] dark:shadow-none"
         >
+          <ActionBarMorePrimitive.Item
+            disabled={forkDisabled}
+            onSelect={() => void forkMessage()}
+            className="aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-[12px] px-3 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+          >
+            <GitBranchIcon strokeWidth={1.75} className="size-icon" />
+            Fork in new chat
+          </ActionBarMorePrimitive.Item>
           <ActionBarPrimitive.ExportMarkdown asChild={true}>
-            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground">
+            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-[12px] px-3 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground">
               <HugeiconsIcon icon={Download01Icon} strokeWidth={1.75} className="size-icon" />
               Export as Markdown
             </ActionBarMorePrimitive.Item>
@@ -2713,7 +3511,7 @@ const UserActionBar: FC = () => {
   return (
     <ActionBarPrimitive.Root
       autohide="always"
-      className="aui-user-action-bar-root flex gap-1 text-chat-icon-fg [&_button]:size-8 [&_button]:!rounded-[10px] [&_button:hover]:bg-chat-icon-bg-hover [&_button:hover]:text-chat-icon-fg-hover"
+      className="aui-user-action-bar-root flex gap-1 text-chat-icon-fg [&_button]:size-8 [&_button]:!rounded-full [&_button:hover]:bg-chat-icon-bg-hover [&_button:hover]:text-chat-icon-fg-hover"
     >
       <CopyButton />
       <ActionBarPrimitive.Edit asChild={true}>
@@ -2725,6 +3523,8 @@ const UserActionBar: FC = () => {
           />
         </TooltipIconButton>
       </ActionBarPrimitive.Edit>
+      <ForkCountBadge />
+      <ForkMessageButton />
       <DeleteMessageButton />
     </ActionBarPrimitive.Root>
   );

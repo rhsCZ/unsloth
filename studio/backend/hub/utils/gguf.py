@@ -83,8 +83,57 @@ def is_mmproj_filename(filename: str) -> bool:
     return "mmproj" in filename.lower()
 
 
+def is_mtp_drafter_path(path: str) -> bool:
+    """True for a separate-file MTP drafter (speculative head), a companion to
+    the main model rather than a selectable quant.
+
+    Covers the repo-root ``mtp-*.gguf`` (the Q8_0 copy unsloth ships for
+    llama.cpp ``-hf`` auto-discovery) and the ``MTP/`` subdir copies (Gemma 4).
+    Repos that bake the head into the main GGUF (Qwen) have no such file, so
+    this is False for them. Must be excluded from main-model selection
+    everywhere mmproj is.
+
+    CANONICAL COPY. Layering keeps two mirrors that must change in lockstep:
+    utils/models/model_config.py ``_is_mtp_drafter`` (utils cannot import
+    hub) and core/inference/llama_cpp.py ``_is_companion_gguf_path`` (core
+    avoids hub imports; bundles the mmproj check).
+    """
+    p = path.lower()
+    if not p.endswith(".gguf"):
+        return False
+    name = p.rsplit("/", 1)[-1]
+    return name.startswith("mtp-") or "/mtp/" in f"/{p}"
+
+
 def is_gguf_filename(filename: str) -> bool:
     return filename.lower().endswith(".gguf")
+
+
+_BIG_ENDIAN_GGUF_FILENAME_RE = re.compile(r"(^|[-_])be(?:[._-]|$)", re.IGNORECASE)
+
+
+def is_big_endian_gguf_path(path: str, quant: str = "") -> bool:
+    normalized = path.replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1]
+    stem = name.rsplit(".", 1)[0].lower()
+    quant_key = quant.strip().lower()
+    quant_index = stem.find(quant_key) if quant_key else -1
+    parent = normalized.rsplit("/", 1)[0].lower() if "/" in normalized else ""
+    quant_in_parent_only = (
+        bool(parent)
+        and quant_index < 0
+        and (
+            (quant_key and quant_key in parent)
+            or (not quant_key and _GGUF_QUANT_RE.search(parent) is not None)
+        )
+    )
+    for match in _BIG_ENDIAN_GGUF_FILENAME_RE.finditer(stem):
+        if quant_index >= 0 and quant_index < match.start():
+            return True
+        tail = stem[match.end() :].lstrip("._-")
+        if not tail or _GGUF_QUANT_RE.search(tail) is None:
+            return not quant_in_parent_only
+    return False
 
 
 # Cap recursive walks so a huge or system path cannot run unbounded.
@@ -119,7 +168,12 @@ def iter_gguf_files(directory: Path, recursive: bool = False):
 
 def pick_best_gguf(filenames: list[str]) -> Optional[str]:
     gguf_files = [
-        name for name in filenames if is_gguf_filename(name) and not is_mmproj_filename(name)
+        name
+        for name in filenames
+        if is_gguf_filename(name)
+        and not is_mmproj_filename(name)
+        and not is_mtp_drafter_path(name)
+        and not is_big_endian_gguf_path(name, extract_quant_label(name))
     ]
     if not gguf_files:
         return None
@@ -270,6 +324,12 @@ def list_partial_gguf_variants_from_state(
             for expected in manifest.expected_files:
                 if not is_gguf_filename(expected.path):
                     continue
+                if is_mtp_drafter_path(expected.path):
+                    # Downloaded with every variant (like mmproj) but not a
+                    # selectable quant; count it so the shown download size
+                    # matches what is fetched.
+                    companion_bytes += max(0, int(expected.size or 0))
+                    continue
                 if is_mmproj_filename(expected.path):
                     has_vision = True
                     companion_bytes += max(0, int(expected.size or 0))
@@ -336,10 +396,14 @@ def list_gguf_variants(
         filename = getattr(sibling, "rfilename", None)
         if not isinstance(filename, str) or not is_gguf_filename(filename):
             continue
+        if is_mtp_drafter_path(filename):
+            continue
         if is_mmproj_filename(filename):
             has_vision = True
             continue
         quant = extract_quant_label(filename)
+        if is_big_endian_gguf_path(filename, quant):
+            continue
         quant_totals[quant] = quant_totals.get(quant, 0) + int(getattr(sibling, "size", 0) or 0)
         quant_first_file.setdefault(quant, filename)
 
@@ -389,7 +453,11 @@ def list_local_gguf_variants(directory: str) -> tuple[list[GgufVariantInfo], boo
         except OSError:
             size = 0
         rel = file.relative_to(root).as_posix()
+        if is_mtp_drafter_path(rel):
+            continue
         quant = extract_quant_label(rel)
+        if is_big_endian_gguf_path(rel, quant):
+            continue
         quant_totals[quant] = quant_totals.get(quant, 0) + size
         quant_first_file.setdefault(quant, rel)
 

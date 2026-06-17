@@ -26,6 +26,7 @@ from hub.utils.hf_cache_state import (
 from hub.utils.gguf import (
     extract_quant_label,
     iter_hf_cache_snapshots,
+    is_big_endian_gguf_path,
     list_gguf_variants,
     list_gguf_variants_from_hf_cache,
     list_local_gguf_variants,
@@ -38,6 +39,7 @@ from hub.utils.paths import (
 )
 from hub.services.models.common import (
     _is_mmproj_filename,
+    _is_mtp_drafter_path,
     _iter_gguf_paths,
 )
 from hub.utils.gguf_plan import (
@@ -479,9 +481,12 @@ async def get_gguf_variants_response(
                         continue
                     key = rel.lower()
                     by_filename[key] = max(by_filename.get(key, 0), size)
-                    if _is_mmproj_filename(f.name):
+                    if _is_mmproj_filename(f.name) or _is_mtp_drafter_path(rel):
                         continue
-                    q = extract_quant_label(rel).lower()
+                    q = extract_quant_label(rel)
+                    if is_big_endian_gguf_path(rel, q):
+                        continue
+                    q = q.lower()
                     by_quant[q] = by_quant.get(q, 0) + size
                 if by_filename:
                     cached_filenames_by_snapshot.append(by_filename)
@@ -593,7 +598,11 @@ async def get_gguf_variants_response(
                 requirement = requirements_by_quant.get(variant.quant.lower())
                 if requirement is None:
                     continue
-                if requirement.mmproj_hashes & incomplete_hashes and _filenames_cached(
+                # companion_hashes adds the MTP drafter (mmproj_hashes covers
+                # every mmproj precision in the repo, not just the planned one).
+                if (
+                    (requirement.mmproj_hashes | requirement.companion_hashes) & incomplete_hashes
+                ) and _filenames_cached(
                     requirement.main_filenames,
                     requirement.main_size_bytes,
                 ):

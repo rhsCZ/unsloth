@@ -17,6 +17,7 @@ Pattern follows core/training/training.py.
 import atexit
 import base64
 import os
+import signal
 import structlog
 from loggers import get_logger
 import multiprocessing as mp
@@ -29,13 +30,13 @@ from pathlib import Path
 from typing import Any, Generator, Optional, Tuple, Union
 from utils.hardware import prepare_gpu_selection
 
+# Re-exported from the shared helper so GGUF, training, and inference share one
+# type; kept importable here for backwards compatibility.
+from utils.hf_xet_fallback import DownloadStallError
+
 logger = get_logger(__name__)
 
 _CTX = mp.get_context("spawn")
-
-
-class DownloadStallError(RuntimeError):
-    """Raised when the worker reports no download progress for too long."""
 
 
 # Dispatcher timeout constants (seconds)
@@ -239,6 +240,43 @@ class InferenceOrchestrator:
         """True if the subprocess is alive."""
         return self._proc is not None and self._proc.is_alive()
 
+    def _subprocess_crash_message(self, context: str) -> str:
+        """Return a user-facing crash message with the worker exit status."""
+        context_label = {
+            "wait": "loading the model",
+            "generation": "generating a response",
+            "audio generation": "generating audio",
+            "audio input generation": "processing audio input",
+        }.get(context, context)
+        message = f"The inference worker stopped unexpectedly while {context_label}."
+
+        if self._proc is None:
+            return f"{message} Details: process missing."
+
+        exitcode = self._proc.exitcode
+        pid = self._proc.pid
+        if exitcode is None:
+            return f"{message} Details: pid={pid}."
+
+        if exitcode < 0:
+            signum = -exitcode
+            try:
+                sig_name = signal.Signals(signum).name
+            except ValueError:
+                sig_name = f"SIG{signum}"
+
+            suffix = ""
+            if sig_name == "SIGKILL":
+                suffix = (
+                    " This usually means the system killed it under memory pressure. "
+                    "Try a smaller model, lower context length, or close other GPU-heavy apps."
+                )
+            return (
+                f"{message}{suffix} " f"Details: pid={pid}, signal={sig_name}, exitcode={exitcode}."
+            )
+
+        return f"{message} Details: pid={pid}, exitcode={exitcode}."
+
     # ------------------------------------------------------------------
     # Queue helpers
     # ------------------------------------------------------------------
@@ -286,7 +324,7 @@ class InferenceOrchestrator:
             if resp is None:
                 # Check subprocess health
                 if not self._ensure_subprocess_alive():
-                    raise RuntimeError("Inference subprocess crashed during wait")
+                    raise RuntimeError(self._subprocess_crash_message("wait"))
                 continue
 
             rtype = resp.get("type", "")
@@ -510,7 +548,7 @@ class InferenceOrchestrator:
                 except queue.Empty:
                     # Timeout — check subprocess health
                     if not self._ensure_subprocess_alive():
-                        yield "Error: Inference subprocess crashed during generation"
+                        yield f"Error: {self._subprocess_crash_message('generation')}"
                         return
                     continue
 
@@ -689,6 +727,7 @@ class InferenceOrchestrator:
                         "is_audio": model_info.get("is_audio", False),
                         "audio_type": model_info.get("audio_type"),
                         "has_audio_input": model_info.get("has_audio_input", False),
+                        "context_length": model_info.get("context_length"),
                     }
                     # Mirror chat_template_info so routes can classify caps
                     # without re-entering the subprocess.
@@ -822,6 +861,8 @@ class InferenceOrchestrator:
         tool_call_timeout: int = 300,
         session_id: Optional[str] = None,
         rag_scope: Optional[dict] = None,
+        confirm_tool_calls: bool = False,
+        bypass_permissions: bool = False,
         use_adapter: Optional[Union[bool, str]] = None,
         stats_holder: Optional[dict] = None,
         **_unused,
@@ -883,6 +924,8 @@ class InferenceOrchestrator:
             tool_call_timeout = tool_call_timeout,
             session_id = session_id,
             rag_scope = rag_scope,
+            confirm_tool_calls = confirm_tool_calls,
+            bypass_permissions = bypass_permissions,
         )
 
     def generate_with_adapter_control(
@@ -1028,7 +1071,7 @@ class InferenceOrchestrator:
             if resp is None:
                 # Check subprocess health
                 if not self._ensure_subprocess_alive():
-                    yield "Error: Inference subprocess crashed during generation"
+                    yield f"Error: {self._subprocess_crash_message('generation')}"
                     return
                 continue
 
@@ -1125,7 +1168,7 @@ class InferenceOrchestrator:
 
             if resp is None:
                 if not self._ensure_subprocess_alive():
-                    raise RuntimeError("Inference subprocess crashed during audio generation")
+                    raise RuntimeError(self._subprocess_crash_message("audio generation"))
                 continue
 
             rtype = resp.get("type", "")
@@ -1247,7 +1290,7 @@ class InferenceOrchestrator:
 
                 if resp is None:
                     if not self._ensure_subprocess_alive():
-                        yield "Error: Inference subprocess crashed during audio input generation"
+                        yield ("Error: " + self._subprocess_crash_message("audio input generation"))
                         return
                     continue
 

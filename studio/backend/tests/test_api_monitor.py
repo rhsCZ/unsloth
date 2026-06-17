@@ -246,7 +246,10 @@ def test_api_monitor_append_reply_exact_cap_then_more_marks_truncated():
 
     monitor = ApiMonitor(max_entries = 1)
     entry_id = monitor.start(
-        endpoint = "/v1/chat/completions", method = "POST", model = "m", prompt = "go",
+        endpoint = "/v1/chat/completions",
+        method = "POST",
+        model = "m",
+        prompt = "go",
     )
     # A reply landing exactly on the cap has no "..." marker yet.
     monitor.append_reply(entry_id, "x" * m._MAX_REPLY_CHARS)

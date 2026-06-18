@@ -419,13 +419,15 @@ def test_install_setup_ps_rocm_torch_floors_in_sync():
         i_map = _ps_floor_map(it, prefix)
         s_map = _ps_floor_map(st, prefix)
         assert i_map, f"install.ps1 has no {prefix!r} floor map"
-        assert i_map == s_map, f"{prefix!r} floor map drift:\ninstall.ps1={i_map}\nsetup.ps1={s_map}"
+        assert (
+            i_map == s_map
+        ), f"{prefix!r} floor map drift:\ninstall.ps1={i_map}\nsetup.ps1={s_map}"
     # Strix Halo (the field case) must be pinned, not bare.
     assert _ps_floor_map(it, "torchvision>=").get("gfx1151") == "torchvision>=0.26.0,<0.27.0"
     # The ROCm install must pass the pinned companion specs, not bare names.
-    assert "$torchSpec $visionSpec $audioSpec" in it, (
-        "install.ps1 ROCm install must use the pinned companion specs"
-    )
+    assert (
+        "$torchSpec $visionSpec $audioSpec" in it
+    ), "install.ps1 ROCm install must use the pinned companion specs"
 
 
 def test_install_ps1_rocm_cpu_fallback_uses_retry():
@@ -435,10 +437,10 @@ def test_install_ps1_rocm_cpu_fallback_uses_retry():
     text = _INSTALL_PS1.read_text(encoding = "utf-8")
     i = text.find("ROCm PyTorch install failed")
     assert i != -1, "ROCm->CPU fallback block not found in install.ps1"
-    window = text[i:i + 600]
-    assert "Invoke-InstallCommandRetry" in window, (
-        "the ROCm->CPU fallback torch install must use Invoke-InstallCommandRetry"
-    )
+    window = text[i : i + 600]
+    assert (
+        "Invoke-InstallCommandRetry" in window
+    ), "the ROCm->CPU fallback torch install must use Invoke-InstallCommandRetry"
 
 
 def test_install_python_stack_gates_every_amd_smi_spawn():

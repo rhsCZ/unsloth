@@ -22,15 +22,63 @@ function Uninstall-UnslothStudio {
         param([string]$Path)
         if ([string]::IsNullOrWhiteSpace($Path)) { return }
         if (-not (Test-Path -LiteralPath $Path)) { return }
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        for ($attempt = 1; $attempt -le 4; $attempt++) {
             try {
                 Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            } catch {
+                if ($attempt -lt 4) { Start-Sleep -Milliseconds 700; continue }
+                _Substep "could not remove: $Path ($($_.Exception.Message))" "Yellow"
+                return
+            }
+            # Remove-Item -Recurse can report success yet leave a child behind when
+            # a file is transiently held open (e.g. unsloth.ico locked by Explorer's
+            # icon cache while a shortcut still references it). Verify and retry so
+            # we neither claim "removed" falsely nor orphan the directory.
+            if (-not (Test-Path -LiteralPath $Path)) {
                 _Substep "removed: $Path" "Green"
                 return
-            } catch {
-                if ($attempt -lt 3) { Start-Sleep -Milliseconds 700; continue }
-                _Substep "could not remove: $Path ($($_.Exception.Message))" "Yellow"
             }
+            if ($attempt -lt 4) { Start-Sleep -Milliseconds 700; continue }
+            _Substep "still present (files held open): $Path" "Yellow"
+        }
+    }
+
+    # Remove the shared data dir, but in a dual native+WSL install keep unsloth.ico
+    # when a WSL shortcut still points at it -- else removing the dir blanks that
+    # shortcut's icon. install.sh reuses LOCALAPPDATA\Unsloth Studio for the WSL
+    # shortcut's icon; uninstall.sh drops the leftover icon + empty dir when WSL is
+    # later removed. (The old code relied on Explorer holding the icon open, which
+    # is unreliable -- preserve it explicitly.)
+    function _RemoveDataDirKeepingWslIcon {
+        param(
+            [string]$DataDir,
+            # Dirs to scan for a surviving WSL shortcut. Defaults to the Start Menu
+            # + Desktop install.sh writes to; overridable so tests stay hermetic.
+            [string[]]$ShortcutDirs = $null
+        )
+        if ([string]::IsNullOrWhiteSpace($DataDir)) { return }
+        if (-not (Test-Path -LiteralPath $DataDir)) { return }
+        # $null = caller passed nothing (use defaults); an explicit @() means
+        # "no dirs to scan" and must be honored (-not @() is $true, so test it
+        # against $null rather than truthiness).
+        if ($null -eq $ShortcutDirs) {
+            $ShortcutDirs = @(Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs")
+            try { $ShortcutDirs += [Environment]::GetFolderPath("Desktop") } catch {}
+        }
+        $wslShortcuts = @()
+        foreach ($d in $ShortcutDirs) {
+            if ($d -and (Test-Path -LiteralPath $d)) {
+                $wslShortcuts += Get-ChildItem -LiteralPath $d -Filter "Unsloth Studio (WSL*.lnk" -ErrorAction SilentlyContinue
+            }
+        }
+        if (@($wslShortcuts).Count -eq 0) {
+            _RemovePath $DataDir
+            return
+        }
+        # A WSL shortcut survives: drop everything except its shared icon.
+        _Substep "keeping $(Join-Path $DataDir 'unsloth.ico') for the WSL shortcut" "Gray"
+        Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Name -ne "unsloth.ico") { _RemovePath $_.FullName }
         }
     }
 
@@ -328,12 +376,15 @@ function Uninstall-UnslothStudio {
     # Default install dir (always at %USERPROFILE%\.unsloth\studio when present).
     if ($defaultStudioHome) { _RemovePath $defaultStudioHome }
     # Default data dir.
-    if ($defaultDataDir) { _RemovePath $defaultDataDir }
+    if ($defaultDataDir) { _RemoveDataDirKeepingWslIcon $defaultDataDir }
     # Default-mode shared llama.cpp build + cache (siblings of studio under
     # ~/.unsloth). No-op in env/custom mode and when absent.
     if ($defaultLlamaCpp) { _RemovePath $defaultLlamaCpp }
     if ($defaultCache) { _RemovePath $defaultCache }
     if ($defaultStaging) { _RemovePath $defaultStaging }
+    # llama.cpp install lock (serializes the shared build); a stray lock keeps
+    # ~/.unsloth from being pruned below. No-op in env/custom mode and when absent.
+    if ($defaultUnslothHome) { _RemovePath (Join-Path $defaultUnslothHome ".llama.cpp.install.lock") }
     # Drop ~/.unsloth itself, but ONLY if now empty -- never nuke unrelated content.
     if ($defaultUnslothHome -and (Test-Path -LiteralPath $defaultUnslothHome) -and
         -not (Get-ChildItem -LiteralPath $defaultUnslothHome -Force -ErrorAction SilentlyContinue)) {
@@ -361,6 +412,14 @@ function Uninstall-UnslothStudio {
             Stop-Process -Name StartMenuExperienceHost -Force -ErrorAction SilentlyContinue
         }
     } catch { }
+
+    # Re-sweep the data dir: unsloth.ico lives there and Explorer/StartMenuExperience
+    # Host may have held it open while the native shortcut above referenced it as its
+    # icon, leaving the dir behind on the first pass. Now that the native shortcut
+    # (and SMEH) are gone, the handle is released. A dual native+WSL install keeps
+    # the icon for the surviving WSL shortcut (uninstall.sh removes it with the dir
+    # when WSL is later uninstalled).
+    if ($defaultDataDir -and (Test-Path -LiteralPath $defaultDataDir)) { _RemoveDataDirKeepingWslIcon $defaultDataDir }
 
     # ── Clean user PATH and registry backup ──
     _Step "Cleaning user PATH and registry..."

@@ -1623,14 +1623,13 @@ exit 0
     if (-not $HasNvidiaSmi) {
         # hipinfo: PATH first, then HIP_PATH/ROCM_PATH bin fallback (mirrors NVIDIA smi path resolution).
         # AMD HIP SDK sets HIP_PATH but may not add the bin dir to PATH depending on install type.
-        # Ignore the venv-internal hipInfo.exe the AMD torch wheel puts on PATH: it
-        # is not a HIP SDK, so amd-smi would still auto-elevate. Cf. _path_inside_venv().
+        # Ignore the venv hipInfo.exe (AMD wheel, on PATH): not a HIP SDK, so
+        # amd-smi would still auto-elevate. Cf. _path_inside_venv().
         function Test-HipinfoIsVenvInternal {
             param([AllowNull()][string]$HipinfoPath)
             if ([string]::IsNullOrWhiteSpace($HipinfoPath)) { return $false }
-            # Also derive the venv from the setup python and the default Studio
-            # home so the venv hipInfo is recognized even when VenvDir/VIRTUAL_ENV
-            # are unset (keeps the amd-smi/DiskPart gate closed).
+            # Also derive the venv from the setup python + default Studio home, so
+            # its hipInfo is caught even when VenvDir/VIRTUAL_ENV are unset.
             $venvRoots = @()
             if ($env:VIRTUAL_ENV) { $venvRoots += $env:VIRTUAL_ENV }
             $vd = Get-Variable -Name VenvDir -ValueOnly -ErrorAction SilentlyContinue
@@ -1644,8 +1643,7 @@ exit 0
             $studioHomeEnv = if (-not [string]::IsNullOrWhiteSpace($env:UNSLOTH_STUDIO_HOME)) { $env:UNSLOTH_STUDIO_HOME.Trim() } elseif (-not [string]::IsNullOrWhiteSpace($env:STUDIO_HOME)) { $env:STUDIO_HOME.Trim() } else { $null }
             if ($studioHomeEnv) {
                 # Expand a leading ~ like the canonical resolver; else GetFullPath
-                # keeps the literal ~ (relative to cwd) and the custom-home hipInfo
-                # escapes the filter, reopening the amd-smi/DiskPart gate.
+                # keeps the literal ~ (cwd-relative) and the hipInfo escapes the filter.
                 if ($studioHomeEnv -eq "~" -or $studioHomeEnv -like "~/*" -or $studioHomeEnv -like "~\*") {
                     $studioHomeEnv = (Join-Path $env:USERPROFILE $studioHomeEnv.Substring(1).TrimStart('/', '\'))
                 }
@@ -1662,9 +1660,8 @@ exit 0
             }
             return $false
         }
-        # Get-Command returns only the first hipinfo on PATH; the venv-internal
-        # hipInfo.exe (prepended by the bnb fix) would shadow a real HIP SDK's
-        # hipinfo later on PATH. Scan all and keep the first non-venv one.
+        # Get-Command returns only the first hipinfo; the venv copy (bnb fix) could
+        # shadow a real HIP SDK's. Scan all, keep the first non-venv one.
         $hipinfoExe = Get-Command hipinfo -All -ErrorAction SilentlyContinue |
             Where-Object { -not (Test-HipinfoIsVenvInternal $_.Source) } |
             Select-Object -First 1
@@ -1770,10 +1767,9 @@ exit 0
             } catch {}
         }
         # ── Arch resolution: env-var override → name inference ──────────────
-        # Runs even when the hipinfo/amd-smi probe could NOT confirm a runtime
-        # ($HasROCm false): the gfx arch inferred from the WMI GPU name drives
-        # both the GPU-accelerated ROCm llama.cpp and the PyTorch ROCm wheels.
-        # repo.amd.com wheels bundle their own runtime (no HIP SDK needed), so a
+        # Runs even when the probe can't confirm a runtime ($HasROCm false): the
+        # gfx arch from the WMI GPU name drives both ROCm llama.cpp and the torch
+        # wheels. repo.amd.com wheels bundle their own runtime (no HIP SDK), so a
         # mapped arch installs ROCm torch directly below -- no wasted CPU base.
         if (-not $ROCmGfxArch) {
             # 1. Manual override: set UNSLOTH_ROCM_GFX_ARCH=gfx1151 before running.
@@ -1949,6 +1945,64 @@ exit 0
         substep "could not determine CUDA version from nvidia-smi, defaulting to cu126" "Yellow"
         return "$baseUrl/cu126"
     }
+
+    # ── Torch flavor helpers (to repair a stale CPU / wrong-CUDA wheel) ──
+    # torch.__version__ -> flavor tag (cuXXX / rocm / cpu); untagged wheel = cpu,
+    # matching setup.ps1's stale-venv parse.
+    function ConvertTo-TorchFlavorTag {
+        param([string]$TorchVersion)
+        if (-not $TorchVersion) { return $null }
+        if ($TorchVersion -match '\+(cu\d+)') { return $Matches[1] }
+        if ($TorchVersion -match '\+rocm')    { return 'rocm' }
+        if ($TorchVersion -match '\+cpu')     { return 'cpu' }
+        return 'cpu'
+    }
+
+    # Expected tag from the index leaf: cuXXX / cpu / rocm ($ROCmIndexUrl or a
+    # gfx* leaf -> rocm). $null on an unknown leaf (odd mirror) so repair no-ops.
+    function Get-ExpectedTorchFlavorTag {
+        param([string]$TorchIndexUrl, [string]$ROCmIndexUrl)
+        if (-not [string]::IsNullOrWhiteSpace($ROCmIndexUrl)) { return 'rocm' }
+        if ([string]::IsNullOrWhiteSpace($TorchIndexUrl)) { return $null }
+        $leaf = ($TorchIndexUrl.TrimEnd('/') -split '/')[-1].ToLowerInvariant()
+        if ($leaf -match '^cu\d+$') { return $leaf }
+        if ($leaf -eq 'cpu')        { return 'cpu' }
+        if ($leaf -match '^rocm')   { return 'rocm' }
+        if ($leaf -match '^gfx')    { return 'rocm' }
+        return $null
+    }
+
+    # Installed torch flavor tag in $PythonExe's venv, or $null if absent. Uses
+    # ProcessStartInfo (not &) so stderr doesn't trip $ErrorActionPreference.
+    function Get-InstalledTorchTag {
+        param([string]$PythonExe)
+        if (-not $PythonExe -or -not (Test-Path -LiteralPath $PythonExe)) { return $null }
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $PythonExe
+            $psi.Arguments = '-c "import torch; print(torch.__version__)"'
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            # Drain BOTH streams async, then WaitForExit. A synchronous ReadToEnd()
+            # before the wait would block forever if a wedged "import torch" never
+            # closes stdout; leaving the redirected stderr undrained would deadlock a
+            # child that floods it past the pipe buffer. Async reads let a noisy-but-
+            # exiting probe finish, while a truly hung one still hits the 30s timeout
+            # and is killed -- bounded either way.
+            $outTask = $proc.StandardOutput.ReadToEndAsync()
+            $errTask = $proc.StandardError.ReadToEndAsync()
+            $finished = $proc.WaitForExit(30000)
+            if (-not $finished) { try { $proc.Kill() } catch {}; return $null }
+            $torchVer = $outTask.GetAwaiter().GetResult().Trim()
+            [void]$errTask.GetAwaiter().GetResult()
+            if ($proc.ExitCode -ne 0 -or -not $torchVer) { return $null }
+            return ConvertTo-TorchFlavorTag $torchVer
+        } catch { return $null }
+    }
+
     $TorchIndexUrl = Get-TorchIndexUrl
 
     # ── GPU arch → newest compatible Windows ROCm wheel release ──
@@ -1983,11 +2037,10 @@ exit 0
             "gfx1201" = "torch>=2.11.0,<2.12.0"; "gfx1200" = "torch>=2.11.0,<2.12.0"
             "gfx1151" = "torch>=2.11.0,<2.12.0"; "gfx1150" = "torch>=2.11.0,<2.12.0"
         }
-        # Companion ranges for torchvision/torchaudio -- must track the torch
-        # ceiling so pip resolves a consistent trio on AMD's per-arch index, which
-        # publishes each independently and may ship torchvision 0.27 (torch 2.12)
-        # before removing 0.26. Mirrors setup.ps1 and the rocm7.2 spec in
-        # install_python_stack.py; bump all three together when 2.12.x is validated.
+        # torchvision/torchaudio companion ranges -- track the torch ceiling so
+        # pip resolves a consistent trio on AMD's per-arch index (which publishes
+        # each independently). Mirrors setup.ps1 / install_python_stack.py; bump
+        # all three together when 2.12.x is validated.
         $torchvisionFloorMap = @{
             "gfx1201" = "torchvision>=0.26.0,<0.27.0"; "gfx1200" = "torchvision>=0.26.0,<0.27.0"
             "gfx1151" = "torchvision>=0.26.0,<0.27.0"; "gfx1150" = "torchvision>=0.26.0,<0.27.0"
@@ -2024,9 +2077,8 @@ exit 0
     if (-not $SkipTorch -and -not $ROCmIndexUrl -and $TorchIndexUrl -like "*/cpu") {
         Write-Host ""
         if ($ROCmGfxArch) {
-            # Only an unmapped arch reaches here: a mapped one set $ROCmIndexUrl
-            # above and installs ROCm directly. No ROCm PyTorch wheels exist for
-            # this arch (e.g. RDNA2 gfx103X), so PyTorch stays on CPU.
+            # Only an unmapped arch reaches here (a mapped one set $ROCmIndexUrl
+            # above). No ROCm torch wheels for this arch (e.g. RDNA2 gfx103X) -> CPU.
             substep "Installing CPU PyTorch -- no ROCm PyTorch wheels are available for $ROCmGfxArch." "Yellow"
             substep "PyTorch (training and Transformers inference) runs on CPU on this GPU." "Yellow"
         } else {
@@ -2082,7 +2134,7 @@ exit 0
         if ($SkipTorch) {
             # No-torch: install unsloth + unsloth-zoo with --no-deps, then
             # runtime deps (typer, safetensors, transformers, etc.) with --no-deps.
-            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (migrated no-torch)" { uv pip install --python $VenvPython --no-deps --reinstall-package unsloth --reinstall-package unsloth-zoo "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5" }
+            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (migrated no-torch)" { uv pip install --python $VenvPython --no-deps --reinstall-package unsloth --reinstall-package unsloth-zoo "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6" }
             if ($baseInstallExit -eq 0) {
                 # Resolve pydantic WITH deps so pip pins pydantic-core
                 # to the matching version (no-torch-runtime.txt below
@@ -2096,7 +2148,7 @@ exit 0
                 }
             }
         } else {
-            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (migrated)" { uv pip install --python $VenvPython --reinstall-package unsloth --reinstall-package unsloth-zoo "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5" }
+            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (migrated)" { uv pip install --python $VenvPython --reinstall-package unsloth --reinstall-package unsloth-zoo "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6" }
         }
         if ($baseInstallExit -ne 0) {
             Write-Host "[ERROR] Failed to install unsloth (exit code $baseInstallExit)" -ForegroundColor Red
@@ -2153,7 +2205,7 @@ exit 0
         if ($SkipTorch) {
             # No-torch: install unsloth + unsloth-zoo with --no-deps, then
             # runtime deps (typer, safetensors, transformers, etc.) with --no-deps.
-            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (no-torch)" { uv pip install --python $VenvPython --no-deps --upgrade-package unsloth --upgrade-package unsloth-zoo "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5" }
+            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (no-torch)" { uv pip install --python $VenvPython --no-deps --upgrade-package unsloth --upgrade-package unsloth-zoo "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6" }
             if ($baseInstallExit -eq 0) {
                 # Same pydantic-with-deps trick as the migrated branch.
                 $baseInstallExit = Invoke-InstallCommandRetry -Label "install pydantic" { uv pip install --python $VenvPython pydantic }
@@ -2165,7 +2217,7 @@ exit 0
                 }
             }
         } elseif ($StudioLocalInstall) {
-            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (local)" { uv pip install --python $VenvPython --upgrade-package unsloth "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5" }
+            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (local)" { uv pip install --python $VenvPython --upgrade-package unsloth "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6" }
         } else {
             $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth" { uv pip install --python $VenvPython --upgrade-package unsloth -- "$PackageName" }
         }
@@ -2193,7 +2245,7 @@ exit 0
         Write-TauriLog "STEP" "Installing unsloth"
         substep "installing unsloth (this may take a few minutes)..."
         if ($StudioLocalInstall) {
-            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (auto torch backend)" { uv pip install --python $VenvPython "unsloth-zoo>=2026.6.5" "unsloth>=2026.6.7" --torch-backend=auto }
+            $baseInstallExit = Invoke-InstallCommandRetry -Label "install unsloth (auto torch backend)" { uv pip install --python $VenvPython "unsloth-zoo>=2026.6.6" "unsloth>=2026.6.8" --torch-backend=auto }
             if ($baseInstallExit -ne 0) {
                 Write-Host "[ERROR] Failed to install unsloth (exit code $baseInstallExit)" -ForegroundColor Red
                 return (Exit-InstallFailure "Failed to install unsloth (exit code $baseInstallExit)" $baseInstallExit)
@@ -2215,6 +2267,50 @@ exit 0
             if ($baseInstallExit -ne 0) {
                 Write-Host "[ERROR] Failed to install unsloth (exit code $baseInstallExit)" -ForegroundColor Red
                 return (Exit-InstallFailure "Failed to install unsloth (exit code $baseInstallExit)" $baseInstallExit)
+            }
+        }
+    }
+
+    # ── Enforce the installed torch flavor matches the detected GPU build ──
+    # PEP 440 ignores the +cpu/+cuXXX/+rocm local label in a version range, so uv
+    # keeps a stale torch==X+cpu against a CUDA index and setup.ps1 then loops on
+    # "torch cpu != required cuXXX". Reinstall the right triplet when a GPU build is
+    # expected: CUDA from $TorchIndexUrl, ROCm from $ROCmIndexUrl (repo.amd.com gfx*
+    # is a PEP 503 index uv resolves via --index-url, same URL the fresh ROCm install
+    # above uses). --no-torch / CPU-only hosts (expected cpu) are no-ops.
+    if (-not $SkipTorch) {
+        $expectedTorchTag = Get-ExpectedTorchFlavorTag -TorchIndexUrl $TorchIndexUrl -ROCmIndexUrl $ROCmIndexUrl
+        if ($expectedTorchTag -and $expectedTorchTag -ne 'cpu') {
+            $installedTorchTag = Get-InstalledTorchTag -PythonExe $VenvPython
+            if ($installedTorchTag -and $installedTorchTag -ne $expectedTorchTag) {
+                if ($expectedTorchTag -eq 'rocm' -and $ROCmIndexUrl) {
+                    # AMD: a migrated venv can keep a stale CPU torch the fresh ROCm path
+                    # would have force-reinstalled. Repair from the same repo.amd.com index.
+                    $rocmSpec = if ($ROCmTorchFloor) { $ROCmTorchFloor } else { "torch" }
+                    substep "PyTorch flavor mismatch (installed $installedTorchTag, need ROCm) -- reinstalling correct build..." "Yellow"
+                    $torchFixExit = Invoke-InstallCommand { uv pip install --python $VenvPython --force-reinstall --index-url $ROCmIndexUrl $rocmSpec torchvision torchaudio }
+                    if ($torchFixExit -ne 0) {
+                        Write-Host "[ERROR] Failed to reinstall PyTorch with the correct ROCm build (exit code $torchFixExit)" -ForegroundColor Red
+                        return (Exit-InstallFailure "Failed to reinstall PyTorch (ROCm) (exit code $torchFixExit)" $torchFixExit)
+                    }
+                    $installedTorchTag = Get-InstalledTorchTag -PythonExe $VenvPython
+                } elseif ($expectedTorchTag -ne 'rocm') {
+                    # CUDA: stale +cpu (or wrong cuXXX) against a CUDA index -> reinstall triplet.
+                    substep "PyTorch flavor mismatch (installed $installedTorchTag, need $expectedTorchTag) -- reinstalling correct build..." "Yellow"
+                    $torchFixExit = Invoke-InstallCommand { uv pip install --python $VenvPython "torch>=2.4,<2.11.0" torchvision torchaudio --index-url $TorchIndexUrl --reinstall-package torch --reinstall-package torchvision --reinstall-package torchaudio }
+                    if ($torchFixExit -ne 0) {
+                        Write-Host "[ERROR] Failed to reinstall PyTorch with the correct CUDA build (exit code $torchFixExit)" -ForegroundColor Red
+                        return (Exit-InstallFailure "Failed to reinstall PyTorch ($expectedTorchTag) (exit code $torchFixExit)" $torchFixExit)
+                    }
+                    $installedTorchTag = Get-InstalledTorchTag -PythonExe $VenvPython
+                }
+            }
+            # Safety net (incl. AMD): GPU build expected but still CPU -> warn loudly.
+            if ($installedTorchTag -eq 'cpu') {
+                Write-Host ""
+                Write-Host "  [WARN] PyTorch is CPU-only but a $expectedTorchTag GPU build was expected for this machine." -ForegroundColor Yellow
+                Write-Host "  [WARN] Training and GPU inference will run on CPU until this is fixed." -ForegroundColor Yellow
+                Write-Host "  [WARN] Re-run this installer, or reinstall the GPU build manually for your GPU." -ForegroundColor Yellow
             }
         }
     }

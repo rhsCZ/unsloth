@@ -1647,14 +1647,10 @@ if [ "$SKIP_TORCH" = true ] && [ "$MAC_INTEL" = true ] && [ -z "$_USER_PYTHON" ]
     fi
 fi
 
-# ── Strix Halo WSL: route to an existing Ubuntu 24.04 before building anything ──
-# ROCm-on-WSL (the GPU runtime for Strix Halo) only targets Ubuntu 24.04; the
-# default WSL distro is often newer (e.g. 26.04) and is not a ROCm target, so a
-# build here would silently fall back to CPU. If a 24.04 distro already exists,
-# continue the install there and stop in this one. Per maintainer choice we only
-# auto-route to an EXISTING 24.04 -- when none exists we just print the
-# `wsl --install` command via the CPU-fallback notes later, never auto-download a
-# distro. Runs before venv creation so the wrong distro is left untouched.
+# Strix Halo WSL GPU (ROCm-on-WSL) only targets Ubuntu 24.04. If this distro is
+# newer (e.g. 26.04) but a 24.04 distro exists, re-run the install there and stop;
+# else fall through to CPU + the `wsl --install` hint below (never auto-create a
+# distro). Runs before venv so the wrong distro is left untouched.
 _maybe_reroute_strixhalo_to_2404() {
     [ "${OS:-}" = "wsl" ] || return 0
     [ "${SKIP_TORCH:-false}" = "false" ] || return 0
@@ -1662,7 +1658,7 @@ _maybe_reroute_strixhalo_to_2404() {
     [ "${UNSLOTH_WSL_REROUTED:-0}" = "1" ] && return 0
     [ -e /dev/dxg ] || return 0
     grep -qiE 'Ryzen AI Max|Radeon 80[0-9]0S|Strix Halo' /proc/cpuinfo 2>/dev/null || return 0
-    # Already a ROCm-on-WSL distro? leave it (covers a working GPU on any version).
+    # Already ROCm-on-WSL? leave a working GPU alone, whatever the version.
     if [ -e /opt/rocm/lib/librocdxg.so ] || [ -e /opt/rocm/lib64/librocdxg.so ]; then
         return 0
     fi
@@ -1670,7 +1666,7 @@ _maybe_reroute_strixhalo_to_2404() {
     [ -r /etc/os-release ] && _rr_ver=$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-}")
     [ "$_rr_ver" = "24.04" ] && return 0
     command -v wsl.exe >/dev/null 2>&1 || return 0
-    # Only auto-route to a 24.04 that already exists; never create one here.
+    # Route only to an already-installed 24.04.
     wsl.exe -l -q 2>/dev/null | tr -d '\000\r' | grep -qiF "Ubuntu-24.04" || return 0
 
     echo ""
@@ -2028,6 +2024,45 @@ get_torch_index_url() {
     elif [ "$_major" -ge 12 ]; then echo "$_base/cu124"
     elif [ "$_major" -ge 11 ]; then echo "$_base/cu118"
     else echo "$_base/cpu"; fi
+}
+
+# ── Torch flavor helpers (to repair a stale CPU / wrong-CUDA wheel) ──
+# torch.__version__ ($1) -> flavor tag (cuXXX / rocm / cpu); untagged wheel = cpu.
+_torch_flavor_tag() {
+    case "$1" in
+        *+cu[0-9]*) printf '%s\n' "$1" | sed -n 's/.*+\(cu[0-9][0-9]*\).*/\1/p' ;;
+        *+rocm*)    echo "rocm" ;;
+        *+cpu*)     echo "cpu" ;;
+        "")         echo "" ;;
+        *)          echo "cpu" ;;
+    esac
+}
+
+# Expected tag from the index leaf ($1): cuXXX / cpu / rocm (rocmX.Y and gfx* ->
+# rocm). Empty on an unknown leaf (odd mirror) so the repair safely no-ops.
+_expected_torch_flavor_tag() {
+    _u="${1%/}"
+    _leaf="${_u##*/}"
+    case "$_leaf" in
+        cu[0-9]*)   echo "$_leaf" ;;
+        cpu)        echo "cpu" ;;
+        rocm*|gfx*) echo "rocm" ;;
+        *)          echo "" ;;
+    esac
+}
+
+# Whether index ($1) supports a plain --index-url reinstall. pytorch.org cuXXX /
+# rocmX.Y AND the repo.amd.com gfx* indexes are all PEP 503 simple indexes that uv
+# resolves (torch + every transitive dep) via --index-url -- the same URLs the
+# fresh-install paths above already use -- so a stale wheel is auto-repairable.
+# Unknown/odd-mirror leaves -> no, so we warn rather than risk a wrong reinstall.
+_torch_index_repairable() {
+    _u="${1%/}"
+    _leaf="${_u##*/}"
+    case "$_leaf" in
+        cu[0-9]*|rocm[0-9]*|gfx*) echo "yes" ;;
+        *)                        echo "no" ;;
+    esac
 }
 
 get_radeon_wheel_url() {
@@ -2525,7 +2560,7 @@ if [ "$_MIGRATED" = true ]; then
         # to prevent transitive torch resolution.
         run_install_cmd_retry "install unsloth (migrated no-torch)" uv pip install --python "$_VENV_PY" --no-deps \
             --reinstall-package unsloth --reinstall-package unsloth-zoo \
-            "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5"
+            "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6"
         # Resolve pydantic WITH deps so pip pins pydantic-core to the
         # matching version (no-torch-runtime.txt below is --no-deps).
         # All transitive deps are torch-free.
@@ -2538,7 +2573,7 @@ if [ "$_MIGRATED" = true ]; then
     else
         run_install_cmd_retry "install unsloth (migrated)" uv pip install --python "$_VENV_PY" \
             --reinstall-package unsloth --reinstall-package unsloth-zoo \
-            "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5"
+            "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6"
     fi
     if [ "$STUDIO_LOCAL_INSTALL" = true ]; then
         substep "overlaying local repo (editable)..."
@@ -2553,7 +2588,7 @@ if [ "$_MIGRATED" = true ]; then
     # fresh reinstall.
     if [ "$SKIP_TORCH" = false ]; then
         case "$TORCH_INDEX_URL" in
-            */rocm*)
+            */rocm*|*/gfx*)
                 _install_bnb_rocm "install bitsandbytes (AMD)" "$_VENV_PY"
                 # Repair ROCm torch if overwritten during migrated install
                 _has_hip=$("$_VENV_PY" -c "import torch; print(getattr(torch.version,'hip','') or '')" 2>/dev/null || true)
@@ -2729,7 +2764,7 @@ elif [ -n "$TORCH_INDEX_URL" ]; then
     # which is only useful once torch is present for training.
     if [ "$SKIP_TORCH" = false ]; then
         case "$TORCH_INDEX_URL" in
-            */rocm*)
+            */rocm*|*/gfx*)
                 _install_bnb_rocm "install bitsandbytes (AMD)" "$_VENV_PY"
                 ;;
         esac
@@ -2742,7 +2777,7 @@ elif [ -n "$TORCH_INDEX_URL" ]; then
         # runtime deps (typer, safetensors, transformers, etc.) with --no-deps.
         run_install_cmd_retry "install unsloth (no-torch)" uv pip install --python "$_VENV_PY" --no-deps \
             --upgrade-package unsloth --upgrade-package unsloth-zoo \
-            "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5"
+            "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6"
         # Same pydantic-with-deps trick as the migrated branch.
         run_install_cmd_retry "install pydantic (with deps for compatible core)" \
             uv pip install --python "$_VENV_PY" pydantic
@@ -2760,7 +2795,7 @@ elif [ -n "$TORCH_INDEX_URL" ]; then
         fi
     elif [ "$STUDIO_LOCAL_INSTALL" = true ]; then
         run_install_cmd_retry "install unsloth (local)" uv pip install --python "$_VENV_PY" \
-            --upgrade-package unsloth "unsloth>=2026.6.7" "unsloth-zoo>=2026.6.5"
+            --upgrade-package unsloth "unsloth>=2026.6.8" "unsloth-zoo>=2026.6.6"
         substep "overlaying local repo (editable)..."
         run_install_cmd "overlay local repo" uv pip install --python "$_VENV_PY" -e "$_REPO_ROOT" --no-deps
         substep "overlaying unsloth-zoo from git main..."
@@ -2775,7 +2810,7 @@ elif [ -n "$TORCH_INDEX_URL" ]; then
     # CUDA torch from PyPI, overwriting the ROCm wheels installed in Step 1.
     if [ "$SKIP_TORCH" = false ]; then
         case "$TORCH_INDEX_URL" in
-            */rocm*)
+            */rocm*|*/gfx*)
                 _has_hip=$("$_VENV_PY" -c "import torch; print(getattr(torch.version,'hip','') or '')" 2>/dev/null || true)
                 if [ -z "$_has_hip" ]; then
                     substep "repairing ROCm torch (overwritten by dependency resolution)..."
@@ -2792,7 +2827,7 @@ else
     tauri_log "STEP" "Installing Unsloth"
     substep "installing unsloth (this may take a few minutes)..."
     if [ "$STUDIO_LOCAL_INSTALL" = true ]; then
-        run_install_cmd_retry "install unsloth (auto torch backend)" uv pip install --python "$_VENV_PY" "unsloth-zoo>=2026.6.5" "unsloth>=2026.6.7" --torch-backend=auto
+        run_install_cmd_retry "install unsloth (auto torch backend)" uv pip install --python "$_VENV_PY" "unsloth-zoo>=2026.6.6" "unsloth>=2026.6.8" --torch-backend=auto
         substep "overlaying local repo (editable)..."
         run_install_cmd "overlay local repo" uv pip install --python "$_VENV_PY" -e "$_REPO_ROOT" --no-deps
         substep "overlaying unsloth-zoo from git main..."
@@ -2801,6 +2836,41 @@ else
             "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo"
     else
         run_install_cmd_retry "install unsloth (auto torch backend)" uv pip install --python "$_VENV_PY" --torch-backend=auto -- "$PACKAGE_NAME"
+    fi
+fi
+
+# ── Enforce the installed torch flavor matches the detected GPU build ──
+# PEP 440 ignores the +cpu/+cuXXX/+rocm local label in a version range, so uv
+# keeps a stale torch==X+cpu against a GPU index and the venv silently trains on
+# CPU. Reinstall the right wheel triplet when a GPU build is expected; if it
+# can't be reinstalled, warn loudly. --no-torch / CPU-only / macOS: no-op.
+if [ "$SKIP_TORCH" = false ] && [ -n "${TORCH_INDEX_URL:-}" ]; then
+    _expected_torch_tag=$(_expected_torch_flavor_tag "$TORCH_INDEX_URL")
+    # Only act when a GPU build is expected (cuXXX / rocm); cpu and unknown skip.
+    if [ -n "$_expected_torch_tag" ] && [ "$_expected_torch_tag" != "cpu" ]; then
+        _installed_torch_ver=$("$_VENV_PY" -c "import torch; print(torch.__version__)" 2>/dev/null || true)
+        _installed_torch_tag=""
+        [ -n "$_installed_torch_ver" ] && _installed_torch_tag=$(_torch_flavor_tag "$_installed_torch_ver")
+        # Repair when flavor is wrong AND the index is plain --index-url reinstallable
+        # (cuXXX / rocmX.Y / repo.amd.com gfx*); an unknown mirror leaf -> warn only.
+        if [ -n "$_installed_torch_tag" ] && [ "$_installed_torch_tag" != "$_expected_torch_tag" ] \
+           && [ "$(_torch_index_repairable "$TORCH_INDEX_URL")" = "yes" ]; then
+            substep "PyTorch flavor mismatch (installed $_installed_torch_tag, need $_expected_torch_tag) -- reinstalling correct build..."
+            run_install_cmd "reinstall PyTorch ($_expected_torch_tag)" uv pip install --python "$_VENV_PY" \
+                "$TORCH_CONSTRAINT" torchvision torchaudio \
+                --index-url "$TORCH_INDEX_URL" \
+                --reinstall-package torch --reinstall-package torchvision --reinstall-package torchaudio
+            _installed_torch_ver=$("$_VENV_PY" -c "import torch; print(torch.__version__)" 2>/dev/null || true)
+            _installed_torch_tag=""
+            [ -n "$_installed_torch_ver" ] && _installed_torch_tag=$(_torch_flavor_tag "$_installed_torch_ver")
+        fi
+        # Safety net (incl. AMD/WSL): GPU build expected but still CPU -> warn loudly.
+        if [ "$_installed_torch_tag" = "cpu" ]; then
+            substep "[WARN] PyTorch is CPU-only but a $_expected_torch_tag GPU build was expected for this machine." "$C_WARN"
+            substep "[WARN] Training and GPU inference will run on CPU until this is fixed." "$C_WARN"
+            substep "[WARN] Re-run this installer, or reinstall the GPU build manually:" "$C_WARN"
+            substep "[WARN]   uv pip install --python \"$_VENV_PY\" \"$TORCH_CONSTRAINT\" torchvision torchaudio --index-url $TORCH_INDEX_URL --reinstall-package torch --reinstall-package torchvision --reinstall-package torchaudio" "$C_WARN"
+        fi
     fi
 fi
 

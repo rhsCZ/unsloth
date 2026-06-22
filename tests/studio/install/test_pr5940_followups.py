@@ -493,6 +493,38 @@ def test_install_ps1_rocm_cpu_fallback_uses_retry():
     assert (
         "Invoke-InstallCommandRetry" in window
     ), "the ROCm->CPU fallback torch install must use Invoke-InstallCommandRetry"
+    # Must --force-reinstall: a failed ROCm install can leave an unpinned ROCm torch
+    # that still satisfies the CPU torch>= range, so without it uv keeps the ROCm
+    # build and only swaps companions -> mismatched venv the repair block won't fix.
+    assert "--force-reinstall" in window, (
+        "the ROCm->CPU fallback must --force-reinstall so a partial ROCm torch is "
+        "replaced by the CPU build"
+    )
+
+
+def test_setup_ps1_rocm_cpu_fallback_force_reinstalls():
+    # setup.ps1's CPU block is shared with the genuine CPU-only path, so it force-
+    # reinstalls only after an AMD ROCm fallback ($ROCmCpuFallback) -- evicting a
+    # partial ROCm torch without slowing the common CPU install.
+    text = _SETUP_PS1.read_text(encoding = "utf-8")
+    assert "$ROCmCpuFallback = $true" in text, (
+        "setup.ps1 must flag the AMD ROCm->CPU fallback so the CPU install can force-"
+        "reinstall a partial ROCm torch"
+    )
+    # Build $cpuForce as a real array, NOT via an if-expression: PowerShell collapses
+    # `$x = if (..) { @("--force-reinstall") }` to a scalar string, which @splat then
+    # enumerates char-by-char into broken single-letter args (- - f o r c e ...).
+    assert (
+        "$cpuForce = @()" in text
+        and 'if ($ROCmCpuFallback) { $cpuForce = @("--force-reinstall") }' in text
+    ), (
+        "setup.ps1 must build $cpuForce as an array assigned outside an if-expression "
+        "so @splat passes a single --force-reinstall arg, not per-character"
+    )
+    assert "$cpuForce = if ($ROCmCpuFallback)" not in text, (
+        'setup.ps1 must NOT assign $cpuForce from an if-expression (collapses @("x") '
+        "to a scalar string that @splat explodes char-by-char)"
+    )
 
 
 def test_install_python_stack_gates_every_amd_smi_spawn():
@@ -642,7 +674,7 @@ def test_install_ps1_clears_rocm_index_after_cpu_fallback():
     text = _INSTALL_PS1.read_text(encoding = "utf-8")
     i = text.find("ROCm PyTorch install failed")
     assert i != -1, "ROCm->CPU fallback block not found in install.ps1"
-    window = text[i : i + 1300]
+    window = text[i : i + 1800]
     assert "$ROCmIndexUrl = $null" in window, (
         "install.ps1 must clear $ROCmIndexUrl after the CPU fallback so the repair "
         "block does not re-trigger the failed ROCm index and abort the install"
@@ -681,6 +713,23 @@ def test_install_sh_wsl_reroute_uses_pipefail():
     ), "install.sh WSL reroute `bash -lc` must run the pipefail exports prefix"
 
 
+def test_install_sh_wsl_reroute_propagates_tauri_need_sudo_exit():
+    # In --tauri mode the rerouted child uses exit 2 ([TAURI:NEED_SUDO]) to ask the
+    # desktop app to elevate for the target distro. The reroute must propagate that
+    # code instead of masking it as a generic failure and dropping to CPU here.
+    text = _INSTALL_SH.read_text(encoding = "utf-8")
+    i = text.find('wsl.exe -d "$_rr_target" -- bash -lc')
+    assert i != -1, "WSL reroute command not found in install.sh"
+    window = text[i : i + 500]
+    assert (
+        '[ "$_rr_rc" -eq 2 ]' in window and "exit 2" in window
+    ), "the reroute must propagate the child's tauri exit 2 (NEED_SUDO)"
+    assert '[ "$TAURI_MODE" = true ]' in window, (
+        "exit-2 propagation must be gated on --tauri mode so the CLI path still falls "
+        "back to CPU on a generic reroute failure"
+    )
+
+
 def test_uninstall_sh_preserves_shared_icon_for_surviving_shortcut():
     # %LOCALAPPDATA%\Unsloth Studio\unsloth.ico is shared with the native install
     # and other WSL distros; both removal paths must keep it while any "Unsloth
@@ -701,6 +750,24 @@ def test_uninstall_sh_preserves_shared_icon_for_surviving_shortcut():
         "uninstall.sh powershell-interop path must guard an empty $env:LOCALAPPDATA "
         "before Join-Path (else cleanup throws on a profile-less account)"
     )
+
+
+def test_uninstall_removes_managed_node_runtime():
+    # The isolated Node.js runtime (install_node_prebuilt.py) lives at ~/.unsloth/node
+    # in default mode, a sibling of studio -- deleting <studio> misses it, so both
+    # uninstallers must remove it explicitly (env/custom mode nests it under the
+    # custom root, removed with that root).
+    sh = (PACKAGE_ROOT / "scripts" / "uninstall.sh").read_text(encoding = "utf-8")
+    assert (
+        '_remove_path "$HOME/.unsloth/node"' in sh
+    ), "uninstall.sh must remove the default-mode ~/.unsloth/node runtime"
+    ps = (PACKAGE_ROOT / "scripts" / "uninstall.ps1").read_text(encoding = "utf-8")
+    assert (
+        '$defaultNode = if ($defaultUnslothHome) { Join-Path $defaultUnslothHome "node" }' in ps
+    ), "uninstall.ps1 must resolve the default-mode ~/.unsloth\\node runtime dir"
+    assert (
+        "_RemovePath $defaultNode" in ps
+    ), "uninstall.ps1 must remove the default-mode ~/.unsloth\\node runtime"
 
 
 def test_install_python_stack_windows_rocm_repair_pins_and_is_nonfatal():

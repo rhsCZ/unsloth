@@ -2196,7 +2196,11 @@ exit 0
                 # Transient AMD-index failure: fall back to a CPU base so the install
                 # still completes; Studio setup retries ROCm afterwards.
                 substep "ROCm PyTorch install failed (exit $torchInstallExit); using a CPU base, Studio setup retries ROCm." "Yellow"
-                $torchInstallExit = Invoke-InstallCommandRetry -Label "install PyTorch (CPU fallback)" { uv pip install --python $VenvPython "torch>=2.4,<2.11.0" torchvision torchaudio --index-url $TorchIndexUrl }
+                # --force-reinstall: a failed ROCm install can leave an unpinned ROCm
+                # torch (e.g. 2.10.0+rocm on gfx110X/gfx90a) that still satisfies the CPU
+                # torch>= range, so without it uv would keep the ROCm build and only swap
+                # the companions -- a mismatched venv the flavor-repair block won't fix.
+                $torchInstallExit = Invoke-InstallCommandRetry -Label "install PyTorch (CPU fallback)" { uv pip install --python $VenvPython --force-reinstall "torch>=2.4,<2.11.0" torchvision torchaudio --index-url $TorchIndexUrl }
                 if ($torchInstallExit -ne 0) {
                     Write-Host "[ERROR] Failed to install PyTorch (ROCm and CPU base both failed, exit code $torchInstallExit)" -ForegroundColor Red
                     return (Exit-InstallFailure "Failed to install PyTorch (exit code $torchInstallExit)" $torchInstallExit)
@@ -2383,7 +2387,9 @@ exit 0
 
     # ── Run studio setup ──
     # setup.ps1 will handle installing Git, CMake, Visual Studio Build Tools,
-    # CUDA Toolkit, Node.js, and other dependencies automatically via winget.
+    # CUDA Toolkit, and other dependencies automatically via winget. Node.js is
+    # NOT installed via winget -- setup.ps1 uses an isolated Node it manages and
+    # never touches the system Node/npm.
     Write-TauriLog "STEP" "Running studio setup"
     step "setup" "running unsloth studio setup..."
     $UnslothExe = Join-Path $VenvDir "Scripts\unsloth.exe"

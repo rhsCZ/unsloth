@@ -781,3 +781,104 @@ class TestHfUploadEnvAndSecretLeakBlock:
             ' operations=[], token="hf_xxx")',
             expect_phrase = "HF upload token= cannot be set",
         )
+
+
+class TestDynamicExecBlock:
+    """Indirection that reaches blocked modules/commands without naming them
+    statically (eval/exec, getattr, ctypes, dynamic import) is blocked, while
+    benign same-named usage (df.eval, re.compile, getattr(os, 'path'),
+    importing non-sensitive modules dynamically) still passes."""
+
+    # ---- arbitrary-code builtins ----
+    def test_eval_blocked(self):
+        _blocked("eval('2 + 2')", expect_phrase = "unsafe code detected")
+
+    def test_exec_blocked(self):
+        _blocked("exec('import os; os.system(\"id\")')", expect_phrase = "unsafe code detected")
+
+    def test_compile_blocked(self):
+        _blocked("compile('x', '<s>', 'exec')", expect_phrase = "unsafe code detected")
+
+    # ---- getattr / setattr reaching os/subprocess ----
+    def test_getattr_os_system_blocked(self):
+        _blocked(
+            "import os; getattr(os, 'system')('id')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    def test_getattr_os_dynamic_attr_blocked(self):
+        _blocked(
+            "import os; f = 'sys' + 'tem'; getattr(os, f)('id')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    def test_getattr_subprocess_popen_blocked(self):
+        _blocked(
+            "import subprocess; getattr(subprocess, 'Popen')(['id'])",
+            expect_phrase = "unsafe code detected",
+        )
+
+    # ---- ctypes library loaders (libc.system bypass) ----
+    def test_ctypes_cdll_blocked(self):
+        _blocked(
+            "import ctypes; ctypes.CDLL('libc.so.6').system(b'id')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    def test_ctypes_cdll_loadlibrary_blocked(self):
+        _blocked(
+            "import ctypes; ctypes.cdll.LoadLibrary('libc.so.6')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    def test_from_ctypes_import_cdll_blocked(self):
+        _blocked(
+            "from ctypes import CDLL; CDLL('libc.so.6')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    # ---- dynamic import of a sensitive module (re-imports under a name the
+    #      os/subprocess alias tracking would miss) ----
+    def test_builtin_import_os_blocked(self):
+        _blocked("__import__('os').system('id')", expect_phrase = "unsafe code detected")
+
+    def test_importlib_import_module_os_blocked(self):
+        _blocked(
+            "import importlib; importlib.import_module('os').system('id')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    def test_from_importlib_import_module_subprocess_blocked(self):
+        _blocked(
+            "from importlib import import_module; import_module('subprocess')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    def test_importlib_computed_module_name_blocked(self):
+        # Computed module name can't be proven safe; treated as obfuscation.
+        _blocked(
+            "import importlib; importlib.import_module('o' + 's')",
+            expect_phrase = "unsafe code detected",
+        )
+
+    # ---- benign same-named usage must still pass ----
+    def test_df_eval_method_allowed(self):
+        _ok("import pandas as pd; df = pd.DataFrame(); df.eval('a + b')")
+
+    def test_model_eval_method_allowed(self):
+        _ok("model = None\nmodel.eval()")
+
+    def test_re_compile_allowed(self):
+        _ok("import re; r = re.compile('x'); print(r)")
+
+    def test_getattr_os_path_allowed(self):
+        _ok("import os; print(getattr(os, 'path'))")
+
+    def test_dynamic_import_non_sensitive_module_allowed(self):
+        _ok("hf = __import__('huggingface_hub'); print(hf.__name__)")
+
+    def test_importlib_non_sensitive_module_allowed(self):
+        _ok(
+            "import importlib; hf = importlib.import_module('huggingface_hub');"
+            " print(hf.__name__)"
+        )

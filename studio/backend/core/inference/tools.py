@@ -1503,6 +1503,7 @@ def _check_signal_escape_patterns(code: str):
     signal_tampering = []
     exception_catching = []
     shell_escapes = []
+    dynamic_exec = []
     warnings = []
 
     def _ast_name_matches(node, names):
@@ -1556,6 +1557,19 @@ def _check_signal_escape_patterns(code: str):
         }
     )
 
+    # Indirection that defeats the name-based checks above: arbitrary-code
+    # builtins, ctypes library loaders, dynamic imports of sensitive modules.
+    _CODE_EXEC_BUILTINS = frozenset({"eval", "exec", "compile"})
+    _CTYPES_LOADERS = frozenset(
+        {"CDLL", "PyDLL", "WinDLL", "OleDLL", "cdll", "windll", "oledll", "LibraryLoader"}
+    )
+    _SENSITIVE_IMPORT_MODULES = frozenset(
+        {
+            "os", "subprocess", "sys", "ctypes", "pty", "socket",
+            "shutil", "multiprocessing", "posix", "nt", "importlib", "builtins",
+        }
+    )
+
     def _extract_string_from_node(node):
         """Extract a plain string value from an AST node, if it is a constant."""
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -1589,15 +1603,28 @@ def _check_signal_escape_patterns(code: str):
                 found |= _find_blocked_commands(s)
         return found
 
+    def _dyn_import_is_sensitive(call_node):
+        # Unsafe if the module arg is computed (obfuscation) or names a
+        # sensitive module the alias tracking would otherwise miss.
+        if not call_node.args:
+            return False
+        mod = _extract_string_from_node(call_node.args[0])
+        if mod is None:
+            return True
+        return mod.split(".")[0] in _SENSITIVE_IMPORT_MODULES
+
     class SignalEscapeVisitor(ast.NodeVisitor):
         def __init__(self):
             self.imports_signal = False
             self.signal_aliases = {"signal"}
             self.os_aliases = {"os"}
             self.subprocess_aliases = {"subprocess"}
+            self.ctypes_aliases = {"ctypes"}
+            self.importlib_aliases = {"importlib"}
             # Bare name -> fully-qualified form for from-import tracking
-            # (e.g. "system" -> "os.system").
+            # ("system" -> "os.system"; "import_module" -> "importlib.import_module").
             self.shell_exec_aliases: dict[str, str] = {}
+            self.dyn_exec_aliases: dict[str, str] = {}
             self.loop_depth = 0
 
         def visit_Import(self, node):
@@ -1610,6 +1637,10 @@ def _check_signal_escape_patterns(code: str):
                     self.os_aliases.add(alias.asname or "os")
                 elif alias.name == "subprocess":
                     self.subprocess_aliases.add(alias.asname or "subprocess")
+                elif alias.name == "ctypes" or alias.name.startswith("ctypes."):
+                    self.ctypes_aliases.add(alias.asname or "ctypes")
+                elif alias.name == "importlib" or alias.name.startswith("importlib."):
+                    self.importlib_aliases.add(alias.asname or "importlib")
             self.generic_visit(node)
 
         def visit_ImportFrom(self, node):
@@ -1637,6 +1668,14 @@ def _check_signal_escape_patterns(code: str):
                     fq = f"{node.module}.{alias.name}"
                     if fq in _SHELL_EXEC_FUNCS:
                         self.shell_exec_aliases[alias.asname or alias.name] = fq
+            elif node.module == "importlib" or (node.module or "").startswith("importlib."):
+                for alias in node.names:
+                    if alias.name in ("import_module", "__import__"):
+                        self.dyn_exec_aliases[alias.asname or alias.name] = f"importlib.{alias.name}"
+            elif node.module == "ctypes" or (node.module or "").startswith("ctypes."):
+                for alias in node.names:
+                    if alias.name in _CTYPES_LOADERS:
+                        self.dyn_exec_aliases[alias.asname or alias.name] = f"ctypes.{alias.name}"
             self.generic_visit(node)
 
         def visit_While(self, node):
@@ -1795,6 +1834,53 @@ def _check_signal_escape_patterns(code: str):
                                     ),
                                 }
                             )
+
+            # --- Indirection that defeats the name-based detection above ---
+            dyn = None
+            root = func
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(func, ast.Attribute) and isinstance(root, ast.Name):
+                if root.id in self.ctypes_aliases:
+                    dyn = f"ctypes.{func.attr}"  # CDLL / cdll.LoadLibrary / util.find_library
+                elif (
+                    isinstance(func.value, ast.Name)
+                    and func.value.id in self.importlib_aliases
+                    and func.attr in ("import_module", "__import__")
+                    and _dyn_import_is_sensitive(node)
+                ):
+                    dyn = f"importlib.{func.attr}"
+            elif isinstance(func, ast.Name):
+                if func.id in _CODE_EXEC_BUILTINS:
+                    dyn = func.id
+                elif func.id == "__import__" and _dyn_import_is_sensitive(node):
+                    dyn = "__import__"
+                elif func.id in ("getattr", "setattr") and node.args:
+                    tgt = node.args[0]
+                    if isinstance(tgt, ast.Name) and (
+                        tgt.id in self.os_aliases or tgt.id in self.subprocess_aliases
+                    ):
+                        mod = "os" if tgt.id in self.os_aliases else "subprocess"
+                        attr = (
+                            _extract_string_from_node(node.args[1]) if len(node.args) > 1 else None
+                        )
+                        if attr is None or f"{mod}.{attr}" in _SHELL_EXEC_FUNCS:
+                            dyn = f"{func.id}() into {mod}"
+                elif func.id in self.dyn_exec_aliases:
+                    label = self.dyn_exec_aliases[func.id]
+                    if not label.startswith("importlib") or _dyn_import_is_sensitive(node):
+                        dyn = label
+            if dyn:
+                dynamic_exec.append(
+                    {
+                        "type": "dynamic_exec",
+                        "line": node.lineno,
+                        "description": (
+                            f"{dyn} can run arbitrary code or reach blocked "
+                            "modules, bypassing static analysis"
+                        ),
+                    }
+                )
 
             self.generic_visit(node)
 
@@ -2415,6 +2501,7 @@ def _check_signal_escape_patterns(code: str):
         len(signal_tampering) == 0
         and len(exception_catching) == 0
         and len(shell_escapes) == 0
+        and len(dynamic_exec) == 0
         and len(network_calls) == 0
         and len(sensitive_file_reads) == 0
     )
@@ -2422,6 +2509,7 @@ def _check_signal_escape_patterns(code: str):
         "signal_tampering": signal_tampering,
         "exception_catching": exception_catching,
         "shell_escapes": shell_escapes,
+        "dynamic_exec": dynamic_exec,
         "network_calls": network_calls,
         "sensitive_file_reads": sensitive_file_reads,
         "warnings": warnings,
@@ -2449,9 +2537,17 @@ def _check_code_safety(code: str) -> str | None:
         file_reasons = [
             item.get("description", "") for item in info.get("sensitive_file_reads", [])
         ]
+        dynamic_reasons = [item.get("description", "") for item in info.get("dynamic_exec", [])]
         all_reasons = [
             r
-            for r in reasons + shell_reasons + exception_reasons + network_reasons + file_reasons
+            for r in (
+                reasons
+                + shell_reasons
+                + exception_reasons
+                + dynamic_reasons
+                + network_reasons
+                + file_reasons
+            )
             if r
         ]
         if all_reasons:

@@ -11,21 +11,52 @@ import json
 import re
 
 # Tool XML stripping patterns. Hyphen in the name class matches dashed MCP names
-# (mcp__srv__list-issues). The Gemma marker is anchored to (?:<tool_call|>|\Z)
-# (like _TOOL_XML_RE) so an unclosed run strips linearly, not quadratically;
-# strip_tool_call_markup uses the quote-aware _strip_gemma_native_spans instead,
-# leaving this regex as the streaming fallback.
-_TC_GEMMA_CLOSED_PAT = re.compile(r"<\|tool_call>.*?(?:<tool_call\|>|\Z)", re.DOTALL)
+# (mcp__srv__list-issues). The non-final list uses a closed-only Gemma pattern so
+# an incomplete block is preserved (matching JSON/function); the final list keeps
+# the same pattern order but lets the Gemma span run to its close marker OR EOF,
+# then sweeps any unclosed JSON/function remainder to EOF.
+_TC_JSON_CLOSED_PAT = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+_TC_GEMMA_CLOSED_PAT = re.compile(r"<\|tool_call>.*?<tool_call\|>", re.DOTALL)
+# Final-only variant: an unclosed Gemma run also strips to EOF. The \Z alternative
+# makes the lazy match short-circuit on the first opener, so it stays linear.
+_TC_GEMMA_CLOSED_OR_EOF_PAT = re.compile(r"<\|tool_call>.*?(?:<tool_call\|>|\Z)", re.DOTALL)
+_TC_FUNC_CLOSED_PAT = re.compile(r"<function=[\w-]+>.*?</function>", re.DOTALL)
+_TC_GEMMA_END_PAT = re.compile(r"<tool_call\|>")
 _TOOL_CLOSED_PATS = [
-    re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL),
+    _TC_JSON_CLOSED_PAT,
     _TC_GEMMA_CLOSED_PAT,
-    re.compile(r"<tool_call\|>"),
-    re.compile(r"<function=[\w-]+>.*?</function>", re.DOTALL),
+    _TC_GEMMA_END_PAT,
+    _TC_FUNC_CLOSED_PAT,
 ]
-_TOOL_ALL_PATS = _TOOL_CLOSED_PATS + [
+_TOOL_ALL_PATS = [
+    _TC_JSON_CLOSED_PAT,
+    _TC_GEMMA_CLOSED_OR_EOF_PAT,
+    _TC_GEMMA_END_PAT,
+    _TC_FUNC_CLOSED_PAT,
     re.compile(r"<tool_call>.*$", re.DOTALL),
     re.compile(r"<function=[\w-]+>.*$", re.DOTALL),
 ]
+# A lazy closed-pair pattern rescans to EOF from every opener when its close
+# token is absent (O(n^2); O(n^3) re-run per streamed token). Skip the doomed
+# sweep when the token is missing -- identical output, no backtracking. The
+# close-or-EOF variant needs no guard: its \Z short-circuits the first opener.
+_PAT_REQUIRED_TOKEN = {
+    _TC_JSON_CLOSED_PAT: "</tool_call>",
+    _TC_GEMMA_CLOSED_PAT: "<tool_call|>",
+    _TC_FUNC_CLOSED_PAT: "</function>",
+}
+
+
+def strip_tool_patterns(text: str, patterns) -> str:
+    """Apply strip ``patterns`` in order, skipping a closed-pair pass whose close
+    token is absent (avoids its quadratic no-match rescan)."""
+    for pat in patterns:
+        token = _PAT_REQUIRED_TOKEN.get(pat)
+        if token is not None and token not in text:
+            continue
+        text = pat.sub("", text)
+    return text
+
 
 # Pre-compiled patterns for tool-call XML parsing.
 _TC_JSON_START_RE = re.compile(r"<tool_call>\s*\{")
@@ -299,46 +330,49 @@ def parse_tool_calls_from_text(
       <tool_call><function=web_search><parameter=query>...</parameter></function></tool_call>
     """
     tool_calls: list[dict] = []
-    # Collect JSON- and Gemma-format candidates with byte spans, then accept in
-    # document order (tools run in returned order). A marker inside an open
+    # Collect JSON/Gemma markers. Nesting is decided by the brace region only --
+    # [start, brace_end], or [start, EOF) when the braces never close -- so a
+    # marker starting inside another's braces is that call's argument data, while
+    # a later balanced call after one with a missing close is still recovered (not
+    # swallowed to EOF). The XML fallback instead excludes each marker's envelope
+    # (start to its close marker, searched after the braces, or EOF) so trailing
+    # markup before the close cannot escape. A marker inside an open
     # <function=...><parameter=> value is that parameter's data, so skip it.
-    candidates = []  # (start, brace_end, kind, match)
-    for m in _TC_JSON_START_RE.finditer(content):
-        if _inside_open_parameter(content, m.start()):
-            continue
-        end = _balanced_brace_end(content, m.end() - 1)
-        if end >= 0:
-            candidates.append((m.start(), end, "json", m))
-    for m in _TC_GEMMA_START_RE.finditer(content):
-        if _inside_open_parameter(content, m.start()):
-            continue
-        end = _balanced_brace_end(content, m.end() - 1, gemma_quotes = True)
-        if end >= 0:
-            candidates.append((m.start(), end, "gemma", m))
-    candidates.sort(key = lambda c: c[0])
+    markers = []  # (start, brace_end, kind, match); brace_end < 0 = unclosed
+    for start_re, gemma, kind in (
+        (_TC_JSON_START_RE, False, "json"),
+        (_TC_GEMMA_START_RE, True, "gemma"),
+    ):
+        for m in start_re.finditer(content):
+            if _inside_open_parameter(content, m.start()):
+                continue
+            brace_end = _balanced_brace_end(content, m.end() - 1, gemma_quotes = gemma)
+            markers.append((m.start(), brace_end, kind, m))
+    markers.sort(key = lambda c: c[0])
 
-    spans = [(s, e) for s, e, _kind, _m in candidates]
-    for idx, (start, end, kind, m) in enumerate(candidates):
-        # Skip a candidate nested in another candidate's span: it is the outer
-        # call's argument data. Checked against every span (not just parsed
-        # ones), so a marker in an outer call that fails to parse is never run.
-        if any(s <= start and end <= e for j, (s, e) in enumerate(spans) if j != idx):
+    brace_regions = [(s, be if be >= 0 else len(content)) for s, be, _k, _m in markers]
+    for idx, (start, brace_end, kind, m) in enumerate(markers):
+        # Skip a marker whose start falls in another marker's brace region: it is
+        # that outer call's argument data, not its own call.
+        if any(s <= start <= e for j, (s, e) in enumerate(brace_regions) if j != idx):
             continue
+        if brace_end < 0:
+            continue  # unclosed: not parseable; the fallback still excludes its XML
         if not allow_incomplete:
-            tail = content[end + 1 :].lstrip()
+            tail = content[brace_end + 1 :].lstrip()
             close_re = _TC_END_TAG_RE if kind == "json" else _TC_GEMMA_END_TAG_RE
             if close_re.match(tail) is None:
                 continue
         try:
             if kind == "json":
-                obj = json.loads(content[m.end() - 1 : end + 1])
+                obj = json.loads(content[m.end() - 1 : brace_end + 1])
                 name = obj.get("name", "")
                 arguments = obj.get("arguments", {})
                 if isinstance(arguments, dict):
                     arguments = json.dumps(arguments)
             else:
                 name = m.group(1)
-                arguments = json.dumps(_gemma_arguments_to_json(content[m.end() : end]))
+                arguments = json.dumps(_gemma_arguments_to_json(content[m.end() : brace_end]))
         except (json.JSONDecodeError, ValueError):
             continue
         tool_calls.append(
@@ -350,15 +384,22 @@ def parse_tool_calls_from_text(
         )
 
     if not tool_calls:
-        # Exclude <function=> markers inside any collected JSON/Gemma candidate
-        # span, even one that failed to parse: such a marker is that call's
-        # argument data, and promoting it here would let nested XML escape from a
-        # malformed Gemma call into an executable tool call.
+        # Exclude <function=> markers inside any marker's envelope -- its data
+        # through the close marker (searched after the braces) or EOF, even if the
+        # call failed to parse -- so nested XML cannot escape as a real call.
+        envelopes = []
+        for s, be, kind, _m in markers:
+            if be < 0:
+                envelopes.append((s, len(content)))
+            else:
+                close_re = _TC_END_TAG_RE if kind == "json" else _TC_GEMMA_END_TAG_RE
+                cm = close_re.search(content, be + 1)
+                envelopes.append((s, cm.end() if cm else len(content)))
         func_starts = [
             fm
             for fm in _TC_FUNC_START_RE.finditer(content)
             if not _inside_open_parameter(content, fm.start())
-            and not any(s <= fm.start() <= e for s, e in spans)
+            and not any(s <= fm.start() < e for s, e in envelopes)
         ]
         for idx, fm in enumerate(func_starts):
             func_name = fm.group(1)
@@ -448,16 +489,18 @@ def _strip_gemma_native_spans(text: str, *, final: bool) -> str:
                 out.append(text[cursor:start])
                 cursor = len(text)
             break
-        tail = text[brace_end + 1 :]
-        leading_ws = len(tail) - len(tail.lstrip())
-        close = _TC_GEMMA_END_TAG_RE.match(tail, leading_ws)
+        # Search for the close marker after the braces (not just immediately
+        # after): junk between } and <tool_call|> is malformed-call markup, so
+        # strip through the close and keep any text after it. None anywhere after
+        # means nothing closes from here on, so stop (keeps this linear).
+        close = _TC_GEMMA_END_TAG_RE.search(text, brace_end + 1)
         if close is None:
             if final:
                 out.append(text[cursor:start])
                 cursor = len(text)
-            continue
+            break
         out.append(text[cursor:start])
-        cursor = brace_end + 1 + close.end()
+        cursor = close.end()
     out.append(text[cursor:])
     return "".join(out)
 
@@ -473,6 +516,5 @@ def strip_tool_call_markup(text: str, *, final: bool = False) -> str:
     # mop up any malformed Gemma span the helper could not match.
     text = _strip_gemma_native_spans(text, final = final)
     patterns = _TOOL_ALL_PATS if final else _TOOL_CLOSED_PATS
-    for pat in patterns:
-        text = pat.sub("", text)
+    text = strip_tool_patterns(text, patterns)
     return text.strip() if final else text

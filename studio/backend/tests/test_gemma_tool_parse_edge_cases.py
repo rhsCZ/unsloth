@@ -187,6 +187,57 @@ def test_nested_xml_in_malformed_gemma_call_does_not_execute():
         assert "terminal" not in [c["function"]["name"] for c in calls], calls
 
 
+def test_unbalanced_gemma_call_with_xml_does_not_execute():
+    # An unbalanced Gemma call (braces never close) records no candidate span,
+    # so the XML fallback must exclude its trailing <function=> through EOF
+    # rather than promote it to an executable call.
+    text = (
+        "<|tool_call>call:outer{code:<function=terminal>"
+        "<parameter=command>id</parameter></function>"
+    )
+    for allow_incomplete in (True, False):
+        calls = parse_tool_calls_from_text(text, allow_incomplete = allow_incomplete)
+        assert "terminal" not in [c["function"]["name"] for c in calls], calls
+
+
+def test_standalone_function_xml_still_parses():
+    # The exclusion must not over-block: a real <function=> call with no
+    # preceding unclosed Gemma/JSON start is still a valid tool call.
+    text = "<function=terminal><parameter=command>id</parameter></function>"
+    calls = parse_tool_calls_from_text(text)
+    assert [c["function"]["name"] for c in calls] == ["terminal"], calls
+
+
+def test_xml_between_braces_and_close_marker_does_not_execute():
+    # Balanced-but-unparsable outer call with XML after the braces but before the
+    # close marker: the envelope runs to the close marker, so <function=> here is
+    # the outer call's data, not an executable tool call.
+    text = (
+        "<|tool_call>call:outer{broken:{x}}<function=terminal>"
+        "<parameter=command>id</parameter></function><tool_call|>"
+    )
+    for allow_incomplete in (True, False):
+        calls = parse_tool_calls_from_text(text, allow_incomplete = allow_incomplete)
+        assert "terminal" not in [c["function"]["name"] for c in calls], calls
+
+
+def test_balanced_inner_call_inside_unclosed_outer_does_not_execute():
+    # A balanced inner call inside an unclosed outer call's argument data must be
+    # skipped, not accepted, even though its own braces balance.
+    text = "<|tool_call>call:outer{code:<|tool_call>call:terminal{command:id}<tool_call|>"
+    for allow_incomplete in (True, False):
+        calls = parse_tool_calls_from_text(text, allow_incomplete = allow_incomplete)
+        assert "terminal" not in [c["function"]["name"] for c in calls], calls
+
+
+def test_strip_preserves_text_after_malformed_gemma_close():
+    # A valid call:name{...} prefix with junk before its <tool_call|> close is a
+    # malformed closed span: strip through the close, keep the text after it.
+    text = "pre <|tool_call>call:t{a:1} note <tool_call|> post"
+    assert strip_tool_call_markup(text) == "pre  post"
+    assert strip_tool_call_markup(text, final = True) == "pre  post"
+
+
 def test_malformed_closed_gemma_span_is_stripped():
     # A closed Gemma span the quote-aware helper cannot match (no call:NAME{)
     # must still be stripped, not leak its opener/payload into visible text.
@@ -194,3 +245,26 @@ def test_malformed_closed_gemma_span_is_stripped():
         strip_tool_call_markup('before <|tool_call>{"name":"x"}<tool_call|> after')
         == "before  after"
     )
+
+
+def test_valid_call_after_missing_close_is_recovered():
+    # A balanced call missing its own close marker must not swallow a later valid
+    # closed call: nesting is decided by the brace region, not an envelope that
+    # would run to EOF, so the second call is still recovered.
+    text = "<|tool_call>call:a{x:1} <|tool_call>call:b{y:2}<tool_call|>"
+    names_inc = [
+        c["function"]["name"] for c in parse_tool_calls_from_text(text, allow_incomplete = True)
+    ]
+    assert "b" in names_inc, names_inc
+    names_strict = [
+        c["function"]["name"] for c in parse_tool_calls_from_text(text, allow_incomplete = False)
+    ]
+    assert names_strict == ["b"], names_strict
+
+
+def test_strip_non_final_keeps_incomplete_gemma_block():
+    # Non-final must preserve an incomplete Gemma block (matching JSON/function),
+    # while final strips the unclosed remainder to EOF.
+    text = "before <|tool_call>call:t{"
+    assert strip_tool_call_markup(text) == text
+    assert strip_tool_call_markup(text, final = True) == "before"

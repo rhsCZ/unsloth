@@ -3965,6 +3965,28 @@ def _resolve_moe_parameter_name(model, default_name: str, alternate_name: str) -
     return default_name
 
 
+def _moe_parameter_exists(model, name: str) -> bool:
+    """True iff a parameter whose path is (or ends with) ``name`` exists on ``model``.
+
+    ``_resolve_moe_parameter_name`` falls back to the default name even when no expert
+    parameter matches it. Some quantized checkpoints do not expose a fused expert
+    ``nn.Parameter`` at all: e.g. gpt-oss bnb-4bit stores its experts as a per-expert
+    ``Linear4bit`` ModuleList (``mlp.experts.gate_up_projs.<i>.weight``) rather than a
+    fused ``mlp.experts.gate_up_proj``. Passing a non-existent name as
+    ``target_parameters`` attaches no adapters, so callers should confirm the resolved
+    name actually exists before claiming MoE LoRA is enabled.
+    """
+    if not hasattr(model, "named_parameters"):
+        return False
+    try:
+        for parameter_name, _ in model.named_parameters():
+            if parameter_name == name or parameter_name.endswith("." + name):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 _MOE_BROAD_MLP_TARGETS = frozenset(("gate_proj", "up_proj", "down_proj", "gate_up_proj"))
 
 
@@ -4062,17 +4084,39 @@ def get_moe_target_parameters(model, target_modules = None) -> Optional[List[str
 
     # gate_up_proj combines both gate_proj and up_proj in MoE
     # Also match "gate_up_proj" directly since users may specify the fused name
+    # Only enable a fused expert parameter that actually exists on the model. Some
+    # quantized checkpoints (e.g. gpt-oss bnb-4bit) store experts as a per-expert
+    # Linear4bit ModuleList instead of a fused nn.Parameter, so the resolved name does
+    # not exist and PEFT would silently attach nothing; skip and warn instead of
+    # printing a misleading "Enabling LoRA on MoE parameters".
+    missing_params = []
     if "gate_proj" in target_set or "up_proj" in target_set or "gate_up_proj" in target_set:
-        moe_params.append(gate_up_name)
+        if _moe_parameter_exists(model, gate_up_name):
+            moe_params.append(gate_up_name)
+        else:
+            missing_params.append(gate_up_name)
 
     if "down_proj" in target_set:
-        moe_params.append(down_name)
+        if _moe_parameter_exists(model, down_name):
+            moe_params.append(down_name)
+        else:
+            missing_params.append(down_name)
 
     if moe_params:
         print(
             f"Unsloth: Detected MoE model with {num_experts = } and {target_modules = }. Enabling LoRA on MoE parameters: {moe_params}"
         )
         return moe_params
+
+    if missing_params:
+        logger.warning(
+            f"Unsloth: Detected an MoE model with num_experts = {num_experts}, but its expert "
+            f"weights are not exposed as fused nn.Parameters that LoRA can target (looked for "
+            f"{missing_params}). This happens with some quantized checkpoints that store experts "
+            f"as per-expert modules (for example gpt-oss bnb-4bit). LoRA is applied to the "
+            f"attention and other targeted layers only; the experts are left frozen. Use a "
+            f"16bit checkpoint to LoRA-train the experts."
+        )
 
     return None
 

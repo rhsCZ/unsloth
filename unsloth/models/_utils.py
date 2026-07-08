@@ -4113,9 +4113,11 @@ def get_moe_target_parameters(model, target_modules = None) -> Optional[List[str
             f"Unsloth: Detected an MoE model with num_experts = {num_experts}, but its expert "
             f"weights are not exposed as fused nn.Parameters that LoRA can target (looked for "
             f"{missing_params}). This happens with some quantized checkpoints that store experts "
-            f"as per-expert modules (for example gpt-oss bnb-4bit). LoRA is applied to the "
-            f"attention and other targeted layers only; the experts are left frozen. Use a "
-            f"16bit checkpoint to LoRA-train the experts."
+            f"as per-expert modules (for example gpt-oss bnb-4bit). Fused-parameter LoRA on the "
+            f"experts is skipped here; expert weights that your target_modules match as regular "
+            f"Linear layers are still adapted, but experts kept in a non-standard layout (like "
+            f"gpt-oss bnb-4bit) get no LoRA. Use a 16bit checkpoint to LoRA-train the experts "
+            f"through fused parameters."
         )
 
     return None

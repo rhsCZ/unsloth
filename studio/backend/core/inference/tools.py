@@ -842,6 +842,16 @@ _PY_DESTRUCTIVE_FS_IMPORT_NAMES = frozenset({"remove", "unlink", "rmtree", "rmdi
 _SENSITIVE_PATH_RE = re.compile(
     r"(?:^|[/\\])\.(?:ssh|aws|azure|gnupg|docker|kube|config/gcloud|config/gh)(?:[/\\]|$)"
     r"|\.(?:netrc|npmrc|pypirc|git-credentials|env)(?:$|[/\\.\s'\"])"
+    # User-level persistence: a write into a shell startup file or an XDG
+    # autostart/user-service dir runs on the next login/session, the same
+    # boot-hook risk as the /etc set but needing no root, so auto prompts. The
+    # sandbox does not confine absolute paths, so >> ~/.bashrc reaches the real
+    # file. These are rarely read in a dev session, so gating any reference is
+    # conservative and does not over-prompt on real work.
+    r"|\.(?:bashrc|bash_profile|bash_login|bash_logout|bash_aliases|profile"
+    r"|zshrc|zprofile|zshenv|zlogin|zlogout|kshrc|cshrc|tcshrc|login"
+    r"|xprofile|xinitrc|xsession)(?:$|[/\\.\s'\"])"
+    r"|(?:^|[/\\])\.config[/\\](?:autostart|systemd[/\\]user|environment\.d)(?:[/\\]|$)"
     r"|id_rsa|id_ed25519|id_ecdsa|id_dsa"
     # Hugging Face stores the login token at ~/.cache/huggingface/token and the
     # legacy ~/.huggingface/token (plus the multi-token store stored_tokens); the

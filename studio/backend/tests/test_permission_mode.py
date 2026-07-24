@@ -415,6 +415,14 @@ def test_terminal_classifier(command, unsafe):
         ("tee /etc/ld.so.preload", True),
         ("echo x >> /etc/rc.local", True),
         ("bash -c 'echo p > /etc/profile.d/z.sh'", True),
+        # user-level persistence (shell startup / autostart / user services)
+        # needs no root and runs on next login, so it prompts too
+        ("printf 'evil' >> /home/alice/.bashrc", True),
+        ("echo x >> ~/.zshrc", True),
+        ("echo x >> ~/.profile", True),
+        ("cp payload.desktop ~/.config/autostart/x.desktop", True),
+        ("cp x.service ~/.config/systemd/user/x.service", True),
+        ("mkdir ~/.config/myapp", False),  # a non-persistence ~/.config dir is fine
         # non-persistence /etc reads/writes stay ordinary (no over-prompt)
         ("cat /etc/hostname", False),
         ("grep nameserver /etc/resolv.conf", False),

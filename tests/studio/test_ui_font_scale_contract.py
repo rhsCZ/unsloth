@@ -100,30 +100,26 @@ def test_cn_knows_the_ui_typography_tokens():
 
 def test_icons_follow_the_ui_font_scale_piecewise():
     """Glyphs beside scaled labels track the preference piecewise: below the
-    default they match the text scale, above it they move at half rate so
-    icons stay slightly smaller than the text. Written as min(full, half),
-    the smaller branch being correct on each side. Sonner toast text and
-    action labels are text, so they follow at full rate everywhere."""
-    icon16 = (
-        "min(calc(1rem * var(--ui-font-scale, 1)), "
-        "calc(0.5rem + 0.5rem * var(--ui-font-scale, 1)))"
-    )
+    default they match the text scale, above it they keep their default size
+    so enlarged text dominates and icons read slightly smaller than the
+    text. Written as min(full rate, base). Sonner toast text and action
+    labels are text, so they follow at full rate everywhere."""
+    icon16 = "min(calc(1rem * var(--ui-font-scale, 1)), 1rem)"
     assert (
-        "--icon-size: min(calc(18px * var(--ui-font-scale, 1)), "
-        "calc(9px + 9px * var(--ui-font-scale, 1)));"
-    ) in INDEX_CSS
+        "--icon-size: min(calc(18px * var(--ui-font-scale, 1)), 18px);" in INDEX_CSS
+    )
     assert f"& svg.size-4 {{ width: {icon16};" in INDEX_CSS
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     # Menu rules that outrank the scoped block must carry the scale too.
     assert (
-        "width: min(calc(19px * var(--ui-font-scale, 1)), "
-        "calc(9.5px + 9.5px * var(--ui-font-scale, 1))) !important;"
-    ) in INDEX_CSS
+        "width: min(calc(19px * var(--ui-font-scale, 1)), 19px) !important;"
+        in INDEX_CSS
+    )
     assert (
-        "width: min(calc(1.15rem * var(--ui-font-scale, 1)), "
-        "calc(0.575rem + 0.575rem * var(--ui-font-scale, 1))) !important;"
-    ) in INDEX_CSS
+        "width: min(calc(1.15rem * var(--ui-font-scale, 1)), 1.15rem) !important;"
+        in INDEX_CSS
+    )
     for scope in (
         "[data-slot='dropdown-menu-content']",
         "[data-slot='select-content']",

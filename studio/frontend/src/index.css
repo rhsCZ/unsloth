@@ -284,7 +284,7 @@
 	   icons read as minimally larger than adjacent labels (~14px text).
 	   Follows the UI font size preference; 18px at the default.
 	   Theme-independent — declared once in :root. */
-	--icon-size: min(calc(18px * var(--ui-font-scale, 1)), calc(9px + 9px * var(--ui-font-scale, 1)));
+	--icon-size: min(calc(18px * var(--ui-font-scale, 1)), 18px);
 	/* Inset of a centered .size-icon glyph within a 2rem (size-8) action
 	   button — i.e. (32px − icon-size) / 2. Use as a negative margin on a
 	   chat-message action bar so the leftmost icon's visual edge aligns
@@ -1266,8 +1266,8 @@ html[data-chat-font] .aui-root {
 	}
 	.app-user-menu [data-slot="dropdown-menu-item"] svg,
 	.app-user-menu [data-slot="dropdown-menu-sub-trigger"] svg {
-		width: min(calc(19px * var(--ui-font-scale, 1)), calc(9.5px + 9.5px * var(--ui-font-scale, 1))) !important;
-		height: min(calc(19px * var(--ui-font-scale, 1)), calc(9.5px + 9.5px * var(--ui-font-scale, 1))) !important;
+		width: min(calc(19px * var(--ui-font-scale, 1)), 19px) !important;
+		height: min(calc(19px * var(--ui-font-scale, 1)), 19px) !important;
 		flex-shrink: 0;
 	}
 	.app-user-menu [data-slot="dropdown-menu-item"]:focus,
@@ -1562,20 +1562,20 @@ html[data-chat-font] .aui-root {
 	/* Fixed-width icon slot so every pill's icon occupies the same space and
 	   the labels line up on an even rhythm, regardless of icon size. */
 	.composer-pill-glyph {
-		@apply relative inline-flex w-[min(calc(19px*var(--ui-font-scale,1)),calc(9.5px+9.5px*var(--ui-font-scale,1)))] shrink-0 items-center justify-center transition-opacity;
+		@apply relative inline-flex w-[min(calc(19px*var(--ui-font-scale,1)),19px)] shrink-0 items-center justify-center transition-opacity;
 	}
 
 	/* On hover the icon swaps for an X inside a soft circle (ChatGPT-style),
 	   filling the icon slot so every pill's X is identical and centered. */
 	.composer-pill-x {
-		@apply pointer-events-none absolute inset-0 m-auto size-[min(calc(19px*var(--ui-font-scale,1)),calc(9.5px+9.5px*var(--ui-font-scale,1)))] rounded-full bg-primary/15 p-[3px] opacity-0 transition-opacity dark:bg-white/[0.14];
+		@apply pointer-events-none absolute inset-0 m-auto size-[min(calc(19px*var(--ui-font-scale,1)),19px)] rounded-full bg-primary/15 p-[3px] opacity-0 transition-opacity dark:bg-white/[0.14];
 	}
 
 	/* Icon-only (compact) pills are too small for the circle, so show a bare x. */
 	[data-pill-compact="true"]
 		.composer-pill-btn:not([data-keep-label])
 		.composer-pill-x {
-		@apply size-[min(calc(15px*var(--ui-font-scale,1)),calc(7.5px+7.5px*var(--ui-font-scale,1)))] bg-transparent p-0 dark:bg-transparent;
+		@apply size-[min(calc(15px*var(--ui-font-scale,1)),15px)] bg-transparent p-0 dark:bg-transparent;
 	}
 
 	/* Compact pills hide their labels, so surface the name as a hover
@@ -1854,8 +1854,8 @@ html[data-chat-font] .aui-root {
 
 	/* Smaller tick for selected Thinking options. */
 	.unsloth-tick {
-		width: min(calc(0.8rem * var(--ui-font-scale, 1)), calc(0.4rem + 0.4rem * var(--ui-font-scale, 1))) !important;
-		height: min(calc(0.8rem * var(--ui-font-scale, 1)), calc(0.4rem + 0.4rem * var(--ui-font-scale, 1))) !important;
+		width: min(calc(0.8rem * var(--ui-font-scale, 1)), 0.8rem) !important;
+		height: min(calc(0.8rem * var(--ui-font-scale, 1)), 0.8rem) !important;
 	}
 
 	/* Soft elevation; [data-slot] outranks the component ring-1, dropping the border. */
@@ -1945,8 +1945,8 @@ html[data-chat-font] .aui-root {
 			[data-slot="dropdown-menu-sub-trigger"]
 		)
 		svg {
-		width: min(calc(1.15rem * var(--ui-font-scale, 1)), calc(0.575rem + 0.575rem * var(--ui-font-scale, 1))) !important;
-		height: min(calc(1.15rem * var(--ui-font-scale, 1)), calc(0.575rem + 0.575rem * var(--ui-font-scale, 1))) !important;
+		width: min(calc(1.15rem * var(--ui-font-scale, 1)), 1.15rem) !important;
+		height: min(calc(1.15rem * var(--ui-font-scale, 1)), 1.15rem) !important;
 	}
 
 	/* Destructive items keep red text and a red-tinted hover, not the grey one. */
@@ -2773,10 +2773,9 @@ html[data-chat-font] .aui-root {
 }
 
 /* Icons that sit beside scaled labels follow the UI font size: below the
-   16px default they match the text scale, above it they move at half the
-   rate so glyphs stay slightly smaller than the text. Expressed as
-   min(full rate, half rate), since the smaller branch is correct on each
-   side. Menu, select and closed select trigger surfaces, popovers, toasts,
+   16px default they match the text scale, above it they keep their default
+   size so the enlarged text dominates and glyphs read slightly smaller
+   than the text. Expressed as min(full rate, base). Menu, select and closed select trigger surfaces, popovers, toasts,
    the chat thread and both composers. Only glyphs scale; hit targets,
    paddings and surface geometry stay fixed. Identity at the default. */
 :is(
@@ -2795,41 +2794,41 @@ html[data-chat-font] .aui-root {
 	.aui-action-bar-more-content,
 	.aui-root
 ) {
-	& svg.size-2\.5 { width: min(calc(0.625rem * var(--ui-font-scale, 1)), calc(0.3125rem + 0.3125rem * var(--ui-font-scale, 1))); height: min(calc(0.625rem * var(--ui-font-scale, 1)), calc(0.3125rem + 0.3125rem * var(--ui-font-scale, 1))); }
-	& svg.size-3 { width: min(calc(0.75rem * var(--ui-font-scale, 1)), calc(0.375rem + 0.375rem * var(--ui-font-scale, 1))); height: min(calc(0.75rem * var(--ui-font-scale, 1)), calc(0.375rem + 0.375rem * var(--ui-font-scale, 1))); }
-	& svg.size-3\.5 { width: min(calc(0.875rem * var(--ui-font-scale, 1)), calc(0.4375rem + 0.4375rem * var(--ui-font-scale, 1))); height: min(calc(0.875rem * var(--ui-font-scale, 1)), calc(0.4375rem + 0.4375rem * var(--ui-font-scale, 1))); }
-	& svg.size-4 { width: min(calc(1rem * var(--ui-font-scale, 1)), calc(0.5rem + 0.5rem * var(--ui-font-scale, 1))); height: min(calc(1rem * var(--ui-font-scale, 1)), calc(0.5rem + 0.5rem * var(--ui-font-scale, 1))); }
-	& svg.size-4\.5 { width: min(calc(1.125rem * var(--ui-font-scale, 1)), calc(0.5625rem + 0.5625rem * var(--ui-font-scale, 1))); height: min(calc(1.125rem * var(--ui-font-scale, 1)), calc(0.5625rem + 0.5625rem * var(--ui-font-scale, 1))); }
-	& svg.size-5 { width: min(calc(1.25rem * var(--ui-font-scale, 1)), calc(0.625rem + 0.625rem * var(--ui-font-scale, 1))); height: min(calc(1.25rem * var(--ui-font-scale, 1)), calc(0.625rem + 0.625rem * var(--ui-font-scale, 1))); }
-	& svg.size-6 { width: min(calc(1.5rem * var(--ui-font-scale, 1)), calc(0.75rem + 0.75rem * var(--ui-font-scale, 1))); height: min(calc(1.5rem * var(--ui-font-scale, 1)), calc(0.75rem + 0.75rem * var(--ui-font-scale, 1))); }
-	& svg.size-\[5px\] { width: min(calc(5px * var(--ui-font-scale, 1)), calc(2.5px + 2.5px * var(--ui-font-scale, 1))); height: min(calc(5px * var(--ui-font-scale, 1)), calc(2.5px + 2.5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[6px\] { width: min(calc(6px * var(--ui-font-scale, 1)), calc(3px + 3px * var(--ui-font-scale, 1))); height: min(calc(6px * var(--ui-font-scale, 1)), calc(3px + 3px * var(--ui-font-scale, 1))); }
-	& svg.size-\[10px\] { width: min(calc(10px * var(--ui-font-scale, 1)), calc(5px + 5px * var(--ui-font-scale, 1))); height: min(calc(10px * var(--ui-font-scale, 1)), calc(5px + 5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[11px\] { width: min(calc(11px * var(--ui-font-scale, 1)), calc(5.5px + 5.5px * var(--ui-font-scale, 1))); height: min(calc(11px * var(--ui-font-scale, 1)), calc(5.5px + 5.5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[12px\] { width: min(calc(12px * var(--ui-font-scale, 1)), calc(6px + 6px * var(--ui-font-scale, 1))); height: min(calc(12px * var(--ui-font-scale, 1)), calc(6px + 6px * var(--ui-font-scale, 1))); }
-	& svg.size-\[13px\] { width: min(calc(13px * var(--ui-font-scale, 1)), calc(6.5px + 6.5px * var(--ui-font-scale, 1))); height: min(calc(13px * var(--ui-font-scale, 1)), calc(6.5px + 6.5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[14px\] { width: min(calc(14px * var(--ui-font-scale, 1)), calc(7px + 7px * var(--ui-font-scale, 1))); height: min(calc(14px * var(--ui-font-scale, 1)), calc(7px + 7px * var(--ui-font-scale, 1))); }
-	& svg.size-\[15px\] { width: min(calc(15px * var(--ui-font-scale, 1)), calc(7.5px + 7.5px * var(--ui-font-scale, 1))); height: min(calc(15px * var(--ui-font-scale, 1)), calc(7.5px + 7.5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[15\.5px\] { width: min(calc(15.5px * var(--ui-font-scale, 1)), calc(7.75px + 7.75px * var(--ui-font-scale, 1))); height: min(calc(15.5px * var(--ui-font-scale, 1)), calc(7.75px + 7.75px * var(--ui-font-scale, 1))); }
-	& svg.size-\[16px\] { width: min(calc(16px * var(--ui-font-scale, 1)), calc(8px + 8px * var(--ui-font-scale, 1))); height: min(calc(16px * var(--ui-font-scale, 1)), calc(8px + 8px * var(--ui-font-scale, 1))); }
-	& svg.size-\[17px\] { width: min(calc(17px * var(--ui-font-scale, 1)), calc(8.5px + 8.5px * var(--ui-font-scale, 1))); height: min(calc(17px * var(--ui-font-scale, 1)), calc(8.5px + 8.5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[18px\] { width: min(calc(18px * var(--ui-font-scale, 1)), calc(9px + 9px * var(--ui-font-scale, 1))); height: min(calc(18px * var(--ui-font-scale, 1)), calc(9px + 9px * var(--ui-font-scale, 1))); }
-	& svg.size-\[18\.5px\] { width: min(calc(18.5px * var(--ui-font-scale, 1)), calc(9.25px + 9.25px * var(--ui-font-scale, 1))); height: min(calc(18.5px * var(--ui-font-scale, 1)), calc(9.25px + 9.25px * var(--ui-font-scale, 1))); }
-	& svg.size-\[20px\] { width: min(calc(20px * var(--ui-font-scale, 1)), calc(10px + 10px * var(--ui-font-scale, 1))); height: min(calc(20px * var(--ui-font-scale, 1)), calc(10px + 10px * var(--ui-font-scale, 1))); }
-	& svg.size-\[21px\] { width: min(calc(21px * var(--ui-font-scale, 1)), calc(10.5px + 10.5px * var(--ui-font-scale, 1))); height: min(calc(21px * var(--ui-font-scale, 1)), calc(10.5px + 10.5px * var(--ui-font-scale, 1))); }
-	& svg.size-\[22px\] { width: min(calc(22px * var(--ui-font-scale, 1)), calc(11px + 11px * var(--ui-font-scale, 1))); height: min(calc(22px * var(--ui-font-scale, 1)), calc(11px + 11px * var(--ui-font-scale, 1))); }
-	& svg.w-3 { width: min(calc(0.75rem * var(--ui-font-scale, 1)), calc(0.375rem + 0.375rem * var(--ui-font-scale, 1))); }
-	& svg.h-3 { height: min(calc(0.75rem * var(--ui-font-scale, 1)), calc(0.375rem + 0.375rem * var(--ui-font-scale, 1))); }
-	& svg.w-3\.5 { width: min(calc(0.875rem * var(--ui-font-scale, 1)), calc(0.4375rem + 0.4375rem * var(--ui-font-scale, 1))); }
-	& svg.h-3\.5 { height: min(calc(0.875rem * var(--ui-font-scale, 1)), calc(0.4375rem + 0.4375rem * var(--ui-font-scale, 1))); }
-	& svg.w-4 { width: min(calc(1rem * var(--ui-font-scale, 1)), calc(0.5rem + 0.5rem * var(--ui-font-scale, 1))); }
-	& svg.h-4 { height: min(calc(1rem * var(--ui-font-scale, 1)), calc(0.5rem + 0.5rem * var(--ui-font-scale, 1))); }
-	& svg.w-5 { width: min(calc(1.25rem * var(--ui-font-scale, 1)), calc(0.625rem + 0.625rem * var(--ui-font-scale, 1))); }
-	& svg.h-5 { height: min(calc(1.25rem * var(--ui-font-scale, 1)), calc(0.625rem + 0.625rem * var(--ui-font-scale, 1))); }
+	& svg.size-2\.5 { width: min(calc(0.625rem * var(--ui-font-scale, 1)), 0.625rem); height: min(calc(0.625rem * var(--ui-font-scale, 1)), 0.625rem); }
+	& svg.size-3 { width: min(calc(0.75rem * var(--ui-font-scale, 1)), 0.75rem); height: min(calc(0.75rem * var(--ui-font-scale, 1)), 0.75rem); }
+	& svg.size-3\.5 { width: min(calc(0.875rem * var(--ui-font-scale, 1)), 0.875rem); height: min(calc(0.875rem * var(--ui-font-scale, 1)), 0.875rem); }
+	& svg.size-4 { width: min(calc(1rem * var(--ui-font-scale, 1)), 1rem); height: min(calc(1rem * var(--ui-font-scale, 1)), 1rem); }
+	& svg.size-4\.5 { width: min(calc(1.125rem * var(--ui-font-scale, 1)), 1.125rem); height: min(calc(1.125rem * var(--ui-font-scale, 1)), 1.125rem); }
+	& svg.size-5 { width: min(calc(1.25rem * var(--ui-font-scale, 1)), 1.25rem); height: min(calc(1.25rem * var(--ui-font-scale, 1)), 1.25rem); }
+	& svg.size-6 { width: min(calc(1.5rem * var(--ui-font-scale, 1)), 1.5rem); height: min(calc(1.5rem * var(--ui-font-scale, 1)), 1.5rem); }
+	& svg.size-\[5px\] { width: min(calc(5px * var(--ui-font-scale, 1)), 5px); height: min(calc(5px * var(--ui-font-scale, 1)), 5px); }
+	& svg.size-\[6px\] { width: min(calc(6px * var(--ui-font-scale, 1)), 6px); height: min(calc(6px * var(--ui-font-scale, 1)), 6px); }
+	& svg.size-\[10px\] { width: min(calc(10px * var(--ui-font-scale, 1)), 10px); height: min(calc(10px * var(--ui-font-scale, 1)), 10px); }
+	& svg.size-\[11px\] { width: min(calc(11px * var(--ui-font-scale, 1)), 11px); height: min(calc(11px * var(--ui-font-scale, 1)), 11px); }
+	& svg.size-\[12px\] { width: min(calc(12px * var(--ui-font-scale, 1)), 12px); height: min(calc(12px * var(--ui-font-scale, 1)), 12px); }
+	& svg.size-\[13px\] { width: min(calc(13px * var(--ui-font-scale, 1)), 13px); height: min(calc(13px * var(--ui-font-scale, 1)), 13px); }
+	& svg.size-\[14px\] { width: min(calc(14px * var(--ui-font-scale, 1)), 14px); height: min(calc(14px * var(--ui-font-scale, 1)), 14px); }
+	& svg.size-\[15px\] { width: min(calc(15px * var(--ui-font-scale, 1)), 15px); height: min(calc(15px * var(--ui-font-scale, 1)), 15px); }
+	& svg.size-\[15\.5px\] { width: min(calc(15.5px * var(--ui-font-scale, 1)), 15.5px); height: min(calc(15.5px * var(--ui-font-scale, 1)), 15.5px); }
+	& svg.size-\[16px\] { width: min(calc(16px * var(--ui-font-scale, 1)), 16px); height: min(calc(16px * var(--ui-font-scale, 1)), 16px); }
+	& svg.size-\[17px\] { width: min(calc(17px * var(--ui-font-scale, 1)), 17px); height: min(calc(17px * var(--ui-font-scale, 1)), 17px); }
+	& svg.size-\[18px\] { width: min(calc(18px * var(--ui-font-scale, 1)), 18px); height: min(calc(18px * var(--ui-font-scale, 1)), 18px); }
+	& svg.size-\[18\.5px\] { width: min(calc(18.5px * var(--ui-font-scale, 1)), 18.5px); height: min(calc(18.5px * var(--ui-font-scale, 1)), 18.5px); }
+	& svg.size-\[20px\] { width: min(calc(20px * var(--ui-font-scale, 1)), 20px); height: min(calc(20px * var(--ui-font-scale, 1)), 20px); }
+	& svg.size-\[21px\] { width: min(calc(21px * var(--ui-font-scale, 1)), 21px); height: min(calc(21px * var(--ui-font-scale, 1)), 21px); }
+	& svg.size-\[22px\] { width: min(calc(22px * var(--ui-font-scale, 1)), 22px); height: min(calc(22px * var(--ui-font-scale, 1)), 22px); }
+	& svg.w-3 { width: min(calc(0.75rem * var(--ui-font-scale, 1)), 0.75rem); }
+	& svg.h-3 { height: min(calc(0.75rem * var(--ui-font-scale, 1)), 0.75rem); }
+	& svg.w-3\.5 { width: min(calc(0.875rem * var(--ui-font-scale, 1)), 0.875rem); }
+	& svg.h-3\.5 { height: min(calc(0.875rem * var(--ui-font-scale, 1)), 0.875rem); }
+	& svg.w-4 { width: min(calc(1rem * var(--ui-font-scale, 1)), 1rem); }
+	& svg.h-4 { height: min(calc(1rem * var(--ui-font-scale, 1)), 1rem); }
+	& svg.w-5 { width: min(calc(1.25rem * var(--ui-font-scale, 1)), 1.25rem); }
+	& svg.h-5 { height: min(calc(1.25rem * var(--ui-font-scale, 1)), 1.25rem); }
 	/* Menu items default un-classed icons to size-4. */
 	& [data-slot*='item'] svg:not([class*='size-'], [class*='w-'], [class*='h-']) {
-		width: min(calc(1rem * var(--ui-font-scale, 1)), calc(0.5rem + 0.5rem * var(--ui-font-scale, 1)));
-		height: min(calc(1rem * var(--ui-font-scale, 1)), calc(0.5rem + 0.5rem * var(--ui-font-scale, 1)));
+		width: min(calc(1rem * var(--ui-font-scale, 1)), 1rem);
+		height: min(calc(1rem * var(--ui-font-scale, 1)), 1rem);
 	}
 }
 
@@ -2847,11 +2846,11 @@ html[data-chat-font] .aui-root {
 }
 /* Sonner's icon well is a fixed 16px box; track the glyph. */
 [data-sonner-toast][data-styled='true'] [data-icon] {
-	width: min(calc(16px * var(--ui-font-scale, 1)), calc(8px + 8px * var(--ui-font-scale, 1))) !important;
-	height: min(calc(16px * var(--ui-font-scale, 1)), calc(8px + 8px * var(--ui-font-scale, 1))) !important;
+	width: min(calc(16px * var(--ui-font-scale, 1)), 16px) !important;
+	height: min(calc(16px * var(--ui-font-scale, 1)), 16px) !important;
 }
 /* Defensive: the built-in loader is unused (a custom loading icon is always
    passed) but keep its fixed --size on the scale in case that changes. */
 [data-sonner-toast] .sonner-loading-wrapper {
-	--size: min(calc(16px * var(--ui-font-scale, 1)), calc(8px + 8px * var(--ui-font-scale, 1))) !important;
+	--size: min(calc(16px * var(--ui-font-scale, 1)), 16px) !important;
 }

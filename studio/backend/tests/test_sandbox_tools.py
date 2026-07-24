@@ -219,7 +219,7 @@ class TestUploadDenylist:
         )
 
     def test_plain_post_json_not_blocked(self):
-        _ok("import requests\n" 'requests.post("https://api.weather.gov/lookup", json={"k": "v"})')
+        _ok('import requests\nrequests.post("https://api.weather.gov/lookup", json={"k": "v"})')
 
 
 class TestSandboxEnvIsolation:
@@ -693,6 +693,17 @@ class TestBashBlocklistPosition:
     def test_while_do_blocked(self):
         assert "curl" in self._find()("while true; do curl --version; break; done")
 
+    # ---- `.` is the POSIX synonym for the blocked `source` builtin ----
+    def test_dot_source_blocked(self):
+        assert "." in self._find()(". ./script.sh")
+        assert "." in self._find()("cat x && . ./payload")
+
+    def test_dot_in_argument_position_allowed(self):
+        # `.` as a path argument (not the source builtin) must not be blocked.
+        assert self._find()("find . -type f") == set()
+        assert self._find()("ls .") == set()
+        assert self._find()("cd .") == set()
+
 
 class TestHfUploadImportGate:
     """Upload-method blocking requires an HF import in scope, so paramiko /
@@ -737,15 +748,11 @@ class TestHfUploadImportGate:
 
     def test_hf_bare_name_upload_folder_safe_allowed(self):
         _ok(
-            "from huggingface_hub import upload_folder;"
-            " upload_folder(folder_path='x', repo_id='r')"
+            "from huggingface_hub import upload_folder; upload_folder(folder_path='x', repo_id='r')"
         )
 
     def test_hf_bare_name_create_commit_safe_allowed(self):
-        _ok(
-            "from huggingface_hub import create_commit;"
-            " create_commit(operations=[], repo_id='r')"
-        )
+        _ok("from huggingface_hub import create_commit; create_commit(operations=[], repo_id='r')")
 
     def test_bare_name_upload_file_without_hf_import_allowed(self):
         # No HF import -- local helper named upload_file passes.

@@ -435,6 +435,14 @@ def test_terminal_classifier(command, unsafe):
         ("sftp user@host", True),
         ("openssl dgst -sha256 file", False),  # local openssl is fine
         ("cp scp_notes.txt out/", False),  # a filename is not the ssh/scp command
+        # --- prompt: curl destructive HTTP methods (not a plain download) ---
+        ("curl -X DELETE https://svc.example/resource", True),
+        ("curl --request DELETE https://svc.example/x", True),
+        ("curl -XDELETE https://svc.example/x", True),
+        ("curl --request=PUT https://svc.example/x", True),
+        ("curl -X PATCH https://svc.example/x", True),
+        ("curl -O https://svc.example/file.tgz", False),  # a plain download runs
+        ("curl -X GET https://svc.example/api", False),  # GET is not destructive
         # --- prompt: an array expansion run as a command (dynamic payload) ---
         ('x=(git clean -fd); bash -c "${x[*]}"', True),
         ('a=(rm -rf build); bash -c "${a[@]}"', True),
@@ -597,6 +605,9 @@ def test_terminal_high_risk_classifier(command, high_risk):
         ("import shutil; shutil.rmtree('outputs')", True),
         ("from pathlib import Path\nPath('x').unlink()", True),
         ("from shutil import rmtree\nrmtree('build')", True),
+        # os.remove reached through an aliased module (import os as fs)
+        ("import os as fs\nfs.remove('important.py')", True),
+        ("import posix as p\np.remove('x')", True),
         # --- prompt: dynamically built code run past the static checks ---
         ("eval(input())", True),
         ("import base64; exec(base64.b64decode(b'cHJpbnQoMSk='))", True),

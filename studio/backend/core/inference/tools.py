@@ -126,6 +126,11 @@ _BLOCKED_COMMANDS_COMMON = frozenset(
         "rsync",
         "eval",
         "source",
+        # `.` is the POSIX synonym for `source`: `. ./script.sh` runs the file's
+        # contents in the current shell, past the classifier that never sees
+        # them. Blocking source but not its synonym is a trivial bypass. Matched
+        # at command position only, so `find . -type f` / `cd .` are unaffected.
+        ".",
     }
 )
 _BLOCKED_COMMANDS_WIN = frozenset(
@@ -2654,6 +2659,11 @@ _CURL_UPLOAD_LONG_FLAGS = frozenset(
     }
 )
 _CURL_UPLOAD_SHORT_FLAGS = ("-d", "-F", "-T")
+# curl's explicit-method flags and the methods that mutate/delete a remote
+# resource (a plain GET download stays out). POST is omitted: it is the ordinary
+# upload verb and is already caught by the body/upload flags above.
+_CURL_METHOD_FLAGS = frozenset({"-X", "--request"})
+_CURL_DESTRUCTIVE_METHODS = frozenset({"delete", "put", "patch"})
 # wget upload/POST flags. Kept separate from curl's so a benign wget short option
 # (wget -T 10 timeout, wget -F force-html) is not misread as an upload.
 _WGET_UPLOAD_FLAGS = frozenset({"--post-data", "--post-file", "--body-data", "--body-file"})
@@ -2841,8 +2851,24 @@ def _command_is_network_exec_or_exfil(command: str) -> bool:
         tokens = shlex.split(command.replace("\n", " "), posix = True)
     except ValueError:
         return True
+    method_pending = False
     for t in tokens:
         name = t.split("=", 1)[0]
+        # curl -X DELETE / --request PUT mutates or deletes a remote resource,
+        # not a plain download. Handle the separated form (-X DELETE), the
+        # attached short form (-XDELETE), and --request=DELETE.
+        if has_curl:
+            if method_pending:
+                method_pending = False
+                if t.lower() in _CURL_DESTRUCTIVE_METHODS:
+                    return True
+            if name in _CURL_METHOD_FLAGS:
+                if "=" in t and t.split("=", 1)[1].lower() in _CURL_DESTRUCTIVE_METHODS:
+                    return True
+                method_pending = True
+                continue
+            if t.startswith("-X") and t[2:].lower() in _CURL_DESTRUCTIVE_METHODS:
+                return True
         if has_curl and (
             name in _CURL_UPLOAD_LONG_FLAGS
             # a curl short upload flag, attached or not (-d@f, -Ffile=@dump.sql)
@@ -3104,11 +3130,18 @@ def _python_is_high_risk(code: str) -> bool:
     # Path.unlink/rmdir, ...) deletes a file or tree, so ask (parity with the
     # terminal `rm` gate). Collect bare aliases (from shutil import rmtree) first.
     destructive_fs_aliases: "set[str]" = set()
+    # `import os as filesystem` rebinds the module, so os.remove reached through
+    # the alias (filesystem.remove) must resolve too; posix is os's low-level twin.
+    os_module_aliases: "set[str]" = {"os", "posix"}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in ("os", "shutil", "pathlib"):
             for alias in node.names:
                 if alias.name in _PY_DESTRUCTIVE_FS_IMPORT_NAMES:
                     destructive_fs_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("os", "posix") and alias.asname:
+                    os_module_aliases.add(alias.asname)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -3120,7 +3153,7 @@ def _python_is_high_risk(code: str) -> bool:
             if (
                 func.attr in _PY_DESTRUCTIVE_FS_OS_ATTRS
                 and isinstance(func.value, ast.Name)
-                and func.value.id == "os"
+                and func.value.id in os_module_aliases
             ):
                 return True
         elif isinstance(func, ast.Name) and func.id in destructive_fs_aliases:
@@ -3252,6 +3285,8 @@ def is_high_risk_tool_call(name: str, arguments: dict) -> bool:
     if name == "python":
         return _python_is_high_risk(str(arguments.get("code", "")))
     return True
+
+
 def _canon_win_path(p: str) -> str:
     """Canonical form for trust comparison: realpath (expands 8.3 aliases and
     resolves junctions/symlinks) + normcase/normpath."""

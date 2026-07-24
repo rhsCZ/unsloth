@@ -515,8 +515,23 @@ _AUTO_RECURSIVE_LISTERS = frozenset({"tree", "du"})
 # absent too: it appends arguments read from stdin that this scan never sees, so
 # `echo -o out /etc/passwd | xargs sort` forwards to `sort -o out /etc/passwd`
 # (a write + sensitive read) while only the allow-listed literals are visible.
+# setsid/exec/builtin forward to a child command just like env/nohup (they are
+# in the sandbox's own _COMMAND_PREFIXES), so classification continues at the
+# child: `setsid git clean` / `exec python -c ...` are judged, not skipped.
 _AUTO_SAFE_WRAPPERS = frozenset(
-    {"env", "command", "time", "timeout", "nice", "ionice", "stdbuf", "nohup"}
+    {
+        "env",
+        "command",
+        "builtin",
+        "exec",
+        "time",
+        "timeout",
+        "nice",
+        "ionice",
+        "stdbuf",
+        "nohup",
+        "setsid",
+    }
 )
 
 # MCP tools whose names look read-only auto-run; anything else asks.
@@ -798,6 +813,16 @@ _PY_WRITE_MODE_RE = re.compile(r"[wax+]")
 # A file-mode literal ("w", "rb", "a+"): letters/flags only, no path chars.
 # Used to tell a Path.open("w") mode from a ZipFile.open("name.txt") filename.
 _PY_MODE_LITERAL_RE = re.compile(r"^[rwxa][btru+]*$")
+# Destructive filesystem calls in the python tool delete a file or tree, a
+# destructive change that pairs with the terminal `rm` gate, so auto prompts.
+# `rmtree`/`unlink`/`rmdir`/`removedirs` name only fs deletion, so any receiver
+# counts (shutil.rmtree, Path.unlink, os.rmdir). `remove` is gated only on the
+# `os` module so a benign list.remove()/set.remove() stays out. A destructive
+# name imported bare (from shutil import rmtree; rmtree(x)) is caught via its
+# import binding.
+_PY_DESTRUCTIVE_FS_ATTRS = frozenset({"unlink", "rmtree", "rmdir", "removedirs"})
+_PY_DESTRUCTIVE_FS_OS_ATTRS = frozenset({"remove"})
+_PY_DESTRUCTIVE_FS_IMPORT_NAMES = frozenset({"remove", "unlink", "rmtree", "rmdir", "removedirs"})
 
 # Reading these off the host escapes the intent of "read-only is safe": they
 # hold credentials. Path traversal (../) escapes the per-session workdir.
@@ -811,8 +836,16 @@ _SENSITIVE_PATH_RE = re.compile(
     # optional leading dot covers the .huggingface dotdir form.
     r"|(?:^|[/\\])\.?huggingface[/\\](?:token|stored_tokens)(?:$|[/\\.\s'\"])"
     # /etc/ssh holds the host private keys (ssh_host_*_key); the whole dir is
-    # sensitive, not just passwd/shadow/sudoers.
-    r"|credentials|/etc/(?:passwd|shadow|sudoers|ssh(?:[/\\]|$))"
+    # sensitive, not just passwd/shadow/sudoers. The trailing group is the
+    # system persistence set: a write there (echo payload > /etc/profile.d/x.sh,
+    # tee /etc/ld.so.preload, a drop into /etc/cron.d or /etc/systemd) installs
+    # a boot/login/preload hook, a destructive/persistence change auto must
+    # prompt on. The sandbox keeps host-fs access, so these are not confined.
+    # These paths are effectively write-only in a dev session, so gating any
+    # reference is conservative and does not over-prompt on real work.
+    r"|credentials|/etc/(?:passwd|shadow|sudoers|ssh(?:[/\\]|$)"
+    r"|cron[^/\\]*(?:[/\\]|$)|profile\.d(?:[/\\]|$)|systemd(?:[/\\]|$)"
+    r"|ld\.so\.preload(?:$|[/\\.\s'\"])|ld\.so\.conf|rc\.local|init\.d(?:[/\\]|$))"
     # Bash opens /dev/tcp/host/port and /dev/udp/host/port as network sockets,
     # so a redirection to one reaches the network without the confirm prompt.
     r"|/dev/(?:tcp|udp)/"
@@ -2627,6 +2660,24 @@ _INLINE_CODE_INTERPRETERS = frozenset(
     }
 )
 _INLINE_CODE_FLAGS = frozenset({"-c", "-e", "-E", "-r", "--eval", "--exec"})
+# node/bun evaluate and print the argument to -p / --print (node --help:
+# "-p, --print [...] evaluate script and print result"; bun --print is the same
+# as bun -e). That is arbitrary code the terminal path never screens, exactly
+# like -e/--eval, so gate it. Scoped to the JS runtimes: -p is a print-loop
+# switch for perl/ruby/sed, not inline eval, so it is not shared with those.
+_NODE_PRINT_INTERPRETERS = frozenset({"node", "nodejs", "bun"})
+_NODE_PRINT_FLAGS = frozenset({"-p", "--print"})
+# Windows cmd.exe runs the rest of the line as a nested command after /c (or
+# /k); the payload is screened recursively like a shell -c payload so
+# `cmd /c del x` reaches the destructive-command gate. cmd is not in the
+# hard-block set and del/erase/rd were added to the high-risk set for it.
+_CMD_SHELLS = frozenset({"cmd"})
+# PowerShell (Windows powershell.exe, cross-platform pwsh) runs an arbitrary
+# inline program passed to -Command / -EncodedCommand (-c / -e and their
+# unambiguous prefixes), which the terminal path cannot parse. On Windows both
+# names are hard-blocked; on other hosts pwsh is not, so gate an inline-command
+# invocation there. A bare `pwsh script.ps1` file run stays out.
+_POWERSHELL_INTERPRETERS = frozenset({"powershell", "pwsh"})
 # Versioned interpreter binaries (python3.11, python2.7, pypy3.10) are the same
 # inline-code risk as their unversioned names, so recognise the version suffix.
 _VERSIONED_INTERPRETER_RE = re.compile(r"^(?:python|pypy)\d+(?:\.\d+)*$")
@@ -2676,12 +2727,18 @@ def _short_flag_arg(token: str, letters: str) -> "str | None":
 
 
 # git subcommands / flags that discard or overwrite work in the session workdir.
-# `git clean` deletes untracked files; `reset`/`push` only qualify with a
-# destructive flag, so `git reset --soft`, a plain `git push`, and read/commit
-# subcommands run. Ordinary git (add/commit/status/log/pull) stays out.
-_HIGH_RISK_GIT_SUBCOMMANDS = frozenset({"clean"})
+# `git clean` deletes untracked files and `git restore` overwrites the working
+# tree from the index/HEAD (its default --worktree discards uncommitted edits
+# irrecoverably); `reset`/`push`/`checkout` only qualify with a destructive flag
+# or pathspec, so `git reset --soft`, a plain `git push`, `git checkout <branch>`
+# and read/commit subcommands run. Ordinary git (add/commit/status/log/pull)
+# stays out.
+_HIGH_RISK_GIT_SUBCOMMANDS = frozenset({"clean", "restore"})
 _HIGH_RISK_GIT_RESET_FLAGS = frozenset({"--hard"})
 _HIGH_RISK_GIT_PUSH_FLAGS = frozenset({"-f", "--force", "--force-with-lease"})
+# `git checkout -- <path>` / `git checkout .` / `git checkout -f` discard tracked
+# working-tree changes; a bare `git checkout <branch>` (switching) does not.
+_HIGH_RISK_GIT_CHECKOUT_FLAGS = frozenset({"-f", "--force"})
 # git global options that take a separate value token (git -C repo clean, git
 # --git-dir d clean); the value must be consumed so it is not mistaken for the
 # subcommand. Attached forms (-C=..., --git-dir=...) carry their own value.
@@ -2827,6 +2884,19 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
                     flag in _INLINE_CODE_FLAGS or _short_flag_arg(token, "ceEr") is not None
                 ):
                     return True
+                # node/bun -p / --print evaluate and print arbitrary source, the
+                # same inline-code risk as -e/--eval (attached node -p'...' too).
+                if current_command in _NODE_PRINT_INTERPRETERS and (
+                    flag in _NODE_PRINT_FLAGS or _short_flag_arg(token, "p") is not None
+                ):
+                    return True
+                # PowerShell -Command / -EncodedCommand (-c / -e and prefixes)
+                # run an inline program the terminal path cannot screen; gate it.
+                # A bare `pwsh script.ps1` (no -c/-e flag) still runs.
+                if current_command in _POWERSHELL_INTERPRETERS and flag.lower().startswith(
+                    ("-c", "-e")
+                ):
+                    return True
                 # A shell `-c PAYLOAD` runs its quoted payload; screen it
                 # recursively. Combined clusters (bash -lc, bash -xc) and the
                 # attached form (bash -c'...') carry -c among other short flags.
@@ -2864,6 +2934,12 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
                         return True
                     if git_subcommand == "push" and flag in _HIGH_RISK_GIT_PUSH_FLAGS:
                         return True
+                    # git checkout -f / --force, or an explicit `--` path
+                    # separator (git checkout -- file), discards tracked edits.
+                    if git_subcommand == "checkout" and (
+                        flag in _HIGH_RISK_GIT_CHECKOUT_FLAGS or token == "--"
+                    ):
+                        return True
                     # A git global option that takes a separate value (git -C repo
                     # clean) precedes its value, not the subcommand.
                     if not git_subcommand and "=" not in token and flag in _GIT_GLOBAL_VALUE_FLAGS:
@@ -2876,6 +2952,12 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
                 continue
             raw = token.strip(";&|()`{}")
             if not raw:
+                continue
+            # cmd.exe /c (or /k) runs the following token as a nested command;
+            # screen it recursively so `cmd /c del x` reaches the del gate. /c is
+            # not a `-`-flag, so it is handled here in argument position after cmd.
+            if current_command in _CMD_SHELLS and raw.lower() in ("/c", "/k"):
+                shell_c_pending = True
                 continue
             # The payload of a shell `-c`: recursively screen it so a high-risk
             # command wrapped in `bash -c '...'` is caught (bounded recursion).
@@ -2925,6 +3007,9 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
                 git_subcommand = base
                 if base in _HIGH_RISK_GIT_SUBCOMMANDS:
                     return True
+            elif current_command == "git" and git_subcommand == "checkout" and base == ".":
+                # `git checkout .` discards every tracked working-tree change.
+                return True
             elif chdir_pending:
                 # The target of a cd/pushd: a chdir into a sensitive directory
                 # sets up a relative read that no single token spells out
@@ -2959,6 +3044,31 @@ def _python_is_high_risk(code: str) -> bool:
         tree = ast.parse(code)
     except SyntaxError:
         return False  # runs into a normal traceback; nothing to guard
+    # A destructive filesystem call (os.remove/os.unlink, shutil.rmtree,
+    # Path.unlink/rmdir, ...) deletes a file or tree, so ask (parity with the
+    # terminal `rm` gate). Collect bare aliases (from shutil import rmtree) first.
+    destructive_fs_aliases: "set[str]" = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in ("os", "shutil", "pathlib"):
+            for alias in node.names:
+                if alias.name in _PY_DESTRUCTIVE_FS_IMPORT_NAMES:
+                    destructive_fs_aliases.add(alias.asname or alias.name)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr in _PY_DESTRUCTIVE_FS_ATTRS:
+                return True
+            # `remove` is a common benign list/set method, so gate it only on os.
+            if (
+                func.attr in _PY_DESTRUCTIVE_FS_OS_ATTRS
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "os"
+            ):
+                return True
+        elif isinstance(func, ast.Name) and func.id in destructive_fs_aliases:
+            return True
     # A sensitive path split across names or joins (p = "/etc"; open(p + "/shadow"),
     # os.path.join("/etc", "shadow"), f"{base}/shadow", Path("/etc") / "shadow") is
     # not a contiguous literal above, so fold the string-literal variables and reuse
@@ -3070,6 +3180,13 @@ def is_high_risk_tool_call(name: str, arguments: dict) -> bool:
         if _AUTO_SENSITIVE_MCP_NOUN_RE.search(tool_name):
             return True
         if _mcp_arguments_reference_sensitive(arguments):
+            return True
+        # A read-named tool carrying a destructive payload (query_database
+        # {"query": "DELETE FROM runs"}, an HTTP tool {"method": "DELETE"}) masks a
+        # destructive external action behind a read-looking name and runs outside
+        # the terminal sandbox, so it asks. Honestly-named create/update/delete
+        # MCP calls (create_issue, update_record) still run in auto.
+        if _mcp_arguments_mutate(arguments):
             return True
         return False
     if name == "terminal":

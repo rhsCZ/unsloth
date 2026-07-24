@@ -399,6 +399,46 @@ def test_terminal_classifier(command, unsafe):
         ("git reset --hard HEAD~1", True),
         ("git push --force origin main", True),
         ("git push -f", True),
+        # --- prompt: git restore / checkout discard tracked working-tree edits ---
+        ("git restore --source=HEAD --worktree .", True),
+        ("git restore src/app.py", True),
+        ("git checkout -- .", True),
+        ("git checkout -- src/app.py", True),
+        ("git checkout .", True),
+        ("git checkout -f main", True),
+        ("git checkout --force other", True),
+        # --- prompt: a write into the system persistence set installs a
+        # boot/login/preload hook (the sandbox keeps host-fs access) ---
+        ("echo payload > /etc/profile.d/agent.sh", True),
+        ("echo '* * * * * root sh' > /etc/cron.d/job", True),
+        ("cp x.service /etc/systemd/system/x.service", True),
+        ("tee /etc/ld.so.preload", True),
+        ("echo x >> /etc/rc.local", True),
+        ("bash -c 'echo p > /etc/profile.d/z.sh'", True),
+        # non-persistence /etc reads/writes stay ordinary (no over-prompt)
+        ("cat /etc/hostname", False),
+        ("grep nameserver /etc/resolv.conf", False),
+        # --- prompt: process-launch wrappers forward to a gated child command
+        # (setsid/exec are in the sandbox's own command-prefix set) ---
+        ("setsid git clean -fd", True),
+        ("exec git clean -fd", True),
+        ('setsid python -c "import os; os.remove(chr(46))"', True),
+        ("exec truncate -s 0 results.txt", True),
+        # --- prompt: node/bun -p / --print evaluate inline code ---
+        ("node -p \"require('fs').rmSync('outputs',{recursive:true})\"", True),
+        ("node --print 1", True),
+        ("bun -p '1+1'", True),
+        ("bun --print x", True),
+        ("node -p'require(1)'", True),  # attached print form
+        # --- prompt: Windows cmd.exe /c runs a nested destructive command ---
+        ("cmd /c del important.csv", True),
+        ("cmd.exe /c del data.txt", True),
+        ("cmd /k rd /s /q build", True),
+        # --- prompt: PowerShell -Command / -EncodedCommand run inline code (pwsh
+        # is not hard-blocked off Windows) ---
+        ("pwsh -Command 'Remove-Item -Recurse -Force project'", True),
+        ("powershell -c 'Remove-Item x'", True),
+        ("pwsh -EncodedCommand ZQBjAGgAbwA=", True),
         # --- prompt: command synthesized by a command-position substitution ---
         ("$(printf rm) -rf build", True),
         ("`printf rm` -rf build", True),
@@ -480,7 +520,18 @@ def test_terminal_classifier(command, unsafe):
         ("git push origin main", False),  # a plain push, no --force
         ("git status", False),
         ("git reset --soft HEAD~1", False),  # soft reset keeps the working tree
+        ("git checkout main", False),  # switching branches is not destructive
+        ("git checkout -b feature", False),  # creating a branch is not destructive
         ("git add -A", False),
+        # --- run: wrappers forwarding to a plain script / benign child ---
+        ("setsid python train.py", False),  # a script path, not inline -c
+        ("exec python train.py", False),
+        ("cmd /c dir", False),  # a benign cmd payload
+        # --- run: JS runtime running a script (not -p/-e/--print inline) ---
+        ("node app.js", False),
+        ("bun run build", False),
+        # --- run: pwsh running a script file, not an inline -Command ---
+        ("pwsh -File deploy.ps1", False),
         ("echo hi > out.txt", False),
         ("echo $(date)", False),  # substitution in argument position stays out
         ("make $(FILES)", False),
@@ -518,6 +569,13 @@ def test_terminal_high_risk_classifier(command, high_risk):
         # --- prompt: credential-path read/write ---
         ("open('/etc/shadow').read()", True),
         ("open('/root/.ssh/id_rsa').read()", True),
+        # --- prompt: destructive filesystem deletion (parity with terminal rm) ---
+        ("import os; os.remove('important.py')", True),
+        ("import os; os.unlink('x')", True),
+        ("import os; os.rmdir('d')", True),
+        ("import shutil; shutil.rmtree('outputs')", True),
+        ("from pathlib import Path\nPath('x').unlink()", True),
+        ("from shutil import rmtree\nrmtree('build')", True),
         # --- prompt: dynamically built code run past the static checks ---
         ("eval(input())", True),
         ("import base64; exec(base64.b64decode(b'cHJpbnQoMSk='))", True),
@@ -544,6 +602,9 @@ def test_terminal_high_risk_classifier(command, high_risk):
         # --- run: ordinary in-workdir writes and computation ---
         ("open('data.csv', 'w').write('a,b')", False),
         ("import math; print(math.sqrt(2))", False),
+        # --- run: a benign list/set .remove() is not a filesystem deletion ---
+        ("items = [1, 2, 3]; items.remove(2)", False),
+        ("s = {1, 2}; s.remove(1)", False),
         ("eval('1 + 1')", False),  # a literal source string is harmless
         ("compile(source='1+1', filename='<s>', mode='eval')", False),  # literal source
         ("import json; json.dump({}, open('out.json', 'w'))", False),
@@ -584,6 +645,27 @@ def test_high_risk_dispatcher_non_terminal():
     assert is_high_risk_tool_call(f"{MCP_TOOL_PREFIX}x__listFiles", {}) is False
     assert is_high_risk_tool_call(f"{MCP_TOOL_PREFIX}gh__create_issue", {"title": "x"}) is False
     assert is_high_risk_tool_call(f"{MCP_TOOL_PREFIX}gh__list_issues", {}) is False
+    # A read-named tool carrying a destructive payload masks a destructive
+    # external action (a DELETE query, an HTTP DELETE) and asks; a plain read
+    # query still runs.
+    assert (
+        is_high_risk_tool_call(
+            f"{MCP_TOOL_PREFIX}db__query_database", {"query": "DELETE FROM runs"}
+        )
+        is True
+    )
+    assert (
+        is_high_risk_tool_call(
+            f"{MCP_TOOL_PREFIX}http__request", {"method": "DELETE", "url": "https://x"}
+        )
+        is True
+    )
+    assert (
+        is_high_risk_tool_call(
+            f"{MCP_TOOL_PREFIX}db__query_database", {"query": "SELECT * FROM runs"}
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

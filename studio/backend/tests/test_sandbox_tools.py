@@ -704,6 +704,11 @@ class TestBashBlocklistPosition:
         assert self._find()("ls .") == set()
         assert self._find()("cd .") == set()
 
+    # ---- ANSI-C quoting must not hide a blocked command name ----
+    def test_ansi_c_quoted_command_blocked(self):
+        assert "ssh" in self._find()("$'ssh' user@host")
+        assert "source" in self._find()("$'source' ./payload")
+
 
 class TestHfUploadImportGate:
     """Upload-method blocking requires an HF import in scope, so paramiko /

@@ -226,6 +226,10 @@ def _find_blocked_commands(command: str) -> set[str]:
     """
     blocked: set[str] = set()
 
+    # Decode ANSI-C quoting first ($'ssh' -> ssh, $'\x73\x73\x68' -> ssh) so a
+    # blocked command name hidden behind it is still detected at command position.
+    command = _decode_ansi_c(command)
+
     # punctuation_chars splits separators into their own tokens, so command
     # position is detected even in `echo done; rm -rf x` (no whitespace).
     try:
@@ -2671,6 +2675,15 @@ _WGET_UPLOAD_FLAGS = frozenset({"--post-data", "--post-file", "--body-data", "--
 _PIPE_TO_INTERPRETER_RE = re.compile(
     r"\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|fish|python[0-9.]*|node|ruby|perl|php)\b"
 )
+# An interpreter that executes a process-substitution's output as a script
+# (bash <(printf 'rm -rf x'), source <(...), . <(...)): the generated content is
+# never literal text, so it is unscreenable and fails closed. A non-interpreter
+# consumer (diff <(sort a) <(sort b)) reads the substituted file and stays out.
+_PROC_SUBST_EXEC_RE = re.compile(
+    r"\b(?:sh|bash|zsh|dash|ksh|fish|ash|source|eval|python[0-9.]*|node|nodejs|bun|ruby|perl|php)\b"
+    r"[^\n]*<\("
+    r"|(?:^|[;&|\n(]|&&|\|\|)\s*\.\s+<\("
+)
 # Network clients beyond curl/wget that open a socket to a remote host: a plain
 # invocation reaches the network (the sandbox has no network namespace), so it
 # can exfil the workdir or fetch/run remote code. Matched only at command
@@ -2891,8 +2904,15 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
     # A credential/secret path read or write, or a sandbox escape (../), asks.
     if _command_references_sensitive(command):
         return True
+    # A process substitution whose output an interpreter executes (bash
+    # <(printf 'rm -rf x'), . <(...)) runs a script the static scan can't read,
+    # so fail closed. diff <(sort a) <(sort b) reads, not executes, and stays out.
+    if _PROC_SUBST_EXEC_RE.search(command):
+        return True
     # Newlines separate commands in a shell but read as whitespace to shlex.
-    normalized = command.replace("\r\n", ";").replace("\n", ";").replace("\r", ";")
+    # Decode ANSI-C quoting ($'rm' -> rm, $'\x72\x6d' -> rm) so a command name
+    # hidden behind it is classified as the real command Bash will run.
+    normalized = _decode_ansi_c(command).replace("\r\n", ";").replace("\n", ";").replace("\r", ";")
     # A verb hidden behind an assignment (c=rm; $c x) or a default parameter
     # (${c:-rm}) is expanded so the resolved token is scanned too.
     expanded = _expand_shell_assignments(_expand_param_defaults(normalized))
@@ -3142,21 +3162,46 @@ def _python_is_high_risk(code: str) -> bool:
             for alias in node.names:
                 if alias.name in ("os", "posix") and alias.asname:
                     os_module_aliases.add(alias.asname)
+
+    def _is_destructive_attr(attr: str, value) -> bool:
+        # A destructive-name attribute (unlink/rmtree/...) on any receiver, or
+        # `remove` specifically on the os module (or an alias of it).
+        if attr in _PY_DESTRUCTIVE_FS_ATTRS:
+            return True
+        return (
+            attr in _PY_DESTRUCTIVE_FS_OS_ATTRS
+            and isinstance(value, ast.Name)
+            and value.id in os_module_aliases
+        )
+
+    # A bound reference (f = os.remove; f(x)) hides the call site behind a plain
+    # Name, so record the target name as a destructive alias to catch f(...) below.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute):
+            if _is_destructive_attr(node.value.attr, node.value.value):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name):
+                        destructive_fs_aliases.add(tgt.id)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if isinstance(func, ast.Attribute):
-            if func.attr in _PY_DESTRUCTIVE_FS_ATTRS:
-                return True
-            # `remove` is a common benign list/set method, so gate it only on os.
-            if (
-                func.attr in _PY_DESTRUCTIVE_FS_OS_ATTRS
-                and isinstance(func.value, ast.Name)
-                and func.value.id in os_module_aliases
-            ):
+            if _is_destructive_attr(func.attr, func.value):
                 return True
         elif isinstance(func, ast.Name) and func.id in destructive_fs_aliases:
+            return True
+        # getattr(os, "remove")(x) resolves the attribute at runtime; screen the
+        # literal attribute name against the same destructive test.
+        if (
+            isinstance(func, ast.Call)
+            and isinstance(func.func, ast.Name)
+            and func.func.id == "getattr"
+            and len(func.args) >= 2
+            and isinstance(func.args[1], ast.Constant)
+            and isinstance(func.args[1].value, str)
+            and _is_destructive_attr(func.args[1].value, func.args[0])
+        ):
             return True
     # A sensitive path split across names or joins (p = "/etc"; open(p + "/shadow"),
     # os.path.join("/etc", "shadow"), f"{base}/shadow", Path("/etc") / "shadow") is

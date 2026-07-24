@@ -98,16 +98,26 @@ def test_cn_knows_the_ui_typography_tokens():
     assert "/^ui-\\d+(p5)?$/.test(value)" in UTILS
 
 
-def test_icons_follow_the_ui_font_scale():
-    """Glyphs beside scaled labels track the preference: the shared
+def test_icons_follow_the_ui_font_scale_at_half_rate():
+    """Glyphs beside scaled labels track the preference at half the rate of
+    the text (base + (setting - 16) / 2, like the logo lockup): the shared
     --icon-size token, the scoped menu/toast/chat svg overrides, and the
-    sonner toast text that is otherwise pinned at 13px."""
-    assert "--icon-size: calc(18px * var(--ui-font-scale, 1));" in INDEX_CSS
-    assert "& svg.size-4 { width: calc(1rem * var(--ui-font-scale, 1));" in INDEX_CSS
+    menu specific rules that use !important. Sonner toast text and action
+    labels are text, so they follow at full rate."""
+    assert "--icon-size: calc(10px + 0.5rem * var(--ui-font-scale, 1));" in INDEX_CSS
+    assert (
+        "& svg.size-4 { width: calc(8px + 0.5rem * var(--ui-font-scale, 1));"
+        in INDEX_CSS
+    )
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
+    assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
+    # Menu rules that outrank the scoped block must carry the scale too.
+    assert "width: calc(11px + 0.5rem * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
+    assert "width: calc(10.4px + 0.5rem * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     for scope in (
         "[data-slot='dropdown-menu-content']",
         "[data-slot='select-content']",
+        "[data-slot='select-trigger']",
         "[data-sonner-toast]",
         ".aui-root",
     ):

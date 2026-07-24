@@ -1027,6 +1027,7 @@ try:
         NativePathLeaseError,
         display_label_for_native_path,
         is_registered_native_path_label,
+        native_gguf_companion_parent_allowed,
         redact_native_paths,
         verify_native_path_lease,
     )
@@ -1065,6 +1066,7 @@ except ImportError:
         NativePathLeaseError,
         display_label_for_native_path,
         is_registered_native_path_label,
+        native_gguf_companion_parent_allowed,
         redact_native_paths,
         verify_native_path_lease,
     )
@@ -3070,11 +3072,15 @@ def _monitor_active_model() -> Optional[str]:
 
 
 def _validate_native_gguf_companion(
-    companion_path: str | None, gguf_path: str | None, label: str
+    companion_path: str | None,
+    gguf_path: str | None,
+    label: str,
+    *,
+    allow_mtp_subdir: bool = False,
 ) -> None:
     """Reject a companion GGUF (mmproj / MTP drafter) that a native-lease load
     would otherwise hand to llama-server: must be a regular file (no symlink
-    escaping the leased directory) living next to the selected GGUF."""
+    escaping the leased directory) in a permitted location."""
     if not companion_path or not gguf_path:
         return
     import stat as _stat_module
@@ -3096,10 +3102,17 @@ def _validate_native_gguf_companion(
             detail = f"Native {label} must be a regular file.",
         )
     try:
-        if companion.resolve(strict = True).parent != gguf.resolve(strict = True).parent:
+        if not native_gguf_companion_parent_allowed(
+            companion, gguf, allow_mtp_subdir = allow_mtp_subdir
+        ):
+            location = (
+                "beside the selected GGUF or in its MTP directory"
+                if allow_mtp_subdir
+                else "next to the selected GGUF"
+            )
             raise HTTPException(
                 status_code = 400,
-                detail = f"Native {label} must live next to the selected GGUF.",
+                detail = f"Native {label} must live {location}.",
             )
     except OSError as exc:
         raise HTTPException(
@@ -4644,7 +4657,10 @@ async def _load_model_impl(
                         # model): drop it rather than fail the load.
                         try:
                             _validate_native_gguf_companion(
-                                config.gguf_mtp_file, config.gguf_file, "MTP drafter"
+                                config.gguf_mtp_file,
+                                config.gguf_file,
+                                "MTP drafter",
+                                allow_mtp_subdir = True,
                             )
                         except HTTPException as exc:
                             logger.warning("Dropping MTP drafter for native load: %s", exc.detail)

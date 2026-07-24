@@ -1510,20 +1510,33 @@ def detect_mtp_file(path: str, search_root: Optional[str] = None) -> Optional[st
 
     subdir_candidates: list[Path] = []
     for d in dirs:
-        mtp_dir = d / "MTP"
         try:
-            entries = sorted(mtp_dir.iterdir())
+            parent_entries = sorted(d.iterdir())
         except OSError:
             continue
-        for f in entries:
-            rel = f"MTP/{f.name}"
-            if not _is_mtp_drafter(rel) or not _matches_weight(f):
+        mtp_dirs: list[Path] = []
+        for entry in parent_entries:
+            if entry.name.casefold() != "mtp":
                 continue
             try:
-                if f.is_file():
-                    subdir_candidates.append(f)
+                if entry.is_dir():
+                    mtp_dirs.append(entry)
             except OSError:
                 continue
+        for mtp_dir in mtp_dirs:
+            try:
+                entries = sorted(mtp_dir.iterdir())
+            except OSError:
+                continue
+            for f in entries:
+                rel = f"MTP/{f.name}"
+                if not _is_mtp_drafter(rel) or not _matches_weight(f):
+                    continue
+                try:
+                    if f.is_file():
+                        subdir_candidates.append(f)
+                except OSError:
+                    continue
 
     for candidate in sorted(subdir_candidates, key = _precision_rank):
         try:

@@ -34,6 +34,7 @@ from utils.models.model_config import (
     detect_mtp_file,
     extract_model_size_b,
 )
+from utils.native_path_leases import native_gguf_companion_parent_allowed
 
 
 # ── Predicate + layering mirrors ─────────────────────────────────────
@@ -256,6 +257,61 @@ def test_detect_mtp_file_subdir_skips_foreign_drafter(tmp_path):
     (sub / "mtp-gemma-4-12b-it-Q4_0.gguf").write_bytes(b"x")
 
     assert detect_mtp_file(str(weight)) is None
+
+
+def test_detect_mtp_file_accepts_case_variant_subdir(tmp_path):
+    weight = tmp_path / "gemma-4-E4B-it-qat-Q4_0.gguf"
+    weight.write_bytes(b"x")
+    sub = tmp_path / "mtp"
+    sub.mkdir()
+    drafter = sub / "mtp-gemma-4-E4B-it-Q4_0.gguf"
+    drafter.write_bytes(b"x")
+
+    assert detect_mtp_file(str(weight)) == str(drafter.resolve())
+
+
+def test_native_companion_parent_accepts_root_and_mtp_subdir(tmp_path):
+    weight = tmp_path / "gemma-4-E4B-it-qat-Q4_0.gguf"
+    weight.write_bytes(b"x")
+    root_drafter = tmp_path / "mtp-gemma-4-E4B-it.gguf"
+    root_drafter.write_bytes(b"x")
+    sub = tmp_path / "MtP"
+    sub.mkdir()
+    nested_drafter = sub / "mtp-gemma-4-E4B-it-Q4_0.gguf"
+    nested_drafter.write_bytes(b"x")
+
+    assert native_gguf_companion_parent_allowed(root_drafter, weight)
+    assert native_gguf_companion_parent_allowed(nested_drafter, weight, allow_mtp_subdir = True)
+
+
+def test_native_companion_parent_rejects_other_nested_directory(tmp_path):
+    weight = tmp_path / "gemma-4-E4B-it-qat-Q4_0.gguf"
+    weight.write_bytes(b"x")
+    sub = tmp_path / "other"
+    sub.mkdir()
+    drafter = sub / "mtp-gemma-4-E4B-it-Q4_0.gguf"
+    drafter.write_bytes(b"x")
+
+    assert not native_gguf_companion_parent_allowed(drafter, weight)
+
+
+def test_native_companion_parent_rejects_mtp_symlink_escape(tmp_path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    weight = model_dir / "gemma-4-E4B-it-qat-Q4_0.gguf"
+    weight.write_bytes(b"x")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    drafter = outside / "mtp-gemma-4-E4B-it-Q4_0.gguf"
+    drafter.write_bytes(b"x")
+    try:
+        (model_dir / "MTP").symlink_to(outside, target_is_directory = True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    assert not native_gguf_companion_parent_allowed(
+        model_dir / "MTP" / drafter.name, weight, allow_mtp_subdir = True
+    )
 
 
 # ── Reload dedup includes the drafter ────────────────────────────────

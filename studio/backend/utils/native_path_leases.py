@@ -47,6 +47,22 @@ class NativePathLeaseError(ValueError):
     """Raised when a native path grant is missing, invalid, or unsafe."""
 
 
+def native_gguf_companion_parent_allowed(
+    companion_path: str | Path,
+    gguf_path: str | Path,
+    *,
+    allow_mtp_subdir: bool = False,
+) -> bool:
+    """Check whether a GGUF companion is in an allowed directory."""
+    companion_parent = Path(companion_path).resolve(strict = True).parent
+    gguf_parent = Path(gguf_path).resolve(strict = True).parent
+    return companion_parent == gguf_parent or bool(
+        allow_mtp_subdir
+        and companion_parent.parent == gguf_parent
+        and companion_parent.name.casefold() == "mtp"
+    )
+
+
 @dataclass(frozen = True)
 class NativePathGrant:
     operation: str

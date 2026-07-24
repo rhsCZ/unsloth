@@ -318,6 +318,18 @@ def test_local_gguf_diagnostics_gate_on_broad_is_gguf():
     assert vram and "isGguf &&" in vram.group(0) and "isLoadedGguf" not in vram.group(0)
 
 
+def test_local_mtp_warning_covers_path_and_native_gguf_sources():
+    """The local MTP recovery text must cover direct files, custom folders,
+    and native-picker labels instead of classifying only .gguf suffixes."""
+    src = _read("features/chat/chat-settings-sheet.tsx")
+    local = re.search(r"const isLocalGguf =.*?;", src, re.S)
+    assert local
+    assert "isGguf &&" in local.group(0)
+    assert "activeNativePathToken" in local.group(0)
+    assert "isLocalModelPath" in local.group(0)
+    assert "isLocalGguf" in src.split('specFallbackReason === "drafter_not_found"', 1)[1]
+
+
 def test_fixed_layer_gguf_pins_displayed_context():
     """An already-loaded auto-fit GGUF saved with Manual fixed GPU layers must
     pin the shown context, so a later fresh load keeps the fitted placement

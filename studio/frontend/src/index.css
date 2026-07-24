@@ -1948,7 +1948,7 @@ html[data-chat-font] .aui-root {
 			[data-slot="dropdown-menu-item"],
 			[data-slot="dropdown-menu-sub-trigger"]
 		)
-		svg {
+		svg:not(.unsloth-tick) {
 		width: var(--ui-icon-size) !important;
 		height: var(--ui-icon-size) !important;
 	}
@@ -2788,6 +2788,8 @@ html[data-chat-font] .aui-root {
 	[data-slot='dropdown-menu-sub-content'],
 	[data-slot='select-content'],
 	[data-slot='select-trigger'],
+	[data-slot='combobox-content'],
+	[data-slot='combobox-trigger'],
 	[data-slot='context-menu-content'],
 	[data-slot='context-menu-sub-content'],
 	[data-slot='menubar-content'],
@@ -2805,7 +2807,7 @@ html[data-chat-font] .aui-root {
 	& svg.size-4 { width: var(--ui-icon-size); height: var(--ui-icon-size); }
 	& svg.size-4\.5 { width: var(--ui-icon-size); height: var(--ui-icon-size); }
 	& svg.size-5 { width: var(--ui-icon-size); height: var(--ui-icon-size); }
-	& svg.size-6 { width: var(--ui-icon-size); height: var(--ui-icon-size); }
+	& svg.size-6 { width: min(calc(1.5rem * var(--ui-font-scale, 1)), calc(0.75rem + 0.75rem * var(--ui-font-scale, 1))); height: min(calc(1.5rem * var(--ui-font-scale, 1)), calc(0.75rem + 0.75rem * var(--ui-font-scale, 1))); }
 	& svg.size-\[5px\] { width: min(calc(5px * var(--ui-font-scale, 1)), calc(2.5px + 2.5px * var(--ui-font-scale, 1))); height: min(calc(5px * var(--ui-font-scale, 1)), calc(2.5px + 2.5px * var(--ui-font-scale, 1))); }
 	& svg.size-\[6px\] { width: min(calc(6px * var(--ui-font-scale, 1)), calc(3px + 3px * var(--ui-font-scale, 1))); height: min(calc(6px * var(--ui-font-scale, 1)), calc(3px + 3px * var(--ui-font-scale, 1))); }
 	& svg.size-\[10px\] { width: min(calc(10px * var(--ui-font-scale, 1)), calc(5px + 5px * var(--ui-font-scale, 1))); height: min(calc(10px * var(--ui-font-scale, 1)), calc(5px + 5px * var(--ui-font-scale, 1))); }
@@ -2822,6 +2824,7 @@ html[data-chat-font] .aui-root {
 	& svg.size-\[20px\] { width: var(--ui-icon-size); height: var(--ui-icon-size); }
 	& svg.size-\[21px\] { width: var(--ui-icon-size); height: var(--ui-icon-size); }
 	& svg.size-\[22px\] { width: var(--ui-icon-size); height: var(--ui-icon-size); }
+	& svg.size-\[36px\] { width: min(calc(36px * var(--ui-font-scale, 1)), calc(18px + 18px * var(--ui-font-scale, 1))); height: min(calc(36px * var(--ui-font-scale, 1)), calc(18px + 18px * var(--ui-font-scale, 1))); }
 	& svg.w-3 { width: min(calc(0.75rem * var(--ui-font-scale, 1)), calc(0.375rem + 0.375rem * var(--ui-font-scale, 1))); }
 	& svg.h-3 { height: min(calc(0.75rem * var(--ui-font-scale, 1)), calc(0.375rem + 0.375rem * var(--ui-font-scale, 1))); }
 	& svg.w-3\.5 { width: min(calc(0.875rem * var(--ui-font-scale, 1)), calc(0.4375rem + 0.4375rem * var(--ui-font-scale, 1))); }
@@ -2830,6 +2833,11 @@ html[data-chat-font] .aui-root {
 	& svg.h-4 { height: var(--ui-icon-size); }
 	& svg.w-5 { width: var(--ui-icon-size); }
 	& svg.h-5 { height: var(--ui-icon-size); }
+	/* Buttons default un-classed icons to size-4 the same way. */
+	& button:not([class*=':size-3']) svg:not([class*='size-'], [class*='w-'], [class*='h-'], .unsloth-tick) {
+		width: var(--ui-icon-size);
+		height: var(--ui-icon-size);
+	}
 	/* Menu items default un-classed icons to size-4. */
 	& [data-slot*='item'] svg:not([class*='size-'], [class*='w-'], [class*='h-']) {
 		width: var(--ui-icon-size);

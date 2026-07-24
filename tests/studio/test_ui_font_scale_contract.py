@@ -114,12 +114,17 @@ def test_icons_follow_the_ui_font_size_itself():
     assert "& svg.size-4 { width: var(--ui-icon-size); height: var(--ui-icon-size); }" in INDEX_CSS
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
-    # Menu rules that outrank the scoped block must carry the token too.
+    # Menu rules that outrank the scoped block must carry the token too,
+    # without flattening the smaller thinking ticks.
     assert "width: var(--ui-icon-size) !important;" in INDEX_CSS
+    assert "svg:not(.unsloth-tick) {" in INDEX_CSS
+    # Oversized art glyphs stay proportional instead of uniform.
+    assert "& svg.size-6 { width: min(calc(1.5rem" in INDEX_CSS
     for scope in (
         "[data-slot='dropdown-menu-content']",
         "[data-slot='select-content']",
         "[data-slot='select-trigger']",
+        "[data-slot='combobox-content']",
         "[data-sonner-toast]",
         ".aui-root",
     ):

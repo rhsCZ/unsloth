@@ -105,21 +105,13 @@ def test_icons_follow_the_ui_font_scale_piecewise():
     text. Written as min(full rate, base). Sonner toast text and action
     labels are text, so they follow at full rate everywhere."""
     icon16 = "min(calc(1rem * var(--ui-font-scale, 1)), 1rem)"
-    assert (
-        "--icon-size: min(calc(18px * var(--ui-font-scale, 1)), 18px);" in INDEX_CSS
-    )
+    assert "--icon-size: min(calc(18px * var(--ui-font-scale, 1)), 18px);" in INDEX_CSS
     assert f"& svg.size-4 {{ width: {icon16};" in INDEX_CSS
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     # Menu rules that outrank the scoped block must carry the scale too.
-    assert (
-        "width: min(calc(19px * var(--ui-font-scale, 1)), 19px) !important;"
-        in INDEX_CSS
-    )
-    assert (
-        "width: min(calc(1.15rem * var(--ui-font-scale, 1)), 1.15rem) !important;"
-        in INDEX_CSS
-    )
+    assert "width: min(calc(19px * var(--ui-font-scale, 1)), 19px) !important;" in INDEX_CSS
+    assert "width: min(calc(1.15rem * var(--ui-font-scale, 1)), 1.15rem) !important;" in INDEX_CSS
     for scope in (
         "[data-slot='dropdown-menu-content']",
         "[data-slot='select-content']",

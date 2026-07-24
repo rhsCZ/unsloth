@@ -2833,8 +2833,9 @@ html[data-chat-font] .aui-root {
 	& svg.h-4 { height: var(--ui-icon-size); }
 	& svg.w-5 { width: var(--ui-icon-size); }
 	& svg.h-5 { height: var(--ui-icon-size); }
-	/* Buttons default un-classed icons to size-4 the same way. */
-	& button:not([class*=':size-3']) svg:not([class*='size-'], [class*='w-'], [class*='h-'], .unsloth-tick) {
+	/* Buttons default un-classed icons to size-4 the same way. Sonner's
+	   close button keeps its compact 12px glyph inside a fixed control. */
+	& button:not([class*=':size-3'], [data-close-button]) svg:not([class*='size-'], [class*='w-'], [class*='h-'], .unsloth-tick) {
 		width: var(--ui-icon-size);
 		height: var(--ui-icon-size);
 	}

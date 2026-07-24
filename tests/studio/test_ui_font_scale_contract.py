@@ -111,10 +111,7 @@ def test_icons_follow_the_ui_font_size_itself():
         "calc(0.5rem + 0.5rem * var(--ui-font-scale, 1)));"
     ) in INDEX_CSS
     assert "--icon-size: var(--ui-icon-size);" in INDEX_CSS
-    assert (
-        "& svg.size-4 { width: var(--ui-icon-size); height: var(--ui-icon-size); }"
-        in INDEX_CSS
-    )
+    assert "& svg.size-4 { width: var(--ui-icon-size); height: var(--ui-icon-size); }" in INDEX_CSS
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     # Menu rules that outrank the scoped block must carry the token too.

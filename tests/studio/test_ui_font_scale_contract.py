@@ -105,10 +105,7 @@ def test_icons_follow_the_ui_font_scale_at_half_rate():
     menu specific rules that use !important. Sonner toast text and action
     labels are text, so they follow at full rate."""
     assert "--icon-size: calc(10px + 0.5rem * var(--ui-font-scale, 1));" in INDEX_CSS
-    assert (
-        "& svg.size-4 { width: calc(8px + 0.5rem * var(--ui-font-scale, 1));"
-        in INDEX_CSS
-    )
+    assert "& svg.size-4 { width: calc(8px + 0.5rem * var(--ui-font-scale, 1));" in INDEX_CSS
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     # Menu rules that outrank the scoped block must carry the scale too.

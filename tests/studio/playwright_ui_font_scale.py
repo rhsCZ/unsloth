@@ -212,10 +212,10 @@ def main():
             "() => { const el = document.querySelector('.size-icon');"
             " return el ? parseFloat(getComputedStyle(el).width) : null; }"
         )
-        # --icon-size is 18px at the default and follows the preference at
-        # half rate: 18 + (12 - 16) / 2 = 16.
-        if not near(icon_w, 18 + (12 - 16) / 2):
-            fail(f"size-icon did not scale at half rate: {icon_w}")
+        # --icon-size is 18px at the default; below the default icons match
+        # the text scale, so 18 * 12 / 16 = 13.5.
+        if not near(icon_w, 18 * 12 / 16):
+            fail(f"size-icon did not match the text scale below 16: {icon_w}")
         page.goto(BASE, wait_until = "domcontentloaded")
         page.wait_for_timeout(1500)
         open_appearance(page)

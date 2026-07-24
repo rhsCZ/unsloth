@@ -98,19 +98,32 @@ def test_cn_knows_the_ui_typography_tokens():
     assert "/^ui-\\d+(p5)?$/.test(value)" in UTILS
 
 
-def test_icons_follow_the_ui_font_scale_at_half_rate():
-    """Glyphs beside scaled labels track the preference at half the rate of
-    the text (base + (setting - 16) / 2, like the logo lockup): the shared
-    --icon-size token, the scoped menu/toast/chat svg overrides, and the
-    menu specific rules that use !important. Sonner toast text and action
-    labels are text, so they follow at full rate."""
-    assert "--icon-size: calc(10px + 0.5rem * var(--ui-font-scale, 1));" in INDEX_CSS
-    assert "& svg.size-4 { width: calc(8px + 0.5rem * var(--ui-font-scale, 1));" in INDEX_CSS
+def test_icons_follow_the_ui_font_scale_piecewise():
+    """Glyphs beside scaled labels track the preference piecewise: below the
+    default they match the text scale, above it they move at half rate so
+    icons stay slightly smaller than the text. Written as min(full, half),
+    the smaller branch being correct on each side. Sonner toast text and
+    action labels are text, so they follow at full rate everywhere."""
+    icon16 = (
+        "min(calc(1rem * var(--ui-font-scale, 1)), "
+        "calc(0.5rem + 0.5rem * var(--ui-font-scale, 1)))"
+    )
+    assert (
+        "--icon-size: min(calc(18px * var(--ui-font-scale, 1)), "
+        "calc(9px + 9px * var(--ui-font-scale, 1)));"
+    ) in INDEX_CSS
+    assert f"& svg.size-4 {{ width: {icon16};" in INDEX_CSS
     assert "font-size: calc(13px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     assert "font-size: calc(12px * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
     # Menu rules that outrank the scoped block must carry the scale too.
-    assert "width: calc(11px + 0.5rem * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
-    assert "width: calc(10.4px + 0.5rem * var(--ui-font-scale, 1)) !important;" in INDEX_CSS
+    assert (
+        "width: min(calc(19px * var(--ui-font-scale, 1)), "
+        "calc(9.5px + 9.5px * var(--ui-font-scale, 1))) !important;"
+    ) in INDEX_CSS
+    assert (
+        "width: min(calc(1.15rem * var(--ui-font-scale, 1)), "
+        "calc(0.575rem + 0.575rem * var(--ui-font-scale, 1))) !important;"
+    ) in INDEX_CSS
     for scope in (
         "[data-slot='dropdown-menu-content']",
         "[data-slot='select-content']",

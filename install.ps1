@@ -87,6 +87,11 @@ function Install-UnslothStudio {
         )
         if ($Code -eq 0) { $Code = 1 }
         Write-TauriLog "ERROR" $Message
+        # Clear the release-preservation handoff on any failure: a non-Tauri `irm | iex`
+        # run throws below and leaves the caller's session alive, so a leaked
+        # UNSLOTH_KEPT_TORCH would let a later `studio setup`/`update` (or a retry that
+        # skips the branch-entry clear) re-pin the abandoned exact torch release.
+        Remove-Item Env:UNSLOTH_KEPT_TORCH -ErrorAction SilentlyContinue
         if (Get-Command Restore-StudioVenvRollback -CommandType Function -ErrorAction SilentlyContinue) {
             Restore-StudioVenvRollback
         }

@@ -20,13 +20,29 @@ failed to load still imports, and what it leaves behind varies by version:
   * no `functional` at all, so reading it raises at import
   * `functional.lib is None` (0.45.5, the floor in pyproject.toml), so the ctypes
     binds raise "'NoneType' object has no attribute cdequantize_blockwise_fp32"
-  * `functional.lib` missing that symbol, or an ErrorHandlerMockBNBNativeLibrary
-    (0.46 onwards). These do NOT raise: BNBNativeLibrary.__getattr__ returns a
-    plain `throw_on_call` closure, so the binds succeed and 4bit dies later
-    inside a kernel. Hence the `restype` check below - a real handle is a ctypes
-    function pointer, a deferred failure is a Python function.
+  * `functional.lib` missing that symbol, which raises on the bind
+  * an ErrorHandlerMockBNBNativeLibrary (0.46 onwards). This one does NOT raise:
+    BNBNativeLibrary.__getattr__ returns a plain `throw_on_call` closure, so the
+    binds succeed and 4bit dies later inside a kernel.
 
-device_type.py, _gpu_init.py and kernels/utils.py must agree on the answer, or
+Two different questions, so two answers:
+
+  `check_bitsandbytes` - would a module-scope read in kernels/utils.py raise? A
+  failure here crashes `import unsloth`, so it is the hard gate: fail it and the
+  module is treated as absent.
+
+  `check_native_kernels` - are the handles real kernels? A deferred-failure
+  closure binds cleanly, so this cannot gate the import; it gates the capability
+  flags instead. bnb stays bound, `get_ptr` stays the real function, and 4bit
+  fails only if a 4bit path is actually entered - which is what the fallbacks in
+  kernels/utils.py have always promised. A real handle is a ctypes function
+  pointer, a deferred failure is a Python function, hence the `restype` check.
+
+Collapsing the two would write off a healthy CPU-only install: there every symbol
+is a `throw_on_call` closure, so a single strict probe reports "no bitsandbytes"
+on a wheel whose Python side works perfectly.
+
+device_type.py, _gpu_init.py and kernels/utils.py must agree on both answers, or
 ALLOW_BITSANDBYTES stays true while the kernels fall back to the stub and
 loader.py forwards a 4bit request instead of the advertised 16bit fallback.
 
@@ -39,6 +55,8 @@ hard-requires it.
 __all__ = [
     "bitsandbytes_symbols",
     "check_bitsandbytes",
+    "check_native_kernels",
+    "native_kernels_ready",
     "probe_bitsandbytes",
 ]
 
@@ -70,6 +88,9 @@ def bitsandbytes_symbols(device_type):
 def check_bitsandbytes(bnb, device_type):
     """Raise unless `bnb` can serve every module-scope read kernels/utils.py makes.
 
+    The hard gate: anything that raises here would crash `import unsloth`. It does
+    not judge whether the handles are real kernels - see `check_native_kernels`.
+
     Safe to repeat: ctypes caches the function object on the first lookup and
     bitsandbytes memoizes its wrapper, so the handles bound later are these ones.
     """
@@ -80,6 +101,18 @@ def check_bitsandbytes(bnb, device_type):
     _get_ptr = functional.get_ptr
     lib = functional.lib  # None on a 0.45.5 native-load failure
     for symbol in bitsandbytes_symbols(device_type):
+        getattr(lib, symbol)  # AttributeError on a lib that does not export it
+
+
+def check_native_kernels(bnb, device_type):
+    """Raise unless every bound handle is a real native kernel.
+
+    Separate from `check_bitsandbytes` because these shapes bind cleanly: this
+    decides whether 4bit can actually run, not whether the import survives.
+    """
+    check_bitsandbytes(bnb, device_type)
+    lib = bnb.functional.lib
+    for symbol in bitsandbytes_symbols(device_type):
         # Only a ctypes foreign function has `restype`; a deferred failure is a
         # plain closure that raises at call time instead of here.
         if not hasattr(getattr(lib, symbol), "restype"):
@@ -89,8 +122,23 @@ def check_bitsandbytes(bnb, device_type):
             )
 
 
+def native_kernels_ready(bnb, device_type):
+    """Can 4bit actually run here? Gates the capability flags, never the import."""
+    try:
+        check_native_kernels(bnb, device_type)
+    except Exception:
+        return False
+    return True
+
+
 def probe_bitsandbytes(device_type):
-    """The bitsandbytes module when it is usable here, else None."""
+    """The bitsandbytes module when it imports without breaking us, else None.
+
+    Deliberately the hard gate only. A wheel whose kernels merely defer their
+    failure still gives a working `get_ptr` and real ctypes binds, so returning
+    None for it would disable a usable module; `native_kernels_ready` handles
+    that case by clearing the capability flags instead.
+    """
     try:
         import bitsandbytes
         check_bitsandbytes(bitsandbytes, device_type)

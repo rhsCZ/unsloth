@@ -144,6 +144,10 @@ def test_capability_flags_come_from_a_guarded_import_not_find_spec():
     assert "probe_bitsandbytes(DEVICE_TYPE)" in head
     assert 'find_spec("bitsandbytes")' not in head, "find_spec cannot see a broken wheel"
     assert head.count("ALLOW_BITSANDBYTES = False") >= 1
+    # The flags follow the kernels, not the mere presence of the module: a wheel that
+    # binds cleanly and dies on call must still route to 16bit.
+    assert "native_kernels_ready(" in head
+    assert "if not BITSANDBYTES_KERNELS_READY:" in head
 
     kernels = (REPO_ROOT / "unsloth" / "kernels" / "utils.py").read_text(encoding = "utf-8")
     assert "bnb = BITSANDBYTES" in kernels, "the kernels must reuse the shared result"
@@ -151,7 +155,9 @@ def test_capability_flags_come_from_a_guarded_import_not_find_spec():
     assert not reimports, f"a second bnb import can disagree with the flags: {reimports}"
 
     gpu_init = (REPO_ROOT / "unsloth" / "_gpu_init.py").read_text(encoding = "utf-8")
-    assert "_check_bitsandbytes(bnb, DEVICE_TYPE)" in gpu_init
+    # The strict check here on purpose: the CUDA relink it guards can repair exactly
+    # the native library a deferred-failure handle reports as dead.
+    assert "_check_native_kernels(bnb, DEVICE_TYPE)" in gpu_init
 
 
 def _bnb_guards():
@@ -347,13 +353,18 @@ def test_the_shared_probe_covers_every_module_scope_bitsandbytes_symbol():
     assert xpu - cuda and cuda - xpu, "the device split collapsed"
 
 
-def test_the_probe_rejects_a_handle_that_only_fails_when_called():
+def test_the_kernel_check_rejects_a_handle_that_only_fails_when_called():
     """bitsandbytes 0.46 onwards does not raise for a symbol its .so lacks.
 
     ``BNBNativeLibrary.__getattr__`` returns a ``throw_on_call`` closure, and a dead
     native library is replaced wholesale by ``ErrorHandlerMockBNBNativeLibrary``, which
     does that for every name. The binds then succeed, ALLOW_BITSANDBYTES stays true and
-    4bit dies inside a kernel. Run against the real classes.
+    4bit dies inside a kernel.
+
+    Only ``check_native_kernels`` may reject it. ``check_bitsandbytes`` must accept it,
+    because every read kernels/utils.py makes at module scope resolves - that is the
+    shape a healthy CPU-only install has, and dropping the module there would disable a
+    working wheel. Run against the real classes.
     """
     if importlib.util.find_spec("bitsandbytes") is None:
         return
@@ -376,11 +387,49 @@ def test_the_probe_rejects_a_handle_that_only_fails_when_called():
 
     assert not hasattr(functional.lib.cdequantize_blockwise_fp32, "restype")
     for device in ("cuda", "xpu"):
+        # The hard gate passes: nothing here raises at module scope.
+        probe.check_bitsandbytes(bnb, device)
+        assert probe.native_kernels_ready(bnb, device) is False, device
         try:
-            probe.check_bitsandbytes(bnb, device)
+            probe.check_native_kernels(bnb, device)
         except Exception:
             continue
-        raise AssertionError(f"the probe accepted a dead native library on {device}")
+        raise AssertionError(f"the kernel check accepted a dead native library on {device}")
+
+
+def test_the_hard_gate_rejects_only_what_would_raise_at_import():
+    """The two levels must not collapse back into one.
+
+    `functional.lib is None` and a lib missing a symbol both raise on the binds in
+    kernels/utils.py, so they fail the hard gate. A deferred-failure closure does not,
+    and is covered by the kernel check instead.
+    """
+    probe = _load_shared_probe()
+
+    def _bnb(lib):
+        functional = types.ModuleType("bitsandbytes.functional")
+        functional.get_ptr = lambda tensor: None
+        functional.lib = lib
+        mod = types.ModuleType("bitsandbytes")
+        mod.__version__ = "0.50.0"
+        mod.functional = functional
+        return mod
+
+    class _Deferred:
+        def __getattr__(self, name):
+            def throw_on_call(*args, **kwargs):
+                raise RuntimeError(f"Method '{name}' not available in CPU-only version")
+
+            return throw_on_call
+
+    for lib in (None, types.SimpleNamespace()):
+        try:
+            probe.check_bitsandbytes(_bnb(lib), "cuda")
+        except Exception:
+            continue
+        raise AssertionError(f"the hard gate accepted lib={lib!r}, which raises on the binds")
+
+    probe.check_bitsandbytes(_bnb(_Deferred()), "cuda")  # binds fine, must be accepted
 
 
 # Stand-ins for a wheel whose native side failed to load: it imports fine and only
@@ -514,17 +563,31 @@ _apply_conftest_cpu_harness()
 import unsloth.kernels.utils as utils
 from unsloth.device_type import ALLOW_BITSANDBYTES, ALLOW_PREQUANTIZED_MODELS
 
-assert utils.bnb is None, utils.bnb
-assert utils.get_ptr.__name__ == "_bnb_required", utils.get_ptr
-assert utils.HAS_CUDA_STREAM is False, utils.HAS_CUDA_STREAM
-for _name in (
+_CTYPES_NAMES = (
     "cdequantize_blockwise_fp32",
     "cdequantize_blockwise_fp16_nf4",
     "cdequantize_blockwise_bf16_nf4",
     "cgemm_4bit_inference_naive_fp16",
     "cgemm_4bit_inference_naive_bf16",
-):
-    assert getattr(utils, _name).__name__ == "_bnb_required", _name
+)
+
+if SHAPE == "lib_defers_failure":
+    # Every module-scope read resolves, so dropping the module would disable a
+    # wheel whose Python side works -- exactly what a healthy CPU-only install
+    # looks like. Keep it bound and let the flags carry the bad news.
+    assert utils.bnb is not None, "a wheel that binds cleanly must stay bound"
+    assert utils.get_ptr is utils.bnb.functional.get_ptr, utils.get_ptr
+    assert utils.HAS_CUDA_STREAM is True, utils.HAS_CUDA_STREAM
+    for _name in _CTYPES_NAMES:
+        assert getattr(utils, _name).__name__ != "_bnb_required", _name
+else:
+    assert utils.bnb is None, utils.bnb
+    assert utils.get_ptr.__name__ == "_bnb_required", utils.get_ptr
+    assert utils.HAS_CUDA_STREAM is False, utils.HAS_CUDA_STREAM
+    for _name in _CTYPES_NAMES:
+        assert getattr(utils, _name).__name__ == "_bnb_required", _name
+
+# Every shape: 4bit cannot run, so the loader must not select a 4bit checkpoint.
 assert ALLOW_BITSANDBYTES is False, "the capability flag disagrees with the kernels"
 assert ALLOW_PREQUANTIZED_MODELS is False
 print("BROKEN_WHEEL_OK")

@@ -21,6 +21,7 @@ __all__ = [
     "ALLOW_PREQUANTIZED_MODELS",
     "ALLOW_BITSANDBYTES",
     "BITSANDBYTES",
+    "BITSANDBYTES_KERNELS_READY",
     "is_mlx_available",
 ]
 
@@ -28,7 +29,7 @@ import functools
 import inspect
 import os
 from unsloth_zoo.utils import Version
-from .bnb_availability import probe_bitsandbytes
+from .bnb_availability import native_kernels_ready, probe_bitsandbytes
 
 
 def is_mlx_available():
@@ -124,8 +125,17 @@ ALLOW_BITSANDBYTES: bool = True
 # see a broken wheel (missing .so, wrong ROCm/CUDA build, no `functional`) - it
 # imports fine and only raises when the kernels are read - and sharing this one
 # result keeps kernels/utils.py and _gpu_init.py from disagreeing with the flags.
+#
+# Two levels, because they answer different questions. The module is kept whenever
+# the module-scope reads in kernels/utils.py resolve, so `get_ptr` stays the real
+# function; the flags additionally require real native kernels, so a wheel that only
+# fails when a kernel is called routes to 16bit up front instead of dying mid-run.
+# Collapsing them would report "no bitsandbytes" on a healthy CPU-only install.
 BITSANDBYTES = probe_bitsandbytes(DEVICE_TYPE)
-if BITSANDBYTES is None:
+BITSANDBYTES_KERNELS_READY: bool = BITSANDBYTES is not None and native_kernels_ready(
+    BITSANDBYTES, DEVICE_TYPE
+)
+if not BITSANDBYTES_KERNELS_READY:
     ALLOW_PREQUANTIZED_MODELS = False
     ALLOW_BITSANDBYTES = False
 # gfx906 (MI50 / Radeon VII / Vega 20): Dynamo/Inductor codegen is broken on this
@@ -146,15 +156,16 @@ if DEVICE_TYPE == "hip":
             "(community-maintained legacy GCN path)."
         )
 if DEVICE_TYPE == "hip":
-    # The flags were already cleared above if the probe found no usable wheel.
-    if BITSANDBYTES is None:
+    # The flags were already cleared above if the probe found no usable kernels.
+    if not BITSANDBYTES_KERNELS_READY:
         print(
             "Unsloth: `bitsandbytes` is unavailable - 4bit QLoRA unallowed, but 16bit and full finetuning works."
         )
     else:
         bitsandbytes = BITSANDBYTES
-    # Not the flag it just set: `bitsandbytes` is bound only on the branch above.
-    if BITSANDBYTES is not None:
+    # Gated on the kernels, not on the module: this assigns rather than narrows, so
+    # running it after an unusable wheel would hand the flag back.
+    if BITSANDBYTES_KERNELS_READY:
         ALLOW_BITSANDBYTES = Version(bitsandbytes.__version__) > Version("0.48.2.dev0")
         if Version(bitsandbytes.__version__) >= Version("0.49.2"):
             pass

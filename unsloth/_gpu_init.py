@@ -169,7 +169,7 @@ from unsloth_zoo.device_type import (
 
 # The shared bitsandbytes probe. Imported from the leaf module, not .device_type:
 # that would settle the verdict before the CUDA relink below can repair the wheel.
-from .bnb_availability import check_bitsandbytes as _check_bitsandbytes
+from .bnb_availability import check_native_kernels as _check_native_kernels
 
 # Fix other issues
 from .import_fixes import (
@@ -315,7 +315,7 @@ if DEVICE_TYPE == "cuda":
     try:
         # Every symbol kernels/utils.py binds, not just the one below - a wheel
         # missing any of them is equally unusable, and the relink may fix them all.
-        _check_bitsandbytes(bnb, DEVICE_TYPE)
+        _check_native_kernels(bnb, DEVICE_TYPE)
         cdequantize_blockwise_fp32 = bnb.functional.lib.cdequantize_blockwise_fp32
         libcuda_dirs()
     except:
@@ -366,7 +366,7 @@ if DEVICE_TYPE == "cuda":
                         pass
                 else:
                     from triton.common.build import libcuda_dirs
-                _check_bitsandbytes(bnb, DEVICE_TYPE)
+                _check_native_kernels(bnb, DEVICE_TYPE)
                 cdequantize_blockwise_fp32 = bnb.functional.lib.cdequantize_blockwise_fp32
                 libcuda_dirs()
             except:

@@ -15,6 +15,7 @@ export interface PerModelConfig {
   kvCacheDtype: string | null;
   speculativeType: string | null;
   specDraftNMax: number | null;
+  nParallel: number | null;
   tensorParallel: boolean;
   chatTemplateOverride: string | null;
   // GPU Memory controls (per-model, GGUF-only), optional so older blobs still
@@ -33,9 +34,15 @@ export const DEFAULT_PER_MODEL_CONFIG: PerModelConfig = {
   kvCacheDtype: null,
   speculativeType: null,
   specDraftNMax: null,
+  nParallel: null,
   tensorParallel: false,
   chatTemplateOverride: null,
 };
+
+// Mirrors llama_server_args.py PARALLEL_MIN/MAX (LoadRequest.n_parallel
+// bounds). null = follow the server-wide default.
+export const N_PARALLEL_MIN = 1;
+export const N_PARALLEL_MAX = 64;
 
 export const MAX_SEQ_LENGTH_MIN = 128;
 export const MAX_SEQ_LENGTH_MAX = 1048576;
@@ -46,7 +53,17 @@ export const MAX_SEQ_LENGTH_STEP = 128;
 export const DEFAULT_MAX_SEQ_LENGTH = 4096;
 export const CONTEXT_LENGTH_MIN = 128;
 
-export const KV_CACHE_DTYPES = ["bf16", "q8_0", "q5_1", "q4_1"] as const;
+// Matches studio/backend/core/inference/llama_cpp.py _valid_cache_types (f16 is the UI default).
+export const KV_CACHE_DTYPES = [
+  "bf16",
+  "q8_0",
+  "q4_0",
+  "q4_1",
+  "q5_0",
+  "q5_1",
+  "iq4_nl",
+  "f32",
+] as const;
 const VALID_KV_CACHE_DTYPES = new Set<string>(KV_CACHE_DTYPES);
 
 export const SPECULATIVE_TYPES = [
@@ -82,6 +99,7 @@ const STORED_CONFIG_FIELDS = new Set([
   "kvCacheDtype",
   "speculativeType",
   "specDraftNMax",
+  "nParallel",
   "tensorParallel",
   "chatTemplateOverride",
   "gpuMemoryMode",
@@ -282,6 +300,8 @@ function legacyEntryToConfig(raw: Record<string, unknown>): PerModelConfig {
       typeof raw.speculativeType === "string" ? raw.speculativeType : null,
     specDraftNMax:
       typeof raw.specDraftNMax === "number" ? raw.specDraftNMax : null,
+    // Legacy blobs predate the parallel-slots knob.
+    nParallel: null,
     tensorParallel:
       typeof raw.tensorParallel === "boolean" ? raw.tensorParallel : false,
     chatTemplateOverride: null,
@@ -449,6 +469,10 @@ function normalizeV1(partial: RawConfig): PerModelConfig {
         : null,
     speculativeType,
     specDraftNMax,
+    nParallel:
+      typeof partial.nParallel === "number" && Number.isFinite(partial.nParallel)
+        ? Math.max(N_PARALLEL_MIN, Math.min(N_PARALLEL_MAX, Math.round(partial.nParallel)))
+        : null,
     tensorParallel:
       typeof partial.tensorParallel === "boolean"
         ? partial.tensorParallel
@@ -587,6 +611,7 @@ export function isDefaultConfig(config: PerModelConfig): boolean {
     (config.kvCacheDtype ?? null) === DEFAULT_PER_MODEL_CONFIG.kvCacheDtype &&
     config.speculativeType === DEFAULT_PER_MODEL_CONFIG.speculativeType &&
     config.specDraftNMax == null &&
+    config.nParallel == null &&
     Boolean(config.tensorParallel) ===
       Boolean(DEFAULT_PER_MODEL_CONFIG.tensorParallel) &&
     (config.chatTemplateOverride ?? null) === null &&

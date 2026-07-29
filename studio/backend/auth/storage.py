@@ -44,7 +44,7 @@ def generate_bootstrap_password() -> str:
 
     # Persisted from a previous run?
     if _BOOTSTRAP_PW_PATH.is_file():
-        _bootstrap_password = _BOOTSTRAP_PW_PATH.read_text().strip()
+        _bootstrap_password = _BOOTSTRAP_PW_PATH.read_text(encoding = "utf-8").strip()
         if _bootstrap_password:
             return _bootstrap_password
 
@@ -57,7 +57,7 @@ def generate_bootstrap_password() -> str:
 
     # Persist so the same passphrase survives restarts until password change.
     ensure_dir(_BOOTSTRAP_PW_PATH.parent)
-    _BOOTSTRAP_PW_PATH.write_text(_bootstrap_password)
+    _BOOTSTRAP_PW_PATH.write_text(_bootstrap_password, encoding = "utf-8")
     try:
         os.chmod(_BOOTSTRAP_PW_PATH, 0o600)
     except OSError:
@@ -76,7 +76,13 @@ def _load_bootstrap_password() -> Optional[str]:
     global _bootstrap_password
     _bootstrap_password = None
     if _BOOTSTRAP_PW_PATH.is_file():
-        bootstrap_password = _BOOTSTRAP_PW_PATH.read_text().strip()
+        # No caller handles a raise, so an unreadable file has to mean "no bootstrap
+        # password", not a dead backend. We write UTF-8, so bytes that will not
+        # decode are damage whose plaintext is worthless anyway.
+        try:
+            bootstrap_password = _BOOTSTRAP_PW_PATH.read_text(encoding = "utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return _bootstrap_password
         if bootstrap_password:
             _bootstrap_password = bootstrap_password
     return _bootstrap_password
@@ -99,7 +105,7 @@ def clear_bootstrap_password() -> None:
             # stale plaintext can't be re-seeded by generate_bootstrap_password()
             # if a later reset-password deletes auth.db and re-validates it.
             try:
-                _BOOTSTRAP_PW_PATH.write_text("")
+                _BOOTSTRAP_PW_PATH.write_text("", encoding = "utf-8")
                 cleared = True
             except OSError:
                 cleared = False

@@ -68,9 +68,9 @@ def resolve_auto_use_xet() -> tuple[bool, str]:
     Server-side on purpose: only the backend can see this machine's RAM, its hf_xet build, and
     whether Xet has been failing here, and the browser must not have to guess any of it.
 
-    Probing IS allowed here (unlike on the per-download path) because Auto resolution happens once
-    per download request and the answer is cached for the whole machine -- a few hundred ms buys a
-    verdict that saves every subsequent download a stalled attempt.
+    Probing IS allowed here, unlike in the capabilities endpoint that the UI polls on render:
+    resolution happens once per download request and the verdict is memoized for the machine, so a
+    few hundred ms buys an answer that saves every subsequent download a stalled attempt.
     """
     if not resolve_effective_use_xet(True):
         return (False, "hf_xet is not installed")
@@ -636,6 +636,59 @@ def _record_xet_failure(reason: str, logger) -> None:
         logger.debug("could not record Xet outcome: %s", exc)
 
 
+def _repo_bytes_on_disk(repo_type, repo_id: str, cache_dir) -> "Optional[int]":
+    """Bytes present for this repo, or None when unmeasurable.
+
+    Used only to tell an actual Xet transfer from a job that found everything already cached: the
+    worker reports nothing but an exit code, and the .transport marker is written before the
+    transfer starts, so there is no other signal.
+    """
+    try:
+        from utils.hf_xet_fallback import get_hf_download_state
+        state = get_hf_download_state([repo_id], repo_type = repo_type, cache_dir = cache_dir)
+    except Exception:  # noqa: BLE001 - a missing measurement must never fail a download
+        return None
+    return None if state is None else int(state[0])
+
+
+_UNSAMPLED = object()
+
+
+def _job_bytes_on_disk(repo_type, repo_id: str, cache_dir, blob_hashes) -> "Optional[int]":
+    """Bytes THIS job owns, or None when unmeasurable.
+
+    Scoped to the variant's own blobs when the claim resolved them: the registry deliberately lets
+    two same-transport GGUF variants of one repo run concurrently, and they share one blobs/ dir, so
+    a repo-wide measure credits a cached no-op worker with its sibling's bytes. That would clear a
+    legitimate stall streak and, worse, flip an already demoted verdict back to Xet.
+
+    Non-variant model jobs and dataset jobs cannot have a concurrent same-repo sibling (claim()
+    rejects those), so they keep the repo-wide measure.
+    """
+    if blob_hashes is None:
+        return _repo_bytes_on_disk(repo_type, repo_id, cache_dir)
+    if not blob_hashes:
+        return None  # variant job with no resolved hashes: unmeasurable, so never clear the streak
+    try:
+        return download_registry.completed_blob_bytes(
+            repo_type,
+            repo_id,
+            blob_hashes,
+            root = Path(cache_dir) if cache_dir else None,
+        )
+    except Exception:  # noqa: BLE001 - a missing measurement must never fail a download
+        return None
+
+
+def _record_xet_success(logger) -> None:
+    """Tell the health tracker a Xet transfer completed here, which resets the failure streak."""
+    try:
+        from utils.hf_xet_fallback import record_xet_outcome
+        record_xet_outcome(True, "Xet download completed")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not record Xet outcome: %s", exc)
+
+
 def _start_stall_watchdog(
     registry: download_registry.DownloadRegistry,
     key: str,
@@ -686,6 +739,20 @@ def _start_stall_watchdog(
             cache_dir = cache_dir,
             on_stall = _on_stall,
             child_pid = proc.pid,
+            # Scope the measurement to partials this worker actually holds open. Without it the
+            # shared helper stays repo-wide and child_pid does nothing, so two same-transport GGUF
+            # variants of one repo (which the registry deliberately allows to run concurrently)
+            # reset each other's stall timer. This scopes the DATA clock; before its first byte a
+            # variant is still covered by the shared peer-progress check, which is repo-wide by
+            # design so a lock wait behind a live sibling is not read as a hang.
+            watch_new_partials_only = True,
+            # The shared 90s zero-byte default is sized for a single-file download, whose pre-byte
+            # phase is one HEAD. This worker calls snapshot_download(max_workers=1), so its pre-byte
+            # phase is a model_info lookup with retries plus one sequential HEAD per file -- and for
+            # an already-cached repo that is the ENTIRE job, with no byte ever written. A few
+            # hundred files on a slow link exceeds 90s legitimately, so a healthy worker would be
+            # killed before it started.
+            connect_timeout = 600.0,
             xet_disabled = False,
         )
     except Exception as exc:  # noqa: BLE001
@@ -707,12 +774,33 @@ def register_worker(
     transport: str,
     cancel_marker_transport: Optional[str] = None,
     watch_name: str,
+    bytes_before: "Optional[int]" = _UNSAMPLED,
 ) -> bool:
     if not registry.register_process(key, proc):
         kill_and_reap_process(proc, label = label, logger = logger)
         return False
 
     worker_token = hf_token
+    # getattr, not a direct call: test doubles and older registries do not all implement this.
+    _get_metadata = getattr(registry, "get_job_metadata", None)
+    _metadata = _get_metadata(key) if callable(_get_metadata) else None
+    _cache_dir = getattr(_metadata, "hub_cache", None) if _metadata is not None else None
+    # The variant's own blobs, so a sibling variant writing into the same repo cannot be counted as
+    # this job's progress. None for job shapes that cannot have a concurrent same-repo sibling.
+    _own_blob_hashes = (
+        getattr(_metadata, "blob_hashes", frozenset())
+        if getattr(_metadata, "variant", None)
+        else None
+    )
+    # Sampled before the worker can write anything, so "did this job actually move bytes over Xet"
+    # is answerable when it exits. launch_worker samples it BEFORE spawn(); sampling here would
+    # race a fast child that already finalized its blobs, making a real transfer look like a no-op
+    # and leaving the failure streak uncleared.
+    _bytes_before = (
+        _job_bytes_on_disk(repo_type, repo_id, _cache_dir, _own_blob_hashes)
+        if bytes_before is _UNSAMPLED
+        else bytes_before
+    )
 
     def _watch() -> None:
         stalled: list[str] = []
@@ -761,8 +849,35 @@ def register_worker(
                 # verification) makes no byte-level progress and must not read as a stall.
                 watchdog_stop.set()
             if stalled:
-                # A machine whose Xet transfers hang is one that should stop starting on Xet.
-                _record_xet_failure(stalled[0], logger)
+                # Only a DATA-phase stall says anything about Xet's health. A connect-phase trip
+                # means no byte ever arrived, which is just as likely to be slow metadata, a long
+                # queue of HEADs, or a cache lock -- and two recorded failures pin this machine to
+                # HTTP for 24h, the expensive direction of error. Still retry over HTTP either way.
+                if "no progress" in stalled[0]:
+                    _record_xet_failure(stalled[0], logger)
+                else:
+                    logger.debug(
+                        "%s not recording a Xet health failure for a pre-byte trip: %s",
+                        log_prefix,
+                        stalled[0],
+                    )
+            elif transport == download_registry.TRANSPORT_XET and state == "complete":
+                # Clear the streak, so "two failures in a row" means in a row. Without this a
+                # stall today and another next week are counted as consecutive despite every
+                # download in between succeeding, pinning Auto to HTTP for no reason.
+                #
+                # Only a job that actually moved bytes says anything about Xet's health, though: a
+                # fully cached repo (the UI's re-download action on an up-to-date model) exits 0
+                # without touching the network, and clearing a correctly earned demotion on that
+                # would put a bad machine back on Xet. Unmeasurable means do not clear -- a missed
+                # clear costs one extra streak entry, a wrong clear undoes the demotion.
+                bytes_after = _job_bytes_on_disk(repo_type, repo_id, _cache_dir, _own_blob_hashes)
+                if (
+                    _bytes_before is not None
+                    and bytes_after is not None
+                    and bytes_after > _bytes_before
+                ):
+                    _record_xet_success(logger)
             # XET-to-HTTP recovery: when a non-cancelled XET worker fails and
             # HTTP is available, attempt one automatic retry over HTTP.  The
             # transport check is the recursion guard: an HTTP worker that errors
@@ -831,6 +946,22 @@ def launch_worker(
     transport: str,
     watch_name: str,
 ) -> str:
+    # Before spawn(), deliberately: a small download can finalize its blobs while we are still
+    # registering the process, and a baseline taken after that shows no growth for a transfer that
+    # really happened -- so the streak is never cleared and two stalls either side of it read as
+    # consecutive.
+    _get_metadata = getattr(registry, "get_job_metadata", None)
+    _metadata = _get_metadata(key) if callable(_get_metadata) else None
+    _baseline = _job_bytes_on_disk(
+        repo_type,
+        repo_id,
+        getattr(_metadata, "hub_cache", None) if _metadata is not None else None,
+        (
+            getattr(_metadata, "blob_hashes", frozenset())
+            if getattr(_metadata, "variant", None)
+            else None
+        ),
+    )
     try:
         proc = spawn()
     except Exception as e:
@@ -856,6 +987,7 @@ def launch_worker(
         repo_id = repo_id,
         transport = transport,
         watch_name = watch_name,
+        bytes_before = _baseline,
     )
     return registry.get_job(key).state
 

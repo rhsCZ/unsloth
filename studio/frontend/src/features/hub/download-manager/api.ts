@@ -104,20 +104,6 @@ export interface TransportStatus {
   resumable: boolean;
 }
 
-export interface DownloadTransportCapability {
-  available: boolean | null;
-  reason: string | null;
-}
-
-export interface DownloadTransportCapabilities {
-  http: DownloadTransportCapability;
-  xet: DownloadTransportCapability;
-  // What the backend's "auto" mode resolves to right now, and why. Computed server-side because
-  // only the backend can see this machine's RAM, hf_xet build, and recent Xet failures.
-  auto_resolves_to?: "xet" | "http";
-  auto_reason?: string | null;
-}
-
 export interface DownloadProgressResponse {
   downloaded_bytes: number;
   completed_bytes: number;
@@ -137,77 +123,60 @@ export type GgufDownloadProgressOptions = DownloadProgressOptions & {
   variant: string;
 };
 
-const DOWNLOAD_TRANSPORT_CAPABILITIES_FALLBACK: DownloadTransportCapabilities = {
-  http: { available: true, reason: null },
-  xet: {
-    available: null,
-    reason: "Couldn't verify Xet support with the Unsloth backend.",
-  },
-  // Unknown backend state: stay on Xet, since the download-time ladder still falls back to HTTP
-  // if Xet turns out to be broken here.
-  auto_resolves_to: "xet",
-  auto_reason: null,
-};
-let downloadTransportCapabilitiesCache: DownloadTransportCapabilities | null =
-  null;
+export type {
+  DownloadTransportCapability,
+  DownloadTransportCapabilities,
+} from "./transport-capabilities";
+import {
+  DOWNLOAD_TRANSPORT_CAPABILITIES_FALLBACK,
+  normalizeDownloadTransportCapabilities,
+} from "./transport-capabilities";
+import type { DownloadTransportCapabilities } from "./transport-capabilities";
+
+// The Auto verdict is dynamic: a stalled transfer demotes this machine mid-session. An
+// indefinite cache would keep resolving Auto to the pre-stall answer until the page reloads, so
+// give it the same TTL shape activeModelDownloadsCache already uses. Refreshing is cheap because
+// the endpoint answers from cached health without a network probe.
+const DOWNLOAD_TRANSPORT_CAPABILITIES_TTL_MS = 30_000;
+let downloadTransportCapabilitiesCache: {
+  expiresAt: number;
+  probed: boolean;
+  capabilities: DownloadTransportCapabilities;
+} | null = null;
 let downloadTransportCapabilitiesInFlight: Promise<DownloadTransportCapabilities> | null =
   null;
 
-function normalizeDownloadTransportCapability(
-  value: unknown,
-  fallback: DownloadTransportCapability,
-): DownloadTransportCapability {
-  if (!value || typeof value !== "object") {
-    return fallback;
-  }
-  const candidate = value as { available?: unknown; reason?: unknown };
-  return {
-    available:
-      typeof candidate.available === "boolean"
-        ? candidate.available
-        : fallback.available,
-    reason:
-      typeof candidate.reason === "string"
-        ? candidate.reason
-        : candidate.reason === null
-          ? null
-          : fallback.reason,
-  };
-}
-
-function normalizeDownloadTransportCapabilities(
-  value: unknown,
-): DownloadTransportCapabilities {
-  if (!value || typeof value !== "object") {
-    return DOWNLOAD_TRANSPORT_CAPABILITIES_FALLBACK;
-  }
-  const candidate = value as { http?: unknown; xet?: unknown };
-  return {
-    http: normalizeDownloadTransportCapability(candidate.http, {
-      available: true,
-      reason: null,
-    }),
-    xet: normalizeDownloadTransportCapability(
-      candidate.xet,
-      DOWNLOAD_TRANSPORT_CAPABILITIES_FALLBACK.xet,
-    ),
-  };
-}
-
 export async function getDownloadTransportCapabilities(options: {
   force?: boolean;
+  // Ask the backend to actually reach for the Xet endpoint rather than answering from its cached
+  // verdict. Only the download-start path sets this: the UI polls this endpoint on render, and a
+  // connection attempt per poll is exactly what the cheap default avoids.
+  probe?: boolean;
 } = {}): Promise<DownloadTransportCapabilities> {
-  if (!options.force && downloadTransportCapabilitiesCache) {
-    return downloadTransportCapabilitiesCache;
+  const cached = downloadTransportCapabilitiesCache;
+  // A cheap cached answer cannot satisfy a caller that asked for a probe, but a probed one
+  // satisfies everybody.
+  const cacheUsable =
+    cached !== null &&
+    cached.expiresAt > Date.now() &&
+    (!options.probe || cached.probed);
+  if (!options.force && cacheUsable) {
+    return cached.capabilities;
   }
-  if (!options.force && downloadTransportCapabilitiesInFlight) {
+  if (!options.force && !options.probe && downloadTransportCapabilitiesInFlight) {
     return downloadTransportCapabilitiesInFlight;
   }
-  const request = authFetch("/api/studio/download-transport-capabilities")
+  const request = authFetch(
+    `/api/studio/download-transport-capabilities${options.probe ? "?probe=1" : ""}`,
+  )
     .then(parseJsonOrThrow<unknown>)
     .then(normalizeDownloadTransportCapabilities)
     .then((capabilities) => {
-      downloadTransportCapabilitiesCache = capabilities;
+      downloadTransportCapabilitiesCache = {
+        expiresAt: Date.now() + DOWNLOAD_TRANSPORT_CAPABILITIES_TTL_MS,
+        probed: options.probe === true,
+        capabilities,
+      };
       return capabilities;
     })
     .catch(() => DOWNLOAD_TRANSPORT_CAPABILITIES_FALLBACK)

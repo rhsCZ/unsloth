@@ -403,3 +403,97 @@ def test_optional_loader_returns_none_when_truly_absent(monkeypatch):
     assert shim.xet_env_overrides() == {}
     assert shim.xet_health() is None
     shim.record_xet_outcome(False, "x")
+
+
+def test_capabilities_probe_is_opt_in(monkeypatch):
+    """The UI polls this endpoint on render, so it must stay cheap by default.
+
+    The download-start path opts in, because that is the one moment worth a connection attempt: a
+    host with an unreachable CAS and no recorded failure yet would otherwise learn by stalling.
+    """
+    from hub.utils import download_registry
+
+    seen: list[bool] = []
+
+    class _Health:
+        use_xet = False
+        reason = "probed: CAS unreachable"
+
+    def _fake_health(*, probe = True):
+        seen.append(probe)
+        return _Health()
+
+    # Patch the sys.modules entry, not an imported alias: get_download_transport_capabilities does
+    # a local `from utils.hf_xet_fallback import xet_health`, and test_hf_xet_fallback.py swaps that
+    # sys.modules entry in and out, so an alias captured here can be a different module object.
+    import sys
+    import types
+
+    stub = types.ModuleType("utils.hf_xet_fallback")
+    stub.xet_health = _fake_health
+    monkeypatch.setitem(sys.modules, "utils.hf_xet_fallback", stub)
+
+    caps = download_registry.get_download_transport_capabilities()
+    if not caps.xet.available:
+        # The health lookup sits behind an hf_xet availability check, so with no hf_xet installed
+        # neither call reaches it. Same guard the neighbouring capability tests use.
+        pytest.skip("hf_xet is not installed in this environment")
+    download_registry.get_download_transport_capabilities(probe = True)
+
+    assert seen == [False, True]
+
+
+def test_gpu_init_override_is_serialized(monkeypatch):
+    """The optional-module retry must not leak the process-wide GPU-init override.
+
+    A leaked UNSLOTH_ZOO_DISABLE_GPU_INIT=1 is inherited by every spawned worker, which then skips
+    Zoo's GPU init for the life of the process.
+
+    Scope of this test, stated honestly: it races the loader against itself, which pins the
+    single-loader path. It does NOT reproduce the cross-loader interleave with _load_shared -- that
+    needs A and B to be inside their env blocks at once, and thread timing would not reproduce it
+    reliably here. That property is instead established by construction: both loaders take the same
+    `_load_lock` around their save/set/restore, so only one can be inside at a time.
+    """
+    import importlib
+    import os
+    import threading
+
+    import utils.hf_xet_fallback as shim
+
+    monkeypatch.delenv("UNSLOTH_ZOO_DISABLE_GPU_INIT", raising = False)
+
+    def _always_fail(name):
+        time.sleep(0.005)  # widen the window the lock has to close
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(importlib, "import_module", _always_fail)
+
+    threads = [
+        threading.Thread(target = shim._load_optional, args = ("unsloth_zoo.hf_xet_tuning",))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert "UNSLOTH_ZOO_DISABLE_GPU_INIT" not in os.environ
+
+
+def test_both_loaders_share_one_env_lock():
+    """The cross-loader guarantee, checked structurally rather than by racing threads.
+
+    Two separate locks would each be correct in isolation and still allow the interleave that
+    leaves the override set permanently, so what matters is that it is one lock, not two.
+    """
+    import inspect
+
+    import utils.hf_xet_fallback as shim
+
+    for fn in (shim._load_shared, shim._load_optional):
+        source = inspect.getsource(fn)
+        assert "UNSLOTH_ZOO_DISABLE_GPU_INIT" in source
+        assert (
+            "with _load_lock:" in source
+        ), f"{fn.__name__} mutates the GPU-init override outside the shared _load_lock"

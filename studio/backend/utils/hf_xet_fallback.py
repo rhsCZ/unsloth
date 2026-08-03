@@ -40,6 +40,10 @@ DEFAULT_HTTP_STALL_TIMEOUT = 180.0
 _shared: Any = None
 _shared_available: Optional[bool] = None  # None = not yet attempted
 _shared_import_error: Optional[BaseException] = None
+# Guards the memoized _shared_available AND every UNSLOTH_ZOO_DISABLE_GPU_INIT save/set/restore in
+# this module. Both loaders below mutate that one process-wide variable, so they must serialize
+# against each other, not merely against themselves: two locks would still allow A-saves-unset /
+# B-saves-"1" / A-restores-unset / B-restores-"1", leaving it set for the life of the process.
 _load_lock = threading.Lock()
 
 
@@ -114,21 +118,28 @@ def _load_optional(module_name: str) -> Any:
     except Exception as exc:  # noqa: BLE001 - an older/absent unsloth_zoo must degrade, not crash
         first_error = exc
 
-    previous = _os.environ.get("UNSLOTH_ZOO_DISABLE_GPU_INIT")
-    _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = "1"
-    try:
-        return importlib.import_module(module_name)
-    except Exception as exc:  # noqa: BLE001
-        import logging as _logging
-        _logging.getLogger(__name__).debug(
-            "%s unavailable (%s; with GPU init disabled: %s)", module_name, first_error, exc
-        )
-        return None
-    finally:
-        if previous is None:
-            _os.environ.pop("UNSLOTH_ZOO_DISABLE_GPU_INIT", None)
-        else:
-            _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = previous
+    # The retry mutates process-wide state, so it must not run concurrently with itself. Two
+    # requests could otherwise interleave save/set/restore -- A saves unset and sets 1, B saves 1,
+    # A restores unset, B restores 1 -- and leave UNSLOTH_ZOO_DISABLE_GPU_INIT set for the life of
+    # the process, so every later worker inherits it and skips Zoo's GPU init. Deliberately the
+    # SAME lock _load_shared holds while it runs its own copy of this sequence.
+    with _load_lock:
+        previous = _os.environ.get("UNSLOTH_ZOO_DISABLE_GPU_INIT")
+        _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = "1"
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as exc:  # noqa: BLE001
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                "%s unavailable (%s; with GPU init disabled: %s)", module_name, first_error, exc
+            )
+            module = None
+        finally:
+            if previous is None:
+                _os.environ.pop("UNSLOTH_ZOO_DISABLE_GPU_INIT", None)
+            else:
+                _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = previous
+        return module
 
 
 def xet_health(**kwargs: Any) -> Any:
@@ -401,6 +412,15 @@ def hf_hub_download_with_xet_fallback(
     if cache_dir is None:
         from utils.hf_cache_settings import get_hf_cache_paths
         cache_dir = str(get_hf_cache_paths().hub_cache)
+    # Omit rather than forward None. No production caller passes these, and an older unsloth_zoo
+    # takes the value literally: its watchdog hands `interval` straight to Event.wait(), where None
+    # blocks forever, so a hung Xet download would never fall back. Omitting them also lets the
+    # shared layer pick its own per-transport defaults instead of freezing one here.
+    optional: dict[str, Any] = {}
+    if stall_timeout is not None:
+        optional["stall_timeout"] = stall_timeout
+    if interval is not None:
+        optional["interval"] = interval
     return _shared_hf_hub_download_with_xet_fallback(
         repo_id,
         filename,
@@ -408,8 +428,7 @@ def hf_hub_download_with_xet_fallback(
         cancel_event = cancel_event,
         repo_type = repo_type,
         revision = revision,
-        stall_timeout = stall_timeout,
-        interval = interval,
+        **optional,
         grace_period = grace_period,
         on_status = on_status,
         force_download = force_download,

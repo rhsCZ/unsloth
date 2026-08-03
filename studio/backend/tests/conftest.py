@@ -58,8 +58,36 @@ def pytest_addoption(parser):
 # E2E server fixtures
 
 
+@pytest.fixture(scope = "session", autouse = True)
+def _isolate_xet_health_home(tmp_path_factory):
+    """Point HF_HOME at a temp dir for the whole session, before any server is spawned.
+
+    Session scope is load-bearing: pytest builds higher-scoped fixtures first, so setting HF_HOME
+    from the function-scoped fixture below landed AFTER ``studio_server`` had already snapshotted
+    os.environ into the spawned server's environment, leaving that server reading and rewriting the
+    developer's real unsloth_xet_health.json.
+    """
+    from _pytest.monkeypatch import MonkeyPatch
+
+    from huggingface_hub import constants as hf_constants
+
+    mp = MonkeyPatch()
+    # Pin these to what the hub resolved from the REAL environment before moving HF_HOME. HF_HOME
+    # also defaults HF_HUB_CACHE, HF_XET_CACHE and HF_TOKEN_PATH, so moving it alone would send the
+    # spawned E2E server to an empty cache and an empty token store: a ~1.1GB GGUF redownload
+    # inside the 120s startup deadline, and no credentials for a private --unsloth-model.
+    mp.setenv("HF_HUB_CACHE", hf_constants.HF_HUB_CACHE)
+    mp.setenv("HF_TOKEN_PATH", hf_constants.HF_TOKEN_PATH)
+    xet_cache = getattr(hf_constants, "HF_XET_CACHE", None)
+    if xet_cache:
+        mp.setenv("HF_XET_CACHE", xet_cache)
+    mp.setenv("HF_HOME", str(tmp_path_factory.mktemp("xet_health_home")))
+    yield
+    mp.undo()
+
+
 @pytest.fixture(autouse = True)
-def _isolate_xet_health_state(tmp_path_factory, monkeypatch):
+def _isolate_xet_health_state():
     """Keep the persisted Xet health verdict out of the developer's real HF home.
 
     The verdict is deliberately sticky across sessions -- two consecutive Xet failures pin a machine
@@ -69,10 +97,14 @@ def _isolate_xet_health_state(tmp_path_factory, monkeypatch):
     happen without the Xet attempt it was asserting. Clean CI runners hide it, developer machines
     do not.
     """
-    monkeypatch.setenv("HF_HOME", str(tmp_path_factory.mktemp("xet_health_home")))
-    try:
-        from unsloth_zoo import hf_xet_health
-    except Exception:  # noqa: BLE001 - degraded unsloth_zoo: nothing to isolate
+    # Load it the way the shim does. A bare `from unsloth_zoo import ...` raises
+    # NotImplementedError on a CPU-only host, because unsloth_zoo's __init__ runs accelerator
+    # detection -- so the plain import silently skipped this isolation on exactly the hosts the
+    # shim's GPU-init retry exists to support, while the module itself was perfectly available.
+    from utils.hf_xet_fallback import _load_optional
+
+    hf_xet_health = _load_optional("unsloth_zoo.hf_xet_health")
+    if hf_xet_health is None:
         yield
         return
     hf_xet_health.clear_xet_health()

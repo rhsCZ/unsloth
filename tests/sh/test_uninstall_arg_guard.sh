@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 #
-# Argument and pipe-safety tests for scripts/uninstall.sh.
-#
-# Behavioral cases use an instrumented copy that aborts before uninstalling.
-# The real no-argument case is skipped on WSL because it reaches host state.
+# Argument and pipe-safety tests for scripts/uninstall.sh. Behavioral cases use
+# an instrumented copy that aborts before uninstalling.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -54,7 +52,6 @@ assert_not_says() {
     esac
 }
 
-# Check the fixture as a unit.
 FIXTURE_PATHS=".unsloth/studio .unsloth/studio/auth/.desktop_secret .local/bin/unsloth .local/share/unsloth"
 
 # assert_fixture <label> <home> present|gone
@@ -70,13 +67,11 @@ assert_fixture() {
     if [ -z "$_missing" ]; then ok "$1"; else nope "$1 (wrong state:$_missing)"; fi
 }
 
-# Publish a validated fixture path. A global keeps setup failures from being
-# hidden by command-substitution errexit behavior.
+# A global, not command substitution: $() would swallow setup failures under -e.
 FIXTURE_HOME=""
 make_home() {
-    # Explicit template, not TMPDIR: BSD mktemp with no template implies -t and
-    # resolves the directory itself, so on macOS TMPDIR= lands a sibling of
-    # _TMP_ROOT and the check below aborts the suite.
+    # Explicit template: BSD mktemp with no template implies -t and picks its
+    # own directory, so TMPDIR= lands outside _TMP_ROOT on macOS.
     FIXTURE_HOME=$(mktemp -d "$_TMP_ROOT/home.XXXXXX") || FIXTURE_HOME=""
     case "$FIXTURE_HOME" in
         "$_TMP_ROOT"/*) ;;
@@ -125,8 +120,19 @@ for _flag in --help -h; do
     run_uninstall "$FIXTURE_HOME" "$_flag"
     check "$_flag exits 0" "0" "$RC"
     assert_says "$_flag prints usage" "Unsloth Studio uninstaller" "$OUT"
+    # Inside the loop: make_home mints a fresh fixture per iteration, so a check
+    # placed after the loop only ever sees the last flag's home and --help could
+    # wipe an install unnoticed.
+    assert_fixture "$_flag keeps the install" "$FIXTURE_HOME" present
 done
-assert_fixture "help keeps the install" "$FIXTURE_HOME" present
+
+# The piped help form has to be spelled out, because the obvious one never
+# works: where -h is accepted it is the shell's own hashall option, so
+# `... | sh -h` uninstalls with no arguments; where it is not, the shell exits.
+# Its own run, not the loop's leftover $OUT, so a failure names the right check.
+make_home
+run_uninstall "$FIXTURE_HOME" --help
+assert_says "usage documents the piped help form" "sh -s -- --help" "$OUT"
 
 echo "=== unknown arguments: abort before touching anything ==="
 
@@ -145,10 +151,14 @@ assert_fixture "a rejected positional argument keeps the install" "$FIXTURE_HOME
 make_home
 run_uninstall "$FIXTURE_HOME" --dry-run --help
 check "'--dry-run --help' exits 2" "2" "$RC"
+# An exit code alone would pass even if the guard rejected the argument only
+# after the removal had already started.
+assert_fixture "'--dry-run --help' keeps the install" "$FIXTURE_HOME" present
 
 make_home
 run_uninstall "$FIXTURE_HOME" --help --dry-run
 check "'--help --dry-run' exits 0" "0" "$RC"
+assert_fixture "'--help --dry-run' keeps the install" "$FIXTURE_HOME" present
 
 echo "=== no arguments: the guard must not have broken the uninstall ==="
 
@@ -168,10 +178,21 @@ else
     assert_fixture "no arguments removes the install" "$FIXTURE_HOME" gone
 fi
 
+echo "=== behaviour: the documented piped help form reaches the guard ==="
+
+# Portable counterpart to the Linux-only pipe-buffer case below: `sh -s --` is
+# the only piped spelling that gets arguments to the script rather than to the
+# shell, so it is the one the usage text points at and the one that has to work
+# everywhere.
+make_home
+OUT=$(HOME="$FIXTURE_HOME" sh -s -- --help < "$UNINSTALL_SH" 2>&1) || true
+assert_says     "'sh -s -- --help' prints usage"               "Unsloth Studio uninstaller" "$OUT"
+assert_not_says "'sh -s -- --help' never starts the uninstall" "$BODY_MARKER" "$OUT"
+assert_fixture  "'sh -s -- --help' keeps the install" "$FIXTURE_HOME" present
+
 echo "=== behaviour: a piped --help must not break the writer ==="
 
-# Shrink the pipe so an unread script tail produces a broken writer. Skip where
-# Linux F_SETPIPE_SZ is unavailable.
+# Shrink the pipe so an unread script tail produces a broken writer.
 if python3 -c 'import fcntl, sys; sys.exit(0 if sys.platform.startswith("linux") else 1)' 2>/dev/null; then
     make_home
     verdict=$(UNINSTALL_SH="$UNINSTALL_SH" FAKE_HOME="$FIXTURE_HOME" python3 - <<'PY'
@@ -209,7 +230,6 @@ PY
     case "$verdict" in
         skip:*|vacuous:*) echo "  SKIP: ${verdict#*: }" ;;
         *)
-            # Check both the writer and script exit codes.
             check "piped --help stays guarded" "ok:0:guarded" "$verdict"
             ;;
     esac

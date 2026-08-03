@@ -34,6 +34,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { isOllamaLinkPath } from "../model-config/model-identity";
 import {
   type PerModelConfig,
   resolveInitialConfig,
@@ -480,11 +481,15 @@ function ModelSelectorContent({
   const visibleConfigTarget = open ? configTarget : null;
   const openConfigPage = (id: string, meta: ModelSelectorChangeMeta) => {
     const leaf = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+    const isGguf = meta.isGguf ?? Boolean(meta.ggufVariant);
     setConfigTarget({
       id,
       displayName: meta.ggufVariant ? `${leaf} · ${meta.ggufVariant}` : leaf,
       ggufVariant: meta.ggufVariant ?? null,
-      isGguf: meta.isGguf ?? Boolean(meta.ggufVariant),
+      isGguf,
+      // Ollama's models sit under a link dir the resolver skips, so mirroring their
+      // settings would advertise a load the API can never make.
+      apiLoadable: isGguf && !isOllamaLinkPath(id),
       meta,
     });
   };
@@ -509,7 +514,7 @@ function ModelSelectorContent({
       className={cn(
         "unsloth-model-selector-menu menu-soft-surface ring-0 max-w-[calc(100vw-1rem)] min-w-0 gap-0",
         visibleConfigTarget
-          ? "w-[min(468px,calc(100vw-1rem))] px-4 pt-4 pb-4"
+          ? "max-h-[var(--radix-popover-content-available-height)] w-[min(468px,calc(100vw-1rem))] overflow-y-auto px-4 pt-4 pb-4"
           : cn(
               "pt-4 pb-0 pl-4",
               // Sized so the left-packed row keeps uniform gaps and the last

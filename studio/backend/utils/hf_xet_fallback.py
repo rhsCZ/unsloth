@@ -44,7 +44,10 @@ _shared_import_error: Optional[BaseException] = None
 # this module. Both loaders below mutate that one process-wide variable, so they must serialize
 # against each other, not merely against themselves: two locks would still allow A-saves-unset /
 # B-saves-"1" / A-restores-unset / B-restores-"1", leaving it set for the life of the process.
-_load_lock = threading.Lock()
+# Reentrant on purpose. It still excludes OTHER threads, which is all the env save/set/restore
+# sequence needs, but child_environment_for_spawn now holds it across a spawn and that context
+# manager legitimately nests -- its own _spawn_env_lock is an RLock for exactly the same reason.
+_load_lock = threading.RLock()
 
 
 def _load_shared() -> bool:
@@ -70,7 +73,10 @@ def _load_shared() -> bool:
             _shared_import_error = exc
             import os as _os
 
+            global _gpu_init_override_depth
             _prev_gpu_init = _os.environ.get("UNSLOTH_ZOO_DISABLE_GPU_INIT")
+            _ours = _prev_gpu_init != "1"
+            _gpu_init_override_depth += _ours  # claimed before the write, released after
             _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = "1"
             try:
                 import unsloth_zoo.hf_xet_fallback as shared
@@ -96,6 +102,21 @@ def _load_shared() -> bool:
                     _os.environ.pop("UNSLOTH_ZOO_DISABLE_GPU_INIT", None)
                 else:
                     _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = _prev_gpu_init
+                _gpu_init_override_depth -= _ours
+
+
+# Result cache for _load_optional, keyed by module name. Memoising the FAILURE is the point: on a
+# zoo that predates these modules the import can never start succeeding, and without this every
+# xet_health / record_xet_outcome / xet_env_overrides call re-ran the whole GPU-init retry --
+# re-opening the process-wide env window on every single download.
+_UNTRIED = object()
+_optional_modules: "dict[str, Any]" = {}
+
+
+def _reset_optional_module_cache() -> None:
+    """Forget memoised optional-module results (tests that install or remove a zoo module)."""
+    with _load_lock:
+        _optional_modules.clear()
 
 
 def _load_optional(module_name: str) -> Any:
@@ -113,8 +134,14 @@ def _load_optional(module_name: str) -> Any:
     import importlib
     import os as _os
 
+    cached = _optional_modules.get(module_name, _UNTRIED)
+    if cached is not _UNTRIED:
+        return cached
+
     try:
-        return importlib.import_module(module_name)
+        module = importlib.import_module(module_name)
+        _optional_modules[module_name] = module
+        return module
     except Exception as exc:  # noqa: BLE001 - an older/absent unsloth_zoo must degrade, not crash
         first_error = exc
 
@@ -124,21 +151,35 @@ def _load_optional(module_name: str) -> Any:
     # the process, so every later worker inherits it and skips Zoo's GPU init. Deliberately the
     # SAME lock _load_shared holds while it runs its own copy of this sequence.
     with _load_lock:
+        cached = _optional_modules.get(module_name, _UNTRIED)
+        if cached is not _UNTRIED:
+            return cached
+        global _gpu_init_override_depth
         previous = _os.environ.get("UNSLOTH_ZOO_DISABLE_GPU_INIT")
-        _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = "1"
+        ours = previous != "1"
+        # Claim ownership BEFORE the write and release it AFTER the restore, so the window in which
+        # the variable is set sits strictly inside the window in which a spawning thread can see
+        # that it is ours. The other order leaves a gap at each end where a child is handed a flag
+        # nobody is claiming, and a child that inherits it never clears it.
+        _gpu_init_override_depth += ours
         try:
-            module = importlib.import_module(module_name)
-        except Exception as exc:  # noqa: BLE001
-            import logging as _logging
-            _logging.getLogger(__name__).debug(
-                "%s unavailable (%s; with GPU init disabled: %s)", module_name, first_error, exc
-            )
-            module = None
+            _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = "1"
+            try:
+                module = importlib.import_module(module_name)
+            except Exception as exc:  # noqa: BLE001
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "%s unavailable (%s; with GPU init disabled: %s)", module_name, first_error, exc
+                )
+                module = None
+            finally:
+                if previous is None:
+                    _os.environ.pop("UNSLOTH_ZOO_DISABLE_GPU_INIT", None)
+                else:
+                    _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = previous
         finally:
-            if previous is None:
-                _os.environ.pop("UNSLOTH_ZOO_DISABLE_GPU_INIT", None)
-            else:
-                _os.environ["UNSLOTH_ZOO_DISABLE_GPU_INIT"] = previous
+            _gpu_init_override_depth -= ours
+        _optional_modules[module_name] = module
         return module
 
 
@@ -306,15 +347,71 @@ def _degraded_snapshot_download_with_xet_fallback(
 # only for these heavy names, not for ``child_should_disable_xet`` / ``DEFAULT_*``.
 _DEGRADED_ATTRS = {
     "DownloadStallError": _DegradedDownloadStallError,
-    "start_watchdog": _degraded_start_watchdog,
     "get_hf_download_state": _degraded_get_hf_download_state,
 }
+
+
+# Nonzero while a loader is inside its UNSLOTH_ZOO_DISABLE_GPU_INIT retry, during which that
+# variable is set process-wide. Read by utf8_child_env so a child spawned in that window does not
+# inherit it: unsloth_zoo injects triton and bitsandbytes STUBS when it is set, so a training child
+# that inherited it would silently run against no-ops. Only counted when the loader actually
+# introduced the value -- an operator who exported it themselves keeps it.
+_gpu_init_override_depth = 0
+
+
+def gpu_init_override_active() -> bool:
+    """Is a loader currently holding UNSLOTH_ZOO_DISABLE_GPU_INIT set for its own import?"""
+    return _gpu_init_override_depth > 0
+
+
+def env_override_barrier() -> Any:
+    """Context manager a caller holds across a spawn so no loader can be mid-override.
+
+    ``multiprocessing`` spawn children inherit the parent's live ``os.environ`` -- there is no env
+    dict to filter -- so the only way to keep UNSLOTH_ZOO_DISABLE_GPU_INIT out of a worker is to
+    make sure no loader has it set at the moment the child is created. The loaders never spawn, so
+    holding this alongside the spawn lock cannot deadlock. It is uncontended in practice because
+    ``_load_optional`` memoises: the window opens at most once per module per process.
+    """
+    return _load_lock
+
+
+def _supported_kwargs(fn: Any, kwargs: "dict[str, Any]") -> "dict[str, Any]":
+    """Drop kwargs *fn* does not accept; pass everything through if it takes ``**kwargs``.
+
+    Uninspectable callables (C functions, some test doubles) also pass through unchanged.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def start_watchdog(**kwargs: Any) -> Any:
+    """Shared stall watchdog, minus any kwarg the INSTALLED unsloth_zoo does not accept.
+
+    This is a version-skew adapter, and it is load-bearing: the supported floor (2026.8.1) has no
+    ``connect_timeout`` or ``heartbeat_interval`` and no ``**kwargs`` to absorb them, so passing one
+    raises TypeError -- and every caller wraps this in ``except Exception``, so the watchdog would
+    silently never start and a stalled Xet worker would never be killed or retried over HTTP. That
+    is the feature being entirely off, not degraded. Filtering here keeps newer knobs live on a
+    newer zoo without breaking the floor, and makes the NEXT new kwarg a no-op rather than a repeat
+    of this bug. Dropping the pre-byte budget on 2026.8.1 is safe: that release resets its timer
+    whenever the child owns no ``.incomplete``, which is exactly the connect phase.
+    """
+    impl = _shared.start_watchdog if _load_shared() else _degraded_start_watchdog
+    return impl(**_supported_kwargs(impl, kwargs))
+
 
 # Annotation-only declarations for the three names above: they bind NO value, so lookup still misses
 # and PEP 562 ``__getattr__`` resolves them lazily -- but ruff/pyflakes see them as defined, so listing
 # them in ``__all__`` does not trip F822 (while F822 still catches a real typo elsewhere in the list).
 DownloadStallError: type
-start_watchdog: Any
 get_hf_download_state: Any
 
 

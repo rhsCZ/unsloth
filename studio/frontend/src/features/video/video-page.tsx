@@ -8,7 +8,6 @@ import {
   FlimSlateIcon,
   Image03Icon,
   InformationCircleIcon,
-  SparklesIcon,
   VolumeHighIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -1505,9 +1504,11 @@ export function VideoPage({ active = true }: { active?: boolean }) {
   );
 
   return (
-    <div className="diffusion-surface flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    // The chat-style layout gives this page no outer top inset, so clear the custom
+    // titlebar here (34px on win/linux, 0 under macOS's native one) as chat does.
+    <div className="diffusion-surface flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden pt-[var(--studio-content-top-inset,0px)]">
       {/* Top: the model selector, sitting clear of the sidebar and level with the controls column below. Load progress shows in a toast. */}
-      <div className="flex h-[48px] shrink-0 items-start justify-between pl-6 pr-2 pt-[11px]">
+      <div className="flex h-[48px] shrink-0 items-start justify-between pl-[var(--studio-media-header-left-inset,1.5rem)] pr-2 pt-[var(--studio-chat-header-padding-top,11px)]">
         <div className="flex items-center gap-3">
           <ModelSelector
             models={VIDEO_MODELS}
@@ -1556,14 +1557,15 @@ export function VideoPage({ active = true }: { active?: boolean }) {
               settingsFadeClass,
             )}
           >
-          {/* Names the pane, as the Images column does. h-9 keeps both pages' headings level. */}
-          <div className="grid gap-1">
-            <h2 className="flex h-9 items-center gap-2 font-heading text-base font-medium text-foreground">
-              {/* The Images page's Create icon, so both headings read the same. */}
-              <HugeiconsIcon icon={SparklesIcon} className="size-4 shrink-0" />
-              Create
+          {/* Names the pane, as the Images column does. Same shape there, so
+              the two pages stay level. */}
+          <div className="mb-2 grid gap-1.5">
+            <h2 className="flex items-center gap-2 font-heading text-xl font-medium leading-none text-foreground">
+              {/* The app's Video icon, same as the sidebar row. */}
+              <HugeiconsIcon icon={FlimSlateIcon} className="size-[18px] shrink-0" />
+              Create videos
             </h2>
-            <p className="text-ui-11p5 leading-snug text-muted-foreground">
+            <p className="text-xs leading-snug text-muted-foreground">
               Generate a video from a prompt
             </p>
           </div>
@@ -1719,7 +1721,7 @@ export function VideoPage({ active = true }: { active?: boolean }) {
                     }
                   }}
                   onError={() => remintSrc(selected)}
-                  className="max-h-full max-w-full rounded-xl object-contain shadow-sm"
+                  className="max-h-full max-w-full object-contain shadow-sm"
                 />
                 {selected.has_audio && (
                   <div className="absolute left-4 top-4 flex items-center gap-1 rounded-lg bg-background/80 px-2 py-1 text-ui-11 font-medium shadow-lg ring-1 ring-border backdrop-blur">
@@ -1858,7 +1860,7 @@ export function VideoPage({ active = true }: { active?: boolean }) {
                   </span>
                   {/* Selection marker on a non-focusable overlay. */}
                   {video.id === selected?.id && (
-                    <span className="pointer-events-none absolute inset-0 z-20 rounded-[10px] border-2 border-primary" />
+                    <span className="pointer-events-none absolute inset-0 z-20 rounded-[10px] border border-border bg-white/35 dark:border-white/25 dark:bg-white/20" />
                   )}
                 </button>
                 </TooltipTrigger>

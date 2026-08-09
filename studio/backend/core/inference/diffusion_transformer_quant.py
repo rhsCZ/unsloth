@@ -23,7 +23,11 @@ probe is best-effort: an unsupported scheme yields None and the caller loads GGU
 
 from __future__ import annotations
 
+import re as _re
 from typing import Any, Optional
+
+# stdlib-only module (no torch), so this stays inside the "imported lazily" promise above.
+from core._torchao_stub import is_stubbed
 
 TQ_INT8 = "int8"
 TQ_FP8 = "fp8"
@@ -67,9 +71,31 @@ _QWENIMAGE_INT8_EXCLUDES = (
     "to_add_out",
     "txt_mlp",
 )
+# HunyuanVideo-1.5's attention trim (this PR) shrinks the text / image streams from their padded
+# lengths to the VALID token counts, so every text-stream Linear runs at a tiny M the int8 dynamic
+# path cannot handle. Both failures measured on B200:
+#   - M = 0 (t2v byt5 / image streams trim to zero tokens): torchao returns the input UNPROJECTED
+#     (a quantized 1472 -> 2048 Linear maps [1, 0, 1472] to [1, 0, 1472]), so the 2048-wide
+#     cond-type add crashes -> context_embedder_2 / image_embedder;
+#   - M <= 16 (a short prompt, or the empty negative prompt's ~6 tokens): torch._int_mm requires
+#     M > 16 and raises -> the TokenRefiner and every block's context-stream projections.
+# These run at M = text tokens (tens) against the video stream's M ~ 32k+, so bf16 here costs
+# nothing measurable and the video-stream linears keep full int8 coverage. "context_embedder"
+# also matches "context_embedder_2" (substring check).
+_HUNYUAN15_INT8_EXCLUDES = (
+    "context_embedder",
+    "image_embedder",
+    "add_q_proj",
+    "add_k_proj",
+    "add_v_proj",
+    "to_add_out",
+    "ff_context",
+)
 _INT8_FAMILY_EXCLUDE_NAME_TOKENS: dict[str, tuple[str, ...]] = {
     "qwen-image": _QWENIMAGE_INT8_EXCLUDES,
     "qwen-image-edit": _QWENIMAGE_INT8_EXCLUDES,  # same DiT class + unpadded text stream
+    "hunyuanvideo-1.5": _HUNYUAN15_INT8_EXCLUDES,
+    "hunyuanvideo-1.5-720p": _HUNYUAN15_INT8_EXCLUDES,
 }
 
 
@@ -90,9 +116,13 @@ def exclude_tokens_for_scheme(scheme: str, family: Optional[str] = None) -> tupl
 
 # Per-arch preference for ``auto``, best first. On Blackwell fp8 leads: on B200 plain fp8 dynamic is faster AND more accurate at DiT shapes,
 # while mxfp8 block scaling only adds overhead. nvfp4's FP4 GEMM is real with torch>=2.11 but wins only on very large GEMMs (0.81x on Z-Image
-# 1024px, LPIPS 0.166 vs fp8 0.044), so it stays an explicit opt-in. Consumer / workstation GPUs move int8 first: they halve fp8/fp16 FP32-accumulate.
+# 1024px, LPIPS 0.166 vs fp8 0.044), so it is kept OUT of the ladder below and stays an explicit opt-in (transformer_quant="nvfp4"): auto must
+# never silently drop to a scheme that is both slower and less accurate. Restore the commented Blackwell tier to re-enable it once the FP4
+# tensor-core GEMM wins at the DiT's real shapes (hidden ~3072, MLP ~12288, M ~4096) and its accuracy is validated by the prequant gate.
+# Consumer / workstation GPUs move int8 first: they halve fp8/fp16 FP32-accumulate.
 _AUTO_LADDER: tuple[tuple[tuple[int, int], tuple[str, ...]], ...] = (
-    ((10, 0), (TQ_FP8, TQ_NVFP4, TQ_MXFP8, TQ_INT8)),  # Blackwell sm_100+
+    ((10, 0), (TQ_FP8, TQ_MXFP8, TQ_INT8)),  # Blackwell sm_100+ (nvfp4 is explicit opt-in only)
+    # ((10, 0), (TQ_FP8, TQ_NVFP4, TQ_MXFP8, TQ_INT8)),  # restore to re-enable nvfp4 under auto
     ((8, 9), (TQ_FP8, TQ_INT8)),  # Ada sm_89 / Hopper sm_90
     ((8, 0), (TQ_INT8,)),  # Ampere sm_80 / sm_86
 )
@@ -108,6 +138,88 @@ _FAMILY_SCHEME_DENY: dict[str, frozenset[str]] = {
 
 def _family_denied(family, scheme: str) -> bool:
     return scheme in _FAMILY_SCHEME_DENY.get(str(family or "").strip().lower(), ())
+
+
+def family_denies_scheme(family: Optional[str], scheme: str) -> bool:
+    """Whether the measured deny list rules ``scheme`` out for ``family``, regardless of hardware.
+
+    Public so the refusal message can tell the two "no" answers apart. ``select_transformer_quant_scheme``
+    folds a family deny and a missing kernel into the same ``None``, and an EXPLICIT scheme now fails
+    closed, so that single answer is the whole explanation the user gets."""
+    return _family_denied(family, scheme)
+
+
+def explain_unusable_scheme(family: Optional[str], scheme: str) -> str:
+    """Why ``select_transformer_quant_scheme`` answered None for an EXPLICIT ``scheme``.
+
+    One ``None`` covers three different faults, and the caller turns it into a 409, so the message
+    has to separate them: a family the scheme is measured to break, a torchao that cannot run at
+    all in this install, and a GPU without the kernels. Only the last is a hardware limit, and only
+    the last is what the message used to say."""
+    if family_denies_scheme(family, scheme):
+        return (
+            f"'{scheme}' is ruled out for family '{family}' by the measured accuracy gate (it "
+            "renders black frames or fails the quality bar on this DiT), whatever the GPU"
+        )
+    unavailable = torchao_unavailable_reason()
+    if unavailable is not None:
+        return (
+            f"the torchao in this install cannot run any dense quant scheme ({unavailable}); this "
+            "is a package/version problem, not a limit of the GPU"
+        )
+    return f"'{scheme}' is not usable for family '{family}' on this GPU"
+
+
+# The reason torchao cannot be used AT ALL, resolved once. None means it imports.
+_TORCHAO_UNAVAILABLE: Optional[tuple[Optional[str]]] = None
+
+
+def torchao_unavailable_reason() -> Optional[str]:
+    """Why no dense quant scheme can run in this install, or ``None`` when torchao is usable.
+
+    ``_smoke_probe`` swallows every failure, so a torchao that does not IMPORT is indistinguishable
+    from a GPU that lacks the kernels. That did not matter while a declined explicit scheme fell
+    back silently; now it is refused, and the message is all the user has. A torch/torchao version
+    skew is the common cause and it is not a hardware fault: telling a Blackwell owner "'fp8' is not
+    usable on this GPU" when the real error is ``cannot import name 'ScalingType' from
+    torch.nn.functional`` points them at the wrong fix entirely."""
+    global _TORCHAO_UNAVAILABLE
+    if _TORCHAO_UNAVAILABLE is not None:
+        return _TORCHAO_UNAVAILABLE[0]
+    reason: Optional[str] = None
+    if is_stubbed("torchao"):
+        # The Windows-ROCm stub imports fine and quantises nothing, so the import test below passes.
+        reason = "this platform ships a torchao stub whose quantize_ is a no-op"
+    else:
+        try:
+            from torchao.quantization import quantize_  # noqa: F401
+        except Exception as exc:  # noqa: BLE001 — any import failure means the same thing here
+            import logging
+
+            # The full text, paths included, goes to the server log; the client gets it stripped.
+            # This string is interpolated into the precision-refusal RuntimeError, which both load
+            # routes return verbatim as the 409 detail, and an ImportError routinely names the
+            # absolute file of the module that raised it.
+            logging.getLogger(__name__).warning(
+                "torchao is unusable: %s: %s", type(exc).__name__, exc
+            )
+            reason = _strip_paths(f"{type(exc).__name__}: {exc}")
+    _TORCHAO_UNAVAILABLE = (reason,)
+    return reason
+
+
+# An absolute POSIX or Windows path, up to the first whitespace / quote / bracket. Deliberately
+# requires a directory separator so dotted module names ("torch.nn.functional") survive intact:
+# those are the actionable half of the message.
+_ABS_PATH_RE = _re.compile(r"(?:[A-Za-z]:)?[\\/](?:[^\s'\"()<>|]*[\\/])+[^\s'\"()<>|]*")
+
+
+def _strip_paths(text: str) -> str:
+    """``text`` with server filesystem paths replaced by ``<path>``.
+
+    Refusal reasons reach an authenticated caller as a 409 body. The reason a load was refused is
+    the caller's business; where this machine keeps its site-packages is not."""
+    return _ABS_PATH_RE.sub("<path>", text)
 
 
 # Cache of (scheme, device) -> bool so the quantise+matmul smoke test runs once.
@@ -193,6 +305,11 @@ def dense_transformer_supported(target: Any) -> bool:
     dtype (the only config any torchao dynamic scheme accelerates). Cheap loader pre-check."""
     if getattr(target, "device", None) != "cuda":
         return False
+    # The Windows-ROCm torchao stub's quantize_ is a no-op, so the smoke probe passes on a
+    # still-dense Linear and the transformer gets MARKED quantised without being quantised,
+    # giving the wrong VRAM budget and compile policy.
+    if is_stubbed("torchao"):
+        return False
     try:
         import torch
         return getattr(target, "dtype", None) is torch.bfloat16
@@ -204,6 +321,8 @@ def select_transformer_quant_scheme(
     target: Any,
     requested: Optional[str],
     family: Optional[str] = None,
+    *,
+    unproven_ok: bool = False,
 ) -> Optional[str]:
     """The concrete scheme to apply, or None to fall back to GGUF.
 
@@ -211,7 +330,13 @@ def select_transformer_quant_scheme(
     quantise+matmul smoke test, so an unavailable Blackwell fp4/mx kernel lands on fp8/int8
     with no error. An explicit scheme is honored only if supported (else None), never swapped.
     ``family`` applies the measured deny list (``_FAMILY_SCHEME_DENY``): schemes that produce
-    black frames / out-of-bar drift are skipped by ``auto`` and refused when explicit."""
+    black frames / out-of-bar drift are skipped by ``auto`` and refused when explicit.
+
+    ``unproven_ok`` is for the PRE-EVICTION route gate. The smoke test allocates, so a resident
+    chat/image/video model can make it fail for want of VRAM rather than for want of a kernel; the
+    gate runs before the arbiter has evicted that model, so treating "could not tell" as "not
+    supported" refuses a load the very next moment would have run. It answers "is this scheme
+    provably unusable here", and the real selection still happens after the handoff."""
     requested = normalize_transformer_quant(requested)
     if requested is None or not dense_transformer_supported(target):
         return None
@@ -219,7 +344,7 @@ def select_transformer_quant_scheme(
     if requested != TQ_AUTO:
         if _family_denied(family, requested):
             return None
-        return requested if _scheme_supported(requested, device) else None
+        return requested if _scheme_supported(requested, device, unproven_ok = unproven_ok) else None
     cap = _capability()
     if cap is None:
         return None
@@ -252,7 +377,12 @@ def _capability() -> Optional[tuple[int, int]]:
         return None
 
 
-def _scheme_supported(scheme: str, device: str) -> bool:
+def _scheme_supported(
+    scheme: str,
+    device: str,
+    *,
+    unproven_ok: bool = False,
+) -> bool:
     """CUDA + (for fp8) the fp8 dtype + a cached quantise+matmul smoke test for ``scheme``."""
     try:
         import torch
@@ -262,13 +392,31 @@ def _scheme_supported(scheme: str, device: str) -> bool:
             return False
     except Exception:
         return False
-    return _smoke_probe(scheme, device)
+    return _smoke_probe(scheme, device, unproven_ok = unproven_ok)
 
 
-def _smoke_probe(scheme: str, device: str) -> bool:
-    """True iff a tiny Linear quantised with ``scheme`` runs one M=32 forward. Cached per
-    (scheme, device). Makes ``auto`` robust to a build lacking a prototype kernel: it fails
-    here and the ladder moves on, rather than crashing at the first real denoise step."""
+def _smoke_probe(
+    scheme: str,
+    device: str,
+    *,
+    unproven_ok: bool = False,
+) -> bool:
+    """True iff a tiny Linear quantised with ``scheme`` runs one M=32 forward and returns
+    finite values. Cached per (scheme, device). Makes ``auto`` robust to a build lacking a
+    prototype kernel: it fails here and the ladder moves on, rather than crashing at the first
+    real denoise step.
+
+    Half the input is all-zero rows and the output is checked for finiteness, because a kernel
+    that runs is not the same as one that is usable. torchao's ``_choose_scale_float8`` has no
+    eps clamp, so a zero row yields scale 0 and NaN qdata; that is the root cause behind
+    qwen-image's fp8 black frames (its txt stream emits all-zero token rows through a set of
+    ``txt_mlp.net.2`` linears that changes run to run, which is why keeping a fixed subset bf16
+    does not fix it). ``_make_quant_config`` floors it with ``activation_value_lb``, but only
+    when the installed torchao exposes that kwarg, and without a zero row the probe passed on a
+    build lacking it. Zero rows are not exotic: every Wan pipeline pads prompt embeddings with
+    ``new_zeros`` out to 226 or 512, so the tail rows reaching the DiT are exactly zero.
+    Measured on B200, 4096-wide Linear: 412 of 512 rows non-finite without the floor, 0 of 512
+    with it. Failing here costs one ladder step down to int8 instead."""
     key = (scheme, device)
     if key in _SMOKE_CACHE:
         return _SMOKE_CACHE[key]
@@ -279,15 +427,49 @@ def _smoke_probe(scheme: str, device: str) -> bool:
 
         lin = torch.nn.Linear(512, 512, bias = False).to(device = device, dtype = torch.bfloat16)
         quantize_(lin, _make_quant_config(scheme), filter_fn = make_filter_fn(0))
+        # M stays 32 (scaled_mm wants 16-aligned dims); the zero rows go inside it, not after it.
         x = torch.randn(32, 512, device = device, dtype = torch.bfloat16)
+        x[16:] = 0
         with torch.no_grad():
-            lin(x)
+            out = lin(x)
         torch.cuda.synchronize()
-        ok = True
-    except Exception:
+        ok = bool(torch.isfinite(out).all().item())
+    except Exception as exc:  # noqa: BLE001
+        if _is_out_of_memory(exc):
+            # NOT cached, and NOT a verdict. An out-of-memory says nothing about the scheme, and
+            # the probe now runs on the ROUTE thread -- BEFORE the arbiter evicts the resident chat
+            # model, which is the whole point of raising the refusal early -- so it meets a full
+            # GPU by design. Caching it would refuse every later EXPLICIT request for this scheme
+            # for the life of the process, on a host that runs it fine once the eviction has
+            # happened; and answering "unsupported" to the pre-eviction gate (``unproven_ok``)
+            # refuses THIS load for the same reason the eviction was about to remove.
+            return unproven_ok
         ok = False
     _SMOKE_CACHE[key] = ok
     return ok
+
+
+def _is_out_of_memory(exc: BaseException) -> bool:
+    """Whether ``exc`` is an allocator failure rather than a verdict on the scheme.
+
+    ``torch.OutOfMemoryError`` subclasses ``RuntimeError``, not ``MemoryError``, and moved between
+    ``torch.cuda`` and ``torch`` across releases, so both names are tried and the message is the
+    backstop (a CUDA OOM surfaced through another wrapper still says "out of memory")."""
+    try:
+        import torch
+        named = tuple(
+            t
+            for t in (
+                getattr(torch, "OutOfMemoryError", None),
+                getattr(torch.cuda, "OutOfMemoryError", None),
+            )
+            if isinstance(t, type)
+        )
+        if named and isinstance(exc, named):
+            return True
+    except Exception:  # noqa: BLE001 — no torch: the message test below still applies
+        pass
+    return isinstance(exc, MemoryError) or "out of memory" in str(exc).lower()
 
 
 def _resolve_fast_accum(fast_accum: Optional[bool]) -> bool:

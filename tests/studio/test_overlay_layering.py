@@ -95,9 +95,9 @@ def test_both_floating_panels_stack_on_the_shared_layer(path: Path):
         f"which would win over the shared layer: {container!r}"
     )
     src = path.read_text(encoding = "utf-8")
-    assert "useFloatingPanelZIndex" in src, (
-        f"{path.name}: the panel no longer reads the shared floating panel layer"
-    )
+    assert (
+        "useFloatingPanelZIndex" in src
+    ), f"{path.name}: the panel no longer reads the shared floating panel layer"
 
 
 def test_the_notification_stack_uses_the_named_layer():
@@ -107,9 +107,9 @@ def test_the_notification_stack_uses_the_named_layer():
     assert len(stacks) == 2, f"expected the two bottom-right stacks, found {len(stacks)}"
     for stack in stacks:
         assert not _Z.search(stack), f"the stack still carries a hard-coded z-index: {stack!r}"
-    assert src.count("zIndex: Z_LAYER.OVERLAY_STACK") == 2, (
-        "the two bottom-right stacks disagree on their layer"
-    )
+    assert (
+        src.count("zIndex: Z_LAYER.OVERLAY_STACK") == 2
+    ), "the two bottom-right stacks disagree on their layer"
 
 
 @pytest.mark.parametrize(
@@ -122,9 +122,9 @@ def test_the_layers_that_outrank_the_panels_still_do(path: Path, layer: str):
     still Tailwind classes, so check the literal against the scale as well as the
     ordering -- otherwise the scale can say one thing and the class another."""
     layers = _layers()
-    assert layers[layer] > layers["FLOATING_PANEL_TOP"], (
-        f"{layer} no longer outranks the floating panels"
-    )
-    assert layers[layer] in _z_indexes(path), (
-        f"{path.name} has drifted from Z_LAYER.{layer} ({layers[layer]})"
-    )
+    assert (
+        layers[layer] > layers["FLOATING_PANEL_TOP"]
+    ), f"{layer} no longer outranks the floating panels"
+    assert layers[layer] in _z_indexes(
+        path
+    ), f"{path.name} has drifted from Z_LAYER.{layer} ({layers[layer]})"

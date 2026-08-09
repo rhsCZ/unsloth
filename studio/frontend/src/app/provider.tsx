@@ -33,6 +33,7 @@ import { TauriUpdateContext } from "@/hooks/tauri-update-context";
 import { type BackendStatus, useTauriBackend } from "@/hooks/use-tauri-backend";
 import { useTauriUpdate } from "@/hooks/use-tauri-update";
 import { isTauri } from "@/lib/api-base";
+import { Z_LAYER } from "@/lib/z-layers";
 import { useRouterState } from "@tanstack/react-router";
 import { MotionConfig } from "motion/react";
 import {
@@ -397,8 +398,12 @@ function TauriUpdateLayer({
   ) : (
     // Capped like the browser stack: the download panel shares it, so both must fit.
     <div
-      className="pointer-events-none fixed right-4 z-[9998] flex flex-col items-end gap-2"
-      style={{ bottom: stack.bottom, maxHeight: stack.maxHeight }}
+      className="pointer-events-none fixed right-4 flex flex-col items-end gap-2"
+      style={{
+        bottom: stack.bottom,
+        maxHeight: stack.maxHeight,
+        zIndex: Z_LAYER.OVERLAY_STACK,
+      }}
     >
       <UpdateBanner
         status={update.status}
@@ -679,8 +684,12 @@ function TauriWrapper({ children }: { children: ReactNode }) {
         {/* Capped to the viewport, or a long download list plus expanded notes
             pushes the top of the stack off screen. */}
         <div
-          className="pointer-events-none fixed right-4 z-[9998] flex flex-col items-end gap-2"
-          style={{ bottom: stack.bottom, maxHeight: stack.maxHeight }}
+          className="pointer-events-none fixed right-4 flex flex-col items-end gap-2"
+          style={{
+            bottom: stack.bottom,
+            maxHeight: stack.maxHeight,
+            zIndex: Z_LAYER.OVERLAY_STACK,
+          }}
         >
           <WebUpdateBanner
             positioned={false}

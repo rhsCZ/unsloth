@@ -107,6 +107,57 @@ def _build_report_targets(training_args) -> list[str] | str:
     return report_to or "none"
 
 
+def _verbose_logging_requested() -> bool:
+    """Whether `unsloth studio --verbose` is in effect.
+
+    --verbose zeroes both access-log windows (unsloth_cli/commands/studio.py), and the
+    env is inherited by the training subprocess, so the same pair is the signal here.
+    """
+    def _zero(name: str) -> bool:
+        raw = (os.environ.get(name) or "").strip()
+        try:
+            return raw != "" and int(raw) <= 0
+        except ValueError:
+            return False
+    return _zero("UNSLOTH_STUDIO_ACCESS_LOG_DEDUP_MS") and _zero(
+        "UNSLOTH_STUDIO_ACCESS_LOG_POLL_DEDUP_MS"
+    )
+
+
+def _hf_stdout_progress_disabled() -> bool:
+    """`disable_tqdm` for the HF training args, unless --verbose asked for everything.
+
+    The trainer subprocess has no terminal: its stdout is teed into the server log, so
+    the tqdm bar becomes a burst of carriage-return fragments that can also land inside
+    a structlog JSON record and make it unparseable. Every number the bar carries is
+    already published twice, as the throttled `training_progress` event added in #7087
+    and as the per-step SSE stream the UI charts.
+    """
+    return not _verbose_logging_requested()
+
+
+def _drop_hf_stdout_callbacks(trainer) -> None:
+    """Remove HF's stdout progress callbacks from an already-built trainer.
+
+    `disable_tqdm=True` only swaps ProgressCallback for PrinterCallback, which prints a
+    raw dict per step instead (`{'loss': '0.5684', 'grad_norm': ..., 'epoch': ...}`).
+    Both write to the same stdout, so both have to go; Studio's own progress callback,
+    the SSE stream and `training_progress` are unaffected. Best effort: a transformers
+    build without these classes just keeps its current behaviour.
+    """
+    if _verbose_logging_requested():
+        return
+    try:
+        from transformers.trainer_callback import PrinterCallback, ProgressCallback
+    except Exception:  # noqa: BLE001 - never let log tidying break a training run
+        return
+    for callback_cls in (PrinterCallback, ProgressCallback):
+        try:
+            trainer.remove_callback(callback_cls)
+        except Exception:  # noqa: BLE001 - not attached, or an incompatible trainer
+            pass
+
+
 class UnslothTrainer:
     """
     Unsloth Training Backend
@@ -386,6 +437,9 @@ class UnslothTrainer:
             "seed": random_seed,
             "output_dir": output_dir,
             "report_to": _build_report_targets(training_args),
+            # The subprocess stdout is teed into the server log, so HF's bar is
+            # noise there; --verbose restores it. See _hf_stdout_progress_disabled.
+            "disable_tqdm": _hf_stdout_progress_disabled(),
         }
 
         if training_args.get("enable_tensorboard", False):
@@ -3153,6 +3207,9 @@ class UnslothTrainer:
                     args = TrainingArguments(**config),
                 )
                 self.trainer.add_callback(self._create_progress_callback())
+                # Studio publishes progress itself, so HF's stdout callbacks are pure
+                # duplication in a log that has no terminal. --verbose keeps them.
+                _drop_hf_stdout_callbacks(self.trainer)
 
                 batch_size = training_args.get("batch_size", 2)
                 total = self._calculate_total_steps(
@@ -3191,6 +3248,9 @@ class UnslothTrainer:
                     ),
                 )
                 self.trainer.add_callback(self._create_progress_callback())
+                # Studio publishes progress itself, so HF's stdout callbacks are pure
+                # duplication in a log that has no terminal. --verbose keeps them.
+                _drop_hf_stdout_callbacks(self.trainer)
 
                 batch_size = training_args.get("batch_size", 2)
                 total = self._calculate_total_steps(
@@ -3235,6 +3295,9 @@ class UnslothTrainer:
 
                 self.trainer = Seq2SeqTrainer(**trainer_kwargs)
                 self.trainer.add_callback(self._create_progress_callback())
+                # Studio publishes progress itself, so HF's stdout callbacks are pure
+                # duplication in a log that has no terminal. --verbose keeps them.
+                _drop_hf_stdout_callbacks(self.trainer)
 
                 batch_size = training_args.get("batch_size", 2)
                 total = self._calculate_total_steps(
@@ -3395,6 +3458,7 @@ class UnslothTrainer:
                 "seed": training_args.get("random_seed", 3407),
                 "output_dir": output_dir,
                 "report_to": _build_report_targets(training_args),
+                "disable_tqdm": _hf_stdout_progress_disabled(),
                 "include_num_input_tokens_seen": True,
                 # serial_as_none = False: this is a config boundary, not a map() call site. The audio
                 # paths ask for 1 to keep dataset workers off a process holding audio/CUDA state, and
@@ -3738,6 +3802,9 @@ class UnslothTrainer:
 
             # ========== PROGRESS TRACKING ==========
             self.trainer.add_callback(self._create_progress_callback())
+            # Studio publishes progress itself, so HF's stdout callbacks are pure
+            # duplication in a log that has no terminal. --verbose keeps them.
+            _drop_hf_stdout_callbacks(self.trainer)
 
             train_dataset_obj = dataset["dataset"] if isinstance(dataset, dict) else dataset
             is_streaming_dataset = detect_streaming_dataset(train_dataset_obj)

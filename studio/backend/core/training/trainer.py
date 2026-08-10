@@ -2831,6 +2831,15 @@ class UnslothTrainer:
                 return (formatted, None)
 
             # ========== FORMAT FIRST ==========
+            # `datasets` is imported long after logging setup and exposes no env var, so
+            # its Map bars can only be turned off once it is actually in. Re-running the
+            # helper here is cheap and idempotent, and this is the point just before the
+            # map() calls that draw them.
+            try:
+                from loggers.config import quiet_third_party_progress_bars
+                quiet_third_party_progress_bars()
+            except Exception:  # noqa: BLE001 - never let log tidying stop a run
+                pass
             logger.info(f"Formatting dataset with format_type='{format_type}'...\n")
 
             dataset_info = format_and_template_dataset(

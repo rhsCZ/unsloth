@@ -70,7 +70,13 @@ def quiet_third_party_progress_bars() -> None:
 
     # transformers derives its own _tqdm_active from the hub flag at import time,
     # so a module imported BEFORE this ran still needs the explicit call.
-    for _mod in ("transformers", "diffusers"):
+    #
+    # datasets is here for the training worker: `Map:` and `Standardizing chat format
+    # (num_proc=8):` bars from dataset preparation were the ones actually landing
+    # inside JSON records. datasets 4.x exposes no env var of its own, so the API call
+    # is the only lever, and it is imported long after logging setup, which is why
+    # this function is safe to call again once a library is in.
+    for _mod in ("transformers", "diffusers", "datasets"):
         module = sys.modules.get(_mod)
         if module is None:
             continue

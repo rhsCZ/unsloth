@@ -82,6 +82,7 @@ def _silence_datasets_bar_output() -> None:
         return
     try:
         from datasets.utils.tqdm import tqdm as bar_cls
+
         if getattr(bar_cls, "_unsloth_output_silenced", False):
             return
         original_init = bar_cls.__init__

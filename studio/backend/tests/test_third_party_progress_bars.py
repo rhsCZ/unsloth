@@ -33,6 +33,7 @@ def test_the_default_is_installed_and_marked(monkeypatch):
     log_config.quiet_third_party_progress_bars()
 
     import os
+
     assert os.environ[_HUB] == "1"
     assert os.environ[log_config._PROGRESS_BARS_DEFAULTED] == "1"
 
@@ -47,6 +48,7 @@ def test_verbose_leaves_the_bars_alone(monkeypatch):
     log_config.quiet_third_party_progress_bars()
 
     import os
+
     assert _HUB not in os.environ
 
 
@@ -57,9 +59,7 @@ def test_hugging_face_false_spellings_are_honored(monkeypatch):
     for value in ("off", "no", "0", "false", ""):
         monkeypatch.setenv(_HUB, value)
         called = []
-        monkeypatch.setattr(
-            log_config, "_silence_datasets_bar_output", lambda: called.append(1)
-        )
+        monkeypatch.setattr(log_config, "_silence_datasets_bar_output", lambda: called.append(1))
         log_config.quiet_third_party_progress_bars()
         assert called == [], value
 
@@ -77,9 +77,7 @@ def test_the_hub_is_not_imported_just_to_quiet_it():
         "quiet_third_party_progress_bars()\n"
         "print('HUB_IMPORTED' if 'huggingface_hub' in sys.modules else 'HUB_ABSENT')\n"
     ) % str(_BACKEND)
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output = True, text = True, timeout = 300
-    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output = True, text = True, timeout = 300)
     assert "HUB_ABSENT" in out.stdout, out.stdout + out.stderr
 
 
@@ -88,6 +86,7 @@ def test_allow_progress_bars_only_undoes_our_own_default(monkeypatch):
     monkeypatch.setenv(log_config._PROGRESS_BARS_DEFAULTED, "1")
     log_config.allow_progress_bars()
     import os
+
     assert _HUB not in os.environ
 
     # An operator who set it themselves keeps it.

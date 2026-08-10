@@ -351,11 +351,45 @@ class UnslothTrainer:
         trainer_ref = self
 
         class _ProgressCallback(TrainerCallback):
+            # Per-batch evaluation progress used to exist only as HF's tqdm bar, which
+            # this PR drops. A long eval would otherwise look stalled between the last
+            # step log and the eval result, so it is republished, throttled, as status
+            # and one structured line.
+            _eval_seen = 0
+            _eval_last_report = 0.0
+
             def on_train_begin(self, args, state, control, **kwargs):
                 # on_log reports an empty status, else the UI stays on "Starting training...".
                 if trainer_ref.should_stop:
                     return
                 trainer_ref._update_progress(status_message = "Training in progress...")
+
+            def on_evaluate(self, args, state, control, **kwargs):
+                type(self)._eval_seen = 0
+                type(self)._eval_last_report = 0.0
+
+            def on_prediction_step(
+                self,
+                args,
+                state,
+                control,
+                eval_dataloader = None,
+                **kwargs,
+            ):
+                cls = type(self)
+                cls._eval_seen += 1
+                total = None
+                try:
+                    total = len(eval_dataloader) if eval_dataloader is not None else None
+                except TypeError:  # an iterable-style loader has no length
+                    total = None
+                now = time.time()
+                if cls._eval_last_report and (now - cls._eval_last_report) < 15.0:
+                    return
+                cls._eval_last_report = now
+                where = f"{cls._eval_seen:,}" + (f"/{total:,}" if total else "")
+                trainer_ref._update_progress(status_message = f"Evaluating... {where} batches")
+                logger.info("evaluating", batches = cls._eval_seen, total_batches = total)
 
             def on_log(
                 self,

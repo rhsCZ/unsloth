@@ -60,6 +60,16 @@ def _run_diffusion_child(*, event_queue: Any, stop_queue: Any, config: dict) -> 
     # Imported lazily so this module (and the route layer) stays torch-free at import.
     from .diffusion_lora_trainer import run_diffusion_training_process
 
+    # This child never runs LogConfig.setup_logging, and diffusers hard-codes
+    # _tqdm_active = True at import and honours no env var, so without this its
+    # "Loading pipeline components..." bars go straight to the inherited stdout and
+    # interleave with the server's structured records.
+    try:
+        from loggers.config import quiet_third_party_progress_bars
+        quiet_third_party_progress_bars()
+    except Exception:  # noqa: BLE001 - never let log tidying stop a training run
+        pass
+
     run_diffusion_training_process(event_queue = event_queue, stop_queue = stop_queue, config = config)
 
 

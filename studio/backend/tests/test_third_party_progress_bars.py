@@ -182,3 +182,44 @@ def test_the_embedding_trainer_is_quiet_too():
     text = (_BACKEND / "core/training/worker.py").read_text(encoding = "utf-8")
     assert '"disable_tqdm": _hf_stdout_progress_disabled(),' in text
     assert "_drop_hf_stdout_callbacks(trainer)" in text
+
+
+def test_the_diffusion_training_child_quiets_diffusers():
+    # That child never runs setup_logging, and diffusers honours no env var.
+    text = (_BACKEND / "core/training/diffusion_training_service.py").read_text(encoding = "utf-8")
+    assert "quiet_third_party_progress_bars()" in text
+
+
+def test_embedding_runs_republish_the_trainer_summary():
+    text = (_BACKEND / "core/training/worker.py").read_text(encoding = "utf-8")
+    body = text[text.index("class _EmbeddingProgressCallback") :]
+    assert "trainer summary" in body
+
+
+def test_evaluation_progress_survives_the_dropped_bar():
+    # ProgressCallback's per-batch eval bar was the only sign a long evaluation was
+    # moving; the replacement has to publish it as status and a structured line.
+    text = (_BACKEND / "core/training/trainer.py").read_text(encoding = "utf-8")
+    assert "def on_prediction_step(" in text
+    assert '"evaluating"' in text
+    assert "Evaluating..." in text
+
+
+def test_evaluation_progress_is_throttled_and_counts():
+    """The throttle from _ProgressCallback.on_prediction_step, in isolation.
+
+    Importing the trainer module pulls in unsloth and torch, so the rule is checked
+    the same way the throughput one is.
+    """
+
+    def report(
+        seen,
+        last_report,
+        now,
+        window = 15.0,
+    ):
+        return not (last_report and (now - last_report) < window)
+
+    assert report(1, 0.0, 100.0) is True  # first batch always reports
+    assert report(2, 100.0, 101.0) is False  # a second later, still quiet
+    assert report(900, 100.0, 116.0) is True  # 16s later, one more line

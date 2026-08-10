@@ -4579,6 +4579,20 @@ def _create_embedding_progress_callback(
         ):
             if not logs:
                 return
+            # Trainer's end-of-run summary carries train_runtime, samples and steps per
+            # second, total_flos and memory, which nothing else here publishes. It used
+            # to reach the log only through PrinterCallback's raw stdout dict.
+            from core.training.trainer import _RESERVED_LOG_KEYS, _TRAINER_SUMMARY_KEYS
+
+            if any(k in logs for k in _TRAINER_SUMMARY_KEYS):
+                logger.info(
+                    "trainer summary",
+                    **{
+                        k: v
+                        for k, v in logs.items()
+                        if isinstance(k, str) and k not in _RESERVED_LOG_KEYS
+                    },
+                )
             loss_value = logs.get("loss", logs.get("train_loss", None))
             current_step = state.global_step
 

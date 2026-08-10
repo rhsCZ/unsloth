@@ -113,12 +113,14 @@ def _verbose_logging_requested() -> bool:
     --verbose zeroes both access-log windows (unsloth_cli/commands/studio.py), and the
     env is inherited by the training subprocess, so the same pair is the signal here.
     """
+
     def _zero(name: str) -> bool:
         raw = (os.environ.get(name) or "").strip()
         try:
             return raw != "" and int(raw) <= 0
         except ValueError:
             return False
+
     return _zero("UNSLOTH_STUDIO_ACCESS_LOG_DEDUP_MS") and _zero(
         "UNSLOTH_STUDIO_ACCESS_LOG_POLL_DEDUP_MS"
     )

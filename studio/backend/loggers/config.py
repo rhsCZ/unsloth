@@ -63,7 +63,6 @@ def quiet_third_party_progress_bars() -> None:
 
     try:
         from huggingface_hub.utils import disable_progress_bars
-
         disable_progress_bars()
     except Exception:  # noqa: BLE001 — quieting logs must never break startup
         pass

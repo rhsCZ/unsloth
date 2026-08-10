@@ -139,10 +139,13 @@ def test_trainer_summary_metrics_are_republished():
         assert key in text, key
 
 
-def test_a_resumed_run_does_not_report_checkpoint_history_as_throughput():
+def test_setup_time_is_never_reported_as_throughput():
+    # elapsed_seconds covers imports, the model load and the dataset build, and on a
+    # resume the counters predate this process, so the first line reports no rate at
+    # all and the second one measures a real in-training interval.
     text = (_BACKEND / "core/training/training.py").read_text(encoding = "utf-8")
-    assert "not self._progress_run_resumed" in text
-    assert 'self._progress_run_resumed = bool(config.get("resume_from_checkpoint"))' in text
+    assert "The first logged line reports no throughput on purpose" in text
+    assert "_progress_run_resumed" not in text
 
 
 def test_the_early_dataset_branches_are_covered():
@@ -223,3 +226,17 @@ def test_evaluation_progress_is_throttled_and_counts():
     assert report(1, 0.0, 100.0) is True  # first batch always reports
     assert report(2, 100.0, 101.0) is False  # a second later, still quiet
     assert report(900, 100.0, 116.0) is True  # 16s later, one more line
+
+
+def test_the_embedding_worker_quiets_dataset_bars():
+    text = (_BACKEND / "core/training/worker.py").read_text(encoding = "utf-8")
+    body = text[text.index("def _run_embedding_training") :]
+    assert "quiet_third_party_progress_bars()" in body
+
+
+def test_evaluation_hands_the_status_back_to_training():
+    # An empty status is ignored downstream, so the UI would sit on "Evaluating..."
+    # for the rest of the run.
+    text = (_BACKEND / "core/training/trainer.py").read_text(encoding = "utf-8")
+    on_evaluate = text[text.index("def on_evaluate(") : text.index("def on_prediction_step(")]
+    assert "Training in progress..." in on_evaluate

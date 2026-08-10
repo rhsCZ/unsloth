@@ -4676,6 +4676,16 @@ def _run_embedding_training(event_queue: Any, stop_queue: Any, config: dict) -> 
         )
         return
 
+    # datasets is only in the process now, and setup_logging ran long before it, so
+    # this is the first point where its Generating/Map bars can be quieted. Without
+    # it a local JSON/CSV/Parquet or Hub load_dataset writes them into this worker's
+    # structured log.
+    try:
+        from loggers.config import quiet_third_party_progress_bars
+        quiet_third_party_progress_bars()
+    except Exception:  # noqa: BLE001 - never let log tidying stop a run
+        pass
+
     # ── Stop signal handling ──
     _should_stop = False
     _save_on_stop = True

@@ -30,16 +30,15 @@ def _throughput(step, prev_step, elapsed, prev_elapsed, tokens, prev_tokens):
             s_per_step = round(d_time / d_steps, 3)
             if tokens is not None and prev_tokens is not None and tokens > prev_tokens:
                 tok_per_s = round((tokens - prev_tokens) / d_time, 1)
-    elif elapsed is not None and elapsed > 0 and prev_step < 0:
-        s_per_step = round(elapsed / step, 3)
-        if tokens:
-            tok_per_s = round(tokens / elapsed, 1)
     return s_per_step, tok_per_s
 
 
-def test_first_line_reports_the_run_average():
-    # Step 4 after 8s having seen 4000 tokens: 2.0 s/step, 500 tok/s.
-    assert _throughput(4, -1, 8.0, None, 4000, None) == (2.0, 500.0)
+def test_the_first_line_reports_no_throughput():
+    # elapsed_seconds is wall time since the worker started, so it also covers the
+    # imports, the model download and load and the dataset build; and on a resumed run
+    # the step and token counters predate this process. Neither is a training rate.
+    assert _throughput(4, -1, 8.0, None, 4000, None) == (None, None)
+    assert _throughput(1010, -1, 20.0, None, 4_000_000, None) == (None, None)
 
 
 def test_later_lines_report_the_interval_not_the_average():

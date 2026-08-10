@@ -365,8 +365,14 @@ class UnslothTrainer:
                 trainer_ref._update_progress(status_message = "Training in progress...")
 
             def on_evaluate(self, args, state, control, **kwargs):
-                type(self)._eval_seen = 0
-                type(self)._eval_last_report = 0.0
+                cls = type(self)
+                had_status = cls._eval_last_report > 0.0
+                cls._eval_seen = 0
+                cls._eval_last_report = 0.0
+                # An empty status is ignored downstream on purpose, so the UI would
+                # sit on "Evaluating..." for the rest of the run.
+                if had_status and not trainer_ref.should_stop:
+                    trainer_ref._update_progress(status_message = "Training in progress...")
 
             def on_prediction_step(
                 self,

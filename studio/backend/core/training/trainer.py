@@ -2781,6 +2781,17 @@ class UnslothTrainer:
                 logger.info("Stopped before applying chat template\n")
                 return None
 
+            # `datasets` is imported long after logging setup and exposes no env var, so
+            # its Map/Filter bars can only be quieted once it is actually in. This is the
+            # last point common to every branch below: the audio preprocessors, the
+            # raw-text path (filter + EOS map) and the audio-VLM formatter all run their
+            # own dataset operations and return before the chat-template path.
+            try:
+                from loggers.config import quiet_third_party_progress_bars
+                quiet_third_party_progress_bars()
+            except Exception:  # noqa: BLE001 - never let log tidying stop a run
+                pass
+
             # ========== AUDIO MODELS: custom preprocessing ==========
             if self._audio_type == "csm":
                 processed = self._preprocess_csm_dataset(dataset, custom_format_mapping)
@@ -2861,15 +2872,6 @@ class UnslothTrainer:
                 return (formatted, None)
 
             # ========== FORMAT FIRST ==========
-            # `datasets` is imported long after logging setup and exposes no env var, so
-            # its Map bars can only be turned off once it is actually in. Re-running the
-            # helper here is cheap and idempotent, and this is the point just before the
-            # map() calls that draw them.
-            try:
-                from loggers.config import quiet_third_party_progress_bars
-                quiet_third_party_progress_bars()
-            except Exception:  # noqa: BLE001 - never let log tidying stop a run
-                pass
             logger.info(f"Formatting dataset with format_type='{format_type}'...\n")
 
             dataset_info = format_and_template_dataset(

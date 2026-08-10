@@ -4955,6 +4955,8 @@ def _run_embedding_training(event_queue: Any, stop_queue: Any, config: dict) -> 
     warmup_steps_val = config.get("warmup_steps")
     log_frequency = config.get("log_frequency", 50)
 
+    from core.training.trainer import _drop_hf_stdout_callbacks, _hf_stdout_progress_disabled
+
     training_args_kwargs = {
         "output_dir": output_dir,
         "per_device_train_batch_size": batch_size,
@@ -4969,6 +4971,10 @@ def _run_embedding_training(event_queue: Any, stop_queue: Any, config: dict) -> 
         "optim": config.get("optim", "adamw_8bit"),
         "weight_decay": config.get("weight_decay", 0.001),
         "seed": config.get("random_seed", 3407),
+        # Same reason as the UnslothTrainer path: this worker has no terminal, its
+        # stdout is teed into the server log, and _create_embedding_progress_callback
+        # already publishes every number the bar carries.
+        "disable_tqdm": _hf_stdout_progress_disabled(),
     }
 
     if max_steps_val and max_steps_val > 0:
@@ -5015,6 +5021,9 @@ def _run_embedding_training(event_queue: Any, stop_queue: Any, config: dict) -> 
             args = args,
             callbacks = [progress_callback],
         )
+        # disable_tqdm only swaps ProgressCallback for PrinterCallback, which prints a
+        # raw dict per step instead; both write to the same stdout.
+        _drop_hf_stdout_callbacks(trainer)
 
         trainer.train(resume_from_checkpoint = resume_from_checkpoint)
     except Exception as e:

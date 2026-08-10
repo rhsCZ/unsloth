@@ -97,6 +97,18 @@ def _silence_datasets_bar_output() -> None:
         pass
 
 
+def quiet_bar_kwargs() -> dict:
+    """tqdm kwargs that keep a bar counting but stop it writing to the log.
+
+    For Studio's own explicit bars (the dataset conversion loops), which no library
+    switch reaches. Empty when the operator asked to keep bars, so nothing changes.
+    """
+    value = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
+    if value is None or not _env_is_true(value):
+        return {}
+    return {"file": _NullStream()}
+
+
 def allow_progress_bars() -> None:
     """Undo an inherited Studio default so this process can draw progress bars.
 

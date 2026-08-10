@@ -143,3 +143,42 @@ def test_a_resumed_run_does_not_report_checkpoint_history_as_throughput():
     text = (_BACKEND / "core/training/training.py").read_text(encoding = "utf-8")
     assert "not self._progress_run_resumed" in text
     assert 'self._progress_run_resumed = bool(config.get("resume_from_checkpoint"))' in text
+
+
+def test_the_early_dataset_branches_are_covered():
+    # The raw-text and audio-VLM branches run their own filter/map and return before
+    # the chat-template path, so the suppression has to come before them.
+    text = (_BACKEND / "core/training/trainer.py").read_text(encoding = "utf-8")
+    quiet_at = text.index("quiet_third_party_progress_bars()")
+    assert quiet_at < text.index("# ========== AUDIO MODELS: custom preprocessing ==========")
+    assert quiet_at < text.index("# ========== FORMAT FIRST ==========")
+
+
+def test_the_precache_helper_restores_rather_than_enables():
+    text = (_BACKEND / "utils/datasets/llm_assist.py").read_text(encoding = "utf-8")
+    assert "if not _bars_were_off:" in text
+    assert "_bars_were_off = bool(are_progress_bars_disabled())" in text
+
+
+def test_the_video_loader_quiets_diffusers_too():
+    text = (_BACKEND / "core/inference/video.py").read_text(encoding = "utf-8")
+    assert "quiet_third_party_progress_bars()" in text
+
+
+def test_our_own_conversion_bars_are_redirected(monkeypatch):
+    monkeypatch.setenv(_HUB, "1")
+    assert "file" in log_config.quiet_bar_kwargs()
+    monkeypatch.setenv(_HUB, "off")
+    assert log_config.quiet_bar_kwargs() == {}
+    monkeypatch.delenv(_HUB, raising = False)
+    assert log_config.quiet_bar_kwargs() == {}
+
+    text = (_BACKEND / "utils/datasets/format_conversion.py").read_text(encoding = "utf-8")
+    assert text.count("**_quiet_bar_kwargs(),") == 2
+
+
+def test_the_embedding_trainer_is_quiet_too():
+    # _run_embedding_training bypasses UnslothTrainer entirely.
+    text = (_BACKEND / "core/training/worker.py").read_text(encoding = "utf-8")
+    assert '"disable_tqdm": _hf_stdout_progress_disabled(),' in text
+    assert "_drop_hf_stdout_callbacks(trainer)" in text

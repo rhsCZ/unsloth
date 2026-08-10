@@ -138,6 +138,20 @@ def _hf_stdout_progress_disabled() -> bool:
     return not _verbose_logging_requested()
 
 
+# Keys that only ever appear on Trainer's end-of-run / end-of-eval summary record.
+_TRAINER_SUMMARY_KEYS = (
+    "train_runtime",
+    "train_samples_per_second",
+    "train_steps_per_second",
+    "total_flos",
+    "eval_runtime",
+    "eval_samples_per_second",
+    "eval_steps_per_second",
+)
+# structlog fills these itself; a metric of the same name would collide.
+_RESERVED_LOG_KEYS = frozenset({"event", "level", "timestamp", "logger"})
+
+
 def _drop_hf_stdout_callbacks(trainer) -> None:
     """Remove HF's stdout progress callbacks from an already-built trainer.
 
@@ -353,6 +367,20 @@ class UnslothTrainer:
             ):
                 if not logs:
                     return
+                # Trainer's end-of-run and end-of-eval summaries carry numbers that
+                # appear nowhere else in Studio (train_samples_per_second,
+                # train_steps_per_second, total_flos, memory, eval runtime). They used
+                # to reach the log only through PrinterCallback's raw stdout dict, so
+                # with that callback gone they are re-published here, structured, once.
+                if any(k in logs for k in _TRAINER_SUMMARY_KEYS):
+                    logger.info(
+                        "trainer summary",
+                        **{
+                            k: v
+                            for k, v in logs.items()
+                            if isinstance(k, str) and k not in _RESERVED_LOG_KEYS
+                        },
+                    )
                 loss_value = logs.get("loss", logs.get("train_loss", None))
                 current_step = state.global_step
                 grad_norm = logs.get("grad_norm", None)

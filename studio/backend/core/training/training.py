@@ -1107,6 +1107,10 @@ class TrainingBackend:
         # can report throughput over the interval between them.
         self._last_progress_log_elapsed: Optional[float] = None
         self._last_progress_log_tokens: Optional[int] = None
+        # A resumed run restores global_step and num_input_tokens_seen from the
+        # checkpoint while the clock starts fresh, so the run-average shortcut on the
+        # first logged line would divide seconds of work by thousands of steps.
+        self._progress_run_resumed: bool = False
 
         # Training metrics (consumed by routes for SSE and /metrics)
         self.loss_history: list = []
@@ -1768,6 +1772,7 @@ class TrainingBackend:
             self._last_progress_log_step = -1
             self._last_progress_log_elapsed = None
             self._last_progress_log_tokens = None
+            self._progress_run_resumed = bool(config.get("resume_from_checkpoint"))
             self.loss_history.clear()
             self.lr_history.clear()
             self.step_history.clear()
@@ -3107,9 +3112,11 @@ class TrainingBackend:
                 s_per_step = round(d_time / d_steps, 3)
                 if tokens is not None and prev_tokens is not None and tokens > prev_tokens:
                     tok_per_s = round((tokens - prev_tokens) / d_time, 1)
-        elif elapsed is not None and elapsed > 0 and prev < 0:
-            # First logged line of the run: no interval yet, so report the average
-            # since the run began rather than nothing.
+        elif elapsed is not None and elapsed > 0 and prev < 0 and not self._progress_run_resumed:
+            # First logged line of a fresh run: no interval yet, so report the average
+            # since the run began rather than nothing. Skipped on a resume, where the
+            # step and token counters predate this process's clock; the next line has a
+            # real interval and reports normally.
             s_per_step = round(elapsed / step, 3)
             if tokens:
                 tok_per_s = round(tokens / elapsed, 1)

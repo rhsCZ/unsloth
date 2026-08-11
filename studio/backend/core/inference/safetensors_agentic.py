@@ -260,8 +260,7 @@ def strip_tool_markup_streaming(
     def _seg(segment: str, is_last: bool) -> str:
         # Scan order lives in the parser's ``strip_segment`` (seg_final -> is_last) so this
         # path, the GGUF streaming path and ``strip_tool_markup`` cannot drift apart. Its
-        # end-of-turn arms run only on the last segment (a bare ``foo[ARGS]`` before
-        # <think> is prose).
+        # end-of-turn arms run only on the last segment (``foo[ARGS]`` before <think> is prose).
         return _parser_strip_segment(
             segment, seg_final = is_last, enabled_tool_names = enabled_tool_names
         )
@@ -627,8 +626,7 @@ def run_safetensors_tool_loop(
         def _strip_streaming_display(text: str) -> str:
             if not (auto_heal_tool_calls or tool_protocol_active):
                 return text
-            # The safetensors-only Magistral leading-reasoning removal first, then the
-            # byte-identical shared strip.
+            # Safetensors-only Magistral leading-reasoning removal first, then the shared strip.
             return _streaming_stripper.strip(_strip_mistral_reasoning(text))
 
         detect_state = _state_buffering
@@ -670,8 +668,8 @@ def run_safetensors_tool_loop(
         def _should_start_provisional_render_html(content: str) -> bool:
             # Re-resolved per chunk on purpose, not cached: the first call's name is not
             # final until its marker completes. A truncated ``<function=rende`` ahead of a
-            # finished ``<function=get_weather>`` reads as get_weather until the earlier
-            # one closes, then as render_html; caching would drop the panel there.
+            # finished ``<function=get_weather>`` reads as get_weather until it closes, then
+            # as render_html; caching would drop the panel there.
             if not _provisional_render_html_possible or provisional_render_html_started:
                 return False
             return _first_detected_tool_name(content) == "render_html"

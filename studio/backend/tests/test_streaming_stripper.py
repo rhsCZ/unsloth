@@ -195,8 +195,7 @@ def test_scan_is_amortized_not_quadratic():
         return elapsed(stripper.strip, tokens)
 
     # 4x the tokens: the reference rescans everything (~16x), the incremental one resumes
-    # (~4x). Comparing growth ratios rather than absolutes keeps this meaningful on a
-    # noisy CI box while still catching a regression to full rescanning.
+    # (~4x). Ratios rather than absolutes keep this meaningful on a noisy CI box.
     reference_growth = elapsed(_reference_strip, long) / max(elapsed(_reference_strip, short), 1e-9)
     incremental_growth = incremental(long) / max(incremental(short), 1e-9)
 

@@ -87,9 +87,9 @@ _TOOL_CLOSED_BLOCK_PATS = [_TC_JSON_CLOSED_PAT, _TC_FUNC_CLOSED_PAT]
 # A lazy closed-pair pattern whose close token is absent would rescan to EOF from every
 # opener; skip that doomed (quadratic) pass. Shared by both strip helpers.
 _PAT_REQUIRED_TOKEN = {
-    # A tuple marks a required CLOSER. Besides skipping the pass when it is absent,
-    # callers bound the regex at the last such closer: nothing can match past it, and a
-    # tail full of openers would retry a lazy pattern at each one (quadratic).
+    # A tuple marks a required CLOSER. Besides skipping the pass when it is absent, callers
+    # bound the regex at the last one: nothing matches past it, and a tail full of openers
+    # would retry a lazy pattern at each one (quadratic).
     _TC_JSON_CLOSED_PAT: ("</tool_call>", "<tool_call>"),
     _TC_GEMMA_CLOSED_PAT: ("<tool_call|>", "<|tool_call>"),
     _TC_FUNC_CLOSED_PAT: ("</function>", "<function="),
@@ -472,9 +472,8 @@ def _iter_bracket_spans(
         kind, m = min(live, key = lambda km: km[1].start())
         last_close = last_array_close if kind == "array" else last_brace_close
         if m.end() > last_close:
-            # This and every later candidate of the same kind lacks its closing
-            # character. Keep other formats live, but skip a balanced scan to EOF
-            # per doomed opener.
+            # This and every later candidate of the same kind lacks its closing character.
+            # Keep other formats live, but skip a balanced scan to EOF per doomed opener.
             nexts[kind] = None
             cursor = m.end()
             continue
@@ -700,9 +699,9 @@ def _inside_open_parameter(
     if param_start_re is None:
         param_start_re = _TC_PARAM_START_RE
     last_param_start = -1
-    # Both supported vocabularies begin with ``<param``, so search backwards to the
-    # nearest candidate and validate it with the original regex instead of rescanning the
-    # whole prefix per marker. Unknown caller patterns keep the general finditer path.
+    # Both supported vocabularies begin with ``<param``, so search backwards to the nearest
+    # candidate and validate it with the regex instead of rescanning the whole prefix per
+    # marker. Unknown caller patterns keep the general finditer path.
     reverse_param_search = (
         param_start_re is _TC_PARAM_START_RE
         or param_start_re.pattern.startswith(r"<(?:parameter|param)")

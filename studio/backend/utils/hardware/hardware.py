@@ -1060,11 +1060,23 @@ def _torch_get_physical_gpu_count() -> Optional[int]:
 def rocm_windows_free_is_untrusted() -> bool:
     """Whether ``mem_get_info``'s FREE half must be treated as an over-report.
 
-    On Windows ROCm the driver's free figure does not track residency: it is
-    commonly returned unchanged as VRAM fills, so it reads at or near ``total`` on
-    a card that is nearly full (ROCm/librocdxg#57, ROCm/TheRock#3724, and
-    ggml-org/llama.cpp#24836 on the reading being OS-dependent). The TOTAL half is
-    fine, and every other platform is left alone.
+    AMD documents this. The hipMemGetInfo reference carries the warning verbatim:
+    "On Windows, the free memory only accounts for memory allocated by this
+    process and may be optimistic." WDDM virtualises video memory, so a process is
+    told its own budget rather than the card's residency, and a fresh process sees
+    free at or near total whatever else is resident. An AMD engineer states the
+    same in ROCm/librocdxg#57, with a measured 24410 MiB of 24560 reported free on
+    a deliberately filled card, and confirms it is the intended Windows model
+    rather than a defect. Corroborating symptom in ROCm/TheRock#3724: torch OOM on
+    Windows while reporting 52.71 GiB of a 53.92 GiB card free.
+
+    Near ``total``, not equal to it, which is why callers cap instead of testing
+    for a sentinel value. The TOTAL half is fine.
+
+    Every other platform is left alone, WSL included and deliberately: AMD keeps
+    the WSL2 reading consistent with native Linux, where free tracks physical
+    residency, and ``sys.platform`` is "linux" there, so this predicate is False
+    and the accurate figure is passed through uncapped.
 
     One predicate for the whole backend so the sentinel is recognised in one place
     (#7452 reporting side, #8403 guard side).
@@ -1112,8 +1124,11 @@ def trusted_mem_get_info(device: Any = None, *, module: Any = None) -> tuple[int
 def _torch_get_per_device_info(device_indices: list[int]) -> list[Dict[str, Any]]:
     """Query torch for per-GPU name, total VRAM, and used VRAM.
 
-    ``used_gb`` is ``None`` on Windows ROCm when ``hipMemGetInfo`` reports
-    ``free == total`` (ROCm/ROCm#1909): that 0 means unknown, not empty.
+    ``used_gb`` is ``None`` on Windows ROCm when the driver reports ``free ==
+    total``: that 0 means unknown, not empty. This is the DISPLAY path, so it
+    reports unknown rather than a pessimistic ceiling; a ceiling is the right
+    answer for a refusal and the wrong one for a number shown to the user as
+    measured.
     """
     mod, _ = _torch_get_device_module()
     if mod is None:

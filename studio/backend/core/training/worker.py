@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import structlog
 from loggers import get_logger
+import importlib
 import math
 import os
 import shutil
@@ -57,7 +58,6 @@ from utils.training_runs import build_default_output_dir_name
 from utils.wheel_utils import (
     direct_wheel_url,
     flash_attn_wheel_url,
-    has_blackwell_gpu,
     install_wheel,
     probe_torch_wheel_env,
     url_exists,
@@ -967,6 +967,20 @@ def _hipcc_gcc_install_dir() -> str | None:
     return None
 
 
+def _is_importable(import_name: str) -> bool:
+    # Invalidate finder caches so a package installed earlier in this process is seen.
+    importlib.invalidate_caches()
+    try:
+        __import__(import_name)
+        return True
+    except Exception as exc:
+        # A wheel built for another arch/ABI raises OSError/RuntimeError ("undefined symbol",
+        # "no kernel image is available"), not ImportError, so catch everything: the caller
+        # treats any failure as "not installed" and falls back rather than hard-failing.
+        logger.debug("%s is not importable (%s: %s)", import_name, type(exc).__name__, exc)
+        return False
+
+
 def _install_package_wheel_first(
     *,
     event_queue: Any,
@@ -981,12 +995,9 @@ def _install_package_wheel_first(
     pypi_spec: str | None = None,
     pypi_status_message: str | None = None,
 ) -> bool:
-    try:
-        __import__(import_name)
+    if _is_importable(import_name):
         logger.info("%s already installed", display_name)
         return True
-    except ImportError:
-        pass
 
     if _model_offline_mode_enabled():
         logger.info("Skipping %s installation while offline", display_name)
@@ -1015,8 +1026,16 @@ def _install_package_wheel_first(
             run = _sp.run,
         ):
             if result.returncode == 0:
-                logger.info("Installed prebuilt %s wheel successfully", display_name)
-                return True
+                # A wheel can install yet fail to import (CUDA/ABI or arch mismatch); verify
+                # before trusting it, else fall through to the PyPI/source path below.
+                if _is_importable(import_name):
+                    logger.info("Installed prebuilt %s wheel successfully", display_name)
+                    return True
+                logger.warning(
+                    "%s wheel installed but is not importable; falling back to PyPI",
+                    display_name,
+                )
+                break
             logger.warning(
                 "%s failed to install %s wheel:\n%s",
                 installer,
@@ -1964,12 +1983,6 @@ def _should_try_runtime_flash_attn_install(max_seq_length: int) -> bool:
 
 def _ensure_flash_attn_for_long_context(event_queue: Any, max_seq_length: int) -> None:
     if not _should_try_runtime_flash_attn_install(max_seq_length):
-        return
-    if has_blackwell_gpu():
-        _send_status(
-            event_queue,
-            "Skipping flash-attn install: Blackwell GPU detected (sm_100+); no compatible prebuilt wheel",
-        )
         return
 
     installed = _install_package_wheel_first(

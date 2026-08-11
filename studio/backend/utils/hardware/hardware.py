@@ -1060,26 +1060,21 @@ def _torch_get_physical_gpu_count() -> Optional[int]:
 def rocm_windows_free_is_untrusted() -> bool:
     """Whether ``mem_get_info``'s FREE half must be treated as an over-report.
 
-    AMD documents this. The hipMemGetInfo reference carries the warning verbatim:
-    "On Windows, the free memory only accounts for memory allocated by this
-    process and may be optimistic." WDDM virtualises video memory, so a process is
-    told its own budget rather than the card's residency, and a fresh process sees
-    free at or near total whatever else is resident. An AMD engineer states the
-    same in ROCm/librocdxg#57, with a measured 24410 MiB of 24560 reported free on
-    a deliberately filled card, and confirms it is the intended Windows model
-    rather than a defect. Corroborating symptom in ROCm/TheRock#3724: torch OOM on
-    Windows while reporting 52.71 GiB of a 53.92 GiB card free.
+    AMD documents this: the hipMemGetInfo reference warns "On Windows, the free
+    memory only accounts for memory allocated by this process and may be optimistic."
+    WDDM virtualises video memory, so a process is told its own budget rather than
+    the card's residency and a fresh process sees free at or near total whatever else
+    is resident. An AMD engineer confirms in ROCm/librocdxg#57 that this is the
+    intended Windows model rather than a defect, measuring 24410 MiB of 24560
+    reported free on a deliberately filled card; ROCm/TheRock#3724 is the same
+    symptom, torch OOM while reporting 52.71 GiB of a 53.92 GiB card free.
 
-    Near ``total``, not equal to it, which is why callers cap instead of testing
-    for a sentinel value. The TOTAL half is fine.
-
-    Every other platform is left alone, WSL included and deliberately: AMD keeps
-    the WSL2 reading consistent with native Linux, where free tracks physical
-    residency, and ``sys.platform`` is "linux" there, so this predicate is False
-    and the accurate figure is passed through uncapped.
-
-    One predicate for the whole backend so the sentinel is recognised in one place
-    (#7452 reporting side, #8403 guard side).
+    Near ``total``, not equal to it, so callers cap instead of testing for a
+    sentinel. The TOTAL half is fine. Every other platform is left alone, WSL
+    included and deliberately: AMD keeps the WSL2 reading consistent with native
+    Linux, where free tracks physical residency, and ``sys.platform`` is "linux"
+    there, so this is False and the accurate figure passes through uncapped. One
+    predicate for the whole backend (#7452 reporting side, #8403 guard side).
     """
     return sys.platform == "win32" and IS_ROCM
 

@@ -980,6 +980,10 @@ def _is_importable(import_name: str) -> bool:
         return False
 
 
+# Kept in step with install_python_stack._FLASH_ATTN_IMPORT_PROBE_TIMEOUT.
+_IMPORT_PROBE_TIMEOUT = 300
+
+
 def _is_importable_isolated(import_name: str) -> bool:
     """Probe the import in a child process.
 
@@ -997,7 +1001,7 @@ def _is_importable_isolated(import_name: str) -> bool:
             ],
             stdout = _sp.DEVNULL,
             stderr = _sp.DEVNULL,
-            timeout = 300,
+            timeout = _IMPORT_PROBE_TIMEOUT,
             # No env override: the probe should see exactly what the real in-process import
             # will see a moment later, and nothing here decodes child output.
         )

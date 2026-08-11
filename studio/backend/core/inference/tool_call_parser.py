@@ -694,9 +694,9 @@ def strip_segment(
             if first_close < 0:
                 continue
             probe_start = first_close + len(token)
-            needs_bound = first_close < first_opener or seg.find(
-                opener, probe_start, probe_start + 256
-            ) >= 0
+            needs_bound = (
+                first_close < first_opener or seg.find(opener, probe_start, probe_start + 256) >= 0
+            )
             if not needs_bound:
                 seg = pat.sub("", seg)
             else:
@@ -1247,9 +1247,7 @@ def _marker_inside_leading_envelope(content: str, enabled_tool_names: Optional[s
         if first_close < 0:
             continue
         probe_start = first_close + len(token)
-        if first_close < first_opener or content.find(
-            opener, probe_start, probe_start + 256
-        ) >= 0:
+        if first_close < first_opener or content.find(opener, probe_start, probe_start + 256) >= 0:
             scan_end = content.rfind(token) + len(token)
         else:
             scan_end = len(content)
@@ -1265,9 +1263,9 @@ def _marker_inside_leading_envelope(content: str, enabled_tool_names: Optional[s
         if first_close < 0:
             continue
         probe_start = first_close + len(token)
-        needs_bound = first_close < first_opener or residue.find(
-            opener, probe_start, probe_start + 256
-        ) >= 0
+        needs_bound = (
+            first_close < first_opener or residue.find(opener, probe_start, probe_start + 256) >= 0
+        )
         if not needs_bound:
             residue = _pat.sub("", residue)
         else:

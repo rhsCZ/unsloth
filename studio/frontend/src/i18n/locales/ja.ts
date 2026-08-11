@@ -20,6 +20,8 @@ export const ja = {
     hubSectionAriaLabel: "Hub セクション",
     pickModelFile: "ディスクからモデルファイルを選択",
     ejectLoadedModel: "読み込み済みモデルをアンロード",
+    modelDropped: "提供終了",
+    modelDroppedByProvider: "{provider} · 提供終了",
     multipleMatches:
       "一致する{noun}が複数あります。リストから1つ選択してください。",
     rateLimitedTitle: "Hugging Face のレート制限に達しました",

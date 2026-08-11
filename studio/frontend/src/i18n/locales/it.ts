@@ -1206,6 +1206,8 @@ export const it = {
     hubSectionAriaLabel: "Sezione Hub",
     pickModelFile: "Scegli un file del modello dal disco",
     ejectLoadedModel: "Espelli il modello caricato",
+    modelDropped: "Non più disponibile",
+    modelDroppedByProvider: "{provider} · non più offerto",
     multipleMatches:
       "Sono stati trovati più {noun} corrispondenti. Scegline uno dall'elenco.",
     rateLimitedTitle: "Limite di richieste di Hugging Face raggiunto",

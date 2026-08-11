@@ -19,6 +19,8 @@ export const hi = {
     hubSectionAriaLabel: "Hub सेक्शन",
     pickModelFile: "डिस्क से मॉडल फ़ाइल चुनें",
     ejectLoadedModel: "लोड किया गया मॉडल इजेक्ट करें",
+    modelDropped: "अब उपलब्ध नहीं",
+    modelDroppedByProvider: "{provider} · अब उपलब्ध नहीं",
     multipleMatches:
       "एक से अधिक मेल खाते {noun} मिले। सूची में से एक चुनें।",
     rateLimitedTitle: "Hugging Face की अनुरोध सीमा पूरी हो गई",

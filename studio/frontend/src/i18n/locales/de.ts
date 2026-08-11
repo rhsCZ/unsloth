@@ -19,6 +19,8 @@ export const de = {
     hubSectionAriaLabel: "Hub-Bereich",
     pickModelFile: "Modelldatei vom Datenträger auswählen",
     ejectLoadedModel: "Geladenes Modell auswerfen",
+    modelDropped: "Nicht mehr verfügbar",
+    modelDroppedByProvider: "{provider} · nicht mehr angeboten",
     multipleMatches:
       "Mehrere passende {noun} gefunden. Wählen Sie einen Eintrag aus der Liste aus.",
     rateLimitedTitle: "Hugging Face-Ratenlimit erreicht",

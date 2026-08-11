@@ -19,6 +19,8 @@ export const es = {
     hubSectionAriaLabel: "Sección del Hub",
     pickModelFile: "Elegir un archivo de modelo del disco",
     ejectLoadedModel: "Expulsar el modelo cargado",
+    modelDropped: "Ya no está disponible",
+    modelDroppedByProvider: "{provider} · ya no se ofrece",
     multipleMatches:
       "Hay varios {noun} coincidentes. Elige uno de la lista.",
     rateLimitedTitle: "Se alcanzó el límite de solicitudes de Hugging Face",

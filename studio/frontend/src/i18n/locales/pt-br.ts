@@ -19,6 +19,8 @@ export const ptBR = {
     hubSectionAriaLabel: "Seção do Hub",
     pickModelFile: "Escolher um arquivo de modelo no disco",
     ejectLoadedModel: "Ejetar o modelo carregado",
+    modelDropped: "Não é mais oferecido",
+    modelDroppedByProvider: "{provider} · não é mais oferecido",
     multipleMatches:
       "Há vários {noun} correspondentes. Escolha uma opção na lista.",
     rateLimitedTitle: "Limite de requisições do Hugging Face atingido",

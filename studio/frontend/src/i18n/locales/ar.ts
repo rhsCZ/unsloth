@@ -19,6 +19,8 @@ export const ar = {
     hubSectionAriaLabel: "قسم Hub",
     pickModelFile: "اختيار ملف نموذج من القرص",
     ejectLoadedModel: "إخراج النموذج المحمّل",
+    modelDropped: "لم يعد متاحًا",
+    modelDroppedByProvider: "{provider} · لم يعد متاحًا",
     multipleMatches:
       "توجد عدة نتائج مطابقة ضمن {noun}. اختر نتيجة من القائمة.",
     rateLimitedTitle: "تم بلوغ حد طلبات Hugging Face",

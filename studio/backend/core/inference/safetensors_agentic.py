@@ -85,9 +85,8 @@ _MAX_BARE_JSON_BUFFER = 16384
 # exact-duplicate calls and cap the count so a runaway turn cannot fan out.
 _MAX_TOOL_CALLS_PER_TURN = 8
 
-# Re-scan only enough settled text to catch a protocol literal split across two
-# cumulative streamer snapshots.  ``_rehearsal_name_start`` can still walk back
-# through the complete candidate when the split literal is ``[ARGS]``.
+# Enough settled text to catch a protocol literal split across two cumulative snapshots.
+# ``_rehearsal_name_start`` still walks back through the candidate when the split is ``[ARGS]``.
 _TOOL_SIGNAL_OVERLAP = max(map(len, TOOL_XML_SIGNALS)) - 1
 
 
@@ -619,17 +618,17 @@ def run_safetensors_tool_loop(
         # Gate the markerless bare-JSON form on enabled names so an ordinary JSON answer isn't misread as a call.
         _enabled_tool_names = None if unrestricted_tools else set(_active_tool_names(active_tools))
 
-        # This loop receives cumulative snapshots.  Keep both whole-prefix scans
-        # incremental: the markup stripper settles safe prefixes, while the signal
-        # detector resumes with enough overlap for a literal split across snapshots.
+        # This loop receives cumulative snapshots, so keep both whole-prefix scans
+        # incremental: the stripper settles safe prefixes, the signal detector resumes
+        # with enough overlap for a literal split across snapshots.
         _streaming_stripper = StreamingMarkupStripper(_enabled_names_gate)
         _tool_signal_scanned_upto = 0
 
         def _strip_streaming_display(text: str) -> str:
             if not (auto_heal_tool_calls or tool_protocol_active):
                 return text
-            # Preserve the legacy safetensors-only Magistral leading-reasoning
-            # removal before delegating the remaining byte-identical strip.
+            # The safetensors-only Magistral leading-reasoning removal first, then the
+            # byte-identical shared strip.
             return _streaming_stripper.strip(_strip_mistral_reasoning(text))
 
         detect_state = _state_buffering
@@ -658,9 +657,8 @@ def run_safetensors_tool_loop(
             and not bypass_permissions
             and not (permission_mode == "auto" and is_always_safe_tool("render_html"))
         )
-        # History and active_tools cannot change during generation.  Resolve a
-        # non-render first call once instead of reparsing its growing arguments on
-        # every remaining decoded chunk.
+        # History and active_tools cannot change during generation, so resolve this once
+        # instead of reparsing growing arguments on every decoded chunk.
         _provisional_render_html_possible = (
             not _tool_succeeded("render_html")
             and not _provisional_confirm_gated
@@ -670,11 +668,10 @@ def run_safetensors_tool_loop(
         )
 
         def _should_start_provisional_render_html(content: str) -> bool:
-            # Re-resolved per chunk on purpose. The first call's name is not final until
-            # its marker is complete, and a later complete marker can resolve first: a
-            # truncated ``<function=rende`` ahead of a finished ``<function=get_weather>``
-            # reads as get_weather until the earlier one closes, then as render_html.
-            # Caching the first non-None answer would drop the panel in that case.
+            # Re-resolved per chunk on purpose, not cached: the first call's name is not
+            # final until its marker completes. A truncated ``<function=rende`` ahead of a
+            # finished ``<function=get_weather>`` reads as get_weather until the earlier
+            # one closes, then as render_html; caching would drop the panel there.
             if not _provisional_render_html_possible or provisional_render_html_started:
                 return False
             return _first_detected_tool_name(content) == "render_html"

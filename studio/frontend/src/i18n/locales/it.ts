@@ -1206,7 +1206,7 @@ export const it = {
     hubSectionAriaLabel: "Sezione Hub",
     pickModelFile: "Scegli un file del modello dal disco",
     ejectLoadedModel: "Espelli il modello caricato",
-    modelDropped: "Non più disponibile",
+    modelDropped: "Non più offerto",
     modelDroppedByProvider: "{provider} · non più offerto",
     multipleMatches:
       "Sono stati trovati più {noun} corrispondenti. Scegline uno dall'elenco.",

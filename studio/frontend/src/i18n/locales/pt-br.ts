@@ -21,6 +21,8 @@ export const ptBR = {
     ejectLoadedModel: "Ejetar o modelo carregado",
     modelDropped: "Não é mais oferecido",
     modelDroppedByProvider: "{provider} · não é mais oferecido",
+    modelDisabled: "Não ativado",
+    modelDisabledByProvider: "{provider} · não ativado",
     multipleMatches:
       "Há vários {noun} correspondentes. Escolha uma opção na lista.",
     rateLimitedTitle: "Limite de requisições do Hugging Face atingido",

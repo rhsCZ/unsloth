@@ -21,6 +21,8 @@ export const ru = {
     ejectLoadedModel: "Выгрузить загруженную модель",
     modelDropped: "Больше не предлагается",
     modelDroppedByProvider: "{provider} · больше не предлагается",
+    modelDisabled: "Не включена",
+    modelDisabledByProvider: "{provider} · не включена",
     multipleMatches:
       "В категории «{noun}» найдено несколько совпадений. Выберите одно из списка.",
     rateLimitedTitle: "Достигнут лимит запросов Hugging Face",

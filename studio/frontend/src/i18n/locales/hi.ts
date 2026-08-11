@@ -21,6 +21,8 @@ export const hi = {
     ejectLoadedModel: "लोड किया गया मॉडल इजेक्ट करें",
     modelDropped: "अब उपलब्ध नहीं",
     modelDroppedByProvider: "{provider} · अब उपलब्ध नहीं",
+    modelDisabled: "सक्षम नहीं",
+    modelDisabledByProvider: "{provider} · सक्षम नहीं",
     multipleMatches:
       "एक से अधिक मेल खाते {noun} मिले। सूची में से एक चुनें।",
     rateLimitedTitle: "Hugging Face की अनुरोध सीमा पूरी हो गई",

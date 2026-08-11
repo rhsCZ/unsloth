@@ -21,6 +21,8 @@ export const de = {
     ejectLoadedModel: "Geladenes Modell auswerfen",
     modelDropped: "Nicht mehr angeboten",
     modelDroppedByProvider: "{provider} · nicht mehr angeboten",
+    modelDisabled: "Nicht aktiviert",
+    modelDisabledByProvider: "{provider} · nicht aktiviert",
     multipleMatches:
       "Mehrere passende {noun} gefunden. Wählen Sie einen Eintrag aus der Liste aus.",
     rateLimitedTitle: "Hugging Face-Ratenlimit erreicht",

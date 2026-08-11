@@ -1208,6 +1208,8 @@ export const it = {
     ejectLoadedModel: "Espelli il modello caricato",
     modelDropped: "Non più offerto",
     modelDroppedByProvider: "{provider} · non più offerto",
+    modelDisabled: "Non attivato",
+    modelDisabledByProvider: "{provider} · non attivato",
     multipleMatches:
       "Sono stati trovati più {noun} corrispondenti. Scegline uno dall'elenco.",
     rateLimitedTitle: "Limite di richieste di Hugging Face raggiunto",

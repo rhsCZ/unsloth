@@ -655,22 +655,27 @@ def run_safetensors_tool_loop(
             and not bypass_permissions
             and not (permission_mode == "auto" and is_always_safe_tool("render_html"))
         )
-        # History and active_tools cannot change during generation, so resolve this once
-        # instead of reparsing growing arguments on every decoded chunk.
-        _provisional_render_html_possible = (
-            not _tool_succeeded("render_html")
-            and not _provisional_confirm_gated
-            and any(
-                ((tool.get("function") or {}).get("name") == "render_html") for tool in active_tools
-            )
-        )
-
         def _should_start_provisional_render_html(content: str) -> bool:
-            # Re-resolved per chunk on purpose, not cached: the first call's name is not
-            # final until its marker completes. A truncated ``<function=rende`` ahead of a
-            # finished ``<function=get_weather>`` reads as get_weather until it closes, then
-            # as render_html; caching would drop the panel there.
-            if not _provisional_render_html_possible or provisional_render_html_started:
+            # Every part of this is re-resolved per chunk, exactly as before. The gates
+            # are a dict lookup and a scan of a handful of tools, so hoisting them saves
+            # nothing measurable and would bake in an invariant nothing enforces:
+            # active_tools is handed to the injectable single_turn callback, which is
+            # free to append to it while generating.
+            #
+            # The name lookup is likewise not cached. The first call's name is not final
+            # until its marker completes: a truncated ``<function=rende`` ahead of a
+            # finished ``<function=get_weather>`` reads as get_weather until it closes,
+            # then as render_html, so caching the first answer would drop the panel.
+            if (
+                _tool_succeeded("render_html")
+                or _provisional_confirm_gated
+                or provisional_render_html_started
+            ):
+                return False
+            if not any(
+                ((tool.get("function") or {}).get("name") == "render_html")
+                for tool in active_tools
+            ):
                 return False
             return _first_detected_tool_name(content) == "render_html"
 

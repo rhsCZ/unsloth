@@ -701,6 +701,14 @@ def strip_segment(
                 seg = pat.sub("", seg)
             else:
                 scan_end = seg.rfind(token) + len(token)
+                if pat_idx == 3:
+                    # The Mistral array arm keeps consuming an optional ``\s*</s>`` PAST
+                    # the ``]`` the bound is taken from; without this the EOS survives.
+                    eos = scan_end
+                    while eos < len(seg) and seg[eos].isspace():
+                        eos += 1
+                    if seg.startswith("</s>", eos):
+                        scan_end = eos + 4
                 seg = pat.sub("", seg[:scan_end]) + seg[scan_end:]
         else:
             seg = pat.sub("", seg)

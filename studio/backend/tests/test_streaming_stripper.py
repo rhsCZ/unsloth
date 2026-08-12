@@ -624,3 +624,14 @@ def test_an_append_only_stream_is_still_recognised_as_a_continuation():
     for i in range(600, len(text), 100):
         assert stripper._is_extension(text[:i]) is True
         stripper.strip(text[:i])
+
+
+def test_a_bounded_scan_still_takes_the_eos_after_a_malformed_mistral_array():
+    """The Mistral array arm keeps consuming an optional ``</s>`` after the ``]`` that the
+    bound is computed from, so bounding at the last ``]`` alone left the EOS in the
+    displayed text. Prose ``[1]`` before the marker is what turns the bound on, and a
+    malformed array is what gets past the string-aware pre-pass to this arm."""
+    text = 'See [1]. [TOOL_CALLS] [{"name": "get_weather", "ar}]</s> Done.'
+
+    assert tool_call_parser.strip_tool_markup(text, final = True) == "See [1].  Done."
+    assert tool_call_parser.strip_tool_markup(text, final = False) == "See [1].  Done."

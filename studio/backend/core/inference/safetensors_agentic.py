@@ -655,6 +655,7 @@ def run_safetensors_tool_loop(
             and not bypass_permissions
             and not (permission_mode == "auto" and is_always_safe_tool("render_html"))
         )
+
         def _should_start_provisional_render_html(content: str) -> bool:
             # Every part of this is re-resolved per chunk, exactly as before. The gates
             # are a dict lookup and a scan of a handful of tools, so hoisting them saves
@@ -673,8 +674,7 @@ def run_safetensors_tool_loop(
             ):
                 return False
             if not any(
-                ((tool.get("function") or {}).get("name") == "render_html")
-                for tool in active_tools
+                ((tool.get("function") or {}).get("name") == "render_html") for tool in active_tools
             ):
                 return False
             return _first_detected_tool_name(content) == "render_html"

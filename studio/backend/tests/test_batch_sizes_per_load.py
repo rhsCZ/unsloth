@@ -761,9 +761,7 @@ def test_the_remote_guard_charges_the_single_slot_activation_scratch():
     cached._embedding_length = 8192  # Llama-3-70B / Qwen2.5-72B, the ceiling assumed remotely
     cached._pooling_type = None  # a chat GGUF, so no first-slot output buffer either side
     weights_and_mask = 1.0 + 32768 * 32768 * 2 * 1.5 / 1024**3
-    cached_flat = (
-        cached._estimate_compute_buffer_bytes(n_ubatch = 32768, n_parallel = 1) / 1024**3
-    )
+    cached_flat = cached._estimate_compute_buffer_bytes(n_ubatch = 32768, n_parallel = 1) / 1024**3
     assert cached_flat > 4.5  # the scratch is 4.6 GiB here, not a rounding term
     assert one_slot == pytest.approx(weights_and_mask + cached_flat)
     # and the same holds at the default micro-batch, where it is only 72 MiB

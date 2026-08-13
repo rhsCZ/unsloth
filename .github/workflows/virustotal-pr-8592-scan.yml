@@ -9,6 +9,10 @@ name: VirusTotal scan for PR 8592
 # what removes the need for the Tauri key.
 
 on:
+  # Push, not workflow_dispatch: dispatch is only offered for workflows that exist
+  # on the default branch, and this one is deliberately temporary.
+  push:
+    branches: ["ci/virustotal-8592"]
   workflow_dispatch:
 
 permissions:

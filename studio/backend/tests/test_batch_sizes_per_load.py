@@ -269,7 +269,9 @@ def test_remote_gguf_guard_counts_explicit_micro_batch():
         big = route._estimate_gguf_required_gb(
             config, max_seq_length = 32768, n_batch = 65536, n_ubatch = 65536
         )
-    assert base > 1.5
+    # the defaults emit no flag but still launch at a 512-token micro-batch, whose mask
+    # is 32768 x 512 x 2 x 1.5 = 48 MiB over the 1 GiB of weights
+    assert base == pytest.approx(1.0 + 32768 * 512 * 2 * 1.5 / 1024**3)
     # ctx-capped ubatch (32768) x ctx x 2 x 1.5 mask safety ~= 3 GiB on top
     assert big > base + 2.0
 
@@ -665,12 +667,14 @@ def test_the_remote_guard_charges_the_flat_output_buffer():
         big_2 = _gb(n_parallel = 2, n_batch = 32768, n_ubatch = 32768)
         typical_4 = _gb(n_parallel = 4, n_batch = 2048, n_ubatch = 512)
 
-    # Unset fields still launch at llama.cpp's known default 512-token micro-batch.
-    assert blank_1 > 1.5
+    # Unset fields still launch at llama.cpp's known default 512-token micro-batch, so
+    # its mask is charged, but one slot reserves no output buffer (measured 36 MiB).
+    assert blank_1 == pytest.approx(1.0 + 32768 * 512 * 2 * 1.5 / 1024**3)
+    # three output buffers for four slots, 0.575 GiB each at the default micro-batch
     assert blank_4 > blank_1 + 1.5
-    # The remote header may enable embeddings, so the first output buffer is charged.
-    assert big_1 > blank_1 + 30.0
-    # 262144 * 32768 * 4 = 32 GiB for the second slot too.
+    # one slot pays the mask alone: 32768 x 32768 x 2 x 1.5 = 3 GiB, no output buffer
+    assert big_1 == pytest.approx(1.0 + 32768 * 32768 * 2 * 1.5 / 1024**3)
+    # 262144 * 32768 * 4 = 32 GiB for the second slot, which the mask alone missed
     assert big_2 > big_1 + 30.0
     # and it stays proportionate where the values are ordinary
     assert typical_4 < 4.0

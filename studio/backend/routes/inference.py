@@ -6374,6 +6374,10 @@ def _estimate_gguf_required_gb(
                 )
             )
             if effective_ubatch is None and not is_diffusion:
+                # None means "no flag emitted", not "no micro-batch": the launch still
+                # runs at llama.cpp's default 512 and still reserves against it. The
+                # local branch already charges that, since _estimate_compute_buffer_bytes
+                # and _compute_buffer_ctx_bytes substitute the same default for None.
                 effective_ubatch = LlamaCppBackend._DEFAULT_N_UBATCH
             if effective_ubatch:
                 # auto context: assume the native one fits at least a full micro-batch
@@ -6414,8 +6418,17 @@ def _estimate_gguf_required_gb(
                 # Scaled per device only in tensor mode, mirroring the local branch: a
                 # layer split folds the flat buffer in once (_flat_buffer(False)), and
                 # only tensor mode replicates it on every card.
-                # The remote header is unknown, so reserve as if it enables embeddings.
-                _out_slots = max(1, n_parallel)
+                # Slots past the first, counted exactly as the local branch counts them.
+                # The measured chat buffers behind _estimate_compute_buffer_bytes are
+                # {1:36, 2:492, 4:1388, 8:3220} MiB, so one slot reserves the activation
+                # scratch and no output buffer at all. Charging one anyway put 0.58 GiB
+                # on every uncached load -- 16x the measured single-slot buffer, and 0.58
+                # GiB more than the same model costs once it is on disk, which is the
+                # remote-vs-cached divergence the split gate above exists to avoid. An
+                # embedding GGUF does output its whole first micro-batch, but its real
+                # vocab sits far under the 262144 ceiling assumed here, so from two slots
+                # on the ceiling already covers the slot this drops.
+                _out_slots = n_parallel if tensor_parallel else max(0, n_parallel - 1)
                 out_buffer_bytes = (
                     _ASSUMED_MAX_VOCAB
                     * effective_ubatch

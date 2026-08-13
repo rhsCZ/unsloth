@@ -1160,6 +1160,11 @@ class TestValidateRefusesDuringTraining(unittest.TestCase):
 # 512 x 512 x 2 bytes x the f16 mask safety. It is under a MiB, but the weights-only
 # expectations below are exact, so they carry it rather than loosening their tolerance.
 _REMOTE_DEFAULT_MASK_GB = 512 * 512 * 2 * 1.5 / (1024**3)
+# The flat half of the same buffer. One slot reserves no output buffer, but every load
+# reserves the activation scratch, 4 x n_embd x ubatch x 4 against the 8192 n_embd ceiling
+# and the compute-buffer safety: 72 MiB at the default micro-batch.
+_REMOTE_DEFAULT_ACT_GB = 4 * 8192 * 512 * 4 * 1.15 / (1024**3)
+_REMOTE_DEFAULT_COMPUTE_GB = _REMOTE_DEFAULT_MASK_GB + _REMOTE_DEFAULT_ACT_GB
 
 
 class TestEstimateGgufRequiredGb(unittest.TestCase):
@@ -1477,7 +1482,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
                     llama_extra_args = ["--model-draft", str(drafter)],
                 )
         # The 10 GB target weights, not just the drafter beside them.
-        self.assertAlmostEqual(gb, 10.0 + 3000 / (1024**3) + _REMOTE_DEFAULT_MASK_GB, places = 9)
+        self.assertAlmostEqual(gb, 10.0 + 3000 / (1024**3) + _REMOTE_DEFAULT_COMPUTE_GB, places = 9)
 
     def test_remote_threads_token_and_adds_companions(self):
         import utils.models.model_config as mc
@@ -1510,7 +1515,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
             )
         self.assertEqual(captured["token"], "tok")  # token threaded for gated repos
         # 10 GB variant + 2 GB companions, plus the default micro-batch's mask
-        self.assertAlmostEqual(gb, 12.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(gb, 12.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
         self.assertTrue(comp.call_args.kwargs["include_mmproj"])
         self.assertFalse(comp.call_args.kwargs["include_mtp"])
         self.assertTrue(comp.call_args.kwargs["include_dspark"])
@@ -1908,7 +1913,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
                 speculative_type = "auto",
                 llama_extra_args = ["--model-draft", "/nope/does-not-exist.gguf"],
             )
-        self.assertAlmostEqual(charged, 4.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(charged, 4.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
 
     def test_only_the_winning_draft_flag_decides_repo_or_path(self):
         """Draft flags are last-wins in llama-server, so a repo id followed by a
@@ -1943,7 +1948,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
                     "/nope/does-not-exist.gguf",
                 ],
             )
-        self.assertAlmostEqual(charged, 4.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(charged, 4.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
 
     def test_the_cached_drafter_scan_reads_the_cache_studio_is_pointed_at(self):
         """A user who moved the Hugging Face cache launches llama-server against the
@@ -2005,7 +2010,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
                 speculative_type = "auto",
                 llama_extra_args = ["--spec_draft_hf", "org/drafter"],
             )
-        self.assertAlmostEqual(charged, 10.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(charged, 10.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
 
     def test_a_listing_that_carries_no_sizes_still_pays_the_reserve(self):
         """A complete family whose listing omits sizes is not a free drafter, it is
@@ -2058,7 +2063,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
             )
         # The extras drafter, not the extras drafter plus the sidecar Auto no
         # longer reaches.
-        self.assertAlmostEqual(charged, 13.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(charged, 13.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
 
     def test_a_split_drafter_sized_in_part_is_not_charged_its_known_half(self):
         """llama-server maps every shard, so a two-shard sidecar listed as 3 GiB
@@ -2412,7 +2417,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
             gb = self.route._estimate_gguf_required_gb(cfg, speculative_type = "dflash")
         # 10 GiB of weights plus the 4 GiB the fallback can still land on, not the
         # 1 GiB candidate that merely goes first.
-        self.assertAlmostEqual(gb, 14.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(gb, 14.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
 
     def test_auto_does_not_charge_dflash_when_extra_args_own_speculation(self):
         """Extra args setting --spec-type stop the loader's Auto promotion, so the
@@ -2458,9 +2463,9 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
                 speculative_type = "dflash",
                 llama_extra_args = ["--spec-type", "ngram-mod"],
             )
-        self.assertAlmostEqual(owned, 10.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
-        self.assertAlmostEqual(asked, 12.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
-        self.assertAlmostEqual(forced, 10.0 + _REMOTE_DEFAULT_MASK_GB, places = 6)
+        self.assertAlmostEqual(owned, 10.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
+        self.assertAlmostEqual(asked, 12.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
+        self.assertAlmostEqual(forced, 10.0 + _REMOTE_DEFAULT_COMPUTE_GB, places = 6)
 
     def test_remote_dflash_sizing_drops_a_candidate_too_big_to_be_a_drafter(self):
         """The fetch refuses an oversized root dflash-*.gguf, so charging for it is a

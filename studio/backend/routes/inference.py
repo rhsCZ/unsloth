@@ -5924,6 +5924,15 @@ def _cached_repo_gguf_bytes(repo: str, hint: str = "") -> int:
 # truncated header drops the token array. Above Llama 4 / Gemma 3 (256k), the widest shipping.
 _ASSUMED_MAX_VOCAB = 262144
 
+# Companion ceiling for the activation scratch (4 * n_embd * ubatch * 4), used when the
+# header is unreadable because the weights are still remote. 8192 is the widest n_embd
+# shipping at a size that plausibly loads beside a training run: Llama-3-70B and
+# Qwen2.5-72B are 8192, DeepSeek-V3 7168, Gemma-3-27B 5376, and the 4B-32B tier 2560-5120.
+# The 405B class reaches 16384 and is deliberately not covered: 16384 is exactly
+# _ASSUMED_MAX_VOCAB / 16, so a ceiling there would make this term one whole ceiling output
+# buffer and charge the dropped first slot straight back under another name.
+_ASSUMED_MAX_EMBD = 8192
+
 
 def _estimate_gguf_kv_gb(
     gguf_path: str,
@@ -6413,8 +6422,6 @@ def _estimate_gguf_required_gb(
                 # (every slot under tensor mode), so n_batch = n_ubatch = 32768 on two
                 # slots is ~32 GiB the mask does not cover. Omitting it let the guard admit
                 # an uncached load that then OOMs the training job it exists to protect.
-                # The activation scratch needs embedding_length and stays uncharged: it is
-                # the small half, and over-reserving here denies the load outright.
                 # Scaled per device only in tensor mode, mirroring the local branch: a
                 # layer split folds the flat buffer in once (_flat_buffer(False)), and
                 # only tensor mode replicates it on every card.
@@ -6437,7 +6444,27 @@ def _estimate_gguf_required_gb(
                     * (devices if tensor_parallel else 1)
                     * LlamaCppBackend._COMPUTE_BUFFER_SAFETY
                 )
-                total_gb += (mask_bytes + out_buffer_bytes) / (1024**3)
+                # The other flat term. _estimate_compute_buffer_bytes charges
+                # act_scratch = 4 * n_embd * ubatch * 4 on EVERY load, slot count included:
+                # it is the whole of the measured 36 MiB a single chat slot reserves. Dropping
+                # the first output buffer above therefore leaves a one-slot remote load with no
+                # flat allowance at all, while the same model once cached still charges the
+                # scratch -- the remote-vs-cached divergence in the direction that OOMs the
+                # training job, and the one the ceiling above cannot absorb because at one slot
+                # it multiplies by zero. Linear in the micro-batch, so it is 72 MiB at the
+                # default 512 and 4.6 GiB at an explicit 32768, which is where the gap bites.
+                # n_embd is unreadable remotely, so it takes the same treatment as the vocab: a
+                # ceiling. Doubled per device in tensor mode, matching that branch's
+                # 2 * act_scratch (output plus comm/staging on every card).
+                act_scratch_bytes = (
+                    4
+                    * _ASSUMED_MAX_EMBD
+                    * effective_ubatch
+                    * 4
+                    * (2 * devices if tensor_parallel else 1)
+                    * LlamaCppBackend._COMPUTE_BUFFER_SAFETY
+                )
+                total_gb += (mask_bytes + out_buffer_bytes + act_scratch_bytes) / (1024**3)
             return total_gb
         return None
     except Exception as e:

@@ -49,6 +49,7 @@ from utils.transformers_version import (
     _higher_tier,
     _config_json_cache,
     _tokenizer_class_cache,
+    _config_mapping_cache,
     _config_needs_510_cache,
     _config_needs_530_cache,
     _config_needs_550_cache,
@@ -1473,6 +1474,10 @@ class TestProbeGating:
         _config_needs_510_cache.clear()
         _config_needs_550_cache.clear()
         _tokenizer_class_cache.clear()
+        # Sixth cache, and the one this class used to miss. get_transformers_tier consults
+        # CONFIG_MAPPING_NAMES per tier and upgrades a model_type the ambient default does
+        # not ship, so a mapping parsed by an earlier test decides the answer here.
+        _config_mapping_cache.clear()
 
     def _patch_venvs(self, monkeypatch):
         for fn in (
@@ -1522,8 +1527,13 @@ class TestProbeGating:
         monkeypatch.setattr(
             "utils.transformers_version._check_tokenizer_config_needs_v5", lambda m, t = None: False
         )
+        # A model_type the ambient default DOES ship. "brandnew" is in none of the
+        # mappings, so the static config-mapping tier upgraded it to 530 before the
+        # version-field probe under test ever ran, and the assert below only passed
+        # when an earlier test had left _config_mapping_cache in a state that skipped
+        # that path. The probe, not the mapping upgrade, is the subject here.
         _config_json_cache[("org/new", None)] = {
-            "model_type": "brandnew",
+            "model_type": "llama",
             "transformers_version": "5.0.0",
         }
         seen = []
@@ -1541,8 +1551,9 @@ class TestProbeGating:
         monkeypatch.setattr(
             "utils.transformers_version._check_tokenizer_config_needs_v5", lambda m, t = None: False
         )
+        # Shipped by the ambient default, for the same reason as the test above.
         _config_json_cache[("org/new", None)] = {
-            "model_type": "brandnew",
+            "model_type": "llama",
             "transformers_version": "5.6.0",
         }
         results = iter([_proc(1, "KeyError: 'x'"), _proc(1, "KeyError: 'x'"), _proc(0)])

@@ -1038,12 +1038,21 @@ export const de = {
         compareChat: "Chats vergleichen",
         exportChat: "Chat exportieren",
       },
+      pastedTextThreshold: "Lange Einfügungen verdichten",
+      pastedTextThresholdDescription: "Eingefügter Text, der länger ist, wird zu einem .txt-Anhang, statt das Nachrichtenfeld zu füllen.",
+      pastedTextThresholdOff: "Aus",
       showResponseModel: "Antwortmodell anzeigen",
       showResponseModelDescription:
         "Modellmetadaten in Antworten des Assistenten anzeigen.",
       modelDisclaimer: "Modell-Hinweis anzeigen",
       modelDisclaimerDescription:
         "Zeigt „LLMs können Fehler machen“ unter dem Chatfeld an.",
+      projectAttachments: "Dateien projektweit teilen",
+      projectAttachmentsDescription:
+        "Standard für Dateien, die in einem Chat innerhalb eines Projekts angehängt werden: für das gesamte Projekt indizieren, damit jeder Chat darin sie nutzen kann. Jeder Chat kann dies im Anhangsmenü überschreiben.",
+      rememberParamsPerModel: "Einstellungen pro Modell merken",
+      rememberParamsPerModelDescription:
+        "Beim Modellwechsel werden Temperatur, Prompt und die weiteren Einstellungen wiederhergestellt, die Sie zuletzt mit diesem Modell verwendet haben. Aus: ein Satz Einstellungen für alle Modelle.",
       thinking: {
         collapseByDefault: "Denken standardmäßig einklappen",
         collapseByDefaultDescription:

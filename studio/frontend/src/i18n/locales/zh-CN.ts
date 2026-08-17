@@ -979,11 +979,20 @@ export const zhCN = {
         compareChat: "对比聊天",
         exportChat: "导出聊天",
       },
+      pastedTextThreshold: "压缩长粘贴内容",
+      pastedTextThresholdDescription: "超过此长度的粘贴文本将变为 .txt 附件，而不会填满消息输入框。",
+      pastedTextThresholdOff: "关闭",
       showResponseModel: "显示回复模型",
       showResponseModelDescription: "在助手回复中显示模型元数据。",
       modelDisclaimer: "显示模型免责声明",
       modelDisclaimerDescription:
         "在聊天框下方显示“LLM 可能会出错”。",
+      projectAttachments: "在项目内共享文件",
+      projectAttachmentsDescription:
+        "属于某个项目的聊天中所附文件的默认行为：为整个项目建立索引，使该项目中的每个聊天都能使用。每个聊天都可以在附件菜单中单独更改。",
+      rememberParamsPerModel: "按模型记住设置",
+      rememberParamsPerModelDescription:
+        "切换模型时会恢复你上次在该模型上使用的温度、提示词等设置。关闭后，所有模型共用一套设置。",
       thinking: {
         collapseByDefault: "默认折叠思考过程",
         collapseByDefaultDescription:

@@ -471,6 +471,17 @@ def test_early_markup_is_not_slower_than_the_code_it_replaces():
     reference = min(elapsed(_reference_strip, count) for _ in range(3))
     incremental = min(elapsed(StreamingMarkupStripper(ENABLED).strip, count) for _ in range(3))
 
+    # process_time has coarser granularity than perf_counter, and `0.0 <= 0.0 * 1.10` is
+    # true. Without a floor a clock that stopped reporting, or a `count` someone lowered,
+    # turns this into an assertion that cannot fail. 0.05s is far below the ~1.3s each arm
+    # actually takes and far above the clock's resolution.
+    assert (
+        reference > 0.05
+    ), f"reference arm measured {reference:.4f}s; too small to compare against"
+    assert (
+        incremental > 0.05
+    ), f"incremental arm measured {incremental:.4f}s; too small to compare against"
+
     assert (
         incremental <= reference * 1.10
     ), f"early markup cost {incremental:.3f}s against the reference's {reference:.3f}s"

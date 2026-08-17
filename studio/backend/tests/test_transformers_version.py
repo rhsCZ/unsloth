@@ -1565,6 +1565,46 @@ class TestProbeGating:
         assert get_transformers_tier("org/new") == "550"
         assert seen == ["", tv._VENV_T5_530_DIR, tv._VENV_T5_550_DIR]
 
+    def test_a_model_type_the_default_lacks_never_reaches_the_version_field_probe(
+        self, monkeypatch
+    ):
+        """The mapping check answers first, and short-circuits the probe below it.
+
+        This ordering is what quietly invalidated the two tests above. They pinned
+        model_type "brandnew", which no mapping ships, so once #7043 landed the mapping
+        check answered before the version-field probe they were written for ever ran, and
+        they began asserting the wrong branch's answer. Nothing pinned the ordering, so
+        the only symptom was those two failing in a way that read like a probe bug.
+
+        Pinning it here means a future reshuffle that puts the probe first fails as
+        itself, and the two tests above keep testing the probe rather than this.
+        """
+        import utils.transformers_version as tv
+
+        self._patch_venvs(monkeypatch)
+        monkeypatch.setattr(
+            "utils.transformers_version._check_tokenizer_config_needs_v5", lambda m, t = None: False
+        )
+        monkeypatch.setattr(
+            tv,
+            "_config_model_types",
+            lambda tier: frozenset({"llama"} if tier == "default" else {"llama", "brandnew"}),
+        )
+        # Declares 5.x too, so the version-field probe below WOULD fire if it were reached.
+        _config_json_cache[("org/brandnew", None)] = {
+            "model_type": "brandnew",
+            "transformers_version": "5.0.0",
+        }
+        probed = []
+        monkeypatch.setattr(
+            "utils.transformers_version.subprocess.run",
+            lambda cmd, **k: probed.append(cmd[3]) or _proc(0),
+        )
+
+        tier = get_transformers_tier("org/brandnew")
+        assert tier != "default", f"a model_type the default lacks must be raised, got {tier!r}"
+        assert probed == [], "the mapping check must answer before any sidecar probe runs"
+
     def test_ordinary_4x_config_does_not_probe(self, monkeypatch):
         self._patch_venvs(monkeypatch)
         monkeypatch.setattr(

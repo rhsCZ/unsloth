@@ -8,6 +8,7 @@ import { normalizeGgufVariantIdentity } from "../lib/model-identity";
 export type LiveGgufVariantState = {
   state: ManagedDownload["state"];
   expectedBytes: number;
+  transferredBytes: number;
   startedAt: number;
 };
 
@@ -49,6 +50,7 @@ export function createLiveGgufVariantStatesSelector(repoId: string): (state: {
         {
           state: job.state,
           expectedBytes: job.expectedBytes,
+          transferredBytes: Math.max(job.downloadedBytes, job.completedBytes),
           startedAt: job.startedAt,
         },
       ]);
@@ -76,12 +78,33 @@ export function applyLiveGgufVariantStates(
       variant.download_size_bytes ?? 0,
       variant.size_bytes,
     );
+    // The row says "N left", so N has to follow the transfer. Only
+    // download_size_bytes moved here, leaving the label on the remainder the
+    // one-time variant fetch measured -- or, for a download that started after
+    // it, on the full total. A running job carries its own progress, so derive
+    // the remainder from that and keep the fetched figure for everything else.
+    //
+    // Both terms come from the job and only from the job. snapshot_progress
+    // nets completed_baseline_bytes -- files a previous quant already fetched,
+    // an mmproj most often -- out of expected_bytes AND downloaded_bytes alike,
+    // so the pair is self-consistent while the catalog totals above are not.
+    // Subtracting the job's transfer from expectedBytes, which takes the larger
+    // of the two scopes, would add that baseline straight back: 1 GB reused and
+    // 1 GB fetched of a 5 GB plan would read 4 GB left rather than 3 GB.
+    const liveRemaining =
+      live.expectedBytes > 0 && live.transferredBytes > 0
+        ? Math.max(live.expectedBytes - live.transferredBytes, 0)
+        : null;
     return {
       ...variant,
       downloaded: liveComplete ? true : livePartial ? false : variant.downloaded,
       partial: liveComplete ? false : livePartial || variant.partial,
       download_size_bytes:
         expectedBytes > 0 ? expectedBytes : variant.download_size_bytes,
+      download_remaining_bytes:
+        liveComplete
+          ? variant.download_remaining_bytes
+          : liveRemaining ?? variant.download_remaining_bytes,
     };
   });
 }

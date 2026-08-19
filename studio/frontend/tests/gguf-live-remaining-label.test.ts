@@ -13,9 +13,8 @@ import { registerBundlerResolver } from "./helpers/kit.ts";
 
 registerBundlerResolver();
 
-const { applyLiveGgufVariantStates } = await import(
-  "../src/features/hub/catalog/gguf-live-variant-states.ts"
-);
+const { applyLiveGgufVariantStates, createLiveGgufVariantStatesSelector } =
+  await import("../src/features/hub/catalog/gguf-live-variant-states.ts");
 const { ggufVariantTransferLabel } = await import(
   "../src/features/hub/lib/gguf-variant-sort.ts"
 );
@@ -41,6 +40,7 @@ const live = (over: Record<string, unknown> = {}) =>
         state: "running",
         expectedBytes: 4 * GB,
         transferredBytes: 3 * GB,
+        measuredTransfer: true,
         startedAt: 0,
         ...over,
       },
@@ -92,6 +92,146 @@ test("a completed download is left alone, so no row reads as partial", () => {
   assert.equal(row.downloaded, true);
   assert.equal(row.partial, false);
   assert.equal(ggufVariantTransferLabel(row), "4.0 GB");
+});
+
+test("a cancelled job keeps the remainder the backend measured", () => {
+  // Progress is not reusable bytes. From huggingface_hub 1.18 the partial is
+  // process-unique, opened "wb" and unlinked in a finally, so an interrupted
+  // in-file transfer is refetched whole -- which is how existing_blob_bytes
+  // already prices it. Subtracting the dead job's 17 GB reported "1.0 GB left"
+  // for a resume that still has all 18 GB to fetch.
+  for (const state of ["cancelled", "error"]) {
+    const [row] = applyLiveGgufVariantStates(
+      [
+        variant({
+          size_bytes: 18 * GB,
+          download_size_bytes: 18 * GB,
+          partial: true,
+          download_remaining_bytes: 18 * GB,
+        }),
+      ],
+      live({
+        state,
+        expectedBytes: 18 * GB,
+        transferredBytes: 17 * GB,
+      }) as never,
+    );
+
+    assert.equal(row.partial, true);
+    assert.equal(row.download_remaining_bytes, 18 * GB);
+    assert.equal(ggufVariantTransferLabel(row), "18 GB left");
+  }
+});
+
+test("an XET fallback does not price the retry against the dead run's bytes", () => {
+  // The XET attempt finalized 3 GB of a 3.5 GB quant, then fell back to HTTP.
+  // The reclaim keeps the generation and recomputes completed_baseline_bytes
+  // from disk, so the backend nets those 3 GB out of BOTH counters: the retry
+  // reports a 0.5 GB total with 0.1 GB moved and completed_bytes 0, which
+  // resolveProgressUpdate holds the old 3 GB behind. Pricing the remainder off
+  // the held figure read "0 B left" with 0.4 GB still to fetch.
+  const select = createLiveGgufVariantStatesSelector("unsloth/model-GGUF");
+  const states = select({
+    jobs: {
+      "model:unsloth/model-GGUF:Q4_K_M": {
+        kind: "model",
+        repoId: "unsloth/model-GGUF",
+        variant: "Q4_K_M",
+        state: "running",
+        expectedBytes: 0.5 * GB,
+        downloadedBytes: 0.1 * GB,
+        completedBytes: 3 * GB,
+        startedAt: 0,
+      },
+    },
+  } as never);
+
+  const [row] = applyLiveGgufVariantStates(
+    [
+      variant({
+        size_bytes: 3.5 * GB,
+        download_size_bytes: 3.5 * GB,
+        partial: true,
+        download_remaining_bytes: 3.5 * GB,
+      }),
+    ],
+    states as never,
+  );
+
+  assert.equal(row.download_remaining_bytes, 0.4 * GB);
+});
+
+test("a retry that has not measured a byte yet keeps the backend remainder", () => {
+  // The reading right after the reclaim, before the HTTP run moves anything.
+  // snapshot_progress recomputes completed_baseline_bytes from the finalized
+  // blobs, nets it out of both counters and out of the total, so it reports
+  // downloaded_bytes 0 against a 0.5 GB total -- and resolveProgressUpdate
+  // holds the dead run's 3 GB behind that zero. Pricing the remainder off the
+  // held figure read "0 B left" with all 0.5 GB still to fetch.
+  const select = createLiveGgufVariantStatesSelector("unsloth/model-GGUF");
+  const states = select({
+    jobs: {
+      "model:unsloth/model-GGUF:Q4_K_M": {
+        kind: "model",
+        repoId: "unsloth/model-GGUF",
+        variant: "Q4_K_M",
+        state: "running",
+        expectedBytes: 0.5 * GB,
+        downloadedBytes: 3 * GB,
+        measuredTransfer: false,
+        completedBytes: 3 * GB,
+        startedAt: 0,
+      },
+    },
+  } as never);
+
+  const [row] = applyLiveGgufVariantStates(
+    [
+      variant({
+        size_bytes: 3.5 * GB,
+        download_size_bytes: 3.5 * GB,
+        partial: true,
+        download_remaining_bytes: 0.5 * GB,
+      }),
+    ],
+    states as never,
+  );
+
+  assert.equal(row.download_remaining_bytes, 0.5 * GB);
+  assert.equal(ggufVariantTransferLabel(row), "500 MB left");
+});
+
+test("the retry prices itself off the first reading that does measure", () => {
+  const select = createLiveGgufVariantStatesSelector("unsloth/model-GGUF");
+  const states = select({
+    jobs: {
+      "model:unsloth/model-GGUF:Q4_K_M": {
+        kind: "model",
+        repoId: "unsloth/model-GGUF",
+        variant: "Q4_K_M",
+        state: "running",
+        expectedBytes: 0.5 * GB,
+        downloadedBytes: 0.1 * GB,
+        measuredTransfer: true,
+        completedBytes: 0,
+        startedAt: 0,
+      },
+    },
+  } as never);
+
+  const [row] = applyLiveGgufVariantStates(
+    [
+      variant({
+        size_bytes: 3.5 * GB,
+        download_size_bytes: 3.5 * GB,
+        partial: true,
+        download_remaining_bytes: 0.5 * GB,
+      }),
+    ],
+    states as never,
+  );
+
+  assert.equal(row.download_remaining_bytes, 0.4 * GB);
 });
 
 test("a variant with no live job is returned untouched", () => {

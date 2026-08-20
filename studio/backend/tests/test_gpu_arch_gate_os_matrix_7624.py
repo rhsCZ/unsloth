@@ -782,6 +782,7 @@ def _run_auto_load(
     capture = None,
     intent_kwargs = None,
     apu_ram_stub = None,
+    host_offload_stub = None,
     backend = None,
 ):
     """Drive a real automatic (no explicit GPU pick) llama-server load with the real
@@ -820,6 +821,8 @@ def _run_auto_load(
     # Off by default: the APU RAM preflight is not what most of these cells are
     # about. A test that IS about it passes its own recording stub.
     backend._apu_ram_shortfall_message = apu_ram_stub or (lambda *_args, **_kwargs: None)
+    # same, off: model_bytes here is sized to force --fit on, not to describe a host
+    backend._host_offload_shortfall_message = host_offload_stub or (lambda *_args, **_kwargs: None)
     backend._find_llama_server_binary = lambda include_denied = False: binary
     backend._fit_off_retry_eligible = lambda *_args, **_kwargs: False
     backend.probe_server_capabilities = lambda _binary: {"found": True}
@@ -1208,6 +1211,47 @@ class TestArchCrashRetryEnv:
         _retry = [env for _c, env in launches if env.get("ROCR_VISIBLE_DEVICES") == "1"]
         assert _retry, "the arch-crash retry did not fire"
         assert all(env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1" for env in _retry)
+
+    def _big_then_small_discrete(self, monkeypatch):
+        """Both cards discrete, so neither pool reading is capped against system RAM and
+        the survivor is genuinely too small to hold what the crashed card held."""
+        _apply_os(monkeypatch, "linux", is_rocm = True)
+        monkeypatch.setattr(LlamaCppBackend, "_rocm_unified_memory_gpu_ids", staticmethod(set))
+        monkeypatch.setattr(
+            LlamaCppBackend, "_available_system_memory_mib", staticmethod(lambda: 20_000)
+        )
+        return _fake_torch(
+            [_device("gfx1030", free_mib = 40_000), _device("gfx900", free_mib = 4_000)],
+            vendor = "amd",
+        )
+
+    def test_the_retry_reprices_the_spill_against_the_narrowed_pool(
+        self, tmp_path, monkeypatch, probe_env
+    ):
+        """The host guard ran against the aggregate pool, and the retry masks the child onto
+        the survivor. When the crashed card supplied most of that credit the narrowed launch
+        spills far more into RAM than the preflight allowed, which is the OOM this guard
+        exists to stop. A 30 GB model is held by the 40000 MiB card the launch pins; the
+        4000 MiB survivor leaves about 26 GB for a host with 20 GB."""
+        torch = self._big_then_small_discrete(monkeypatch)
+        capture = {}
+        launches = _run_auto_load(
+            monkeypatch,
+            tmp_path,
+            torch,
+            None,
+            returncode = 1,
+            output = "ROCm error: device kernel image is invalid",
+            model_bytes = 30 * 1024**3,
+            host_offload_stub = LlamaCppBackend._host_offload_shortfall_message,
+            capture = capture,
+        )
+
+        assert launches, "the first launch was refused, so the retry is not what was tested"
+        assert not [
+            env for _c, env in launches if env.get("ROCR_VISIBLE_DEVICES") == "1"
+        ], "the respawn on the narrowed pool was not refused"
+        assert "does not fit in GPU memory" in str(capture.get("error"))
 
 
 class TestManualSplitLaunchesRespectTheGate:
@@ -1773,6 +1817,111 @@ class TestArchCrashRetryOntoAnApu:
         _retry = [env for _c, env in launches if env.get("ROCR_VISIBLE_DEVICES") == "1"]
         assert _retry, "the arch-crash retry did not fire"
         assert all(env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1" for env in _retry)
+
+
+class TestUnifiedMemoryOptOut:
+    """Turning GGML_CUDA_ENABLE_UNIFIED_MEMORY off has to make it ABSENT (#8651).
+
+    ggml gates on ``getenv(...) != nullptr``, so "0" is still on and the reporter's
+    only route was patching the source. The host below is the reported one: a
+    gfx1151 Strix Halo APU whose pool ROCm reports in full. Mock-based, no ROCm."""
+
+    def _strix_halo(self, monkeypatch):
+        _apply_os(monkeypatch, "linux", is_rocm = True)
+        monkeypatch.setattr(
+            LlamaCppBackend, "_rocm_unified_memory_gpu_ids", staticmethod(lambda: {0})
+        )
+        monkeypatch.setattr(
+            LlamaCppBackend, "_available_system_memory_mib", staticmethod(lambda: 60000)
+        )
+        return _fake_torch(
+            [_device("gfx1151", free_mib = 47000, is_integrated = 1)],
+            vendor = "amd",
+        )
+
+    def _load(
+        self,
+        tmp_path,
+        monkeypatch,
+        env_extra = None,
+    ):
+        return _run_auto_load(
+            monkeypatch,
+            tmp_path,
+            self._strix_halo(monkeypatch),
+            None,
+            returncode = None,
+            env_extra = env_extra,
+        )
+
+    def test_the_apu_still_gets_it_by_default(self, tmp_path, monkeypatch, probe_env):
+        """Baseline: #5301 added the variable for exactly this hardware."""
+        _cmd, env = self._load(tmp_path, monkeypatch)[0]
+        assert env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1"
+
+    @pytest.mark.parametrize("value", ["0", "", "false", "FALSE", "no", "off", " 0 "])
+    def test_a_falsy_user_value_is_not_passed_through(
+        self, tmp_path, monkeypatch, probe_env, value
+    ):
+        """setdefault kept the user's "0", which ggml then read as enabled."""
+        _cmd, env = self._load(tmp_path, monkeypatch, {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": value})[0]
+        assert "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env
+
+    @pytest.mark.parametrize("value", ["1", "2", "true", "on"])
+    def test_a_truthy_user_value_still_wins(self, tmp_path, monkeypatch, probe_env, value):
+        """Only off spellings are intercepted; anything else passes through."""
+        _cmd, env = self._load(tmp_path, monkeypatch, {"GGML_CUDA_ENABLE_UNIFIED_MEMORY": value})[0]
+        assert env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == value
+
+    def test_the_disable_switch_keeps_it_unset(self, tmp_path, monkeypatch, probe_env):
+        """The switch users can find, mirroring UNSLOTH_DISABLE_DC_TUNING."""
+        _cmd, env = self._load(tmp_path, monkeypatch, {"UNSLOTH_DISABLE_UNIFIED_MEMORY": "1"})[0]
+        assert "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env
+
+    def test_the_disable_switch_also_clears_an_inherited_value(
+        self, tmp_path, monkeypatch, probe_env
+    ):
+        """The switch has to beat a stale inherited "1" too."""
+        _cmd, env = self._load(
+            tmp_path,
+            monkeypatch,
+            {"UNSLOTH_DISABLE_UNIFIED_MEMORY": "1", "GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"},
+        )[0]
+        assert "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env
+
+    def test_a_non_one_disable_value_does_nothing(self, tmp_path, monkeypatch, probe_env):
+        """Exact "1", like the DC switch: firing on any value is the same trap."""
+        _cmd, env = self._load(tmp_path, monkeypatch, {"UNSLOTH_DISABLE_UNIFIED_MEMORY": "0"})[0]
+        assert env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1"
+
+    def test_the_opt_out_survives_a_retry_onto_an_apu(self, tmp_path, monkeypatch, probe_env):
+        """The retry re-adds the variable on an APU; it must not undo the opt-out."""
+        _apply_os(monkeypatch, "linux", is_rocm = True)
+        monkeypatch.setattr(
+            LlamaCppBackend, "_rocm_unified_memory_gpu_ids", staticmethod(lambda: {1})
+        )
+        monkeypatch.setattr(
+            LlamaCppBackend, "_available_system_memory_mib", staticmethod(lambda: 60000)
+        )
+        torch = _fake_torch(
+            [
+                _device("gfx1030", free_mib = 40000),
+                _device("gfx1151", free_mib = 12000, is_integrated = 1),
+            ],
+            vendor = "amd",
+        )
+        launches = _run_auto_load(
+            monkeypatch,
+            tmp_path,
+            torch,
+            None,  # no marker: the proactive gate fails open, so the crash path runs
+            returncode = 1,
+            output = "ROCm error: device kernel image is invalid",
+            env_extra = {"UNSLOTH_DISABLE_UNIFIED_MEMORY": "1"},
+        )
+        _retry = [env for _c, env in launches if env.get("ROCR_VISIBLE_DEVICES") == "1"]
+        assert _retry, "the arch-crash retry did not fire"
+        assert all("GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env for _c, env in launches)
 
 
 class TestArchCrashRetryDropsDeadTensorMode:

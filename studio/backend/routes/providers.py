@@ -28,6 +28,7 @@ from routes.provider_credentials import (
     current_credential_write,
     require_ui_session,
     resolve_provider_api_key_or_400,
+    serialize_provider_config,
 )
 from core.inference.key_exchange import (
     get_public_key_fingerprint,
@@ -117,17 +118,20 @@ def _validate_max_output_tokens_contract(
     field_was_set: bool,
     value: Optional[int] = None,
 ) -> None:
-    """Reject a non-null override on a provider type with its own documented caps.
+    """Reject a non-null override on a ChatGPT subscription.
 
-    An explicit null is allowed through everywhere: the dialog shows the field for rows
-    it displays as Custom but the backend stores as `openai`, and a blank field
-    serialises as null, so rejecting it failed every unrelated edit of those rows.
-    Clearing an override that cannot exist is a no-op.
+    Codex routing, model list and output cap are all fixed, so an override stored there
+    would never be read. Every other type takes one: the frontend uses it to lower a
+    model's documented cap, or to replace the 32,768-token fallback for a model with no
+    documented cap.
+
+    An explicit null is allowed everywhere, Codex included: a blank field serialises as
+    null rather than as an omission, and clearing an absent override is a no-op.
     """
-    if field_was_set and value is not None and provider_type != "custom":
+    if field_was_set and value is not None and provider_type == "openai_codex":
         raise HTTPException(
             status_code = 400,
-            detail = "Max Tokens limit can only be overridden for generic Custom providers.",
+            detail = "ChatGPT subscriptions use a fixed Max Tokens limit.",
         )
 
 
@@ -151,9 +155,18 @@ async def get_public_key(current_subject: str = Depends(get_current_subject)):
 
 
 @router.get("/registry", response_model = list[ProviderRegistryEntry])
-async def list_registry(current_subject: str = Depends(get_current_subject)):
-    """List all supported provider types with their default configurations."""
-    return list_available_providers()
+async def list_registry(
+    include_hidden: bool = False, current_subject: str = Depends(get_current_subject)
+):
+    """List all supported provider types with their default configurations.
+
+    ``include_hidden=true`` also returns the backend-only entries (the
+    self-hosted presets), which carry the studio-tools capability the composer
+    needs. It is opt-in so that a browser still running a pre-capability bundle,
+    which does not know to filter on ``hidden``, keeps seeing exactly the list
+    it saw before and cannot render them as duplicate dropdown options.
+    """
+    return list_available_providers(include_hidden = include_hidden)
 
 
 # ── Per-MTok pricing snapshot for client-side cost display ──────────
@@ -169,8 +182,9 @@ async def get_pricing_snapshot(current_subject: str = Depends(get_current_subjec
 # ── Provider config CRUD ──────────────────────────────────────────
 
 
+# FastAPI offloads sync reads; mutations stay on-loop to preserve atomic sequences.
 @router.get("/", response_model = list[ProviderResponse])
-async def list_provider_configs(_current_subject: str = Depends(get_current_subject)):
+def list_provider_configs(_current_subject: str = Depends(get_current_subject)):
     """List all saved provider configurations."""
     rows = providers_db.list_providers()
     return [_provider_response(row) for row in rows]
@@ -243,6 +257,7 @@ async def create_provider_config(
 
 
 @router.put("/{provider_id}", response_model = ProviderResponse)
+@serialize_provider_config
 async def update_provider_config(
     provider_id: str,
     payload: ProviderUpdate,
@@ -351,6 +366,7 @@ async def update_provider_config(
 
 
 @router.put("/{provider_id}/api-key/migrate", response_model = ProviderResponse)
+@serialize_provider_config
 async def migrate_provider_api_key(
     provider_id: str,
     payload: ProviderCredentialMigration,
@@ -373,6 +389,7 @@ async def migrate_provider_api_key(
 
 
 @router.delete("/{provider_id}", status_code = 204)
+@serialize_provider_config
 async def delete_provider_config(
     provider_id: str,
     credential: tuple = Depends(get_current_credential),

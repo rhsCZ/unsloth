@@ -1572,7 +1572,11 @@ def _fetch_swa_entry_from_hf(repo_id: str) -> Optional[object]:
     try:
         from huggingface_hub import hf_hub_download
         from utils.hf_cache_settings import active_hf_hub_cache
+        from utils.hf_probe import hf_file_definitely_absent
 
+        # Avoid caching the expected 404 for GGUF repos without config.json.
+        if hf_file_definitely_absent(repo_id, "config.json"):
+            return None
         cfg_path = hf_hub_download(
             repo_id,
             "config.json",
@@ -4423,6 +4427,9 @@ class LlamaCppBackend:
         self._port: Optional[int] = None
         self._model_identifier: Optional[str] = None
         self._gguf_path: Optional[str] = None
+        # Snapshot of the exact file(s) handed to the resident process. A local
+        # link can be atomically retargeted while `_gguf_path` stays unchanged.
+        self._gguf_load_identity: Optional[tuple] = None
         self._hf_repo: Optional[str] = None
         # Separate MTP drafter launched with the current model; reload-dedup
         # key so a drafter that appears next to the weights forces a reload.
@@ -10690,6 +10697,7 @@ class LlamaCppBackend:
 
         # Publish state before the health wait (mirrors the llama-server path).
         self._gguf_path = model_path
+        self._gguf_load_identity = self._gguf_load_source_identity(model_path)
         self._hf_repo = hf_repo
         self._is_vision = False
         self._is_audio = False  # clear any prior TTS/audio model's routing flag
@@ -18632,6 +18640,7 @@ class LlamaCppBackend:
                 # set BEFORE the spawn: load_progress() reads _gguf_path for
                 # the mmap progress total while the health wait runs.
                 self._gguf_path = model_path
+                self._gguf_load_identity = self._gguf_load_source_identity(model_path, mmproj_path)
                 self._hf_repo = hf_repo
                 self._mtp_draft_path = launch_mtp_draft_path
                 self._mtp_draft_suppressed_path = _pv_suppressed_draft_path
@@ -20132,6 +20141,12 @@ class LlamaCppBackend:
         ):
             return False
         if intent.gguf_path is not None and self._gguf_path:
+            resident_identity = getattr(self, "_gguf_load_identity", None)
+            if resident_identity is not None:
+                candidate_identity = LlamaCppBackend._gguf_load_source_identity(
+                    intent.gguf_path, intent.mmproj_path
+                )
+                return candidate_identity == resident_identity
             try:
                 return Path(self._gguf_path).resolve() == Path(intent.gguf_path).resolve()
             except OSError:
@@ -20248,6 +20263,7 @@ class LlamaCppBackend:
             logger.info(f"Unloaded GGUF model: {self._model_identifier}")
             self._model_identifier = None
             self._gguf_path = None
+            self._gguf_load_identity = None
             self._hf_repo = None
             self._mtp_draft_path = None
             self._mtp_draft_suppressed_path = None
@@ -21062,6 +21078,50 @@ class LlamaCppBackend:
             self._n_ubatch,
             self._flash_attn_enabled,
         )
+
+    @staticmethod
+    def _gguf_load_source_identity(path: str, mmproj_path: Optional[str] = None) -> Optional[tuple]:
+        """Identity of the exact GGUF inode(s) handed to the resident process."""
+        p = Path(path)
+        paths = [p]
+        match = _SHARD_FULL_RE.match(p.name)
+        if match:
+            prefix, _first, total = match.groups()
+            paths = [
+                p.with_name(f"{prefix}-{index:05d}-of-{total}{p.suffix}")
+                for index in range(1, int(total) + 1)
+            ]
+        try:
+            identity = []
+            for shard in paths:
+                resolved = shard.resolve()
+                stat = shard.stat()
+                identity.append(
+                    (
+                        str(resolved),
+                        stat.st_dev,
+                        stat.st_ino,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                    )
+                )
+            if mmproj_path:
+                projector = Path(mmproj_path)
+                resolved = projector.resolve()
+                stat = projector.stat()
+                identity.append(
+                    (
+                        "mmproj",
+                        str(resolved),
+                        stat.st_dev,
+                        stat.st_ino,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                    )
+                )
+            return tuple(identity)
+        except (OSError, RuntimeError):
+            return None
 
     def _gguf_file_identity(self, path) -> Optional[tuple]:
         # (size, mtime_ns) per shard: a split GGUF keys KV validity on every sibling.
@@ -24147,8 +24207,8 @@ class LlamaCppBackend:
                                     # characters per token than four. This path has a
                                     # tokenizer, so hand it over and let the check spend
                                     # the budget as exactly as it computes it.
-                                    kwargs["conversation_token_counter"] = (
-                                        lambda text: self.count_chat_tokens(
+                                    kwargs["conversation_token_counter"] = lambda text: (
+                                        self.count_chat_tokens(
                                             [{"role": "tool", "content": text}],
                                             None,
                                             None,

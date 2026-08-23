@@ -45,25 +45,20 @@ export function compactionBoundary(
 }
 
 function nonNegativeInt(value: number | undefined): number {
-  // A field that arrived as null, NaN or a float is a field we cannot subtract with, and
-  // silently propagating NaN would print "NaN tokens on its own".
+  // A propagated NaN would print "NaN tokens on its own" at the user.
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value as number)) : 0;
 }
 
 export function latestTurnOwnTokens(
   truncation: ContextTruncation | null | undefined,
 ): number {
-  // `latest_turn_tokens` prices a whole rendered PROMPT, not a bare message: the
-  // template's wrapper and, on a tool-enabled request, the entire tool catalogue
-  // rendered into the system turn. So the catalogue sits inside this number AND inside
-  // `irreducible_tokens`, where it does not cancel -- the built-in catalogue alone is
-  // over a thousand tokens and enabled MCP tools are added uncapped, so a 20-token
-  // "hi" was reported as thousands of tokens "on its own" and blamed for a prompt the
-  // catalogue filled. `shared_prompt_tokens` is that floor, measured by the server on
-  // an empty prompt; taking it off leaves what the turn itself contributed.
+  // `latest_turn_tokens` prices a whole rendered PROMPT: template wrapper plus, on a
+  // tool-enabled request, the entire tool catalogue. That sits inside `irreducible_tokens`
+  // too and does not cancel (built-in catalogue alone is over a thousand tokens, MCP tools
+  // uncapped), so a 6-token "hi" was reported as thousands "on its own".
+  // `shared_prompt_tokens` is that floor, measured by the server on an empty prompt.
   const latest = nonNegativeInt(truncation?.latest_turn_tokens);
-  // Never the whole turn: a floor at or above the number it belongs to does not
-  // describe it, and a turn reported as zero tokens is a worse lie than the old one.
+  // Never the whole turn: reporting it as zero tokens is a worse lie than the old one.
   const shared = Math.min(
     nonNegativeInt(truncation?.shared_prompt_tokens),
     Math.max(0, latest - 1),
@@ -76,19 +71,14 @@ export function latestTurnIsTheProblem(
   budget: number,
 ): boolean {
   if (!truncation) return false;
-  // `latest_turn_exact: false` means nothing could price the turn at all, so the number
-  // is the message's own JSON at four characters a token while every other number here
-  // is a tokenizer count of a rendered prompt. The two do not share units: 16,400
-  // characters of newlines estimate 8,207 against 557 rendered. Quoting it as "N tokens
-  // on its own" states a number the turn never cost. A turn the template renders as
-  // nothing on its own is NOT this case -- the server prices that by difference and
-  // reports it exact. Absent means a server that predates the flag, which only ever
-  // sent a count.
+  // `latest_turn_exact: false` means nothing could price the turn, so the number is the
+  // message's JSON at four characters a token while every other number here is a
+  // tokenizer count of a rendered prompt: 16,400 characters of newlines estimate 8,207
+  // against 557 rendered. A turn the template renders as nothing is NOT this case (the
+  // server prices that by difference, exact). Absent means a server predating the flag.
   if (!(truncation.latest_turn_exact ?? true)) return false;
-  // The turn WITHOUT the shared floor, so a turn that clears the budget only once a
-  // tool catalogue is standing beside it is not called a turn the budget cannot hold.
-  // An older server sends no floor, which reads as zero and leaves this exactly as it
-  // was before the field existed.
+  // Measured WITHOUT the shared floor, so a turn only over budget once a tool catalogue
+  // stands beside it is not blamed. An older server sends no floor, which reads as zero.
   return latestTurnOwnTokens(truncation) > budget;
 }
 
@@ -96,13 +86,11 @@ export function historyCannotHelp(
   truncation: ContextTruncation | null | undefined,
 ): boolean {
   if (!truncation) return false;
-  // `irreducible_tokens` is what the fit measured AFTER dropping every group the evictor
-  // was willing to drop, so it prices the floor eviction cannot go below: the template
-  // wrapper, the tool catalogue, every system turn and the newest turn. At or over the
-  // WINDOW, llama-server refuses on size alone however short the conversation gets, so
-  // "start a new chat" is not merely vague, it opens a chat that fails identically.
-  // Below the window, shortening really can work -- the fit refuses at `prompt_target`
-  // but passes the untrimmed messages on -- so that case keeps the generic advice.
+  // `irreducible_tokens` prices what survives dropping every evictable group: template
+  // wrapper, tool catalogue, system turns and the newest turn. At or over the WINDOW,
+  // llama-server refuses on size alone however short the conversation gets, so "start a
+  // new chat" opens a chat that fails identically. Below it, shortening really can work
+  // (the fit refuses at `prompt_target` but passes the untrimmed messages on).
   const irreducible = nonNegativeInt(truncation.irreducible_tokens);
   const window = nonNegativeInt(truncation.context_length);
   return irreducible > 0 && window > 0 && irreducible >= window;
@@ -144,8 +132,8 @@ export function mergeContextTruncation(
     // Rides with the count it describes: alone it says nothing, and left behind it would
     // describe a number that is no longer there.
     delete merged.latest_turn_exact;
-    // Likewise the floor: a stale one subtracted from a later fit's count would move the
-    // blame rather than remove it.
+    // Likewise the floor: a stale one subtracted from a later fit's count moves the blame
+    // rather than removing it.
     delete merged.shared_prompt_tokens;
   }
   return merged;

@@ -6854,10 +6854,10 @@ export function createOpenAIStreamAdapter(
             // send the user to a new chat that fails identically.
             const budget =
               irreducible?.prompt_target ?? irreducible?.context_length ?? 0;
-            // Both the gate and the number quoted below take the shared prompt floor off
-            // the turn first: `latest_turn_tokens` prices a whole rendered prompt, so on
-            // a tool-enabled request it carries the entire tool catalogue, and quoting it
-            // told the user a 20-token message was thousands of tokens "on its own".
+            // Both the gate and the number below take the shared prompt floor off the turn
+            // first: `latest_turn_tokens` prices a whole rendered prompt, so on a
+            // tool-enabled request it carries the entire tool catalogue, and quoting it
+            // told the user a 6-token message was thousands of tokens "on its own".
             const oneTurnIsTheProblem = latestTurnIsTheProblem(
               irreducible,
               budget,
@@ -6883,11 +6883,11 @@ export function createOpenAIStreamAdapter(
                     'Raise "Context Length" in the chat Settings panel (⚙ in the top-right), ' +
                     "or ask for less output from that tool."
                 : historyCannotHelp(irreducible)
-                  ? // No one turn to name, and yet the bulk is in the parts eviction
-                    // never touches, so "start a new chat" opens a chat that fails
-                    // identically. Both levers are named, neither is claimed as the
-                    // cause: the floor bundles the template wrapper with the catalogue,
-                    // so a large one does not prove there are tools.
+                  ? // No one turn to name, and the bulk is in the parts eviction never
+                    // touches, so "start a new chat" opens a chat that fails identically.
+                    // Both levers are named, neither claimed as the cause: the floor
+                    // bundles the template wrapper with the catalogue, so a large one does
+                    // not prove there are tools.
                     "Even with every earlier turn dropped, this prompt would still be " +
                     "too long, so shortening the conversation will not help. " +
                     'Raise "Context Length" in the chat Settings panel (⚙ in the top-right), ' +

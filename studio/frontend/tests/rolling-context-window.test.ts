@@ -377,9 +377,8 @@ test("the too-long advice depends on WHICH part does not fit", () => {
   // already been evicted and the single message is what overflows.
   assert.match(adapterSource, /contextTruncation\?\.fits === false/);
   assert.match(adapterSource, /shortening the conversation will not help/);
-  // The turn's size comes from the helper, which prices the turn itself. Matching the
-  // wire field name here would pin nothing: after the floor fix its only occurrence in
-  // this file is prose in a comment.
+  // Matching the wire field name would pin nothing: after the floor fix its only
+  // occurrence in that file is prose in a comment.
   assert.match(adapterSource, /latestTurnOwnTokens\(irreducible\)/);
 });
 
@@ -420,7 +419,7 @@ test("the too-long check uses the prompt budget, not the raw window", () => {
   // message cannot fit a 4,096-token context. The raw window would blame the
   // conversation and send the user to a new chat that fails identically.
   assert.match(source, /irreducible\?\.prompt_target \?\? irreducible\?\.context_length/);
-  // The budget is still the thing the turn is measured against; the turn's own size now
-  // comes from the shared helper, which takes the prompt's floor off it first.
+  // Still measured against the budget, but through the helper that takes the prompt's
+  // shared floor off the turn first.
   assert.match(source, /latestTurnIsTheProblem\(\s*irreducible,\s*budget,?\s*\)/);
 });

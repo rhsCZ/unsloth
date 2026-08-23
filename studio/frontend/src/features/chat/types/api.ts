@@ -756,10 +756,10 @@ export interface OpenAIChatChunk {
     // estimate the fit falls back to when the template renders the newest turn as
     // nothing on its own. Only the counted one may be quoted as the turn's size.
     latest_turn_exact?: boolean;
-    // The floor both counts above carry: what a rendered prompt costs with no messages
-    // in it, which on a tool-enabled request is the whole tool catalogue. Subtract it
-    // from both before comparing them, or the catalogue is blamed on the turn. Absent
-    // from a server that predates it, where zero reproduces the old behaviour.
+    // The floor both counts above carry: what a rendered prompt costs with no messages in
+    // it, which on a tool-enabled request is the whole tool catalogue. Subtract it before
+    // comparing them, or the catalogue is blamed on the turn. Absent from an older server,
+    // where zero reproduces the old behaviour.
     shared_prompt_tokens?: number;
     // Where the compaction boundary sits in the messages THIS request was sent with.
     // Absolute, unlike dropped_messages, so re-sending it after a turn that refit several

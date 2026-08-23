@@ -284,6 +284,17 @@ export const fr = {
         engineModel: "Transcription locale",
         engineModelDescription:
           "Exécute un modèle de reconnaissance vocale (STT) en local et fonctionne hors ligne. Téléchargez-le, chargez-le ; il se décharge après une période d'inactivité.",
+        engineCustom: "Point de terminaison personnalisé",
+        engineCustomDescription:
+          "Envoie l'audio enregistré à un serveur STT compatible avec OpenAI depuis vos connexions.",
+        connectionLabel: "Connexion",
+        connectionDescription:
+          "Ajoutez un serveur compatible avec OpenAI et éventuellement une clé API dans Connexions.",
+        connectionPlaceholder: "Sélectionner une connexion",
+        connectionEmpty: "Aucune connexion disponible",
+        customModelLabel: "Modèle",
+        customModelDescription:
+          "Nom du modèle envoyé à /v1/audio/transcriptions.",
         sttModelLabel: "Modèle de reconnaissance vocale",
         sttModelDescription:
           "Choisissez ou recherchez un modèle STT à exécuter en local.",
@@ -346,6 +357,7 @@ export const fr = {
         languageLabel: "Langue de la dictée",
         languageDescription: "Langue à reconnaître",
         languageAuto: "Auto (langue du navigateur)",
+        languageAutoDetect: "Auto (détecter la langue)",
       },
       dictionary: {
         sectionTitle: "Dictionnaire de dictée",
@@ -581,6 +593,7 @@ export const fr = {
         embeddingModel: "Modèle d'embedding",
         embeddingModelDescription:
           "Modèle Hugging Face ou chemin local utilisé pour indexer et rechercher vos documents. La valeur par défaut est {defaultModel}.",
+        searchPlaceholder: "Rechercher des modèles d'embedding",
         reindexWarning:
           "N'affecte que les documents nouvellement indexés. Téléversez à nouveau les documents existants après avoir changé de modèle.",
         emptyError:
@@ -1061,6 +1074,10 @@ export const fr = {
           "Garde l'agent parent sur son modèle actuel et enregistre Unsloth comme sous-agent local (Claude Code, Codex et OpenCode).",
         apiKey:
           "Fournit votre clé API Unsloth, ou lit la variable UNSLOTH_API_KEY.",
+        reasoning:
+          "Utiliser le raisonnement dans le chat : on, off ou auto. Auto suit le modèle de chat du modèle, ce qui veut généralement dire on.",
+        reasoningEffort:
+          "Effort de raisonnement transmis au modèle de chat du modèle, par exemple medium. Les niveaux dépendent du modèle, utilisez-en un qu'il accepte. Sans valeur, le niveau du modèle de chat s'applique.",
         yolo:
           "Ignore les demandes d'autorisation. À n'utiliser que dans des environnements de confiance.",
       },

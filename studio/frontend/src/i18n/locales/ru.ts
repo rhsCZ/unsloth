@@ -282,6 +282,17 @@ export const ru = {
         engineModel: "Локальное распознавание",
         engineModelDescription:
           "Запускает модель распознавания речи (STT) локально и работает офлайн. Скачайте модель, затем загрузите её; после простоя она выгружается.",
+        engineCustom: "Пользовательский эндпоинт",
+        engineCustomDescription:
+          "Отправляет записанный звук на OpenAI-совместимый сервер STT из ваших подключений.",
+        connectionLabel: "Подключение",
+        connectionDescription:
+          "Добавьте OpenAI-совместимый сервер и при необходимости ключ API в разделе «Подключения».",
+        connectionPlaceholder: "Выберите подключение",
+        connectionEmpty: "Нет доступных подключений",
+        customModelLabel: "Модель",
+        customModelDescription:
+          "Имя модели, отправляемое в /v1/audio/transcriptions.",
         sttModelLabel: "Модель распознавания речи",
         sttModelDescription:
           "Выберите или найдите модель STT для локального запуска.",
@@ -341,6 +352,7 @@ export const ru = {
         languageLabel: "Язык диктовки",
         languageDescription: "Язык для распознавания",
         languageAuto: "Автоматически (язык браузера)",
+        languageAutoDetect: "Автоматически (определить язык)",
       },
       dictionary: {
         sectionTitle: "Словарь диктовки",
@@ -565,6 +577,7 @@ export const ru = {
         embeddingModel: "Модель эмбеддингов",
         embeddingModelDescription:
           "Модель Hugging Face или локальный путь для индексации и поиска по вашим документам. По умолчанию {defaultModel}.",
+        searchPlaceholder: "Поиск embedding-моделей",
         reindexWarning:
           "Влияет только на вновь индексируемые документы. После смены модели загрузите существующие документы заново.",
         emptyError: "Введите ID модели Hugging Face или локальный путь.",
@@ -1040,6 +1053,10 @@ export const ru = {
           "Оставляет родительского агента на текущей модели и регистрирует Unsloth как локального субагента (Claude Code, Codex и OpenCode).",
         apiKey:
           "Передаёт ваш ключ API Unsloth (альтернатива: переменная UNSLOTH_API_KEY).",
+        reasoning:
+          "Использовать рассуждения в чате: on, off или auto. Auto следует чат-шаблону модели, что обычно означает on.",
+        reasoningEffort:
+          "Уровень усилий, передаваемый чат-шаблону модели, например medium. Набор уровней зависит от модели, поэтому укажите тот, который она принимает. Без значения остаётся уровень шаблона.",
         yolo:
           "Пропускает запросы подтверждения. Используйте только в доверенных средах.",
       },

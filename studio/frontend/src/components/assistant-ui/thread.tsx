@@ -3940,9 +3940,11 @@ const Composer: FC<{
   const queueComposerText = useCallback(
     (waitForCurrentRun: boolean) => {
       const queuedPrompt = aui.composer().getState().text.trim();
+      ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "queueComposerText:body", queuedPrompt, t: Date.now() });
       if (!queuedPrompt) {
         return;
       }
+      ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "startHydratedPromptQueue", waitForCurrentRun, t: Date.now() });
       startHydratedPromptQueue([queuedPrompt], waitForCurrentRun, () => {
         // Guard the untrimmed text too: that is what a late write carries.
         const cleared = aui.composer().getState().text;
@@ -4401,6 +4403,7 @@ const Composer: FC<{
       stopPropagation?: () => void;
     }) => {
       // Read once per submit: a rejected send must not leave it armed.
+      ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "enter", t: Date.now() });
       const forceQueue = forceQueueRef.current;
       forceQueueRef.current = false;
       if (isResearchActive) {
@@ -4408,6 +4411,7 @@ const Composer: FC<{
         return;
       }
       if (disabled || shouldBlockSend()) {
+        ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "blocked", disabled, t: Date.now() });
         event.preventDefault();
         parkIfWaitingOnAttachments();
         return;
@@ -4416,6 +4420,7 @@ const Composer: FC<{
       // own settings are still on their way is snapshotted from the installation
       // defaults on screen, so a chat stored as "ask" would queue as "off".
       if (threadScopedSettingsPending && !overlay) {
+        ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "settingsPending", t: Date.now() });
         event.preventDefault();
         // The intent rides with the parked send; the release reads it back.
         if (forceQueue) {
@@ -4455,6 +4460,7 @@ const Composer: FC<{
         livePreStreamRunActive
       ) {
         event.preventDefault();
+        ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "runningBranch", disableQueue, canQueueCurrentPrompt, canQueuePastedTextPrompt, liveThreadIsRunning, livePromptQueueActive, livePreStreamRunActive, t: Date.now() });
         // Project new-chat composer: never queue, just ask the user to wait.
         if (disableQueue) {
           toast.error("Wait for the current response to finish");
@@ -4480,6 +4486,7 @@ const Composer: FC<{
           }
           return;
         }
+        ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "callQueueComposerText", t: Date.now() });
         queueComposerText(liveThreadIsRunning || livePreStreamRunActive);
         return;
       }
@@ -4501,6 +4508,7 @@ const Composer: FC<{
         }
       }
 
+      ((window as any).__submitTrace = (window as any).__submitTrace || []).push({ at: "beforeIntercept", t: Date.now() });
       if (interceptSend(event)) return;
 
       if (overlay) {

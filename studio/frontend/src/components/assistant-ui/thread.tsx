@@ -3993,6 +3993,7 @@ const Composer: FC<{
         | "video"
         | "settings" = "indexing",
     ) => {
+      ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "enqueueSend", waitingOn, already: pendingSendRef.current, t: Date.now() });
       if (pendingSendRef.current) return;
       pendingSendRef.current = true;
       setPendingSend(true);
@@ -4182,6 +4183,7 @@ const Composer: FC<{
       return;
     }
     const { text, attachments } = aui.composer().getState();
+    ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "release", text, running: aui.thread().getState().isRunning, forceQueue: pendingSendForceQueueRef.current, t: Date.now() });
     const forceQueue = pendingSendForceQueueRef.current;
     pendingSendRef.current = false;
     pendingSendForceQueueRef.current = false;
@@ -4206,6 +4208,7 @@ const Composer: FC<{
         }
         // Nothing queueable: send, as this path did before it carried intent.
       }
+      ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "release:sendReservedComposer", running: aui.thread().getState().isRunning, t: Date.now() });
       sendReservedComposer();
     }
   }, [

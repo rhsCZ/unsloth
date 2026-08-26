@@ -1604,6 +1604,7 @@ let heldThreadScopedEdits: {
 
 /** Start of the window: the read for `threadId` is out but its snapshot has not landed. */
 export function beginThreadScopedPairing(threadId: string): void {
+  ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "beginPairing", threadId, prev: pendingPairingThreadId, t: Date.now() });
   if (pendingPairingThreadId === threadId) return;
   releaseHeldThreadScopedEdits();
   pendingPairingThreadId = threadId;
@@ -1648,6 +1649,7 @@ function openThreadScopedPairingGate(threadId: string): void {
  * is separate, and only tracks whether the chat now on screen is still waiting.
  */
 function closeThreadScopedPairingGate(threadId: string | null): void {
+  ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "closeGate", threadId, pending: pendingPairingThreadId, t: Date.now() });
   if (threadId !== null) {
     pairingSettledByThreadId.get(threadId)?.resolve();
     pairingSettledByThreadId.delete(threadId);
@@ -1655,6 +1657,7 @@ function closeThreadScopedPairingGate(threadId: string | null): void {
   const stillWaiting =
     pendingPairingThreadId !== null &&
     pairingSettledByThreadId.has(pendingPairingThreadId);
+  ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "closeGate:result", stillWaiting, pending: pendingPairingThreadId, t: Date.now() });
   if (useChatRuntimeStore.getState().threadScopedSettingsPending !== stillWaiting) {
     useChatRuntimeStore.setState({ threadScopedSettingsPending: stillWaiting });
   }
@@ -4314,6 +4317,7 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
     })),
   applyThreadScopedSettings: (threadId, settings) =>
     set((state) => {
+      ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "applyThreadScoped", threadId, pending: pendingPairingThreadId, active: state.activeThreadId, t: Date.now() });
       // the pending write belongs to the outgoing thread, so it goes out before the swap.
       flushThreadScopedSettingsWrite();
       // edits made while this chat's snapshot was in flight: keep them and store them on the

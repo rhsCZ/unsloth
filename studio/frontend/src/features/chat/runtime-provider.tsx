@@ -2190,7 +2190,9 @@ function ThreadScopedSettingsSync({
     // to 404 -- which is how an edit on a fresh /chat stopped reaching the installation
     // defaults. The `__LOCALID_` prefix stays on the id for good, so only the runtime's
     // pending-new-thread id tells the two apart.
+    ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "effect", activeThreadId, pendingNewThreadId, enabled, settingsHydrated, t: Date.now() });
     if (activeThreadId !== null && activeThreadId === pendingNewThreadId) {
+      ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "effect:isPendingNew", t: Date.now() });
       applyThreadScopedSettings(null, null);
       return;
     }
@@ -2311,6 +2313,7 @@ function ThreadScopedSettingsSync({
             // held for it is a plain default change and goes out now. Deferring that to a
             // second missing read meant an unsaved chat's click was written to a row that
             // does not exist, or attached to the chat once it was saved.
+            ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "noRow", activeThreadId, unpaired, t: Date.now() });
             releaseHeldThreadScopedEdits();
             if (unpaired) return;
             unpaired = true;
@@ -2318,6 +2321,7 @@ function ThreadScopedSettingsSync({
             return;
           }
           paired = true;
+          ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "paired", activeThreadId, t: Date.now() });
           // the response spells every omitted field as null, which is not a value to apply.
           applyThreadScopedSettings(
             activeThreadId,
@@ -2337,6 +2341,7 @@ function ThreadScopedSettingsSync({
     // installation defaults for as long as it stays open. A fresh browser with no legacy
     // cache has nothing else to fall back on, so retry a bounded few times.
     const retryThreadRead = () => {
+      ((window as any).__gateTrace = (window as any).__gateTrace || []).push({ at: "retryRead", retriesLeft, cancelled, t: Date.now() });
       if (cancelled) return;
       commitHeldThreadScopedEditsToTheirThread();
       if (retryTimer !== null) return;

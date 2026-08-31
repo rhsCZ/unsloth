@@ -409,7 +409,6 @@ from utils.process_lifetime import child_popen_kwargs as _child_popen_kwargs
 from utils.process_lifetime import is_signalable_pid as _is_signalable_pid
 from core.inference.tool_call_parser import (
     BUDGET_EXHAUSTED_NUDGE,
-    INTENT_SIGNAL as _INTENT_SIGNAL,
     MAX_ACT_REPROMPTS as _MAX_REPROMPTS,
     NUDGE_TOOL_CALLS_STATUS as _NUDGE_TOOL_CALLS_STATUS,
     REPROMPT_MAX_CHARS as _REPROMPT_MAX_CHARS,
@@ -845,210 +844,119 @@ def _native_linux_system_rocm_lib_dirs(binary_dir: str = "") -> "list[str]":
 
 # Plan-without-action re-prompt state now lives in tool_call_parser (imported above).
 
-# Lookup verbs are gated on a freshness or online target so ordinary
-# answer prose such as "binary search" is not mistaken for a tool plan.
-_TOOL_LOOKUP_TARGET = (
-    r"(?:web|internet|online(?: sources?)?|current|latest|today['’]?s?|up[- ]to[- ]date|live)"
-)
-_TOOL_ACTION_VERBS = (
-    r"web[ _-]?search|"
-    r"(?:search|look up|browse|google) (?:for )?(?:the |a |an )?"
-    rf"{_TOOL_LOOKUP_TARGET}|"
-    r"(?:query|consult) (?:the |a |an )?"
-    r"(?:web|internet|online(?: sources?)?)|"
-    r"fetch (?:the |a |an )?"
-    rf"{_TOOL_LOOKUP_TARGET}|"
-    r"(?:research|investigate|find|check|verify|compare|review) "
-    r"(?:for )?(?:the |a |an )?"
-    rf"{_TOOL_LOOKUP_TARGET}|"
-    r"(?:use|invoke|call) (?:the )?(?:python|search) tool|"
-    r"use python(?: tool)? to|"
-    r"call (?:a |the )?tool|run (?:python|the code)|execute (?:python|the code)"
-)
-
-# Substantive answer artifacts. Re-prompt fires when the model emits
-# intent-only language ("first I'll ...", "let me ...") without a tool
-# call, but the same intent words appear in long explanations that
-# accompany REAL code or markup. Without this guard, a complete reply
-# like "First, let me set up pygame. ```python ... ```" trips the
-# re-prompt and the next user-visible message wipes the code. We
-# require ALL of (intent signal, length < _REPROMPT_MAX_CHARS, no
-# answer artifact) to fire.
+# An artifact is content the model could not have written as a plan; without
+# one, "First, let me set up pygame. ```python ... ```" satisfies the intent
+# gate and the synthetic STOP turn wipes the code.
 #
-# Notes on the patterns:
-#   * `\r?\n` everywhere a newline is required so Windows-authored or
-#     CRLF-converted content still matches.
-#   * Code-fence info string is `[^\r\n]{0,200}` so common languages with
-#     digits / symbols (python3, c++, c#, objective-c, ts-node, ...) are
-#     all recognised; closing fence may be indented (` ``` ` inside a
-#     list or blockquote).
-#   * HTML branches require a closing `</html>` so plan-only mentions of
-#     `<html>` or `<!doctype>` do not bypass the re-prompt.
-#   * All `[\s\S]{...}?` runs are length-bounded so the search stays
-#     linear on adversarial input (CRLF spam, repeated `<html>` etc.).
+# A numbered list is deliberately NOT one: over the 300 recorded answers in
+# tests/data/plan_vs_answer a list branch decided one turn while costing errors
+# in both directions.
+#
+# `\s*` in the closing tags is spec-legal HTML. Every `[\s\S]{...}?` run stays
+# length-bounded or the search backtracks on CRLF and `<html>` spam.
 _CLOSED_CODE_FENCE = re.compile(
-    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
-    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)",
+    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
+    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)",
     re.IGNORECASE,
 )
 _CLOSED_MARKUP_ARTIFACT = re.compile(
-    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[\s\S]{0,4000}?</html>|<svg\b[\s\S]{0,4000}?</svg>",
+    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[\s\S]{0,4000}?</html\s*>|<svg\b[\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 _HAS_ANSWER_ARTIFACT = re.compile(
-    # Closed backtick code fence (any markdown info string, optional indent
-    # on close).  CommonMark allows opening fences of 3+ backticks; the
-    # closing fence must have at least as many delimiters, and the line
-    # must end cleanly (only trailing whitespace before newline / EOS),
-    # so spam like ``` ```not actually closed ``` does not count.
-    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
-    # Closed tilde code fence; same 3+ rule (several models emit ~~~ when
-    # the body itself contains backticks). Opener anchored to the full
-    # run of tildes; closer accepts >= opener length per CommonMark.
-    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
-    # Complete HTML page; doctype prefix is optional.
-    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[\s\S]{0,4000}?</html>"
-    # Complete SVG document.
-    r"|<svg\b[\s\S]{0,4000}?</svg>",
+    # Backtick then tilde fence (models emit ~~~ when the body holds backticks).
+    # CommonMark takes 3+ to open, at least as many to close, and the closing line
+    # must end cleanly, so ``` ```not actually closed ``` does not count.
+    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
+    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
+    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
-
-# Two or more numbered list items at column 0. Indent is spaces / tabs
-# only so the regex stays linear on long whitespace runs.
-_NUMBERED_LIST_ARTIFACT = re.compile(
-    r"(?:^|\r?\n)[ \t]*\d+\.[ \t]+\S.*?\r?\n[ \t]*\d+\.",
-)
-
-# Markers that a numbered list is a plan (still re-promptable), not a
-# final answer. Fires when an intent phrase from _INTENT_SIGNAL is
-# followed anywhere in the short re-prompt candidate by a tool-action
-# verb. The apostrophe in ``i['’]ll`` is required (no ``?``) so the
-# regex does not accidentally match the word "ill". Without a tool-
-# action verb the numbered list is treated as a completed answer
-# artifact. The scan window is bounded at _REPROMPT_MAX_CHARS by the
-# caller, so the lazy ``[\s\S]{0,2000}?`` quantifier stays linear.
-_PLAN_LIST_FRAMING = re.compile(
-    r"\b(?:here['’]?s (?:my |the |a )?(?:plan|approach)|"
-    r"step \d+|first|"
-    r"i['’](?:ll|m going to|m gonna)|i am (?:going to|gonna)|"
-    r"i will|i shall|let me|allow me|now i|next i)\b"
-    r"[\s\S]{0,2000}?"
-    rf"\b(?:{_TOOL_ACTION_VERBS})\b",
-    re.IGNORECASE,
-)
-
-# "Here's my plan" / "Here's my approach" are strong stand-alone plan
-# signals: a possessive, first-person framing where the model is
-# announcing what it WILL do. Treat the following numbered list as a
-# plan regardless of the specific verbs each item uses, so stalls like
-# ``Here's my plan: 1. Analyze 2. Draft`` still re-prompt.
-_EXPLICIT_PLAN_HEADER = re.compile(
-    r"\bhere['’]?s (?:my |the |a )?(?:plan|approach)\b",
-    re.IGNORECASE,
-)
-
-# Direct first-person intent + a tool/work verb that the model is about
-# to perform + a numbered list. Catches stalls like
-# ``First, I'll do this:\n1. Search ...`` or ``Let me do this:\n1. Parse
-# the file ...`` where each list item is an action the model promised
-# to take without actually invoking a tool. The first-person intent
-# branch tolerates a broad set of work verbs (open/read/search/check/
-# review/inspect/etc.) because direct first-person announcements are
-# strongly plan-like; the "First, ..." / "Step N:" branch stays
-# narrow so algorithmic answers ("First, use binary search:") are
-# preserved.
-_DIRECT_NUMBERED_PLAN_FRAMING = re.compile(
-    r"(?:"
-    r"\b(?:i['’](?:ll|m going to|m gonna)|i am (?:going to|gonna)|"
-    r"i will|i shall|let me|allow me|now i|next i)\b"
-    r"[^\r\n]{0,160}"
-    r"\b(?:open|read|search|look (?:this |that |it |them )?up|browse|"
-    r"google|find|check|verify|compare|review|inspect|examine|"
-    r"visit|access|navigate|gather|collect|"
-    r"do (?:this|these|the following|it)|"
-    r"(?:take|follow|complete|perform) (?:these|the following) (?:steps|actions)|"
-    r"proceed|start|begin|"
-    r"create|build|implement|set up|add|calculate|compute|analy[sz]e|"
-    r"parse|load|run|execute|test)\b"
-    r"|"
-    r"\b(?:first|step \d+:?)\b"
-    r"[^\r\n]{0,160}"
-    r"\b(?:do (?:this|these|the following|it)|"
-    r"look (?:this |that |it |them )?up|"
-    r"proceed|start|begin|"
-    r"create|build|implement|set up|add|"
-    r"calculate|compute|analy[sz]e|parse|load|run|execute|test)\b"
-    r")"
-    r"[\s\S]{0,500}?"
-    r"(?:^|\r?\n)[ \t]*\d+\.",
-    re.IGNORECASE,
-)
-
 
 _FENCE_RUN_RE = re.compile(r"(?<!`)(?P<backticks>`{3,})(?!`)|(?<!~)(?P<tildes>~{3,})(?!~)")
+# Structure, not content: stripped so a quoted fence is judged at its real column.
+_BLOCKQUOTE_PREFIX = re.compile(r"^[ \t]*(?:>[ \t]?)+")
+# A language token, the only trailing text that makes an inline run an opener
+# rather than prose: python3, c++, c#, objective-c, ts-node, bash-session.
+_FENCE_INFO_STRING_RE = re.compile(r"[A-Za-z][\w.+#-]*")
 
 
 def _has_unclosed_code_fence(text: str) -> bool:
     """True if ``text`` contains a code fence whose closer is missing.
 
-    Each line is scanned with ``search`` so inline openers like
-    ``First. \\`\\`\\`python`` are tracked. To avoid reading prose
-    mentions of triple backticks as openers, an INLINE fence (fence
-    not at line start) is only accepted when its trailing characters
-    look like a clean CommonMark info-string token with no internal
-    whitespace. Column-0 fences always count, so multi-token info
-    strings like ``\\`\\`\\`python linenums=1`` still work.
+    Models do open a fence mid-line (``First. \\`\\`\\`python``), so an inline
+    run counts, but only when it cannot be read as prose instead. A column-0
+    fence always counts, blockquoted or not.
+
+    This helper, not `_HAS_ANSWER_ARTIFACT`, is what pairs a quoted closer with
+    a quoted opener: the pattern accepts `>` on any closer so a quoted block is
+    found at all, and the depth check below rejects the ones that do not match.
     """
     active_char: Optional[str] = None
     active_len = 0
-    for line in text.splitlines():
-        m = _FENCE_RUN_RE.search(line)
-        if not m:
-            continue
-        fence = m.group("backticks") or m.group("tildes")
-        raw_trailing = line[m.end() :]
-        trailing = raw_trailing.strip()
-        ch = fence[0]
-        is_inline = bool(line[: m.start()].strip())
-        # Inline + multi-word trailing or leading-space trailing both
-        # read as prose ("Use ``` to start", "Use ```python to open").
-        if is_inline:
-            if raw_trailing and raw_trailing[0] == " " and trailing:
+    active_quote = 0
+    closed_any = False
+    for raw_line in text.splitlines():
+        quote = _BLOCKQUOTE_PREFIX.match(raw_line)
+        quote_depth = quote.group(0).count(">") if quote else 0
+        line = raw_line[quote.end() :] if quote else raw_line
+        runs = list(_FENCE_RUN_RE.finditer(line))
+        for index, m in enumerate(runs):
+            fence = m.group("backticks") or m.group("tildes")
+            trailing = line[m.end() :].strip()
+            ch = fence[0]
+            at_line_start = not line[: m.start()].strip()
+            if active_char is not None:
+                # CommonMark closes only on a delimiter that starts its own line
+                # and ends it, so "Use three backticks: ```" inside a block is
+                # body text. Everything else here is body too.
+                if (
+                    at_line_start
+                    and ch == active_char
+                    and len(fence) >= active_len
+                    and quote_depth == active_quote
+                    and not trailing
+                ):
+                    active_char, active_len, active_quote = None, 0, 0
+                    closed_any = True
                 continue
-            if trailing and (" " in trailing or "\t" in trailing):
+            if at_line_start:
+                active_char, active_len, active_quote = ch, len(fence), quote_depth
                 continue
-        if active_char is None:
-            active_char = ch
-            active_len = len(fence)
-        elif ch == active_char and len(fence) >= active_len and not trailing:
-            active_char = None
-            active_len = 0
+            # Inline. Models do open a fence mid-line, but only the last run can
+            # be that opener: an earlier one is closed by the later ("the marker
+            # is ```python```"), and only a bare info string tells an opener from
+            # prose. A bare delimiter once a block has closed is a literal ("wrap
+            # it in ```"); before any close, "here is code: ```" still opens.
+            if index != len(runs) - 1:
+                continue
+            if trailing and not _FENCE_INFO_STRING_RE.fullmatch(trailing):
+                continue
+            if not trailing and closed_any:
+                continue
+            active_char, active_len, active_quote = ch, len(fence), quote_depth
     return active_char is not None
 
 
 def _has_unclosed_markup_block(text: str) -> bool:
     """True if ``text`` opens an <html>/<svg> block without closing it.
 
-    Either a missing close on the only block, OR a closed block followed
-    by a still-open block, qualifies. The check is unbalanced-count
-    based so half-finished output ALWAYS disqualifies the artifact path,
-    even when an earlier complete artifact is also present in the same
-    response.
+    Counted rather than matched, so a closed block followed by a still-open one
+    also qualifies.
     """
     opens_html = len(re.findall(r"<html\b", text, re.IGNORECASE))
-    closes_html = len(re.findall(r"</html>", text, re.IGNORECASE))
+    closes_html = len(re.findall(r"</html\s*>", text, re.IGNORECASE))
     if opens_html > closes_html:
         return True
     opens_svg = len(re.findall(r"<svg\b", text, re.IGNORECASE))
-    closes_svg = len(re.findall(r"</svg>", text, re.IGNORECASE))
+    closes_svg = len(re.findall(r"</svg\s*>", text, re.IGNORECASE))
     return opens_svg > closes_svg
 
 
-# Matches the full span of an empty <html></html> or <svg></svg>
-# skeleton. Plan-only mentions ("First, I'll create an <html></html>
-# skeleton") would otherwise look like a complete page.
+# "First, I'll create an <html></html> skeleton" is a plan, not a page.
 _EMPTY_MARKUP_SKELETON = re.compile(
-    r"<(html|svg)\b[^>]*>\s*</\1>",
+    r"<(html|svg)\b[^>]*>\s*</\1\s*>",
     re.IGNORECASE,
 )
 _DOCTYPE_PREFIX = re.compile(
@@ -1058,125 +966,57 @@ _DOCTYPE_PREFIX = re.compile(
 
 
 def _is_empty_markup_skeleton(matched: str) -> bool:
-    """True if ``matched`` is just an empty <html></html> / <svg></svg>
-    (optionally with a `<!doctype>` prefix and surrounding whitespace).
-    These read as plan-only mentions, not substantive answers."""
+    """True if ``matched`` is an empty <html></html> / <svg></svg>, doctype
+    prefix and surrounding whitespace allowed."""
     candidate = _DOCTYPE_PREFIX.sub("", matched.strip(), count = 1).strip()
     return _EMPTY_MARKUP_SKELETON.fullmatch(candidate) is not None
-
-
-# A numbered list whose item lines start with a strong work / tool
-# verb. Combined with first-person intent framing this catches stalls
-# like "First, I'll:\n1. Load the CSV\n2. Compute the total" where the
-# verbs sit in the list items rather than before the list. The verb
-# list deliberately excludes ``search`` / ``look up`` / ``read`` /
-# ``open`` / ``create`` / ``build`` etc. so ordinary algorithm or
-# instructional answers ("1. Search the left half", "1. Read the
-# docs") stay valid answers.
-_LOCAL_ACTION_VERBS = (
-    r"load|inspect|parse|"
-    r"calculate|compute|analy[sz]e|extract|"
-    r"run|execute|fetch|download|query|"
-    r"gather|collect|identify"
-)
-_NUMBERED_ACTION_ITEM = re.compile(
-    rf"(?:^|\r?\n)[ \t]*\d+\.[ \t]+(?:{_LOCAL_ACTION_VERBS})\b",
-    re.IGNORECASE,
-)
-# Direct first-person pronoun intent only. "First," and "Step N:" are
-# intentionally excluded here because they appear in non-plan answers
-# ("First, use binary search:") and would over-trigger the items-in-
-# numbered-list cross-check.
-_STRONG_INTENT_BEFORE_LIST = re.compile(
-    r"\b(?:i['’](?:ll|m going to|m gonna)|i am (?:going to|gonna)|"
-    r"i will|i shall|let me|allow me|now i|next i)\b",
-    re.IGNORECASE,
-)
-
-# Bare first-person intent immediately followed by ``:`` and a numbered
-# list whose first item begins with a work verb. Catches
-# ``I'll:\n1. Open the URL`` and ``Let me:\n1. Parse the JSON`` where
-# no work verb appears between the intent phrase and the list. The
-# verb set here is broader than _LOCAL_ACTION_VERBS because the
-# tight ``intent + : + newline + numbered`` shape is itself the strong
-# signal that this is a tool stall.
-_BARE_INTENT_NUMBERED_PLAN = re.compile(
-    r"\b(?:i['’](?:ll|m going to|m gonna)|i am (?:going to|gonna)|"
-    r"i will|i shall|let me|allow me|now i|next i)\s*:[ \t]*"
-    r"(?:\r?\n)[ \t]*\d+\.[ \t]+"
-    r"(?:open|read|search|"
-    r"look (?:this |that |it |them )?up|"
-    r"check|verify|create|build|add|set up|"
-    r"load|inspect|parse|calculate|compute|analy[sz]e|extract|run|execute|"
-    r"fetch|download|query|summari[sz]e|implement|generate|draft|write|"
-    r"visit|access|navigate|gather|collect|identify|update|edit)\b",
-    re.IGNORECASE,
-)
 
 
 def _looks_like_real_artifact(text: str) -> bool:
     """Match _HAS_ANSWER_ARTIFACT but reject empty markup skeletons.
 
-    Iterates every artifact match in ``text`` so an empty <html></html>
-    skeleton followed by a real complete page still classifies as a
-    real artifact (the second match wins)."""
+    Every match is inspected, so a skeleton followed by a real page counts."""
     for m in _HAS_ANSWER_ARTIFACT.finditer(text):
         if not _is_empty_markup_skeleton(m.group(0)):
             return True
     return False
 
 
+def _strip_markup_around_fences(text: str) -> str:
+    """Drop complete <html>/<svg> blocks without touching any complete fence.
+
+    A plain substitution matches from an opening tag inside a fence to a closing
+    one in the prose after it, taking the fence's own closer with it, which then
+    reads as an unfinished block:
+    ``` ```html\\n<html>\\n``` \\nClose it with </html>.```
+    """
+    out, pos = [], 0
+    for m in _CLOSED_CODE_FENCE.finditer(text):
+        out.append(_CLOSED_MARKUP_ARTIFACT.sub("", text[pos : m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(_CLOSED_MARKUP_ARTIFACT.sub("", text[pos:]))
+    return "".join(out)
+
+
 def _has_answer_artifact(text: str) -> bool:
     """True if ``text`` looks like a completed answer artifact.
 
-    Code fences, complete HTML, and complete SVG count directly. A
-    numbered list counts only when there is no plan framing, so stalls
-    like ``Here's my plan:\\n1. search\\n2. summarise`` still re-prompt.
-    An explicit ``Here's my plan`` / ``Here's my approach`` header, or a
-    direct first-person ``I'll do this:\\n1. ...`` framing with a
-    work/tool verb before the list, also flags the list as a plan even
-    when no narrow tool-action verb appears in the items. Any unclosed
-    fence or unclosed `<html>` / `<svg>` block disqualifies the
-    artifact path so half-finished output does not look like a final
-    answer, even when an earlier complete artifact is also present.
-    Empty `<html></html>` / `<svg></svg>` skeletons do not count.
+    A closed code fence, a complete HTML page, or a complete SVG, and none of
+    them left unfinished. Empty skeletons do not count.
     """
-    # Cross-strip closed artifacts before the unclosed-state checks so
-    # delimiter-like content INSIDE a complete code fence (e.g.
-    # `html = '<html>'` literal in a Python snippet) or INSIDE complete
-    # HTML (e.g. a JS string containing backticks) does not falsely
-    # disqualify the artifact path.
+    # Strip closed artifacts first: a `html = '<html>'` literal in a finished
+    # snippet, or backticks inside finished HTML, are content, not open state.
     text_without_closed_fences = _CLOSED_CODE_FENCE.sub("", text)
-    text_without_closed_markup = _CLOSED_MARKUP_ARTIFACT.sub("", text)
     text_without_both = _CLOSED_MARKUP_ARTIFACT.sub("", text_without_closed_fences)
-    if _has_unclosed_code_fence(text_without_closed_markup):
+    if _has_unclosed_code_fence(_strip_markup_around_fences(text)):
         return False
-    # When NO complete artifact has been emitted yet, count-based markup
-    # detection is reliable for spotting mid-stream output. Once a real
-    # artifact already exists, prose mentions of bare ``<html>`` /
-    # ``<svg>`` tags in explanations are common (and would falsely
-    # unbalance the open/close count), so we rely on the closed-artifact
-    # path instead and skip the count check.
+    # Only meaningful before any artifact lands: afterwards, prose mentioning
+    # a bare <html> tag is common and would unbalance the count.
     real_artifact = _looks_like_real_artifact(text)
     if not real_artifact and _has_unclosed_markup_block(text_without_both):
         return False
-    if real_artifact:
-        return True
-    if _NUMBERED_LIST_ARTIFACT.search(text):
-        if _EXPLICIT_PLAN_HEADER.search(text):
-            return False
-        if _DIRECT_NUMBERED_PLAN_FRAMING.search(text):
-            return False
-        if _BARE_INTENT_NUMBERED_PLAN.search(text):
-            return False
-        # First-person pronoun intent + numbered list where the items
-        # themselves start with a strong work verb ("First, I'll:\n
-        # 1. Load...\n2. Run...") is a plan stall, even when no work
-        # verb appears before the list.
-        if _STRONG_INTENT_BEFORE_LIST.search(text) and _NUMBERED_ACTION_ITEM.search(text):
-            return False
-        return _PLAN_LIST_FRAMING.search(text) is None
-    return False
+    return real_artifact
 
 
 # Default max_tokens to the effective context when known. The floor is high
@@ -29513,10 +29353,8 @@ class LlamaCppBackend:
                         # to _MAX_REPROMPTS times, only on short responses with intent
                         # signals -- "4" or "Hello!" won't trigger it. Uses content,
                         # else reasoning text (reasoning-only stalls).
-                        # Classify only text the user can see. Tool-call markup is
-                        # scrubbed from the final answer and cannot make a plan look
-                        # complete. Reasoning is visible only when no content tokens
-                        # were produced.
+                        # Classify only what the user sees: tool-call markup is
+                        # scrubbed, and reasoning shows only with no content tokens.
                         _visible_raw = content_accum.strip()
                         _visible = (
                             _strip_tool_markup(content_accum, final = True).strip()

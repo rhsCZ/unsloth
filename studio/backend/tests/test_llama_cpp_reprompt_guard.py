@@ -253,6 +253,51 @@ def test_bare_delimiter_in_prose_after_a_closed_block():
     assert _has_answer_artifact("First, here is code: ```\nx = 1\n```")
 
 
+def test_fence_body_indented_four_spaces_is_not_a_closer():
+    """CommonMark allows a fence at most 3 columns of indentation, so a deeper
+    delimiter in a markdown example is body and the block is still open."""
+    text = "First, let me show it.\n```markdown\n    ```\nstill going"
+    assert not _has_answer_artifact(text)
+    assert _would_reprompt(text)
+    # Three columns or fewer still closes.
+    assert _has_answer_artifact("First, let me show:\n```python\nx = 1\n  ```")
+
+
+def test_fence_indentation_is_measured_from_its_container():
+    """The 3-column allowance comes from the container, so a block a list indents
+    closes at the list's column, while a block that merely indented itself does
+    not get those columns twice."""
+    nested = [
+        "First, let me show it.\n  - ```python\n    x = 1\n    ```",
+        "First, let me show it.\n    - ```python\n      x = 1\n      ```",
+    ]
+    for text in nested:
+        assert _has_answer_artifact(text), text
+        assert not _would_reprompt(text), text
+
+    # No container: the opener's own 3 columns do not buy the closer 3 more.
+    assert not _has_answer_artifact("First, let me show it.\n   ```python\n   x = 1\n      ```")
+    assert _has_answer_artifact("First, let me show it.\n   ```python\n   x = 1\n   ```")
+
+
+def test_blockquote_inside_a_list_item_is_one_container():
+    """``- > ```py`` is a quote in a list item, so the opener and the closer under it
+    have to be read at the same quote depth."""
+    text = "First, let me show it.\n- > ```python\n  > x = 1\n  > ```"
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
+
+
+def test_indented_code_literal_is_not_a_fence_opener():
+    """Past 3 columns a delimiter on its own line is an indented code line, so a
+    fence shown as a literal must not reopen after a finished block. A quote marker
+    that deep is literal too, since a blockquote cannot start there."""
+    for tail in ("    ```python", "    > ```python"):
+        text = "First, let me show it.\n```python\nx = 1\n```\nLiteral:\n\n" + tail
+        assert _has_answer_artifact(text), tail
+        assert not _would_reprompt(text), tail
+
+
 def test_closer_must_start_its_own_line():
     """CommonMark closes on a delimiter that starts and ends its line, so a body
     line reading ``Use three backticks: ``` `` is content, not the closer."""
@@ -284,6 +329,66 @@ def test_closing_tag_in_prose_does_not_eat_a_fence_closer():
     # finished page do not read as fence delimiters.
     assert _has_answer_artifact(
         "First, let me show it.\n<html><body><script>const s = `hi`;</script></body></html>"
+    )
+    # A page that ENCLOSES a fence is one block and goes whole, so a later literal
+    # delimiter inside it is removed with it rather than left looking unclosed.
+    enclosing = "First, let me show it.\n<html>\n```python\nx = 1\n```\n<pre>\n```\n</pre>\n</html>"
+    assert _has_answer_artifact(enclosing)
+    assert not _would_reprompt(enclosing)
+
+
+def test_artifact_nested_in_an_unclosed_page_does_not_count():
+    """A complete inner artifact says nothing about the page around it, so a stream
+    that stopped after the SVG but before ``</html>`` is still unfinished."""
+    for text in (
+        'First, let me build it.\n<html><body><svg width="10"><circle r="3"/></svg>',
+        "First, let me build it.\n<html><body>\n```python\nx = 1\n```",
+    ):
+        assert not _has_answer_artifact(text), text
+        assert _would_reprompt(text), text
+    # A tag NAMED in prose before the artifact is prose, not a container: only
+    # markup and whitespace between the two means the opener encloses it.
+    for text in (
+        "First, let me demonstrate the <html> tag.\n```python\nx = 1\n```",
+        "First, let me demonstrate the <svg> tag.\n```python\nx = 1\n```",
+    ):
+        assert _has_answer_artifact(text), text
+        assert not _would_reprompt(text), text
+    # Closed, it is an answer, and a bare tag AFTER one is prose either way.
+    assert _has_answer_artifact(
+        'First, let me build it.\n<html><body><svg width="10"><circle r="3"/></svg></body></html>'
+    )
+    assert _has_answer_artifact(
+        "First, let me show it.\n```python\nx = 1\n```\nNow replace <html> with something."
+    )
+
+
+def test_markup_opening_tag_must_terminate():
+    """`<html lang='en'` with no `>` never opened a page, so pairing it with a
+    closing tag mentioned later in a plan is not a completed artifact."""
+    samples = [
+        "First, I'll create <html lang='en' and then close it with </html>",
+        "First, I'll draw <svg width='10' and then close with </svg>",
+    ]
+    for text in samples:
+        assert not _has_answer_artifact(text), text
+        assert _would_reprompt(text), text
+    # A real opening tag with attributes is still a page.
+    assert _has_answer_artifact("First, let me show it.\n<html lang='en'><body>hi</body></html>")
+
+
+def test_list_marker_line_opens_a_block_level_fence():
+    """``- ```python linenums=1`` sits in a list container, not in prose, so the
+    prose rules that keep a mid-sentence delimiter from opening do not apply."""
+    unfinished = (
+        "First, let me show it.\n```python\nx=1\n```\n- ```python linenums=1\ndef g(): pass"
+    )
+    assert not _has_answer_artifact(unfinished)
+    assert _would_reprompt(unfinished)
+    assert _has_answer_artifact("First, let me show it.\n- ```python linenums=1\n  x = 1\n  ```")
+    # Prose is unchanged: a mid-sentence delimiter with words after it stays prose.
+    assert _has_answer_artifact(
+        "First, let me show it.\n```python\nx=1\n```\nUse ``` for markdown."
     )
 
 
@@ -885,7 +990,7 @@ def test_no_reprompt_on_html_containing_backtick_literal():
 
 def test_empty_markup_before_real_artifact_still_counts_real_artifact():
     """An empty <html></html> / <svg></svg> skeleton that PRECEDES a
-    real complete artifact must not hide it. _looks_like_real_artifact
+    real complete artifact must not hide it. _first_real_artifact
     iterates every match."""
     samples = [
         (
@@ -950,13 +1055,78 @@ def test_hidden_reasoning_artifact_still_reprompts():
     reasoning_accum = "First, let me draft it.\n```python\nprint('hidden answer')\n```"
     has_content_tokens = True  # content existed but was stripped
 
-    visible = content_accum.strip()
+    assert _gate_would_reprompt(content_accum, reasoning_accum, has_content_tokens)
+
+
+def _gate_would_reprompt(
+    content_accum,
+    reasoning_accum,
+    has_content_tokens,
+    *,
+    promote_reasoning_only = True,
+    finish_reason = "stop",
+):
+    """The re-prompt gate's own derivation of what counts as the visible answer."""
+    from core.inference.llama_cpp import _REPROMPT_MAX_CHARS, _text_outside_think
+    from core.inference.tool_call_parser import strip_tool_markup
+
+    visible_raw = content_accum.strip()
+    visible = strip_tool_markup(content_accum, final = True).strip() if visible_raw else ""
     reasoning = reasoning_accum.strip()
     stripped = visible if visible else reasoning
-    artifact_text = visible if visible else (reasoning if not has_content_tokens else "")
-    would_reprompt = bool(
+    visible_answer = _text_outside_think(visible).strip()
+    reasoning_shown = (
+        not has_content_tokens and promote_reasoning_only and finish_reason != "length"
+    )
+    artifact_text = visible_answer or (reasoning if reasoning_shown else "")
+    intent_text = visible_answer or stripped
+    return bool(
         0 < len(stripped) < _REPROMPT_MAX_CHARS
-        and _INTENT_SIGNAL.search(stripped)
+        and _INTENT_SIGNAL.search(intent_text)
         and not (artifact_text and _has_answer_artifact(artifact_text))
     )
-    assert would_reprompt
+
+
+def test_content_channel_think_block_is_not_an_answer():
+    """A template that renders thinking as ``<think>`` in the CONTENT channel keeps
+    those blocks in the visible text, but a fence rehearsed inside one is not an
+    answer the user was shown, so the nudge must still fire."""
+    think_only = "<think>First, let me write it.\n```python\nx = 1\n```\nDone.</think>"
+    assert _gate_would_reprompt(think_only, "", True)
+
+    # An answer after ``</think>`` is a real answer and still suppresses it.
+    with_answer = "<think>First, let me plan.</think>Here you go.\n```python\nx = 1\n```"
+    assert not _gate_would_reprompt(with_answer, "", True)
+
+
+def test_prefilled_reasoning_closes_without_an_opener():
+    """A template that sends the opening ``<think>`` itself leaves only the closer in
+    the generated text, so the answer after it still has to be found."""
+    assert not _gate_would_reprompt(
+        "First, I will search the web.</think>The answer is Paris.", "", True
+    )
+    # Nothing after the closer is still the stall.
+    assert _gate_would_reprompt("First, I will search the web.</think>", "", True)
+
+
+def test_reasoning_artifact_counts_only_when_the_loop_promotes_it():
+    """Reasoning stands in for the answer only when it is promoted to visible
+    content. On the Anthropic path it stays a thinking block and the user saw
+    nothing, so a fence inside it must not suppress the nudge."""
+    reasoning = "First, let me draft it.\n```python\nprint('hi')\n```"
+    assert not _gate_would_reprompt("", reasoning, False, promote_reasoning_only = True)
+    assert _gate_would_reprompt("", reasoning, False, promote_reasoning_only = False)
+    # Promoted but cut off by the window: nothing is yielded, so it is a stall too.
+    assert _gate_would_reprompt("", reasoning, False, finish_reason = "length")
+
+
+def test_intent_inside_a_think_block_is_not_an_announcement():
+    """A plan the model only thought is not one it told the user about, so a plain
+    answer after ``</think>`` must stand even with no code or markup in it."""
+    assert not _gate_would_reprompt(
+        "<think>First, I will search the web.</think>The answer is Paris.", "", True
+    )
+    # With nothing outside the block the turn showed nothing, which IS the stall.
+    assert _gate_would_reprompt("<think>First, I will search the web.</think>", "", True)
+    # No think block: the plan is on screen and still earns the nudge.
+    assert _gate_would_reprompt("First, I will search the web.", "", True)

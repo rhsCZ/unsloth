@@ -423,6 +423,7 @@ from core.inference.tool_call_parser import (
     thinking_exhausted_message as _thinking_exhausted_message,
     unfinished_thought_progress as _unfinished_thought_progress,
 )
+from core.tool_healing import strip_outside_think as _strip_outside_think
 from core.inference.passthrough_healing import nudge_enabled as _nudge_enabled
 from core.inference.repetition_guard import is_repetition_dominated
 from core.inference.tool_loop_controller import (
@@ -860,7 +861,8 @@ _CLOSED_CODE_FENCE = re.compile(
     re.IGNORECASE,
 )
 _CLOSED_MARKUP_ARTIFACT = re.compile(
-    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[\s\S]{0,4000}?</html\s*>|<svg\b[\s\S]{0,4000}?</svg\s*>",
+    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[^>]{0,200}>[\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 _HAS_ANSWER_ARTIFACT = re.compile(
@@ -869,17 +871,20 @@ _HAS_ANSWER_ARTIFACT = re.compile(
     # must end cleanly, so ``` ```not actually closed ``` does not count.
     r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
     r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
-    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[\s\S]{0,4000}?</html\s*>"
-    r"|<svg\b[\s\S]{0,4000}?</svg\s*>",
+    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[^>]{0,200}>[\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 
 _FENCE_RUN_RE = re.compile(r"(?<!`)(?P<backticks>`{3,})(?!`)|(?<!~)(?P<tildes>~{3,})(?!~)")
 # Structure, not content: stripped so a quoted fence is judged at its real column.
-_BLOCKQUOTE_PREFIX = re.compile(r"^[ \t]*(?:>[ \t]?)+")
+# One list marker may precede the quote, since "- > ```py" is a quote in a list item.
+_BLOCKQUOTE_PREFIX = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])?[ \t]*(?:>[ \t]?)+")
 # A language token, the only trailing text that makes an inline run an opener
 # rather than prose: python3, c++, c#, objective-c, ts-node, bash-session.
 _FENCE_INFO_STRING_RE = re.compile(r"[A-Za-z][\w.+#-]*")
+# A fence on a list-marker line is block level, so the prose rules below do not apply.
+_LIST_MARKER_ONLY = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+$")
 
 
 def _has_unclosed_code_fence(text: str) -> bool:
@@ -896,9 +901,17 @@ def _has_unclosed_code_fence(text: str) -> bool:
     active_char: Optional[str] = None
     active_len = 0
     active_quote = 0
+    active_base = 0
     closed_any = False
     for raw_line in text.splitlines():
+        # A quote marker four columns in is an indented code line, not a container,
+        # and nothing on it opens a fence. List markers are left alone: at that depth
+        # they are as likely to continue a list this scan cannot see.
+        lead = raw_line[: len(raw_line) - len(raw_line.lstrip(" \t"))]
         quote = _BLOCKQUOTE_PREFIX.match(raw_line)
+        indented_quote = quote is not None and len(lead.expandtabs(4)) > 3
+        if indented_quote:
+            quote = None
         quote_depth = quote.group(0).count(">") if quote else 0
         line = raw_line[quote.end() :] if quote else raw_line
         runs = list(_FENCE_RUN_RE.finditer(line))
@@ -906,36 +919,48 @@ def _has_unclosed_code_fence(text: str) -> bool:
             fence = m.group("backticks") or m.group("tildes")
             trailing = line[m.end() :].strip()
             ch = fence[0]
-            at_line_start = not line[: m.start()].strip()
+            prefix = line[: m.start()]
+            indent = len(prefix.expandtabs(4))
+            blank_prefix = not prefix.strip()
             if active_char is not None:
-                # CommonMark closes only on a delimiter that starts its own line
-                # and ends it, so "Use three backticks: ```" inside a block is
-                # body text. Everything else here is body too.
+                # A closer starts and ends its own line, within 3 columns of the
+                # CONTAINER, not of whatever indentation the opener chose. Anything
+                # else, "Use three backticks: ```" included, is body.
                 if (
-                    at_line_start
+                    blank_prefix
+                    and indent <= active_base + 3
                     and ch == active_char
                     and len(fence) >= active_len
                     and quote_depth == active_quote
                     and not trailing
                 ):
-                    active_char, active_len, active_quote = None, 0, 0
+                    active_char, active_len, active_quote, active_base = None, 0, 0, 0
                     closed_any = True
                 continue
-            if at_line_start:
-                active_char, active_len, active_quote = ch, len(fence), quote_depth
+            if blank_prefix:
+                # Its own indentation, so the baseline is 0. Past three columns it
+                # is an indented code line and opens nothing.
+                if indent <= 3:
+                    active_char, active_len = ch, len(fence)
+                    active_quote, active_base = quote_depth, 0
                 continue
-            # Inline. Models do open a fence mid-line, but only the last run can
-            # be that opener: an earlier one is closed by the later ("the marker
-            # is ```python```"), and only a bare info string tells an opener from
-            # prose. A bare delimiter once a block has closed is a literal ("wrap
+            # A list marker is a container, so a fence on that line is block level and
+            # skips the rest. CommonMark has no mid-PROSE fence, but models open one. Only
+            # the last run can be it (an earlier one is closed by the later, "the
+            # marker is ```python```"), and only a bare info string separates an
+            # opener from prose. Bare, after something closed, it is a literal ("wrap
             # it in ```"); before any close, "here is code: ```" still opens.
-            if index != len(runs) - 1:
-                continue
-            if trailing and not _FENCE_INFO_STRING_RE.fullmatch(trailing):
-                continue
-            if not trailing and closed_any:
-                continue
-            active_char, active_len, active_quote = ch, len(fence), quote_depth
+            if not _LIST_MARKER_ONLY.match(prefix):
+                if indented_quote or index != len(runs) - 1:
+                    continue
+                if trailing and not _FENCE_INFO_STRING_RE.fullmatch(trailing):
+                    continue
+                if not trailing and closed_any:
+                    continue
+            active_char, active_len = ch, len(fence)
+            # A list marker before the fence IS the container, so its width is the
+            # baseline the closer's three columns are measured from.
+            active_quote, active_base = quote_depth, indent
     return active_char is not None
 
 
@@ -953,6 +978,11 @@ def _has_unclosed_markup_block(text: str) -> bool:
     closes_svg = len(re.findall(r"</svg\s*>", text, re.IGNORECASE))
     return opens_svg > closes_svg
 
+
+# Only markup and whitespace between an opener and the artifact means the opener
+# encloses it; "the <html> tag." before a fence is prose about a tag.
+_MARKUP_OPEN_RE = re.compile(r"<(?:html|svg)\b", re.IGNORECASE)
+_ONLY_MARKUP_AND_SPACE = re.compile(r"(?:<[^>]*>|\s)*")
 
 # "First, I'll create an <html></html> skeleton" is a plan, not a page.
 _EMPTY_MARKUP_SKELETON = re.compile(
@@ -972,51 +1002,81 @@ def _is_empty_markup_skeleton(matched: str) -> bool:
     return _EMPTY_MARKUP_SKELETON.fullmatch(candidate) is not None
 
 
-def _looks_like_real_artifact(text: str) -> bool:
-    """Match _HAS_ANSWER_ARTIFACT but reject empty markup skeletons.
+def _first_real_artifact(text: str):
+    """First _HAS_ANSWER_ARTIFACT match that is not an empty markup skeleton.
 
     Every match is inspected, so a skeleton followed by a real page counts."""
     for m in _HAS_ANSWER_ARTIFACT.finditer(text):
         if not _is_empty_markup_skeleton(m.group(0)):
-            return True
-    return False
+            return m
+    return None
 
 
-def _strip_markup_around_fences(text: str) -> str:
-    """Drop complete <html>/<svg> blocks without touching any complete fence.
+def _strip_markup_outside_fences(text: str) -> str:
+    """Drop complete <html>/<svg> blocks, except ones that BEGIN inside a fence.
 
-    A plain substitution matches from an opening tag inside a fence to a closing
-    one in the prose after it, taking the fence's own closer with it, which then
-    reads as an unfinished block:
-    ``` ```html\\n<html>\\n``` \\nClose it with </html>.```
+    An opening tag inside a code example is that example's content, and pairing it
+    with a closing tag in the prose after the fence swallowed the fence's own closer:
+    ``` ```html\\n<html>\\n``` \\nClose it with </html>.``` then read as unfinished. A
+    block that merely encloses a fence is still a real block and goes whole, so a page
+    holding a Markdown example is not left in pieces.
     """
-    out, pos = [], 0
-    for m in _CLOSED_CODE_FENCE.finditer(text):
-        out.append(_CLOSED_MARKUP_ARTIFACT.sub("", text[pos : m.start()]))
-        out.append(m.group(0))
-        pos = m.end()
-    out.append(_CLOSED_MARKUP_ARTIFACT.sub("", text[pos:]))
-    return "".join(out)
+    fences = [m.span() for m in _CLOSED_CODE_FENCE.finditer(text)]
+
+    def _keep_examples(m):
+        return m.group(0) if any(s <= m.start() < e for s, e in fences) else ""
+
+    return _CLOSED_MARKUP_ARTIFACT.sub(_keep_examples, text)
+
+
+def _text_outside_think(text: str) -> str:
+    """``text`` with <think>/[THINK] blocks dropped, leaving what the user was told.
+
+    Those blocks are preserved for display, so judging whether an answer landed means
+    removing them. Routed through ``strip_outside_think`` so the span detection is the
+    one every strip path uses rather than a second reading of the markers.
+    """
+    outside: list[str] = []
+
+    def _collect(segment: str, _is_last: bool) -> str:
+        outside.append(segment)
+        return segment
+
+    _strip_outside_think(text, _collect)
+    kept = "".join(outside)
+    if kept == text:
+        # A prefilled reasoning template emits the opening marker itself, so the
+        # generated text carries only the closer and the splitter sees no block.
+        close = text.find("</think>")
+        if close >= 0 and "<think" not in text[:close]:
+            return text[close + len("</think>") :]
+    return kept
 
 
 def _has_answer_artifact(text: str) -> bool:
     """True if ``text`` looks like a completed answer artifact.
 
-    A closed code fence, a complete HTML page, or a complete SVG, and none of
-    them left unfinished. Empty skeletons do not count.
+    A closed code fence, a complete HTML page, or a complete SVG, and none of them
+    left unfinished. Empty skeletons do not count.
     """
     # Strip closed artifacts first: a `html = '<html>'` literal in a finished
     # snippet, or backticks inside finished HTML, are content, not open state.
-    text_without_closed_fences = _CLOSED_CODE_FENCE.sub("", text)
-    text_without_both = _CLOSED_MARKUP_ARTIFACT.sub("", text_without_closed_fences)
-    if _has_unclosed_code_fence(_strip_markup_around_fences(text)):
+    if _has_unclosed_code_fence(_strip_markup_outside_fences(text)):
         return False
-    # Only meaningful before any artifact lands: afterwards, prose mentioning
-    # a bare <html> tag is common and would unbalance the count.
-    real_artifact = _looks_like_real_artifact(text)
-    if not real_artifact and _has_unclosed_markup_block(text_without_both):
+    real_artifact = _first_real_artifact(text)
+    if real_artifact is None:
         return False
-    return real_artifact
+    # An artifact says nothing about a page it is nested in, so the text BEFORE it
+    # is checked too: `<html><body><svg>...</svg>` stopped mid-page. Only before,
+    # because prose mentioning a bare <html> after a finished answer is common and
+    # would unbalance the count.
+    head = text[: real_artifact.start()]
+    head = _CLOSED_MARKUP_ARTIFACT.sub("", _CLOSED_CODE_FENCE.sub("", head))
+    if not _has_unclosed_markup_block(head):
+        return True
+    opens = _MARKUP_OPEN_RE.findall(head)
+    last = head.rfind(opens[-1]) if opens else -1
+    return last < 0 or _ONLY_MARKUP_AND_SPACE.fullmatch(head[last:]) is None
 
 
 # Default max_tokens to the effective context when known. The floor is high
@@ -29363,9 +29423,27 @@ class LlamaCppBackend:
                         )
                         _reasoning = reasoning_accum.strip()
                         _stripped = _visible if _visible else _reasoning
-                        _artifact_text = (
-                            _visible if _visible else (_reasoning if not has_content_tokens else "")
+                        # Thinking rendered as <think> in the CONTENT channel stays
+                        # in _visible, and a fence inside one was never shown.
+                        _visible_answer = _text_outside_think(_visible).strip()
+                        # Reasoning stands in for the answer only when the loop
+                        # promotes it to visible content; on the Anthropic path it
+                        # stays a thinking block and the user saw nothing.
+                        _reasoning_shown = (
+                            not has_content_tokens
+                            and promote_reasoning_only
+                            and _iter_finish_reason != "length"
                         )
+                        _artifact_text = (
+                            _visible_answer
+                            if _visible_answer
+                            else (_reasoning if _reasoning_shown else "")
+                        )
+                        # Same for intent: a plan only thought is not one announced.
+                        # With nothing outside the block the turn showed nothing, which
+                        # IS the stall. _stripped stays whole; it is what gets replayed
+                        # as the assistant turn and compared for a repeat.
+                        _intent_text = _visible_answer if _visible_answer else _stripped
 
                         # ── Continue an answer the window cut in half ──
                         # The sibling case below is a turn that showed NOTHING. This one
@@ -29635,7 +29713,7 @@ class LlamaCppBackend:
                             and not _render_html_already_done_intent
                             and _reprompt_used < _reprompt_cap
                             and not _is_reprompt_repeat(_stripped, _last_reprompt_text)
-                            and _is_short_intent_without_action(_stripped)
+                            and _is_short_intent_without_action(_intent_text)
                             and not (_artifact_text and _has_answer_artifact(_artifact_text))
                         ):
                             _reprompt_count += 1

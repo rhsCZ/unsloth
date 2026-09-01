@@ -864,8 +864,8 @@ _CLOSED_MARKUP_ARTIFACT = re.compile(
 )
 _HAS_ANSWER_ARTIFACT = re.compile(
     # Backtick then tilde fence (models emit ~~~ when the body holds backticks).
-    # CommonMark takes 3+ to open, at least as many to close, and the closing line
-    # must end cleanly, so ``` ```not actually closed ``` does not count.
+    # CommonMark takes 3+ to open and as many to close, on a cleanly ended line, so
+    # ``` ```not actually closed ``` does not count.
     r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
     r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
     r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
@@ -902,9 +902,9 @@ def _has_unclosed_code_fence(text: str) -> bool:
     active_base = 0
     closed_any = False
     for raw_line in text.splitlines():
-        # A quote marker four columns in is an indented code line, not a container,
-        # and nothing on it opens a fence. List markers are left alone: at that depth
-        # they are as likely to continue a list this scan cannot see.
+        # A quote marker four columns in is indented code, not a container. List
+        # markers are left alone: at that depth they may continue a list not visible
+        # from one line.
         lead = raw_line[: len(raw_line) - len(raw_line.lstrip(" \t"))]
         quote = _BLOCKQUOTE_PREFIX.match(raw_line)
         indented_quote = quote is not None and len(lead.expandtabs(4)) > 3
@@ -935,9 +935,13 @@ def _has_unclosed_code_fence(text: str) -> bool:
                     active_char, active_len, active_quote, active_base = None, 0, 0, 0
                     closed_any = True
                 continue
-            # A later run on the same line closes an inline span ("```python``` is
-            # the syntax"), so neither run opens a block, at column zero or not.
-            if index != len(runs) - 1:
+            # A later run of the SAME delimiter closes an inline span ("```python```
+            # is the syntax"), at column zero or not. A different one is info-string
+            # text (```markdown title=~~~) and leaves the opener standing.
+            if any(
+                (later.group("backticks") or later.group("tildes"))[0] == ch
+                for later in runs[index + 1 :]
+            ):
                 continue
             if blank_prefix:
                 # Its own indentation, so the baseline is 0. Past three columns it
@@ -946,23 +950,22 @@ def _has_unclosed_code_fence(text: str) -> bool:
                     active_char, active_len = ch, len(fence)
                     active_quote, active_base = quote_depth, 0
                 continue
-            # A list marker is a container, so a fence on that line is block level and
-            # skips the rest. CommonMark has no mid-PROSE fence, but models open one, and
-            # only a bare info string separates that opener from prose. Bare, after
-            # something closed, it is a literal ("wrap it in ```"); before any close,
-            # "here is code: ```" still opens.
+            # A list marker is a container, so its fence is block level and skips the
+            # rest. CommonMark has no mid-PROSE fence, but models open one, and only a
+            # bare info string tells that opener from prose. Once something HAS
+            # closed, an inline run is a mention ("wrap it in ```", "the marker is
+            # ```python"); a real second block starts at column 0 and is unaffected.
             in_list = _LIST_MARKER_ONLY.match(prefix) is not None
             if not in_list:
                 if indented_quote:
                     continue
                 if trailing and not _FENCE_INFO_STRING_RE.fullmatch(trailing):
                     continue
-                if not trailing and closed_any:
+                if closed_any:
                     continue
             active_char, active_len, active_quote = ch, len(fence), quote_depth
-            # A list marker IS the container, so its width is the baseline. A fence
-            # opened mid-sentence has no container and its column is just where the
-            # sentence reached, so the closer is measured from 0 as usual.
+            # A list marker IS the container, so its width is the baseline. Mid-sentence
+            # there is no container, only how far the sentence got, so 0.
             active_base = indent if in_list else 0
     return active_char is not None
 
@@ -1046,9 +1049,18 @@ def _strip_markup_outside_fences(text: str) -> str:
     fences = [m.span() for m in _CLOSED_CODE_FENCE.finditer(text)]
 
     def _keep_examples(m):
-        return m.group(0) if any(s <= m.start() < e for s, e in fences) else ""
+        # Either endpoint inside a fence makes the match that example's content:
+        # prose may open a tag the fenced fragment goes on to close.
+        return m.group(0) if any(s <= m.start() < e or s < m.end() <= e for s, e in fences) else ""
 
     return _CLOSED_MARKUP_ARTIFACT.sub(_keep_examples, text)
+
+
+# A reasoning opener ends at a tag boundary: "<think-card>" is an element of the
+# answer, not a thought.
+_THINK_OPEN_RE = re.compile(r"<think[\s>]")
+_THINKING_OPEN_RE = re.compile(r"<thinking[\s>]")
+_BRACKET_THINK_OPEN_RE = re.compile(r"\[THINK\]")
 
 
 def _artifact_spans(text: str) -> "list[tuple[int, int]]":
@@ -1058,13 +1070,23 @@ def _artifact_spans(text: str) -> "list[tuple[int, int]]":
     ]
 
 
-def _find_outside_artifacts(text: str, needle: str) -> int:
+def _find_outside_artifacts(
+    text: str,
+    needle: str,
+    spans = None,
+) -> int:
     """First index of ``needle`` that is not inside a complete artifact, or -1.
 
     A reasoning marker shown in a code example is the example, not reasoning.
+
+    The scan comes first: most answers carry no reasoning marker at all, and
+    mapping the artifacts is two regex passes over the whole response.
     """
-    spans = _artifact_spans(text)
     at = text.find(needle)
+    if at < 0:
+        return -1
+    if spans is None:
+        spans = _artifact_spans(text)
     while at >= 0:
         if not any(start <= at < end for start, end in spans):
             return at
@@ -1083,20 +1105,29 @@ def _text_outside_think(text: str) -> str:
     only its closer.
     """
     stripped = text.lstrip()
-    # Longest opener first: "<think" is also a prefix of "<thinking".
-    for opener, closer in (
-        ("<thinking", "</thinking>"),
-        ("<think", "</think>"),
-        ("[THINK]", "[/THINK]"),
-    ):
-        close = _find_outside_artifacts(text, closer)
-        if close < 0:
-            # A leading block with no closer runs to the end: a thought the window
-            # cut off has no closing tag, and none of it was shown.
-            if stripped.startswith(opener):
-                return ""
-            continue
-        if stripped.startswith(opener) or opener not in text[:close]:
+    pairs = (
+        (_THINKING_OPEN_RE, "<thinking", "</thinking>"),
+        (_THINK_OPEN_RE, "<think", "</think>"),
+        (_BRACKET_THINK_OPEN_RE, "[THINK]", "[/THINK]"),
+    )
+    # Whichever opener actually starts the turn owns it, so settle that before
+    # looking at bare closers: a leading block may name another marker in its body.
+    for lead, _opener, closer in pairs:
+        if lead.match(stripped):
+            # Plain scan: an artifact can span from a tag named in the thought to
+            # one in the answer, and that span must not swallow the block's closer.
+            close = text.find(closer)
+            # No closer: a thought the window cut off runs to the end, and none of
+            # it was shown.
+            return text[close + len(closer) :] if close >= 0 else ""
+    # No leading opener, so a closer with none before it is a prefilled template's:
+    # it emits the opening marker itself and only the closer is generated.
+    spans = None
+    for _lead, opener, closer in pairs:
+        if closer in text and spans is None:
+            spans = _artifact_spans(text)
+        close = _find_outside_artifacts(text, closer, spans)
+        if close >= 0 and opener not in text[:close]:
             return text[close + len(closer) :]
     return text
 
@@ -1111,12 +1142,10 @@ def _has_answer_artifact(text: str) -> bool:
     # snippet, or backticks inside finished HTML, are content, not open state.
     if _has_unclosed_code_fence(_strip_markup_outside_fences(text)):
         return False
-    # A page the artifact is nested in is deliberately NOT inspected. Telling an
-    # unfinished enclosing page from a tag named in prose needs to know which text
-    # belongs to an element, which is an HTML parser; two attempts at it here each
-    # went on to reject a finished answer instead. Missing the nudge on a page that
-    # stopped after a complete inner block leaves that block on screen, which is the
-    # cheaper mistake.
+    # A page the artifact is nested in is deliberately NOT inspected: separating an
+    # unfinished enclosing page from a tag named in prose needs an HTML parser, and two
+    # attempts here each went on to reject a finished answer. Missing the nudge leaves
+    # the block on screen, which is the cheaper mistake.
     return _first_real_artifact(text) is not None
 
 
@@ -29708,9 +29737,8 @@ class LlamaCppBackend:
                             else ""
                         )
                         _reasoning = reasoning_accum.strip()
-                        # Bracketed reasoning IS the turn for a Magistral-style model,
-                        # and the strip takes it whole, so classify the raw text rather
-                        # than lose the nudge on a turn that showed nothing.
+                        # Bracketed reasoning IS the turn for a Magistral-style model
+                        # and the strip takes it whole, so fall back to the raw text.
                         _stripped = _visible or _reasoning or _visible_raw
                         # Thinking rendered as <think> in the CONTENT channel stays
                         # in _visible, and a fence inside one was never shown.
@@ -29977,25 +30005,11 @@ class LlamaCppBackend:
                                 yield _meta
                             return
 
-                        _names_render_html = re.search(
+                        _render_html_already_done_intent = _tool_succeeded(
+                            "render_html"
+                        ) and re.search(
                             r"(?i)\brender[_\s-]?html\b",
                             _stripped,
-                        )
-                        # For the PENDING flag, only prose counts: the name also appears
-                        # as an identifier in code the model is answering with.
-                        _announces_render_html = re.search(
-                            r"(?i)\brender[_\s-]?html\b",
-                            _CLOSED_MARKUP_ARTIFACT.sub("", _CLOSED_CODE_FENCE.sub("", _stripped)),
-                        )
-                        _render_html_already_done_intent = (
-                            _tool_succeeded("render_html") and _names_render_html
-                        )
-                        # Markup drafted for a canvas tool that has not run yet is not a
-                        # finished answer, so the artifact exemption does not apply to it.
-                        _render_html_pending_intent = bool(
-                            _announces_render_html
-                            and "render_html" in _enabled_tool_names
-                            and not _tool_succeeded("render_html")
                         )
                         # A post-tool stall still deserves a nudge, but each retry
                         # re-runs tools, so allow only one. RAG autoinject never lands
@@ -30020,11 +30034,7 @@ class LlamaCppBackend:
                             # intent text can be a short tail of a very long turn.
                             and len(_stripped) < _REPROMPT_MAX_CHARS
                             and _is_short_intent_without_action(_intent_text)
-                            and not (
-                                _artifact_text
-                                and not _render_html_pending_intent
-                                and _has_answer_artifact(_artifact_text)
-                            )
+                            and not (_artifact_text and _has_answer_artifact(_artifact_text))
                         ):
                             _reprompt_count += 1
                             if _already_acted:

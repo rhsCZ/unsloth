@@ -1131,9 +1131,14 @@ def test_only_a_leading_block_is_reasoning():
 def test_unclosed_leading_reasoning_is_all_hidden():
     """A thought the window cut off has no closing tag, so a leading block without
     one runs to the end and none of it was shown, artifact included."""
-    for opener in ("<think>", "<thinking>"):
+    for opener in ("<think>", "<thinking>", "<think id=1>"):
         turn = f"{opener}First, let me draft it.\n```python\nx = 1\n```"
         assert _gate_would_reprompt(turn, "", True), opener
+    # The opener ends at a tag boundary: an element that merely starts with the same
+    # letters is part of the answer.
+    answer = "<think-card>First, I will show it.</think-card>\n```python\nx = 1\n```"
+    assert _has_answer_artifact(answer)
+    assert not _gate_would_reprompt(answer, "", True)
 
 
 def test_reasoning_marker_inside_an_example_is_not_reasoning():
@@ -1144,6 +1149,52 @@ def test_reasoning_marker_inside_an_example_is_not_reasoning():
     assert not _gate_would_reprompt(text, "", True)
     # A real prefilled closer, outside any artifact, is still where reasoning ends.
     assert not _gate_would_reprompt("First, I will search.</think>The answer is Paris.", "", True)
+
+
+def test_leading_block_wins_over_a_marker_named_in_its_body():
+    """A leading `<think>` that discusses `</thinking>` still ends at its own closer,
+    so none of the private body leaks into the answer."""
+    turn = "<think>First, I will search. The </thinking> marker is different.</think>The answer is Paris."
+    assert not _gate_would_reprompt(turn, "", True)
+
+
+def test_a_thought_naming_a_tag_does_not_swallow_its_own_closer():
+    """An artifact can span from a tag named inside the thought to one in the answer.
+    The leading block's closer is found by a plain scan so that span cannot hide it."""
+    turn = (
+        "<think>First, I will search for data to put in <html>.</think>"
+        "Here is the page: <html><body>Hi</body></html>"
+    )
+    assert not _gate_would_reprompt(turn, "", True)
+
+
+def test_delimiter_mention_after_a_closed_block_is_prose():
+    """Once a block has closed, an inline delimiter is a mention whether or not it
+    carries a language token. A real second block starts at column 0."""
+    for tail in ("Wrap it in ```", "The opening marker is ```python"):
+        text = f"First, I will show it.\n```python\nx = 1\n```\n{tail}"
+        assert _has_answer_artifact(text), tail
+        assert not _would_reprompt(text), tail
+    assert _would_reprompt("First, let me show it.\n```python\nx=1\n```\n```python\nimport")
+
+
+def test_info_string_may_hold_the_other_delimiter():
+    """```markdown title=~~~ is an opener whose info string mentions tildes; only a
+    later run of the SAME delimiter closes an inline span."""
+    text = "First, let me show it.\n```markdown title=~~~\nbody line\n```"
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
+
+
+def test_markup_closed_inside_a_fence_stays_that_fence_s_content():
+    """Prose may open a tag that the fenced fragment goes on to close, so a markup
+    match ending inside a fence belongs to the example."""
+    text = (
+        "First, I will complete `<html>` with this fragment:\n"
+        "```html\n<body>Hi</body></html>\n```"
+    )
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
 
 
 def test_bracketed_reasoning_only_turn_still_gets_nudged():

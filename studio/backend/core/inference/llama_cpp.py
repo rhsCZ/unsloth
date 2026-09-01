@@ -861,8 +861,8 @@ _CLOSED_CODE_FENCE = re.compile(
     re.IGNORECASE,
 )
 _CLOSED_MARKUP_ARTIFACT = re.compile(
-    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[\s\S]{0,4000}?</html\s*>"
-    r"|<svg\b[^>]{0,200}>[\s\S]{0,4000}?</svg\s*>",
+    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 _HAS_ANSWER_ARTIFACT = re.compile(
@@ -871,8 +871,8 @@ _HAS_ANSWER_ARTIFACT = re.compile(
     # must end cleanly, so ``` ```not actually closed ``` does not count.
     r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
     r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
-    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[\s\S]{0,4000}?</html\s*>"
-    r"|<svg\b[^>]{0,200}>[\s\S]{0,4000}?</svg\s*>",
+    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 
@@ -928,7 +928,7 @@ def _has_unclosed_code_fence(text: str) -> bool:
                 # else, "Use three backticks: ```" included, is body.
                 if (
                     blank_prefix
-                    and indent <= active_base + 3
+                    and active_base <= indent <= active_base + 3
                     and ch == active_char
                     and len(fence) >= active_len
                     and quote_depth == active_quote
@@ -950,17 +950,19 @@ def _has_unclosed_code_fence(text: str) -> bool:
             # marker is ```python```"), and only a bare info string separates an
             # opener from prose. Bare, after something closed, it is a literal ("wrap
             # it in ```"); before any close, "here is code: ```" still opens.
-            if not _LIST_MARKER_ONLY.match(prefix):
+            in_list = _LIST_MARKER_ONLY.match(prefix) is not None
+            if not in_list:
                 if indented_quote or index != len(runs) - 1:
                     continue
                 if trailing and not _FENCE_INFO_STRING_RE.fullmatch(trailing):
                     continue
                 if not trailing and closed_any:
                     continue
-            active_char, active_len = ch, len(fence)
-            # A list marker before the fence IS the container, so its width is the
-            # baseline the closer's three columns are measured from.
-            active_quote, active_base = quote_depth, indent
+            active_char, active_len, active_quote = ch, len(fence), quote_depth
+            # A list marker IS the container, so its width is the baseline. A fence
+            # opened mid-sentence has no container and its column is just where the
+            # sentence reached, so the closer is measured from 0 as usual.
+            active_base = indent if in_list else 0
     return active_char is not None
 
 
@@ -978,11 +980,6 @@ def _has_unclosed_markup_block(text: str) -> bool:
     closes_svg = len(re.findall(r"</svg\s*>", text, re.IGNORECASE))
     return opens_svg > closes_svg
 
-
-# Only markup and whitespace between an opener and the artifact means the opener
-# encloses it; "the <html> tag." before a fence is prose about a tag.
-_MARKUP_OPEN_RE = re.compile(r"<(?:html|svg)\b", re.IGNORECASE)
-_ONLY_MARKUP_AND_SPACE = re.compile(r"(?:<[^>]*>|\s)*")
 
 # "First, I'll create an <html></html> skeleton" is a plan, not a page.
 _EMPTY_MARKUP_SKELETON = re.compile(
@@ -1002,12 +999,24 @@ def _is_empty_markup_skeleton(matched: str) -> bool:
     return _EMPTY_MARKUP_SKELETON.fullmatch(candidate) is not None
 
 
+def _is_blank_fence(matched: str) -> bool:
+    """True if ``matched`` is a fence whose body is only whitespace.
+
+    The delimiters are on the first and last lines, so what sits between them is
+    the answer, and a block holding a single space is no more one than an empty
+    `<html></html>` is a page."""
+    if not matched[:1] in ("`", "~"):
+        return False
+    lines = matched.splitlines()
+    return not any(_BLOCKQUOTE_PREFIX.sub("", line).strip() for line in lines[1:-1])
+
+
 def _first_real_artifact(text: str):
-    """First _HAS_ANSWER_ARTIFACT match that is not an empty markup skeleton.
+    """First _HAS_ANSWER_ARTIFACT match with something in it.
 
     Every match is inspected, so a skeleton followed by a real page counts."""
     for m in _HAS_ANSWER_ARTIFACT.finditer(text):
-        if not _is_empty_markup_skeleton(m.group(0)):
+        if not _is_empty_markup_skeleton(m.group(0)) and not _is_blank_fence(m.group(0)):
             return m
     return None
 
@@ -1044,12 +1053,23 @@ def _text_outside_think(text: str) -> str:
 
     _strip_outside_think(text, _collect)
     kept = "".join(outside)
-    if kept == text:
-        # A prefilled reasoning template emits the opening marker itself, so the
-        # generated text carries only the closer and the splitter sees no block.
-        close = text.find("</think>")
-        if close >= 0 and "<think" not in text[:close]:
-            return text[close + len("</think>") :]
+    if kept != text:
+        return kept
+    # A prefilled reasoning template emits the opening marker itself, so the
+    # generated text carries only the closer and the splitter sees no block. A pair
+    # the splitter does not know is unhandled too, but only when the opener starts
+    # the turn: further in, "plan <think>...</think> answer" is the ordinary shape
+    # where the plan was on screen.
+    for opener, closer in (
+        ("<think", "</think>"),
+        ("[THINK]", "[/THINK]"),
+        ("<thinking", "</thinking>"),
+    ):
+        close = text.find(closer)
+        if close < 0:
+            continue
+        if opener not in text[:close] or text.lstrip().startswith(opener):
+            return text[close + len(closer) :]
     return kept
 
 
@@ -1063,20 +1083,13 @@ def _has_answer_artifact(text: str) -> bool:
     # snippet, or backticks inside finished HTML, are content, not open state.
     if _has_unclosed_code_fence(_strip_markup_outside_fences(text)):
         return False
-    real_artifact = _first_real_artifact(text)
-    if real_artifact is None:
-        return False
-    # An artifact says nothing about a page it is nested in, so the text BEFORE it
-    # is checked too: `<html><body><svg>...</svg>` stopped mid-page. Only before,
-    # because prose mentioning a bare <html> after a finished answer is common and
-    # would unbalance the count.
-    head = text[: real_artifact.start()]
-    head = _CLOSED_MARKUP_ARTIFACT.sub("", _CLOSED_CODE_FENCE.sub("", head))
-    if not _has_unclosed_markup_block(head):
-        return True
-    opens = _MARKUP_OPEN_RE.findall(head)
-    last = head.rfind(opens[-1]) if opens else -1
-    return last < 0 or _ONLY_MARKUP_AND_SPACE.fullmatch(head[last:]) is None
+    # A page the artifact is nested in is deliberately NOT inspected. Telling an
+    # unfinished enclosing page from a tag named in prose needs to know which text
+    # belongs to an element, which is an HTML parser; two attempts at it here each
+    # went on to reject a finished answer instead. Missing the nudge on a page that
+    # stopped after a complete inner block leaves that block on screen, which is the
+    # cheaper mistake.
+    return _first_real_artifact(text) is not None
 
 
 # Default max_tokens to the effective context when known. The floor is high

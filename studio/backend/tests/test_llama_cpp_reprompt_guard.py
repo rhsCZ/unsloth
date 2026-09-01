@@ -337,44 +337,34 @@ def test_closing_tag_in_prose_does_not_eat_a_fence_closer():
     assert not _would_reprompt(enclosing)
 
 
-def test_artifact_nested_in_an_unclosed_page_does_not_count():
-    """A complete inner artifact says nothing about the page around it, so a stream
-    that stopped after the SVG but before ``</html>`` is still unfinished."""
-    for text in (
-        'First, let me build it.\n<html><body><svg width="10"><circle r="3"/></svg>',
-        "First, let me build it.\n<html><body>\n```python\nx = 1\n```",
-    ):
-        assert not _has_answer_artifact(text), text
-        assert _would_reprompt(text), text
-    # A tag NAMED in prose before the artifact is prose, not a container: only
-    # markup and whitespace between the two means the opener encloses it.
-    for text in (
-        "First, let me demonstrate the <html> tag.\n```python\nx = 1\n```",
-        "First, let me demonstrate the <svg> tag.\n```python\nx = 1\n```",
-    ):
-        assert _has_answer_artifact(text), text
-        assert not _would_reprompt(text), text
-    # Closed, it is an answer, and a bare tag AFTER one is prose either way.
-    assert _has_answer_artifact(
-        'First, let me build it.\n<html><body><svg width="10"><circle r="3"/></svg></body></html>'
-    )
-    assert _has_answer_artifact(
-        "First, let me show it.\n```python\nx = 1\n```\nNow replace <html> with something."
-    )
-
-
-def test_markup_opening_tag_must_terminate():
-    """`<html lang='en'` with no `>` never opened a page, so pairing it with a
-    closing tag mentioned later in a plan is not a completed artifact."""
+def test_markup_tags_named_in_a_plan_are_not_a_page():
+    """A page carries child markup. A plan that only names the root tags, closed or
+    not, is describing work still to do."""
     samples = [
         "First, I'll create <html lang='en' and then close it with </html>",
         "First, I'll draw <svg width='10' and then close with </svg>",
+        "First, I'll add the <html> element, search for the content, and finish with </html>.",
+        "First, I'll open <svg>, search for the data, and finish with </svg>.",
+        # A comparison operator is not child markup.
+        "First, I'll wrap the results in <html>, filter values < 3, then finish with </html>.",
     ]
     for text in samples:
         assert not _has_answer_artifact(text), text
         assert _would_reprompt(text), text
     # A real opening tag with attributes is still a page.
     assert _has_answer_artifact("First, let me show it.\n<html lang='en'><body>hi</body></html>")
+
+
+def test_dedented_delimiter_does_not_close_a_list_fence():
+    """A delimiter dedented out of the list leaves the container, so it starts a new
+    top-level block rather than closing the one the list opened."""
+    text = "First, let me show it.\n- ```python\n  x = 1\n```"
+    assert not _has_answer_artifact(text)
+    assert _would_reprompt(text)
+    # A fence opened mid-sentence has no container, so its column is not a floor.
+    assert _has_answer_artifact(
+        "First, let me explain: use ``` for fences; here is code: ```python\nx = 1\n```"
+    )
 
 
 def test_list_marker_line_opens_a_block_level_fence():
@@ -1100,13 +1090,33 @@ def test_content_channel_think_block_is_not_an_answer():
 
 
 def test_prefilled_reasoning_closes_without_an_opener():
-    """A template that sends the opening ``<think>`` itself leaves only the closer in
-    the generated text, so the answer after it still has to be found."""
+    """A template that sends the opening marker itself leaves only the closer in the
+    generated text, so the answer after it still has to be found. Every marker pair
+    the strip paths know is covered, not just ``</think>``."""
+    for closer in ("</think>", "[/THINK]", "</thinking>"):
+        text = f"First, I will search the web.{closer}The answer is Paris."
+        assert not _gate_would_reprompt(text, "", True), closer
+        # Nothing after the closer is still the stall.
+        assert _gate_would_reprompt(f"First, I will search the web.{closer}", "", True), closer
+    # A complete pair the shared splitter does not know, opening the turn.
     assert not _gate_would_reprompt(
-        "First, I will search the web.</think>The answer is Paris.", "", True
+        "<thinking>First, I will search.</thinking>The answer is Paris.", "", True
     )
-    # Nothing after the closer is still the stall.
-    assert _gate_would_reprompt("First, I will search the web.</think>", "", True)
+
+
+def test_whitespace_only_fence_is_not_an_answer():
+    """A block holding a single space is no more an answer than an empty
+    ``<html></html>`` is a page."""
+    for body in (" ", ""):
+        text = f"First, I'll run it.\n```bash\n{body}\n```"
+        assert not _has_answer_artifact(text), body
+        assert _would_reprompt(text), body
+    # A quote marker is the container, not content, so a quoted blank block is blank.
+    quoted = "First, I will run it.\n> ```bash\n>   \n> ```"
+    assert not _has_answer_artifact(quoted)
+    assert _would_reprompt(quoted)
+    # A blank first line with real code after it is still an answer.
+    assert _has_answer_artifact("First, let me show it.\n```bash\n \necho hi\n```")
 
 
 def test_reasoning_artifact_counts_only_when_the_loop_promotes_it():

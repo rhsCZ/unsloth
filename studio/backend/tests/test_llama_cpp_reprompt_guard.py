@@ -339,6 +339,30 @@ def test_closing_tag_in_prose_does_not_eat_a_fence_closer():
     assert not _would_reprompt(enclosing)
 
 
+def test_root_tag_may_carry_many_attributes():
+    """A real SVG root carries namespace, accessibility and data attributes; the
+    opener bound has to fit one."""
+    tag = (
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        'width="200" height="100" viewBox="0 0 200 100" fill="none" stroke="black" '
+        'stroke-width="2" role="img" aria-label="A circle" data-testid="chart">'
+    )
+    assert len(tag) > 200
+    text = "First, let me draw it.\n" + tag + '<circle cx="50" r="30"/></svg>'
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
+
+
+def test_a_sentence_word_is_not_an_info_string():
+    """``Use ```html``` here.`` is a balanced span in prose. A language token may
+    contain a dot (asp.net) but never ends in one, so "here." is not one."""
+    text = "First, let me show it.\n<html><body>hi</body></html>\nUse ```html``` here."
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
+    # A real mid-line opener still opens.
+    assert _would_reprompt("First, let me write it. ```text\n1. Install deps\n2. Run it")
+
+
 def test_markup_tags_named_in_a_plan_are_not_a_page():
     """A page carries child markup. A plan that only names the root tags, closed or
     not, is describing work still to do."""
@@ -1158,14 +1182,30 @@ def test_leading_block_wins_over_a_marker_named_in_its_body():
     assert not _gate_would_reprompt(turn, "", True)
 
 
+def test_prefilled_opener_detection_respects_a_tag_boundary():
+    """`<think-card>` named in a prefilled trace is not a `<think>` opener, so the
+    block is still stripped at its closer."""
+    assert not _gate_would_reprompt(
+        "First, I will inspect <think-card> markup.</think>The answer is Paris.", "", True
+    )
+
+
 def test_a_thought_naming_a_tag_does_not_swallow_its_own_closer():
-    """An artifact can span from a tag named inside the thought to one in the answer.
-    The leading block's closer is found by a plain scan so that span cannot hide it."""
+    """A leading block ends at its first closer, plainly, so nothing derived from the
+    surrounding markup can span the boundary and hide it."""
     turn = (
         "<think>First, I will search for data to put in <html>.</think>"
         "Here is the page: <html><body>Hi</body></html>"
     )
     assert not _gate_would_reprompt(turn, "", True)
+
+
+def test_tilde_info_string_may_hold_tildes():
+    """CommonMark bars backticks from a backtick info string but allows tildes in a
+    tilde one, so a longer tilde run there does not displace the opener."""
+    text = "First, let me show it.\n~~~markdown title=~~~~\nbody\n~~~"
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
 
 
 def test_delimiter_mention_after_a_closed_block_is_prose():
@@ -1214,3 +1254,28 @@ def test_intent_inside_a_think_block_is_not_an_announcement():
     assert _gate_would_reprompt("<think>First, I will search the web.</think>", "", True)
     # No think block: the plan is on screen and still earns the nudge.
     assert _gate_would_reprompt("First, I will search the web.", "", True)
+
+
+def test_info_string_may_be_a_long_title():
+    """An info string carries attributes and paths (``python title="..."``), so its
+    length is not what tells an opener from prose."""
+    info = "python " + 'title="a-very-long-descriptive-file-name-for-the-snippet.py" ' * 4
+    text = f"First, let me show it.\n```{info}\nx = 1\n```"
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
+
+
+def test_a_deeper_delimiter_line_is_the_quoted_block_s_content():
+    """A ``> > ``` `` line inside a singly quoted block is text the block quotes,
+    not the block's closer, so the fence around it holds content."""
+    text = "First, I will run it.\n> ```text\n> \n> > ```\n> ```"
+    assert _has_answer_artifact(text)
+    assert not _would_reprompt(text)
+    # The same shape with nothing but whitespace between the markers is still blank,
+    # at either depth: the container is the opener's, not whatever the match ended on.
+    for quoted in (
+        "First, I will run it.\n> ```bash\n>   \n> ```",
+        "First, I will run it.\n> > ```bash\n> >   \n> > ```",
+    ):
+        assert not _has_answer_artifact(quoted)
+        assert _would_reprompt(quoted)

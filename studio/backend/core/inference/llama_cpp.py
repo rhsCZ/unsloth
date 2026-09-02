@@ -853,23 +853,23 @@ def _native_linux_system_rocm_lib_dirs(binary_dir: str = "") -> "list[str]":
 # `\s*` in the closing tags is spec-legal HTML. Every `[\s\S]{...}?` run stays
 # length-bounded or the search backtracks on CRLF and `<html>` spam.
 _CLOSED_CODE_FENCE = re.compile(
-    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
-    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)",
+    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,600}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
+    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,600}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)",
     re.IGNORECASE,
 )
 _CLOSED_MARKUP_ARTIFACT = re.compile(
-    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
-    r"|<svg\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</svg\s*>",
+    r"(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,600}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[^>]{0,600}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 _HAS_ANSWER_ARTIFACT = re.compile(
     # Backtick then tilde fence (models emit ~~~ when the body holds backticks).
     # CommonMark takes 3+ to open and as many to close, on a cleanly ended line, so
     # ``` ```not actually closed ``` does not count.
-    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
-    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,200}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
-    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
-    r"|<svg\b[^>]{0,200}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</svg\s*>",
+    r"(?<!`)(?P<bf>`{3,})(?!`)[^\r\n]{0,600}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=bf)`*[ \t]*(?:\r?\n|\Z)"
+    r"|(?<!~)(?P<tf>~{3,})(?!~)[^\r\n]{0,600}\r?\n[\s\S]{1,4000}?\r?\n[ \t>]*(?P=tf)~*[ \t]*(?:\r?\n|\Z)"
+    r"|(?:<!doctype\b[\s\S]{0,200}?)?<html\b[^>]{0,600}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</html\s*>"
+    r"|<svg\b[^>]{0,600}>[^<]{0,400}<[a-zA-Z!/][\s\S]{0,4000}?</svg\s*>",
     re.IGNORECASE,
 )
 
@@ -878,8 +878,10 @@ _FENCE_RUN_RE = re.compile(r"(?<!`)(?P<backticks>`{3,})(?!`)|(?<!~)(?P<tildes>~{
 # One list marker may precede the quote, since "- > ```py" is a quote in a list item.
 _BLOCKQUOTE_PREFIX = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])?[ \t]*(?:>[ \t]?)+")
 # A language token, the only trailing text that makes an inline run an opener
-# rather than prose: python3, c++, c#, objective-c, ts-node, bash-session.
-_FENCE_INFO_STRING_RE = re.compile(r"[A-Za-z][\w.+#-]*")
+# rather than prose: python3, c++, c#, objective-c, ts-node, bash-session. It may
+# contain a dot (asp.net) but never ends in one, which is how "here." stays a
+# sentence rather than an info string.
+_FENCE_INFO_STRING_RE = re.compile(r"[A-Za-z][\w+#-]*(?:\.[\w+#-]+)*")
 # A fence on a list-marker line is block level, so the prose rules below do not apply.
 _LIST_MARKER_ONLY = re.compile(r"^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+$")
 _ONE_QUOTE_MARKER = re.compile(r"[ \t]*>[ \t]?")
@@ -935,10 +937,11 @@ def _has_unclosed_code_fence(text: str) -> bool:
                     active_char, active_len, active_quote, active_base = None, 0, 0, 0
                     closed_any = True
                 continue
-            # A later run of the SAME delimiter closes an inline span ("```python```
-            # is the syntax"), at column zero or not. A different one is info-string
-            # text (```markdown title=~~~) and leaves the opener standing.
-            if any(
+            # A later BACKTICK run closes an inline span ("```python``` is the
+            # syntax"), at column zero or not. A different delimiter is info-string
+            # text (```markdown title=~~~), and a tilde info string may itself hold
+            # tildes (~~~markdown title=~~~~), which CommonMark allows.
+            if ch == "`" and any(
                 (later.group("backticks") or later.group("tildes"))[0] == ch
                 for later in runs[index + 1 :]
             ):
@@ -1003,7 +1006,7 @@ def _is_empty_markup_skeleton(matched: str) -> bool:
     return _EMPTY_MARKUP_SKELETON.fullmatch(candidate) is not None
 
 
-def _is_blank_fence(matched: str) -> bool:
+def _is_blank_fence(matched: str, depth: int = 0) -> bool:
     """True if ``matched`` is a fence whose body is only whitespace.
 
     The delimiters are on the first and last lines, so what sits between them is
@@ -1012,10 +1015,13 @@ def _is_blank_fence(matched: str) -> bool:
     if matched[:1] not in ("`", "~"):
         return False
     lines = matched.splitlines()
-    # The closing line sits at the container's depth, so that is how many markers
-    # belong to the quote; any deeper one on a body line is content.
+    # ``depth`` is the OPENER's quote depth, which the caller reads from the line the
+    # match starts on. A closer sits at that same depth, so a deeper last line means
+    # the pattern stopped on a nested delimiter that is really body text, and the
+    # block runs past it: content, not a blank fence.
     closing = _BLOCKQUOTE_PREFIX.match(lines[-1]) if lines else None
-    depth = closing.group(0).count(">") if closing else 0
+    if (closing.group(0).count(">") if closing else 0) != depth:
+        return False
     for line in lines[1:-1]:
         for _ in range(depth):
             marker = _ONE_QUOTE_MARKER.match(line)
@@ -1032,8 +1038,15 @@ def _first_real_artifact(text: str):
 
     Every match is inspected, so a skeleton followed by a real page counts."""
     for m in _HAS_ANSWER_ARTIFACT.finditer(text):
-        if not _is_empty_markup_skeleton(m.group(0)) and not _is_blank_fence(m.group(0)):
-            return m
+        if _is_empty_markup_skeleton(m.group(0)):
+            continue
+        # The container the fence sits in is whatever quotes the line it opens on.
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        quote = _BLOCKQUOTE_PREFIX.match(text[line_start : m.start()])
+        depth = quote.group(0).count(">") if quote else 0
+        if _is_blank_fence(m.group(0), depth):
+            continue
+        return m
     return None
 
 
@@ -1114,8 +1127,11 @@ def _text_outside_think(text: str) -> str:
     # looking at bare closers: a leading block may name another marker in its body.
     for lead, _opener, closer in pairs:
         if lead.match(stripped):
-            # Plain scan: an artifact can span from a tag named in the thought to
-            # one in the answer, and that span must not swallow the block's closer.
+            # First closer, plainly. `routes/inference.py` `_split_think_segments`
+            # reads a leading block the same way and solves a closer quoted inside
+            # the trace with the generator's recorded length, not by guessing which
+            # markup is an example: every such guess here let a span run from the
+            # thought into the answer and swallow the real boundary.
             close = text.find(closer)
             # No closer: a thought the window cut off runs to the end, and none of
             # it was shown.
@@ -1123,11 +1139,13 @@ def _text_outside_think(text: str) -> str:
     # No leading opener, so a closer with none before it is a prefilled template's:
     # it emits the opening marker itself and only the closer is generated.
     spans = None
-    for _lead, opener, closer in pairs:
+    for lead, _opener, closer in pairs:
         if closer in text and spans is None:
             spans = _artifact_spans(text)
         close = _find_outside_artifacts(text, closer, spans)
-        if close >= 0 and opener not in text[:close]:
+        # Boundary-aware, so "<think-card>" named in the trace is not read as an
+        # opener that would leave the prefilled block unstripped.
+        if close >= 0 and not lead.search(text[:close]):
             return text[close + len(closer) :]
     return text
 

@@ -748,6 +748,11 @@ class PreemptionSnapshot:
     # returns to. Nothing in this module ACTS on it; it is reported, not policy. See
     # core.inference.llama_exact.
     exact: str = EXACT_STATE_OFF
+    # Participants that hold cells right now, in any state, raw streams included. This
+    # is the question "is anybody else in the cache" answered by the ledger alone:
+    # ``committed`` folds in the last residency reading, which can still be counting a
+    # chat that has just unregistered.
+    holders: int = 0
 
 
 class PreemptionController:
@@ -1599,7 +1604,15 @@ class PreemptionController:
             # 2026-09-05 at `evict-latency ms=6.5`, a socket that was never opened. What
             # follows is a wait for room, which is the admission wait spelled as a pause.
             # Pinned by test_arming_into_a_full_cache_costs_no_prefill.
-            victims = [p for p in self._participants.values() if p.preemptable]
+            # `holds_kv` as well as `preemptable`. A participant whose cells were erased
+            # by an idle reclaim keeps `preemptable` True (its STATE is still
+            # PARKED_ON_TOOL) while `holds_kv` has gone False, so it is out of `total` --
+            # and the loop below subtracts its stale `tokens` from a figure that never
+            # included them. The sweep then stops believing it has freed enough, having
+            # signalled a chat whose room was already given back and no live decoder at
+            # all, and the prefill that triggered it goes into a cache nothing was
+            # evicted from.
+            victims = [p for p in self._participants.values() if p.preemptable and p.holds_kv]
             # A chat preempted this many times running is promoted above newest-first, so
             # repeatedly losing does not become never finishing. A THRESHOLD rather than a
             # continuous term: ordering by the count directly would let a single earlier
@@ -1664,6 +1677,7 @@ class PreemptionController:
                 prefilling = self._pending_prefill_locked(),
                 mode = PREEMPT_MODE_SERVER if self._server_mode else PREEMPT_MODE_STUDIO,
                 exact = self._exact,
+                holders = sum(1 for p in self._participants.values() if p.holds_kv),
             )
 
 

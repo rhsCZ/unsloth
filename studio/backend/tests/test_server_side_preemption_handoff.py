@@ -1,26 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Studio hands preemption to a llama-server that can park slots itself.
-
-A build with ``--preempt-ram`` (unslothai/llama.cpp#184) parks a slot's sequence in host
-RAM when the unified pool fills and restores it in place, byte-identically, and with the
-stream notices it writes ``: preempted`` and ``: resumed`` SSE comments on the way. On
-such a build the Studio-side preemption must stand down: it would abort a stream the
-server was about to park in place, and re-prefill what the server would have kept. The
-chat must still show the pause, and a park must never read as a stall.
-
-On an upstream build without the flag every path here is the one that exists today.
-"""
+"""Studio hands preemption to a llama-server that can park slots itself."""
 
 from __future__ import annotations
 
 import contextlib
-import copy
-import json
 import threading
 
-import httpx
 import pytest
 
 from core.inference import llama_cpp as llama_cpp_mod
@@ -32,6 +19,33 @@ from core.inference.llama_preemption import (
     get_preemption_controller,
     reset_preemption_controllers,
 )
+
+from .preempt_fakes import (
+    FakeResponse as _FakeResponse,
+    PreemptRecorder,
+    ServerHookPolicy as _HookPolicy,
+    delta as preempt_fakes_delta,
+    finish as preempt_fakes_finish,
+)
+
+
+def _delta(content: str) -> str:
+    return preempt_fakes_delta(content, terminator = "\n\n")
+
+
+def _finish(reason: str = "stop") -> str:
+    return preempt_fakes_finish(reason, terminator = "\n\n")
+
+
+def _Recorder(monkeypatch, chunks, *, server_preempts):
+    return PreemptRecorder(
+        monkeypatch,
+        [chunks],
+        patch_iter = False,
+        response_factory = _FakeResponse,
+        _server_preempts_kv = server_preempts,
+        _kv_cache_unified = True,
+    )
 
 
 @pytest.fixture(autouse = True)
@@ -147,8 +161,6 @@ def _fill(
     n = 4,
     tokens = 2000,
 ):
-    """Register `n` decoding chats. No sweep runs here: `register` never plans, so the
-    caller sees the first decision itself."""
     signals = []
     for i in range(n):
         signal = PreemptSignal()
@@ -204,10 +216,6 @@ class TestController:
         assert controller.server_mode is True
 
     def test_the_deferred_wrapper_forwards_the_server_hooks(self):
-        """The routes hand the stream a DeferredPreemptionPolicy and bind the real one
-        later, so the wrapper has to carry the two new hooks or the ledger never hears
-        about a server park. Measured: four chats, one park, the client saw the pause,
-        the log showed no `server-parked` line."""
         controller = get_preemption_controller("deferred")
         controller.configure(budget = 8192, kv_unified = True, slots = 4, server_mode = True)
         signal = PreemptSignal()
@@ -238,96 +246,7 @@ class TestController:
 # ----------------------------------------------------------------------- the stream
 
 
-def _delta(content: str) -> str:
-    return (
-        "data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": content}}]}) + "\n\n"
-    )
-
-
-def _finish(reason: str = "stop") -> str:
-    return (
-        "data: "
-        + json.dumps({"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]})
-        + "\n\n"
-    )
-
-
-class _FakeResponse:
-    status_code = 200
-
-    def __init__(self, chunks):
-        self._chunks = list(chunks)
-
-    def iter_text(self):
-        yield from self._chunks
-
-    def close(self):
-        pass
-
-
-class _Recorder:
-    """A backend whose upstream stream is a scripted list of raw SSE chunks, read through
-    the REAL cancel-aware iterator so the comment lines take the real path."""
-
-    def __init__(self, monkeypatch, chunks, *, server_preempts):
-        self.payloads = []
-        backend = LlamaCppBackend.__new__(LlamaCppBackend)
-        backend._process = object()
-        backend._healthy = True
-        backend._port = 48851
-        backend._api_key = None
-        backend._effective_context_length = 4096
-        backend._supports_reasoning = False
-        backend._reasoning_always_on = False
-        backend._reasoning_style = "enable_thinking"
-        backend._supports_preserve_thinking = False
-        backend._server_preempts_kv = server_preempts
-        backend._kv_cache_unified = True
-        self.backend = backend
-        recorder = self
-
-        @contextlib.contextmanager
-        def fake_stream_with_retry(
-            _client,
-            _url,
-            payload,
-            _cancel_event,
-            headers = None,
-            **_kw,
-        ):
-            recorder.payloads.append(copy.deepcopy(payload))
-            yield _FakeResponse(chunks)
-
-        monkeypatch.setattr(backend, "_stream_with_retry", fake_stream_with_retry)
-        monkeypatch.setattr(backend, "_maybe_recover_from_mtp_crash", lambda *_a, **_k: False)
-
-
-class _HookPolicy:
-    def __init__(self):
-        self.events = []
-
-    def should_preempt(self):
-        return False
-
-    def on_preempted(self, checkpoint):
-        self.events.append("preempted")
-
-    def await_resume(self, timeout = None):
-        self.events.append("awaited")
-        return True
-
-    def on_resumed(self):
-        self.events.append("resumed")
-
-    def on_server_parked(self):
-        self.events.append("server-parked")
-
-    def on_server_resumed(self):
-        self.events.append("server-resumed")
-
-
 def _client_view(events):
-    """What a client assembles: the concatenation of snapshot diffs, plus the dict events."""
     text = ""
     marks = []
     for ev in events:
@@ -453,8 +372,6 @@ class _Obj:
 
 
 def _install_wrapper(response, clock, silent_stream, grace):
-    """Wire a fake client and pool the way `test_llama_cpp_stall_timeout` does, and
-    return the wrapped read."""
     import httpcore  # noqa: F401
 
     inner = _Obj()
@@ -473,10 +390,7 @@ def _install_wrapper(response, clock, silent_stream, grace):
 
 
 class TestAParkIsNotAStall:
-    """The stall lives in the read wrapper (`_install_cancel_aware_read`), below the httpx
-    body iterator, because an iterator that has raised is finished and cannot be waited
-    through. The wrapper is driven directly here, with a fake clock and a stream that
-    never delivers."""
+    """The stall lives in the read wrapper, below the httpx iterator that cannot resume."""
 
     _STALL = 120.0
 

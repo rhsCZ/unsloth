@@ -1,119 +1,32 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A pause the stream refuses has to be handed back, not merely ignored.
-
-A sweep that chooses a victim moves it to PREEMPTING and sets its signal. Both halves of
-the tool loop refuse to pause once they have paused ``_MAX_PREEMPT_RESUMES`` times: rather
-than pausing again they clear the signal and finish the turn, which for the round loop
-means breaking into the final answering pass and decoding a whole answer there.
-
-Clearing the signal is not the same as taking the decision back. PREEMPTING is outside
-``_PREEMPTABLE`` and nothing in the ordinary path moves it back -- ``observe`` returns
-TOOLS_RUNNING and PARKED_ON_TOOL to DECODING and deliberately leaves PREEMPTING alone --
-so the refusing chat went on decoding while permanently unselectable, holding cells the
-planner had already counted as reclaimed. Whoever was waiting on those cells waited for
-room that was never coming.
-
-``on_declined`` is the handback: state and signal only, nothing released, because nothing
-was released. These drive the real loop with fake llama-server streams and a real
-controller, and check the state the sweep reads.
-"""
+"""A pause the stream refuses has to be handed back, not merely ignored."""
 
 from __future__ import annotations
 
-import contextlib
-import copy
-import json
-import threading
 
 from core.inference import llama_preemption as preemption
-from core.inference.llama_cpp import LlamaCppBackend
 from core.inference.llama_preemption import (
     ControllerPreemptionPolicy,
     ParticipantState,
     PreemptionController,
 )
 
+from .preempt_fakes import (
+    PreemptRecorder,
+    # No ``on_declined``, which is the point: injected doubles are handed straight to the
+    # loop, so the call has to survive one written against the protocol as it was.
+    RecordingPolicy as _OldDouble,
+    delta as _delta,
+    done as _done,
+    finish as _finish,
+    run_tool_loop,
+    tool_call as _tool_call,
+    web_search_tool,
+)
 
-_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "search",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-    },
-}
-
-
-def _delta(content: str) -> str:
-    return "data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": content}}]}) + "\n"
-
-
-def _finish(reason: str = "stop") -> str:
-    return (
-        "data: "
-        + json.dumps({"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]})
-        + "\n"
-    )
-
-
-def _done() -> str:
-    return "data: [DONE]\n"
-
-
-def _tool_call(call_id: str = "call_search") -> list[str]:
-    return [
-        "data: "
-        + json.dumps(
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {
-                            "tool_calls": [
-                                {
-                                    "index": 0,
-                                    "id": call_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": "web_search",
-                                        "arguments": json.dumps({"query": "kernel"}),
-                                    },
-                                }
-                            ]
-                        },
-                    }
-                ]
-            }
-        )
-        + "\n",
-        _done(),
-    ]
-
-
-class _OldDouble:
-    """A policy written against the protocol as it was, with no ``on_declined``.
-
-    Injected doubles are handed straight to the loop, so the call has to survive one that
-    has never heard of the method.
-    """
-
-    def __init__(self):
-        self.events: list[str] = []
-
-    def should_preempt(self) -> bool:
-        return False
-
-    def on_preempted(self, checkpoint) -> None:
-        self.events.append("preempted")
-
-    def await_resume(self, timeout = None) -> bool:
-        self.events.append("awaited")
-        return True
-
-    def on_resumed(self) -> None:
-        self.events.append("resumed")
+_TOOL = web_search_tool()
 
 
 class _RaisingPolicy(_OldDouble):
@@ -124,83 +37,30 @@ class _RaisingPolicy(_OldDouble):
         raise RuntimeError("policy is broken")
 
 
-class _Recorder:
-    """A backend whose chosen attempt is preempted partway through."""
-
-    def __init__(self, monkeypatch, streams, *, signal, pause_attempts):
-        self.payloads: list[dict] = []
-        self.signal = signal
-        self.pause_attempts = set(pause_attempts)
-        self._streams = [list(stream) for stream in streams]
-        backend = LlamaCppBackend.__new__(LlamaCppBackend)
-        backend._process = object()
-        backend._healthy = True
-        backend._port = 48851
-        backend._api_key = None
-        backend._effective_context_length = 4096
-        backend._supports_reasoning = False
-        backend._reasoning_always_on = False
-        backend._reasoning_style = "enable_thinking"
-        backend._supports_preserve_thinking = False
-        self.backend = backend
-
-        recorder = self
-
-        @contextlib.contextmanager
-        def fake_stream_with_retry(
-            _client,
-            _url,
-            payload,
-            _cancel_event,
-            headers = None,
-            first_token_deadline = None,
-            preempt_event = None,
-        ):
-            recorder.payloads.append(copy.deepcopy(payload))
-            stream = recorder._streams.pop(0)
-            yield type("FakeResponse", (), {"status_code": 200, "chunks": stream})()
-
-        def fake_iter_text_cancellable(
-            response,
-            _cancel_event,
-            first_token_deadline = None,
-            preempt_event = None,
-        ):
-            attempt = len(recorder.payloads) - 1
-            for chunk in response.chunks:
-                yield chunk
-                if attempt in recorder.pause_attempts and chunk.startswith("data: {"):
-                    raise preemption.LlamaStreamPreempted
-
-        monkeypatch.setattr(backend, "_stream_with_retry", fake_stream_with_retry)
-        monkeypatch.setattr(backend, "_iter_text_cancellable", fake_iter_text_cancellable)
-        monkeypatch.setattr(backend, "_maybe_recover_from_mtp_crash", lambda *_a, **_k: False)
-        monkeypatch.setattr(
-            "core.inference.tools.execute_tool",
-            lambda name, arguments, **_kwargs: "Linux kernel 6.10.",
-        )
+def _Recorder(monkeypatch, streams, *, signal, pause_attempts):
+    return PreemptRecorder(
+        monkeypatch,
+        streams,
+        signal = signal,
+        pause_attempts = pause_attempts,
+        request_pressure = False,
+        execute_tool = True,
+    )
 
 
 def _run(recorder, *, signal, policy):
-    return list(
-        recorder.backend.generate_chat_completion_with_tools(
-            messages = [{"role": "user", "content": "what kernel is current?"}],
-            tools = [_TOOL],
-            cancel_event = threading.Event(),
-            preempt_event = signal,
-            preempt_policy = policy,
-            max_tool_iterations = 1,
-            permission_mode = "off",
-        )
+    return run_tool_loop(
+        recorder.backend,
+        signal = signal,
+        policy = policy,
+        tools = [_TOOL],
+        prompt = "what kernel is current?",
+        max_tool_iterations = 1,
+        permission_mode = "off",
     )
 
 
 def _chosen_victim(controller, gen_id, signal):
-    """Register two decoding chats and let a real sweep choose `gen_id`.
-
-    Newest first is the policy, so the one registered last is the one asked to stop, and
-    it is asked by the controller itself rather than by a test setting a field.
-    """
     controller.register("other", tokens = 1000)
     participant = controller.register(gen_id, tokens = 1000, signal = signal)
     victims = controller.plan_preemptions(needed = 16384)
@@ -211,7 +71,6 @@ def _chosen_victim(controller, gen_id, signal):
 
 
 def _capped(monkeypatch):
-    """Refuse the first pause, so the capped branch is the one under test."""
     monkeypatch.setattr(preemption, "DEFAULT_MAX_PREEMPT_RESUMES", 0)
 
 
@@ -240,12 +99,11 @@ class TestTheRoundLoopHandsTheDecisionBack:
         )
         assert participant.preemptable, "a decoding chat has to be selectable again"
         assert not signal.is_set() and not signal.pending
-        assert any(event.get("type") == "content" for event in events), (
-            "the turn still has to produce its answer"
-        )
+        assert any(
+            event.get("type") == "content" for event in events
+        ), "the turn still has to produce its answer"
 
     def test_the_lease_and_the_cells_stay_where_they_are(self, monkeypatch):
-        """Declining is not pausing: nothing was handed back, so nothing is released."""
         _capped(monkeypatch)
         controller = PreemptionController("declined-keeps-room")
         controller.configure(budget = 16384, kv_unified = True)
@@ -328,9 +186,7 @@ class TestTheRoundLoopHandsTheDecisionBack:
 
 
 class TestTheFinalPassHandsTheDecisionBack:
-    """The same branch at the end of the turn. Nothing decodes after it, but teardown is
-    what releases the lease, and a sweep running before teardown must not be shown a
-    victim whose pause is never coming."""
+    """The same branch at the end of the turn, where teardown still has to find it clean."""
 
     def test_nothing_is_left_preempting(self, monkeypatch):
         _capped(monkeypatch)
@@ -351,13 +207,13 @@ class TestTheFinalPassHandsTheDecisionBack:
         )
         events = _run(recorder, signal = signal, policy = policy)
 
-        assert participant.state != ParticipantState.PREEMPTING, (
-            "the turn ended with the ledger still holding a chosen victim"
-        )
+        assert (
+            participant.state != ParticipantState.PREEMPTING
+        ), "the turn ended with the ledger still holding a chosen victim"
         assert not signal.is_set()
-        assert any(event.get("reason") == "preempt_gave_up" for event in events), (
-            "the turn ended with no notice of why"
-        )
+        assert any(
+            event.get("reason") == "preempt_gave_up" for event in events
+        ), "the turn ended with no notice of why"
         metadata = [event for event in events if event.get("type") == "metadata"]
         assert metadata and metadata[-1]["finish_reason"] == "length"
 
@@ -384,9 +240,9 @@ class TestTheControllerItself:
         controller.plan_preemptions(needed = 16384)
         controller.note_declined("chat")
         assert participant.state == ParticipantState.DECODING
-        assert not signal.is_set(), (
-            "a signal left set aborts the very stream this call is letting run"
-        )
+        assert (
+            not signal.is_set()
+        ), "a signal left set aborts the very stream this call is letting run"
         assert not signal.pending
 
     def test_a_declined_chat_can_be_chosen_again(self):
@@ -397,9 +253,9 @@ class TestTheControllerItself:
         controller.register("chat", tokens = 1000, signal = signal)
         controller.plan_preemptions(needed = 16384)
         controller.note_declined("chat")
-        assert [v.gen_id for v in controller.plan_preemptions(needed = 16384)] == ["chat"], (
-            "the point of the handback: pressure later in the turn can ask again"
-        )
+        assert [v.gen_id for v in controller.plan_preemptions(needed = 16384)] == [
+            "chat"
+        ], "the point of the handback: pressure later in the turn can ask again"
 
     def test_the_null_policy_answers_it(self):
         preemption.NullPreemptionPolicy().on_declined()

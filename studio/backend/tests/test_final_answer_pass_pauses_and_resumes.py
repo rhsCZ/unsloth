@@ -1,205 +1,60 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The last stream of a tool run pauses and resumes like the rounds before it.
-
-A tool loop ends in a synthesized answering pass: the rounds break, the tool results are
-in the conversation, and one more request writes the reply. That request is routinely the
-longest decode of the whole turn, and it feeds the same shared KV cache as everything
-else, so it is exactly the generation a sweep under pressure will choose.
-
-It could not be paused. The rounds forwarded ``preempt_event`` into their stream and
-handled ``LlamaStreamPreempted``; the final pass forwarded neither, so a chat chosen here
-kept decoding while its participant stayed PREEMPTING. That state is outside
-``_PREEMPTABLE``, so no later sweep could ask it again, and the cells the planner had
-already counted as reclaimed were never released: the chats waiting on them waited for
-room that was not coming.
-
-These drive the real loop with fake llama-server streams. The first stream calls a tool,
-the loop's one-round budget breaks it into the final pass, and that pass is what pauses.
-"""
+"""The last stream of a tool run pauses and resumes like the rounds before it."""
 
 from __future__ import annotations
 
 import ast
-import contextlib
-import copy
-import json
 import pathlib
-import threading
 
 from core.inference import llama_preemption as preemption
-from core.inference.llama_cpp import LlamaCppBackend
+
+from .preempt_fakes import (
+    PreemptRecorder,
+    RecordingPolicy as _RecordingPolicy,
+    delta as _delta,
+    done as _done,
+    finish as _finish,
+    run_tool_loop,
+    tool_call as _tool_call,
+    web_search_tool,
+)
+
+_TOOL = web_search_tool()
 
 
-LLAMA_CPP = pathlib.Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-
-_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "search",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-    },
-}
-
-
-def _delta(content: str) -> str:
-    return "data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": content}}]}) + "\n"
-
-
-def _finish(reason: str = "stop") -> str:
-    return (
-        "data: "
-        + json.dumps({"choices": [{"index": 0, "delta": {}, "finish_reason": reason}]})
-        + "\n"
-    )
-
-
-def _done() -> str:
-    return "data: [DONE]\n"
-
-
-def _tool_call(call_id: str = "call_search") -> list[str]:
-    return [
-        "data: "
-        + json.dumps(
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {
-                            "tool_calls": [
-                                {
-                                    "index": 0,
-                                    "id": call_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": "web_search",
-                                        "arguments": json.dumps({"query": "kernel"}),
-                                    },
-                                }
-                            ]
-                        },
-                    }
-                ]
-            }
-        )
-        + "\n",
-        _done(),
-    ]
-
-
-class _RecordingPolicy:
-    """Stands in for the admission side. Records the handshake order."""
-
-    def __init__(self, *, resume = True):
-        self.events: list[str] = []
-        self.checkpoints: list[preemption.StreamCheckpoint] = []
-        self._resume = resume
-
-    def should_preempt(self) -> bool:
-        return False
-
-    def on_preempted(self, checkpoint):
-        self.events.append("preempted")
-        self.checkpoints.append(checkpoint)
-
-    def await_resume(self, timeout = None) -> bool:
-        self.events.append("awaited")
-        return self._resume
-
-    def on_resumed(self) -> None:
-        self.events.append("resumed")
-
-
-class _Recorder:
-    """A backend that pauses the stream of a chosen attempt partway through.
-
-    Attempt 0 is the tool round; attempt 1 is the final answering pass, which is the one
-    these tests are about.
-    """
-
-    def __init__(
-        self,
+def _Recorder(
+    monkeypatch,
+    streams,
+    *,
+    signal,
+    pause_attempts = (1,),
+):
+    return PreemptRecorder(
         monkeypatch,
         streams,
-        *,
-        signal,
-        pause_attempts = (1,),
-    ):
-        self.payloads: list[dict] = []
-        self.signal = signal
-        self.pause_attempts = set(pause_attempts)
-        self._streams = [list(stream) for stream in streams]
-        backend = LlamaCppBackend.__new__(LlamaCppBackend)
-        backend._process = object()
-        backend._healthy = True
-        backend._port = 48847
-        backend._api_key = None
-        backend._effective_context_length = 4096
-        backend._supports_reasoning = False
-        backend._reasoning_always_on = False
-        backend._reasoning_style = "enable_thinking"
-        backend._supports_preserve_thinking = False
-        self.backend = backend
-
-        recorder = self
-
-        @contextlib.contextmanager
-        def fake_stream_with_retry(
-            _client,
-            _url,
-            payload,
-            _cancel_event,
-            headers = None,
-            first_token_deadline = None,
-            preempt_event = None,
-        ):
-            recorder.payloads.append(copy.deepcopy(payload))
-            recorder.opened_with_signal.append(preempt_event)
-            stream = recorder._streams.pop(0)
-            yield type("FakeResponse", (), {"status_code": 200, "chunks": stream})()
-
-        def fake_iter_text_cancellable(
-            response,
-            _cancel_event,
-            first_token_deadline = None,
-            preempt_event = None,
-        ):
-            attempt = len(recorder.payloads) - 1
-            recorder.read_with_signal.append(preempt_event)
-            for chunk in response.chunks:
-                yield chunk
-                if attempt in recorder.pause_attempts and chunk.startswith("data: {"):
-                    # Pressure noticed mid-stream, which is when it really is.
-                    recorder.signal.request("kv_pressure")
-                    raise preemption.LlamaStreamPreempted
-
-        self.opened_with_signal: list[object] = []
-        self.read_with_signal: list[object] = []
-        monkeypatch.setattr(backend, "_stream_with_retry", fake_stream_with_retry)
-        monkeypatch.setattr(backend, "_iter_text_cancellable", fake_iter_text_cancellable)
-        monkeypatch.setattr(backend, "_maybe_recover_from_mtp_crash", lambda *_a, **_k: False)
-        monkeypatch.setattr(
-            "core.inference.tools.execute_tool",
-            lambda name, arguments, **_kwargs: "Linux kernel 6.10.",
-        )
+        signal = signal,
+        pause_attempts = pause_attempts,
+        port = 48847,
+        execute_tool = True,
+    )
 
 
 def _run(recorder, *, signal, policy):
-    return list(
-        recorder.backend.generate_chat_completion_with_tools(
-            messages = [{"role": "user", "content": "what kernel is current?"}],
-            tools = [_TOOL],
-            cancel_event = threading.Event(),
-            preempt_event = signal,
-            preempt_policy = policy,
-            # One round, so the loop breaks mid-round into the synthesized final pass.
-            max_tool_iterations = 1,
-            permission_mode = "off",
-        )
+    return run_tool_loop(
+        recorder.backend,
+        signal = signal,
+        policy = policy,
+        tools = [_TOOL],
+        prompt = "what kernel is current?",
+        # One round, so the loop breaks mid-round into the synthesized final pass.
+        max_tool_iterations = 1,
+        permission_mode = "off",
     )
+
+
+LLAMA_CPP = pathlib.Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
 
 
 def _paused_final_run(monkeypatch, *, resume = True):
@@ -242,7 +97,6 @@ class TestTheFinalPassPauses:
         assert policy.checkpoints[0].resumes == 1
 
     def test_the_signal_is_cleared_so_the_resume_can_run(self, monkeypatch):
-        """Left set, the resumed attempt aborts on its first read and spins."""
         _recorder, _policy, signal, _events = _paused_final_run(monkeypatch)
         assert not signal.is_set()
         assert not signal.pending
@@ -274,11 +128,6 @@ class TestTheFinalPassResumes:
         assert "is 6.10." in answer, answer
 
     def test_a_policy_that_gives_up_ends_the_turn_and_says_so(self, monkeypatch):
-        """It must not wait forever, it must not pause again, and it must not fall silent.
-
-        Nothing runs after this pass, so a bare return is a blank assistant turn that a
-        caller cannot tell from a model that chose to say nothing.
-        """
         recorder, policy, signal, events = _paused_final_run(monkeypatch, resume = False)
         assert policy.events.count("preempted") == 1, "it paused more than once"
         assert not signal.is_set(), "the signal must be cleared before ending the turn"
@@ -294,8 +143,7 @@ class TestTheFinalPassResumes:
 
 
 class TestTheWiringIsThere:
-    """Structural, because the absence is what breaks: both calls behaved correctly on
-    their own terms, and a pause simply never reached them."""
+    """Structural, because the absence is what breaks: nothing connected the two halves."""
 
     @staticmethod
     def _final_pass_source() -> str:
@@ -319,7 +167,6 @@ class TestTheWiringIsThere:
         )
 
     def test_both_pass_the_signal_conditionally(self):
-        """A test double written against the old signature must keep working."""
         source = self._final_pass_source()
         assert (
             source.count('{"preempt_event": preempt_event}') == 2
@@ -353,6 +200,4 @@ class TestTheWiringIsThere:
         ), "the clear must not run after the participant becomes selectable again"
 
     def test_the_module_still_parses(self):
-        """The handler lives deep inside a very long generator; a stray indent there
-        would be caught by nothing else in this file."""
         ast.parse(LLAMA_CPP.read_text(encoding = "utf-8"))

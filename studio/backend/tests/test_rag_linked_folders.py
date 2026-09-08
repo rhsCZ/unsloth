@@ -722,7 +722,9 @@ def test_reauthorizing_same_path_refreshes_root_identity_and_retains_mappings(
     source_stat = source.stat()
     assert reauthorized.is_set()
     assert refreshed["id"] == folder["id"]
-    assert (refreshed["root_device"], refreshed["root_inode"]) == (
+    # Read back through the loader: an identity above SQLite's signed maximum is stored as
+    # a hex string, which is the ordinary case for a Windows device id.
+    assert folder_sync._load_identity(refreshed["root_device"], refreshed["root_inode"]) == (
         source_stat.st_dev,
         source_stat.st_ino,
     )
@@ -2375,6 +2377,11 @@ def test_retirement_leaves_a_folder_linked_after_the_ownership_check(rag_home):
     source.mkdir()
     existing = folder_sync.create_folder(scope_type = "project", scope_id = "p1", path = str(source))
     checked_at = folder_sync.now_iso()
+    # The bound is created_at<=checked_at, and the Windows clock ticks about every 15ms, so
+    # wait out the tick the check landed in; otherwise the folder linked after it carries
+    # the same timestamp and nothing could tell the two apart.
+    while folder_sync.now_iso() <= checked_at:
+        time.sleep(0.001)
     # a second backend process links this one after the check and before the write
     later = rag_home / "after-check"
     later.mkdir()

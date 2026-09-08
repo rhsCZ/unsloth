@@ -1,0 +1,375 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+"""Four gaps between what a park promises and what reached the client or the ledger.
+
+1. The raw passthrough loops (Responses, chat and completions passthrough, Anthropic
+   passthrough) relayed ``data:`` lines only. A request the server parked sent
+   ``: preempted`` and a ``: preempt-keepalive`` every two seconds, each of which reset
+   the stall clock and reached nobody, so a long park sent the client no bytes at all.
+   ``_server_park_sse`` maps those notices onto the comments every other surface forwards.
+
+2. Exact concurrency was reported ``on`` under ``UNSLOTH_LLAMA_PREEMPT_MODE=studio``. A chat
+   the server parks is restored cell for cell; one Studio pauses is resumed as a
+   continuation with fresh sampler and draft state, so the promise needs the server to be
+   the one pausing. ``_exact_state_after_launch`` now takes ``server_parks``.
+
+3. A user-named ``--preempt-ram`` below the KV pool was reported exact too, though a park
+   that outgrows it is re-prefilled. ``_exact_parking_shortfall_mib`` names the shortfall
+   and the state reads ``unavailable`` for it.
+
+4. A swap build predating the stream notices parks in silence. The read wrapper excused the
+   silence from `/metrics` and forwarded nothing, so a durable run's lease had nothing to
+   renew on and the sweeper could cancel a legitimate park. The backend stamps the excuse
+   and the run loop renews from it.
+"""
+
+import asyncio
+import inspect
+import time
+
+import httpx
+import pytest
+
+import core.inference.chat_generation_runs as runs
+import core.inference.llama_cpp as llama_mod
+import routes.inference as inference
+from core.inference import llama_exact as exact
+from core.inference import llama_preemption as preemption_mod
+from core.inference.llama_cpp import LlamaCppBackend
+
+
+class TestARawStreamForwardsTheServersPark:
+    def test_the_three_notices_map_onto_the_studio_comments(self):
+        assert inference._server_park_sse(llama_mod._SERVER_PARKED_COMMENT) == (
+            inference._OPENAI_PREEMPT_SSE_PAUSED
+        )
+        assert inference._server_park_sse(llama_mod._SERVER_RESUMED_COMMENT) == (
+            inference._OPENAI_PREEMPT_SSE_RESUMED
+        )
+        assert inference._server_park_sse(llama_mod._SERVER_KEEPALIVE_COMMENT) == (
+            inference._OPENAI_PREEMPT_SSE_KEEPALIVE
+        )
+        # The routes spell the notices out; the backend's constants are the source of truth.
+        assert set(inference._SERVER_PARK_SSE_BY_COMMENT) == set(llama_mod._SERVER_PARK_COMMENTS)
+
+    def test_everything_else_is_left_to_the_loop(self):
+        assert inference._server_park_sse('data: {"choices": []}') is None
+        assert inference._server_park_sse("") is None
+        assert inference._server_park_sse(None) is None
+        assert inference._server_park_sse(": keep-alive") is None
+
+    def test_bytes_and_trailing_whitespace_are_read_the_same(self):
+        assert inference._server_park_sse(b": preempt-keepalive") == (
+            inference._OPENAI_PREEMPT_SSE_KEEPALIVE
+        )
+        assert inference._server_park_sse(": preempted\r") == inference._OPENAI_PREEMPT_SSE_PAUSED
+
+    def test_every_raw_loop_asks(self):
+        """One relay per raw loop: Responses, Anthropic passthrough, chat passthrough and the
+        completions byte loop. The count is the guard against a loop that forgets."""
+        source = inspect.getsource(inference)
+        calls = source.count("_park = _server_park_sse(")
+        assert calls >= 4, f"{calls} raw loops relay a park; four did when this was written"
+        # Each relay yields the comment and moves on, before the `data:` filter.
+        assert source.count("if _park is not None:\n") >= 4
+
+
+class TestExactNeedsTheServerToPark:
+    _ARGV = ["llama-server", "--kv-unified", "--flash-attn", "on"]
+
+    def _state(self, **kw):
+        kw.setdefault("supports_exact", True)
+        kw.setdefault("setting", "auto")
+        kw.setdefault("env", {exact.CHILD_ENV: "1"})
+        kw.setdefault("args", self._ARGV)
+        return LlamaCppBackend._exact_state_after_launch(**kw)
+
+    def test_on_when_the_server_parks_and_the_budget_holds(self):
+        assert self._state() == exact.EXACT_STATE_ON
+        assert self._state(server_parks = True, parking_holds = True) == exact.EXACT_STATE_ON
+
+    @pytest.mark.parametrize("setting", ["auto", "on"])
+    def test_studio_side_pausing_is_not_exact(self, setting):
+        assert self._state(setting = setting, server_parks = False) == (exact.EXACT_STATE_UNAVAILABLE)
+
+    @pytest.mark.parametrize("setting", ["auto", "on"])
+    def test_a_budget_below_the_pool_is_not_exact(self, setting):
+        assert self._state(setting = setting, parking_holds = False) == (exact.EXACT_STATE_UNAVAILABLE)
+
+    def test_off_stays_off_whatever_the_server_does(self):
+        assert self._state(setting = "off", server_parks = False) == exact.EXACT_STATE_OFF
+
+    def test_the_launch_hands_both_answers_over(self):
+        source = inspect.getsource(LlamaCppBackend.load_model)
+        assert "server_parks = self.server_preempts_kv" in source
+        assert "parking_holds = _exact_short is None" in source
+
+
+_GIB = 1024 * 1024 * 1024
+
+
+class TestTheNamedBudgetIsJudged:
+    def test_a_budget_below_the_pool_is_a_shortfall(self):
+        short = llama_mod._exact_parking_shortfall_mib(
+            12 * _GIB, args = ["--preempt-ram", "1024"], env = {}
+        )
+        assert short == (1024, 12 * 1024, 12 * 1024 + 64)
+
+    def test_a_budget_that_holds_the_pool_is_fine(self):
+        assert (
+            llama_mod._exact_parking_shortfall_mib(
+                12 * _GIB, args = ["--preempt-ram", str(12 * 1024 + 64)], env = {}
+            )
+            is None
+        )
+
+    def test_unlimited_and_off_are_not_shortfalls(self):
+        # -1 is no limit; 0 is parking off, which server_preempts_kv already reports.
+        for value in ("-1", "0"):
+            assert (
+                llama_mod._exact_parking_shortfall_mib(
+                    12 * _GIB, args = ["--preempt-ram", value], env = {}
+                )
+                is None
+            )
+
+    def test_nothing_named_is_nothing_to_judge(self):
+        assert llama_mod._exact_parking_shortfall_mib(12 * _GIB, args = [], env = {}) is None
+        assert (
+            llama_mod._exact_parking_shortfall_mib(0, args = ["--preempt-ram", "1"], env = {}) is None
+        )
+
+    def test_the_servers_default_is_judged_for_a_pool_sized_after_launch(self):
+        # An auto-fit context leaves the pool unknown at launch; after it the default budget
+        # the child ran with is judged against the context the server chose.
+        short = llama_mod._exact_parking_shortfall_mib(
+            12 * _GIB, args = [], env = {}, default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB
+        )
+        assert short == (8192, 12 * 1024, 12 * 1024 + 64)
+        assert (
+            llama_mod._exact_parking_shortfall_mib(
+                4 * _GIB, args = [], env = {}, default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB
+            )
+            is None
+        )
+        # A named budget still wins over the default.
+        assert (
+            llama_mod._exact_parking_shortfall_mib(
+                12 * _GIB, args = ["--preempt-ram", "-1"], env = {}, default_mib = 8192
+            )
+            is None
+        )
+
+    def test_an_unknown_pool_is_sized_off_the_servers_context_after_launch(self):
+        source = inspect.getsource(LlamaCppBackend.load_model)
+        assert "self._exact_pool_unknown = _exact_kv_bytes <= 0" in source
+        judged = source.index('getattr(self, "_exact_pool_unknown", False)')
+        window = source[judged : judged + 1600]
+        assert "self._query_server_n_ctx()" in window
+        assert "default_mib = _PREEMPT_RAM_DEFAULT_MIB" in window
+        assert (
+            "_exact_short = (_PREEMPT_RAM_DEFAULT_MIB, 0, 0)" in window
+        ), "a pool that cannot be sized must not be certified"
+        assert window.index("self._exact_parking_short = _exact_short") < window.index(
+            "self._exact_state_after_launch("
+        )
+
+    def test_the_environment_and_a_later_flag_are_read_in_llama_cpps_order(self):
+        # The variable first, argv last-wins over it, as the child applies them.
+        assert llama_mod._named_preempt_ram_mib([], {"LLAMA_ARG_PREEMPT_RAM": "512"}) == 512
+        assert (
+            llama_mod._named_preempt_ram_mib(
+                ["--preempt-ram", "512", "--preempt-ram=2048"], {"LLAMA_ARG_PREEMPT_RAM": "1"}
+            )
+            == 2048
+        )
+        assert llama_mod._named_preempt_ram_mib(["--preempt-ram", "lots"], {}) is None
+        short = llama_mod._exact_parking_shortfall_mib(
+            12 * _GIB, args = [], env = {"LLAMA_ARG_PREEMPT_RAM": "2048"}
+        )
+        assert short is not None and short[0] == 2048
+
+
+class TestASilentParkStillRenewsTheLease:
+    def _backend(self, monkeypatch, preempted):
+        backend = LlamaCppBackend.__new__(LlamaCppBackend)
+        backend._port = 65010
+        backend._api_key = None
+        monkeypatch.setattr(
+            "core.inference.llama_stats.scrape_llama_metrics",
+            lambda base_url, timeout_s = 3.0, headers = None: {"requests_preempted": preempted},
+        )
+        return backend
+
+    def test_an_excused_silence_is_stamped(self, monkeypatch):
+        backend = self._backend(monkeypatch, 1)
+        assert backend.server_park_grace_recent(1.0) is False
+        assert backend._server_park_grace() is True
+        assert backend.server_park_grace_recent(1.0) is True
+
+    def test_a_pool_with_nothing_parked_stamps_nothing(self, monkeypatch):
+        backend = self._backend(monkeypatch, 0)
+        assert backend._server_park_grace() is False
+        assert backend.server_park_grace_recent(60.0) is False
+
+    def test_the_stamp_ages_out(self, monkeypatch):
+        backend = self._backend(monkeypatch, 1)
+        assert backend._server_park_grace() is True
+        backend._server_park_grace_at = time.monotonic() - 100.0
+        assert backend.server_park_grace_recent(10.0) is False
+
+    def test_the_run_loop_consults_the_stamp(self, monkeypatch):
+        class _Backend:
+            def server_park_grace_recent(self, within_s):
+                return within_s > 0
+
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: _Backend())
+        assert runs._server_park_excused_recently() is True
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: object())
+        assert runs._server_park_excused_recently() is False
+
+    def test_the_silent_branch_renews_and_is_bounded(self):
+        """The wait is bounded even with nothing to flush, and the silent branch renews
+        from the stamp; the source is the only place this loop can be read."""
+        source = inspect.getsource(runs.ChatGenerationSupervisor)
+        assert "else _renew_interval_seconds()" in source
+        assert "elif await asyncio.to_thread(_server_park_excused_recently):" in source
+        branch = source.index("elif await asyncio.to_thread(_server_park_excused_recently):")
+        assert "await self._try_touch_progress(run_id)" in source[branch : branch + 400]
+
+
+class TestAutoDoesNotStartAModeItWillReportUnavailable:
+    _ARGV = ["llama-server", "--kv-unified"]
+
+    def test_studio_side_pausing_blocks_an_auto_launch(self, monkeypatch):
+        monkeypatch.setenv(preemption_mod.PREEMPT_MODE_ENV, "studio")
+        why = llama_mod._exact_auto_blocker(exact.EXACT_AUTO, self._ARGV, {})
+        assert why and "UNSLOTH_LLAMA_PREEMPT_MODE=studio" in why
+
+    def test_parking_switched_off_blocks_an_auto_launch(self, monkeypatch):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        assert llama_mod._exact_auto_blocker(
+            exact.EXACT_AUTO, self._ARGV + ["--preempt-ram", "0"], {}
+        )
+        assert llama_mod._exact_auto_blocker(
+            exact.EXACT_AUTO, self._ARGV, {"LLAMA_ARG_PREEMPT_RAM": "0"}
+        )
+        # Studio's own budget after an inherited zero wins, as the child applies argv last.
+        assert (
+            llama_mod._exact_auto_blocker(
+                exact.EXACT_AUTO,
+                self._ARGV + ["--preempt-ram", "4096"],
+                {"LLAMA_ARG_PREEMPT_RAM": "0"},
+            )
+            is None
+        )
+
+    def test_a_clean_auto_launch_and_every_on_launch_go_ahead(self, monkeypatch):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        assert llama_mod._exact_auto_blocker(exact.EXACT_AUTO, self._ARGV, {}) is None
+        monkeypatch.setenv(preemption_mod.PREEMPT_MODE_ENV, "studio")
+        # `on` is the post-launch check's to fail, naming the reason.
+        assert llama_mod._exact_auto_blocker(exact.EXACT_ON, self._ARGV, {}) is None
+
+    def test_the_launch_consults_it_before_the_child_env_is_written(self):
+        source = inspect.getsource(LlamaCppBackend.load_model)
+        blocker = source.index("_exact_blocker = _exact_auto_blocker(")
+        short_drop = source.index("if _exact_setting == _exact.EXACT_AUTO:\n")
+        child_env = source.index("_exact.apply_child_env(env, on = _exact_wanted)")
+        assert blocker < child_env and short_drop < child_env
+        # An unknown pool with nothing named parks without a limit rather than on a default
+        # the pool may exceed.
+        assert 'cmd.extend(["--preempt-ram", "-1"])' in source
+
+
+class _Request:
+    async def is_disconnected(self):
+        return False
+
+
+class TestARawRelayWaitsThroughAServerPark:
+    @staticmethod
+    async def _stream(timeouts_before_second: int):
+        yield "data: a"
+        for _ in range(timeouts_before_second):
+            await asyncio.sleep(0.03)
+            raise httpx.ReadTimeout("read timed out")
+        yield "data: b"
+
+    @staticmethod
+    async def _resumable(timeouts: int):
+        """An iterator whose ReadTimeouts do not end it, like a live httpx line stream."""
+        state = {"left": timeouts, "sent_a": False}
+
+        class _It:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not state["sent_a"]:
+                    state["sent_a"] = True
+                    return "data: a"
+                if state["left"] > 0:
+                    state["left"] -= 1
+                    await asyncio.sleep(0.03)
+                    raise httpx.ReadTimeout("read timed out")
+                if state.get("done"):
+                    raise StopAsyncIteration
+                state["done"] = True
+                return "data: b"
+
+        return _It()
+
+    def test_a_parked_relay_keeps_waiting(self):
+        async def run():
+            it = await self._resumable(3)
+            seen = []
+            async for item in inference._aiter_llama_stream_items(
+                it,
+                request = _Request(),
+                post_first_item_read_timeout_s = 0.01,
+                stall_grace = lambda: True,
+            ):
+                seen.append(item)
+            return seen
+
+        assert asyncio.run(run()) == ["data: a", "data: b"]
+
+    def test_without_a_park_the_stall_still_ends_the_relay(self):
+        async def run():
+            it = await self._resumable(3)
+            seen = []
+            async for item in inference._aiter_llama_stream_items(
+                it,
+                request = _Request(),
+                post_first_item_read_timeout_s = 0.01,
+                stall_grace = lambda: False,
+            ):
+                seen.append(item)
+            return seen
+
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(run())
+
+    def test_the_probe_is_the_backends_and_only_when_the_server_parks(self):
+        class _Parks:
+            server_preempts_kv = True
+
+            def _server_park_grace(self):
+                return True
+
+        class _DoesNot:
+            server_preempts_kv = False
+
+            def _server_park_grace(self):
+                return True
+
+        assert inference._raw_park_grace(_Parks())() is True
+        assert inference._raw_park_grace(_DoesNot()) is None
+        assert inference._raw_park_grace(object()) is None
+
+    def test_every_raw_relay_hands_it_over(self):
+        source = inspect.getsource(inference)
+        assert source.count("stall_grace = _raw_park_grace(llama_backend),") == 4
+        assert inference._RAW_PARK_STALL_CAP_S == llama_mod._SERVER_PARK_STALL_CAP_S

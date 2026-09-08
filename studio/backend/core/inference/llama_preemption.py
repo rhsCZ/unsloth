@@ -229,7 +229,10 @@ class PreemptionPolicy(Protocol):
     def on_preempted(self, checkpoint: StreamCheckpoint) -> None: ...
 
     def await_resume(
-        self, timeout: Optional[float] = None, *, cancel_event = None
+        self,
+        timeout: Optional[float] = None,
+        *,
+        cancel_event = None,
     ) -> bool: ...
 
     def on_resumed(self) -> None: ...
@@ -261,7 +264,10 @@ class DeferredPreemptionPolicy:
             self._inner.on_preempted(checkpoint)
 
     def await_resume(
-        self, timeout: Optional[float] = None, *, cancel_event = None
+        self,
+        timeout: Optional[float] = None,
+        *,
+        cancel_event = None,
     ) -> bool:
         if self._inner is None:
             return False
@@ -302,7 +308,10 @@ class NullPreemptionPolicy:
         return None
 
     def await_resume(
-        self, timeout: Optional[float] = None, *, cancel_event = None
+        self,
+        timeout: Optional[float] = None,
+        *,
+        cancel_event = None,
     ) -> bool:
         return True
 
@@ -329,6 +338,11 @@ class ParticipantState:
     # CANCEL and it is never a victim. Registered all the same, or the watermark fires late.
     STREAMING_RAW = "streaming_raw"
     PAUSED = "paused"
+    # Granted room for its resume and waiting for a serving slot to prefill into. It
+    # holds KV (the room is booked) and is not a victim: a sweep that chose it would
+    # count cells as freed that its prefill is about to fill, and the admission wait
+    # cannot see the signal.
+    RESUMING = "resuming"
     DONE = "done"
 
 
@@ -339,6 +353,7 @@ _HOLDS_KV = frozenset(
         ParticipantState.TOOLS_RUNNING,
         ParticipantState.PREEMPTING,
         ParticipantState.STREAMING_RAW,
+        ParticipantState.RESUMING,
     }
 )
 
@@ -355,6 +370,7 @@ _DECODES_WHEN_TOKENS_ARRIVE = frozenset(
     {
         ParticipantState.TOOLS_RUNNING,
         ParticipantState.PARKED_ON_TOOL,
+        ParticipantState.RESUMING,
     }
 )
 
@@ -668,7 +684,10 @@ class PreemptionController:
         """Decide there is room AND take it, without letting go of the lock between. `room_for`
         only answers a question, and two paused chats asking at once both get yes: PAUSED is not
         in `_HOLDS_KV`, so neither appears in the other's arithmetic and both prefill together.
-        Roll back with `note_resume_failed`."""
+        Roll back with `note_resume_failed`. The grant marks the participant RESUMING, not DECODING: the
+        lease's slot is reacquired after this, a sweep in between could choose a DECODING
+        participant and count its reservation as freed, and the admission wait never reads
+        the signal. RESUMING holds KV and is not preemptable; `note_resumed` moves it on."""
         with self._lock:
             if not self._kv_unified or self._budget <= 0 or not preemption_enabled():
                 return True
@@ -680,7 +699,7 @@ class PreemptionController:
                 participant.tokens = max(participant.tokens, need)
                 participant.base_tokens = max(participant.base_tokens, need)
                 participant.measured = False
-                participant.state = ParticipantState.DECODING
+                participant.state = ParticipantState.RESUMING
                 # Announced under the same lock that booked the room.
                 participant.announce_prefill(need)
             return True
@@ -688,7 +707,10 @@ class PreemptionController:
     def note_resume_failed(self, gen_id: str) -> None:
         with self._lock:
             participant = self._participants.get(gen_id)
-            if participant is not None and participant.state == ParticipantState.DECODING:
+            if participant is not None and participant.state in (
+                ParticipantState.RESUMING,
+                ParticipantState.DECODING,
+            ):
                 participant.state = ParticipantState.PAUSED
                 participant.prefill_done()
 
@@ -883,6 +905,25 @@ class PreemptionController:
                 participant.prefill_done()
             if self._epoch_winner == gen_id and state != ParticipantState.DECODING:
                 self._epoch_winner = None
+
+    def note_measured(self, gen_id: str) -> None:
+        """A holder that never reports tokens has prefilled: its cells are in the resident
+        figure now, so its charge stops being a reservation on top of it.
+
+        The raw passthroughs and the Responses surface relay upstream bytes and never call
+        `observe` or `note_tokens`, so they stayed unmeasured for their whole life and
+        `_committed_locked` counted them twice once `/slots` reported them: their residency
+        and their whole lease again as pending, which pushed the watermark over a ceiling
+        the cache was well below and paused every Studio chat for a holder that is never a
+        victim. Idempotent; the state is left alone.
+        """
+        with self._lock:
+            participant = self._participants.get(gen_id)
+            if participant is None:
+                return
+            participant.measured = True
+            participant.cells_reclaimed = False
+            participant.prefill_done()
 
     def note_resumed(self, gen_id: str) -> None:
         with self._lock:
@@ -1227,7 +1268,10 @@ class ControllerPreemptionPolicy:
                 pass
 
     def await_resume(
-        self, timeout: Optional[float] = None, *, cancel_event = None
+        self,
+        timeout: Optional[float] = None,
+        *,
+        cancel_event = None,
     ) -> bool:
         # None means "caller stated no preference", NOT "wait forever".
         if timeout is None:
@@ -1329,10 +1373,17 @@ class ControllerPreemptionPolicy:
                 return False
             time.sleep(0.1)
         try:
-            future = asyncio.run_coroutine_threadsafe(
-                lease.resume_async(want, timeout_s = timeout, cancel_event = cancel_event),
-                self._loop,
-            )
+            try:
+                coro = lease.resume_async(
+                    want,
+                    timeout_s = timeout,
+                    cancel_event = cancel_event,
+                    progress = self._controller.progress_signature,
+                )
+            except TypeError:
+                # An older lease without the stall-aware wait.
+                coro = lease.resume_async(want, timeout_s = timeout, cancel_event = cancel_event)
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             # A backstop for a loop that never runs the coroutine at all; resume_async is
             # already bounded by timeout_s.
             got = bool(future.result(timeout = timeout + 5.0))

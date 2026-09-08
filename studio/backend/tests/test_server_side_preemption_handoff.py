@@ -115,7 +115,11 @@ class TestBackendProperty:
         assert self._backend(flag = True, unified = True).server_preempts_kv is False
 
 
-def _fill(controller, n = 4, tokens = 2000):
+def _fill(
+    controller,
+    n = 4,
+    tokens = 2000,
+):
     signals = []
     for i in range(n):
         signal = PreemptSignal()
@@ -164,6 +168,7 @@ class TestController:
         assert controller.participant("g").state == ParticipantState.DECODING
         assert not signal.is_set(), "a server park never sets the Studio-side signal"
 
+
 def _client_view(events):
     text = ""
     marks = []
@@ -188,15 +193,24 @@ _SCRIPT = [
 
 
 class TestTheStreamRelaysAServerPark:
-    def _plain(self, monkeypatch, script, *, policy, server_preempts = True):
+    def _plain(
+        self,
+        monkeypatch,
+        script,
+        *,
+        policy,
+        server_preempts = True,
+    ):
         recorder = _Recorder(monkeypatch, script, server_preempts = server_preempts)
         events = list(
             recorder.backend.generate_chat_completion(
                 messages = [{"role": "user", "content": "hi"}],
                 cancel_event = threading.Event(),
-                **({} if policy is None else {
-                    "preempt_event": PreemptSignal(), "preempt_policy": policy
-                }),
+                **(
+                    {}
+                    if policy is None
+                    else {"preempt_event": PreemptSignal(), "preempt_policy": policy}
+                ),
             )
         )
         return recorder, events
@@ -211,9 +225,10 @@ class TestTheStreamRelaysAServerPark:
             ("keepalive", len("Once upon")),
             ("resumed", len("Once upon")),
         ]
-        assert policy.events == ["server-parked", "server-resumed"], (
-            "the ledger is told, and the Studio-side pause handshake never runs"
-        )
+        assert policy.events == [
+            "server-parked",
+            "server-resumed",
+        ], "the ledger is told, and the Studio-side pause handshake never runs"
         assert len(recorder.payloads) == 1, "nothing was re-opened: the server resumed in place"
 
     def test_the_tool_loop_surface_relays_the_comments_too(self, monkeypatch):
@@ -280,7 +295,10 @@ class TestThePauseReachesTheClient:
         body = {"messages": [{"role": "user", "content": "write me an essay"}], "stream": True}
         if tools:
             body["enable_tools"] = True
-        response = TestClient(app).post("/chat/completions", json = body)
+        # The Studio UI's opt-in: tools with confirmation are refused without it.
+        response = TestClient(app, headers = {"X-Unsloth-Events": "1"}).post(
+            "/chat/completions", json = body
+        )
         assert response.status_code == 200
         return response.text
 
@@ -291,6 +309,7 @@ class TestThePauseReachesTheClient:
         assert body.index(": preempt-paused") < body.index(": preempt-resumed")
         assert "Introduction: The" in body and " Paradigm" in body
         assert "data: [DONE]" in body
+
 
 class TestADurableRunRelaysThePause:
     """The GUI streams plain chats through a durable run, whose worker reads the events."""
@@ -310,6 +329,7 @@ class TestADurableRunRelaysThePause:
         # Renewed on, never relayed: a keepalive is progress for the lease, not a status.
         assert _admission_status_chunks(": preempt-keepalive\n\n") == []
 
+
 class TestEverySignalTheClientReadsHasAProducer:
     """The one cross-language contract here: the client understands four comments, and a
     signal it can read that the server never sends is a user staring at a stopped answer."""
@@ -324,7 +344,10 @@ class TestEverySignalTheClientReadsHasAProducer:
         pattern = r'^export const ADMISSION_COMMENT_\w+ = "([^"]+)";'
         declared = set(re.findall(pattern, ts.read_text(encoding = "utf-8"), re.M))
         assert declared == {
-            "admission-wait", "admission-done", "preempt-paused", "preempt-resumed",
+            "admission-wait",
+            "admission-done",
+            "preempt-paused",
+            "preempt-resumed",
         }
 
 
@@ -336,7 +359,11 @@ class TestTheParkedMetricsProbeIsAuthenticated:
     def test_the_probe_carries_the_key(self, monkeypatch):
         seen = {}
 
-        def scrape(base_url, timeout_s = 3.0, headers = None):
+        def scrape(
+            base_url,
+            timeout_s = 3.0,
+            headers = None,
+        ):
             seen["headers"] = headers
             return {"requests_preempted": 1.0}
 
@@ -385,7 +412,6 @@ class TestAParkIsNotAStall:
 
     def _read_until_stall(self, read):
         import httpcore
-
         with pytest.raises(httpcore.ReadTimeout):
             read(65536, timeout = 1200.0)
 
@@ -401,9 +427,7 @@ class TestAParkIsNotAStall:
         assert len(asked) == 3
         assert clock["t"] == pytest.approx(3 * self._STALL, abs = 1.0)
 
-    def test_the_open_stream_hands_the_grace_down_only_when_the_build_can_park(
-        self, monkeypatch
-    ):
+    def test_the_open_stream_hands_the_grace_down_only_when_the_build_can_park(self, monkeypatch):
         seen = []
 
         @contextlib.contextmanager
@@ -422,4 +446,3 @@ class TestAParkIsNotAStall:
                 pass
         assert "stall_grace" not in seen[0], "an upstream build passes nothing new"
         assert seen[1]["stall_grace"] is not None
-

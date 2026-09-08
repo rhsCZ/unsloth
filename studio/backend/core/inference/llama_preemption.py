@@ -15,7 +15,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, runtime_checkable
 
-from core.inference.llama_admission import LlamaAdmissionLease, _bool_env
+from core.inference.llama_admission import (
+    LlamaAdmissionLease,
+    _bool_env,
+    llama_admission_config_from_env,
+)
 from core.inference.llama_exact import EXACT_STATE_OFF, EXACT_STATES
 
 
@@ -50,18 +54,6 @@ def resolve_preempt_mode(server_preempts: bool) -> str:
     return PREEMPT_MODE_SERVER if server_preempts else PREEMPT_MODE_STUDIO
 
 
-def _float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        value = float(raw.strip())
-    except ValueError:
-        return default
-    # Outside (0, 0.5) is a typo, not a policy: zero removes the margin entirely.
-    return value if 0.0 < value < 0.5 else default
-
-
 def _int_env(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None:
@@ -73,8 +65,6 @@ def _int_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-# Legacy knob. A fraction of the cache is the wrong shape; see `preemption_buffer_tokens`.
-DEFAULT_PREEMPT_BUFFER_RATIO = _float_env("UNSLOTH_LLAMA_PREEMPT_BUFFER_RATIO", 0.15)
 # Reaction headroom for ONE decoding slot: what it generates between the sweep and the stop.
 DEFAULT_PREEMPT_BUFFER_PER_SLOT = 192
 DEFAULT_PREEMPT_BUFFER_MIN_TOKENS = 256
@@ -238,7 +228,9 @@ class PreemptionPolicy(Protocol):
 
     def on_preempted(self, checkpoint: StreamCheckpoint) -> None: ...
 
-    def await_resume(self, timeout: Optional[float] = None) -> bool: ...
+    def await_resume(
+        self, timeout: Optional[float] = None, *, cancel_event = None
+    ) -> bool: ...
 
     def on_resumed(self) -> None: ...
 
@@ -268,8 +260,20 @@ class DeferredPreemptionPolicy:
         if self._inner is not None:
             self._inner.on_preempted(checkpoint)
 
-    def await_resume(self, timeout: Optional[float] = None) -> bool:
-        return False if self._inner is None else bool(self._inner.await_resume(timeout))
+    def await_resume(
+        self, timeout: Optional[float] = None, *, cancel_event = None
+    ) -> bool:
+        if self._inner is None:
+            return False
+        # Stop travels through, or every routed chat pauses without it: the caller's keyword
+        # raised TypeError here and its fallback retried the wait with no Stop at all.
+        if cancel_event is None:
+            return bool(self._inner.await_resume(timeout))
+        try:
+            return bool(self._inner.await_resume(timeout, cancel_event = cancel_event))
+        except TypeError:
+            # An inner policy written against the older protocol.
+            return bool(self._inner.await_resume(timeout))
 
     def on_resumed(self) -> None:
         if self._inner is not None:
@@ -297,7 +301,9 @@ class NullPreemptionPolicy:
     def on_preempted(self, checkpoint: StreamCheckpoint) -> None:
         return None
 
-    def await_resume(self, timeout: Optional[float] = None) -> bool:
+    def await_resume(
+        self, timeout: Optional[float] = None, *, cancel_event = None
+    ) -> bool:
         return True
 
     def on_resumed(self) -> None:
@@ -355,6 +361,20 @@ _DECODES_WHEN_TOKENS_ARRIVE = frozenset(
 
 def preemption_enabled() -> bool:
     return _bool_env(PREEMPT_ENV, DEFAULT_PREEMPT_ENABLED)
+
+
+def preemption_eligible() -> bool:
+    """The switches that have to be on before anything here may choose a victim.
+
+    The rollout switch is not the only opt-out. Every charge the controller plans against is an
+    admission lease, so with admission control or the KV budget off the ledger is a column of
+    zeroes: choosing on it pauses live streams for an accounting that is not running. Read here
+    rather than at the call site so ``active`` and ``plan_preemptions`` cannot drift apart.
+    """
+    if not preemption_enabled():
+        return False
+    config = llama_admission_config_from_env()
+    return bool(config.enabled and config.kv_budget)
 
 
 def preemption_buffer_tokens(
@@ -568,7 +588,7 @@ class PreemptionController:
     @property
     def active(self) -> bool:
         with self._lock:
-            return bool(self._kv_unified) and self._budget > 0 and preemption_enabled()
+            return bool(self._kv_unified) and self._budget > 0 and preemption_eligible()
 
     def register(
         self,
@@ -1000,7 +1020,7 @@ class PreemptionController:
         """Who must stop so ``needed`` more tokens fit. Sets each victim's ``preempt_event`` and
         marks it PAUSED, so decision and signal cannot drift."""
         with self._lock:
-            if not self._kv_unified or self._budget <= 0 or not preemption_enabled():
+            if not self._kv_unified or self._budget <= 0 or not preemption_eligible():
                 return []
             if self._server_mode:
                 # llama-server parks and restores slots itself. Choosing a victim here would
@@ -1206,7 +1226,9 @@ class ControllerPreemptionPolicy:
                 # reclaimed when the lease is finally released either way.
                 pass
 
-    def await_resume(self, timeout: Optional[float] = None) -> bool:
+    def await_resume(
+        self, timeout: Optional[float] = None, *, cancel_event = None
+    ) -> bool:
         # None means "caller stated no preference", NOT "wait forever".
         if timeout is None:
             timeout = DEFAULT_RESUME_WAIT_TIMEOUT_S
@@ -1260,8 +1282,16 @@ class ControllerPreemptionPolicy:
         # Fresh reading first: this grant lets a chat back in carrying its whole replayed partial.
         self._controller.refresh_residency()
         # try_grant_resume, not room_for: the room has to be BOOKED at the instant it is found,
-        # or two chats waiting at once both find the same space and both take it.
-        while not self._controller.try_grant_resume(self._gen_id, want):
+        # or two chats waiting at once both find the same space and both take it. Stop is read
+        # before every attempt: a grant that succeeds at once would otherwise skip it.
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                # Stop pressed during the pause: nothing to resume, and the worker must not
+                # sit here until room appears for a chat nobody is reading.
+                _log.info("llama preemption cancelled-while-paused: gen_id=%s", self._gen_id)
+                return False
+            if self._controller.try_grant_resume(self._gen_id, want):
+                break
             self._controller.refresh_residency()
             now = time.monotonic()
             current = self._controller.progress_signature()
@@ -1300,7 +1330,8 @@ class ControllerPreemptionPolicy:
             time.sleep(0.1)
         try:
             future = asyncio.run_coroutine_threadsafe(
-                lease.resume_async(want, timeout_s = timeout), self._loop
+                lease.resume_async(want, timeout_s = timeout, cancel_event = cancel_event),
+                self._loop,
             )
             # A backstop for a loop that never runs the coroutine at all; resume_async is
             # already bounded by timeout_s.

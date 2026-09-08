@@ -102,8 +102,7 @@ def test_injected_payload_is_a_usable_single_use_token():
 
 
 def test_two_page_loads_get_independent_tokens():
-    # Minted per response, so two browsers opening setup do not race for one
-    # token and burn each other's.
+    # Minted per response, so two browsers opening setup do not burn each other's.
     _seed_admin()
     first, _ = studio_main._inject_bootstrap(_HTML, _App(bootstrap_password = _SEED))
     second, _ = studio_main._inject_bootstrap(_HTML, _App(bootstrap_password = _SEED))
@@ -343,24 +342,27 @@ def test_a_rebound_dns_name_is_refused_the_setup_token():
 
     app = _A()
     # Hostile names, including one that merely contains a loopback label.
-    for hostile in ("attacker.example", "evil.test:8000", "localhost.attacker.example",
-                    "127.0.0.1.attacker.example"):
+    for hostile in (
+        "attacker.example",
+        "evil.test:8000",
+        "localhost.attacker.example",
+        "127.0.0.1.attacker.example",
+    ):
         assert studio_main._host_is_safe_from_rebinding(_Req(hostile), app) is False, hostile
     # Loopback, however spelled.
     for ok in ("localhost:8000", "127.0.0.1:8000", "[::1]:8000", "LOCALHOST"):
         assert studio_main._host_is_safe_from_rebinding(_Req(ok), app) is True, ok
-    # An IP literal is not rebindable: a browser only sends one the operator
-    # typed. This is what keeps `-H 0.0.0.0` usable from another machine.
+    # An IP literal is not rebindable: a browser sends one only when typed, which
+    # is what keeps `-H 0.0.0.0` usable from another machine.
     for ok in ("192.168.1.50:8000", "10.0.0.5:8000", "[fe80::1]:8000"):
         assert studio_main._host_is_safe_from_rebinding(_Req(ok), app) is True, ok
+
     # A name is allowed only when it is the host this launch was configured with.
     class _Named:
         state = type("S", (), {"bind_host": "studio.internal"})()
 
-    assert studio_main._host_is_safe_from_rebinding(
-        _Req("studio.internal:8000"), _Named()) is True
-    assert studio_main._host_is_safe_from_rebinding(
-        _Req("attacker.example"), _Named()) is False
+    assert studio_main._host_is_safe_from_rebinding(_Req("studio.internal:8000"), _Named()) is True
+    assert studio_main._host_is_safe_from_rebinding(_Req("attacker.example"), _Named()) is False
 
 
 def test_a_missing_host_header_is_refused():
@@ -372,3 +374,63 @@ def test_a_missing_host_header_is_refused():
         state = type("S", (), {"bind_host": "127.0.0.1"})()
 
     assert studio_main._host_is_safe_from_rebinding(_Req(), _A()) is False
+
+
+def test_colab_notebook_proxy_still_gets_the_setup_token(monkeypatch):
+    """The regression the rebinding guard introduced, and the merge base's rule.
+
+    Colab serves Studio through Google's single-user proxy: the server binds
+    0.0.0.0 and the browser sends the proxy's hostname in Host. That is neither a
+    loopback name, nor an IP literal, nor the configured bind, so the guard
+    refused it and a fresh notebook lost automatic first-boot setup entirely --
+    the operator would have to read .bootstrap_password out of the runtime by
+    hand. The merge base allowed this case explicitly; restoring it also restores
+    its single exception, the shareable Cloudflare link.
+    """
+
+    class _Req:
+        def __init__(
+            self,
+            host,
+            headers = None,
+        ):
+            self.headers = {"host": host, **(headers or {})}
+            self.url = type("U", (), {"scheme": "https", "netloc": host})()
+
+    class _A:
+        state = type("S", (), {"bind_host": "0.0.0.0"})()
+
+    app = _A()
+    proxy = _Req("abc123-colab.prod.colab.dev")
+
+    monkeypatch.setattr(studio_main, "_IS_COLAB", False)
+    assert studio_main._host_is_safe_from_rebinding(proxy, app) is False
+
+    monkeypatch.setattr(studio_main, "_IS_COLAB", True)
+    assert studio_main._host_is_safe_from_rebinding(proxy, app) is True
+    # A shareable Cloudflare link marks its visitors, who are not the notebook's
+    # owner. Withheld even on loopback, as at the merge base.
+    tunnel = _Req("localhost:8000", {"cf-connecting-ip": "203.0.113.7"})
+    assert studio_main._host_is_safe_from_rebinding(tunnel, app) is False
+
+
+def test_the_index_mints_its_token_off_the_event_loop():
+    """Minting opens SQLite under BEGIN IMMEDIATE, so it must not run on the loop.
+
+    While setup is pending EVERY index GET mints a link token. A concurrent auth
+    writer holding the database lock makes that wait out the busy timeout, and on
+    the event loop the wait is charged to every other request in flight, not just
+    this one. /link-exchange is a plain `def` for the same reason.
+
+    Asserted on the source rather than by racing a lock: the property is "this
+    call is not awaited inline", which a timing test can only sample.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(studio_main.setup_frontend)
+    for handler in ("serve_root", "serve_frontend"):
+        body = source.split(f"def {handler}(", 1)[1].split("\n    @app.get", 1)[0]
+        assert "_build_index_response" in body, handler
+        for call in re.findall(r"[^\n]*_build_index_response\([^\n]*", body):
+            assert "run_in_threadpool" in call, (handler, call.strip())

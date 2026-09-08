@@ -78,8 +78,8 @@ def _slice_setup_exchange_cache(src: str) -> str:
     end = src.index("\n}", src.index("function startSetupExchange")) + len("\n}")
     sliced = src[start:end]
     # The harness runs plain JS (node -e, no --experimental-strip-types), so drop
-    # the TypeScript annotations. Only the shapes this slice actually uses: a
-    # generic on the Map, and the parameter/return types on the one function.
+    # the TypeScript annotations this slice uses: the Map generic and the one
+    # function's parameter/return types.
     sliced = re.sub(r"new Map<[^>]*>+\(\)", "new Map()", sliced)
     sliced = re.sub(
         r"function startSetupExchange\([^)]*\)[^{]*\{",
@@ -211,10 +211,9 @@ def test_a_strictmode_replay_does_not_burn_the_single_use_token():
     gets a 401, and the operator is left on an error they cannot reload out of.
     """
     result = _run_effect_harness(strict_mode = True)
-    assert result["exchangeCalls"] == 1, (
-        "the setup token was exchanged more than once across a StrictMode "
-        "replay, which burns it"
-    )
+    assert (
+        result["exchangeCalls"] == 1
+    ), "the setup token was exchanged more than once across a StrictMode replay, which burns it"
     assert result["setupSession"] == "ACCESS"
     assert result["setupError"] is None
 

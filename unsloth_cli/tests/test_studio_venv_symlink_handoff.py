@@ -80,8 +80,8 @@ class TestTheSecondHandOffIsRefused:
 
 class TestTheMarkerIsClearedWhereTheHandOffLanded:
     def test_the_recognised_child_drops_the_marker(self, monkeypatch):
-        """Left in place it reached the server and every subprocess, and a fresh
-        `unsloth studio` from an integrated terminal was refused as a second hand-off."""
+        """Left in place it reaches the server and every subprocess, and a fresh
+        `unsloth studio` is refused as a second hand-off."""
         monkeypatch.setenv(_studio()._REEXEC_DEPTH_ENV, "1")
         _studio()._hand_off_landed()
         assert _studio()._REEXEC_DEPTH_ENV not in os.environ
@@ -160,3 +160,22 @@ class TestAnOldLauncherBehindASymlinkIsRefusedNotLooped:
         )
         guard = source.index("_guard_reexec_loop(str(studio_venv_dir))")
         assert ask < guard
+
+    def test_both_guards_run_before_the_windows_branch(self):
+        """Windows hands off with subprocess.Popen, which inherits this environment just as
+        os.execvp does. Guarding only the POSIX arm let an old child behind a symlinked venv
+        spawn another child, and another, with no depth marker anywhere to stop it."""
+        import inspect
+
+        source = inspect.getsource(_studio().run)
+        ask = source.index(
+            "_refuse_an_old_launcher_behind_a_symlink(studio_venv_dir, studio_python)"
+        )
+        guard = source.index("_guard_reexec_loop(str(studio_venv_dir))")
+        branch = source.index('if sys.platform == "win32":')
+        spawn = source.index("subprocess.Popen(args")
+        assert ask < branch and guard < branch, (
+            "the platform branch is taken before the hand-off guards, so the Windows "
+            "child is started unguarded"
+        )
+        assert guard < spawn

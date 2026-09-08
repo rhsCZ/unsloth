@@ -44,6 +44,12 @@ import inspect
 import json
 import httpx
 from loggers import get_logger
+from loggers.media_progress import (
+    log_media_generation_progress,
+    log_media_load_progress,
+    reset_media_generation_progress,
+    reset_media_load_progress,
+)
 import asyncio
 import contextvars
 import threading
@@ -1808,15 +1814,11 @@ def _openai_llama_admission_raw_total(llama_backend) -> Optional[int]:
 def _openai_llama_admission_budget(llama_backend) -> Optional[int]:
     """KV tokens the running llama-server actually allocated, or None if unknown.
 
-    ``_kv_cache_context_total`` is the aggregate, and is preferred where the backend
-    has it. ``context_length`` is NOT that once the server has been read back:
-    ``_reconcile_effective_ctx_with_server`` adopts the PER-SLOT ``n_ctx`` from
-    ``default_generation_settings`` into it, and computes the total alongside as
-    ``n_ctx * slots`` (slots being 1 only under ``--kv-unified``). Unsloth appends
-    that flag only when ``n_parallel > 1`` and the binary supports it, so a build
-    without it, or a user ``--no-kv-unified``, gives N private caches while
-    ``context_length`` names one of them: an N-fold under-budget that collapses
-    concurrency to a single generation.
+    ``_kv_cache_context_total`` is the aggregate and is preferred. ``context_length`` is
+    NOT that once the server has been read back: it holds the PER-SLOT ``n_ctx``, so
+    without ``--kv-unified`` it names one of N private caches, an N-fold under-budget that
+    collapses concurrency to a single generation. None when the backend cannot say, which
+    keeps slot-only admission rather than inventing a budget.
 
     Falls back to ``context_length`` when the total is unset (nothing has been read
     back yet, in which case the two agree), and None when the backend cannot say,
@@ -1920,10 +1922,10 @@ def _openai_llama_admission_output_allowance(
 ) -> int:
     """KV to reserve for what a request may still generate.
 
-    A cap at or above the window is not a cap: `_build_passthrough_payload` sends
-    max_tokens = backend_ctx and "Max" sends the context length, so both mean unstated, and
-    charging the window for either serialises the queue. Measured against the per-request
-    window, since the budget is N times larger under --no-kv-unified.
+    A cap at or above the window is not a cap: both ``max_tokens = backend_ctx`` and "Max"
+    mean unstated, and charging the window for either serialises the queue. Measured
+    against the per-request window, since the budget is N times larger under
+    --no-kv-unified.
 
     Invariant when a ``share`` is known: an unstated request costs at most its fair share of
     the cache, so ``capacity`` of them always fit. A flat allowance breaks that on a small
@@ -2321,9 +2323,8 @@ def _llama_slot_headers(llama_backend) -> dict:
 def _preempt_key(llama_backend) -> str:
     """The key for one model load's admission queue and preemption controller.
 
-    The backend's ``admission_key`` when it has one, which survives a respawn; the
-    URL otherwise, since a respawn moves the port and a key read off it would strand
-    every live participant under the old one.
+    The backend's ``admission_key`` when it has one, which survives a respawn; the URL
+    otherwise, since a respawn moves the port and would strand every live participant.
     """
     key = getattr(llama_backend, "admission_key", None)
     if key:
@@ -2359,6 +2360,9 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
         base = str(getattr(llama_backend, "base_url", "") or "")
         if not base:
             return
+        # Read BEFORE the scrape, so a chat that parks between the two is left out rather
+        # than released against cells this reading never saw and no erase will take.
+        parked_before = controller.parked_holders()
         occupancy = read_slot_occupancy(
             lambda: fetch_llama_slots(base, headers = _llama_slot_headers(llama_backend))
         )
@@ -2367,6 +2371,9 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
             0 if occupancy is None else int(occupancy.get("idle_tokens") or 0),
         )
         _gguf_slots_seen["occupancy"] = occupancy
+        # Carried with the reading it belongs to: the token path reclaims from a snapshot
+        # up to a second old, and the holders parked since are not this snapshot's to give.
+        _gguf_slots_seen["parked"] = parked_before
         if occupancy is None:
             return
         # Reclaim dead residue the moment it is SEEN, not once a victim has been chosen: by then
@@ -2399,13 +2406,12 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
                     max(0, int(occupancy.get("resident") or 0) - freed),
                     max(0, int(occupancy.get("idle_tokens") or 0) - freed),
                 )
-                # ONLY when every idle slot went. `needed` is the overshoot, so the erase
-                # can stop after one slot, and `note_cells_reclaimed` is global: applied
-                # after a partial erase it hands every parked holder's commitment back
-                # while some of their cells are still resident, and a waiter is admitted
-                # into them. The later reclaim path already guards the same way.
+                # ONLY when every idle slot went: the erase can stop after one, and after a
+                # partial erase the release would hand back commitments whose cells are
+                # still resident. `parked_before` bounds it to the holders THIS reading saw
+                # parked, so one that parked during the erases keeps its charge.
                 if freed >= int(occupancy.get("idle_tokens") or 0):
-                    controller.note_cells_reclaimed()
+                    controller.note_cells_reclaimed(parked_before)
                 _gguf_slots_seen["occupancy"] = None
 
     _gguf_live_state = {"state": ParticipantState.DECODING}
@@ -2457,10 +2463,13 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
                     )
                     if freed:
                         _llama_preemption_log("reclaimed-idle", freed = freed, gen_id = completion_id)
-                        # ONLY when every idle slot went: `reclaim_idle_slots` stops as soon as
-                        # `freed >= needed`, while `note_cells_reclaimed` is global.
+                        # ONLY when every idle slot went: `reclaim_idle_slots` stops at
+                        # `freed >= needed`, so after a partial erase the release would give
+                        # away room that is still occupied. Bounded to the holders the
+                        # snapshot this erase was planned from saw parked, since it can be
+                        # a second old and a chat parks on a tool in far less.
                         if freed >= _idle_tokens:
-                            controller.note_cells_reclaimed()
+                            controller.note_cells_reclaimed(_gguf_slots_seen.get("parked"))
                         # Re-read rather than assume the erase was enough.
                         _gguf_slots_seen["at"] = 0.0
         except Exception:
@@ -2494,8 +2503,7 @@ def _openai_llama_count_raw_holder(*, llama_backend, lease, gen_id: str) -> None
 def _openai_llama_note_raw_measured(*, llama_backend, gen_id: str) -> None:
     """The raw holder's upstream has produced: its prompt is prefilled and resident.
 
-    Counted holders never report tokens, so they stayed unmeasured and were charged twice
-    once `/slots` saw them. Called at a stream's first data line, once.
+    Counted holders never report tokens, so they were charged twice once `/slots` saw them.
     """
     try:
         get_preemption_controller(_preempt_key(llama_backend)).note_measured(gen_id)
@@ -2527,8 +2535,7 @@ def _openai_llama_preemption_arm(
         return None
     lease = reservation.lease_nowait()
     if lease is None:
-        # Queued, not yet granted. It holds no cache, so there is nothing to preempt and
-        # nothing to preempt FOR.
+        # Queued, not yet granted: it holds no cache, so there is nothing to preempt.
         _llama_preemption_log("not-armed", reason = "no-lease-yet", gen_id = gen_id, level = "debug")
         return None
     key = _preempt_key(llama_backend)
@@ -2639,6 +2646,10 @@ def _openai_llama_preemption_disarm(*, llama_backend, gen_id: str) -> None:
 
         def _reclaim() -> None:
             try:
+                # Before the scrape, for the reason the sweep reads it there: each erase
+                # below can take seconds, and a chat that parks inside that window keeps
+                # cells no erase took.
+                parked_before = get_preemption_controller(key).parked_holders()
                 occupancy = read_slot_occupancy(
                     lambda: fetch_llama_slots(base, headers = _llama_slot_headers(llama_backend))
                 )
@@ -2654,11 +2665,9 @@ def _openai_llama_preemption_disarm(*, llama_backend, gen_id: str) -> None:
                 if freed:
                     _llama_preemption_log("released-cells", gen_id = gen_id, freed = freed)
                     _controller = get_preemption_controller(key)
-                    # Re-read rather than subtract: this runs on a worker and each erase
-                    # can take seconds, during which a live chat publishes newer samples.
-                    # `old - freed` written over them was a stale, lower figure, and a
-                    # waiter was granted against cells that were occupied. A failed
-                    # re-read leaves the newest sample in place.
+                    # Re-read rather than subtract: each erase can take seconds, during
+                    # which a live chat publishes newer samples that `old - freed` would
+                    # overwrite with a stale, lower figure.
                     after = read_slot_occupancy(
                         lambda: fetch_llama_slots(base, headers = _llama_slot_headers(llama_backend))
                     )
@@ -2667,17 +2676,16 @@ def _openai_llama_preemption_disarm(*, llama_backend, gen_id: str) -> None:
                             int(after.get("resident") or 0),
                             int(after.get("idle_tokens") or 0),
                         )
-                    # And only when every idle slot went: an erase that returned zero
-                    # leaves cells resident that a global reclaim would hand out.
+                    # And only when every idle slot went, or the release hands out cells
+                    # that are still resident -- and only to the holders that were parked
+                    # before the scrape, since each erase above can take seconds.
                     if freed >= int(occupancy.get("idle_tokens") or 0):
-                        _controller.note_cells_reclaimed()
+                        _controller.note_cells_reclaimed(parked_before)
             except Exception:
                 pass
 
-        # The slots probe and the erase are blocking HTTP calls. Several callers are
-        # ``async def`` route bodies, and a slow server held the whole event loop for the
-        # probe's timeout; the bookkeeping above stays inline, the wire work moves to a
-        # worker when a loop is running here.
+        # The slots probe and the erase are blocking HTTP calls, and a slow server held the
+        # whole event loop for the probe's timeout, so the wire work moves to a worker.
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -28843,6 +28851,110 @@ def _responses_reasoning_output_item(
     return ResponsesOutputReasoning(**kwargs).model_dump()
 
 
+def _reject_unserviceable_responses_attachment(part, *, role = "user") -> None:
+    """Refuse an attachment the local adapter cannot serve, instead of dropping it.
+
+    Same rules and wording as ``_responses_tool_output_content``; two vocabularies for one
+    question is the bug. A part only reaches here by failing its typed variant, so an
+    ``input_image`` here lacks ``image_url``, or carries an undocumented ``detail``, or both.
+    One with ``image_url`` and ``file_id`` both never arrives: ``file_id`` means instead of
+    a URL, so it validates and is served from the URL, here and on the tool-result path.
+    """
+    part_type = getattr(part, "type", None)
+    if part_type in ("input_text", "output_text") and not isinstance(
+        part, (ResponsesInputTextPart, ResponsesOutputTextPart)
+    ):
+        # Wearing a known type name, so a name-only allowlist waves it through and the
+        # flatten drops it. "type 'input_text' is not supported" would also be untrue.
+        _raise_unsupported_openai_parameter(
+            "input",
+            f"Responses {part_type} message parts require a text field.",
+        )
+    if part_type == "input_file":
+        _raise_unsupported_openai_parameter(
+            "input",
+            "Responses input_file message parts are not supported by the local adapter.",
+        )
+    if part_type == "input_image":
+        image_url = getattr(part, "image_url", None)
+        if not isinstance(image_url, str) or not image_url:
+            if getattr(part, "file_id", None):
+                _raise_unsupported_openai_parameter(
+                    "input",
+                    "Responses input_image message parts with file_id are not supported by the "
+                    "local adapter. Use image_url instead.",
+                )
+            _raise_unsupported_openai_parameter(
+                "input",
+                "Responses input_image message parts require an image_url string.",
+            )
+        detail = getattr(part, "detail", "auto")
+        if detail is None:
+            detail = "auto"
+        if detail not in ("auto", "low", "high", "original"):
+            _raise_unsupported_openai_parameter(
+                "input",
+                "Responses input_image message detail must be auto, low, high, or original.",
+            )
+        if role != "user":
+            _raise_unsupported_openai_parameter(
+                "input",
+                f"Responses input_image message parts are only supported on user messages; "
+                f"{role} content is flattened to text by the local adapter.",
+            )
+
+
+# What a flatten may discard without losing caller content. Metadata is the model's own
+# output, free to drop on a replay turn and only there; on system or developer it is content
+# someone wrote. An allowlist, not an ``input_`` prefix test, which misses
+# ``computer_screenshot`` (OpenAI's set: input_text, input_image, output_text, refusal,
+# input_file, computer_screenshot, summary_text).
+_RESPONSES_TEXT_PART_TYPES = frozenset({"input_text", "output_text"})
+_RESPONSES_ASSISTANT_METADATA_PART_TYPES = frozenset({"refusal", "summary_text"})
+
+
+def _responses_part_survives_flatten(part_type, role) -> bool:
+    if part_type in _RESPONSES_TEXT_PART_TYPES:
+        return True
+    return role == "assistant" and part_type in _RESPONSES_ASSISTANT_METADATA_PART_TYPES
+
+
+def _reject_unserviceable_responses_attachments(item) -> None:
+    """Run the attachment refusal over one input message's content parts.
+
+    Only a user turn keeps its parts. ``_responses_message_text`` flattens the rest to text
+    and silently dropped everything else, and nothing can be forwarded there instead:
+    Chat Completions wants a plain string on system and assistant, and the strict templates
+    this normaliser exists for reject an array.
+    """
+    if isinstance(item.content, str):
+        return
+    for part in item.content or []:
+        _reject_unserviceable_responses_attachment(part, role = item.role)
+        part_type = getattr(part, "type", None)
+        if item.role != "user" and not _responses_part_survives_flatten(part_type, item.role):
+            _raise_unsupported_openai_parameter(
+                "input",
+                f"Responses message content parts of type '{part_type}' are not supported on "
+                f"{item.role} messages; {item.role} content is flattened to text by the local "
+                "adapter.",
+            )
+
+
+def _reject_unknown_responses_message_part(part) -> None:
+    """Refuse a content part no local route can serve, naming the type.
+
+    Mirrors ``_reject_unsupported_content_parts`` on the Chat Completions side. User turns
+    only: clients round-trip prior assistant output verbatim, so hoisting this one too would
+    fail a replay turn over a part that carries no attachment.
+    """
+    _raise_unsupported_openai_parameter(
+        "input",
+        f"Responses message content parts of type '{getattr(part, 'type', None)}' "
+        "are not supported.",
+    )
+
+
 def _normalise_responses_input(payload: ResponsesRequest) -> list[ChatMessage]:
     """Convert a ResponsesRequest's ``input`` into a Chat-format ``ChatMessage`` list.
 
@@ -28965,7 +29077,11 @@ def _normalise_responses_input(payload: ResponsesRequest) -> list[ChatMessage]:
             # don't 422.
             continue
 
-        # ResponsesInputMessage -- hoist system/developer to the top, merge.
+        # ResponsesInputMessage. Before the role branches: each returns via `continue`, so a
+        # refusal placed after them loses a system, developer or assistant attachment.
+        _reject_unserviceable_responses_attachments(item)
+
+        # Hoist system/developer to the top, merge.
         if item.role in ("system", "developer"):
             hoisted = _responses_message_text(item.content)
             if hoisted:
@@ -28986,8 +29102,8 @@ def _normalise_responses_input(payload: ResponsesRequest) -> list[ChatMessage]:
                 messages.append(ChatMessage(role = "assistant", content = text))
             continue
 
-        # User (and any other remaining roles) -- keep multimodal when present,
-        # drop unknown content parts silently.
+        # User (and any other remaining roles). Attachments were refused above, so a part
+        # still standing is one no local route can serve.
         parts: list = []
         for part in item.content:
             if isinstance(part, (ResponsesInputTextPart, ResponsesOutputTextPart)):
@@ -28999,7 +29115,8 @@ def _normalise_responses_input(payload: ResponsesRequest) -> list[ChatMessage]:
                         image_url = ImageUrl(url = part.image_url, detail = part.detail),
                     )
                 )
-            # ResponsesUnknownContentPart and anything else: drop.
+            else:
+                _reject_unknown_responses_message_part(part)
         if parts:
             # Collapse single-text-part content to a plain string so roles that
             # reject multimodal arrays (e.g. legacy templates) still accept it.
@@ -30457,7 +30574,7 @@ async def _responses_stream(
             api_monitor.finish(monitor_id, "cancelled")
             raise
         finally:
-            # Before the lease goes back, so the next admission is not granted against a
+            # Before the lease goes back, or the next admission is granted against a
             # ledger that still counts this one.
             _openai_llama_preemption_disarm(llama_backend = llama_backend, gen_id = resp_id)
             if lease is not None:
@@ -35656,8 +35773,8 @@ async def _openai_passthrough_non_streaming(
             request = request,
             cancel_event = cancel_event,
         )
-        # Counted, never chosen: one upstream generation per HTTP call, with no Studio-side
-        # conversation to resume, so it cannot be paused. It still fills cells.
+        # Counted, never chosen: no Studio-side conversation to resume, so it cannot be
+        # paused, but it still fills cells.
         _openai_llama_count_raw_holder(
             llama_backend = llama_backend,
             lease = lease,
@@ -36440,6 +36557,7 @@ async def load_diffusion_model_gated(
             extract_quant_token(request.gguf_filename) if kind == "gguf" else None,
             user_action = user_initiated,
         )
+        reset_media_load_progress("image")
         return DiffusionStatusResponse(**annotate_status(status_dict))
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code = 400, detail = redact_native_paths(str(exc)))
@@ -36504,6 +36622,9 @@ async def generate_diffusion_image(
     )
 
     backend = get_active_diffusion_engine()
+    # Ahead of the run, like the video route: milestones are keyed on the previous poll, so a
+    # run starting at or above where the last one stopped would read as it and log nothing.
+    reset_media_generation_progress("image")
     try:
         result = await asyncio.to_thread(
             backend.generate,
@@ -36937,7 +37058,10 @@ async def diffusion_inference_info(current_subject: str = Depends(get_current_su
 @studio_router.get("/images/load-progress", response_model = DiffusionLoadProgressResponse)
 async def diffusion_load_progress(current_subject: str = Depends(get_current_subject)):
     from core.inference.diffusion_engine_router import get_active_diffusion_engine
-    return DiffusionLoadProgressResponse(**get_active_diffusion_engine().load_progress())
+
+    progress = get_active_diffusion_engine().load_progress()
+    log_media_load_progress("image", progress.get("phase"), progress.get("fraction"))
+    return DiffusionLoadProgressResponse(**progress)
 
 
 @studio_router.get("/images/generate-progress", response_model = DiffusionGenerateProgressResponse)
@@ -36945,6 +37069,7 @@ async def diffusion_generate_progress(current_subject: str = Depends(get_current
     from core.inference.diffusion_engine_router import get_active_diffusion_engine
 
     progress = get_active_diffusion_engine().generate_progress()
+    log_media_generation_progress("image", progress)
     # A finished generation still persisting its gallery record counts as active, so a reload probe keeps polling.
     if _diffusion_persist_active > 0 and not progress["active"]:
         progress = {**progress, "active": True}
@@ -37177,6 +37302,7 @@ async def _generate_openai_images(
 
         # Fall back to the resolved base repo so a local-path load still gets the right per-model steps/guidance.
         steps, guidance = default_generation_params(status.get("repo_id"), status.get("base_repo"))
+        reset_media_generation_progress("image")
         try:
             result = await asyncio.to_thread(
                 backend.generate,

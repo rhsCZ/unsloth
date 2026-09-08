@@ -338,10 +338,8 @@ class ParticipantState:
     # CANCEL and it is never a victim. Registered all the same, or the watermark fires late.
     STREAMING_RAW = "streaming_raw"
     PAUSED = "paused"
-    # Granted room for its resume and waiting for a serving slot to prefill into. It
-    # holds KV (the room is booked) and is not a victim: a sweep that chose it would
-    # count cells as freed that its prefill is about to fill, and the admission wait
-    # cannot see the signal.
+    # Granted room and waiting for a slot to prefill into. Not a victim: a sweep would
+    # count cells as freed that its prefill is about to fill.
     RESUMING = "resuming"
     DONE = "done"
 
@@ -423,8 +421,7 @@ def preemption_buffer_tokens(
     reserve = max(reserve, batch_reserve)
     # Drafts are additional: cells the drafter puts in before acceptance, unseen by admission.
     reserve += max(0, int(draft_tokens or 0)) * slot_count
-    # Still never the whole cache: a large draft window on a small -c must degrade to a
-    # tight buffer, not to a ceiling of zero.
+    # Never the whole cache: a large draft window on a small -c degrades to a tight buffer.
     return min(reserve, max(1, budget // 2))
 
 
@@ -449,8 +446,13 @@ class Participant:
     # True once an idle-slot reclaim erased this holder's cells while it was parked. Counting
     # them anyway kept two waiting chats out of an EMPTY cache for three minutes.
     cells_reclaimed: bool = False
-    # Announced but not yet prefilled: the ONLY thing that puts the batch term in the buffer, so
-    # it must be set before the request carrying the prompt is submitted.
+    # Bumped every time this holder stops on a tool. A reclaim is planned from a `/slots`
+    # reading and released after the erases, so the release has to tell the holder that
+    # reading saw parked from one that parked (or parked again) while the erases were in
+    # flight, whose cells no erase touched.
+    park_seq: int = 0
+    # The ONLY thing that puts the batch term in the buffer, so it must be set before the
+    # request carrying the prompt is sent. `measured` asks whether the charge is resident.
     pending_prefill: int = 0
     pending_prefill_at: float = 0.0
     # Last count `observe` was given, so cumulative reports become a DELTA. Falls back to zero
@@ -840,6 +842,8 @@ class PreemptionController:
             if participant.state == state:
                 return False
             participant.state = state
+            if state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING):
+                participant.park_seq += 1
             if state == ParticipantState.DECODING:
                 # Back at the model: the prompt is prefilled in again, so the cells are real.
                 if participant.cells_reclaimed:
@@ -852,10 +856,35 @@ class PreemptionController:
                 self._epoch_winner = None
             return True
 
-    def note_cells_reclaimed(self) -> int:
-        """An idle-slot reclaim just erased every idle slot. Tell the ledger: a holder parked on
-        an approval has an idle slot by definition, so its charge would only keep waiters out of
-        room that exists. Returns how many holders this applied to."""
+    def parked_holders(self) -> Dict[str, int]:
+        """Who is parked on a tool right now, with each one's park count.
+
+        Read BEFORE the `/slots` scrape a reclaim is planned from and handed back to
+        `note_cells_reclaimed`, so the release covers the holders whose idle cells that
+        reading counted and not one that parked while the erases were in flight.
+        """
+        with self._lock:
+            return {
+                gen_id: participant.park_seq
+                for gen_id, participant in self._participants.items()
+                if participant.state
+                in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING)
+            }
+
+    def note_cells_reclaimed(self, only: Optional[Dict[str, int]] = None) -> int:
+        """An idle-slot reclaim just erased every idle slot. Tell the ledger.
+
+        A holder parked on an approval or running its tools has an idle slot by definition,
+        so the erase took its cells: its charge stops counting, and its lease hands the
+        commitment back the way `recost_waiting` does. Returns how many holders it applied
+        to.
+
+        `only` is a `parked_holders()` reading taken before the scrape the erases were
+        planned from. The erases are blocking HTTP calls that can take seconds, and a chat
+        that parks inside that window has idle cells no erase touched and was never in the
+        scrape's `idle_tokens`; releasing its commitment would let a waiter into KV that is
+        still resident. Omitted, every parked holder is released, as before.
+        """
         released = []
         with self._lock:
             for participant in self._participants.values():
@@ -863,6 +892,10 @@ class PreemptionController:
                     ParticipantState.PARKED_ON_TOOL,
                     ParticipantState.TOOLS_RUNNING,
                 ):
+                    continue
+                if only is not None and only.get(participant.gen_id) != participant.park_seq:
+                    # Parked after the reading, or parked again since: its cells are the
+                    # ones the erases did not take.
                     continue
                 if participant.cells_reclaimed:
                     continue
@@ -898,6 +931,13 @@ class PreemptionController:
             participant = self._participants.get(gen_id)
             if participant is None:
                 return
+            # A park is counted once, however many times it is reported: a repeat would
+            # make a holder that really was in the reading look like a newcomer to it.
+            if state != participant.state and state in (
+                ParticipantState.PARKED_ON_TOOL,
+                ParticipantState.TOOLS_RUNNING,
+            ):
+                participant.park_seq += 1
             participant.state = state
             if state not in _HOLDS_KV:
                 # Nothing of this chat is submitted until it asks again, and asking is where it
@@ -907,15 +947,12 @@ class PreemptionController:
                 self._epoch_winner = None
 
     def note_measured(self, gen_id: str) -> None:
-        """A holder that never reports tokens has prefilled: its cells are in the resident
-        figure now, so its charge stops being a reservation on top of it.
+        """A holder that never reports tokens has prefilled: its charge stops being a
+        reservation on top of the resident figure.
 
-        The raw passthroughs and the Responses surface relay upstream bytes and never call
-        `observe` or `note_tokens`, so they stayed unmeasured for their whole life and
-        `_committed_locked` counted them twice once `/slots` reported them: their residency
-        and their whole lease again as pending, which pushed the watermark over a ceiling
-        the cache was well below and paused every Studio chat for a holder that is never a
-        victim. Idempotent; the state is left alone.
+        The raw passthroughs never call `observe` or `note_tokens`, so `_committed_locked`
+        counted them twice once `/slots` saw them, pausing every Studio chat for a holder
+        that is never a victim. Idempotent; the state is left alone.
         """
         with self._lock:
             participant = self._participants.get(gen_id)
@@ -984,7 +1021,7 @@ class PreemptionController:
         one participant so a caller asking "room for ME" can substitute its own figure."""
         now = time.monotonic()
         # See CHARGED_PREFILL_ENV: an unmeasured holder's chunk comes out of cells
-        # `_committed_locked` has already added on top of the resident figure.
+        # `_committed_locked` already adds on top of the resident figure.
         skip_charged = _bool_env(CHARGED_PREFILL_ENV, DEFAULT_PREEMPT_BATCH_ONLY_UNCHARGED)
         return sum(
             p.prefill_pending(now)

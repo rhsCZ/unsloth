@@ -441,6 +441,67 @@ def test_a_declined_pause_hands_the_final_pass_the_whole_partial_and_the_whole_c
     assert "status" not in kinds[kinds.index("content") :]
 
 
+def test_a_declined_pause_with_the_callers_cap_spent_ends_the_turn(monkeypatch):
+    # Four one-token deltas spend a cap of four as the pause is declined. The decline handed
+    # the final pass a cap floored at one, a token past the caller's; the turn ends instead.
+    monkeypatch.setattr(p, "DEFAULT_MAX_PREEMPT_RESUMES", 0)
+    signal = p.PreemptSignal()
+    streams = [
+        [delta("a") for _ in range(4)] + [finish("length"), done()],
+        [delta("b"), finish("length"), done()],
+    ]
+    rec = PreemptRecorder(monkeypatch, streams, signal = signal, pause_after = {0: 4})
+    events = run_tool_loop(
+        rec.backend,
+        signal = signal,
+        policy = DecliningPolicy(),
+        tools = [web_search_tool()],
+        max_tokens = 4,
+        max_tool_iterations = 5,
+        permission_mode = "off",
+    )
+    assert [q["max_tokens"] for q in rec.payloads] == [4]
+    metadata = [e for e in events if isinstance(e, dict) and e.get("type") == "metadata"]
+    assert metadata and metadata[-1]["finish_reason"] == "length"
+    assert int((metadata[-1].get("usage") or {}).get("completion_tokens") or 0) <= 4
+
+
+@pytest.mark.parametrize("ending", ["declined", "not_resumed"])
+def test_the_final_pass_gave_up_counts_the_interrupted_attempt_once(monkeypatch, ending):
+    # The refusal never folded the attempt, so a stream with no terminal usage reported none
+    # of its tokens; the not-resumed end folded it and then added the reading again.
+    if ending == "declined":
+        monkeypatch.setattr(p, "DEFAULT_MAX_PREEMPT_RESUMES", 0)
+        policy = DecliningPolicy()
+    else:
+        policy = RecordingPolicy(resume = False)
+    signal = p.PreemptSignal()
+    streams = [
+        [
+            delta("a", timings = {"predicted_n": i + 1, "predicted_ms": 10.0 * (i + 1)})
+            for i in range(4)
+        ]
+        + [finish(), done()],
+        [delta("b"), finish(), done()],
+    ]
+    rec = PreemptRecorder(monkeypatch, streams, signal = signal, pause_after = {0: 4})
+    events = run_tool_loop(
+        rec.backend,
+        signal = signal,
+        policy = policy,
+        tools = [web_search_tool()],
+        max_tool_iterations = 0,
+        permission_mode = "off",
+    )
+    assert len(rec.payloads) == 1
+    metadata = [e for e in events if isinstance(e, dict) and e.get("type") == "metadata"]
+    assert metadata and metadata[-1]["finish_reason"] == "length"
+    usage = metadata[-1].get("usage") or {}
+    timings = metadata[-1].get("timings") or {}
+    assert int(usage.get("completion_tokens") or 0) == 4, usage
+    assert int(timings.get("predicted_n") or 0) == 4, timings
+
+
 def test_the_thought_before_a_pause_survives_a_resumed_turn_that_calls_a_tool(monkeypatch):
     # The resumed attempt went on thinking and then called a tool. Its assistant message
     # carried only the later thought, and the merge replaced the earlier one.

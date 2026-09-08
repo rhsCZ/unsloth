@@ -27,6 +27,7 @@
 import asyncio
 import inspect
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -239,6 +240,76 @@ class TestASilentParkStillRenewsTheLease:
         assert "await self._try_touch_progress(run_id)" in source[branch : branch + 400]
 
 
+class TestTheRunLoopProbesParkingRatherThanWaitForTheStamp:
+    """The read wrapper only asks `/metrics` when its read deadline fires, and before the first
+    token that deadline IS the 20 minute first-token budget, i.e. the whole default lease. A run
+    parked during prefill therefore had no stamp to renew from until the sweeper had already had
+    its chance to cancel it, and any shorter lease lost outright. The run loop asks for itself."""
+
+    @pytest.fixture(autouse = True)
+    def _reset_probe_rate_limit(self):
+        runs._park_probe_at[0] = None
+        yield
+        runs._park_probe_at[0] = None
+
+    class _Backend:
+        """A swap build that parks in silence and has never been asked, so it has no stamp."""
+
+        server_preempts_kv = True
+
+        def __init__(self):
+            self.asked = 0
+
+        def server_park_grace_recent(self, within_s):
+            return False
+
+        def _server_park_grace(self):
+            self.asked += 1
+            return True
+
+    def test_a_park_with_no_stamp_yet_still_renews(self, monkeypatch):
+        backend = self._Backend()
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: backend)
+        assert runs._server_park_excused_recently() is True
+        assert backend.asked == 1
+
+    def test_a_server_that_does_not_park_is_never_scraped(self, monkeypatch):
+        backend = self._Backend()
+        backend.server_preempts_kv = False
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: backend)
+        assert runs._server_park_excused_recently() is False
+        assert backend.asked == 0
+
+    def test_nothing_parked_is_not_excused(self, monkeypatch):
+        backend = self._Backend()
+        backend._server_park_grace = lambda: False
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: backend)
+        assert runs._server_park_excused_recently() is False
+
+    def test_the_stamp_still_wins_and_costs_no_scrape(self, monkeypatch):
+        backend = self._Backend()
+        backend.server_park_grace_recent = lambda within_s: True
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: backend)
+        assert runs._server_park_excused_recently() is True
+        assert backend.asked == 0
+
+    def test_the_live_probe_is_rate_limited_across_runs(self, monkeypatch):
+        backend = self._Backend()
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: backend)
+        assert runs._server_park_excused_recently() is True
+        # A short lease drives the renewal cadence to 0.25s; the floor keeps that off /metrics.
+        assert runs._server_park_excused_recently() is False
+        assert backend.asked == 1
+        runs._park_probe_at[0] = time.monotonic() - runs._PARK_PROBE_MIN_INTERVAL_S - 0.1
+        assert runs._server_park_excused_recently() is True
+        assert backend.asked == 2
+
+    def test_the_probe_stays_off_the_event_loop(self):
+        """It blocks on one HTTP GET, so the silent branch must keep reaching it via to_thread."""
+        source = inspect.getsource(runs.ChatGenerationSupervisor)
+        assert "elif await asyncio.to_thread(_server_park_excused_recently):" in source
+
+
 class TestAutoDoesNotStartAModeItWillReportUnavailable:
     _ARGV = ["llama-server", "--kv-unified"]
 
@@ -373,3 +444,341 @@ class TestARawRelayWaitsThroughAServerPark:
         source = inspect.getsource(inference)
         assert source.count("stall_grace = _raw_park_grace(llama_backend),") == 4
         assert inference._RAW_PARK_STALL_CAP_S == llama_mod._SERVER_PARK_STALL_CAP_S
+
+
+class TestARawStreamIsParkableWhenTheServerParks:
+    """`pausable=False` is about Studio's preemptor. With the server parking slots itself a raw
+    relay is parked and restored like any other, so it is priced like any other."""
+
+    class _Backend:
+        _kv_cache_unified = True
+        context_length = 16384
+        effective_parallel_slots = 4
+        server_preempts_kv = True
+
+    class _StudioOnly(_Backend):
+        server_preempts_kv = False
+
+    def test_the_predicate_reads_the_backend(self):
+        assert inference._server_parks_raw_streams(self._Backend()) is True
+        assert inference._server_parks_raw_streams(self._StudioOnly()) is False
+        assert inference._server_parks_raw_streams(object()) is False
+
+    def test_both_entry_points_lift_the_share_for_a_parking_server(self):
+        source = inspect.getsource(inference._openai_llama_admission_enforced_max_tokens)
+        assert "pausable = pausable or _server_parks_raw_streams(llama_backend)" in source
+        source = inspect.getsource(inference._openai_llama_admission_reserve)
+        assert "pausable = pausable or _server_parks_raw_streams(llama_backend)" in source
+        assert source.index("pausable = pausable or") < source.index("preemption_active = pausable")
+
+    def test_the_wire_cap_is_the_window_not_a_share(self, monkeypatch):
+        monkeypatch.setenv("UNSLOTH_LLAMA_ADMISSION_PREEMPT", "1")
+        monkeypatch.setattr(inference, "_openai_llama_admission_budget", lambda b: 16384)
+        monkeypatch.setattr(inference, "_openai_llama_admission_context_window", lambda b: 16384)
+        monkeypatch.setattr(inference, "_openai_llama_admission_capacity", lambda r, b: 4)
+        monkeypatch.setattr(inference, "_openai_llama_admission_raw_total", lambda b: 16384)
+        monkeypatch.setattr(inference, "_openai_llama_admission_image_tokens", lambda b: 0)
+        monkeypatch.setattr(
+            inference, "_openai_llama_admission_prompt_tokens", lambda *a, **k: 1000
+        )
+        monkeypatch.setattr(
+            inference, "_openai_llama_preemption_will_apply", lambda b, budget: True
+        )
+        payload = {"messages": [{"role": "user", "content": "x"}]}
+        parked = inference._openai_llama_admission_enforced_max_tokens(
+            payload, request = None, llama_backend = self._Backend(), pausable = False
+        )
+        studio_only = inference._openai_llama_admission_enforced_max_tokens(
+            payload, request = None, llama_backend = self._StudioOnly(), pausable = False
+        )
+        assert studio_only == 16384 // 4 - 1000, "Studio-only: the honest share"
+        assert parked == 16384 - 1000, "a parking server: the window, like every other stream"
+
+
+class TestAParkDuringPrefillIsExcusedToo:
+    def test_the_first_item_deadline_takes_the_grace(self, monkeypatch):
+        # Each read times out the way httpx's own read timeout does, after the deadline has
+        # passed, and the excuse extends the deadline by a short first-token window.
+        monkeypatch.setattr(inference, "_DEFAULT_FIRST_TOKEN_TIMEOUT_S", 0.002)
+
+        class _It:
+            def __init__(self):
+                self.left = 3
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.left > 0:
+                    self.left -= 1
+                    await asyncio.sleep(0.005)
+                    raise httpx.ReadTimeout("read timed out")
+                if getattr(self, "done", False):
+                    raise StopAsyncIteration
+                self.done = True
+                return "data: first"
+
+        async def run(grace):
+            seen = []
+            async for item in inference._aiter_llama_stream_items(
+                _It(),
+                request = _Request(),
+                first_token_deadline = time.monotonic() + 0.001,
+                stall_grace = grace,
+            ):
+                seen.append(item)
+            return seen
+
+        assert asyncio.run(run(lambda: True)) == ["data: first"]
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(run(None))
+
+    def test_the_first_item_grace_is_bounded(self):
+        source = inspect.getsource(inference._aiter_llama_stream_items)
+        excuse = source.index("def _first_item_excused(")
+        window = source[excuse : excuse + 700]
+        assert "first_deadline_crossed_at" in window and "_RAW_PARK_STALL_CAP_S" in window
+        # Both ways the first read can time out ask it.
+        assert source.count("_first_item_excused(") == 3
+
+
+class TestTheGlobalOptOutBlocksAnAutoLaunch:
+    def test_preemption_off_with_nothing_named_is_parking_off(self, monkeypatch):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        monkeypatch.setattr(llama_mod._preemption, "preemption_enabled", lambda: False)
+        why = llama_mod._exact_auto_blocker(exact.EXACT_AUTO, ["llama-server"], {})
+        assert why and "UNSLOTH_LLAMA_ADMISSION_PREEMPT=0" in why
+        # A named budget keeps its say, as `_stand_down_child_parking` leaves it alone.
+        assert (
+            llama_mod._exact_auto_blocker(
+                exact.EXACT_AUTO, ["llama-server", "--preempt-ram", "4096"], {}
+            )
+            is None
+        )
+        assert (
+            llama_mod._exact_auto_blocker(
+                exact.EXACT_AUTO, ["llama-server"], {"LLAMA_ARG_PREEMPT_RAM": "4096"}
+            )
+            is None
+        )
+        monkeypatch.setattr(llama_mod._preemption, "preemption_enabled", lambda: True)
+        assert llama_mod._exact_auto_blocker(exact.EXACT_AUTO, ["llama-server"], {}) is None
+
+
+class TestTheParkGraceLivesBelowTheHttpxIterators:
+    """An httpx async generator that raised is closed, so a retry above it returned
+    StopAsyncIteration and the relay ended as if the parked answer were complete. The grace
+    is applied to the network stream's read, where nothing above it unwinds; this runs the
+    relay over a real httpx stream against a local server that goes silent."""
+
+    @staticmethod
+    async def _serve(first_delay: float, gap: float):
+        async def handle(reader, writer):
+            try:
+                await reader.readuntil(b"\r\n\r\n")
+            except Exception:
+                return
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+            )
+            await writer.drain()
+            for delay, chunk in ((first_delay, b"data: a\n\n"), (gap, b"data: b\n\n")):
+                await asyncio.sleep(delay)
+                writer.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                await writer.drain()
+            writer.write(b"0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+
+        return await asyncio.start_server(handle, "127.0.0.1", 0)
+
+    async def _relay(
+        self,
+        first_delay,
+        gap,
+        *,
+        grace,
+        stall_s = 0.05,
+        first_s = 0.05,
+    ):
+        server = await self._serve(first_delay, gap)
+        port = server.sockets[0].getsockname()[1]
+        seen = []
+        try:
+            async with httpx.AsyncClient(timeout = httpx.Timeout(5.0, read = 0.05)) as client:
+                async with client.stream("GET", f"http://127.0.0.1:{port}/") as resp:
+                    async for line in inference._aiter_llama_stream_items(
+                        resp.aiter_lines(),
+                        request = _Request(),
+                        response = resp,
+                        first_token_deadline = time.monotonic() + first_s,
+                        post_first_item_read_timeout_s = stall_s,
+                        stall_grace = grace,
+                    ):
+                        if line:
+                            seen.append(line)
+        finally:
+            server.close()
+            await server.wait_closed()
+        return seen
+
+    def test_a_park_after_the_first_item_is_waited_out(self):
+        asked = []
+
+        def grace():
+            asked.append(time.monotonic())
+            return True
+
+        assert asyncio.run(self._relay(0.0, 0.4, grace = grace)) == ["data: a", "data: b"]
+        assert asked, "the probe was never consulted"
+
+    def test_a_park_during_prefill_is_waited_out(self):
+        assert asyncio.run(self._relay(0.4, 0.0, grace = lambda: True)) == ["data: a", "data: b"]
+
+    def test_without_a_park_the_stall_is_still_an_error_not_a_short_answer(self):
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(self._relay(0.0, 0.4, grace = lambda: False))
+
+    def test_a_closed_iterator_is_never_retried(self, monkeypatch):
+        # Grace above the iterator only: the raised generator is done, and the relay reports
+        # the stall rather than returning the one line it had as the whole answer.
+        monkeypatch.setattr(inference, "_install_park_aware_read", lambda *a, **k: False)
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(self._relay(0.0, 0.4, grace = lambda: True))
+
+    def test_the_wrapper_follows_the_request_a_kept_alive_connection_serves_next(self):
+        class _Stream:
+            async def read(
+                self,
+                max_bytes,
+                timeout = None,
+            ):
+                return b""
+
+        stream = _Stream()
+        first = SimpleNamespace(extensions = {"network_stream": stream})
+        second = SimpleNamespace(extensions = {"network_stream": stream})
+        one, two = (lambda: True), (lambda: False)
+        assert inference._install_park_aware_read(first, one) is True
+        assert inference._install_park_aware_read(second, two) is True
+        assert stream._unsloth_park_state["stall_grace"] is two
+        assert inference._install_park_aware_read(SimpleNamespace(extensions = {}), one) is False
+
+    def test_every_raw_relay_reads_through_the_response(self):
+        source = inspect.getsource(inference)
+        assert source.count("stall_grace = _raw_park_grace(llama_backend),") == 4
+        assert (
+            source.count("                    response = resp,\n")
+            + source.count("                response = resp,\n")
+            >= 4
+        )
+
+
+class TestTheGraceStartsAtTheDeadlineAndTheProbeLeavesTheLoopAlone:
+    @staticmethod
+    def _wrapped(
+        monkeypatch,
+        read,
+        grace,
+        *,
+        read_timeout = 0.03,
+    ):
+        stream = SimpleNamespace(read = read)
+        response = SimpleNamespace(
+            extensions = {"network_stream": stream},
+            request = SimpleNamespace(extensions = {"timeout": {"read": read_timeout}}),
+        )
+        assert inference._install_park_aware_read(response, grace) is True
+        return stream
+
+    def test_the_cap_is_measured_from_the_deadline_it_first_crossed(self, monkeypatch):
+        import httpcore
+
+        # A 30ms window and a 50ms grace: the retries after the first deadline add up to the
+        # grace, and not to the grace less the window it took to reach the deadline.
+        monkeypatch.setattr(inference, "_RAW_PARK_STALL_CAP_S", 0.05)
+        windows = []
+
+        async def silent(max_bytes, timeout = None):
+            windows.append(timeout)
+            await asyncio.sleep(timeout)
+            raise httpcore.ReadTimeout("silence")
+
+        stream = self._wrapped(monkeypatch, silent, lambda: True)
+        with pytest.raises(httpcore.ReadTimeout):
+            asyncio.run(stream.read(65536, timeout = 1200.0))
+        assert windows[0] == pytest.approx(0.03)
+        assert sum(windows[1:]) == pytest.approx(0.05, abs = 0.002), windows
+        assert len(windows) >= 3
+
+    def test_the_probe_runs_off_the_event_loop(self, monkeypatch):
+        import httpcore
+
+        calls = {"n": 0}
+
+        async def read(max_bytes, timeout = None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpcore.ReadTimeout("silence")
+            return b"data: a\n\n"
+
+        def slow_probe():
+            time.sleep(0.2)  # `/metrics` over urllib, blocking
+            return True
+
+        stream = self._wrapped(monkeypatch, read, slow_probe)
+
+        async def run():
+            ticks = []
+
+            async def ticker():
+                while True:
+                    ticks.append(time.monotonic())
+                    await asyncio.sleep(0.005)
+
+            task = asyncio.create_task(ticker())
+            try:
+                got = await stream.read(65536, timeout = 1200.0)
+            finally:
+                task.cancel()
+            return got, len(ticks)
+
+        got, ticks = asyncio.run(run())
+        assert got == b"data: a\n\n"
+        assert ticks > 10, f"the loop was held while the probe ran ({ticks} ticks)"
+
+    def test_the_grace_above_the_iterator_asks_off_the_loop_too(self):
+        source = inspect.getsource(inference._aiter_llama_stream_items)
+        assert "grace_above()" not in source
+        assert source.count("await _probe_off_the_loop(grace_above)") == 2
+
+
+class TestAnExplicitOptOutOfTheUnifiedCacheIsKept:
+    _CAPS = {"supports_kv_unified": True}
+
+    def test_the_launch_line_does_not_reverse_it(self):
+        add = LlamaCppBackend._exact_missing_launch_flags
+        assert add(["llama-server", "--parallel", "1"], self._CAPS) == ["--kv-unified"]
+        assert add(["llama-server", "--parallel", "1", "--no-kv-unified"], self._CAPS) == []
+        assert add(["llama-server", "-no-kvu"], self._CAPS) == []
+        assert add(["llama-server", "--no-kv-unified", "--kv-unified"], self._CAPS) == []
+
+    def test_it_is_the_contradiction_it_is(self):
+        assert exact.contradicting_args(["--no-kv-unified"]) == ["--no-kv-unified"]
+        assert exact.contradicting_args(["-no-kvu"]) == ["-no-kvu"]
+        # A later spelling of the same option decides for it, as llama-server applies argv.
+        assert exact.contradicting_args(["--no-kv-unified", "--kv-unified"]) == []
+        assert exact.contradicting_args(["--kv-unified", "-no-kvu"]) == ["-no-kvu"]
+
+    def test_auto_does_not_start_a_mode_the_extras_contradict(self, monkeypatch):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        monkeypatch.delenv(preemption_mod.PREEMPT_ENV, raising = False)
+        reason = llama_mod._exact_auto_blocker(
+            exact.EXACT_AUTO, ["llama-server", "--kv-unified", "--no-kv-unified"], {}
+        )
+        assert reason is not None and "--no-kv-unified" in reason
+        assert (
+            llama_mod._exact_auto_blocker(exact.EXACT_AUTO, ["llama-server", "--kv-unified"], {})
+            is None
+        )

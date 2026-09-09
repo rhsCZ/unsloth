@@ -329,6 +329,15 @@ class TestADurableRunRelaysThePause:
         # Renewed on, never relayed: a keepalive is progress for the lease, not a status.
         assert _admission_status_chunks(": preempt-keepalive\n\n") == []
 
+    def test_a_recompute_reaches_a_follower_after_the_resume_it_qualifies(self):
+        # The park could not be held, so the answer was re-prefilled: the durable follower
+        # needs it to mark the thread, not to change the status line.
+        both = ": preempt-resumed\n\n: preempt-recomputed\n\n"
+        assert [c["_admissionStatus"] for c in _admission_status_chunks(both)] == [
+            "resumed",
+            "recomputed",
+        ]
+
 
 class TestEverySignalTheClientReadsHasAProducer:
     """The one cross-language contract here: the client understands four comments, and a
@@ -336,7 +345,7 @@ class TestEverySignalTheClientReadsHasAProducer:
 
     # No behavioural reach: the producers are asserted elsewhere in this file, but only
     # the frontend source says which comments the client is prepared to read.
-    def test_the_frontend_declares_exactly_the_four_comments_the_route_emits(self):
+    def test_the_frontend_declares_exactly_the_comments_the_route_emits(self):
         backend_dir = pathlib.Path(__file__).resolve().parent.parent
         ts = backend_dir.parent / "frontend/src/features/chat/utils/admission-status.ts"
         if not ts.exists():
@@ -348,7 +357,43 @@ class TestEverySignalTheClientReadsHasAProducer:
             "admission-done",
             "preempt-paused",
             "preempt-resumed",
+            "preempt-recomputed",
         }
+
+
+class TestTheAggregateReadingIsOnlyTheFallback:
+    """`requests_preempted` counts every request, so it cannot say that THIS stream is the parked
+    one: a stream stalled for its own reason was excused while an unrelated chat sat parked, and
+    one that had already resumed stayed excused. The per-request notices decide where the build
+    sends them; the aggregate is what is left for a swap build that predates them."""
+
+    def test_the_stream_wrapper_puts_the_notices_in_front_of_the_probe(self):
+        import inspect
+
+        opened = inspect.getsource(LlamaCppBackend._open_stream)
+        assert "stall_grace = self._server_park_grace if self.server_preempts_kv else None" in (
+            opened
+        )
+        wrapper = inspect.getsource(LlamaCppBackend._install_cancel_aware_read)
+        assert "ServerParkNotices(stall_grace)" in wrapper
+        assert "notices.excuses_silence()" in wrapper
+
+    def test_the_probe_itself_says_it_is_the_fallback(self):
+        doc = (LlamaCppBackend._server_park_grace.__doc__ or "").lower()
+        assert "aggregate" in doc and "fallback" in doc
+
+    def test_this_streams_notice_excuses_it_and_a_resume_ends_that(self):
+        asked = []
+        notices = preemption.ServerParkNotices(lambda: asked.append(1) or True)
+        notices.feed_line(": preempted")
+        assert notices.excuses_silence() is True
+        assert asked == [], "its own notice needs no /metrics read"
+        notices.feed_line(": resumed")
+        assert notices.excuses_silence() is False
+        assert asked == [], "a neighbour's park is not this stream's excuse"
+
+    def test_a_build_without_notices_keeps_the_old_behaviour(self):
+        assert preemption.ServerParkNotices(lambda: True).excuses_silence() is True
 
 
 class _Obj:

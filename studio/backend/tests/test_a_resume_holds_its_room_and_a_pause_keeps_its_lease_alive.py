@@ -228,6 +228,31 @@ class TestResumeTicketsKeepTheirOrderForRoomToo:
         queue.release(got_first, 70)
 
     @pytest.mark.asyncio
+    async def test_an_empty_cache_still_leaves_the_room_a_ticket_is_owed(self):
+        """The last holder leaving empties the ledger, and an empty ledger admits any size
+        on its own; that escape must not spend the room a ticket ahead is coming back for:
+        holder 50, ticket 80, arrival 80, budget 100."""
+        queue = LlamaAdmissionQueue("k")
+        holder = await _lease(queue, tokens = 50)
+        waiting = asyncio.ensure_future(
+            queue.acquire_parked_slot(tokens = 80, poll_s = 0.01, deadline = time.monotonic() + 2.0)
+        )
+        await asyncio.sleep(0.05)
+        reservation = queue.reserve(
+            capacity = 2, config = LlamaAdmissionConfig(), tokens = 80, budget = 100
+        )
+        assert reservation.lease_nowait() is None
+        holder.release()
+        slot = await waiting
+        assert slot is not None, "the arrival took the room the ticket was owed"
+        assert reservation.lease_nowait() is None, "80 beside the resumed 80 is over the budget"
+        queue.release(slot, 80)
+        try:
+            reservation.cancel()
+        except Exception:
+            pass
+
+    @pytest.mark.asyncio
     async def test_a_fresh_arrival_leaves_the_room_a_ticket_is_owed(self):
         queue = LlamaAdmissionQueue("k")
         holder = await _lease(queue, tokens = 60)
@@ -267,13 +292,16 @@ class TestARawHolderIsMeasuredOnceItProduces:
         assert source.count("_raw_measured = False") == 3
         assert source.count("_openai_llama_note_raw_measured(") >= 4  # the def and three calls
 
-    def test_the_non_streaming_raw_requests_are_measured_at_registration(self):
-        # No data line to mark them at, so the charge sat on top of the residency
-        # `/slots` reported for the whole answer.
+    def test_no_raw_request_is_measured_at_registration(self):
+        # Measured before its prefill, a residency sample from before it swallowed the
+        # charge and a missed pause overran the cache. A non-streaming request has no data
+        # line, so it stays counted on top of the residency for its answer: the safer side.
         source = inspect.getsource(inference)
-        assert source.count("measured = True,  # non-streaming") == 2
-        helper = inspect.getsource(inference._openai_llama_count_raw_holder)
-        assert "controller.note_measured(gen_id)" in helper
+        assert "measured = True" not in inspect.getsource(inference._openai_llama_count_raw_holder)
+        assert source.count("_arm_anthropic(reservation, raw = raw)") == 2
+        assert "controller.note_measured(gen_id)" not in inspect.getsource(
+            inference._openai_llama_count_raw_holder
+        )
 
     def test_the_helper_reaches_the_controller(self, monkeypatch):
         controller = _controller()

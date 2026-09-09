@@ -14,7 +14,6 @@ import urllib.request
 
 import pytest
 
-from core.inference import llama_admission
 from core.inference import llama_preemption as preemption
 from core.inference.llama_admission import LlamaAdmissionConfig, LlamaAdmissionQueue
 from core.inference.llama_cpp import LlamaCppBackend, _CombinedCancelEvent, _interrupt_event
@@ -37,7 +36,10 @@ from core.inference.llama_preemption import (
 )
 from core.inference.llama_stats import erase_llama_slot, fetch_llama_slots
 
-from .preempt_fakes import clean_admission_queues, clean_preemption_registry  # noqa: F401
+from .preempt_fakes import clean_admission_queues, clean_preemption_registry
+
+# pytest finds these by name; named here so the import reads as a use.
+_FIXTURES = (clean_admission_queues, clean_preemption_registry)
 
 
 def _controller(
@@ -423,12 +425,21 @@ class TestWhoStops:
         victims = {p.gen_id for p in controller.plan_preemptions(needed = 6000)}
         assert "huge" in victims, "an exempt chat can grow until it fills the window"
         assert "oldest" not in victims, "the last holder standing must survive"
-        assert controller.snapshot().winner is None, "nobody is crowned any more"
+        assert not hasattr(controller.snapshot(), "winner"), "nobody is crowned any more"
 
     def test_a_lone_holder_is_not_preempted_for_a_newcomer(self):
         controller = _controller()
         _register(controller, "alone", 15000)
         assert controller.plan_preemptions(needed = 4000) == []
+
+    def test_there_is_no_winner_in_the_snapshot(self):
+        controller = _controller(budget = 16384)
+        _register(controller, "a", 9000)
+        _register(controller, "b", 6000)
+        controller.plan_preemptions()
+        # The field and the state behind it are gone, not merely empty.
+        assert not hasattr(controller.snapshot(), "winner")
+        assert not hasattr(controller, "_epoch_winner")
 
     def test_an_unpreemptable_holder_counts_as_the_one_left_standing(self):
         c = _controller(budget = 8192, key = "raw-standing", slots = 4, batch_tokens = 2048)

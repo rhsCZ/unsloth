@@ -412,11 +412,13 @@ from utils.subprocess_compat import (
 )
 from utils.process_lifetime import child_popen_kwargs as _child_popen_kwargs
 from utils.process_lifetime import is_signalable_pid as _is_signalable_pid
+from core.inference.llama_admission import LlamaAdmissionCancelled, LlamaAdmissionRecostRefused
 from core.inference.tool_call_parser import (
     BUDGET_EXHAUSTED_NUDGE,
     MAX_ACT_REPROMPTS as _MAX_REPROMPTS,
     NUDGE_TOOL_CALLS_STATUS as _NUDGE_TOOL_CALLS_STATUS,
     REPROMPT_MAX_CHARS as _REPROMPT_MAX_CHARS,
+    admission_room_refused_message as _admission_room_refused_message,
     is_reprompt_repeat as _is_reprompt_repeat,
     is_reprompt_restatement as _is_reprompt_restatement,
     is_short_intent_without_action as _is_short_intent_without_action,
@@ -2079,12 +2081,24 @@ def _exact_parking_need_mib(
     """The ``--preempt-ram`` every park fits in, in MiB.
 
     A park saves a sequence's TARGET and DRAFT (MTP) state together, and the server holds the
-    parked sequences' state at once, so the bound is both pools, shared out per slot so the
-    rounding favours the parks, plus the margin. It refuses a rotation it cannot hold."""
+    parked sequences' state at once. Under the unified cache any one sequence can have grown to
+    the whole pool before it was parked, and parked history lives outside the pool, so up to
+    P - 1 parked histories plus the one being written can each be the whole pool: the bound is
+    both pools times the slot count, plus the margin. Sharing the pool out per slot, the earlier
+    bound, accepted a budget three near-pool histories overflow, and the overflow is re-prefilled."""
     slots = max(int(parallel or 1), 1)
     total = max(int(kv_bytes), 0) + max(int(draft_bytes), 0)
-    per_slot = -(-total // (1024 * 1024 * slots))
-    return per_slot * (max(slots - 1, 0) + 1) + _PARKING_MARGIN_MIB
+    pool_mib = -(-total // (1024 * 1024))
+    return pool_mib * slots + _PARKING_MARGIN_MIB
+
+
+def _available_host_memory_mib() -> Optional[int]:
+    """Host RAM free right now, in MiB, or None where it cannot be read."""
+    try:
+        import psutil
+        return int(psutil.virtual_memory().available // (1024 * 1024))
+    except Exception:
+        return None
 
 
 def _exact_parking_budget_mib(
@@ -2150,6 +2164,16 @@ def _exact_parking_shortfall_mib(
     return (named, saved, need) if named < need else None
 
 
+def _exact_preflight_env(environ: Mapping[str, str], gpu_memory_mode: Optional[str]) -> dict:
+    """The inherited variables as the child will see them: Manual mode drops the placement
+    twins before launch, so judging the parent's environment blocked `auto` on a value the
+    child never gets."""
+    env = dict(environ)
+    if gpu_memory_mode == "manual":
+        LlamaCppBackend._clear_manual_placement_env(env)
+    return env
+
+
 def _exact_auto_blocker(setting: str, args, env: Mapping[str, str]) -> Optional[str]:
     """Why an ``auto`` exact launch should not start the mode at all, else None.
 
@@ -2166,7 +2190,7 @@ def _exact_auto_blocker(setting: str, args, env: Mapping[str, str]) -> Optional[
         )
     if _preempt_ram_disabled_in(args, env = env):
         return "the server's parking is switched off (--preempt-ram 0)"
-    conflicts = _exact.contradicting_args(args)
+    conflicts = _exact.contradicting_args(args) + _exact.contradicting_env(env)
     if conflicts:
         return (
             "the launch line passes "
@@ -6992,7 +7016,13 @@ class LlamaCppBackend:
         """The AGGREGATE park reading, and the legacy fallback only: `requests_preempted` counts
         every request, so it cannot say that THIS stream is the parked one. A build that writes
         the stream notices is read per request instead (`ServerParkNotices`); this is what is
-        left for a swap build predating them, which is silent for the whole park."""
+        left for a swap build predating them, which is silent for the whole park.
+
+        A build known to write the notices, including for a park during prompt processing, is
+        never asked: a stream of its that heard nothing is not parked, and the aggregate reading
+        excused an unrelated stream's stall for as long as somebody else stayed parked."""
+        if getattr(self, "_server_park_notices", False):
+            return False
         try:
             from core.inference.llama_stats import scrape_llama_metrics
 
@@ -7310,6 +7340,8 @@ class LlamaCppBackend:
             and _kv_unified_from_args(args, env = env)
             and _flash_attn_enabled_from_args(args, env = env)
             and not _exact.contradicting_args(args)
+            # The env twins of the CPU placements reach the child however the argv was stripped.
+            and not _exact.contradicting_env(env)
             and bool(server_parks)
             and bool(parking_holds)
         )
@@ -23663,7 +23695,7 @@ class LlamaCppBackend:
                     _exact_blocker = _exact_auto_blocker(
                         _exact_setting,
                         list(cmd) + [str(a) for a in (extra_args or ())],
-                        os.environ,
+                        _exact_preflight_env(os.environ, gpu_memory_mode),
                     )
                     if _exact_blocker is not None:
                         _exact_wanted = False
@@ -23674,6 +23706,8 @@ class LlamaCppBackend:
                             "share the KV cache. Set it to 'on' to fail the load instead."
                         )
                 self._exact_parking_short = None
+                self._exact_host_short = None
+                self._server_park_notices = False
                 self._exact_pool_unknown = False
                 if _exact_wanted:
                     # Studio's line contradicts the mode in one place: --parallel 1 skips --kv-unified.
@@ -23709,12 +23743,28 @@ class LlamaCppBackend:
                             cmd.extend(["--preempt-ram", str(_exact_budget)])
                             logger.info(
                                 "Exact concurrency: --preempt-ram %d holds every park of the "
-                                "%d MiB pool and its %d MiB of draft state, so no park has to be "
-                                "re-prefilled.",
+                                "%d MiB pool and its %d MiB of draft state across %d slots, so no "
+                                "park has to be re-prefilled.",
                                 _exact_budget,
                                 _exact_kv_bytes // (1024 * 1024),
                                 _exact_draft_bytes // (1024 * 1024),
+                                n_parallel,
                             )
+                            # A cap, not an allocation: a park past what the host can give
+                            # fails its allocation and is re-prefilled, so a budget the host
+                            # cannot back is judged like one too small.
+                            _host_free_mib = _available_host_memory_mib()
+                            if _host_free_mib is not None and _exact_budget > _host_free_mib:
+                                self._exact_host_short = (_exact_budget, _host_free_mib)
+                                self._record_load_warning(
+                                    "Exact concurrency may park up to %d MiB of KV state in host "
+                                    "RAM, and this host has %d MiB free. A park the host cannot "
+                                    "hold is re-prefilled, which is not byte-identical. The load "
+                                    "will run without exact concurrency, or fail, depending on "
+                                    "the setting." % (_exact_budget, _host_free_mib)
+                                )
+                                if _exact_setting == _exact.EXACT_AUTO:
+                                    _exact_wanted = False
                         # An auto-fit context leaves the pool unknown, so no budget is sized: the
                         # server's default is judged after launch off the context it chose. A
                         # budget guessed here survives every abandoned attempt, parking unlimited.
@@ -23742,7 +23792,9 @@ class LlamaCppBackend:
                                 # Known now, so the child does not start the mode for it.
                                 _exact_wanted = False
                     # The user's extras are appended last and win by last-arg, so name the flag ourselves.
-                    _exact_conflicts = _exact.contradicting_args(extra_args)
+                    _exact_conflicts = _exact.contradicting_args(
+                        extra_args
+                    ) + _exact.contradicting_env(_exact_preflight_env(os.environ, gpu_memory_mode))
                     if _exact_conflicts:
                         self._record_load_warning(
                             "Exact concurrency was requested, but the extra arguments "
@@ -25974,6 +26026,27 @@ class LlamaCppBackend:
                 # Read off the argv that LAUNCHED and the env it launched with, not the intent: respawns rewrite them.
                 self._requested_exact_concurrency = _exact_setting
                 _exact_short = getattr(self, "_exact_parking_short", None)
+                _exact_host_short = getattr(self, "_exact_host_short", None)
+                if (
+                    _exact_short is not None
+                    and _mtp_will_engage
+                    and not _mtp_active_for_launched_server
+                ):
+                    # Priced before launch with the drafter's state, and the server that came up
+                    # runs without one: judged again for what it parks, or a budget that holds
+                    # every park fails a healthy load.
+                    try:
+                        _exact_short = _exact_parking_shortfall_mib(
+                            _exact_kv_bytes,
+                            args = list(_last_spawn_cmd or cmd)
+                            + [str(a) for a in (extra_args or ())],
+                            env = env,
+                            draft_bytes = 0,
+                            parallel = n_parallel,
+                        )
+                    except Exception:
+                        pass
+                    self._exact_parking_short = _exact_short
                 if (
                     _exact_short is None
                     and getattr(self, "_exact_pool_unknown", False)
@@ -25988,7 +26061,12 @@ class LlamaCppBackend:
                         _fitted_ctx = 0
                     try:
                         _fitted_bytes = _kv_bytes(_fitted_ctx) if _fitted_ctx > 0 else 0
-                        _fitted_draft = _draft_kv_state_bytes(_fitted_ctx)
+                        # No draft state to park on a server that came up without its drafter.
+                        _fitted_draft = (
+                            _draft_kv_state_bytes(_fitted_ctx)
+                            if _mtp_active_for_launched_server
+                            else 0
+                        )
                     except Exception:
                         _fitted_bytes, _fitted_draft = 0, 0
                     if _fitted_draft is None:
@@ -26006,14 +26084,18 @@ class LlamaCppBackend:
                         _exact_short = (_PREEMPT_RAM_DEFAULT_MIB, 0, 0)
                     self._exact_parking_short = _exact_short
                 # The server's own answer, not the launch's intent. See the helper.
-                _exact_running = self._server_reports_exact_concurrency()
+                _server_props = self._query_server_props() or {}
+                # unslothai/llama.cpp#197 carries the field and writes the per-request notices,
+                # so its silence is never excused from the aggregate reading.
+                self._server_park_notices = "exact_concurrency" in _server_props
+                _exact_running = _server_props.get("exact_concurrency") is True
                 self._exact_concurrency = self._exact_state_after_launch(
                     setting = _exact_setting,
                     env = env,
                     args = _last_spawn_cmd or cmd,
                     supports_exact = _exact_running,
                     server_parks = self.server_preempts_kv,
-                    parking_holds = _exact_short is None,
+                    parking_holds = _exact_short is None and _exact_host_short is None,
                 )
                 if self._exact_concurrency == _exact.EXACT_STATE_UNAVAILABLE:
                     if not self.server_preempts_kv:
@@ -26033,6 +26115,12 @@ class LlamaCppBackend:
                             f" --preempt-ram {_exact_short[0]} MiB cannot hold the "
                             f"{_exact_short[1]} MiB of KV and draft state a park saves; raise it "
                             f"to at least {_exact_short[2]} MiB, or set an explicit context."
+                        )
+                    elif _exact_host_short is not None:
+                        _exact_why = (
+                            f" The {_exact_host_short[0]} MiB parking budget is more than the "
+                            f"{_exact_host_short[1]} MiB of host RAM free at load; free host "
+                            "memory, or lower the context or the slot count."
                         )
                     else:
                         _exact_why = ""
@@ -29303,8 +29391,9 @@ class LlamaCppBackend:
         if preempt_event is not None:
             cancel_event = _interrupt_event(cancel_event, preempt_event)
         # One per stream: `max_keepalive_connections = 0`, so the connections wrapped below serve
-        # this request only.
-        notices = _preemption.ServerParkNotices(stall_grace)
+        # this request only. None where the server does not park: no notice can come, and the
+        # tail scan on every read is not free.
+        notices = _preemption.ServerParkNotices(stall_grace) if stall_grace is not None else None
 
         def _live_read_timeout() -> Optional[float]:
             if response is None:
@@ -29353,7 +29442,7 @@ class LlamaCppBackend:
                         grace_left = crossed_at + _SERVER_PARK_STALL_CAP_S - now
                         if grace_left <= 0:
                             return None
-                        parked = notices.excuses_silence()
+                        parked = notices is not None and notices.excuses_silence()
                         if not parked:
                             return None
                         logger.info(
@@ -29386,7 +29475,8 @@ class LlamaCppBackend:
                                 raise
                             continue  # slow but alive: keep reading
                         # This stream's own notices, before anything above it parses a line.
-                        notices.feed(data)
+                        if notices is not None:
+                            notices.feed(data)
                         return data
 
                 stream.read = read
@@ -29643,7 +29733,6 @@ class LlamaCppBackend:
         top_k: int = 20,
         min_p: float = 0.01,
         max_tokens: Optional[int] = None,
-        admission_output_allowance: Optional[int] = None,
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
         frequency_penalty: float = 0.0,
@@ -29675,6 +29764,9 @@ class LlamaCppBackend:
         # Running token count for THIS attempt, so the sweep sees n_i grow and evicts in time.
         # Batched by _TOKEN_REPORT_EVERY, must be cheap, must not raise.
         on_tokens: Optional[Callable[[int], None]] = None,
+        # Appended, never inserted: no bare `*`, so a mid-signature parameter would
+        # silently rebind positional callers.
+        admission_output_allowance: Optional[int] = None,
     ) -> Generator[Union[str, dict], None, None]:
         """
         Send a chat completion to llama-server and stream tokens back.
@@ -29967,16 +30059,24 @@ class LlamaCppBackend:
                                     _metadata_finish_reason = _fr
 
                                 # The live n_i for THIS chat, the only thing that makes preemption
-                                # act: without it four chats grew to 16354 of a 16384 cache.
-                                _tokens_this_stream += 1
+                                # act: without it four chats grew to 16354 of a 16384 cache. Only a
+                                # frame carrying output: the opener and the finish frame add no
+                                # cell, and a sweep on the finish frame could pick this finished
+                                # request as the victim.
                                 if (
-                                    on_tokens is not None
-                                    and _tokens_this_stream % _TOKEN_REPORT_EVERY == 0
+                                    delta.get("content")
+                                    or delta.get("reasoning_content")
+                                    or delta.get("tool_calls")
                                 ):
-                                    try:
-                                        on_tokens(_tokens_this_stream)
-                                    except Exception:
-                                        pass
+                                    _tokens_this_stream += 1
+                                    if (
+                                        on_tokens is not None
+                                        and _tokens_this_stream % _TOKEN_REPORT_EVERY == 0
+                                    ):
+                                        try:
+                                            on_tokens(_tokens_this_stream)
+                                        except Exception:
+                                            pass
 
                                 # Reasoning/thinking tokens: llama-server
                                 # sends these as "reasoning_content"; wrap
@@ -30105,6 +30205,17 @@ class LlamaCppBackend:
                 )
                 yield from _finish_after_giving_up()
                 return
+            if isinstance(max_tokens, int) and max_tokens > 0:
+                _window_p = self._effective_context_length or 0
+                if max_tokens - checkpoint.charged_tokens <= 0 and not (
+                    _window_p and max_tokens >= _window_p
+                ):
+                    # Spent: reopening the stream for one floored token went past the cap by
+                    # that token, once per pause. The partial is on screen and the turn is
+                    # continuable, and it does not queue for room it cannot use.
+                    logger.info("Paused with the caller's output cap spent; ending the turn")
+                    yield from _finish_after_giving_up(notice = False)
+                    return
             resumed_p = yield from _await_resume(preempt_policy, cancel_event)
             if not resumed_p:
                 # The room never came back. Ending here leaves the client the partial it was
@@ -30134,18 +30245,11 @@ class LlamaCppBackend:
             _paused_prefix = cumulative
             _paused_in_thinking = in_thinking
             # `max_tokens` bounds NEW tokens and the resumed attempt starts a fresh count, so
-            # forwarding it lets a chat preempted n times emit (n+1) times its cap.
+            # forwarding it lets a chat preempted n times emit (n+1) times its cap. A spent cap
+            # ended the turn above, so the floor only guards zero.
             resume_max_tokens = max_tokens
             if isinstance(max_tokens, int) and max_tokens > 0:
-                resume_max_tokens = max_tokens - checkpoint.charged_tokens
-                _window_p = self._effective_context_length or 0
-                if resume_max_tokens <= 0 and not (_window_p and max_tokens >= _window_p):
-                    # Spent: reopening the stream for one floored token went past the cap by
-                    # that token. The partial is on screen and the turn is continuable.
-                    logger.info("Resumed with the caller's output cap spent; ending the turn")
-                    yield from _finish_after_giving_up(notice = False)
-                    return
-                resume_max_tokens = max(1, resume_max_tokens)
+                resume_max_tokens = max(1, max_tokens - checkpoint.charged_tokens)
             # `continues` false means the pause landed before anything was produced, so the
             # attempt is re-issued whole, though not as a fresh turn: dropping the flag on an
             # attempt that was itself a resume made the whole essay appear twice.
@@ -30349,7 +30453,6 @@ class LlamaCppBackend:
         top_k: int = 20,
         min_p: float = 0.01,
         max_tokens: Optional[int] = None,
-        admission_output_allowance: Optional[int] = None,
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
         frequency_penalty: float = 0.0,
@@ -30384,14 +30487,15 @@ class LlamaCppBackend:
         # Appended, never inserted: no bare `*` here, so every parameter is
         # positional-or-keyword and inserting one rebinds later positional arguments.
         #
-        # Called at the top of every round with the conversation as it now stands, so KV
-        # admission can charge what this run occupies rather than its opening estimate.
-        # MAY BLOCK: recost_waiting waits for cache room. Safe at the top of a round,
-        # where the previous round's request has completed.
-        on_conversation_grew: Optional[Callable[[list], None]] = None,
+        # Per request, with the conversation as it stands and the catalogue it sends
+        # (None = no `tools` array). MAY BLOCK waiting for cache room; safe between rounds.
+        # An int back replaces `admission_output_allowance`, None leaves it alone.
+        on_conversation_grew: Optional[Callable[[list, Optional[list]], Optional[int]]] = None,
         # Called during generation with the running token count for THIS attempt, so the
         # preemptor sees n_i grow. Batched by _TOKEN_REPORT_EVERY; cheap, and must not raise.
         on_tokens: Optional[Callable[[int], None]] = None,
+        # Bounds the wire cap of every request the loop sends. Appended, like the hook.
+        admission_output_allowance: Optional[int] = None,
     ) -> Generator[dict, None, None]:
         """
         Agentic loop: let the model call tools, execute them, and continue.
@@ -30524,7 +30628,7 @@ class LlamaCppBackend:
                 and not bypass_permissions
                 and permission_mode not in ("auto", "off")
             )
-        ) or bool(continue_final_message and trailing_assistant_text(conversation))
+        ) or bool(continue_final_message and trailing_assistant_resumable(conversation))
         _auto = None if _skip_autoinject else build_rag_autoinject(conversation, rag_scope)
         if _auto:
             for _ev in _auto["events"]:
@@ -30591,6 +30695,23 @@ class LlamaCppBackend:
         # This turn's park counters, kept across the attempts a tool loop makes: a mutable holder
         # so the nested builders read the latest without a `nonlocal` in every one of them.
         _turn_preempt: dict = {}
+        # Whether the server's own `: recomputed` notice was relayed this turn; a build that only
+        # counts recomputes in its final object has the notice synthesised from the count.
+        _turn_saw_recompute: list = [False]
+
+        def _relay_server_preempt_counts(chunk):
+            """The `preempt` field of a final object: kept for the metadata, and a recompute
+            it counted without the notice is relayed as the notice would have been."""
+            counts = self._server_preempt_counts(chunk)
+            if counts is None:
+                return None
+            # Summed: each final object counts its own request, and a turn is every request.
+            for _k, _v in counts.items():
+                _turn_preempt[_k] = _turn_preempt.get(_k, 0) + _v
+            if counts.get("recomputes") and not _turn_saw_recompute[0]:
+                _turn_saw_recompute[0] = True
+                return {"type": "preempt", "state": "recomputed", "source": "server"}
+            return None
 
         def _build_metadata_event(usage, timings, finish_reason):
             """Final usage+timings metadata event for the given pass, merging its
@@ -30642,6 +30763,36 @@ class LlamaCppBackend:
                 if k not in ("predicted_ms", "predicted_n", "predicted_per_second")
             }
             return (_u or None), (_t or None)
+
+        # The prompt side of the last attempt that completed, for an ending that sends
+        # nothing: its generation is already in the accumulators, its prompt is not.
+        _last_attempt: dict = {}
+
+        def _remember_attempt(usage, timings):
+            _last_attempt["usage"] = {
+                k: v for k, v in (usage or {}).items() if k.startswith("prompt")
+            }
+            _last_attempt["timings"] = {
+                k: v for k, v in (timings or {}).items() if not k.startswith("predicted")
+            }
+
+        def _admission_refused_ending(shown: str):
+            """End the turn on a refused re-cost, keeping what is on screen.
+
+            `length` is the finish the UI renders as Continue, not an error box. Content
+            events are cumulative, so the explanation goes out only over nothing.
+            """
+            yield {"type": "status", "text": ""}
+            if not (shown or "").strip():
+                yield {"type": "content", "text": _admission_room_refused_message()}
+            # The same notice a paused chat that gave up sends: the client then waits for an
+            # explicit Continue instead of resubmitting at once into the same full cache.
+            yield _preempt_gave_up_event(self._effective_context_length, max_tokens)
+            _meta = _build_metadata_event(
+                _last_attempt.get("usage"), _last_attempt.get("timings"), "length"
+            )
+            if _meta is not None:
+                yield _meta
 
         def _flush_reasoning_and_buffer():
             """Close a live-streamed <think> block (or emit the buffered reasoning
@@ -30937,16 +31088,12 @@ class LlamaCppBackend:
         _declined_charged = 0
         _declined_continues = False
         _declined_display: Optional[tuple[str, str, bool]] = None
+        # Rebound per iteration below; bound here too because the re-cost at the top of a
+        # round reads what the PREVIOUS round left on screen, and round zero has none.
+        _last_emitted = ""
         iteration = -1
         while True:
             iteration += 1
-            # Here rather than at each append: six sites grow the conversation and all of
-            # them pass through this one point before the cache must hold the result.
-            if on_conversation_grew is not None:
-                try:
-                    on_conversation_grew(conversation)
-                except Exception:  # accounting must never break a run in progress
-                    logger.debug("tool loop recost failed", exc_info = True)
             if iteration >= max_tool_iterations + _extra + _continuation_credits + _preempt_resumes:
                 break
             if cancel_event is not None and cancel_event.is_set():
@@ -31140,6 +31287,29 @@ class LlamaCppBackend:
                 except Exception as exc:
                     logger.warning("Could not preflight the rolling context window: %s", exc)
 
+            # All six growth sites pass here, below the narrowing that sets what is SENT
+            # and the fit above it: a refusal has to be for the prompt this round sends,
+            # not for history the compaction was about to drop.
+            if on_conversation_grew is not None:
+                try:
+                    _recosted_allowance = on_conversation_grew(conversation, safe_tools)
+                    if _recosted_allowance is not None:
+                        admission_output_allowance = _recosted_allowance
+                except LlamaAdmissionRecostRefused:
+                    # The lease still holds the previous round's figure, so this prompt
+                    # is not covered; sending it is the overcommit that kills every slot.
+                    logger.info(
+                        "Tool round %d: no cache room for this prompt; keeping the "
+                        "partial answer instead of sending it",
+                        iteration,
+                    )
+                    yield from _admission_refused_ending(_last_emitted)
+                    return
+                except LlamaAdmissionCancelled:
+                    return  # a Stop during the wait ends the turn as a Stop always does
+                except Exception:  # accounting must never break a run in progress
+                    logger.debug("tool loop recost failed", exc_info = True)
+
             payload = {
                 # Re-run every iteration: tool results land in ``conversation`` as the
                 # loop goes, and a forged turn in one would render for real (#7066).
@@ -31213,6 +31383,11 @@ class LlamaCppBackend:
                     return
                 if max_tokens is None:
                     payload["max_tokens"] = self._effective_context_length
+                    # A new window is not a new reservation.
+                    if admission_output_allowance is not None:
+                        payload["max_tokens"] = min(
+                            payload["max_tokens"], admission_output_allowance
+                        )
                 try:
                     conversation, truncation = _fit_with_instruction_pins(
                         conversation,
@@ -31458,6 +31633,8 @@ class LlamaCppBackend:
                                 # llama-server parked this slot or restored it; nothing is torn down.
                                 _park_event = self._server_park_event(line, preempt_policy)
                                 if _park_event is not None:
+                                    if _park_event.get("state") == "recomputed":
+                                        _turn_saw_recompute[0] = True
                                     yield _park_event
                                 continue
                             if not line.startswith("data: "):
@@ -31473,6 +31650,9 @@ class LlamaCppBackend:
                                 _cu = chunk_data.get("usage")
                                 if _cu:
                                     _iter_usage = _cu
+                                _recompute_event = _relay_server_preempt_counts(chunk_data)
+                                if _recompute_event is not None:
+                                    yield _recompute_event
 
                                 # See the note on the first stream loop: an error chunk has
                                 # no choices, so `continue` below would drop it silently.
@@ -31490,10 +31670,18 @@ class LlamaCppBackend:
 
                                 # One chunk is about one token, so this is the live n_i the
                                 # preemptor needs. Batched because the sweep takes a lock and
-                                # this runs per token; the slack is well under the buffer.
-                                _tokens_this_stream += 1
+                                # this runs per token; the slack is well under the buffer. Only a
+                                # frame carrying output, as on the plain path.
+                                _output_frame = bool(
+                                    delta.get("content")
+                                    or delta.get("reasoning_content")
+                                    or delta.get("tool_calls")
+                                )
+                                if _output_frame:
+                                    _tokens_this_stream += 1
                                 if (
-                                    on_tokens is not None
+                                    _output_frame
+                                    and on_tokens is not None
                                     and _tokens_this_stream % _TOKEN_REPORT_EVERY == 0
                                 ):
                                     try:
@@ -32172,6 +32360,7 @@ class LlamaCppBackend:
                                     _it_c = _iter_timings or {}
                                     _accumulated_predicted_ms += _it_c.get("predicted_ms", 0)
                                     _accumulated_predicted_n += _it_c.get("predicted_n", 0)
+                                    _remember_attempt(_fu_c, _it_c)
                                     if _continuation_credits < _MAX_CONTINUATION_CREDITS:
                                         _continuation_credits += 1
                                     yield {"type": "status", "text": ""}
@@ -32283,6 +32472,7 @@ class LlamaCppBackend:
                                 _it_l = _iter_timings or {}
                                 _accumulated_predicted_ms += _it_l.get("predicted_ms", 0)
                                 _accumulated_predicted_n += _it_l.get("predicted_n", 0)
+                                _remember_attempt(_fu_l, _it_l)
                                 # Blank first so the route resets its text cursor, as the
                                 # re-prompt below does; else the retry reads as a hang.
                                 if _continuation_credits < _MAX_CONTINUATION_CREDITS:
@@ -32396,6 +32586,7 @@ class LlamaCppBackend:
                             _it_r = _iter_timings or {}
                             _accumulated_predicted_ms += _it_r.get("predicted_ms", 0)
                             _accumulated_predicted_n += _it_r.get("predicted_n", 0)
+                            _remember_attempt(_fu_r, _it_r)
                             # Blank first (the route resets its text cursor only on an
                             # empty status), then the badge so the retry is not a hang.
                             yield {"type": "status", "text": ""}
@@ -32543,12 +32734,12 @@ class LlamaCppBackend:
                 # helper exists to preserve and which strict templates reject.
                 _merge_into_partial = continue_final_message
                 continue_final_message = _caller_continue_final_message
-                _accumulated_completion_tokens += (
-                    _backfill_usage_from_timings(_iter_usage, _iter_timings) or {}
-                ).get("completion_tokens", 0)
+                _fu = _backfill_usage_from_timings(_iter_usage, _iter_timings) or {}
+                _accumulated_completion_tokens += _fu.get("completion_tokens", 0)
                 _it = _iter_timings or {}
                 _accumulated_predicted_ms += _it.get("predicted_ms", 0)
                 _accumulated_predicted_n += _it.get("predicted_n", 0)
+                _remember_attempt(_fu, _it)
 
                 # Collapse exact-duplicate calls and cap the count for the TEXTUAL
                 # fallback (mirrors the safetensors loop; see _MAX_TOOL_CALLS_PER_TURN).
@@ -33112,21 +33303,38 @@ class LlamaCppBackend:
                         # no new case and the model gets a tool result it can read rather
                         # than a stream that stops mid-turn.
                         resolved_provisional_tool_call_ids.add(decision.tool_call_id)
-                        yield {
-                            "type": "tool_end",
-                            "tool_name": decision.tool_name,
-                            "tool_call_id": decision.tool_call_id,
-                            "result": _unservable_text,
-                            "provenance": decision.provenance,
-                        }
-                        _refused_message = {
-                            "role": "tool",
-                            "name": decision.tool_name,
-                            "content": _unservable_text,
-                        }
-                        if decision.tool_call_id:
-                            _refused_message["tool_call_id"] = decision.tool_call_id
-                        conversation.append(_refused_message)
+                        if _parallel_round:
+                            # Its place in the round is still its own: closed and appended
+                            # here, ahead of the calls before it still running, the tool
+                            # messages settled out of the model's order.
+                            _pending_calls.append(
+                                (
+                                    decision,
+                                    None,
+                                    None,
+                                    _unservable_text,
+                                    None,
+                                    ["<not passed>"],
+                                    [False],
+                                    _compact_after_execution,
+                                )
+                            )
+                        else:
+                            yield {
+                                "type": "tool_end",
+                                "tool_name": decision.tool_name,
+                                "tool_call_id": decision.tool_call_id,
+                                "result": _unservable_text,
+                                "provenance": decision.provenance,
+                            }
+                            _refused_message = {
+                                "role": "tool",
+                                "name": decision.tool_name,
+                                "content": _unservable_text,
+                            }
+                            if decision.tool_call_id:
+                                _refused_message["tool_call_id"] = decision.tool_call_id
+                            conversation.append(_refused_message)
                         # The refusal is itself the `tool` message that makes this call's
                         # arguments start rendering, so declining without this leaves the
                         # next generation over the window anyway: observed as an accurate
@@ -33902,7 +34110,10 @@ class LlamaCppBackend:
                     # instead decoded on cells the planner had handed out, the lease having gone
                     # back with on_preempted.
                     yield _preempt_gave_up_event(self._effective_context_length, max_tokens)
-                    _gave_up_meta = _build_metadata_event(_iter_usage, _iter_timings, "length")
+                    # The attempt's decode is in the accumulators already: its prompt side only.
+                    _gave_up_meta = _build_metadata_event(
+                        *_folded_attempt(_iter_usage, _iter_timings), "length"
+                    )
                     if _gave_up_meta is not None:
                         yield _gave_up_meta
                     return
@@ -33971,12 +34182,16 @@ class LlamaCppBackend:
             if max_tokens is not None
             else (self._effective_context_length or _DEFAULT_MAX_TOKENS_FLOOR)
         )
-        # The same clamp the per-round payload applies: without it a run that spent its tool budget
-        # sent the whole window as its output cap while admission had reserved a share.
-        if admission_output_allowance is not None:
-            _final_max_tokens = min(_final_max_tokens, admission_output_allowance)
+        # A declined pause charged its attempt against the caller's cap, so the final pass
+        # extends what is left of it.
         if _declined_charged and isinstance(_final_max_tokens, int):
             _final_max_tokens = max(1, _final_max_tokens - _declined_charged)
+        # Unclamped: the re-cost below can RAISE the bound. Only the fit gets the clamp.
+        _final_fit_max_tokens = (
+            min(_final_max_tokens, admission_output_allowance)
+            if admission_output_allowance is not None
+            else _final_max_tokens
+        )
         _final_preflight_context_length = None
         _final_preflight_succeeded = False
         if context_overflow == "truncate_oldest" and self._effective_context_length:
@@ -34005,7 +34220,7 @@ class LlamaCppBackend:
                 conversation, truncation = _fit_with_instruction_pins(
                     conversation,
                     context_length = self._effective_context_length,
-                    max_tokens = _final_max_tokens,
+                    max_tokens = _final_fit_max_tokens,
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(
                             messages_without_unpriced_media(fitted), None, self.markup_profile
@@ -34088,13 +34303,7 @@ class LlamaCppBackend:
         # tool-iteration cap, a controller turning tools off) leave the assistant turn,
         # its tool results and any nudge appended after the last re-cost -- making this
         # final pass the largest request of the run and the one the pool never heard
-        # about. Here rather than at the breaks: the recall above can rebind
-        # `conversation`, and every path reaches this point with the list about to be sent.
-        if on_conversation_grew is not None:
-            try:
-                on_conversation_grew(conversation)
-            except Exception:  # accounting must never break a run in progress
-                logger.debug("tool loop final recost failed", exc_info = True)
+        # about. It sends no `tools` array, hence the None below.
 
         stream_payload = {
             "messages": neutralize_control_markup_in_messages(
@@ -34114,6 +34323,9 @@ class LlamaCppBackend:
         if _reasoning_kw is not None:
             stream_payload["chat_template_kwargs"] = _reasoning_kw
         stream_payload["max_tokens"] = _final_max_tokens
+        # What this attempt may write before the admission bound: kept apart from the
+        # payload so a re-cost that raises the allowance is not held under the last cap.
+        _final_attempt_cap = _final_max_tokens
         if stop:
             stream_payload["stop"] = stop
         _apply_seeded_llama_request(stream_payload, seed)
@@ -34151,7 +34363,7 @@ class LlamaCppBackend:
                 _refit_tail_merged = True
 
         def _refit_final_after_respawn() -> None:
-            nonlocal conversation
+            nonlocal conversation, _final_attempt_cap
             _before_respawn_fit = conversation
             if (
                 _final_preflight_context_length is None
@@ -34163,7 +34375,14 @@ class LlamaCppBackend:
             ):
                 return
             if max_tokens is None:
-                stream_payload["max_tokens"] = self._effective_context_length
+                # The replacement window is the new base: a later re-cost must not
+                # restore a cap the dead server's window allowed.
+                _final_attempt_cap = self._effective_context_length
+                stream_payload["max_tokens"] = _final_attempt_cap
+                if admission_output_allowance is not None:
+                    stream_payload["max_tokens"] = min(
+                        stream_payload["max_tokens"], admission_output_allowance
+                    )
             try:
                 conversation, truncation = _fit_with_instruction_pins(
                     conversation,
@@ -34383,6 +34602,33 @@ class LlamaCppBackend:
         # left on instead of taking the reasoning-only recovery.
         _attempt_started_at = ""
         while True:
+            # Per attempt: a continuation appends the partial, so a cap priced on the
+            # first attempt over-permits. Read from the payload, where that tail lives.
+            if on_conversation_grew is not None:
+                try:
+                    _final_recosted_allowance = on_conversation_grew(
+                        stream_payload["messages"], None
+                    )
+                    if _final_recosted_allowance is not None:
+                        admission_output_allowance = _final_recosted_allowance
+                except LlamaAdmissionRecostRefused:
+                    # As in the loop: a refused attempt is not sent. On a continuation
+                    # that leaves the answer it has already shown, which Continue extends.
+                    logger.info(
+                        "Final answer: no cache room for this attempt; keeping the "
+                        "partial answer instead of sending it"
+                    )
+                    yield from _admission_refused_ending(_last_emitted)
+                    return
+                except LlamaAdmissionCancelled:
+                    return
+                except Exception:  # accounting must never break a run in progress
+                    logger.debug("tool loop final recost failed", exc_info = True)
+            # After it, so a continuation that rewrote the cap is bounded too. Rebuilt from
+            # the attempt cap, not narrowed from the last payload: a continuation whose
+            # prompt reached its share earns the flat allowance the re-cost above paid for.
+            if admission_output_allowance is not None:
+                stream_payload["max_tokens"] = min(_final_attempt_cap, admission_output_allowance)
             try:
                 with self._open_chat_stream_with_respawn_retry(
                     stream_payload,
@@ -34450,6 +34696,8 @@ class LlamaCppBackend:
                                 # llama-server parked this slot or restored it; nothing is torn down.
                                 _park_event = self._server_park_event(line, preempt_policy)
                                 if _park_event is not None:
+                                    if _park_event.get("state") == "recomputed":
+                                        _turn_saw_recompute[0] = True
                                     yield _park_event
                                 continue
                             if not line.startswith("data: "):
@@ -34466,10 +34714,9 @@ class LlamaCppBackend:
                                 _chunk_usage = chunk_data.get("usage")
                                 if _chunk_usage:
                                     _metadata_usage = _chunk_usage
-                                _chunk_preempt = self._server_preempt_counts(chunk_data)
-                                if _chunk_preempt is not None:
-                                    _turn_preempt.clear()
-                                    _turn_preempt.update(_chunk_preempt)
+                                _recompute_event = _relay_server_preempt_counts(chunk_data)
+                                if _recompute_event is not None:
+                                    yield _recompute_event
                                 # See the note on the first stream loop.
                                 _stream_error = stream_error_from_chunk(chunk_data)
                                 if _stream_error is not None:
@@ -34482,10 +34729,17 @@ class LlamaCppBackend:
                                         _metadata_finish_reason = _fr
 
                                     # One chunk is about one token. Batched by
-                                    # _TOKEN_REPORT_EVERY and never allowed to raise.
-                                    _final_tokens_this_stream += 1
+                                    # _TOKEN_REPORT_EVERY and never allowed to raise. Output frames only.
+                                    _final_output_frame = bool(
+                                        delta.get("content")
+                                        or delta.get("reasoning_content")
+                                        or delta.get("tool_calls")
+                                    )
+                                    if _final_output_frame:
+                                        _final_tokens_this_stream += 1
                                     if (
-                                        on_tokens is not None
+                                        _final_output_frame
+                                        and on_tokens is not None
                                         and _final_tokens_this_stream % _TOKEN_REPORT_EVERY == 0
                                     ):
                                         try:
@@ -34622,6 +34876,7 @@ class LlamaCppBackend:
                             stream_payload["continue_final_message"] = True
                             stream_payload["add_generation_prompt"] = False
                             if _next_cap is not None:
+                                _final_attempt_cap = _next_cap
                                 stream_payload["max_tokens"] = _next_cap
                             # Folded in only now, else the reported usage counts the last
                             # fragment alone.
@@ -34633,6 +34888,7 @@ class LlamaCppBackend:
                             _it_f = _metadata_timings or {}
                             _accumulated_predicted_ms += _it_f.get("predicted_ms", 0)
                             _accumulated_predicted_n += _it_f.get("predicted_n", 0)
+                            _remember_attempt(_fu_f, _it_f)
                             _stream_done = False
                             _metadata_finish_reason = None
                             # Per attempt, like the finish reason. This attempt's usage has
@@ -34752,6 +35008,7 @@ class LlamaCppBackend:
                                 stream_payload.pop("continue_final_message", None)
                                 stream_payload.pop("add_generation_prompt", None)
                                 if _next_cap_r is not None:
+                                    _final_attempt_cap = _next_cap_r
                                     stream_payload["max_tokens"] = _next_cap_r
                                 if _off_kw is not None:
                                     stream_payload["chat_template_kwargs"] = _off_kw
@@ -34765,6 +35022,7 @@ class LlamaCppBackend:
                                 _it_r = _metadata_timings or {}
                                 _accumulated_predicted_ms += _it_r.get("predicted_ms", 0)
                                 _accumulated_predicted_n += _it_r.get("predicted_n", 0)
+                                _remember_attempt(_fu_r, _it_r)
                                 _stream_done = False
                                 _metadata_finish_reason = None
                                 # Per attempt, like the finish reason. This attempt's usage has

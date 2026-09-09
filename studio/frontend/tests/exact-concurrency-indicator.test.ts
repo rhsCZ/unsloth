@@ -30,6 +30,9 @@ const API_TYPES = read("src/features/chat/types/api.ts");
 const STORE = read("src/features/chat/stores/chat-runtime-store.ts");
 const CHIP = read("src/features/chat/components/exact-concurrency-chip.tsx");
 const CHAT_PAGE = read("src/features/chat/chat-page.tsx");
+const RUNTIME = read("src/features/chat/hooks/use-chat-model-runtime.ts");
+const ADAPTER = read("src/features/chat/api/chat-adapter.ts");
+const PROVIDER = read("src/features/chat/runtime-provider.tsx");
 
 test("the three reported states map to themselves", () => {
   assert.equal(normalizeExactConcurrency("on"), "on");
@@ -91,6 +94,30 @@ test("the store holds the state and starts off", () => {
   assert.equal(STORE.match(/loadedExactConcurrency: "off",/g)?.length, 2);
 });
 
+test("a rollback resends the exact setting the previous load asked for", () => {
+  // The store may have been switched to `on` since that load; an omitted field would
+  // resolve to it and fail the model that was running fine.
+  const request = API_TYPES.slice(
+    API_TYPES.indexOf("export interface LoadModelRequest"),
+    API_TYPES.indexOf("export interface LoadModelResponse"),
+  );
+  assert.match(request, /exact_concurrency\?: string \| null;/);
+  assert.match(STORE, /loadedRequestedExactConcurrency: string \| null;/);
+  assert.equal(STORE.match(/loadedRequestedExactConcurrency: null,/g)?.length, 2);
+  assert.match(
+    APPLIER,
+    /loadedRequestedExactConcurrency: status\.requested_exact_concurrency \?\? null,/,
+  );
+  assert.match(
+    RUNTIME,
+    /loadedRequestedExactConcurrency:\s*loadResponse\.requested_exact_concurrency \?\? null,/,
+  );
+  assert.match(
+    RUNTIME,
+    /exact_concurrency: stateBeforeUnload\.loadedRequestedExactConcurrency/,
+  );
+});
+
 test("every status refresh republishes it, not just a seeded load", () => {
   // A tab opened onto an already-loaded model performs no load, so the chip would never
   // appear if this were gated on seedLoadParams.
@@ -149,7 +176,7 @@ test("a recompute in this chat is named in the chip, whatever the load reports",
   const on = exactConcurrencyChip("on", { recomputed: true });
   assert.ok(on);
   assert.match(on.title, /re-prefilled after a park the server could not hold/);
-  assert.match(on.title, /not byte-identical/);
+  assert.match(on.title, /not guaranteed byte-identical/);
   assert.notEqual(on.label, "Exact");
   const unavailable = exactConcurrencyChip("unavailable", { recomputed: true });
   assert.ok(unavailable);
@@ -162,6 +189,31 @@ test("without a recompute the chip reads exactly as it did", () => {
   assert.doesNotMatch(exactConcurrencyChip("on")!.title, /re-prefilled/);
   // `off` renders nothing at all, so a recompute there has no chip to annotate.
   assert.equal(exactConcurrencyChip("off", { recomputed: true }), null);
+});
+
+test("the recompute note is persisted with the answer and read back on load", () => {
+  // The map is in memory only; a reload or another tab restores the load's state as `on`,
+  // so the note has to come back from the thread's last answer, and a turn that failed
+  // must not have cleared it first.
+  assert.equal(
+    ADAPTER.match(/preemptRecomputed: sawPreemptRecompute \|\| undefined,/g)?.length,
+    2,
+    "the live and the final metadata both carry it",
+  );
+  assert.doesNotMatch(
+    ADAPTER,
+    /createStreamPublishGate\(\);\s*\/\/[^\n]*\n\s*runtime\.clearPreemptRecompute/,
+    "cleared before the first chunk",
+  );
+  assert.match(
+    ADAPTER,
+    /if \(sawPreemptRecompute\) \{\s*runtime\.notePreemptRecompute\(liveThreadKey\(serverCancel\)\);\s*\} else \{\s*runtime\.clearPreemptRecompute\(liveThreadKey\(serverCancel\)\);/,
+  );
+  assert.match(PROVIDER, /preemptRecomputed: true/);
+  assert.match(
+    PROVIDER,
+    /\?\.preemptRecomputed === true[\s\S]{0,80}store\.notePreemptRecompute\(remoteId\)/,
+  );
 });
 
 test("the chip reads the flag for the conversation on screen", () => {

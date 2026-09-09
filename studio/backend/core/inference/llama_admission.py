@@ -214,6 +214,14 @@ class LlamaAdmissionCancelled(LlamaAdmissionError):
     pass
 
 
+class LlamaAdmissionRecostRefused(LlamaAdmissionError):
+    """A started run asked to grow past its lease and was refused.
+
+    The lease still holds the figure it came in with, so the larger prompt is not
+    covered: the caller must end the turn with what it has rather than send.
+    """
+
+
 def _raw_env(name: str) -> Optional[str]:
     """Value for a canonical name, falling back to its legacy spelling."""
     value = os.environ.get(name)
@@ -358,6 +366,11 @@ class LlamaAdmissionLease:
     def slot(self) -> Optional[int]:
         """Pool slot this lease holds, or None when admission is disabled."""
         return self._slot
+
+    @property
+    def released(self) -> bool:
+        """Whether release() has run: the run is being torn down, not refused."""
+        return self._released
 
     def park(self) -> bool:
         """Hand the slot back while this holder waits on something off the GPU.
@@ -962,7 +975,12 @@ class LlamaAdmissionQueue:
         # A free slot is not enough: with --kv-unified every slot reports the full n_ctx, so the pool can hand out more
         # slots than the one cache can serve. ``reserved_tokens`` is the room the tickets ahead are coming back for, or
         # a later, smaller resume overtakes an earlier one that could then wait out its deadline.
-        return self._fits_budget_locked(tokens + max(0, int(reserved_tokens or 0)))
+        reserved_tokens = max(0, int(reserved_tokens or 0))
+        if self._budget > 0 and reserved_tokens > 0:
+            # Not through the empty-cache escape: that room is not committed yet, and an arrival
+            # that takes it on an empty ledger strands the older resume at its deadline.
+            return self._committed + max(0, int(tokens or 0)) + reserved_tokens <= self._budget
+        return self._fits_budget_locked(tokens)
 
     def _take_slot_locked(
         self,

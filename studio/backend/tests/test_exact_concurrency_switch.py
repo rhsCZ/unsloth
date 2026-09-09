@@ -117,6 +117,15 @@ class TestTheSetting:
             ("true", True),
             ("on", True),
             ("yes", True),
+            # atoi reads the leading integer and stops, and reads nothing as zero.
+            ("1.0", True),
+            ("1foo", True),
+            (" +3 ", True),
+            ("-1", True),
+            ("0x1", False),
+            ("0.5", False),
+            ("foo1", False),
+            (".1", False),
         ],
     )
     def test_what_counts_as_an_inherited_variable_being_set(self, raw, set_):
@@ -220,6 +229,24 @@ class TestTheLaunchArgs:
     )
     def test_what_the_mode_cannot_run_beside(self, args, expected):
         assert exact.contradicting_args(args) == expected
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            ({}, []),
+            ({"LLAMA_ARG_CPU_MOE": "1"}, ["LLAMA_ARG_CPU_MOE=1"]),
+            ({"LLAMA_ARG_CPU_MOE": "true"}, ["LLAMA_ARG_CPU_MOE=true"]),
+            ({"LLAMA_ARG_CPU_MOE": "0"}, []),
+            ({"LLAMA_ARG_N_CPU_MOE": "8"}, ["LLAMA_ARG_N_CPU_MOE=8"]),
+            ({"LLAMA_ARG_N_CPU_MOE": "0"}, []),
+            ({"LLAMA_ARG_OVERRIDE_TENSOR": "exps=CPU"}, ["LLAMA_ARG_OVERRIDE_TENSOR=exps=CPU"]),
+            ({"LLAMA_ARG_OVERRIDE_TENSOR": "attn=CUDA0"}, []),
+            ({"LLAMA_ARG_KV_UNIFIED": "0"}, []),
+        ],
+    )
+    def test_what_the_mode_cannot_inherit(self, env, expected):
+        # llama.cpp reads these before argv and appends, so no later flag takes them back.
+        assert exact.contradicting_env(env) == expected
 
     @pytest.mark.parametrize(
         ("value", "on_cpu"),
@@ -367,6 +394,15 @@ class TestTheReportedState:
                 self._state(setting = setting, env = {exact.CHILD_ENV: "1"}, args = args)
                 == exact.EXACT_STATE_UNAVAILABLE
             )
+        # An inherited CPU placement the argv never mentions counts the same way.
+        assert (
+            self._state(
+                setting = "on",
+                env = {exact.CHILD_ENV: "1", "LLAMA_ARG_OVERRIDE_TENSOR": "exps=CPU"},
+                args = _STUDIO_ARGV,
+            )
+            == exact.EXACT_STATE_UNAVAILABLE
+        )
 
 
 class TestThePreemptionSnapshotReportsItAndNeverActsOnIt:

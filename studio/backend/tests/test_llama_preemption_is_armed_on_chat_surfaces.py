@@ -15,7 +15,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from auth.authentication import get_current_subject
-from core.inference import llama_admission
 from core.inference.llama_admission import LlamaAdmissionConfig, get_llama_admission_queue
 from core.inference.llama_preemption import (
     ParticipantState,
@@ -28,7 +27,10 @@ import routes.inference as inference
 
 from .asgi_stream_helpers import wait_for_frame
 from .llama_backend_double import FakeLlamaCppBackend
-from .preempt_fakes import clean_admission_queues, clean_preemption_registry  # noqa: F401
+from .preempt_fakes import clean_admission_queues, clean_preemption_registry
+
+# pytest finds these by name; named here so the import reads as a use.
+_FIXTURES = (clean_admission_queues, clean_preemption_registry)
 
 
 BASE = "http://llama.test"
@@ -360,6 +362,17 @@ class TestARawPassthroughIsCountedAndNeverChosen:
         assert controller.committed_tokens() == 9000, "a holder the watermark cannot see"
         controller.register("chat", tokens = 6000, signal = PreemptSignal())
         assert [v.gen_id for v in controller.plan_preemptions(needed = 4000)] == ["chat"]
+
+    def test_a_streaming_raw_holder_is_measured_at_its_first_data_line(self):
+        """Registered unmeasured; the passthrough body marks it at its first data line."""
+        import inspect
+
+        source = " ".join(inspect.getsource(inference).split())
+        body = source.index("async def _anthropic_passthrough_stream(")
+        assert (
+            "_openai_llama_note_raw_measured(llama_backend = llama_backend, gen_id = message_id)"
+            in source[body : body + 40000]
+        )
 
 
 class TestArmingItself:

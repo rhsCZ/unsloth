@@ -34,10 +34,10 @@ from core.inference.llama_preemption import (
 from fastapi import HTTPException
 from models.inference import AnthropicMessagesRequest, ChatCompletionRequest
 
-from .preempt_fakes import (  # noqa: F401  (autouse registry/queue cleanup)
-    clean_admission_queues,
-    clean_preemption_registry,
-)
+from .preempt_fakes import clean_admission_queues, clean_preemption_registry
+
+# pytest finds these by name; named here so the import reads as a use.
+_FIXTURES = (clean_admission_queues, clean_preemption_registry)
 
 _BUDGET = 16384
 _SLOTS = 4
@@ -339,7 +339,8 @@ class TestExactModeIsOnlyReportedOnEvidence:
         import inspect
 
         source = inspect.getsource(LlamaCppBackend.load_model)
-        assert "_exact_running = self._server_reports_exact_concurrency()" in source
+        assert "_server_props = self._query_server_props() or {}" in source
+        assert '_exact_running = _server_props.get("exact_concurrency") is True' in source
         assert "supports_exact = _exact_running," in source
         assert "supports_exact = bool(" not in source
 
@@ -578,6 +579,9 @@ class TestTheResidencySweepAnswersToTheSameSwitches:
         assert inf._openai_llama_preemption_will_apply(backend, _BUDGET)
         controller = get_preemption_controller(_KEY)
         controller.configure(budget = 512, kv_unified = True, slots = _SLOTS)
+        # Two holders: a chat alone on the cache reads no slots on its token path.
+        controller.register("active", tokens = 64)
+        controller.register("theirs", tokens = 64)
         _refresh, observe, _note = inf._openai_llama_residency_observer(
             llama_backend = backend, completion_id = "active"
         )
@@ -659,13 +663,13 @@ class TestTheAnthropicPassthroughIsSentTheCapItWasChargedFor:
             *a,
             **k,
         ):
-            sent["max_tokens"] = max_tokens
+            sent.update(max_tokens = max_tokens, messages = messages, tools = tools)
             raise HTTPException(status_code = 418)
 
         async def _non_streaming(
             llama_backend, messages, tools, temperature, top_p, top_k, max_tokens, *a, **k
         ):
-            sent["max_tokens"] = max_tokens
+            sent.update(max_tokens = max_tokens, messages = messages, tools = tools)
             raise HTTPException(status_code = 418)
 
         monkeypatch.setattr(inf, "_anthropic_passthrough_stream", _stream)
@@ -687,8 +691,14 @@ class TestTheAnthropicPassthroughIsSentTheCapItWasChargedFor:
                 inf.anthropic_messages(payload, request = _AnthropicRequest(), current_subject = "t")
             )
         assert raised.value.status_code == 418
+        # Priced from the messages and catalogue actually sent, held to the share.
         expected = inf._openai_llama_admission_enforced_max_tokens(
-            payload, request = None, llama_backend = backend, pausable = False
+            payload,
+            request = None,
+            llama_backend = backend,
+            conversation = sent["messages"],
+            injected_tools = sent["tools"],
+            pausable = False,
         )
         assert expected is not None and expected < _BUDGET
         assert sent["max_tokens"] == expected

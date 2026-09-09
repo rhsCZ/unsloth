@@ -18,7 +18,8 @@ byte-identical output being unable to notice a downgrade).
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, Mapping, Optional, Sequence
+import re
+from typing import Any, Mapping, Optional, Sequence
 
 
 # Studio's own switch, overriding the request field and the stored setting.
@@ -48,17 +49,16 @@ def normalize_setting(value: Any) -> Optional[str]:
 
 
 def _truthy(value: Optional[str]) -> bool:
-    """llama.cpp reads this variable with ``atoi() != 0``, so match that, plus the spellings a
-    person types where a C program would have read zero."""
+    """llama.cpp reads this variable with ``atoi() != 0``, so match that (the leading integer,
+    whatever follows it), plus the spellings a person types where a C program would have
+    read zero."""
     if value is None:
         return False
     text = value.strip().lower()
     if text in {"true", "yes", "on"}:
         return True
-    try:
-        return int(text, 10) != 0
-    except ValueError:
-        return False
+    leading = re.match(r"[+-]?\d+", text)
+    return leading is not None and int(leading.group(0), 10) != 0
 
 
 def child_flag_set(environ: Mapping[str, str]) -> bool:
@@ -198,6 +198,29 @@ def _flag_value(token: str, following: Optional[str]) -> Optional[str]:
     if "=" in token:
         return token.split("=", 1)[1]
     return following
+
+
+# The env twins llama.cpp reads for the CPU expert placements, which reach the child however
+# the argv was stripped.
+_CPU_PLACEMENT_ENV = ("LLAMA_ARG_CPU_MOE", "LLAMA_ARG_N_CPU_MOE", "LLAMA_ARG_OVERRIDE_TENSOR")
+
+
+def contradicting_env(env: Optional[Mapping[str, str]]) -> list[str]:
+    """The inherited variables exact mode cannot run with, spelled as ``NAME=value``."""
+    found: list[str] = []
+    for name in _CPU_PLACEMENT_ENV:
+        value = str((env or {}).get(name) or "").strip()
+        if not value:
+            continue
+        if name == "LLAMA_ARG_CPU_MOE":
+            hit = value.lower() in ("1", "on", "true", "yes")
+        elif name == "LLAMA_ARG_N_CPU_MOE":
+            hit = value.isdigit() and int(value) > 0
+        else:
+            hit = _places_tensors_on_cpu(value)
+        if hit:
+            found.append(f"{name}={value}")
+    return found
 
 
 def contradicting_args(args: Optional[Sequence[str]]) -> list[str]:

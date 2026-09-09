@@ -3,12 +3,9 @@
 
 """Every KV-preemption switch has to reach every surface that acts on it.
 
-The optimistic allowance, the wire clamp, the arm and the disarm's erase are four different
-decisions taken from one question -- can the difference between what a request is charged and
-what it may generate be reclaimed? Each of these covers one place where the answer was assumed
-instead of asked: a request that cannot be paused, a server whose parking was switched off
-through its environment, a binary that never implemented exact concurrency, and the two
-accounting opt-outs.
+The optimistic allowance, the wire clamp, the arm and the disarm's erase are four decisions taken
+from one question: can the difference between what a request is charged and what it may generate
+be reclaimed? Each check covers one place where the answer was assumed instead of asked.
 """
 
 from __future__ import annotations
@@ -342,7 +339,8 @@ class TestExactModeIsOnlyReportedOnEvidence:
         import inspect
 
         source = inspect.getsource(LlamaCppBackend.load_model)
-        assert "supports_exact = self._server_reports_exact_concurrency()" in source
+        assert "_exact_running = self._server_reports_exact_concurrency()" in source
+        assert "supports_exact = _exact_running," in source
         assert "supports_exact = bool(" not in source
 
     @pytest.mark.parametrize(

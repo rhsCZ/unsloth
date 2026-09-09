@@ -3,25 +3,19 @@
 
 """Four gaps between what a park promises and what reached the client or the ledger.
 
-1. The raw passthrough loops (Responses, chat and completions passthrough, Anthropic
-   passthrough) relayed ``data:`` lines only. A request the server parked sent
-   ``: preempted`` and a ``: preempt-keepalive`` every two seconds, each of which reset
-   the stall clock and reached nobody, so a long park sent the client no bytes at all.
-   ``_server_park_sse`` maps those notices onto the comments every other surface forwards.
+1. The raw passthrough loops relayed ``data:`` lines only, so a parked request's ``: preempted``
+   and two-second ``: preempt-keepalive`` reached nobody and a long park sent the client no bytes
+   at all. ``_server_park_sse`` maps those notices onto the comments every surface forwards.
 
-2. Exact concurrency was reported ``on`` under ``UNSLOTH_LLAMA_PREEMPT_MODE=studio``. A chat
-   the server parks is restored cell for cell; one Studio pauses is resumed as a
-   continuation with fresh sampler and draft state, so the promise needs the server to be
-   the one pausing. ``_exact_state_after_launch`` now takes ``server_parks``.
+2. Exact concurrency was reported ``on`` under ``UNSLOTH_LLAMA_PREEMPT_MODE=studio``, though a
+   chat Studio pauses resumes with fresh sampler and draft state where one the server parks is
+   restored cell for cell. ``_exact_state_after_launch`` now takes ``server_parks``.
 
-3. A user-named ``--preempt-ram`` below the KV pool was reported exact too, though a park
-   that outgrows it is re-prefilled. ``_exact_parking_shortfall_mib`` names the shortfall
-   and the state reads ``unavailable`` for it.
+3. A user-named ``--preempt-ram`` below the KV pool was reported exact too, though a park that
+   outgrows it is re-prefilled; ``_exact_parking_shortfall_mib`` names the shortfall.
 
-4. A swap build predating the stream notices parks in silence. The read wrapper excused the
-   silence from `/metrics` and forwarded nothing, so a durable run's lease had nothing to
-   renew on and the sweeper could cancel a legitimate park. The backend stamps the excuse
-   and the run loop renews from it.
+4. A swap build predating the stream notices parks in silence, and the read wrapper forwarded
+   nothing, so a durable run's lease had nothing to renew on. The backend stamps the excuse.
 """
 
 import asyncio
@@ -241,10 +235,9 @@ class TestASilentParkStillRenewsTheLease:
 
 
 class TestTheRunLoopProbesParkingRatherThanWaitForTheStamp:
-    """The read wrapper only asks `/metrics` when its read deadline fires, and before the first
-    token that deadline IS the 20 minute first-token budget, i.e. the whole default lease. A run
-    parked during prefill therefore had no stamp to renew from until the sweeper had already had
-    its chance to cancel it, and any shorter lease lost outright. The run loop asks for itself."""
+    """The read wrapper only asks `/metrics` at its read deadline, and before the first token that
+    deadline IS the 20 minute first-token budget, so a run parked during prefill had no stamp to
+    renew from until the sweeper had had its chance to cancel it. The run loop asks for itself."""
 
     @pytest.fixture(autouse = True)
     def _reset_probe_rate_limit(self):
@@ -567,9 +560,8 @@ class TestTheGlobalOptOutBlocksAnAutoLaunch:
 
 class TestTheParkGraceLivesBelowTheHttpxIterators:
     """An httpx async generator that raised is closed, so a retry above it returned
-    StopAsyncIteration and the relay ended as if the parked answer were complete. The grace
-    is applied to the network stream's read, where nothing above it unwinds; this runs the
-    relay over a real httpx stream against a local server that goes silent."""
+    StopAsyncIteration and the relay ended as if the parked answer were complete. The grace is
+    applied to the network stream's read; this runs the relay against a server that goes silent."""
 
     @staticmethod
     async def _serve(first_delay: float, gap: float):
@@ -696,20 +688,32 @@ class TestTheGraceStartsAtTheDeadlineAndTheProbeLeavesTheLoopAlone:
         import httpcore
 
         # A 30ms window and a 50ms grace: the retries after the first deadline add up to the
-        # grace, and not to the grace less the window it took to reach the deadline.
+        # grace, and not to the grace less the window it took to reach the deadline. The clock
+        # is faked and advanced by exactly each window: real sleeps overshoot on a loaded
+        # runner and read as a short grace.
         monkeypatch.setattr(inference, "_RAW_PARK_STALL_CAP_S", 0.05)
         windows = []
+        clock = [1000.0]
+
+        class _Clock:
+            monotonic = staticmethod(lambda: clock[0])
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        monkeypatch.setattr(inference, "time", _Clock())
 
         async def silent(max_bytes, timeout = None):
             windows.append(timeout)
-            await asyncio.sleep(timeout)
+            clock[0] += timeout
+            await asyncio.sleep(0)
             raise httpcore.ReadTimeout("silence")
 
         stream = self._wrapped(monkeypatch, silent, lambda: True)
         with pytest.raises(httpcore.ReadTimeout):
             asyncio.run(stream.read(65536, timeout = 1200.0))
         assert windows[0] == pytest.approx(0.03)
-        assert sum(windows[1:]) == pytest.approx(0.05, abs = 0.002), windows
+        assert sum(windows[1:]) == pytest.approx(0.05, abs = 1e-9), windows
         assert len(windows) >= 3
 
     def test_the_probe_runs_off_the_event_loop(self, monkeypatch):
@@ -785,10 +789,9 @@ class TestAnExplicitOptOutOfTheUnifiedCacheIsKept:
 
 
 class TestTheGlobalOptOutBlocksAnExactOnLaunchToo:
-    """`auto` was preflighted for the opt-out, `on` was not: the exact launch sized a parking
-    budget of its own (a finite one for a pool past the server's default), and
-    `_stand_down_child_parking` reads any `--preempt-ram` as a budget somebody named, so the
-    child parked with UNSLOTH_LLAMA_ADMISSION_PREEMPT=0 set. The budget is generated only when
+    """`auto` was preflighted for the opt-out, `on` was not: the exact launch sized a parking budget
+    of its own, and `_stand_down_child_parking` reads any `--preempt-ram` as one somebody named, so
+    the child parked with UNSLOTH_LLAMA_ADMISSION_PREEMPT=0 set. The budget is generated only when
     the child is going to be allowed to park at all."""
 
     _POOL = 12 * _GIB
@@ -847,14 +850,10 @@ class TestTheGlobalOptOutBlocksAnExactOnLaunchToo:
 
 class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
     """The exact launch used to append ``--preempt-ram -1`` for an auto-fit context, before the
-    running server had confirmed the mode. Every way the attempt is abandoned keeps that argv:
-    the refusal rung takes the mode off the child's ENVIRONMENT and relaunches the same command,
-    and a build that ignores ``LLAMA_EXACT_CONCURRENCY`` comes up healthy and is reported
-    ``unavailable`` with nothing relaunched at all. Either way a server with no exact
-    concurrency parked into unbounded host RAM instead of llama.cpp's 8192 MiB default
-    (unslothai/llama.cpp#184: ``--preempt-ram N`` bounds the host RAM parked sequences hold,
-    ``-1`` is no limit). So the launch names no budget it cannot size, and the default it left
-    the child on is judged after launch instead."""
+    running server had confirmed the mode, and every way the attempt is abandoned keeps that argv
+    (the refusal rung relaunches the same command; a build ignoring the variable never relaunches).
+    A server with no exact concurrency then parked into unbounded host RAM instead of llama.cpp's
+    8192 MiB default. So the launch names no budget it cannot size, judging the default later."""
 
     def test_the_launch_never_generates_an_unlimited_budget(self):
         source = inspect.getsource(LlamaCppBackend.load_model)
@@ -880,6 +879,18 @@ class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
         window = spawn[rung : rung + 900]
         assert "continue" in window
         assert "run_cmd" not in window.split("continue")[0]
+
+    def test_a_short_budget_is_reported_as_the_mode_running_short_not_as_absent(self):
+        # The child keeps the mode after a late shortfall, so the warning, and the `on`
+        # refusal, say it runs but cannot hold every park, not that it came up without it.
+        spawn = inspect.getsource(LlamaCppBackend.load_model)
+        judged = spawn.index("_exact_running = self._server_reports_exact_concurrency()")
+        window = spawn[judged : judged + 6000]
+        assert "if _exact_running:" in window
+        assert "runs the mode, but it cannot hold every " in window
+        assert "park, and a chat re-prefilled after a park it could not hold" in window
+        assert "came up without it" in window.split("if _exact_running:")[1]
+        assert window.count("_exact_what") >= 4
 
     def test_the_default_budget_the_child_keeps_is_the_one_that_gets_judged(self):
         # An auto-fit pool the server's default cannot hold is reported, not papered over

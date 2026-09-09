@@ -2053,15 +2053,23 @@ def _preempt_ram_disabled_in(args, env: Optional[Mapping[str, str]] = None) -> b
     carries ``set_env("LLAMA_ARG_PREEMPT_RAM")``: a zero in the environment disables parking with
     nothing on the launch line, and a Studio-managed budget still beats an inherited zero."""
     value = (os.environ if env is None else env).get("LLAMA_ARG_PREEMPT_RAM")
-    disabled = value is not None and str(value).strip() == "0"
+    disabled = value is not None and _preempt_ram_value_is_zero(value)
     tokens = [str(a) for a in (args or ())]
     for i, tok in enumerate(tokens):
         if tok == "--preempt-ram":
             value = tokens[i + 1] if i + 1 < len(tokens) else ""
-            disabled = value.strip() == "0"
+            disabled = _preempt_ram_value_is_zero(value)
         elif tok.startswith("--preempt-ram="):
-            disabled = tok.split("=", 1)[1].strip() == "0"
+            disabled = _preempt_ram_value_is_zero(tok.split("=", 1)[1])
     return disabled
+
+
+def _preempt_ram_value_is_zero(text) -> bool:
+    """Numerically zero the way llama.cpp reads the budget (``00``, ``+0``), not the one spelling."""
+    try:
+        return int(str(text).strip()) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 # llama-server's own default for --preempt-ram, in MiB.
@@ -2164,6 +2172,15 @@ def _exact_parking_shortfall_mib(
     return (named, saved, need) if named < need else None
 
 
+def _exact_host_shortfall_after_load(
+    writes: Optional[int], free_mib: Optional[int]
+) -> Optional[tuple[int, int]]:
+    """``(writes, free)`` when the parks' host RAM is short now that the model is resident."""
+    if writes is None or free_mib is None or int(writes) <= int(free_mib):
+        return None
+    return (int(writes), int(free_mib))
+
+
 def _exact_preflight_env(environ: Mapping[str, str], gpu_memory_mode: Optional[str]) -> dict:
     """The inherited variables as the child will see them: Manual mode drops the placement
     twins before launch, so judging the parent's environment blocked `auto` on a value the
@@ -2204,25 +2221,33 @@ def _exact_auto_blocker(setting: str, args, env: Mapping[str, str]) -> Optional[
     return None
 
 
-def _child_parking_stand_down_reason() -> Optional[str]:
+def _child_parking_stand_down_reason(server_supports: Optional[bool] = None) -> Optional[str]:
     """The setting that makes pausing chats somebody other than the child's job, else None.
 
-    Spelled as the user set it, so a load warning can name what overrode their budget."""
+    Spelled as the user set it, so a load warning can name what overrode their budget.
+    ``server_supports`` False is the capability probe not confirming ``--preempt-ram``: Studio
+    then arms its own preemptor, and a child that can park after all must not park beside it."""
     if _preemption.preempt_mode_setting() == _preemption.PREEMPT_MODE_STUDIO:
         return f"{_preemption.PREEMPT_MODE_ENV}=studio"
     if not _preemption.preemption_enabled():
         return f"{_preemption.PREEMPT_ENV}=0"
+    if server_supports is False:
+        return "the llama-server probe did not confirm --preempt-ram"
     return None
 
 
-def _child_parking_stands_down() -> bool:
+def _child_parking_stands_down(server_supports: Optional[bool] = None) -> bool:
     """Whether the child's own parking is to be switched off. One owner pauses chats, so a budget
     somebody named does not buy the child a park Studio would race unexcused; the load warning
     names the flag that lost. Read BEFORE an exact launch sizes a budget of its own."""
-    return _child_parking_stand_down_reason() is not None
+    return _child_parking_stand_down_reason(server_supports) is not None
 
 
-def _stand_down_child_parking(env: dict, args: Optional[list] = None) -> Optional[list[str]]:
+def _stand_down_child_parking(
+    env: dict,
+    args: Optional[list] = None,
+    server_supports: Optional[bool] = None,
+) -> Optional[list[str]]:
     """One switch means no preemption anywhere: with Studio's off, the child would still park on its
     own default budget. ``UNSLOTH_LLAMA_PREEMPT_MODE=studio`` stands it down too, a park the child
     made on its own racing Studio's pause with no relay excusing the silence.
@@ -2230,7 +2255,7 @@ def _stand_down_child_parking(env: dict, args: Optional[list] = None) -> Optiona
     Writes ``LLAMA_ARG_PREEMPT_RAM=0`` and zeroes any ``--preempt-ram`` in ``args`` IN PLACE, since
     llama.cpp applies argv after the environment. Returns the budgets it overrode, empty when the
     line named none, and None when the child keeps its parking."""
-    if not _child_parking_stands_down():
+    if not _child_parking_stands_down(server_supports):
         return None
     overridden: list[str] = []
     inherited = env.get("LLAMA_ARG_PREEMPT_RAM")
@@ -2847,7 +2872,8 @@ _TOOL_TEMPLATE_MARKERS = (
 # Canonical reasoning_effort levels, weakest -> strongest. Used to read the
 # discrete set a template branches on (e.g. GLM-5.2 uses 'high' | 'max', Inkling
 # uses the full 'none'..'max' ladder) so we only ever offer levels the template
-# actually understands.
+# actually understands. Must stay in sync with REASONING_EFFORT_SCALE in
+# studio/frontend/src/features/chat/provider-capabilities.ts.
 _REASONING_EFFORT_SCALE = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # Match a Qwen3.8 path/repo segment without treating future names such as
@@ -6320,6 +6346,18 @@ def _report_live_llama_timings(callback, chunk) -> None:
 # system RAM, so hold back the same margin rather than inventing a larger one.
 _IGPU_HOST_RESERVE_MIB = 1024
 _HOST_RAM_HEADROOM_MIB = 2048
+# What the advice refuses to take from the host: this many GB or this share of the
+# machine, whichever is larger. The carve-out comes out of the RAM the OS sees, so
+# ignoring the host turns a slow load into an unusable desktop.
+_CARVEOUT_ADVICE_MIN_HOST_GB = 8
+# A fifth, not a quarter: the 128 GB Strix Halo firmware offers 96 GB and runs it. A
+# quarter would cap at 95.83 GB and rule out a setting we measured.
+_CARVEOUT_ADVICE_HOST_FRACTION = 0.20
+# A driver reports the pool it kept, not the firmware menu number (95.83 against a
+# 96.00 GB setting here). Without slack a model between the two earns the rung the
+# user is ALREADY on, so the advice reads "allocate 96 GB" to someone running 96 GB.
+# Half a GB is well under the gap between rungs.
+_CARVEOUT_NOMINAL_SLACK_GB = 0.5
 # Appended to whichever shortfall warning an oversized non-pageable launch produced,
 # after _page_an_oversized_unmapped_load rewrote the mode. One string, so the three
 # call sites cannot describe the same override differently.
@@ -6632,6 +6670,8 @@ class LlamaCppBackend:
         # Reset by _begin_load_warnings so one load's notice is never reported against
         # the next.
         self._last_load_warning: Optional[str] = None
+        # Set per launch by _record_carveout_advice; None on nearly every load.
+        self._last_carveout_advice: Optional[dict] = None
         self._model_identifier: Optional[str] = None
         self._gguf_path: Optional[str] = None
         # Snapshot of the exact file(s) handed to the resident process. A local
@@ -11273,6 +11313,297 @@ class LlamaCppBackend:
         )
 
     @staticmethod
+    def _igpu_dedicated_memory_bytes(
+        gpu_indices = None, *, ordinals_are_vulkan = False
+    ) -> Optional[int]:
+        """Memory dedicated to the selected integrated GPU, in bytes, or ``None``.
+
+        Two readings, since no single source covers every platform: the DirectX
+        registry (Windows, no vendor runtime needed, already parsed for the GPU
+        inventory) and ``_rocm_selected_pool_mib`` (Linux, needs a ROCm torch,
+        reports the carve-out as the device's total memory).
+
+        ``None`` whenever the reading would be a guess; every caller treats absence
+        as "say nothing".
+
+        The registry goes first despite being the less authoritative answer, because
+        it is the cheap one: a few ``winreg`` queries against a torch import plus a
+        ``get_device_properties`` per device, which this file documents as leaking a
+        ~700 MiB primary context. Off Windows it returns nothing instantly.
+        """
+        # Every adapter the registry lists, not only those with a readable allocation:
+        # the count IS the attribution test. Filtering the unreadable ones out hid a
+        # shared APU, leaving a discrete Radeon looking like the only candidate and its
+        # fixed VRAM quoted as the APU's carve-out.
+        answers: list[Optional[dict]] = []
+        try:
+            from utils.hardware.hardware import (
+                _AMD_PCI_VENDOR_ID,
+                _INTEL_PCI_VENDOR_ID,
+                _windows_amd_adapter_records_by_luid,
+            )
+            for vendor_id in (_AMD_PCI_VENDOR_ID, _INTEL_PCI_VENDOR_ID):
+                answers.append(
+                    _windows_amd_adapter_records_by_luid(vendor_id, distinguish_failure = True)
+                )
+        except Exception:
+            answers = []
+        if any(answer is not None for answer in answers):
+            # A vendor answered, so this is Windows. A vendor that could not be read
+            # leaves the inventory incomplete, and an incomplete inventory cannot call
+            # the adapter it did see the only one, so fail closed.
+            if any(answer is None for answer in answers):
+                return None
+            adapters = sum(len(answer) for answer in answers)
+            # AMD only, though Intel is counted. On an APU the DirectX value is the
+            # firmware carve-out; on Intel UMA it is a small dedicated block beside
+            # memory handed out dynamically, so quoting it would advise a setting that
+            # may not exist and promise residency it cannot deliver.
+            amd_sizes = [
+                int(record["dedicated_memory_bytes"])
+                for record in (answers[0] or {}).values()
+                if record.get("dedicated_memory_bytes")
+            ]
+            if adapters == 1 and len(amd_sizes) == 1 and amd_sizes[0] > 0:
+                return amd_sizes[0]
+            if adapters:
+                # Two adapters need the inventory's LUID-to-device join; attributing
+                # the wrong one would advise about the wrong GPU. An APU paired with a
+                # discrete Radeon lands here, and silence is right.
+                return None
+        if ordinals_are_vulkan:
+            # No Linux reading for a Vulkan launch, for two reasons. gpu_indices holds
+            # VULKAN ordinals while _rocm_selected_pool_mib compares PHYSICAL HIP ids,
+            # and nothing in the Vulkan inventory carries a HIP id to join on, so the
+            # reading could land on a device this launch never touches. And it is not
+            # free: it creates a HIP primary context in THIS process (~800 MiB) out of
+            # the very pool it would then call too small.
+            return None
+        pool_mib = LlamaCppBackend._rocm_selected_pool_mib(gpu_indices)
+        return int(pool_mib) * 1024 * 1024 if pool_mib and pool_mib > 0 else None
+
+    @staticmethod
+    def _igpu_carveout_ladder_gb(cap_gb: float) -> list[int]:
+        """Plausible dedicated-GPU-memory sizes up to ``cap_gb``, ascending.
+
+        Firmware and driver panels offer a menu, not a slider, built from powers of
+        two and their halves (…16, 24, 32, 48, 64, 96, 128…). Generated rather than
+        tabulated so an unusually large machine still gets a suggestion; the caller
+        picks the smallest entry that fits, so an entry the user's firmware lacks is
+        a recommendation one notch off, not a wrong one.
+        """
+        # A `while` on the model-load path: the caller's try/except catches a raise,
+        # not a hang. A non-finite cap makes the condition permanently true, so reject
+        # it before the loop.
+        if not isinstance(cap_gb, (int, float)) or not math.isfinite(cap_gb):
+            return []
+        rungs: set[int] = set()
+        # From 1 GB, not 4: an APU on its automatic setting reports a few hundred
+        # megabytes, and starting at 4 took two more gigabytes from the host than the
+        # smallest-setting-that-fits rule needed.
+        step = 1
+        while step <= cap_gb:
+            rungs.add(step)
+            if step * 1.5 <= cap_gb:
+                rungs.add(int(step * 1.5))
+            step *= 2
+        return sorted(rungs)
+
+    @staticmethod
+    def _igpu_carveout_advice(
+        model_size_bytes: Optional[int],
+        carve_out_bytes: Optional[int],
+        host_total_bytes: Optional[int],
+        *,
+        is_igpu: bool,
+        min_host_gb: int = _CARVEOUT_ADVICE_MIN_HOST_GB,
+        host_fraction: float = _CARVEOUT_ADVICE_HOST_FRACTION,
+        nominal_slack_gb: float = _CARVEOUT_NOMINAL_SLACK_GB,
+    ) -> Optional[dict]:
+        """Advice payload when an integrated GPU's dedicated memory is too small to
+        hold this model's weights, else ``None``.
+
+        Weights spilling out of the allocation run from shared system memory, which
+        is markedly slower. Raising the allocation is a firmware/driver-panel setting
+        only the user can make, so this only ever advises.
+
+        Silent on a discrete GPU (``is_igpu`` false): that allocation is fixed
+        silicon. Nothing is hardcoded to one machine -- the ceiling comes from what
+        this host has, so a 32 GB laptop and a 512 GB workstation are each sized to
+        themselves, and a model too large for ANY allocation here gets no advice.
+        """
+        if not is_igpu:
+            return None
+        # Strictly positive, not merely truthy: -1 is truthy, so a bare falsiness test
+        # would carry a nonsense driver reading into confident wrong advice.
+        if not all(
+            isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+            for value in (model_size_bytes, carve_out_bytes, host_total_bytes)
+        ):
+            return None
+        if model_size_bytes <= carve_out_bytes:
+            return None  # already fits: nothing to advise
+
+        gb = float(1024**3)
+        # Windows subtracts the carve-out from the RAM it reports, so the machine has
+        # both; reading one under-counts by exactly the amount this advice is about.
+        machine_gb = (host_total_bytes + carve_out_bytes) / gb
+        need_gb = model_size_bytes / gb
+        current_gb = carve_out_bytes / gb
+
+        # Whatever is suggested, the rest of the system still has to run.
+        reserve_gb = max(float(min_host_gb), machine_gb * host_fraction)
+        cap_gb = machine_gb - reserve_gb
+        if need_gb > cap_gb:
+            # No allocation this machine can offer holds the weights, so advice would
+            # be something the user cannot act on.
+            return None
+
+        suggested = next(
+            (rung for rung in LlamaCppBackend._igpu_carveout_ladder_gb(cap_gb) if rung >= need_gb),
+            None,
+        )
+        # Not `<= current_gb`: the reading is the pool the driver kept, so the rung the
+        # user is already on sits just above it. See _CARVEOUT_NOMINAL_SLACK_GB.
+        if suggested is None or suggested <= current_gb + nominal_slack_gb:
+            return None
+
+        return {
+            "current_gb": round(current_gb, 1),
+            "needed_gb": round(need_gb, 1),
+            "suggested_gb": int(suggested),
+            "machine_gb": round(machine_gb, 1),
+            "host_left_gb": round(machine_gb - suggested, 1),
+        }
+
+    def _record_carveout_advice(
+        self,
+        gpu_indices,
+        need_bytes,
+        *,
+        is_vulkan_backend = False,
+        shared_gpu_ids = None,
+        detected_gpus = None,
+        target_unknown = False,
+        forced_cpu = False,
+    ) -> None:
+        """Work out whether this load is worth advising about, and stash the result.
+
+        Advisory only, and never raises: the launch decides whether to spill the
+        weights into shared memory, this only says whether the user could stop the
+        spill existing at all, and an advisory must not break a model load.
+
+        Tests are ordered cheapest first because this runs on every load, including
+        the Vulkan ones that skip the managed-memory branch above. The allocation
+        reading is arithmetic over a registry query; the integrated-GPU probe behind
+        it imports torch and reads device properties, so the common load whose model
+        fits pays only the cheap half.
+
+        ``forced_cpu``: the architecture gate emptied the pool and the env block below
+        masks every device away, so no allocation would hold a single weight. Priced
+        before that mask is written, so without this it would offer exactly that.
+
+        ``target_unknown``: the cache tuning's test, borrowed. With no ``gpu_ids`` a
+        user ``--device`` (or ``LLAMA_ARG_DEVICE``) survives into the child and wins
+        last-wins over the generated pin, so the placement this would advise about is
+        not the one the child gets. Decline rather than re-derive it from argv.
+        """
+        self._last_carveout_advice = None
+        try:
+            if not need_bytes or target_unknown or forced_cpu:
+                return
+            # Gated HERE, not beside the ROCm gate below: on Vulkan gpu_indices holds
+            # VULKAN ORDINALS, and _amd_apu_wants_unified_memory would read them as
+            # physical HIP ids, which on a mixed host advises about an integrated GPU
+            # the model is not using or hides advice that was valid. This branch is
+            # also free (a set test against the planner's shared_gpu_ids, no torch), so
+            # a dGPU-only Vulkan launch returns before the allocation reading.
+            if is_vulkan_backend and not self._offload_target_shares_system_memory(
+                is_vulkan_backend = True,
+                shared_gpu_ids = shared_gpu_ids,
+                detected_gpus = detected_gpus,
+                gpu_indices = gpu_indices,
+            ):
+                return
+            carve_out = self._igpu_dedicated_memory_bytes(
+                gpu_indices, ordinals_are_vulkan = is_vulkan_backend
+            )
+            if not carve_out or need_bytes <= carve_out:
+                return  # fits, or nothing to compare it against
+            total_mib = self._total_system_memory_mib()
+            advice = self._igpu_carveout_advice(
+                need_bytes,
+                carve_out,
+                int(total_mib) * 1024 * 1024 if total_mib else None,
+                is_igpu = True,
+            )
+            if advice is None:
+                return
+            # Only now, with a shortfall confirmed and a followable suggestion, is the
+            # probe worth paying for. AMD only: a CUDA integrated part has no readable
+            # allocation on either branch above, so carve_out is already None and we
+            # returned, and calling _integrated_cuda_unified_memory anyway would create
+            # a CUDA primary context per device for nothing. Not on Vulkan either: that
+            # launch was classified above, in the index space it actually uses.
+            if not is_vulkan_backend and not self._amd_apu_wants_unified_memory(gpu_indices):
+                return
+            # Asked last, so the common path never pays a database round trip.
+            from utils.igpu_carveout_notice_settings import notice_already_dismissed
+
+            if notice_already_dismissed(advice.get("current_gb")):
+                return
+            advice["message"] = self._igpu_carveout_advice_message(advice)
+            self._last_carveout_advice = advice
+            logger.info(
+                "Integrated GPU has %.0f GB dedicated but this model needs about "
+                "%.0f GB; suggesting %d GB.",
+                advice["current_gb"],
+                advice["needed_gb"],
+                advice["suggested_gb"],
+            )
+        except Exception:
+            logger.debug("Carve-out advice declined", exc_info = True)
+            self._last_carveout_advice = None
+
+    @property
+    def last_carveout_advice(self) -> Optional[dict]:
+        """Advice from the most recent load, or None. Read by the route."""
+        return getattr(self, "_last_carveout_advice", None)
+
+    @staticmethod
+    def _fmt_gb(value: float) -> str:
+        """A GB quantity as the user should read it: whole numbers above 10 GB, one
+        decimal below, so an APU's few-hundred-megabyte automatic allocation does not
+        print as "only about 0 GB is allocated" and read like a bug.
+        """
+        if value < 10:
+            return f"{value:.1f}".rstrip("0").rstrip(".")
+        return f"{value:.0f}"
+
+    @staticmethod
+    def _igpu_carveout_advice_message(advice: dict) -> str:
+        """The advice as user-facing prose: two sentences, because it is a toast.
+
+        Names no vendor, menu or key: the control is firmware on one machine and a
+        driver panel on the next, and a confident wrong instruction costs the user
+        more than a neutral one.
+
+        Length is a correctness constraint, not a preference, for the reason
+        xet_progress_notice.ts records: a toast tall enough to cover the controls
+        under it takes them away for as long as it is up. So it carries the four
+        numbers that make the advice actionable -- needed, allocated, suggested, left
+        for the system -- and stops.
+        """
+        fmt = LlamaCppBackend._fmt_gb
+        return (
+            f"Weights need about {fmt(advice['needed_gb'])} GB but only "
+            f"{fmt(advice['current_gb'])} GB is allocated to the integrated GPU, so the rest "
+            f"runs from slower shared memory. Raising it to {advice['suggested_gb']} GB in "
+            "your firmware or GPU control panel leaves about "
+            f"{fmt(advice['host_left_gb'])} GB for the system."
+        )
+
+    @staticmethod
     def _host_offload_shortfall_message(
         offload_bytes: int,
         avail_mib: Optional[int],
@@ -11398,6 +11729,9 @@ class LlamaCppBackend:
         reverse -- the placement everything was priced against is the one that just
         died."""
         self._last_load_warning = None
+        # Same lifetime, same reason: the advice describes the placement the dying
+        # child was priced against and must not be reported against its replacement.
+        self._last_carveout_advice = None
 
     def _record_load_warning(self, message: Optional[str]) -> None:
         """Log an advisory memory notice and keep it for the route to hand back.
@@ -11551,7 +11885,12 @@ class LlamaCppBackend:
         any other notice first-notice-wins kept, is left exactly as it is. The note
         follows the message: an override on a silenced load stays in the log alone,
         exactly as it does on the main launch path.
+
+        The carve-out advice is dropped rather than re-priced: this replay runs
+        ``--gpu-layers 0 --device none``, so no allocation holds any of the weights.
+        Here rather than at either call site, since both reach this same state.
         """
+        self._last_carveout_advice = None
         repriced = self._launch_host_shortfall_message(
             cpu_cmd,
             (),
@@ -23707,6 +24046,7 @@ class LlamaCppBackend:
                         )
                 self._exact_parking_short = None
                 self._exact_host_short = None
+                self._exact_parking_writes = None
                 self._server_park_notices = False
                 self._exact_pool_unknown = False
                 if _exact_wanted:
@@ -23750,18 +24090,36 @@ class LlamaCppBackend:
                                 _exact_draft_bytes // (1024 * 1024),
                                 n_parallel,
                             )
-                            # A cap, not an allocation: a park past what the host can give
-                            # fails its allocation and is re-prefilled, so a budget the host
-                            # cannot back is judged like one too small.
+                        # A cap, not an allocation: a park past what the host can give fails
+                        # its allocation and is re-prefilled, so the budget in force, named or
+                        # sized here, is judged against the host like one too small. What the
+                        # parks write is the smaller of the cap and every park's state.
+                        if _exact_kv_bytes > 0:
+                            _exact_cap = _exact_budget
+                            if _exact_cap is None:
+                                _exact_cap = _named_preempt_ram_mib(
+                                    list(cmd) + [str(a) for a in (extra_args or ())], os.environ
+                                )
+                            if _exact_cap is None:
+                                _exact_cap = _PREEMPT_RAM_DEFAULT_MIB
+                            _exact_writes = _exact_parking_need_mib(
+                                _exact_kv_bytes,
+                                draft_bytes = _exact_draft_bytes,
+                                parallel = n_parallel,
+                            )
+                            if _exact_cap >= 0:
+                                _exact_writes = min(_exact_cap, _exact_writes)
+                            # Judged again once the weights are resident: see after launch.
+                            self._exact_parking_writes = _exact_writes
                             _host_free_mib = _available_host_memory_mib()
-                            if _host_free_mib is not None and _exact_budget > _host_free_mib:
-                                self._exact_host_short = (_exact_budget, _host_free_mib)
+                            if _host_free_mib is not None and _exact_writes > _host_free_mib:
+                                self._exact_host_short = (_exact_writes, _host_free_mib)
                                 self._record_load_warning(
                                     "Exact concurrency may park up to %d MiB of KV state in host "
                                     "RAM, and this host has %d MiB free. A park the host cannot "
                                     "hold is re-prefilled, which is not byte-identical. The load "
                                     "will run without exact concurrency, or fail, depending on "
-                                    "the setting." % (_exact_budget, _host_free_mib)
+                                    "the setting." % (_exact_writes, _host_free_mib)
                                 )
                                 if _exact_setting == _exact.EXACT_AUTO:
                                     _exact_wanted = False
@@ -23827,9 +24185,16 @@ class LlamaCppBackend:
                         "Model Memory owns placement; dropped inherited %s",
                         ", ".join(_mem_scrubbed),
                     )
-                _parking_overridden = _stand_down_child_parking(env, cmd)
+                # An inconclusive probe (a --help that timed out or read as nothing) makes Studio
+                # the owner, and a child that parks after all is told not to: the variable is
+                # ignored by a build without the flag and honoured by one with it.
+                _parking_overridden = _stand_down_child_parking(
+                    env, cmd, server_supports = bool(server_caps.get("supports_preempt_ram"))
+                )
                 if _parking_overridden is not None:
-                    _stand_down_why = _child_parking_stand_down_reason()
+                    _stand_down_why = _child_parking_stand_down_reason(
+                        bool(server_caps.get("supports_preempt_ram"))
+                    )
                     logger.info(
                         "%s, so the server's own parking is off as well and Studio is the only "
                         "one pausing chats",
@@ -24104,6 +24469,25 @@ class LlamaCppBackend:
                 ):
                     """Drop the variable THIS launch set once a respawn stops needing it."""
                     nonlocal _unified_env_applied
+                    # Before the withdrawal test and outside it: every caller is a retry
+                    # whose argv differs from what the advice was priced against, and
+                    # dropping a projector or the MTP blocks can take the footprint back
+                    # under the carve-out. Re-priced rather than cleared, so a spill that
+                    # still stands is still reported. Computed here rather than in the
+                    # argument list, which is evaluated OUTSIDE the recorder's try.
+                    try:
+                        _carveout_need = _unified_need_now(argv = run_cmd, mtp_engages = mtp_engages)
+                    except Exception:
+                        _carveout_need = None
+                    self._record_carveout_advice(
+                        _unified_gpu_indices,
+                        _carveout_need,
+                        is_vulkan_backend = is_vulkan_backend,
+                        shared_gpu_ids = _shared_gpu_ids,
+                        detected_gpus = _detected_gpus,
+                        target_unknown = _cache_target_unknown,
+                        forced_cpu = _arch_gate_forced_cpu,
+                    )
                     if not _unified_env_applied:
                         return
                     if self._unified_memory_for_launch(
@@ -24139,6 +24523,20 @@ class LlamaCppBackend:
                         if _unified_opt_in
                         else "the weights outgrow the carve-out and host RAM is the larger pool",
                     )
+
+                # Whether the user could stop the spill existing at all, independent of
+                # the managed-memory decision above, which only copes with one that is.
+                # The placement facts go with it: the index space gpu_indices is in, and
+                # whether a user --device makes the child's target unknowable.
+                self._record_carveout_advice(
+                    gpu_indices,
+                    _unified_need,
+                    is_vulkan_backend = is_vulkan_backend,
+                    shared_gpu_ids = _shared_gpu_ids,
+                    detected_gpus = _detected_gpus,
+                    target_unknown = _cache_target_unknown,
+                    forced_cpu = _arch_gate_forced_cpu,
+                )
 
                 # DC NVIDIA GPUs: FP32 accum (+ P2P / launch queues for multi-GPU).
                 # See _apply_datacenter_env; opt out with UNSLOTH_DISABLE_DC_TUNING=1.
@@ -24319,6 +24717,23 @@ class LlamaCppBackend:
                         _child_gpu_physical_ids = tuple(int(i) for i in _survivors)
                         # Narrower than any pin above, so it replaces it.
                         _launch_pinned_ids = list(_survivors)
+                        # And the carve-out advice with it: upstream priced the
+                        # UNNARROWED set, which _rocm_selected_pool_mib declines on a
+                        # mixed host, so a model outgrowing the surviving APU's
+                        # carve-out was never advised about.
+                        try:
+                            _gated_carveout_need = _unified_need_now(argv = cmd)
+                        except Exception:
+                            _gated_carveout_need = None
+                        self._record_carveout_advice(
+                            _survivors,
+                            _gated_carveout_need,
+                            is_vulkan_backend = is_vulkan_backend,
+                            shared_gpu_ids = _shared_gpu_ids,
+                            detected_gpus = _detected_gpus,
+                            target_unknown = _cache_target_unknown,
+                            forced_cpu = _arch_gate_forced_cpu,
+                        )
                     elif manual_tensor_split_emitted:
                         # A manual per-GPU ratio across ALL GPUs (no explicit pick, so
                         # no mask above): the UI built --tensor-split in ascending
@@ -25461,6 +25876,23 @@ class LlamaCppBackend:
                             # From the argv, like the fit-strip above: `cmd` is what
                             # the respawn runs, and the record has to match it.
                             self._memory_state = resolve_effective_memory_state(cmd, env)
+                        # And the carve-out advice with them. _begin_load_warnings()
+                        # dropped the one priced for the crashed placement, but the
+                        # respawn can land on a unified-memory APU whose allocation the
+                        # same weights outgrow. Priced against `cmd` and _remaining, so
+                        # the spill reported is this placement's.
+                        try:
+                            _retry_carveout_need = _unified_need_now(argv = cmd)
+                        except Exception:
+                            _retry_carveout_need = None
+                        self._record_carveout_advice(
+                            _remaining,
+                            _retry_carveout_need,
+                            is_vulkan_backend = is_vulkan_backend,
+                            shared_gpu_ids = _shared_gpu_ids,
+                            detected_gpus = _retry_rows or _detected_gpus,
+                            target_unknown = _cache_target_unknown,
+                        )
                         healthy = _spawn_and_wait(cmd, label = "-archfallback")
 
                 # Studio adds --kv-unified itself above one slot, so nothing the user
@@ -26027,6 +26459,21 @@ class LlamaCppBackend:
                 self._requested_exact_concurrency = _exact_setting
                 _exact_short = getattr(self, "_exact_parking_short", None)
                 _exact_host_short = getattr(self, "_exact_host_short", None)
+                if _exact_host_short is None:
+                    # The reading before launch predates the weights: a load that keeps them
+                    # in anonymous host memory (no mmap, host tensors) takes gigabytes the
+                    # parks were told they could have. Judged again now that they are resident.
+                    _exact_host_short = _exact_host_shortfall_after_load(
+                        getattr(self, "_exact_parking_writes", None), _available_host_memory_mib()
+                    )
+                    if _exact_host_short is not None:
+                        self._exact_host_short = _exact_host_short
+                        self._record_load_warning(
+                            "Exact concurrency may park up to %d MiB of KV state in host RAM, "
+                            "and this host has %d MiB free now that the model is loaded. A park "
+                            "the host cannot hold is re-prefilled, which is not byte-identical."
+                            % _exact_host_short
+                        )
                 if (
                     _exact_short is not None
                     and _mtp_will_engage
@@ -31026,7 +31473,7 @@ class LlamaCppBackend:
                 self._effective_context_length
             )
 
-        def _continuation_refusal_event() -> "Optional[dict]":
+        def _continuation_refusal_event(fit_max_tokens) -> "Optional[dict]":
             """The `context_truncated` the client needs when a continuation cannot be served: its own
             `shouldAutoContinue` guard under-counts code and auto-continued a turn just declined."""
             window = self._effective_context_length or 0
@@ -31039,8 +31486,9 @@ class LlamaCppBackend:
                 # "This conversation was compacted" toast for an eviction that never happened.
                 "dropped_messages": 0,
                 "context_length": window,
-                # Same formula the preflight's fit reports, so both sides stay on one scale.
-                "prompt_target": prompt_budget(window, max_tokens),
+                # Same formula and the same clamped reserve the pass's fit used, so the
+                # client stays on one scale.
+                "prompt_target": prompt_budget(window, fit_max_tokens),
             }
 
         def _loop_budget_left(spent_this_attempt: int) -> "Optional[int]":
@@ -31080,9 +31528,15 @@ class LlamaCppBackend:
         # `context_truncated` is not idempotent on the client, and the per-iteration list is
         # rebuilt by `continue`, so a truncation seen on a paused attempt rides across on this.
         _carried_truncations: list[dict] = []
-        # Seeds the resumed attempt's display so its snapshots extend the paused one's. Every
-        # consumer diffs snapshots, and a shorter one loses the first emission.
-        _preempt_display_seed: Optional[tuple[str, str, bool]] = None
+        # Seeds the resumed attempt's display so its snapshots extend the paused one's:
+        # every consumer diffs snapshots, and a shorter one loses the first emission.
+        _preempt_display_seed: Optional[tuple[str, str, bool, str]] = None
+        # The thought the paused attempts already decoded. A reasoning-only turn promotes
+        # its thought as the visible answer, and that promotion is built from the CURRENT
+        # attempt's `reasoning_accum`, which resets every round; without this the answer is
+        # only the half decoded after the pause. Rebound per iteration below, as
+        # `_last_emitted` is. Mirrors `_preempt_earlier_reasoning` on the plain path.
+        _preempt_earlier_reasoning = ""
         # A pause declined at the resume cap keeps its attempt: what it decoded is charged
         # against the final pass's allowance, and its partial is the turn the pass extends.
         _declined_charged = 0
@@ -31163,6 +31617,23 @@ class LlamaCppBackend:
             _iteration_max_tokens = (
                 _continuation_max_tokens if _continuation_max_tokens is not None else max_tokens
             )
+            # What the wire will actually be allowed to emit: the clamp below caps the
+            # payload at the admitted share, so with eight slots a request may generate
+            # an eighth of the window while a fit reserving the caller's whole cap evicts
+            # history and cuts results that had room. Sizing only -- `payload["max_tokens"]`
+            # keeps its own path, as the final pass does with `_final_fit_max_tokens`.
+            # The re-cost below reassigns `admission_output_allowance` after the fit has
+            # run, so an iteration prices against the previous round's allowance.
+            _iteration_fit_max_tokens = (
+                min(
+                    _iteration_max_tokens
+                    if _iteration_max_tokens is not None
+                    else (self._effective_context_length or _DEFAULT_MAX_TOKENS_FLOOR),
+                    admission_output_allowance,
+                )
+                if admission_output_allowance is not None
+                else _iteration_max_tokens
+            )
             _preflight_context_length = None
             _preflight_succeeded = False
             if context_overflow == "truncate_oldest" and self._effective_context_length:
@@ -31188,7 +31659,7 @@ class LlamaCppBackend:
                     conversation, truncation = _fit_with_instruction_pins(
                         conversation,
                         context_length = self._effective_context_length,
-                        max_tokens = _iteration_max_tokens,
+                        max_tokens = _iteration_fit_max_tokens,
                         count_tokens = lambda fitted: self.count_chat_tokens(
                             neutralize_control_markup_in_messages(
                                 messages_without_unpriced_media(fitted),
@@ -31244,7 +31715,7 @@ class LlamaCppBackend:
                             recall_budget_tokens = _retrieval_budget(
                                 self._effective_context_length,
                                 # As above: the cap this iteration will actually send.
-                                _iteration_max_tokens,
+                                _iteration_fit_max_tokens,
                                 truncation.get("prompt_tokens_after") or 0,
                                 reply_returns = True,
                             ),
@@ -31392,7 +31863,7 @@ class LlamaCppBackend:
                     conversation, truncation = _fit_with_instruction_pins(
                         conversation,
                         context_length = self._effective_context_length,
-                        max_tokens = _iteration_max_tokens,
+                        max_tokens = _iteration_fit_max_tokens,
                         count_tokens = lambda fitted: self.count_chat_tokens(
                             neutralize_control_markup_in_messages(
                                 messages_without_unpriced_media(fitted),
@@ -31493,10 +31964,18 @@ class LlamaCppBackend:
                 _iter_finish_reason = None
                 _stream_done = False
                 _last_emitted = ""
+                # Cleared with the display: a round that was not resumed is a new turn.
+                _preempt_earlier_reasoning = ""
                 if _preempt_display_seed is not None:
-                    # Resumed after a pause: continue the display where it stopped. Only the
-                    # display; the accumulators stay per attempt, the checkpoint being built on them.
-                    cumulative_display, _last_emitted, in_thinking = _preempt_display_seed
+                    # The display and the thought so far: `content_accum` and
+                    # `reasoning_accum` stay per attempt, since the checkpoint and the
+                    # replay are built from them.
+                    (
+                        cumulative_display,
+                        _last_emitted,
+                        in_thinking,
+                        _preempt_earlier_reasoning,
+                    ) = _preempt_display_seed
                     _preempt_display_seed = None
                 # Provisional tool_start cards already shown, keyed by tool_call_id.
                 provisional_started_tool_calls: dict[str, str] = {}
@@ -31532,7 +32011,7 @@ class LlamaCppBackend:
                     # compact, and pricing a continuation as if it had the whole cap
                     # compacts a turn that had room.
                     _reply_target = prompt_budget(
-                        self._effective_context_length, _iteration_max_tokens
+                        self._effective_context_length, _iteration_fit_max_tokens
                     )
                     if (
                         estimate_messages_tokens_dense(
@@ -31617,7 +32096,7 @@ class LlamaCppBackend:
                                     else:
                                         cumulative_display = _finalize_reasoning_only_cumulative(
                                             cumulative_display,
-                                            reasoning_accum,
+                                            _preempt_earlier_reasoning + reasoning_accum,
                                             _iter_finish_reason,
                                             promote_reasoning_only,
                                         )
@@ -32189,7 +32668,7 @@ class LlamaCppBackend:
                                     yield _summary
                             cumulative_display = _finalize_reasoning_only_cumulative(
                                 cumulative_display,
-                                reasoning_accum,
+                                _preempt_earlier_reasoning + reasoning_accum,
                                 _iter_finish_reason,
                                 promote_reasoning_only,
                             )
@@ -32344,7 +32823,9 @@ class LlamaCppBackend:
                                     # Only the window case: a spent output cap belongs to THIS
                                     # request, and "does not fit" would hide a working Continue.
                                     if _cap_left_c != 0 and not _continuation_refusal_announced:
-                                        _refusal_c = _continuation_refusal_event()
+                                        _refusal_c = _continuation_refusal_event(
+                                            _iteration_fit_max_tokens
+                                        )
                                         if _refusal_c is not None:
                                             _continuation_refusal_announced = True
                                             yield _refusal_c
@@ -32457,7 +32938,9 @@ class LlamaCppBackend:
                                 # Same signal and the same exclusion for a cap the caller set: this
                                 # turn ends at the window, and a resume meets the preflight's refusal.
                                 if not _reasoning_cap_spent and not _continuation_refusal_announced:
-                                    _refusal_l = _continuation_refusal_event()
+                                    _refusal_l = _continuation_refusal_event(
+                                        _iteration_fit_max_tokens
+                                    )
                                     if _refusal_l is not None:
                                         _continuation_refusal_announced = True
                                         yield _refusal_l
@@ -32959,6 +33442,11 @@ class LlamaCppBackend:
                 # one-shot stores no result, and dividing the room by the raw list cut a lone
                 # real read short. A cell the workers read; final before any driver starts.
                 _round_launched = [0]
+                # The room ONE call of the round gets, and the prompt it was priced
+                # against. Filled below the loop, with every call attached and after the
+                # round compacts, and read by the workers instead of each counting a
+                # `conversation` its siblings are already settling into.
+                _round_budget_cell: list = [None, None]
 
                 for _call_index, tc in enumerate(tool_calls or []):
                     func = tc.get("function", {})
@@ -33150,7 +33638,7 @@ class LlamaCppBackend:
                     if self._effective_context_length:
                         # This iteration's cap, like every other sizing decision in it.
                         _room_target = prompt_budget(
-                            self._effective_context_length, _iteration_max_tokens
+                            self._effective_context_length, _iteration_fit_max_tokens
                         )
                         # Cheap gate first. The exact count is a template render plus a
                         # tokenizer pass over the whole conversation, and this runs per
@@ -33422,6 +33910,7 @@ class LlamaCppBackend:
                             _round_parallel = _parallel_round,
                             # Read, not bound by value: the cell completes after this closure.
                             _round_launched_cell = _round_launched,
+                            _round_budget_cell = _round_budget_cell,
                         ):
                             # execute_tool is injectable and may be monkey-patched with the
                             # pre-PR signature; forward output_callback only if it's accepted.
@@ -33443,6 +33932,19 @@ class LlamaCppBackend:
                             # truncation protects, so a top_k the window cannot hold ends
                             # the turn in an unrecoverable context-length error.
                             if self._effective_context_length:
+                                # The round's own figure, sized ONCE on the generator
+                                # thread with every call attached and after the round
+                                # compacted, read here before any count. A worker counting
+                                # the shared `conversation` sees whatever calls of its own
+                                # round have already settled into it and still divides by
+                                # the whole round, so a late call is priced short and a
+                                # valid result is cut to a window notice it then retries
+                                # against.
+                                _frozen_budget, _frozen_spent = (
+                                    _round_budget_cell
+                                    if _round_parallel and _round_budget_cell[0] is not None
+                                    else (None, None)
+                                )
                                 # Priced against the catalogue too: the messages alone
                                 # leave the tools array out, and a big catalogue can put
                                 # the request near its budget while this still reports
@@ -33502,25 +34004,26 @@ class LlamaCppBackend:
                                 }
                                 if _decision.tool_call_id:
                                     _size_probe["tool_call_id"] = _decision.tool_call_id
-                                try:
-                                    _exact_prompt_tokens = self.count_chat_tokens(
-                                        neutralize_control_markup_in_messages(
-                                            messages_without_unpriced_media(
-                                                [*conversation, _size_probe]
+                                if _frozen_spent is None:
+                                    try:
+                                        _exact_prompt_tokens = self.count_chat_tokens(
+                                            neutralize_control_markup_in_messages(
+                                                messages_without_unpriced_media(
+                                                    [*conversation, _size_probe]
+                                                ),
+                                                _markup_cache,
+                                                self.markup_profile,
                                             ),
-                                            _markup_cache,
-                                            self.markup_profile,
-                                        ),
-                                        None,
-                                        safe_tools,
-                                        strict = True,
-                                        chat_template_kwargs = _reasoning_kw,
-                                    )
-                                except Exception:
-                                    logger.debug(
-                                        "recall budget: exact prompt count failed",
-                                        exc_info = True,
-                                    )
+                                            None,
+                                            safe_tools,
+                                            strict = True,
+                                            chat_template_kwargs = _reasoning_kw,
+                                        )
+                                    except Exception:
+                                        logger.debug(
+                                            "recall budget: exact prompt count failed",
+                                            exc_info = True,
+                                        )
                                 # Dense on the fallback leg only: `_prompt_token_offset`
                                 # already carries the fit's exact tokenizer count, so it
                                 # needs no correction, while the estimate that stands in
@@ -33533,7 +34036,9 @@ class LlamaCppBackend:
                                 # budget and throws its output away, in the one case where
                                 # the room is about to be there.
                                 _spent = (
-                                    _compacted_tokens
+                                    _frozen_spent
+                                    if _frozen_spent is not None
+                                    else _compacted_tokens
                                     if _compact_flag and _compacted_tokens
                                     else _exact_prompt_tokens
                                     if _exact_prompt_tokens is not None
@@ -33595,25 +34100,30 @@ class LlamaCppBackend:
                                             _pending_args = 2 * estimate_messages_tokens_dense(
                                                 _pending_msgs
                                             )
-                                    _result_budget = tool_result_budget(
-                                        self._effective_context_length,
-                                        # This iteration's cap, not the caller's whole
-                                        # one. A recovery turn with 100 of 1000 tokens
-                                        # left had the result priced as if 1000 were
-                                        # still to come, which reserves room away and can
-                                        # starve a read the request had space for.
-                                        _iteration_max_tokens,
-                                        _spent + _pending_args,
-                                    ) // (
-                                        # Sequentially, call k divides by the calls still to
-                                        # run. Run together they price against the same
-                                        # `_spent`, so per-call remainders would hand out
-                                        # more than the batch has; the launched calls, since
-                                        # a suppressed one stores no result.
-                                        max(1, _round_launched_cell[0])
-                                        if _round_parallel
-                                        else (len(_pending) + 1)
-                                    )
+                                    if _frozen_budget is not None:
+                                        # Handed over whole, so two calls of one round
+                                        # cannot price against different conversations.
+                                        _result_budget = int(_frozen_budget)
+                                    else:
+                                        _result_budget = tool_result_budget(
+                                            self._effective_context_length,
+                                            # This iteration's cap, not the caller's whole
+                                            # one. A recovery turn with 100 of 1000 tokens
+                                            # left had the result priced as if 1000 were
+                                            # still to come, which reserves room away and can
+                                            # starve a read the request had space for.
+                                            _iteration_fit_max_tokens,
+                                            _spent + _pending_args,
+                                        ) // (
+                                            # Sequentially, call k divides by the calls still to
+                                            # run. Run together they price against the same
+                                            # `_spent`, so per-call remainders would hand out
+                                            # more than the batch has; the launched calls, since
+                                            # a suppressed one stores no result.
+                                            max(1, _round_launched_cell[0])
+                                            if _round_parallel
+                                            else (len(_pending) + 1)
+                                        )
                                     # A budget at or near zero means the call cannot deliver
                                     # A budget at or near zero means the call cannot deliver
                                     # anything: the result is cut to a notice that reads as a fresh
@@ -33662,7 +34172,7 @@ class LlamaCppBackend:
                                                     # or the rescue is measured against a
                                                     # different request from the one it is
                                                     # rescuing.
-                                                    _iteration_max_tokens,
+                                                    _iteration_fit_max_tokens,
                                                     _spent_after + _pending_args,
                                                 ) // (len(_pending) + 1)
                                                 logger.info(
@@ -33706,7 +34216,7 @@ class LlamaCppBackend:
                                         # allowance on a continuation that has a fraction
                                         # of it left returns a near-zero budget and drops
                                         # recall the request had room for.
-                                        _iteration_max_tokens,
+                                        _iteration_fit_max_tokens,
                                         _spent,
                                         reply_returns = True,
                                     )
@@ -33788,26 +34298,56 @@ class LlamaCppBackend:
                     # The room every call of the round shares, sized once with the whole round as
                     # the divisor and reclaimed on the generator thread, the one place that is safe.
                     if self._effective_context_length:
-                        try:
-                            _round_spent = self.count_chat_tokens(
-                                neutralize_control_markup_in_messages(
-                                    messages_without_unpriced_media(conversation),
-                                    _markup_cache,
-                                    self.markup_profile,
-                                ),
-                                None,
-                                safe_tools,
-                                strict = True,
-                                chat_template_kwargs = _reasoning_kw,
-                            )
-                        except Exception:
-                            logger.debug("round budget: prompt count failed", exc_info = True)
-                            _round_spent = estimate_messages_tokens_dense(
-                                messages_without_unpriced_media(conversation)
-                            )
+
+                        def _round_prompt_tokens(_messages):
+                            """The prompt this round is about to produce, its results still empty."""
+                            # With one empty stand-in reply per deferred call, as the gate
+                            # and `_invoke_tool` price a single call: templates that render
+                            # an assistant call only once a `tool` reply follows drop the
+                            # round's own arguments otherwise.
+                            _probe = list(_messages)
+                            for _e in _pending_calls:
+                                if _e[0] is not _TOOL_START_DEFERRED:
+                                    continue
+                                _stand_in: dict = {
+                                    "role": "tool",
+                                    "name": _e[1].tool_name,
+                                    "content": "",
+                                }
+                                if _e[1].tool_call_id:
+                                    _stand_in["tool_call_id"] = _e[1].tool_call_id
+                                _probe.append(_stand_in)
+                            # And with the arguments of every call the gate admitted on the
+                            # promise that they are compacted before the next prompt already
+                            # compacted, or the round is priced against a prompt it will
+                            # never send.
+                            for _e in _pending_calls:
+                                if _e[0] is _TOOL_START_DEFERRED and _e[5] and _e[1].tool_call_id:
+                                    _probe = compact_executed_call_arguments(
+                                        _probe, _e[1].tool_call_id
+                                    )
+                            try:
+                                return self.count_chat_tokens(
+                                    neutralize_control_markup_in_messages(
+                                        messages_without_unpriced_media(_probe),
+                                        _markup_cache,
+                                        self.markup_profile,
+                                    ),
+                                    None,
+                                    safe_tools,
+                                    strict = True,
+                                    chat_template_kwargs = _reasoning_kw,
+                                )
+                            except Exception:
+                                logger.debug("round budget: prompt count failed", exc_info = True)
+                                return estimate_messages_tokens_dense(
+                                    messages_without_unpriced_media(_probe)
+                                )
+
+                        _round_spent = _round_prompt_tokens(conversation)
                         _round_budget = tool_result_budget(
                             self._effective_context_length,
-                            _iteration_max_tokens,
+                            _iteration_fit_max_tokens,
                             _round_spent,
                         ) // max(1, _round_launched[0])
                         if _round_budget < _MIN_USEFUL_RESULT_TOKENS:
@@ -33816,6 +34356,18 @@ class LlamaCppBackend:
                             )
                             if _n_roomier:
                                 conversation[:] = _roomier
+                                # Re-priced on the room that was just reclaimed, which is
+                                # the whole point of reclaiming it here.
+                                _round_spent = _round_prompt_tokens(conversation)
+                                _round_budget = tool_result_budget(
+                                    self._effective_context_length,
+                                    _iteration_fit_max_tokens,
+                                    _round_spent,
+                                ) // max(1, _round_launched[0])
+                        # Final before any driver starts: every worker takes this instead of
+                        # counting a `conversation` its siblings are already settling into.
+                        _round_budget_cell[0] = _round_budget
+                        _round_budget_cell[1] = _round_spent
                     for _entry_index, _entry in enumerate(_pending_calls):
                         if _entry[0] is _TOOL_START_DEFERRED:
                             _pending_calls[_entry_index] = _start_tool_call(
@@ -34127,7 +34679,15 @@ class LlamaCppBackend:
                     # Floored at 1: a request for zero tokens returns nothing at all, which
                     # would turn a pause into a silently empty turn.
                     _continuation_max_tokens = max(1, _preempt_cap_left)
-                _preempt_display_seed = (cumulative_display, _last_emitted, in_thinking)
+                _preempt_display_seed = (
+                    cumulative_display,
+                    _last_emitted,
+                    in_thinking,
+                    # Carried so the promoted answer is the WHOLE thought. Dropped once the
+                    # attempt has prose: the thought is then a thinking block, not the
+                    # answer, and the resume replays the prose instead.
+                    "" if content_accum else _preempt_earlier_reasoning + reasoning_accum,
+                )
                 continue
             except httpx.ConnectError:
                 # Mark unresolved provisional cards as failed before raising.
@@ -34259,7 +34819,11 @@ class LlamaCppBackend:
                         # The synthesized final answer never returns to the prompt.
                         recall_budget_tokens = _retrieval_budget(
                             self._effective_context_length,
-                            max_tokens,
+                            # The bound the wire is held to, like the fit above: the
+                            # caller's whole cap against an eighth-of-the-window lease
+                            # reserves a reply this request may not write, and the
+                            # recall is what pays for it.
+                            _final_fit_max_tokens,
                             truncation.get("prompt_tokens_after") or 0,
                         ),
                         count_tokens = lambda fitted: self.count_chat_tokens(
@@ -34387,7 +34951,9 @@ class LlamaCppBackend:
                 conversation, truncation = _fit_with_instruction_pins(
                     conversation,
                     context_length = self._effective_context_length,
-                    max_tokens = max_tokens,
+                    # Priced against the pre-respawn window, as the iteration refit is:
+                    # a new window is not a new reservation.
+                    max_tokens = _final_fit_max_tokens,
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(
                             messages_without_unpriced_media(fitted), None, self.markup_profile
@@ -34916,7 +35482,7 @@ class LlamaCppBackend:
                             # The final pass's twin of the in-loop decline: the turn ends at
                             # `length` holding a partial. Cap-spent excluded, that cap being ours.
                             if _next_cap != 0 and not _continuation_refusal_announced:
-                                _refusal_f = _continuation_refusal_event()
+                                _refusal_f = _continuation_refusal_event(_final_fit_max_tokens)
                                 if _refusal_f is not None:
                                     _continuation_refusal_announced = True
                                     yield _refusal_f
@@ -35045,7 +35611,7 @@ class LlamaCppBackend:
                                 }
                             else:
                                 if _next_cap_r != 0 and not _continuation_refusal_announced:
-                                    _refusal_r = _continuation_refusal_event()
+                                    _refusal_r = _continuation_refusal_event(_final_fit_max_tokens)
                                     if _refusal_r is not None:
                                         _continuation_refusal_announced = True
                                         yield _refusal_r

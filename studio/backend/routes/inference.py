@@ -2601,14 +2601,18 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
         admission overcommitting on purpose."""
         try:
             controller = get_preemption_controller(_preempt_key(llama_backend))
+            # The growth goes on the ledger BEFORE any reading: the `/slots` round trip is
+            # synchronous with a three second timeout, and the server keeps decoding while
+            # it is out, so a count held back behind it can outrun the reaction headroom.
+            victims = controller.observe(completion_id, generated)
             # A solo chat has nobody to preempt and nobody waiting for its cells, so the
-            # synchronous `/slots` round trip this makes every 32 chunks can decide nothing.
-            # The ledger below is still updated, or the first chat to join it would be
-            # planned against a figure that stopped moving. Admission and the resume wait
-            # pass `force`, so both fresh-read barriers still read.
+            # round trip can decide nothing there. Admission and the resume wait pass
+            # `force`, so both fresh-read barriers still read. Contended, it is read even
+            # after a choice: the reclaim below plans from this reading.
             if controller.contended():
                 _gguf_refresh_residency(controller)
-            victims = controller.observe(completion_id, generated)
+                if not victims:
+                    victims = controller.plan_preemptions(needed = 0)
             if victims:
                 # Dead residue first: an idle slot's cache belongs to a finished request, so
                 # erasing it costs a future prefix hit where pausing costs a conversation.
@@ -7844,6 +7848,29 @@ def _llama_runtime_fields(llama_backend: LlamaCppBackend) -> dict:
     return fields
 
 
+def _live_carveout_advice(llama_backend: LlamaCppBackend) -> Optional[dict]:
+    """The recorded carve-out advice, unless it has been dismissed since the load.
+
+    The launch-time gate cannot cover the already-resident path: picking a model that
+    is still up answers from ``_reuse_loaded_gguf`` without launching, so a dismissal
+    taken in between was ignored and the notice came straight back. Re-read here
+    rather than cleared on dismissal, since the settings route holds no reference to
+    the backend.
+    """
+    advice = getattr(llama_backend, "last_carveout_advice", None)
+    if not advice:
+        return None
+    try:
+        from utils.igpu_carveout_notice_settings import notice_already_dismissed
+        if notice_already_dismissed(advice.get("current_gb")):
+            return None
+    except Exception:
+        # A failure here must not affect a load that succeeded, and showing the notice
+        # once more is the safe side.
+        pass
+    return advice
+
+
 def _gguf_load_response(
     llama_backend: LlamaCppBackend,
     status: str,
@@ -7869,6 +7896,10 @@ def _gguf_load_response(
         # weights outgrow fast memory, so the client can say why generation is slow.
         # getattr: older/custom backend doubles predate this additive field.
         memory_warning = getattr(llama_backend, "last_load_warning", None),
+        # Also advisory and usually None: the integrated GPU's dedicated memory is
+        # smaller than the weights. Re-checked against the dismissal store, since the
+        # already-resident path returns this response too.
+        carveout_advice = _live_carveout_advice(llama_backend),
         **_llama_runtime_fields(llama_backend),
     )
 
@@ -7941,6 +7972,15 @@ def _drafter_for_path(
             detected,
         )
     return detected
+
+
+def _native_mmproj_accept(candidate: str, gguf_path: str) -> bool:
+    """Apply native projector authorization before discovery reads its header."""
+    try:
+        _validate_native_gguf_companion(candidate, gguf_path, "vision companion")
+    except HTTPException:
+        return False
+    return True
 
 
 def _native_drafter_accept(candidate: str, gguf_path: str, kind: str, search_root: str) -> bool:
@@ -15413,6 +15453,7 @@ async def _load_model_impl(
                     # pass that touches a drafter candidate, so the boundary has
                     # to travel with it rather than being applied afterwards.
                     drafter_accept = _native_drafter_accept if native_grant_backed else None,
+                    mmproj_accept = _native_mmproj_accept if native_grant_backed else None,
                     gguf_companion_roots = request._gguf_companion_roots or None,
                 )
 
@@ -16413,6 +16454,7 @@ async def validate_model(
                     # pass that touches a drafter candidate, so the boundary has
                     # to travel with it rather than being applied afterwards.
                     drafter_accept = _native_drafter_accept if native_grant_backed else None,
+                    mmproj_accept = _native_mmproj_accept if native_grant_backed else None,
                 )
 
         config = await asyncio.to_thread(_resolve_config)
@@ -17256,6 +17298,7 @@ def _cached_estimate_config(
             hf_token = hf_token,
             gguf_variant = gguf_variant,
             drafter_accept = _native_drafter_accept if native_grant_backed else None,
+            mmproj_accept = _native_mmproj_accept if native_grant_backed else None,
         )
 
     # Offline FIRST, not only when the Hub is unreachable. The gate above established
@@ -25210,6 +25253,16 @@ async def produce_openai_chat_completions(
                         # Stop spawning the remaining choices once cancelled.
                         if cancel_event.is_set():
                             break
+                        if _idx:
+                            # The same lease and participant serve every choice, and each
+                            # starts over from the original prompt: the last one's replayed
+                            # partial and resume count are not its own.
+                            try:
+                                _plain_preempt_policy.restart()
+                            except Exception:
+                                logger.debug(
+                                    "could not restart the preemption ledger", exc_info = True
+                                )
                         full_text = ""
                         completion_usage = None
                         completion_finish = None

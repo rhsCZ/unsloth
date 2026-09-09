@@ -211,6 +211,10 @@ export interface LoadModelResponse {
   is_lora: boolean;
   is_gguf?: boolean;
   is_local_model?: boolean;
+  /** Advisory, absent on nearly every load: the integrated GPU has less memory
+   *  dedicated to it than the weights need. Unknown-shaped on purpose so an older or
+   *  proxied backend cannot render "undefined GB"; narrowed by parseCarveoutAdvice. */
+  carveout_advice?: unknown;
   is_diffusion?: boolean;
   /** GPU-layer count the diffusion runner was ASKED for, when it differs from what it applied: a shim
    *  without --ngl runs Auto, so gpu_layers reports -1 while this carries the request. */
@@ -232,6 +236,10 @@ export interface LoadModelResponse {
   max_context_length?: number | null;
   native_context_length?: number | null;
   context_length_enforced?: boolean | null;
+  /** What the running llama-server does about exact concurrency: "on", "off" or "unavailable". */
+  exact_concurrency?: string | null;
+  /** The exact-concurrency setting the load resolved to (auto/off/on): what was asked for. */
+  requested_exact_concurrency?: string | null;
   supports_reasoning?: boolean;
   reasoning_style?:
     | "enable_thinking"

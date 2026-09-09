@@ -314,17 +314,38 @@ class TestTheNamedBudgetIsJudged:
         # budget too small: `auto` runs without the mode and `on` fails the load.
         source = " ".join(inspect.getsource(LlamaCppBackend.load_model).split())
         site = source.index('cmd.extend(["--preempt-ram", str(_exact_budget)])')
-        window = source[site : site + 1600]
+        window = source[site : site + 2600]
+        # Judged for every budget in force, not only the one sized here: a named budget
+        # that holds every park can still be more than the host has.
+        assert "if _exact_kv_bytes > 0: _exact_cap = _exact_budget" in window
+        assert "_exact_cap = _named_preempt_ram_mib(" in window
+        assert "_exact_cap = _PREEMPT_RAM_DEFAULT_MIB" in window
+        assert "_exact_writes = min(_exact_cap, _exact_writes)" in window
         assert "_available_host_memory_mib()" in window
-        assert "_exact_budget > _host_free_mib" in window
-        assert "self._exact_host_short = (_exact_budget, _host_free_mib)" in window
+        assert "_exact_writes > _host_free_mib" in window
+        assert "self._exact_host_short = (_exact_writes, _host_free_mib)" in window
         assert "if _exact_setting == _exact.EXACT_AUTO: _exact_wanted = False" in window
         assert "parking_holds = _exact_short is None and _exact_host_short is None" in source
         assert "self._exact_host_short = None" in source
-        monkeypatch.setattr(llama_mod, "_available_host_memory_mib", lambda: None)
-        assert llama_mod._available_host_memory_mib() is None
-        real = llama_mod.__dict__["_available_host_memory_mib"]
-        assert real() is None
+
+    def test_the_host_is_read_again_once_the_weights_are_resident(self):
+        # The reading before launch predates the model: a load that keeps the weights in
+        # anonymous host memory takes what the parks were told they could have.
+        source = " ".join(inspect.getsource(LlamaCppBackend.load_model).split())
+        launch = source.index('cmd.extend(["--preempt-ram", str(_exact_budget)])')
+        assert "self._exact_parking_writes = _exact_writes" in source[launch : launch + 1800]
+        after = source.index("_server_props = self._query_server_props() or {}")
+        again = source.index("_exact_host_shortfall_after_load(")
+        assert again < after, "judged after the props read, which is after the launch"
+        assert "if _exact_host_short is None: " in source[again - 400 : again]
+        assert (
+            "parking_holds = _exact_short is None and _exact_host_short is None" in source[again:]
+        )
+        assert llama_mod._exact_host_shortfall_after_load(4096, 8192) is None
+        assert llama_mod._exact_host_shortfall_after_load(4096, 4096) is None
+        assert llama_mod._exact_host_shortfall_after_load(4096, 1000) == (4096, 1000)
+        assert llama_mod._exact_host_shortfall_after_load(None, 1000) is None
+        assert llama_mod._exact_host_shortfall_after_load(4096, None) is None
 
     def test_a_single_slot_still_budgets_the_one_snapshot_it_writes(self):
         pool = 1024 * 1024 * 1024
@@ -1265,7 +1286,7 @@ class TestTheGlobalOptOutBlocksAnExactOnLaunchToo:
 
     def test_the_stand_down_and_the_launch_read_one_predicate(self):
         stand_down = inspect.getsource(llama_mod._stand_down_child_parking)
-        assert "_child_parking_stands_down()" in stand_down
+        assert "_child_parking_stands_down(server_supports)" in stand_down
         source = inspect.getsource(LlamaCppBackend.load_model)
         guard = source.index('server_caps.get("supports_preempt_ram")')
         window = source[guard : source.index("self._exact_pool_unknown = _exact_kv_bytes <= 0")]

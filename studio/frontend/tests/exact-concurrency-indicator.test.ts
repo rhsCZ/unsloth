@@ -210,8 +210,17 @@ test("the recompute note is persisted with the answer and read from the answer o
   assert.match(PROVIDER, /function VisibleAnswerRecomputeSync\(/);
   assert.match(
     PROVIDER,
-    /useAuiState\(\(\{ thread \}\) => \{[\s\S]{0,400}\?\.preemptRecomputed === true/,
+    /useAuiState\(\(\{ thread \}\) => \{[\s\S]{0,600}\?\.preemptRecomputed === true/,
   );
+  // Scoped to the model that wrote the answer: a note from model A must not qualify model B,
+  // loaded into the same thread before it has answered.
+  assert.match(
+    PROVIDER,
+    /answerRecomputed && \(answerModelId === null \|\| answerModelId === checkpoint\)/,
+  );
+  // The selector hands back the message itself, never a fresh object: a new object on every
+  // store read re-renders without end (React error 185, seen in the Windows UI lane).
+  assert.doesNotMatch(PROVIDER, /useAuiState\(\(\{ thread \}\) => \{[\s\S]{0,400}return \{/);
   assert.match(PROVIDER, /setPreemptRecompute\(activeThreadId, recomputed\)/);
   assert.match(PROVIDER, /<VisibleAnswerRecomputeSync\s+enabled=\{modelType === "base" && !pairId && !backgrounded\}/);
   assert.doesNotMatch(PROVIDER, /notePreemptRecompute|clearPreemptRecompute/);

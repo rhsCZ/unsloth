@@ -1038,7 +1038,8 @@ class TestWhatTheWireActuallyCarries:
         assert wire == share - _RESERVE - conversation_tokens, (wire, share, conversation_tokens)
 
     def test_image_transport_bytes_do_not_come_off_the_answer(self):
-        """Only OpenAI `image_url` parts are compacted, so an Anthropic image keeps base64."""
+        """An Anthropic `image` part is priced as an image on both sides, never as base64
+        text (#10669), so the raw payload and its translation agree and neither swamps the share."""
         # A share (8192) above one image's allowance but below the base64 as prompt text.
         backend = _backend_stub(window = 32768, total = 32768, slots = 4)
         data = "A" * 40000
@@ -1072,10 +1073,13 @@ class TestWhatTheWireActuallyCarries:
         wire = _openai_llama_admission_enforced_max_tokens(
             payload, request = None, llama_backend = backend, conversation = translated
         )
+        # The two shapes differ only by their JSON envelope around the same image.
         assert (
-            raw == _OPENAI_LLAMA_ADMISSION_UNSTATED_OUTPUT_TOKENS - _RESERVE
-        ), "the base64 transport should have swamped the share, leaving the flat allowance"
-        assert wire > raw, "the normalised part is priced as an image, not as prompt text"
+            abs(raw - wire) <= 32
+        ), "the raw Anthropic image must be priced as an image, not as base64"
+        assert (
+            raw > _OPENAI_LLAMA_ADMISSION_UNSTATED_OUTPUT_TOKENS - _RESERVE
+        ), "the base64 transport must not swamp the share"
         assert wire == 32768 // 4 - _RESERVE - _openai_llama_admission_wire_prompt_tokens(
             translated, image_tokens = _OPENAI_LLAMA_ADMISSION_IMAGE_TOKENS
         )
@@ -1325,6 +1329,8 @@ class TestARetryThatGrewItsPrompt:
             first_messages, image_tokens = _OPENAI_LLAMA_ADMISSION_IMAGE_TOKENS
         )
         # The charge IS the first attempt's wire occupancy plus the reserve it never sends.
+        # With preemption unset -- the default here -- nothing reclaims the difference, so the
+        # ledger holds the whole share and the reserve comes out of the allowance.
         assert charge == budget // slots
         assert first_prompt + allowance == charge - _RESERVE
 
@@ -1405,6 +1411,92 @@ class TestARetryThatGrewItsPrompt:
             )
             is None
         )
+
+
+class TestARetryWhosePromptSpentTheAllowanceIsNotSent:
+    """The replayed answer was generated inside the allowance, so it costs at most that
+    whatever the estimator makes of it; what the nudge adds on top is new. Once that passes
+    the allowance and the wire reserve together, the retry's prompt alone overruns a lease a
+    raw holder cannot be paused off. Zero tells the callers to keep the first answer; the
+    one-token floor the tests above prove stands inside the reserve."""
+
+    def test_zero_when_the_growth_alone_spends_it(self):
+        backend = _backend_stub(window = 16384, total = 16384, slots = 4)
+        first = [{"role": "user", "content": "hi"}]
+        grown = {"messages": first + [{"role": "user", "content": "word " * 2000}]}
+        assert (
+            _openai_llama_admission_retry_max_tokens(
+                grown,
+                admission_output_allowance = 64,
+                request = None,
+                llama_backend = backend,
+                first_messages = first,
+            )
+            == 0
+        )
+        assert (
+            _openai_llama_admission_retry_max_tokens(
+                {"messages": first + [{"role": "user", "content": "one more line"}]},
+                admission_output_allowance = 64,
+                request = None,
+                llama_backend = backend,
+                first_messages = first,
+            )
+            >= 1
+        )
+
+    def test_both_passthrough_nudges_keep_the_first_answer_on_zero(self):
+        import inspect
+
+        import routes.inference as inference
+
+        source = inspect.getsource(inference)
+        assert source.count("if _retry_bound == 0:") == 2
+        assert (
+            source.count("retry_resp = await _post(retry_body) if retry_body is not None else None")
+            == 2
+        )
+
+
+class TestTheOpeningLeaseIsPricedOnTheProfiledPrompt:
+    """The builders neutralise against the loaded model's profile, and so does the bound.
+    Charging the generic sweep instead left a lease short of the wire by every profiled
+    marker the prompt repeats, and a bound priced past its share falls to the flat
+    allowance: cells the ledger never booked."""
+
+    def test_the_charge_moves_with_the_profile_exactly_as_the_wire_does(self):
+        from core.inference.chat_template_helpers import model_markup
+
+        profile = model_markup("[ZETA] {{ m }}", ["[ZETA]"])
+        conversation = [{"role": "user", "content": "[ZETA] " * 40 + "hello"}]
+        payload = _Payload(messages = conversation, max_tokens = 64)
+        wire = lambda markup: _openai_llama_admission_wire_prompt_tokens(
+            conversation, markup = markup
+        )
+        charge = lambda markup: _openai_llama_admission_tokens(
+            payload,
+            budget = 65536,
+            capacity = 1,
+            context_window = 65536,
+            conversation = conversation,
+            markup = markup,
+        )
+        assert wire(profile) > wire(None), "the profile is what makes the marker cost words"
+        assert charge(profile) - charge(None) == wire(profile) - wire(None)
+        # The raw surfaces reserve from the payload alone, and their builders neutralise on
+        # the same profile.
+        raw = lambda markup: _openai_llama_admission_tokens(
+            payload, budget = 65536, capacity = 1, context_window = 65536, markup = markup
+        )
+        assert raw(profile) > raw(None)
+
+    def test_the_reservation_hands_the_backends_profile_over(self):
+        import inspect
+
+        from routes.inference import _openai_llama_admission_reserve
+
+        source = inspect.getsource(_openai_llama_admission_reserve)
+        assert "markup = _openai_llama_admission_markup(llama_backend)," in source
 
 
 class TestTheOperatorSwitches:

@@ -75,6 +75,22 @@ class TestARawStreamForwardsTheServersPark:
         )
         assert inference._server_park_sse(": preempted\r") == inference._OPENAI_PREEMPT_SSE_PAUSED
 
+    def test_a_recompute_the_server_only_counted_reaches_the_translated_relays(self):
+        # The Responses and Anthropic relays rebuild the final object, dropping its `preempt`
+        # field, so a build that counts a recompute without writing the notice has it
+        # synthesised there, once, as the chat path does.
+        assert inference._server_recompute_counted({"preempt": {"parks": 1, "recomputes": 1}})
+        assert not inference._server_recompute_counted({"preempt": {"parks": 2, "recomputes": 0}})
+        assert not inference._server_recompute_counted({"preempt": {"recomputes": "x"}})
+        assert not inference._server_recompute_counted({"choices": []})
+        assert not inference._server_recompute_counted("data: {}")
+        for relay in (inference._responses_stream, inference._anthropic_passthrough_stream):
+            source = inspect.getsource(relay)
+            assert source.count("_raw_saw_recompute = False") == 1
+            assert "_raw_saw_recompute |= _park == _OPENAI_PREEMPT_SSE_RECOMPUTED" in source
+            assert "if not _raw_saw_recompute and _server_recompute_counted(" in source
+            assert source.count("yield _OPENAI_PREEMPT_SSE_RECOMPUTED") == 1
+
     def test_every_raw_loop_asks(self):
         """One relay per raw loop: Responses, Anthropic passthrough, chat passthrough and the
         completions byte loop. The count is the guard against a loop that forgets."""
@@ -109,6 +125,22 @@ class TestExactNeedsTheServerToPark:
 
     def test_off_stays_off_whatever_the_server_does(self):
         assert self._state(setting = "off", server_parks = False) == exact.EXACT_STATE_OFF
+
+    def test_the_settings_page_is_told_what_parking_needs(self, monkeypatch):
+        # Off by default: Auto came up unavailable and On failed the load from a selector
+        # that offered both. The response names the variable that turns parking on.
+        from core.inference import llama_preemption as preemption
+        from routes import settings as settings_mod
+
+        monkeypatch.delenv(preemption.PREEMPT_ENV, raising = False)
+        monkeypatch.delenv(preemption.PREEMPT_MODE_ENV, raising = False)
+        assert settings_mod._exact_parking_prerequisite() == f"{preemption.PREEMPT_ENV}=1"
+        monkeypatch.setenv(preemption.PREEMPT_ENV, "1")
+        assert settings_mod._exact_parking_prerequisite() is None
+        monkeypatch.setenv(preemption.PREEMPT_MODE_ENV, "studio")
+        assert settings_mod._exact_parking_prerequisite() == f"{preemption.PREEMPT_MODE_ENV}=server"
+        fields = settings_mod.ExactConcurrencyResponse.model_fields
+        assert "parking_available" in fields and "parking_prerequisite" in fields
 
     def test_the_launch_hands_both_answers_over(self):
         source = inspect.getsource(LlamaCppBackend.load_model)
@@ -279,13 +311,14 @@ class TestTheNamedBudgetIsJudged:
         # server holds one more snapshot while it rotates another in.
         pool = 1024 * 1024 * 1024
         need = llama_mod._exact_parking_need_mib(pool, draft_bytes = pool, parallel = 4)
-        assert need == 4 * 2048 + llama_mod._PARKING_MARGIN_MIB
+        # The margin is per park: page rounding and slot metadata come with every snapshot.
+        assert need == 4 * (2048 + llama_mod._PARKING_MARGIN_MIB)
         # A 768 MiB history parked twice is 1536 MiB; the per-slot share this replaces
         # accepted 1088 MiB for a 1024 MiB pool at four slots.
-        assert llama_mod._exact_parking_need_mib(pool, parallel = 4) == 4 * 1024 + 64
+        assert llama_mod._exact_parking_need_mib(pool, parallel = 4) == 4 * (1024 + 64)
         assert llama_mod._exact_parking_shortfall_mib(
             pool, args = ["--preempt-ram", "1088"], env = {}, parallel = 4
-        ) == (1088, 1024, 4 * 1024 + 64)
+        ) == (1088, 1024, 4 * (1024 + 64))
         assert llama_mod._exact_parking_need_mib(pool) == 1088
         short = llama_mod._exact_parking_shortfall_mib(
             pool,
@@ -357,7 +390,7 @@ class TestTheNamedBudgetIsJudged:
     def test_the_launch_prices_the_draft_state_and_the_slot_count(self):
         source = inspect.getsource(LlamaCppBackend.load_model)
         assert "_exact_draft_bytes = _draft_kv_state_bytes(effective_ctx)" in source
-        for call in ("_exact_parking_budget_mib(", "_exact_parking_shortfall_mib("):
+        for call in ("_server_owned_parking_budget_mib(", "_exact_parking_shortfall_mib("):
             site = source.index(call)
             window = source[site : site + 500]
             assert "draft_bytes = _exact_draft_bytes" in window
@@ -402,19 +435,21 @@ class TestTheNamedBudgetIsJudged:
         # A draft cache with no dimensions is a park nobody can size, so it is not certified.
         assert "if _fitted_draft is None:" in window
 
-    def test_the_servers_default_is_judged_for_a_pool_sized_after_launch(self):
-        # An auto-fit context leaves the pool unknown at launch; after it the default budget
-        # the child ran with is judged against the context the server chose.
-        short = llama_mod._exact_parking_shortfall_mib(
-            12 * _GIB, args = [], env = {}, default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB
-        )
-        assert short == (8192, 12 * 1024, 12 * 1024 + 64)
+    def test_the_budget_named_for_an_unknown_pool_is_judged_after_launch(self):
+        # An auto-fit context leaves the pool unknown at launch, so the launch names the unsized
+        # budget and that figure is judged against the context the server chose. The server has
+        # no default of its own left to judge: naming nothing parks nothing.
+        assert llama_mod._PREEMPT_RAM_DEFAULT_MIB == 0
         assert (
             llama_mod._exact_parking_shortfall_mib(
-                4 * _GIB, args = [], env = {}, default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB
+                12 * _GIB, args = [], env = {}, default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB
             )
             is None
         )
+        unsized = ["--preempt-ram", str(llama_mod._PREEMPT_RAM_UNSIZED_MIB)]
+        short = llama_mod._exact_parking_shortfall_mib(12 * _GIB, args = unsized, env = {})
+        assert short == (8192, 12 * 1024, 12 * 1024 + 64)
+        assert llama_mod._exact_parking_shortfall_mib(4 * _GIB, args = unsized, env = {}) is None
         # A named budget still wins over the default.
         assert (
             llama_mod._exact_parking_shortfall_mib(
@@ -427,15 +462,30 @@ class TestTheNamedBudgetIsJudged:
         source = inspect.getsource(LlamaCppBackend.load_model)
         assert "self._exact_pool_unknown = _exact_kv_bytes <= 0" in source
         judged = source.index('getattr(self, "_exact_pool_unknown", False)')
-        window = source[judged : judged + 2400]
+        window = source[judged : source.index("self._exact_state_after_launch(", judged) + 40]
         assert "self._query_server_n_ctx()" in window
         assert "default_mib = _PREEMPT_RAM_DEFAULT_MIB" in window
+        assert "_named_now = _named_preempt_ram_mib(" in window
         assert (
-            "_exact_short = (_PREEMPT_RAM_DEFAULT_MIB, 0, 0)" in window
+            "_exact_short = (_named_now or 0, 0, 0)" in window
         ), "a pool that cannot be sized must not be certified"
         assert window.index("self._exact_parking_short = _exact_short") < window.index(
             "self._exact_state_after_launch("
         )
+
+    def test_the_pool_sized_after_launch_is_judged_against_the_host_too(self):
+        # The host reading before launch had no pool to price, so the fitted one is priced and
+        # judged against free host RAM, or an auto-fit context certified exact on a host whose
+        # first large park would fail to allocate.
+        source = inspect.getsource(LlamaCppBackend.load_model)
+        judged = source.index('getattr(self, "_exact_pool_unknown", False)')
+        window = source[judged : source.index("self._exact_state_after_launch(", judged)]
+        assert "self._exact_parking_writes = _fitted_writes" in window
+        assert window.index("_exact_parking_need_mib(") < window.index(
+            "_exact_host_shortfall_after_load("
+        )
+        assert "_fitted_writes = min(_fitted_cap, _fitted_writes)" in window
+        assert "self._exact_host_short = _exact_host_short" in window
 
     def test_the_environment_and_a_later_flag_are_read_in_llama_cpps_order(self):
         # The variable first, argv last-wins over it, as the child applies them.
@@ -571,6 +621,11 @@ class TestTheRunLoopProbesParkingRatherThanWaitForTheStamp:
 
 
 class TestAutoDoesNotStartAModeItWillReportUnavailable:
+    # Opted in: exact concurrency needs the SERVER to park, and the server only parks where
+    # preemption was asked for, so the switch is what these cases hold still while they vary
+    # the launch line. `TestTheGlobalOptOutBlocksAnAutoLaunch` is the other half.
+    pytestmark = pytest.mark.usefixtures("preemption_opted_in")
+
     _ARGV = ["llama-server", "--kv-unified"]
 
     def test_studio_side_pausing_blocks_an_auto_launch(self, monkeypatch):
@@ -837,7 +892,14 @@ class TestTheGlobalOptOutBlocksAnAutoLaunch:
         monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
         monkeypatch.setattr(llama_mod._preemption, "preemption_enabled", lambda: False)
         why = llama_mod._exact_auto_blocker(exact.EXACT_AUTO, ["llama-server"], {})
-        assert why and "UNSLOTH_LLAMA_ADMISSION_PREEMPT=0" in why
+        # Spelled as the operator set it. Unset is the default, and "=0" there would name a
+        # variable nobody wrote.
+        assert why and f"{preemption_mod.PREEMPT_ENV} is not set" in why
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "0")
+        assert f"{preemption_mod.PREEMPT_ENV}=0" in llama_mod._exact_auto_blocker(
+            exact.EXACT_AUTO, ["llama-server"], {}
+        )
+        monkeypatch.delenv(preemption_mod.PREEMPT_ENV, raising = False)
         # A named budget does not buy the child a park either: `_stand_down_child_parking`
         # zeroes it, so the mode would be started for a server that never parks.
         for argv, env in (
@@ -845,7 +907,7 @@ class TestTheGlobalOptOutBlocksAnAutoLaunch:
             (["llama-server"], {"LLAMA_ARG_PREEMPT_RAM": "4096"}),
         ):
             blocked = llama_mod._exact_auto_blocker(exact.EXACT_AUTO, argv, env)
-            assert blocked and "UNSLOTH_LLAMA_ADMISSION_PREEMPT=0" in blocked
+            assert blocked and preemption_mod.PREEMPT_ENV in blocked
         monkeypatch.setattr(llama_mod._preemption, "preemption_enabled", lambda: True)
         assert llama_mod._exact_auto_blocker(exact.EXACT_AUTO, ["llama-server"], {}) is None
 
@@ -1201,7 +1263,9 @@ class TestAnExplicitOptOutOfTheUnifiedCacheIsKept:
 
     def test_auto_does_not_start_a_mode_the_extras_contradict(self, monkeypatch):
         monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
-        monkeypatch.delenv(preemption_mod.PREEMPT_ENV, raising = False)
+        # On, so the launch line is the only thing left to block on: unset is the opt-out, and
+        # that blocks every auto launch on its own.
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "1")
         reason = llama_mod._exact_auto_blocker(
             exact.EXACT_AUTO, ["llama-server", "--kv-unified", "--no-kv-unified"], {}
         )
@@ -1213,7 +1277,8 @@ class TestAnExplicitOptOutOfTheUnifiedCacheIsKept:
 
     def test_cpu_expert_placement_is_read_off_the_whole_launch_line(self, monkeypatch):
         monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
-        monkeypatch.delenv(preemption_mod.PREEMPT_ENV, raising = False)
+        # As above: the launch line is what is under test, so the switch is held on.
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "1")
         # Studio emits --n-cpu-moe itself, so the preflight reads the line, not just the extras,
         # and llama-server does not refuse this one: exact concurrency does.
         reason = llama_mod._exact_auto_blocker(
@@ -1251,10 +1316,12 @@ class TestTheGlobalOptOutBlocksAnExactOnLaunchToo:
         assert llama_mod._named_preempt_ram_mib(argv, {}) is None
         # ... and the guard that now stands in front of both.
         assert llama_mod._child_parking_stands_down() is True
-        # So nothing names a budget, and the child is handed parking off.
+        # So nothing names a budget, and with the server parking only when it is told to there
+        # is nothing to write to the child either: it comes up exactly as upstream ships it.
         env: dict = {}
         assert llama_mod._stand_down_child_parking(env, argv) == []
-        assert env["LLAMA_ARG_PREEMPT_RAM"] == "0"
+        assert env == {}
+        assert llama_mod._preempt_ram_disabled_in(argv, env = env) is True
 
     def test_a_budget_somebody_named_is_overridden_and_named(self, monkeypatch):
         self._opt_out(monkeypatch)
@@ -1298,12 +1365,152 @@ class TestTheGlobalOptOutBlocksAnExactOnLaunchToo:
         assert window.index("not _child_parking_stands_down(") < window.index("_exact_budget = ")
 
 
+class TestParkingIsOffUntilTheLaunchAsksForIt:
+    """A llama-server launched without ``--preempt-ram`` parks nothing (unslothai/llama.cpp#197),
+    so server-side preemption is something Studio asks for by name. A default install passes the
+    flag no more than it passes any other and its child is a stock llama-server; with the switch
+    on, the launch names the budget itself rather than relying on a default that is now zero."""
+
+    _POOL = 12 * _GIB
+    _ARGV = ["llama-server", "--kv-unified"]
+
+    @staticmethod
+    def _plan(
+        argv,
+        env,
+        *,
+        supported = True,
+        unified = True,
+        pool = 0,
+        parallel = 1,
+    ):
+        """The launch's decision, taken with the helpers and in the order load_model takes it.
+
+        ``test_the_launch_takes_the_decision_this_way`` pins that this is that order.
+        Returns the argv, the child environment, the budget named, whether the child parks, and
+        what the stand-down overrode."""
+        cmd = list(argv)
+        supported = bool(supported)
+        owned = supported and not llama_mod._child_parking_stands_down(supported)
+        budget = None
+        if owned:
+            budget = llama_mod._server_owned_parking_budget_mib(
+                pool,
+                args = cmd,
+                env = env,
+                server_supports = supported,
+                kv_unified = unified,
+                parallel = parallel,
+            )
+            if budget is not None:
+                cmd.extend(["--preempt-ram", str(budget)])
+        parks = owned and not llama_mod._preempt_ram_disabled_in(cmd, env = env)
+        child_env = dict(env)
+        overridden = llama_mod._stand_down_child_parking(child_env, cmd, server_supports = supported)
+        return cmd, child_env, budget, parks, overridden
+
+    def test_a_default_install_launches_a_stock_llama_server(self, monkeypatch):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        monkeypatch.delenv(preemption_mod.PREEMPT_ENV, raising = False)
+        # An unset switch is off; pinned here so this reads the default install rather than
+        # whichever way the constant happens to be set.
+        monkeypatch.setattr(preemption_mod, "DEFAULT_PREEMPT_ENABLED", False)
+        cmd, env, budget, parks, overridden = self._plan(self._ARGV, {}, pool = self._POOL)
+        assert budget is None
+        assert cmd == self._ARGV, "no --preempt-ram on the launch line"
+        assert env == {}, "and no LLAMA_ARG_PREEMPT_RAM in the child environment either"
+        assert parks is False
+        # Nothing was overridden, so the load has nothing to warn about.
+        assert overridden == []
+
+    def test_the_switch_on_names_the_budget_and_the_server_parks(self, monkeypatch):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "1")
+        cmd, env, budget, parks, overridden = self._plan(
+            self._ARGV, {}, pool = self._POOL, parallel = 4
+        )
+        assert budget == llama_mod._exact_parking_need_mib(self._POOL, parallel = 4)
+        assert cmd[-2:] == ["--preempt-ram", str(budget)]
+        assert parks is True
+        assert overridden is None, "the child keeps the parking Studio just asked it for"
+        assert env == {}
+        # The property the rest of Studio reads follows the launch, not the build.
+        backend = LlamaCppBackend.__new__(LlamaCppBackend)
+        backend._server_preempts_kv = parks
+        backend._kv_cache_unified = True
+        assert backend.server_preempts_kv is True
+
+    @pytest.mark.parametrize(("supported", "unified"), [(False, True), (True, False)])
+    def test_a_child_that_could_not_park_anyway_is_named_nothing(
+        self, monkeypatch, supported, unified
+    ):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "1")
+        argv = ["llama-server"] + (["--kv-unified"] if unified else [])
+        cmd, _, budget, parks, _ = self._plan(
+            argv, {}, supported = supported, unified = unified, pool = self._POOL
+        )
+        assert budget is None and parks is False
+        assert cmd == argv
+
+    def test_a_budget_the_user_named_still_wins_and_their_zero_still_stands_it_down(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv(preemption_mod.PREEMPT_MODE_ENV, raising = False)
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "1")
+        for argv, env in (
+            (self._ARGV + ["--preempt-ram", "4096"], {}),
+            (self._ARGV, {"LLAMA_ARG_PREEMPT_RAM": "4096"}),
+        ):
+            cmd, _, budget, parks, _ = self._plan(argv, env, pool = self._POOL)
+            assert budget is None, "Studio sizes no budget over one somebody named"
+            assert cmd == argv and parks is True
+        for argv, env in (
+            (self._ARGV + ["--preempt-ram", "0"], {}),
+            (self._ARGV, {"LLAMA_ARG_PREEMPT_RAM": "0"}),
+        ):
+            cmd, _, budget, parks, _ = self._plan(argv, env, pool = self._POOL)
+            assert budget is None and parks is False
+            assert cmd == argv
+
+    def test_studio_mode_names_no_flag_and_hands_the_child_a_zero(self, monkeypatch):
+        monkeypatch.setenv(preemption_mod.PREEMPT_ENV, "1")
+        monkeypatch.setenv(preemption_mod.PREEMPT_MODE_ENV, "studio")
+        cmd, env, budget, parks, overridden = self._plan(self._ARGV, {}, pool = self._POOL)
+        assert budget is None and parks is False
+        assert cmd == self._ARGV
+        # Studio's own preemptor is armed here, so a build that parks after all is told not to.
+        assert env["LLAMA_ARG_PREEMPT_RAM"] == "0"
+        assert overridden == []
+
+    def test_the_launch_takes_the_decision_this_way(self):
+        source = " ".join(inspect.getsource(LlamaCppBackend.load_model).split())
+        site = source.index('_park_supported = bool(server_caps.get("supports_preempt_ram"))')
+        window = source[site : site + 1500]
+        assert (
+            "_park_owned = _park_supported and not _child_parking_stands_down(_park_supported)"
+            in window
+        )
+        assert "_exact_budget = _server_owned_parking_budget_mib(" in window
+        assert "kv_unified = _kv_unified_from_args(cmd)," in window
+        assert 'cmd.extend(["--preempt-ram", str(_exact_budget)])' in window
+        # Read off what this launch turned on, not off what the build could do.
+        assert "self._server_preempts_kv = _park_owned and not _preempt_ram_disabled_in(" in source
+        assert 'self._server_preempts_kv = bool(server_caps.get("supports_preempt_ram"))' not in (
+            source
+        )
+        # Named before the child environment is written, so the stand-down can still override it.
+        assert source.index("_exact_budget = _server_owned_parking_budget_mib(") < source.index(
+            "_parking_overridden = _stand_down_child_parking("
+        )
+
+
 class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
     """The exact launch used to append ``--preempt-ram -1`` for an auto-fit context, before the
     running server had confirmed the mode, and every way the attempt is abandoned keeps that argv
     (the refusal rung relaunches the same command; a build ignoring the variable never relaunches).
-    A server with no exact concurrency then parked into unbounded host RAM instead of llama.cpp's
-    8192 MiB default. So the launch names no budget it cannot size, judging the default later."""
+    A server with no exact concurrency then parked into unbounded host RAM. So the launch names the
+    unsized budget for a pool it cannot measure, and judges that figure after launch."""
 
     def test_the_launch_never_generates_an_unlimited_budget(self):
         source = inspect.getsource(LlamaCppBackend.load_model)
@@ -1342,24 +1549,35 @@ class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
         assert "came up without it" in window.split("if _exact_running:")[1]
         assert window.count("_exact_what") >= 4
 
-    def test_the_default_budget_the_child_keeps_is_the_one_that_gets_judged(self):
-        # An auto-fit pool the server's default cannot hold is reported, not papered over
-        # with an unlimited budget; one it can hold certifies as before.
+    def test_the_budget_the_launch_named_is_the_one_that_gets_judged(self):
+        # An auto-fit pool the named budget cannot hold is reported, not papered over with an
+        # unlimited one; one it can hold certifies as before.
+        named = ["llama-server", "--kv-unified", "--preempt-ram", "8192"]
         assert llama_mod._exact_parking_shortfall_mib(
             12 * _GIB,
-            args = ["llama-server", "--kv-unified"],
+            args = named,
             env = {},
             default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB,
         ) == (8192, 12 * 1024, 12 * 1024 + 64)
         assert (
             llama_mod._exact_parking_shortfall_mib(
                 4 * _GIB,
+                args = named,
+                env = {},
+                default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB,
+            )
+            is None
+        )
+        # A launch that names nothing gets a server that parks nothing, so there is no budget to
+        # judge and nothing reads back as unlimited.
+        assert llama_mod._named_preempt_ram_mib(["llama-server", "--kv-unified"], {}) is None
+        assert llama_mod._preempt_ram_disabled_in(["llama-server", "--kv-unified"], env = {}) is True
+        assert (
+            llama_mod._exact_parking_shortfall_mib(
+                12 * _GIB,
                 args = ["llama-server", "--kv-unified"],
                 env = {},
                 default_mib = llama_mod._PREEMPT_RAM_DEFAULT_MIB,
             )
             is None
         )
-        # A server left on its default names nothing, so nothing reads back as unlimited.
-        assert llama_mod._named_preempt_ram_mib(["llama-server", "--kv-unified"], {}) is None
-        assert llama_mod._preempt_ram_disabled_in(["llama-server", "--kv-unified"], env = {}) is False

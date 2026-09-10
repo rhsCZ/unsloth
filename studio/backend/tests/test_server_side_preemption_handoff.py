@@ -38,6 +38,8 @@ from .preempt_fakes import (
     finish as preempt_fakes_finish,
 )
 
+pytestmark = pytest.mark.usefixtures("preemption_opted_in")
+
 
 def _delta(content: str) -> str:
     return preempt_fakes_delta(content, terminator = "\n\n")
@@ -85,7 +87,8 @@ class TestMode:
     @pytest.mark.parametrize(
         "args, disabled",
         [
-            ([], False),
+            # Nothing named is parking off: unslothai/llama.cpp#197 defaults the budget to 0.
+            ([], True),
             (["--preempt-ram", "8192"], False),
             (["--preempt-ram", "0"], True),
             (["--preempt-ram=0"], True),
@@ -93,7 +96,7 @@ class TestMode:
             (["--preempt-ram"], False),
         ],
     )
-    def test_a_hand_typed_zero_switches_parking_off(self, args, disabled):
+    def test_a_hand_typed_zero_or_no_budget_at_all_is_parking_off(self, args, disabled):
         assert _preempt_ram_disabled_in(["llama-server", "-m", "x.gguf", *args]) is disabled
 
 

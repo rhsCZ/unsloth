@@ -40,6 +40,8 @@ from .preempt_fakes import clean_admission_queues, clean_preemption_registry
 # pytest finds these by name; named here so the import reads as a use.
 _FIXTURES = (clean_admission_queues, clean_preemption_registry)
 
+pytestmark = pytest.mark.usefixtures("preemption_opted_in")
+
 
 def _controller(
     budget = 16384,
@@ -134,9 +136,25 @@ class TestTheSignal:
 
     @pytest.mark.parametrize(
         ("value", "enabled"),
-        [(None, True), ("0", False), ("false", False), ("OFF", False), ("maybe", True)],
+        [
+            # OFF by default, which is the whole point: an install that sets nothing pauses
+            # nobody. A typo cannot switch it on either, so "maybe" keeps that default.
+            (None, False),
+            ("maybe", False),
+            ("   ", False),
+            ("1", True),
+            ("true", True),
+            ("yes", True),
+            ("on", True),
+            ("ON", True),
+            ("0", False),
+            ("false", False),
+            ("no", False),
+            ("off", False),
+            ("OFF", False),
+        ],
     )
-    def test_the_rollout_switch_is_on_unless_the_environment_plainly_says_otherwise(
+    def test_the_opt_in_switch_is_off_unless_the_environment_plainly_asks_for_it(
         self, monkeypatch, value, enabled
     ):
         if value is None:
@@ -719,10 +737,19 @@ class TestTheCacheHoldsMoreThanTheLedgerKnows:
     def test_a_chat_that_has_not_prefilled_is_added_to_what_the_cache_holds(self):
         controller = _controller(key = "resident")
         controller.register("a", tokens = 2000, signal = PreemptSignal())
+        clock = [100.0]
+        controller._clock = lambda: clock[0]
         controller.note_resident(16383)
         # "a" has not decoded a token, so its 2000 are NOT among the 16383 already held:
         # they are a prefill still to come, and both have to fit.
         assert controller.committed_tokens() == 18383
+        controller.note_resident(None)
+        assert (
+            controller.committed_tokens() == 18383
+        ), "one failed read must not turn a full cache into an estimate"
+        from core.inference import llama_preemption
+
+        clock[0] += llama_preemption._RESIDENT_HOLD_S + 1
         controller.note_resident(None)
         assert controller.committed_tokens() == 2000, "a failed read falls back, not to zero"
 
@@ -997,6 +1024,10 @@ class TestTheResumeWait:
 
     def test_the_hard_backstop_outlasts_the_slowest_answer_measured(self):
         bound = DEFAULT_RESUME_WAIT_TIMEOUT_S * MAX_RESUME_WAIT_MULTIPLE
+        # The admission wait nested inside it must not give up first.
+        from core.inference import llama_admission
+
+        assert llama_admission._MAX_REPARK_WAIT_MULTIPLE == MAX_RESUME_WAIT_MULTIPLE
         assert bound >= 2 * (8192 / 2.3), f"the backstop is {bound}s, shorter than two answers"
 
 

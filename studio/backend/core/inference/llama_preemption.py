@@ -2,7 +2,13 @@
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 """Who pauses when the shared KV cache fills. llama-server admits on `prompt_tokens <
-slot.n_ctx` alone, so chats that each fit collide and it errors EVERY processing slot."""
+slot.n_ctx` alone, so chats that each fit collide and it errors EVERY processing slot.
+
+OPT-IN: all of it is off unless `UNSLOTH_LLAMA_ADMISSION_PREEMPT=1`. Unset, an install behaves
+as it did before this module existed: no `/slots` reads on the token path, no participants, no
+`preempt_event` handed to a generation, no `: preempt-*` SSE comments, no park notices, and
+admission prices every request against its fair share. `preemption_enabled()` is that switch and
+every entry point below asks it first."""
 
 from __future__ import annotations
 
@@ -31,8 +37,10 @@ from loggers import get_logger
 _log = get_logger(__name__)
 
 
+# Opt-in: `=1` turns the whole controller on. Unset it is off and admission falls back to step 1's
+# wire clamp alone, which is what every install ran before preemption existed.
 PREEMPT_ENV = "UNSLOTH_LLAMA_ADMISSION_PREEMPT"
-DEFAULT_PREEMPT_ENABLED = True
+DEFAULT_PREEMPT_ENABLED = False
 
 
 # The park notices a llama-server built with unslothai/llama.cpp#197 writes on the very stream it
@@ -451,6 +459,12 @@ _DECODES_WHEN_TOKENS_ARRIVE = frozenset(
 
 
 def preemption_enabled() -> bool:
+    """Whether the operator opted in with ``UNSLOTH_LLAMA_ADMISSION_PREEMPT=1``.
+
+    A plain environment read, so it is cheap enough to be the FIRST thing every gate asks:
+    off, the caller must be able to bail out before it builds a signal, registers a
+    participant or opens a ``/slots`` round trip.
+    """
     return _bool_env(PREEMPT_ENV, DEFAULT_PREEMPT_ENABLED)
 
 
@@ -526,6 +540,9 @@ class Participant:
     # reading saw parked from one that parked (or parked again) while the erases were in
     # flight, whose cells no erase touched.
     park_seq: int = 0
+    # The lease's `charge_seq` when this holder parked: the commitment a reclaim hands back.
+    # Read at reclaim time instead, a round re-costed while the erases ran was handed back.
+    park_charge_seq: Optional[int] = None
     # The ONLY thing that puts the batch term in the buffer, so it must be set before the
     # request carrying the prompt is sent. `measured` asks whether the charge is resident.
     pending_prefill: int = 0
@@ -638,6 +655,13 @@ class PreemptionSnapshot:
     holders: int = 0
 
 
+# How long the last good `/slots` reading outlives a failed one. A probe that times out once
+# must not turn what the cache was known to hold into the ledger's estimate, which is lower
+# whenever finished requests left residue: a resume granted on that gap overflows the pool.
+# A probe that keeps failing past this is gone, and the ledger is all that is left.
+_RESIDENT_HOLD_S = 5.0
+
+
 class PreemptionController:
     """Victim choice and the epoch, for one llama-server backend. Not a scheduler: callers ask
     whether there is room and are told who must stop."""
@@ -654,6 +678,9 @@ class PreemptionController:
         "_batch_tokens",
         "_resident",
         "_resident_seq",
+        "_last_sample_seq",
+        "_resident_at",
+        "_clock",
         "_resume_tickets",
         "_reclaimable",
         "_residency_probe",
@@ -686,6 +713,12 @@ class PreemptionController:
         # Bumped per successful reading AND per `note_measured`, so a mark can be ordered
         # against a probe that was already in flight when it was made.
         self._resident_seq = 0
+        # The clock as it stood when the last reading was recorded: a probe that started
+        # before that is older than what is already here.
+        self._last_sample_seq = 0
+        # When the last good reading was taken, on `_clock` (monotonic; tests swap it).
+        self._resident_at = 0.0
+        self._clock = time.monotonic
         # Resume order, taken BEFORE the room test, so a later smaller resume cannot book the
         # space an older one waits for; the admission queue keeps the same rule one layer down.
         self._resume_tickets: "OrderedDict[str, int]" = OrderedDict()
@@ -939,7 +972,12 @@ class PreemptionController:
 
     def observe(self, gen_id: str, generated: int) -> List["Participant"]:
         """Live growth during generation, and THE watermark sweep. It cannot live only between
-        rounds: one round can generate thousands of tokens. Returns whoever must stop, signalled."""
+        rounds: one round can generate thousands of tokens. Returns whoever must stop, signalled.
+
+        Gated first: off, the surfaces hand out `on_tokens = None` and no chat reaches here, but
+        the tool loops re-baseline through `note_tokens`, and that sweeps."""
+        if not preemption_enabled():
+            return []
         with self._lock:
             participant = self._participants.get(gen_id)
             if participant is not None:
@@ -965,7 +1003,13 @@ class PreemptionController:
 
     def set_residency_probe(self, probe: Optional[Callable[[], None]]) -> None:
         """Register a way to re-read the cache on demand. The ledger adds up prompt ESTIMATES; a
-        reading a second old can be a thousand tokens stale when a resume grant uses it."""
+        reading a second old can be a thousand tokens stale when a resume grant uses it.
+
+        Refused while the switch is off: the call sites register one unconditionally and each is a
+        per-request closure kept on a process-lifetime controller. Clearing (`probe = None`) is
+        always allowed, so flipping the switch off never strands an earlier request's probe."""
+        if probe is not None and not preemption_enabled():
+            return
         self._residency_probe = probe
 
     def refresh_residency(self) -> None:
@@ -997,9 +1041,21 @@ class PreemptionController:
         """The cache as llama-server actually sees it, None when the read failed. ``reclaimable``
         is the part held by IDLE slots: it counts toward the watermark but is erased on demand.
         ``started_at_seq`` is `residency_epoch()` read before the probe was sent; None means
-        the reading is treated as taken now."""
+        the reading is treated as taken now. A reading whose probe started before the last one
+        was recorded is dropped, so an arming probe past its join window cannot put an older
+        count back over a newer sample."""
         with self._lock:
+            if started_at_seq is not None and started_at_seq < self._last_sample_seq:
+                return
             if resident is None:
+                if (
+                    self._resident is not None
+                    and self._clock() - self._resident_at <= _RESIDENT_HOLD_S
+                ):
+                    # One failed read keeps what the cache was known to hold; only the idle
+                    # residue it reported stops counting as room, since it may be gone.
+                    self._reclaimable = 0
+                    return
                 self._resident = None
                 self._reclaimable = 0
                 return
@@ -1009,6 +1065,8 @@ class PreemptionController:
             self._resident = max(0, min(int(resident), ceiling))
             self._reclaimable = max(0, min(int(reclaimable or 0), self._resident))
             self._resident_seq += 1
+            self._last_sample_seq = self._resident_seq
+            self._resident_at = self._clock()
             for participant in self._participants.values():
                 if participant.measured_at_seq is None:
                     continue
@@ -1089,6 +1147,7 @@ class PreemptionController:
             participant.state = state
             if state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING):
                 participant.park_seq += 1
+                participant.park_charge_seq = getattr(participant.lease, "charge_seq", None)
             if state == ParticipantState.DECODING:
                 # Back at the model: the prompt is prefilled in again, so the cells are real.
                 if participant.cells_reclaimed:
@@ -1140,13 +1199,7 @@ class PreemptionController:
                 # Whatever it was about to prefill went with the cells. It re-announces in
                 # `note_state` when it decodes again.
                 participant.prefill_done()
-                released.append(
-                    (
-                        participant,
-                        participant.park_seq,
-                        getattr(participant.lease, "charge_seq", None),
-                    )
-                )
+                released.append((participant, participant.park_seq, participant.park_charge_seq))
         for participant, park_seq, charge_seq in released:
             # The lease call runs outside the lock, after erases that took seconds: a holder
             # whose tool came back in between has restated its prompt and re-charged, and
@@ -1215,6 +1268,7 @@ class PreemptionController:
                 ParticipantState.TOOLS_RUNNING,
             ):
                 participant.park_seq += 1
+                participant.park_charge_seq = getattr(participant.lease, "charge_seq", None)
             participant.state = state
             if state not in _HOLDS_KV:
                 # Nothing is submitted until it asks again, and asking is where it re-announces.

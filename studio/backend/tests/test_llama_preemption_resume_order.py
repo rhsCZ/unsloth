@@ -17,6 +17,8 @@ from core.inference.llama_preemption import (
     reset_preemption_controllers,
 )
 
+pytestmark = pytest.mark.usefixtures("preemption_opted_in")
+
 
 @pytest.fixture(autouse = True)
 def _clean_registry():
@@ -246,6 +248,55 @@ class TestAResidencySampleIsOrderedAgainstTheMark:
         assert controller.participant("a").measured is True
         assert controller.participant("b").measured is False
         assert controller.snapshot().committed == 7000
+
+    def test_an_older_sample_finishing_after_a_newer_one_is_dropped(self):
+        # Two probes leave together; the arming one outlives its join window and lands
+        # after the token-path one that read a fuller cache.
+        controller = _controller()
+        controller.register(
+            "raw", lease = _Lease(1000), tokens = 1000, state = ParticipantState.STREAMING_RAW
+        )
+        controller.note_measured("raw")
+        arming = controller.residency_epoch()
+        newer = controller.residency_epoch()
+        controller.note_resident(9000, started_at_seq = newer)
+        controller.note_resident(2000, started_at_seq = arming)
+        assert controller.snapshot().committed == 9000, "the older count came back"
+        controller.note_resident(None, started_at_seq = arming)
+        assert controller.snapshot().committed == 9000, "a stale failed read cleared it"
+        # A probe sent after the recorded one is the newest word, whatever it says.
+        later = controller.residency_epoch()
+        controller.note_resident(2000, started_at_seq = later)
+        assert controller.snapshot().committed == 2000
+
+    def test_a_failed_read_within_the_hold_keeps_the_count_and_drops_the_residue(self):
+        clock = [50.0]
+
+        def fresh():
+            controller = _controller()
+            controller._clock = lambda: clock[0]
+            controller.register(
+                "raw", lease = _Lease(1000), tokens = 1000, state = ParticipantState.STREAMING_RAW
+            )
+            controller.note_measured("raw")
+            controller.note_resident(12000, reclaimable = 4000)
+            return controller
+
+        held = fresh()
+        assert held.try_grant_resume("raw", 8000) is True, "the confirmed residue is room"
+        failed = fresh()
+        clock[0] += 1.0
+        failed.note_resident(None)
+        assert failed.snapshot().committed == 12000, "one failed read lost the count"
+        assert (
+            failed.try_grant_resume("raw", 8000) is False
+        ), "residue a failed read cannot confirm is not room"
+        gone = fresh()
+        from core.inference import llama_preemption
+
+        clock[0] += llama_preemption._RESIDENT_HOLD_S + 1
+        gone.note_resident(None)
+        assert gone.snapshot().committed == 1000, "past the hold the ledger is all there is"
 
     def test_a_caller_that_states_no_epoch_keeps_the_old_behaviour(self):
         controller = _controller()

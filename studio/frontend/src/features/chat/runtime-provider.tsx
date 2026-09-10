@@ -119,6 +119,7 @@ import {
   generationIsCorroboratedLive,
   threadHasDurableGenerationRun,
   generationNeedsRecovery,
+  restoreCarriedPartsFromRaw,
   isLiveGenerationRun,
   generationRawContent,
   loadGenerationOverlaySnapshot,
@@ -132,6 +133,7 @@ import {
   shouldPreserveGenerationMetadata,
   subscribeGenerationRecoveryTriggers,
 } from "./utils/chat-generation-recovery";
+import { createGenerationToolRecovery } from "./utils/generation-tool-recovery";
 import { mergeContextTruncation } from "./utils/context-truncation";
 import {
   extractDeltaText,
@@ -872,7 +874,10 @@ function scheduleGenerationRecovery(
   const recovery = (async () => {
     let cursor = Number(metadata.generationSeq ?? 0);
     if (!Number.isSafeInteger(cursor) || cursor < 0) cursor = 0;
-    let { raw, reasoningOpen } = generationRawContent(storedMessage.content);
+    const stored = generationRawContent(storedMessage.content);
+    const carried = stored.carried;
+    const toolRecovery = createGenerationToolRecovery(carried, runId, cursor);
+    let { raw, reasoningOpen } = stored;
     let completionTokens: number | undefined;
     let recoveryUsage:
       | {
@@ -904,6 +909,22 @@ function scheduleGenerationRecovery(
       owner: serverCancel,
     });
 
+    // Save and finalisation share ONE rebuild: derived apart, the names lag a publish or are empty.
+    const rebuild = () =>
+      toolRecovery.withSources(
+        restoreCarriedPartsFromRaw(
+          reasoningOpen ? `${raw}</think>` : raw,
+          carried,
+        ),
+      ) as MessageRecord["content"];
+    const toolNames = (content: MessageRecord["content"]): string[] =>
+      (Array.isArray(content) ? content : []).flatMap((part) => {
+        const card = part as { type?: string; toolName?: unknown };
+        return card.type === "tool-call" && typeof card.toolName === "string"
+          ? [card.toolName]
+          : [];
+      });
+
     /** Write one state of the reply to storage and to every view showing it. `running` is the
      *  caller's, not derived here: a follow that hit its no-progress deadline settles the message
      *  while its persisted run status is still non-terminal. */
@@ -912,9 +933,7 @@ function scheduleGenerationRecovery(
       running: boolean,
     ) => {
       currentMetadata = nextMetadata;
-      const content = parseAssistantContent(
-        reasoningOpen ? `${raw}</think>` : raw,
-      ) as MessageRecord["content"];
+      const content = rebuild();
       await saveStoredChatMessage({
         id: storedMessage.id,
         threadId,
@@ -1000,6 +1019,7 @@ function scheduleGenerationRecovery(
           timings: recoveryTimings,
           firstChunkAt,
           totalChunks,
+          toolCalls: toolNames(rebuild()),
         });
       }
       await commit(nextMetadata, generationNeedsRecovery(nextMetadata));
@@ -1013,7 +1033,7 @@ function scheduleGenerationRecovery(
       let followStalled = false;
       try {
         for await (const update of followChatGenerationRun(runId, {
-          replayFrom: cursor,
+          replayFrom: toolRecovery.replayFrom,
         })) {
           if (!identityValidated) {
             if (
@@ -1039,7 +1059,18 @@ function scheduleGenerationRecovery(
             }
             identityValidated = true;
           }
+          // Replay from 0 re-delivers already-saved chunks: apply them, but publish nothing.
+          let advanced = false;
+          if (update.event?.type === "chunk") {
+            toolRecovery.apply(
+              update.event.payload,
+              raw.length,
+              update.event.seq,
+              update.run.requestPayload.session_id,
+            );
+          }
           if (update.event && update.event.seq > cursor) {
+            advanced = true;
             cursor = update.event.seq;
             if (update.event.type === "chunk") {
               const chunk = update.event.payload as {
@@ -1064,9 +1095,8 @@ function scheduleGenerationRecovery(
               };
               if (chunk._admissionStatus !== undefined) {
                 if (chunk._admissionStatus === "recomputed") {
-                  // Qualifies the resume before it, so the status line stays as it is.
-                  useChatRuntimeStore.getState().notePreemptRecompute(threadId);
-                  // Persisted with the message, as the live adapter does.
+                  // Qualifies the resume before it, so the status line stays as it is. Reaches
+                  // the chip through the message, as the live adapter's does.
                   currentMetadata = { ...currentMetadata, preemptRecomputed: true };
                   continue;
                 }
@@ -1129,7 +1159,7 @@ function scheduleGenerationRecovery(
             }
           }
           const shouldPublish =
-            update.event?.type === "chunk" ||
+            (update.event?.type === "chunk" && advanced) ||
             update.run.status !== lastPublishedStatus ||
             (["cancelled", "completed", "failed"].includes(update.run.status) &&
               cursor >= update.run.lastEventSeq);
@@ -2043,16 +2073,6 @@ function useStudioRuntimeAdapters(
             }
           | undefined;
         const store = useChatRuntimeStore.getState();
-        // The chip's recompute note is the last answer's, read back from it: the map is
-        // in memory only, and a fresh tab would otherwise show Exact for a re-prefilled answer.
-        if (
-          (lastAssistant?.metadata as Record<string, unknown> | undefined)
-            ?.preemptRecomputed === true
-        ) {
-          store.notePreemptRecompute(remoteId);
-        } else {
-          store.clearPreemptRecompute(remoteId);
-        }
         // Window check applies only when a local GGUF window is known; external
         // providers have loadedContextLength === null. llama.cpp stops at the window, so
         // a saved count past it is stale; MLX runs past it by design, and a thread whose
@@ -2961,6 +2981,36 @@ function ThreadScopedSettingsSync({
 
 // Lets the recount read the on-screen branch, not the stored records: an incognito thread stores
 // none, and a retried thread's newest stored leaf is not what the runtime would send.
+/** The exact-concurrency chip's recompute note follows the answer on screen. A thread-level
+ *  flag set when a turn ended conflated a thread's retry branches: a normal retry cleared the
+ *  note of its re-prefilled sibling, and switching back to that sibling showed Exact over an
+ *  answer that was not. Read from the visible branch's last assistant message, whose metadata
+ *  both adapters write and persist, so a reload and a branch switch read the same source. */
+function VisibleAnswerRecomputeSync({
+  enabled,
+}: { enabled: boolean }): ReactElement | null {
+  const recomputed = useAuiState(({ thread }) => {
+    const messages = thread.messages;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.role !== "assistant") continue;
+      return (
+        (message.metadata?.custom as Record<string, unknown> | undefined)
+          ?.preemptRecomputed === true
+      );
+    }
+    return false;
+  });
+  const activeThreadId = useChatRuntimeStore((s) => s.activeThreadId);
+
+  useEffect(() => {
+    if (!enabled) return;
+    useChatRuntimeStore.getState().setPreemptRecompute(activeThreadId, recomputed);
+  }, [activeThreadId, enabled, recomputed]);
+
+  return null;
+}
+
 function ActiveBranchRegistrar({
   enabled,
 }: { enabled: boolean }): ReactElement | null {
@@ -3401,6 +3451,9 @@ export function ChatRuntimeProvider({
           enabled={modelType === "base" && !pairId && !backgrounded}
         />
         <ActiveBranchRegistrar
+          enabled={modelType === "base" && !pairId && !backgrounded}
+        />
+        <VisibleAnswerRecomputeSync
           enabled={modelType === "base" && !pairId && !backgrounded}
         />
         <ThreadContextUsageRecount

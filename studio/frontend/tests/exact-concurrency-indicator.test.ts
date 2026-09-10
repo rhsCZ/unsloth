@@ -196,29 +196,25 @@ test("without a recompute the chip reads exactly as it did", () => {
   assert.equal(exactConcurrencyChip("off", { recomputed: true }), null);
 });
 
-test("the recompute note is persisted with the answer and read back on load", () => {
-  // The map is in memory only; a reload or another tab restores the load's state as `on`,
-  // so the note has to come back from the thread's last answer, and a turn that failed
-  // must not have cleared it first.
+test("the recompute note is persisted with the answer and read from the answer on screen", () => {
+  // The map is in memory only and a thread has retry branches, each with its own answer: the
+  // note travels in the message metadata both adapters write, and one sync reads it off the
+  // visible branch, so a reload, a retry and a switch back to a sibling all agree.
   assert.equal(
     ADAPTER.match(/preemptRecomputed: sawPreemptRecompute \|\| undefined,/g)?.length,
     2,
     "the live and the final metadata both carry it",
   );
-  assert.doesNotMatch(
-    ADAPTER,
-    /createStreamPublishGate\(\);\s*\/\/[^\n]*\n\s*runtime\.clearPreemptRecompute/,
-    "cleared before the first chunk",
-  );
-  assert.match(
-    ADAPTER,
-    /if \(sawPreemptRecompute\) \{\s*runtime\.notePreemptRecompute\(liveThreadKey\(serverCancel\)\);\s*\} else \{\s*runtime\.clearPreemptRecompute\(liveThreadKey\(serverCancel\)\);/,
-  );
+  assert.doesNotMatch(ADAPTER, /notePreemptRecompute|clearPreemptRecompute/);
   assert.match(PROVIDER, /preemptRecomputed: true/);
+  assert.match(PROVIDER, /function VisibleAnswerRecomputeSync\(/);
   assert.match(
     PROVIDER,
-    /\?\.preemptRecomputed === true[\s\S]{0,80}store\.notePreemptRecompute\(remoteId\)/,
+    /useAuiState\(\(\{ thread \}\) => \{[\s\S]{0,400}\?\.preemptRecomputed === true/,
   );
+  assert.match(PROVIDER, /setPreemptRecompute\(activeThreadId, recomputed\)/);
+  assert.match(PROVIDER, /<VisibleAnswerRecomputeSync\s+enabled=\{modelType === "base" && !pairId && !backgrounded\}/);
+  assert.doesNotMatch(PROVIDER, /notePreemptRecompute|clearPreemptRecompute/);
 });
 
 test("the chip reads the flag for the conversation on screen", () => {
@@ -226,4 +222,18 @@ test("the chip reads the flag for the conversation on screen", () => {
   // the one the user is looking at.
   assert.match(STORE, /preemptRecomputedByThreadId: Record<string, boolean>/);
   assert.match(CHIP, /preemptRecomputedByThreadId\[s\.activeThreadId/);
+});
+
+test("the settings selector says what exact mode needs before offering it", () => {
+  // Preemption is off by default and exact mode cannot run without the server parking, so
+  // Auto came up unavailable and On failed the load from a selector that offered both.
+  const section = read(
+    "src/features/settings/components/llama-backend-section.tsx",
+  );
+  const api = read("src/features/settings/api/exact-concurrency.ts");
+  assert.match(api, /parkingAvailable: value\.parking_available \?\? true/);
+  assert.match(api, /parkingPrerequisite: value\.parking_prerequisite \?\? null/);
+  assert.match(section, /disabled=\{!parkingAvailable && setting !== "off"\}/);
+  assert.match(section, /exactConcurrency\.parkingRequired/);
+  assert.match(section, /data-testid="exact-concurrency-parking-required"/);
 });

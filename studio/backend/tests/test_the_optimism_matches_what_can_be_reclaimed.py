@@ -28,6 +28,8 @@ from core.inference.llama_preemption import (
 )
 import routes.inference as inference_route
 
+pytestmark = pytest.mark.usefixtures("preemption_opted_in")
+
 
 ROUTES = pathlib.Path(inference_route.__file__)
 LLAMA_CPP = ROUTES.parent.parent / "core" / "inference" / "llama_cpp.py"
@@ -154,6 +156,20 @@ class TestARawSurfaceKeepsTheShare:
         assert (
             "pausable = False" in window
         ), "a raw surface priced as pausable takes the whole window and gives nothing back"
+
+    def test_the_overflow_retry_keeps_the_raw_flag(self):
+        # The first bound on both OpenAI passthroughs is raw; the bound priced again after a
+        # context overflow dropped history must be too, or the retry is handed nearly the
+        # whole window while still a participant nobody can pause.
+        source = ROUTES.read_text(encoding = "utf-8")
+        needle = "def _repriced_passthrough_cap(fitted):"
+        starts, at = [], source.find(needle)
+        while at != -1:
+            starts.append(at)
+            at = source.find(needle, at + 1)
+        assert len(starts) == 2, "the streaming and the non-streaming passthrough"
+        for start in starts:
+            assert "pausable = False" in source[start : start + 700]
 
     def test_the_anthropic_reserve_follows_its_own_raw_flag(self):
         source = ROUTES.read_text(encoding = "utf-8")

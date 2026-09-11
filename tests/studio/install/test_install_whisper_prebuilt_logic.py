@@ -6,6 +6,8 @@ import importlib.util
 import io
 import contextlib
 import json
+import stat
+import os
 import sys
 import tarfile
 import zipfile
@@ -2177,6 +2179,20 @@ def test_macos_walks_back_to_newest_compatible_release(monkeypatch):
     )
     assert payload["prebuilt_available"] is True
     assert payload["release_tag"] == compatible.release_tag
+    # Recorded on the plan and its selection, so the marker carries it.
+    plan = M._release_plan_for_host(
+        _host("macos", "arm64", macos_version = (14, 7)),
+        published_repo = "unslothai/whisper.cpp",
+        published_release_tag = None,
+        whisper_tag = "latest",
+        requested_backend = "cpu",
+    )
+    assert plan.bundle.release_tag == compatible.release_tag
+    walk_back = M.core.WalkBack(release_tag = latest.release_tag, macos_version = "14.7")
+    assert plan.walk_back == walk_back
+    assert plan.selection is not None
+    assert plan.selection.walk_back == walk_back
+    assert "walked_back_from" not in plan.selection.coverage
 
 
 def test_macos_walkback_never_masks_checksum_failure(monkeypatch):
@@ -2235,13 +2251,8 @@ def test_resolver_reports_metal_slim_on_macos(tmp_path, monkeypatch, capsys):
     assert payload["requested_backend"] == "metal"
 
 
-# ── the no-network re-check ──
-#
-# install_prebuilt used to fetch the release, its manifest and its checksum index on every
-# update before it could even ask whether the install was already current. These tests hold
-# the check that answers from the marker plus at most one HEAD, and -- because a slim whisper
-# bundle hardlinks llama's ggml libraries -- that it still notices a llama runtime that moved
-# underneath an install whose own release did not.
+# The no-network re-check: answers from the marker plus at most one HEAD, and still notices a llama
+# runtime that moved under a slim bundle whose own release did not.
 def _installed_cpu_tree(
     tmp_path,
     monkeypatch,
@@ -2300,8 +2311,7 @@ def test_a_hyphenated_upstream_pin_keeps_its_suffix_when_matching_packagings(mon
     monkeypatch.setattr(M.llama, "github_releases", lambda _repo, max_pages = 1: releases)
     newest = M._api_newest_release_tag_for_upstream("r/w", "v1.9.2-rc1", "v1.9.2-rc1-unsloth.1")
     assert newest == "v1.9.2-rc1-unsloth.2"
-    # And a plain pin takes neither a longer tag that merely starts with it nor a
-    # prerelease of it: the manifest match the full path makes would refuse both.
+    # A plain pin takes neither a longer tag starting with it nor a prerelease of it.
     releases.append({"tag_name": "v1.9.20-unsloth.1", "published_at": "2026-04-01T00:00:00Z"})
     releases.append({"tag_name": "v1.9.2-rc1-unsloth.9", "published_at": "2026-05-01T00:00:00Z"})
     assert (
@@ -2351,6 +2361,62 @@ def test_whisper_keep_paths_reject_an_empty_server_and_a_marker_without_a_finger
     marker_path.write_text(json.dumps(payload), encoding = "utf-8")
     assert _whisper_check(install_dir, host) is False
     marker_path.write_text(original, encoding = "utf-8")
+    assert _whisper_check(install_dir, host) is True
+
+
+def test_whisper_marker_fields_edited_under_a_kept_fingerprint_take_the_full_path(
+    tmp_path, monkeypatch
+):
+    """A release_tag edited to the current tag over an old binary and its old
+    fingerprint used to read as current from the marker alone; the full path compared
+    the fingerprint against the plan's and reinstalled. The marker-only path now
+    recomputes the fingerprint from the marker's own fields."""
+    install_dir, host, calls = _installed_cpu_tree(tmp_path, monkeypatch)
+    marker_path = install_dir / M.METADATA_FILENAME
+    original = marker_path.read_text(encoding = "utf-8")
+    payload = json.loads(original)
+    assert isinstance(payload.get("fingerprint_coverage"), dict)
+    assert M.core.marker_install_fingerprint(payload) == payload["install_fingerprint"]
+    # release_tag moved to the current latest over the old asset: the tag comparison alone passes
+    # this.
+    edited = dict(payload)
+    edited["release_tag"] = "v9.9.9-unsloth.1"
+    marker_path.write_text(json.dumps(edited), encoding = "utf-8")
+    monkeypatch.setattr(
+        M.llama,
+        "_download_host_latest_release_tag",
+        lambda _repo: "v9.9.9-unsloth.1",
+        raising = False,
+    )
+    assert _whisper_check(install_dir, host) is False
+    monkeypatch.setattr(
+        M.llama, "_download_host_latest_release_tag", lambda _repo: RELEASE_TAG, raising = False
+    )
+    for field, value in (("asset_sha256", "0" * 64), ("upstream_tag", "v0.0.1")):
+        edited = dict(payload)
+        edited[field] = value
+        marker_path.write_text(json.dumps(edited), encoding = "utf-8")
+        assert _whisper_check(install_dir, host) is False, field
+    marker_path.write_text(original, encoding = "utf-8")
+    assert _whisper_check(install_dir, host) is True
+    # A marker predating fingerprint_coverage: the full path keeps the install and settles the key.
+    legacy = dict(payload)
+    legacy.pop("fingerprint_coverage")
+    marker_path.write_text(json.dumps(legacy), encoding = "utf-8")
+    # A group-shared install's marker: the settle must not narrow its mode.
+    if os.name != "nt":
+        os.chmod(marker_path, 0o664)
+    assert _whisper_check(install_dir, host) is False
+    downloads = calls["n"]
+    assert M.install_prebuilt(install_dir, backend = "cpu") == M.EXIT_SUCCESS
+    assert calls["n"] == downloads
+    settled = json.loads(marker_path.read_text(encoding = "utf-8"))
+    assert settled.get("fingerprint_coverage") == payload["fingerprint_coverage"]
+    # Temp-and-replace: nothing left beside the marker, mode kept.
+    assert not list(install_dir.glob(M.METADATA_FILENAME + ".tmp-*"))
+    if os.name != "nt":
+        assert stat.S_IMODE(marker_path.stat().st_mode) == 0o664
+    assert settled["install_fingerprint"] == payload["install_fingerprint"]
     assert _whisper_check(install_dir, host) is True
 
 
@@ -2560,13 +2626,9 @@ def test_a_fat_install_gains_no_pairing_record(tmp_path, monkeypatch):
     assert "paired_llama_ggml_tree" not in marker
 
 
-# ── A release lookup that could not answer, over an install that is fine ──
-# Observed on a strict offline update (UV_OFFLINE plus a CONNECT proxy refusing every
-# connection): the run exited 0 and changed not a byte, yet setup printed "whisper.cpp
-# prebuilt install failed; curated whisper.cpp dictation is unavailable" while llama.cpp
-# beside it printed "update unavailable, existing prebuilt kept". These hold the fix that
-# a lookup nothing could answer is not evidence that the install stopped working, and --
-# just as important -- that it is still only the EVIDENCE on disk that decides.
+# A release lookup that could not answer, over an install that is fine. A strict offline update
+# exited 0 and changed nothing, yet setup printed "prebuilt install failed" for whisper while llama
+# printed "existing prebuilt kept". Only the EVIDENCE on disk decides.
 KEPT_LINE = "whisper.cpp update unavailable, existing prebuilt kept"
 # The substring setup.sh and setup.ps1 already grep to choose that wording for llama.cpp.
 KEPT_GREP = "keeping the existing complete install"
@@ -2621,8 +2683,7 @@ def test_an_unreachable_lookup_keeps_a_validated_install(tmp_path, monkeypatch, 
     # llama.cpp's wording for WHY, so update_flow reads both installers the same way.
     assert "prebuilt update reason: could not fetch release" in output
     assert FAILED_LINE not in output
-    # Kept, not reinstalled: the archive was downloaded once, at install time, and the
-    # marker is byte for byte the one that run wrote.
+    # Kept, not reinstalled: one download, and the marker byte for byte as written.
     assert calls["n"] == 1
     assert (marker_path.read_bytes(), server.read_bytes(), server.stat().st_mtime_ns) == before
 
@@ -2714,8 +2775,7 @@ def test_an_unreachable_lookup_still_fails_on_a_broken_install(tmp_path, monkeyp
     assert FAILED_LINE in output
     assert KEPT_LINE not in output
 
-    # (2) Marker back, but the server the sidecar would run is not executable, which is
-    # the exact shape the sidecar refuses.
+    # (2) Marker back, but the server is not executable, the shape the sidecar refuses.
     marker_path.write_bytes(recorded)
     server.chmod(0o644)
     rc, output = _cli_install(capsys, install_dir)
@@ -2971,3 +3031,85 @@ def test_force_compile_lets_a_lookup_failure_reach_the_source_build(tmp_path, mo
     rc, output = _cli_install(capsys, install_dir)
     assert rc != M.EXIT_SUCCESS
     assert KEPT_GREP not in output
+
+
+def test_whisper_fast_path_accepts_a_recorded_macos_walk_back(tmp_path, monkeypatch):
+    """A Mac below the newest release's OS floor installs an older release; the
+    marker-only re-check asks the download host for the newest and must recognise the
+    recorded walk-back rather than send every such install down the full path. A
+    release newer than the recorded one, a macOS upgrade since the walk-back (the
+    newest release may fit now), or any other OS still does."""
+    install_dir, _, _ = _installed_cpu_tree(tmp_path, monkeypatch)
+    marker = {
+        "release_tag": "old",
+        "walked_back_from": "new",
+        "walked_back_on_macos": "14.7",
+        "backend": "cpu",
+    }
+    monkeypatch.setattr(M, "_existing_install_is_intact", lambda *a, **k: dict(marker))
+    monkeypatch.setattr(M.llama, "_download_host_resolve_enabled", lambda: True, raising = False)
+    monkeypatch.setattr(
+        M.llama, "_download_host_latest_release_tag", lambda _repo: "new", raising = False
+    )
+    mac = _host("macos", "arm64", macos_version = (14, 7))
+    assert _whisper_check(install_dir, mac) is True
+    assert _whisper_check(install_dir, _host("macos", "arm64", macos_version = (15, 0))) is False
+    assert _whisper_check(install_dir, _host("linux", "x64")) is False
+    monkeypatch.setattr(
+        M.llama, "_download_host_latest_release_tag", lambda _repo: "newer", raising = False
+    )
+    assert _whisper_check(install_dir, mac) is False
+    monkeypatch.setattr(
+        M.llama, "_download_host_latest_release_tag", lambda _repo: "old", raising = False
+    )
+    assert _whisper_check(install_dir, mac) is True
+    # A marker predating the host version record takes the full path once, which settles it.
+    del marker["walked_back_on_macos"]
+    monkeypatch.setattr(
+        M.llama, "_download_host_latest_release_tag", lambda _repo: "new", raising = False
+    )
+    assert _whisper_check(install_dir, mac) is False
+
+
+def _rewrite_marker(install_dir: Path, **overrides) -> dict:
+    marker_path = install_dir / M.METADATA_FILENAME
+    payload = json.loads(marker_path.read_text(encoding = "utf-8"))
+    for key, value in overrides.items():
+        if value is None:
+            payload.pop(key, None)
+        else:
+            payload[key] = value
+    # Self-consistent: the fast path recomputes the fingerprint from the recorded fields.
+    payload["install_fingerprint"] = M.core.marker_install_fingerprint(payload)
+    marker_path.write_text(json.dumps(payload, indent = 2), encoding = "utf-8")
+    return payload
+
+
+def test_the_marker_records_the_platform_it_was_selected_for(tmp_path, monkeypatch):
+    install_dir, host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
+    marker = json.loads((install_dir / M.METADATA_FILENAME).read_text(encoding = "utf-8"))
+    assert (marker["os"], marker["arch"]) == M.host_platform_tokens(host)
+
+
+def test_a_custom_repository_asset_name_is_judged_by_the_recorded_platform(tmp_path, monkeypatch):
+    """A custom --published-repo's manifest may name its assets freely; the platform
+    check reads the os/arch the marker records and only falls back to the fork's
+    asset naming for a marker written before they were recorded. Otherwise every such
+    install took the full path on every update, and the keep-existing path (which runs
+    when the newest release cannot be looked up) dropped a valid install."""
+    install_dir, host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
+    os_token, arch_token = M.host_platform_tokens(host)
+    _rewrite_marker(install_dir, asset = "server-bundle.tar.gz")
+    assert _whisper_check(install_dir, host) is True
+    # ...and the recorded platform is what is checked: another one is not intact here.
+    _rewrite_marker(
+        install_dir, asset = "server-bundle.tar.gz", arch = "arm64" if arch_token != "arm64" else "x64"
+    )
+    assert _whisper_check(install_dir, host) is False
+    # No recorded platform: the fork's naming is the only evidence, and this has none.
+    _rewrite_marker(install_dir, asset = "server-bundle.tar.gz", os = None, arch = None)
+    assert _whisper_check(install_dir, host) is False
+    _rewrite_marker(
+        install_dir, asset = f"whisper-v1.9.1-{os_token}-{arch_token}-cpu.tar.gz", os = None, arch = None
+    )
+    assert _whisper_check(install_dir, host) is True

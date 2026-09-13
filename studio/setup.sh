@@ -962,12 +962,10 @@ VENV_DIR="$RUNTIME_ROOT/unsloth_studio"
 #
 # STUDIO_HOME, not RUNTIME_ROOT: the cache has to be the one install.sh created, and the
 # two agree whenever UNSLOTH_STUDIO_STAGE_ROOT is unset, which is every non-staged run.
-# Under a stage root the LIVE marker is read: the CLI parks its choice inside the stage and
-# promotes it on acceptance, so an unactivated stage cannot move the live cache. setup.sh
-# NEVER writes the marker: it infers, and a recorded inference outlives its install.
+# The LIVE marker, even under a stage root: the CLI promotes its parked choice on acceptance,
+# so an unactivated stage cannot move the live cache. setup.sh only infers; it never writes.
 _uv_no_cache_requested() {
-    # --no-cache outranks --cache-dir, so naming one changes nothing. Same boolish spelling
-    # as unsloth_cli's _uv_no_cache_requested.
+    # --no-cache outranks --cache-dir. Same spelling as unsloth_cli's _uv_no_cache_requested.
     _unc=${UV_NO_CACHE:-}
     _unc=${_unc#"${_unc%%[![:space:]]*}"}
     _unc=${_unc%"${_unc##*[![:space:]]}"}
@@ -979,9 +977,8 @@ _uv_no_cache_requested() {
 }
 
 _uv_cache_probe_writable() {
-    # A real create, as install.sh's _probe_uv_cache_writable: mkdir -p exits 0 for an unwritable
-    # directory and -w reads the mode. mktemp (O_EXCL, unpredictable), not a $$ name another
-    # account could pre-create as a symlink for `: >` to truncate.
+    # As install.sh's _probe_uv_cache_writable: a real create, and mktemp (O_EXCL) not $$,
+    # since a predictable name can be pre-created as a symlink.
     _uv_cache_probe=""
     if ! mkdir -p "$1" 2>/dev/null \
        || ! _uv_cache_probe=$(mktemp "$1/.unsloth-write-probe.XXXXXX" 2>/dev/null); then
@@ -994,9 +991,26 @@ _uv_cache_probe_writable() {
     return 0
 }
 
+_uv_cache_usable() {
+    # Every directory uv owns under the root, not a hand-written bucket list: uv 0.10.7 aborts on
+    # a 0555 archive-* ("failed to rename") and on an empty 0555 interpreter-v4 ("failed to create
+    # directory", before resolution). install.sh's _probe_uv_cache_usable is the same check.
+    _uv_cache_probe_writable "$1" || return 1
+    for _uvu_bucket in "$1"/*/; do
+        _uvu_bucket=${_uvu_bucket%/}
+        [ -d "$_uvu_bucket" ] || continue
+        if ! _uv_cache_probe_writable "$_uvu_bucket"; then
+            unset _uvu_bucket
+            return 1
+        fi
+    done
+    unset _uvu_bucket
+    return 0
+}
+
 _uv_cache_warm() {
-    # Package BYTES, not metadata: wheels-* holds only .msgpack/.http after a bare resolve.
-    # Mirrors install.sh's _configure_uv_cache scan and unsloth_cli's _uv_cache_has_packages.
+    # Package BYTES, not metadata (wheels-* is .msgpack/.http after a bare resolve). Mirrors
+    # install.sh's scan and unsloth_cli's _uv_cache_has_packages.
     [ -n "${1:-}" ] && [ -d "$1" ] && [ -r "$1" ] || return 1
     for _uvw_bucket in "$1"/archive-* "$1"/builds-* "$1"/built-wheels-* \
         "$1"/wheels-* "$1"/sdists-*; do
@@ -1004,9 +1018,8 @@ _uv_cache_warm() {
         # Unreadable is not empty, but it is also not proof of warmth.
         [ -r "$_uvw_bucket" ] && [ -x "$_uvw_bucket" ] || continue
         # -L: a bucket can be a symlink, as Get-ChildItem -Recurse follows. -print -quit, never
-        # `| head -n 1`: under this file's `set -o pipefail` head's early exit kills find with
-        # SIGPIPE on any bucket over 64K of names, `|| _uvw_hit=""` discards the hit, and a
-        # warm cache reads as cold and every wheel is refetched.
+        # `| head -n 1`: under this file's pipefail head's early exit SIGPIPEs find on a bucket
+        # over 64K of names, and the warm cache then reads as cold.
         _uvw_hit=$(find -L "$_uvw_bucket" -type f \
             ! -name CACHEDIR.TAG ! -name .git ! -name .gitignore \
             ! -name '*.lock' ! -name '*.msgpack' ! -name '*.http' ! -name '*.rev' \
@@ -1024,9 +1037,8 @@ _uv_cache_warm() {
 
 _recorded_uv_cache() {
     # The marker as unsloth_cli writes it: one absolute path, one trailing newline. Tolerates a
-    # BOM (Windows PowerShell 5.1) and a CR, otherwise byte-for-byte. The sentinel keeps the
-    # bytes: command substitution strips EVERY trailing newline, and the CLI removes exactly
-    # one delimiter (one LF, then one CR) so a pathname ending in a newline round-trips.
+    # BOM (PowerShell 5.1) and a CR, otherwise byte-for-byte. The sentinel keeps the bytes, and
+    # exactly one delimiter is removed, so a pathname ending in a newline round-trips.
     _ruc_raw=$(cat "$STUDIO_HOME/cache/uv-cache-dir" 2>/dev/null && printf x) || return 1
     _ruc_raw=${_ruc_raw%x}
     _ruc_raw=${_ruc_raw%"$_UV_MARKER_LF"}
@@ -1048,11 +1060,16 @@ _UV_MARKER_CR=$(printf '\r')
 _UV_MARKER_LF=$(printf '\n.')
 _UV_MARKER_LF=${_UV_MARKER_LF%.}
 
-# Three tiers: a caller value, --no-cache, then the recorded marker or the Studio cache. NO
-# "uv's default if warm" tier, unlike install.sh: it decides before anything is recorded; here
-# the decision is written down (and the CLI injects UV_CACHE_DIR for `unsloth studio update`),
-# and such a tier would move an update off the installer's cache with nothing recording it.
-if [ -n "${UV_CACHE_DIR:-}" ]; then
+# Three tiers: a caller value, --no-cache, then the recorded marker or the Studio cache. No
+# "uv's default if warm" tier, unlike install.sh, which decides before anything is recorded:
+# here it would move an update off the installer's cache with nothing recording the change.
+_uv_caller_value=false
+# `*[![:space:]]*`, not `-n`: install.sh's test, so an all-whitespace value is not a caller's
+# choice here and `--cache-dir '   '` there. The two selectors have to answer alike.
+case "${UV_CACHE_DIR-}" in
+    *[![:space:]]*) _uv_caller_value=true ;;
+esac
+if [ "$_uv_caller_value" = true ]; then
     # A caller value wins outright, here as in install.sh and in the CLI.
     :
 elif _uv_no_cache_requested; then
@@ -1063,7 +1080,7 @@ else
     _uv_recorded=$(_recorded_uv_cache && printf x) || _uv_recorded=""
     _uv_recorded=${_uv_recorded%x}
     if [ -n "$_uv_recorded" ] && _uv_cache_warm "$_uv_recorded" \
-       && _uv_cache_probe_writable "$_uv_recorded"; then
+       && _uv_cache_usable "$_uv_recorded"; then
         # Only while it holds packages and uv can write to it: an emptied cache would refetch
         # everything, and uv aborts on a read-only one (a share remounted since the install).
         UV_CACHE_DIR="$_uv_recorded"
@@ -1078,6 +1095,7 @@ else
     fi
     unset _uv_recorded
 fi
+unset _uv_caller_value
 VENV_T5_530_DIR="$RUNTIME_ROOT/.venv_t5_530"
 VENV_T5_550_DIR="$RUNTIME_ROOT/.venv_t5_550"
 VENV_T5_510_DIR="$RUNTIME_ROOT/.venv_t5_510"

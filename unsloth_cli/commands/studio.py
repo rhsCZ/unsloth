@@ -1067,22 +1067,48 @@ def _cli_update_password(
     """CLI mirror of backend update_password + change-password effects, in one transaction. File
     cleanup runs after commit, so it cannot roll back."""
     password_salt, password_hash = _hash_password(new_password)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(auth_user)")}
+    # Managed credentials live in the account_* columns behind the downgrade fence; the owner's row keeps the legacy columns.
+    managed = False
+    if "account_jwt_secret" in columns:
+        row = conn.execute("SELECT role FROM auth_user WHERE username = ?", (username,)).fetchone()
+        managed = bool(row) and row[0] not in (None, "owner")
+    target_columns = (
+        "account_password_salt = ?, account_password_hash = ?, account_jwt_secret = ?"
+        if managed
+        else "password_salt = ?, password_hash = ?, jwt_secret = ?"
+    )
     with conn:
         conn.execute(
-            """
+            f"""
             UPDATE auth_user
-            SET password_salt = ?, password_hash = ?, jwt_secret = ?, must_change_password = 0
+            SET {target_columns}, must_change_password = 0
             WHERE username = ?
             """,
             (password_salt, password_hash, secrets.token_urlsafe(64), username),
         )
         conn.execute("DELETE FROM refresh_tokens WHERE username = ?", (username,))
-        conn.execute(
-            "DELETE FROM app_secrets WHERE key IN (?, ?)",
-            (DESKTOP_SECRET_HASH_KEY, DESKTOP_SECRET_CREATED_AT_KEY),
-        )
+        if username == DEFAULT_ADMIN_USERNAME:
+            conn.execute(
+                "DELETE FROM app_secrets WHERE key IN (?, ?)",
+                (DESKTOP_SECRET_HASH_KEY, DESKTOP_SECRET_CREATED_AT_KEY),
+            )
         if revoke_api_keys:
-            conn.execute("DELETE FROM api_keys")
+            conn.execute("DELETE FROM api_keys WHERE username = ?", (username,))
+            if managed:
+                conn.execute(
+                    "DELETE FROM account_api_keys WHERE account_id = "
+                    "(SELECT account_id FROM auth_user WHERE username = ?)",
+                    (username,),
+                )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(auth_user)")}
+            if "setup_code_hash" in columns:
+                conn.execute(
+                    "UPDATE auth_user SET setup_code_hash = NULL, setup_code_expires_at = NULL WHERE username = ?",
+                    (username,),
+                )
+    if username != DEFAULT_ADMIN_USERNAME:
+        return
     stale_files = [BOOTSTRAP_PASSWORD_FILE, DESKTOP_SECRET_FILE]
     if revoke_api_keys:
         # Reset only: the rows are gone, so each cached key is now plaintext for a
@@ -3286,12 +3312,24 @@ def _backfill_uv_cache_marker(env: Optional[dict]) -> None:
 
 def _uv_cache_is_writable(cache_dir: Path) -> bool:
     """A real create, as install.sh's write probe does: mode bits do not answer for a network mount, and uv aborts on a cache it
-    cannot write rather than falling back."""
+    cannot write rather than falling back.
+
+    The buckets too, not just the root: uv unpacks distributions into them, so a root-only probe
+    passes on a cache uv then cannot use. Measured with uv 0.10.7, a 0555 archive-* bucket under a
+    writable root aborts with "failed to rename ... Permission denied", and an empty 0555
+    interpreter-v4 aborts before resolution. Every directory uv owns, not a hand-written bucket
+    list that has to track uv's layout. Mirrors install.sh's _probe_uv_cache_usable."""
+    probes = [cache_dir]
     try:
-        with tempfile.NamedTemporaryFile(dir = cache_dir, prefix = ".unsloth-write-probe."):
-            pass
+        probes.extend(p for p in cache_dir.iterdir() if p.is_dir())
     except OSError:
         return False
+    for target in probes:
+        try:
+            with tempfile.NamedTemporaryFile(dir = target, prefix = ".unsloth-write-probe."):
+                pass
+        except OSError:
+            return False
     return True
 
 
@@ -3320,6 +3358,19 @@ def _with_studio_uv_cache(env: Optional[dict], cwd: Optional[Path] = None) -> Op
         and _uv_cache_is_writable(default_cache)
     ):
         return {**(env or os.environ), "UV_CACHE_DIR": str(default_cache)}
+    # setup.sh treats an inherited UV_CACHE_DIR as the caller's choice and skips its own write
+    # probe, so handing it an unwritable Studio cache aborts every uv command in the update --
+    # the one branch here that was still unprobed. Left unset, setup.sh probes and falls back.
+    try:
+        studio_cache.mkdir(parents = True, exist_ok = True)
+    except OSError:
+        pass
+    if not _uv_cache_is_writable(studio_cache):
+        # Explicitly absent rather than a bare `return env`: the other branches all hand back a
+        # dict, and setup.sh's own probe wants the variable gone, not inherited from this process.
+        unset = {**(env or os.environ)}
+        unset.pop("UV_CACHE_DIR", None)
+        return unset
     return {**(env or os.environ), "UV_CACHE_DIR": str(studio_cache)}
 
 
@@ -4306,14 +4357,30 @@ def provision_desktop_auth():
     typer.echo("Desktop auth ready.")
 
 
-@studio_app.command("reset-password")
-def reset_password():
-    """Reset the Unsloth admin password.
+def _reset_password_username(conn: sqlite3.Connection, username: Optional[str]) -> str:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(auth_user)")}
+    active_filter = " WHERE is_active = 1" if "is_active" in columns else ""
+    count = conn.execute("SELECT COUNT(*) FROM auth_user" + active_filter).fetchone()[0]
+    if username is None and count > 1:
+        typer.echo("Error: --username is required when multiple accounts are active.", err = True)
+        raise typer.Exit(1)
+    target = DEFAULT_ADMIN_USERNAME if username is None else username.casefold()
+    if target == DEFAULT_ADMIN_USERNAME:
+        _ensure_cli_default_admin(conn)
+    elif conn.execute("SELECT 1 FROM auth_user WHERE username = ?", (target,)).fetchone() is None:
+        typer.echo("Error: account not found.", err = True)
+        raise typer.Exit(1)
+    return target
 
-    Rotates the credential in place: a running Unsloth accepts the new password on
-    its next request, so there is nothing to restart. Shared /p preview links are
-    not revoked -- rotate those in Settings if the old password leaked.
-    """
+
+@studio_app.command("reset-password")
+def reset_password(
+    username: Optional[str] = typer.Option(
+        None, "--username", help = "Account to reset; required with multiple active accounts."
+    ),
+):
+    """Reset an Unsloth account password. Rotates in place, so nothing needs restarting. Shared /p
+    preview links are not revoked; rotate those in Settings if the old password leaked."""
     new_password = _generate_reset_password()
     try:
         conn = _connect_auth_db()
@@ -4327,15 +4394,16 @@ def reset_password():
         raise typer.Exit(1)
 
     try:
-        _ensure_cli_default_admin(conn)
-        _cli_update_password(conn, DEFAULT_ADMIN_USERNAME, new_password, revoke_api_keys = True)
+        conn.execute("BEGIN IMMEDIATE")
+        target = _reset_password_username(conn, username)
+        _cli_update_password(conn, target, new_password, revoke_api_keys = True)
     except (OSError, sqlite3.Error) as exc:
         typer.echo(f"Error: could not reset the password ({exc}).", err = True)
         raise typer.Exit(1)
     finally:
         conn.close()
 
-    typer.echo(f"New password for '{DEFAULT_ADMIN_USERNAME}': {new_password}")
+    typer.echo(f"New password for '{target}': {new_password}")
     typer.echo(
         "Sessions and API keys revoked. A running Unsloth takes it on the next request, "
         "though repeated failed logins can hold the rate limit shut for up to a minute."

@@ -21,6 +21,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 HELPERS=$(awk '
     /^_uv_no_cache_requested\(\) \{/ { grab = 1 }
     /^_uv_cache_probe_writable\(\) \{/ { grab = 1 }
+    /^_uv_cache_usable\(\) \{/ { grab = 1 }
     /^_uv_cache_warm\(\) \{/ { grab = 1 }
     /^_recorded_uv_cache\(\) \{/ { grab = 1 }
     /^_UV_MARKER_BOM=/ { print; next }
@@ -30,12 +31,12 @@ HELPERS=$(awk '
     grab && /^}/ { grab = 0 }
 ' "$SETUP_SH")
 SELECTOR=$(awk '
-    /^if \[ -n "\$\{UV_CACHE_DIR:-\}" \]; then$/ { grab = 1 }
+    /^_uv_caller_value=false$/ { grab = 1 }
     grab { print }
     grab && /^fi$/ { exit }
 ' "$SETUP_SH")
 
-for _need in _uv_no_cache_requested _uv_cache_probe_writable _uv_cache_warm _recorded_uv_cache; do
+for _need in _uv_no_cache_requested _uv_cache_probe_writable _uv_cache_usable _uv_cache_warm _recorded_uv_cache; do
     if ! printf '%s\n' "$HELPERS" | grep -q "^${_need}() {"; then
         echo "FATAL: could not extract $_need from setup.sh" >&2
         exit 1
@@ -145,6 +146,34 @@ for shell in sh bash; do
     warm "$META" wheels-v6 torch.whl
     assert_eq "$shell: package bytes beside metadata do count" \
         "$META" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+
+    # A writable root is not a usable cache: uv unpacks into the buckets, so a root-only probe
+    # adopts a recorded cache uv then aborts on (uv 0.10.7: "failed to rename", exit 1).
+    BLOCKED="$CASE/bucket blocked/uv"
+    warm "$BLOCKED"
+    record "$HOME_DIR" "$BLOCKED\\n"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0555 "$BLOCKED/archive-v0" 2>/dev/null; then
+        assert_eq "$shell: a recorded cache with an unwritable bucket falls back to Studio" \
+            "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+        chmod 0755 "$BLOCKED/archive-v0" 2>/dev/null || true
+    fi
+    assert_eq "$shell: the same cache is adopted once its bucket is writable again" \
+        "$BLOCKED" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+
+    # An all-whitespace UV_CACHE_DIR is not a caller's choice. install.sh's selector decides
+    # this with `case *[![:space:]]*`; a plain `-n` here would read the same value as a choice
+    # and hand uv `--cache-dir '   '`, so the two selectors would answer differently for one
+    # environment. Whitespace-only falls through to the marker, exactly as it does in install.sh.
+    WS="$CASE/whitespace/uv"
+    warm "$WS"
+    record "$HOME_DIR" "$WS\\n"
+    assert_eq "$shell: an all-whitespace UV_CACHE_DIR is not a caller value" \
+        "$WS" "$(run "$shell" value "   " unset "" "$HOME_DIR")"
+    assert_eq "$shell: a tab-only UV_CACHE_DIR is not a caller value" \
+        "$WS" "$(run "$shell" value "$(printf '\t')" unset "" "$HOME_DIR")"
+    # ...while one real character in it still is.
+    assert_eq "$shell: a caller value with surrounding space is still a caller value" \
+        " /caller/uv " "$(run "$shell" value " /caller/uv " unset "" "$HOME_DIR")"
 
     for bucket in archive-v0 builds-v0 built-wheels-v3 sdists-v9; do
         BUCKET_CACHE="$CASE/$bucket/uv"

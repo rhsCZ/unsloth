@@ -583,9 +583,8 @@ _absolutize_uv_cache_dir() {
 }
 
 _probe_uv_cache_writable() {
-    # mkdir -p exits 0 for an existing unwritable directory and -w reads the mode, so probe with
-    # a real create. mktemp (O_EXCL, unpredictable name), not a $$ name: another account can
-    # pre-create a predictable path as a symlink that `: >` would follow and truncate.
+    # A real create: mkdir -p exits 0 on an existing unwritable dir and -w reads only the mode.
+    # mktemp (O_EXCL, unpredictable), not $$: a predictable name can be pre-created as a symlink.
     _uv_probe_dir="$1"
     _uv_cache_probe=""
     if ! mkdir -p "$_uv_probe_dir" 2>/dev/null \
@@ -599,6 +598,30 @@ _probe_uv_cache_writable() {
     return 0
 }
 
+# uv writes into every directory it owns under the cache root, not just the package buckets, so
+# a probe over a hand-written bucket list passes on a cache uv then cannot use. Two measured
+# aborts with uv 0.10.7, both on a writable root: a 0555 archive-* gives "failed to rename ...
+# Permission denied" during install, and an empty 0555 interpreter-v4 gives "Failed to query
+# Python interpreter ... failed to create directory" before resolution even starts.
+#
+# Every existing immediate subdirectory, therefore, rather than a list that has to track uv's
+# layout (interpreter-v*, simple-v*, archive-v*, wheels-v*, ... change between releases). The
+# WARMTH scan still uses the package-bucket list: interpreter and index metadata are not
+# packages, and a cache holding only those has fetched nothing.
+_probe_uv_cache_usable() {
+    _probe_uv_cache_writable "$1" || return 1
+    for _uv_probe_bucket in "$1"/*/; do
+        _uv_probe_bucket=${_uv_probe_bucket%/}
+        [ -d "$_uv_probe_bucket" ] || continue
+        if ! _probe_uv_cache_writable "$_uv_probe_bucket"; then
+            unset _uv_probe_bucket
+            return 1
+        fi
+    done
+    unset _uv_probe_bucket
+    return 0
+}
+
 _record_uv_cache_choice() {
     # In place, before anything reads it: every branch records, so this is the one point every phase of the install and the marker are made to agree on one directory.
     _absolutize_uv_cache_dir
@@ -609,7 +632,10 @@ _record_uv_cache_choice() {
     if [ "$_UV_MARKER_SAVED" != true ]; then
         if [ -e "$_uv_marker_file" ] || [ -L "$_uv_marker_file" ]; then
             # One we cannot read is one we cannot put back, so leave it alone.
-            _UV_MARKER_PREVIOUS=$(cat "$_uv_marker_file" 2>/dev/null) || return 0
+            # Same sentinel the readers use: substitution strips EVERY trailing newline, and a
+            # rollback rewriting `path\n\n` as `path\n` names a different directory.
+            _UV_MARKER_PREVIOUS=$(cat "$_uv_marker_file" 2>/dev/null && printf x) || return 0
+            _UV_MARKER_PREVIOUS=${_UV_MARKER_PREVIOUS%x}
             _UV_MARKER_EXISTED=true
         else
             _UV_MARKER_PREVIOUS=""
@@ -634,17 +660,16 @@ _restore_uv_cache_marker() {
     rm -f "$_uv_marker_file" 2>/dev/null || true
     if [ "$_UV_MARKER_EXISTED" = true ] \
        && ! { [ -e "$_uv_marker_file" ] || [ -L "$_uv_marker_file" ]; }; then
-        printf '%s\n' "$_UV_MARKER_PREVIOUS" > "$_uv_marker_file" 2>/dev/null || true
+        # The saved bytes, verbatim: the delimiter is already part of them.
+        printf '%s' "$_UV_MARKER_PREVIOUS" > "$_uv_marker_file" 2>/dev/null || true
     fi
     _UV_MARKER_SAVED=false
 }
 
 _configure_uv_cache() {
     _uv_studio_cache="$STUDIO_HOME/cache/uv"
-    # `_default_uv_cache_early` exported OUR Studio path so the bootstrap shares one cache; read
-    # back as a custom UV_CACHE_DIR it kept `shared` unreachable on POSIX (install.ps1 has no
-    # early export), so a warm ~/.cache/uv was duplicated. Dropped here; a caller's own value
-    # survives because the early block sets no flag when one is present.
+    # The prologue's placeholder read back as a custom value, which kept `shared` unreachable on
+    # POSIX (install.ps1 has no early export). Dropped here; a caller's own value sets no flag.
     if [ "${_UV_CACHE_DEFAULTED:-false}" = true ]; then
         unset UV_CACHE_DIR
         _UV_CACHE_DEFAULTED=false
@@ -663,6 +688,16 @@ _configure_uv_cache() {
     if [ "$_ISOLATE_UV_CACHE" = true ]; then
         UV_CACHE_DIR="$_uv_studio_cache"
         _UV_CACHE_MODE=isolated
+        # The same probe the studio branch gets: the early answer was discarded above, so
+        # isolation must not be the one branch that hands uv an untested path.
+        if ! _probe_uv_cache_writable "$UV_CACHE_DIR"; then
+            echo "[WARN] Cannot write to $UV_CACHE_DIR -- using uv's default cache." >&2
+            echo "[WARN] Wheels will be copied into the venv rather than hardlinked, costing extra disk." >&2
+            step "uv cache" "using uv's default cache; $UV_CACHE_DIR is not writable" "$C_WARN"
+            unset UV_CACHE_DIR
+            _UV_CACHE_MODE=default
+            return 0
+        fi
         export UV_CACHE_DIR
         _record_uv_cache_choice
         step "uv cache" "forced Studio cache isolation ($UV_CACHE_DIR); already-cached packages may download again" "$C_WARN"
@@ -681,8 +716,7 @@ _configure_uv_cache() {
             _uv_default_cache="${HOME}/.cache/uv"
         fi
     fi
-    # A relative uv.toml cache-dir is reported relative to UV_WORKING_DIR (uv's cwd); scanned
-    # against this script's cwd it reads as cold.
+    # uv reports a relative cache-dir against UV_WORKING_DIR; against our cwd it reads as cold.
     case "$_uv_default_cache" in
         "" | /*) ;;
         *)
@@ -709,15 +743,14 @@ _configure_uv_cache() {
                 _uv_scan_blocked=true
                 continue
             fi
-            # -print -quit, not `| head -n 1`: head exits on the first match and find dies of
-            # SIGPIPE on any bucket over 64K of names. Harmless here (no pipefail), but the same
-            # line under studio/setup.sh's pipefail lost the match, and the scanners must agree.
+            # -print -quit, never `| head -n 1`: head's early exit SIGPIPEs find on any bucket
+            # over 64K of names, which under setup.sh's pipefail lost the hit. The scans agree.
             _uv_artifact=$(find -L "$_uv_bucket" -type f \
                 ! -name CACHEDIR.TAG ! -name .git ! -name .gitignore \
                 ! -name '*.lock' ! -name '*.msgpack' ! -name '*.http' ! -name '*.rev' \
                 -print -quit 2>/dev/null) || true
             # `|| true`, not `|| _uv_artifact=""`: find exits nonzero after an unreadable leaf
-            # even once it printed the hit, and the hit is already assigned.
+            # even once it printed the hit.
             if [ -n "$_uv_artifact" ]; then
                 _uv_default_populated=true
                 break
@@ -725,10 +758,9 @@ _configure_uv_cache() {
         done
     fi
 
-    # Warm is not enough: uv writes to its cache and aborts on one it cannot (a preseeded
-    # image, an NFS mount).
+    # Warm is not enough: uv aborts on a cache it cannot write (a preseeded image, an NFS mount).
     _uv_default_readonly=false
-    if [ "$_uv_default_populated" = true ] && ! _probe_uv_cache_writable "$_uv_default_cache"; then
+    if [ "$_uv_default_populated" = true ] && ! _probe_uv_cache_usable "$_uv_default_cache"; then
         _uv_default_populated=false
         _uv_default_readonly=true
     fi
@@ -739,9 +771,8 @@ _configure_uv_cache() {
     else
         UV_CACHE_DIR="$_uv_studio_cache"
         _UV_CACHE_MODE=studio
-        # The early probe's answer was discarded above, so probe again or uv aborts on a cache
-        # it cannot create. Nothing is recorded then: an empty marker would point the next
-        # update at uv's default.
+        # The early answer was discarded above, so probe again. Nothing is recorded on failure:
+        # an empty marker would point the next update at uv's default.
         if ! _probe_uv_cache_writable "$UV_CACHE_DIR"; then
             echo "[WARN] Cannot write to $UV_CACHE_DIR -- using uv's default cache." >&2
             echo "[WARN] Wheels will be copied into the venv rather than hardlinked, costing extra disk." >&2
@@ -772,6 +803,9 @@ _configure_uv_cache() {
 
 _prepare_studio_uv_cache_for_launch() {
     [ "${_UV_CACHE_MODE:-}" = shared ] || return 0
+    # Shared mode never probed the Studio cache (the warm shared one won first), so probe before
+    # repointing. On failure keep the shared cache: this install just filled it, and it is probed.
+    _probe_uv_cache_writable "$STUDIO_HOME/cache/uv" || return 0
     UV_CACHE_DIR="$STUDIO_HOME/cache/uv"
     export UV_CACHE_DIR
 }

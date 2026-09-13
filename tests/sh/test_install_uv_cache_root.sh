@@ -15,12 +15,13 @@ HELPERS=$(awk '
     /^_absolutize_uv_cache_dir\(\) \{/ { grab = 1 }
     /^_restore_uv_cache_marker\(\) \{/ { grab = 1 }
     /^_probe_uv_cache_writable\(\) \{/ { grab = 1 }
+    /^_probe_uv_cache_usable\(\) \{/ { grab = 1 }
     /^_default_uv_cache_early\(\) \{/ { grab = 1 }
     grab { print }
     grab && /^}/ { grab = 0 }
 ' "$INSTALL_SH")
 for _helper in _configure_uv_cache _prepare_studio_uv_cache_for_launch _record_uv_cache_choice \
-    _restore_uv_cache_marker _absolutize_uv_cache_dir _probe_uv_cache_writable \
+    _restore_uv_cache_marker _absolutize_uv_cache_dir _probe_uv_cache_writable _probe_uv_cache_usable \
     _default_uv_cache_early; do
     if ! printf '%s\n' "$HELPERS" | grep -q "^${_helper}() {"; then
         echo "  FAIL: could not extract $_helper from install.sh"
@@ -504,6 +505,84 @@ EXPORTED
         chmod 755 "$RO_CACHE" 2>/dev/null || true
     fi
 
+    # Two branches used to hand uv the Studio cache without probing it, and uv aborts on a
+    # cache it cannot create rather than falling back.
+    #
+    # Isolation: the early block's probe answer is discarded whenever it had defaulted, so
+    # --isolated-uv-cache was the one selector branch that exported unprobed.
+    #
+    # The launch repoint: shared mode reaches it having probed only the SHARED cache (the warm
+    # one won before the studio branch was reached), so the Studio path it switches to was
+    # never tested. On main that was unreachable on POSIX, because shared mode itself was; this
+    # is the branch that makes it reachable, so it has to hold up.
+    # Its own probe, not run_case: the outcome here is UV_CACHE_DIR *unset*, and run_case's
+    # expectation is built as `child=x:<value>`, which cannot express an absent variable.
+    RO_ROOT="$CASE/unwritable root"
+    mkdir -p "$RO_ROOT/cache"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 555 "$RO_ROOT/cache" 2>/dev/null; then
+        ISO_PROBE="$WORK/$shell isolation unwritable.sh"
+        {
+            printf '%s\n' "$HELPERS"
+            cat <<ISOLATED
+step() { :; }
+substep() { :; }
+C_WARN=""
+STUDIO_HOME='$RO_ROOT'
+_UV_MARKER_SAVED=false
+_UV_MARKER_EXISTED=false
+_UV_MARKER_PREVIOUS=""
+_ISOLATE_UV_CACHE=true
+unset UV_CACHE_DIR
+TEST_UV_EFFECTIVE_CACHE='$HOME_CACHE'
+export TEST_UV_EFFECTIVE_CACHE
+PATH="\$UV_STUB_DIR:\$PATH"
+export PATH
+_configure_uv_cache
+printf '%s|%s\n' "\$_UV_CACHE_MODE" "\${UV_CACHE_DIR+set}"
+ISOLATED
+        } > "$ISO_PROBE"
+        _iso_actual=$($shell "$ISO_PROBE" 2>/dev/null)
+        if [ "$_iso_actual" = "default|" ]; then
+            ok "$shell: isolation falls back when the Studio cache is unwritable"
+        else
+            bad "$shell: isolation with an unwritable Studio cache gave [$_iso_actual], wanted [default|]"
+        fi
+        chmod 755 "$RO_ROOT/cache" 2>/dev/null || true
+    fi
+
+    # A writable ROOT is not a usable cache: uv unpacks distributions into the buckets, so a
+    # root-only probe passes on a cache uv then aborts on. Measured with uv 0.10.7, a 0555
+    # archive-* under a writable root gives "failed to rename ... Permission denied (os error
+    # 13)" and exit 1. Only this branch made it reachable on POSIX, so it is this branch's to
+    # keep out: before it, a POSIX install never selected an inferred cache at all.
+    BUCKET_RO="$CASE/bucket-blocked cache/uv"
+    mkdir -p "$BUCKET_RO/archive-v0/pkg"
+    : > "$BUCKET_RO/archive-v0/pkg/payload.whl"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0555 "$BUCKET_RO/archive-v0" 2>/dev/null; then
+        run_case "$shell" "a warm cache with an unwritable bucket is not adopted" unset "" false \
+            "$HOME_DIR" unset "" "$ROOT" "$BUCKET_RO" "$STUDIO_CACHE" studio \
+            "using new Studio-owned cache ($STUDIO_CACHE); $BUCKET_RO holds packages but is not writable, so cached packages may download again" \
+            "$STUDIO_CACHE"
+        chmod 0755 "$BUCKET_RO/archive-v0" 2>/dev/null || true
+    fi
+
+    # ...and not only the package buckets. uv writes interpreter and index metadata under the
+    # same root, and an empty unwritable interpreter-v4 aborts uv 0.10.7 BEFORE resolution:
+    # "Failed to query Python interpreter ... failed to create directory ... Permission denied",
+    # exit 2. A probe over a hand-written bucket list passed that cache, so the probe walks every
+    # directory uv owns instead. Warmth is still package bytes only: this cache is cold, and the
+    # message says so.
+    INTERP_RO="$CASE/interpreter blocked/uv"
+    mkdir -p "$INTERP_RO/archive-v0/pkg" "$INTERP_RO/interpreter-v4"
+    : > "$INTERP_RO/archive-v0/pkg/payload.whl"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0555 "$INTERP_RO/interpreter-v4" 2>/dev/null; then
+        run_case "$shell" "a warm cache with unwritable interpreter state is not adopted" unset "" false \
+            "$HOME_DIR" unset "" "$ROOT" "$INTERP_RO" "$STUDIO_CACHE" studio \
+            "using new Studio-owned cache ($STUDIO_CACHE); $INTERP_RO holds packages but is not writable, so cached packages may download again" \
+            "$STUDIO_CACHE"
+        chmod 0755 "$INTERP_RO/interpreter-v4" 2>/dev/null || true
+    fi
+
     # A relative uv.toml cache-dir resolves against UV_WORKING_DIR, not the installer's cwd.
     mkdir -p "$CASE/work/relcache/archive-v0/pkg"
     : > "$CASE/work/relcache/archive-v0/pkg/payload.whl"
@@ -540,10 +619,13 @@ RELATIVE
     # An unwritable STUDIO_HOME is a reason to skip the marker, never to fail the install.
     rm -rf "$ROOT/cache"
     if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && mkdir -p "$ROOT" && chmod 500 "$ROOT" 2>/dev/null; then
+        # ...and the launch repoint keeps the shared cache rather than switching to a Studio
+        # cache uv cannot create. It used to switch unconditionally, which failed the install
+        # this case exists to keep alive, at the first on-demand backend install.
         run_case "$shell" "an unwritable Studio root still installs" unset "" false \
             "$HOME_DIR" unset "" "$ROOT" "$BUILDS_CACHE" "$BUILDS_CACHE" shared \
             "reusing existing shared cache ($BUILDS_CACHE) to avoid duplicate Torch/CUDA downloads; use --isolated-uv-cache to isolate" \
-            "$STUDIO_CACHE"
+            "$BUILDS_CACHE"
         chmod 755 "$ROOT" 2>/dev/null || true
     fi
 done
@@ -632,12 +714,53 @@ else
     bad "helper ordering (resolve=$_resolve_line uv=$_uv_line configure=$_configure_line venv=$_venv_line)"
 fi
 
+# A failed install must put the previous marker back BYTE FOR BYTE. install.ps1 does this with
+# ReadAllBytes/WriteAllBytes; the POSIX side used `$(cat ...)` + `printf '%s\n'`, which strips
+# every trailing newline and re-adds exactly one, so a recorded path whose own last byte is a
+# newline -- the case the reader's sentinel exists to support -- came back naming a DIFFERENT
+# directory. The readers agree on those bytes, so the rollback has to as well.
+ROLLBACK_PROBE="$WORK/rollback.sh"
+printf '%s\n' "$HELPERS" > "$ROLLBACK_PROBE"
+cat >> "$ROLLBACK_PROBE" <<'RB'
+_UV_MARKER_SAVED=false
+_UV_MARKER_EXISTED=false
+_UV_MARKER_PREVIOUS=""
+_STUDIO_INSTALL_COMMITTED=false
+STUDIO_HOME=$1
+UV_CACHE_DIR=$2
+_record_uv_cache_choice
+_restore_uv_cache_marker
+od -An -c < "$STUDIO_HOME/cache/uv-cache-dir" | tr -s ' ' | tr -d '\n'
+RB
+
+for shell in sh bash; do
+    command -v "$shell" >/dev/null 2>&1 || continue
+    for _shape in plain trailing-newline bom-crlf; do
+        _rb_home="$WORK/rollback $shell $_shape"
+        mkdir -p "$_rb_home/cache"
+        case "$_shape" in
+            # The ordinary marker every writer produces.
+            plain)            printf '/previous/uv\n' > "$_rb_home/cache/uv-cache-dir" ;;
+            # A recorded path that itself ends in a newline: two LF bytes on disk.
+            trailing-newline) printf '/previous/uv\n\n' > "$_rb_home/cache/uv-cache-dir" ;;
+            # What an older install.ps1 left behind under Windows PowerShell 5.1.
+            bom-crlf)         printf '\357\273\277/previous/uv\r\n' > "$_rb_home/cache/uv-cache-dir" ;;
+        esac
+        _rb_want=$(od -An -c < "$_rb_home/cache/uv-cache-dir" | tr -s ' ' | tr -d '\n')
+        _rb_got=$($shell "$ROLLBACK_PROBE" "$_rb_home" "/new/uv")
+        if [ "$_rb_want" = "$_rb_got" ]; then
+            ok "$shell: a failed install restores a [$_shape] marker byte for byte"
+        else
+            bad "$shell: rollback rewrote a [$_shape] marker (expected [$_rb_want], got [$_rb_got])"
+        fi
+    done
+done
+
 for _required in \
     '_ISOLATE_UV_CACHE=false' \
     '--isolated-uv-cache) _ISOLATE_UV_CACHE=true' \
     'UNSLOTH_ISOLATE_UV_CACHE' \
     'export UNSLOTH_ISOLATE_UV_CACHE=1' \
-    'unset UV_CACHE_DIR' \
     '_prepare_studio_uv_cache_for_launch'; do
     if grep -Fq -- "$_required" "$INSTALL_SH"; then
         ok "source contract: $_required"
@@ -645,6 +768,21 @@ for _required in \
         bad "missing source contract: $_required"
     fi
 done
+
+# A bare `unset UV_CACHE_DIR` grep cannot fail for the reason it claims: the string appears in
+# five unrelated places in install.sh (the early probe's unwind, no-cache mode, the reroute).
+# What the selector must actually do is drop the value the PROLOGUE defaulted, so pin that
+# adjacency instead.
+if awk '
+    /^[[:space:]]*if \[ "\$\{_UV_CACHE_DEFAULTED:-false\}" = true \]; then$/ { armed = 1; next }
+    armed && /^[[:space:]]*unset UV_CACHE_DIR$/ { found = 1 }
+    armed { armed = 0 }
+    END { exit(found ? 0 : 1) }
+' "$INSTALL_SH"; then
+    ok "the selector drops the cache path the prologue defaulted"
+else
+    bad "the selector no longer unsets a defaulted UV_CACHE_DIR (shared mode is unreachable again)"
+fi
 
 echo ""
 echo "  PASS: $PASS"

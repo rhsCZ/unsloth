@@ -471,9 +471,33 @@ def atomic_write_bytes(destination: Path, data: bytes) -> None:
     os.replace(tmp_path, destination)
 
 
-def atomic_replace_from_tempfile(tmp_path: Path, destination: Path) -> None:
+def atomic_replace_from_tempfile(
+    tmp_path: Path,
+    destination: Path,
+    *,
+    attempts: int = 8,
+) -> None:
+    """os.replace, retried against transient Windows sharing violations.
+
+    Rename-over needs DELETE access on the destination, so a scanner or the indexer holding the
+    marker open fails the swap outright -- where the in-place write this replaced would only
+    have contended for write access. Handles clear in a second or two, so a bounded backoff
+    turns the failure into a pause; anything else raises at once rather than stalling on a real
+    problem. A no-op off Windows, where the rename does not care about open handles.
+    """
     destination.parent.mkdir(parents = True, exist_ok = True)
-    os.replace(tmp_path, destination)
+    delay = 0.25
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp_path, destination)
+            return
+        except OSError as exc:
+            transient = os.name == "nt" and getattr(exc, "winerror", None) in (5, 32, 145)
+            if not transient or attempt == attempts - 1:
+                raise
+            log(f"marker swap blocked ({exc.winerror}), retrying in {delay:.2f}s")
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
 
 
 def write_live_marker(marker_path: Path, marker: dict[str, Any]) -> None:
@@ -2062,11 +2086,10 @@ class InstallSelection:
     linked_libraries: tuple[str, ...] | None = None
     runtime_wiring_version: int | None = None
     linked_runtime_directories: tuple[str, ...] | None = None
-    # The macOS release walk-back behind this choice (WalkBack), None when release_tag is the
-    # newest. Describes the choice, not the bundle: never in the fingerprint.
+    # None when release_tag is the newest. Describes the choice, not the bundle: never fingerprinted.
     walk_back: "WalkBack | None" = None
-    # The manifest's os/arch, recorded on the marker so a keep decision need not infer the platform
-    # from an asset name a custom repository may spell freely. Outside the fingerprint.
+    # The manifest's os/arch, so a keep decision need not infer it from an asset name a custom
+    # repository may spell freely. Outside the fingerprint.
     platform_os: str | None = None
     platform_arch: str | None = None
 
@@ -2218,8 +2241,8 @@ def write_prebuilt_metadata(ops: ModuleOps, install_dir: Path, selection: Instal
         "min_os": coverage.get("min_os"),
         "studio_protocol": selection.studio_protocol,
         "install_fingerprint": selection.fingerprint(),
-        # The one fingerprint input the top-level fields do not carry whole: with it a later run
-        # recomputes the fingerprint and tells a whole marker from an edited one.
+        # The one fingerprint input the top-level fields do not carry whole, so a later run can
+        # recompute and tell a whole marker from an edited one.
         "fingerprint_coverage": coverage,
         "installed_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -2233,19 +2256,30 @@ def write_prebuilt_metadata(ops: ModuleOps, install_dir: Path, selection: Instal
         payload["install_kind"] = "slim"
         payload["paired_llama_tag"] = selection.paired_llama_tag
         payload["linked_from"] = selection.linked_from
-        # The ggml tree these hardlinks point into, from the live llama marker: the tag alone cannot
-        # say whether a later llama build still backs this bundle, and the no-network re-check has
-        # no release to ask. Absent reads as "cannot say": full path.
+        # The ggml tree these hardlinks point into: the tag alone cannot say whether a later llama
+        # build still backs this bundle. Absent reads as "cannot say": full path.
         paired_tree = getattr(ops, "installed_paired_runtime_tree", None)
         paired_tree = paired_tree() if callable(paired_tree) else None
         if isinstance(paired_tree, str) and paired_tree:
             payload["paired_llama_ggml_tree"] = paired_tree
+        # ...and WHICH install of that tree, since one release publishes a bundle per gfx target:
+        # the tree id survives a reselection that replaces every byte behind these hardlinks.
+        paired_id = getattr(ops, "installed_paired_runtime_id", None)
+        paired_id = paired_id() if callable(paired_id) else None
+        if isinstance(paired_id, str) and paired_id:
+            payload["paired_llama_runtime_id"] = paired_id
         if selection.linked_libraries is not None:
             payload["linked_libraries"] = list(selection.linked_libraries)
         if selection.runtime_wiring_version is not None:
             payload["runtime_wiring_version"] = selection.runtime_wiring_version
         if selection.linked_runtime_directories is not None:
             payload["linked_runtime_directories"] = list(selection.linked_runtime_directories)
+    # Optional per component: size + sha256 of the payload a reuse would otherwise have to RUN to
+    # trust. Written last so it covers the wiring above. Absent means full path once.
+    records = getattr(ops, "runtime_file_records", None)
+    records = records(install_dir, selection) if callable(records) else None
+    if records:
+        payload["runtime_files"] = records
     ops.metadata_path(install_dir).write_text(
         json.dumps(payload, indent = 2) + "\n", encoding = "utf-8"
     )
@@ -2330,6 +2364,10 @@ def _backfill_fingerprint_inputs(
     if not patch:
         return
     metadata = ops.load_prebuilt_metadata(install_dir)
+    # A second read: another installer swapping the tree in between leaves None, and falling out is
+    # right, since the run that replaced the tree wrote its own marker.
+    if not metadata:
+        return
     if metadata.get("install_fingerprint") != selection.fingerprint():
         return
     for key, value in patch.items():
@@ -2337,8 +2375,7 @@ def _backfill_fingerprint_inputs(
             metadata.pop(key, None)
         else:
             metadata[key] = value
-    # Over a LIVE marker: temp-and-replace, mode and owner kept, so a failed write leaves the valid
-    # marker and a group-shared marker stays readable.
+    # Over a LIVE marker: temp-and-replace, so a failed write leaves the valid one in place.
     write_live_marker(ops.metadata_path(install_dir), metadata)
 
 
@@ -2616,8 +2653,7 @@ def install_selected_prebuilt(
     if not force and ops.existing_install_matches(install_dir, host, selection):
         if _settle_kept_install(ops, install_dir, host, selection, locked = False):
             return 0
-        # The install changed under the lock: the locked path re-checks and installs rather than
-        # reporting a release just replaced.
+        # Changed under the lock: the locked path re-checks rather than reporting a replaced release.
 
     with ops.install_lock(ops.install_lock_path(install_dir)):
         # Re-check under the lock: a concurrent run may have just finished.

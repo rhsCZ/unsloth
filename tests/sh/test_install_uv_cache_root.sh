@@ -566,6 +566,19 @@ ISOLATED
         chmod 0755 "$BUCKET_RO/archive-v0" 2>/dev/null || true
     fi
 
+    # Store versions are not single-digit: uv 0.12.1 ships simple-v24. `*-v[0-9]*` is "a digit
+    # then anything", so it covers both, and this case keeps a narrower glob from slipping in.
+    MULTI_RO="$CASE/multi-digit store/uv"
+    mkdir -p "$MULTI_RO/archive-v0/pkg" "$MULTI_RO/simple-v24"
+    : > "$MULTI_RO/archive-v0/pkg/payload.whl"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0555 "$MULTI_RO/simple-v24" 2>/dev/null; then
+        run_case "$shell" "an unwritable multi-digit store is not adopted" unset "" false \
+            "$HOME_DIR" unset "" "$ROOT" "$MULTI_RO" "$STUDIO_CACHE" studio \
+            "using new Studio-owned cache ($STUDIO_CACHE); $MULTI_RO holds packages but is not writable, so cached packages may download again" \
+            "$STUDIO_CACHE"
+        chmod 0755 "$MULTI_RO/simple-v24" 2>/dev/null || true
+    fi
+
     # ...and not only the package buckets. uv writes interpreter and index metadata under the
     # same root, and an empty unwritable interpreter-v4 aborts uv 0.10.7 BEFORE resolution:
     # "Failed to query Python interpreter ... failed to create directory ... Permission denied",
@@ -597,10 +610,11 @@ ISOLATED
         chmod 0755 "$STRAY/notes from someone" 2>/dev/null || true
     fi
 
-    # uv opens its own control files on every command, so an unreadable one aborts cache init
-    # ("Failed to initialize cache ... Permission denied", uv 0.10.7, exit 2) before any package
-    # is touched. Package bytes are different: with those unreadable uv still installs anything
-    # not cached there, so they must NOT disqualify the cache.
+    # uv opens its control files FOR WRITING on every command, so one that is merely readable
+    # (0444 from another account) aborts cache init just as an unreadable one does: "Failed to
+    # initialize cache ... Permission denied", uv 0.10.7, exit 2, before any package is touched.
+    # Package bytes are different: with those unreadable uv still installs anything not cached
+    # there, so they must NOT disqualify the cache.
     CTRL="$CASE/unreadable control/uv"
     mkdir -p "$CTRL/archive-v0/pkg"
     : > "$CTRL/archive-v0/pkg/payload.whl"
@@ -608,6 +622,15 @@ ISOLATED
     if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 000 "$CTRL/CACHEDIR.TAG" 2>/dev/null \
        && [ ! -r "$CTRL/CACHEDIR.TAG" ]; then
         run_case "$shell" "an unreadable uv control file disqualifies the cache" unset "" false \
+            "$HOME_DIR" unset "" "$ROOT" "$CTRL" "$STUDIO_CACHE" studio \
+            "using new Studio-owned cache ($STUDIO_CACHE); $CTRL holds packages but is not writable, so cached packages may download again" \
+            "$STUDIO_CACHE"
+        chmod 644 "$CTRL/CACHEDIR.TAG" 2>/dev/null || true
+    fi
+    # ...and a read-only control file is rejected for the same reason, since uv writes to it.
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0444 "$CTRL/CACHEDIR.TAG" 2>/dev/null \
+       && [ ! -w "$CTRL/CACHEDIR.TAG" ]; then
+        run_case "$shell" "a read-only uv control file disqualifies the cache" unset "" false \
             "$HOME_DIR" unset "" "$ROOT" "$CTRL" "$STUDIO_CACHE" studio \
             "using new Studio-owned cache ($STUDIO_CACHE); $CTRL holds packages but is not writable, so cached packages may download again" \
             "$STUDIO_CACHE"

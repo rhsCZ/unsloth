@@ -598,19 +598,17 @@ _probe_uv_cache_writable() {
     return 0
 }
 
-# uv writes into every directory it owns under the cache root, not just the package buckets, so
-# a probe over a hand-written bucket list passes on a cache uv then cannot use. Two measured
-# aborts with uv 0.10.7, both on a writable root: a 0555 archive-* gives "failed to rename ...
-# Permission denied" during install, and an empty 0555 interpreter-v4 gives "Failed to query
-# Python interpreter ... failed to create directory" before resolution even starts.
-#
-# Every existing immediate subdirectory, therefore, rather than a list that has to track uv's
-# layout (interpreter-v*, simple-v*, archive-v*, wheels-v*, ... change between releases). The
-# WARMTH scan still uses the package-bucket list: interpreter and index metadata are not
-# packages, and a cache holding only those has fetched nothing.
+# uv writes into the stores under the cache root, not just the root: with uv 0.10.7 a 0555
+# archive-* aborts the install ("failed to rename") and an empty 0555 interpreter-v4 aborts
+# before resolution ("failed to create directory"). Matched by uv's `<name>-v<n>` naming so a
+# later release is covered, and NOT every subdirectory: an unrelated read-only one would
+# disqualify a cache uv uses fine, costing the re-download this exists to avoid.
+# Warmth still counts package bytes only; interpreter and index metadata are not packages.
 _probe_uv_cache_usable() {
     _probe_uv_cache_writable "$1" || return 1
-    for _uv_probe_bucket in "$1"/*/; do
+    # Symlinked stores are followed on purpose: uv writes through them too, so probing the
+    # link target is what makes the answer match uv's.
+    for _uv_probe_bucket in "$1"/*-v[0-9]*/; do
         _uv_probe_bucket=${_uv_probe_bucket%/}
         [ -d "$_uv_probe_bucket" ] || continue
         if ! _probe_uv_cache_writable "$_uv_probe_bucket"; then
@@ -619,6 +617,18 @@ _probe_uv_cache_usable() {
         fi
     done
     unset _uv_probe_bucket
+    # uv opens its own control files on every command, cache init included: an unreadable one
+    # aborts uv 0.10.7 with "Failed to initialize cache ... Permission denied". Only these, not
+    # package files: with package bytes unreadable uv still installs anything not cached there.
+    for _uv_probe_file in "$1"/CACHEDIR.TAG "$1"/.gitignore "$1"/.lock \
+        "$1"/*-v[0-9]*/.git "$1"/*-v[0-9]*/.gitignore "$1"/*-v[0-9]*/.lock; do
+        [ -f "$_uv_probe_file" ] || continue
+        if [ ! -r "$_uv_probe_file" ]; then
+            unset _uv_probe_file
+            return 1
+        fi
+    done
+    unset _uv_probe_file
     return 0
 }
 
@@ -688,8 +698,7 @@ _configure_uv_cache() {
     if [ "$_ISOLATE_UV_CACHE" = true ]; then
         UV_CACHE_DIR="$_uv_studio_cache"
         _UV_CACHE_MODE=isolated
-        # The same probe the studio branch gets: the early answer was discarded above, so
-        # isolation must not be the one branch that hands uv an untested path.
+        # The same probe the studio branch gets: the early answer was discarded above.
         if ! _probe_uv_cache_writable "$UV_CACHE_DIR"; then
             echo "[WARN] Cannot write to $UV_CACHE_DIR -- using uv's default cache." >&2
             echo "[WARN] Wheels will be copied into the venv rather than hardlinked, costing extra disk." >&2
@@ -803,8 +812,8 @@ _configure_uv_cache() {
 
 _prepare_studio_uv_cache_for_launch() {
     [ "${_UV_CACHE_MODE:-}" = shared ] || return 0
-    # Shared mode never probed the Studio cache (the warm shared one won first), so probe before
-    # repointing. On failure keep the shared cache: this install just filled it, and it is probed.
+    # Shared mode never probed the Studio cache (the warm shared one won first). On failure keep
+    # the shared cache: this install just filled it.
     _probe_uv_cache_writable "$STUDIO_HOME/cache/uv" || return 0
     UV_CACHE_DIR="$STUDIO_HOME/cache/uv"
     export UV_CACHE_DIR

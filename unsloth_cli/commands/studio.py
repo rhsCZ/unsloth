@@ -3314,14 +3314,13 @@ def _uv_cache_is_writable(cache_dir: Path) -> bool:
     """A real create, as install.sh's write probe does: mode bits do not answer for a network mount, and uv aborts on a cache it
     cannot write rather than falling back.
 
-    The buckets too, not just the root: uv unpacks distributions into them, so a root-only probe
-    passes on a cache uv then cannot use. Measured with uv 0.10.7, a 0555 archive-* bucket under a
-    writable root aborts with "failed to rename ... Permission denied", and an empty 0555
-    interpreter-v4 aborts before resolution. Every directory uv owns, not a hand-written bucket
-    list that has to track uv's layout. Mirrors install.sh's _probe_uv_cache_usable."""
+    The stores too, not just the root: uv writes into them, so a root-only probe passes on a
+    cache uv then aborts on. Mirrors install.sh's _probe_uv_cache_usable."""
     probes = [cache_dir]
     try:
-        probes.extend(p for p in cache_dir.iterdir() if p.is_dir())
+        # uv's `<name>-v<n>` naming, not every subdirectory: an unrelated read-only directory
+        # must not disqualify a usable cache.
+        probes.extend(p for p in cache_dir.glob("*-v[0-9]*") if p.is_dir())
     except OSError:
         return False
     for target in probes:
@@ -3330,6 +3329,13 @@ def _uv_cache_is_writable(cache_dir: Path) -> bool:
                 pass
         except OSError:
             return False
+    # uv opens its own control files on every command, so an unreadable one aborts cache init.
+    # Only these, not package files, which uv tolerates.
+    for target in probes:
+        for name in ("CACHEDIR.TAG", ".gitignore", ".git", ".lock"):
+            control = target / name
+            if control.is_file() and not os.access(control, os.R_OK):
+                return False
     return True
 
 

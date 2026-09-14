@@ -992,11 +992,11 @@ _uv_cache_probe_writable() {
 }
 
 _uv_cache_usable() {
-    # Every directory uv owns under the root, not a hand-written bucket list: uv 0.10.7 aborts on
-    # a 0555 archive-* ("failed to rename") and on an empty 0555 interpreter-v4 ("failed to create
-    # directory", before resolution). install.sh's _probe_uv_cache_usable is the same check.
+    # The stores uv owns, by its `<name>-v<n>` naming: a 0555 archive-* or interpreter-v4 aborts
+    # uv. Not every subdirectory, or an unrelated read-only one disqualifies a usable cache.
+    # install.sh's _probe_uv_cache_usable is the same check.
     _uv_cache_probe_writable "$1" || return 1
-    for _uvu_bucket in "$1"/*/; do
+    for _uvu_bucket in "$1"/*-v[0-9]*/; do
         _uvu_bucket=${_uvu_bucket%/}
         [ -d "$_uvu_bucket" ] || continue
         if ! _uv_cache_probe_writable "$_uvu_bucket"; then
@@ -1005,6 +1005,17 @@ _uv_cache_usable() {
         fi
     done
     unset _uvu_bucket
+    # uv opens its own control files on every command, so an unreadable one aborts cache init.
+    # Only these, not package files: unreadable package bytes do not stop uv.
+    for _uvu_file in "$1"/CACHEDIR.TAG "$1"/.gitignore "$1"/.lock \
+        "$1"/*-v[0-9]*/.git "$1"/*-v[0-9]*/.gitignore "$1"/*-v[0-9]*/.lock; do
+        [ -f "$_uvu_file" ] || continue
+        if [ ! -r "$_uvu_file" ]; then
+            unset _uvu_file
+            return 1
+        fi
+    done
+    unset _uvu_file
     return 0
 }
 

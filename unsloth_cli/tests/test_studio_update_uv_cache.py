@@ -1100,3 +1100,54 @@ def test_a_dangling_symlink_where_a_store_belongs_is_rejected(tmp_path):
     _fill(cache)
     (cache / "simple-v24").symlink_to(tmp_path / "gone")
     assert studio._uv_cache_is_writable(cache) is False
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason = "POSIX mode bits; chmod(0o555) denies nothing on Windows"
+)
+def test_a_case_folded_store_name_is_probed(monkeypatch, tmp_path):
+    """On APFS or NTFS `Python-V0` is the same path uv opens as `python-v0`. This box is ext4,
+    so the fold is stubbed: what is under test is that the probe acts on the answer, not that
+    it can measure a folding filesystem it does not have."""
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    _fill(cache)
+    odd = cache / "Interpreter-V4"
+    odd.mkdir()
+    odd.chmod(0o555)
+    try:
+        monkeypatch.setattr(studio, "_uv_cache_folds_case", lambda cache_dir: False)
+        assert studio._uv_cache_is_writable(cache) is True, "case-sensitive: not uv's path"
+        monkeypatch.setattr(studio, "_uv_cache_folds_case", lambda cache_dir: True)
+        assert studio._uv_cache_is_writable(cache) is False, "folding: uv opens this one"
+    finally:
+        odd.chmod(0o755)
+
+
+def test_the_fold_probe_leaves_nothing_behind(tmp_path):
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    _fill(cache)
+    before = sorted(p.name for p in cache.iterdir())
+    studio._uv_cache_folds_case(cache)
+    assert sorted(p.name for p in cache.iterdir()) == before
+
+
+def test_a_lock_that_is_not_a_regular_file_makes_the_cache_unusable(tmp_path):
+    """uv cannot open it at all. Measured on uv 0.10.7: a `.lock` directory, and a symlink to
+    one, both exit 2 with "Could not acquire lock ... Is a directory". is_file() skipped both."""
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    _fill(cache)
+    lock = cache / ".lock"
+    lock.mkdir()
+    assert studio._uv_cache_is_writable(cache) is False
+    lock.rmdir()
+    assert studio._uv_cache_is_writable(cache) is True
+    (tmp_path / "lock target").mkdir()
+    lock.symlink_to(tmp_path / "lock target")
+    assert studio._uv_cache_is_writable(cache) is False
+    lock.unlink()
+    assert studio._uv_cache_is_writable(cache) is True

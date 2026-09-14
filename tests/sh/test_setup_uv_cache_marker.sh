@@ -22,7 +22,10 @@ HELPERS=$(awk '
     /^_uv_is_bucket_name\(\) \{/ { grab = 1 }
     /^_uv_no_cache_requested\(\) \{/ { grab = 1 }
     /^_uv_cache_probe_writable\(\) \{/ { grab = 1 }
+    /^_uv_cache_folds_case\(\) \{/ { grab = 1 }
+    /^_uv_store_key\(\) \{/ { grab = 1 }
     /^_uv_cache_usable\(\) \{/ { grab = 1 }
+    /^_uv_control_files_writable\(\) \{/ { grab = 1 }
     /^_uv_cache_warm\(\) \{/ { grab = 1 }
     /^_recorded_uv_cache\(\) \{/ { grab = 1 }
     /^_UV_MARKER_BOM=/ { print; next }
@@ -37,7 +40,7 @@ SELECTOR=$(awk '
     grab && /^fi$/ { exit }
 ' "$SETUP_SH")
 
-for _need in _uv_is_bucket_name _uv_no_cache_requested _uv_cache_probe_writable _uv_cache_usable _uv_cache_warm _recorded_uv_cache; do
+for _need in _uv_is_bucket_name _uv_no_cache_requested _uv_cache_probe_writable _uv_cache_folds_case _uv_store_key _uv_cache_usable _uv_control_files_writable _uv_cache_warm _recorded_uv_cache; do
     if ! printf '%s\n' "$HELPERS" | grep -q "^${_need}() {"; then
         echo "FATAL: could not extract $_need from setup.sh" >&2
         exit 1
@@ -48,6 +51,8 @@ printf '%s\n' "$HELPERS" | grep -q '^_UV_MARKER_BOM=' || {
 printf '%s\n' "$SELECTOR" | grep -q '_uv_cache_warm "\$_uv_recorded"' || {
     echo "FATAL: could not extract the selector from setup.sh" >&2; exit 1; }
 
+PROBE_HELPERS="$WORK/helpers.sh"
+printf '%s\n' "$HELPERS" > "$PROBE_HELPERS"
 PROBE="$WORK/probe.sh"
 {
     printf '%s\n' "$HELPERS"
@@ -195,6 +200,103 @@ for shell in sh bash; do
     rm -f "$BLOCKFILE/interpreter-v4"
     assert_eq "$shell: and the same cache is adopted once it is gone" \
         "$BLOCKFILE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+
+    # `*-v[0-9]*/.lock` also reaches `unused-v999`, a kind `_uv_is_bucket_name` rejects on
+    # purpose. A read-only control-looking file there condemned a cache real uv uses fine
+    # (measured: probe REJECT, uv exit 0), so the standalone update lost its warm cache.
+    STRAY_CTL="$CASE/stray control file/uv"
+    warm "$STRAY_CTL"
+    mkdir -p "$STRAY_CTL/unused-v999"
+    : > "$STRAY_CTL/unused-v999/.lock"
+    record "$HOME_DIR" "$STRAY_CTL\\n"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0444 "$STRAY_CTL/unused-v999/.lock" 2>/dev/null; then
+        assert_eq "$shell: a control file outside uv's stores does not condemn the cache" \
+            "$STRAY_CTL" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+        chmod 0644 "$STRAY_CTL/unused-v999/.lock" 2>/dev/null || true
+    fi
+    # ...while a .git inside a store still does. Measured on uv 0.10.7: sdists-v9/.git at 0444
+    # aborts with "Permission denied", exit 2. uv creates no per-store control files itself, so
+    # this one is someone else's, and it is the one proven to break uv.
+    mkdir -p "$STRAY_CTL/sdists-v9"
+    : > "$STRAY_CTL/sdists-v9/.git"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0444 "$STRAY_CTL/sdists-v9/.git" 2>/dev/null; then
+        assert_eq "$shell: a read-only .git inside a store still does" \
+            "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+        chmod 0644 "$STRAY_CTL/sdists-v9/.git" 2>/dev/null || true
+    fi
+    # And the root .lock, the other one measured to abort (exit 2).
+    : > "$STRAY_CTL/.lock"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0444 "$STRAY_CTL/.lock" 2>/dev/null; then
+        assert_eq "$shell: a read-only root .lock is not usable either" \
+            "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+        chmod 0644 "$STRAY_CTL/.lock" 2>/dev/null || true
+    fi
+    # A CACHEDIR.TAG at 0444 installs fine (measured), so it must not cost the warm cache.
+    : > "$STRAY_CTL/CACHEDIR.TAG"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0444 "$STRAY_CTL/CACHEDIR.TAG" 2>/dev/null; then
+        assert_eq "$shell: a read-only CACHEDIR.TAG does not, since uv tolerates it" \
+            "$STRAY_CTL" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+        chmod 0644 "$STRAY_CTL/CACHEDIR.TAG" 2>/dev/null || true
+    fi
+
+    # uv cannot open a `.lock` that is not a regular file. Measured on uv 0.10.7: a directory
+    # there, and a symlink to one, both exit 2 with "Could not acquire lock ... Is a directory".
+    LOCKDIR="$CASE/lock is a directory/uv"
+    warm "$LOCKDIR"
+    mkdir -p "$LOCKDIR/.lock"
+    record "$HOME_DIR" "$LOCKDIR\\n"
+    assert_eq "$shell: a .lock directory is not a usable cache" \
+        "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+    rmdir "$LOCKDIR/.lock"
+    assert_eq "$shell: and the same cache is adopted once it is a file again" \
+        "$LOCKDIR" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+    mkdir -p "$CASE/lock target"
+    ln -s "$CASE/lock target" "$LOCKDIR/.lock"
+    assert_eq "$shell: a .lock symlinked to a directory is not either" \
+        "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+    rm -f "$LOCKDIR/.lock"
+
+    # The fold, at the two call sites rather than only in the helper. ext4 does not fold, so the
+    # measurement is stubbed both ways and what is pinned is that each scan acts on the answer.
+    fold_probe() {  # fold_probe <shell> <folds:0|1> <expr>
+        # _FOLDS, not $2: inside the stub $2 is the STUB's argument, not the script's, so the
+        # answer read as empty and every fold case passed for the wrong reason.
+        "$1" -c '. "$1"
+_FOLDS=$2
+_uv_cache_folds_case() { [ "$_FOLDS" = 1 ]; }
+if eval "$3"; then echo yes; else echo no; fi' _ "$PROBE_HELPERS" "$2" "$3"
+    }
+    FOLDED="$CASE/folded store/uv"
+    mkdir -p "$FOLDED/Archive-V0/pkg"
+    : > "$FOLDED/Archive-V0/pkg/torch.whl"
+    assert_eq "$shell: a folded bucket counts as warmth on a folding filesystem" \
+        "yes" "$(fold_probe "$shell" 1 '_uv_cache_warm "'"$FOLDED"'"')"
+    assert_eq "$shell: and does not where the filesystem is case-sensitive" \
+        "no" "$(fold_probe "$shell" 0 '_uv_cache_warm "'"$FOLDED"'"')"
+
+    # Same for the control file: `Sdists-V9` passes the folded store test, so the .git inside it
+    # has to be probed under uv's spelling, not the raw one.
+    FOLDCTL="$CASE/folded sdists/uv"
+    mkdir -p "$FOLDCTL/archive-v0/pkg" "$FOLDCTL/Sdists-V9"
+    : > "$FOLDCTL/archive-v0/pkg/torch.whl"
+    : > "$FOLDCTL/Sdists-V9/.git"
+    if [ "$(id -u 2>/dev/null || echo 0)" != 0 ] && chmod 0444 "$FOLDCTL/Sdists-V9/.git" 2>/dev/null; then
+        assert_eq "$shell: a read-only .git in a folded sdists store is caught" \
+            "no" "$(fold_probe "$shell" 1 '_uv_cache_usable "'"$FOLDCTL"'"')"
+        assert_eq "$shell: and is left alone where the name is not uv's" \
+            "yes" "$(fold_probe "$shell" 0 '_uv_cache_usable "'"$FOLDCTL"'"')"
+        chmod 0644 "$FOLDCTL/Sdists-V9/.git" 2>/dev/null || true
+    fi
+
+    # A folding filesystem opens `Archive-V0` as the store uv writes at `archive-v0`, and a
+    # lowercase glob does not fold, so the warm scan read a full cache as cold and the offline
+    # update failed. Both scans go through _uv_store_key now, so they agree on the entry.
+    assert_eq "$shell: a folded store name resolves to uv's spelling" \
+        "archive-v0" "$($shell -c '. "$1"; _uv_store_key "Archive-V0" 1' _ "$PROBE_HELPERS")"
+    assert_eq "$shell: and is not claimed on a case-sensitive filesystem" \
+        "" "$($shell -c '. "$1"; _uv_store_key "Archive-V0" 0 || true' _ "$PROBE_HELPERS")"
+    assert_eq "$shell: a lookalike is never a store, folding or not" \
+        "" "$($shell -c '. "$1"; _uv_store_key "Archive-V0.backup" 1 || true' _ "$PROBE_HELPERS")"
 
     # An all-whitespace UV_CACHE_DIR is not a caller's choice. install.sh's selector decides
     # this with `case *[![:space:]]*`; a plain `-n` here would read the same value as a choice

@@ -1467,14 +1467,9 @@ def _enforce_password_change_before_exposure(
                 _pbkdf2_hex(candidate, password_salt.encode("utf-8")), password_hash
             )
 
-        # Ctrl+C aborts a TUNNEL launch only; on a raw bind it declines the prompt, because that launch worked before this gate existed.
-        refusal = (
-            "Ctrl+C to abort."
-            if tunnel_will_start
-            else "Ctrl+C to skip, and Unsloth starts with the auto-generated password."
-        )
         typer.echo(
-            f"Unsloth Studio will be reachable {exposure}, so set a password now. {refusal}",
+            f"Unsloth Studio will be reachable {exposure}, so set a password now. "
+            "Ctrl+C to abort.",
             err = True,
         )
         try:
@@ -1495,25 +1490,19 @@ def _enforce_password_change_before_exposure(
             os.environ[_UNATTENDED_PROMPT_DONE_ENV] = "1"
             return
         except (KeyboardInterrupt, EOFError):
-            if tunnel_will_start:
-                typer.echo(
-                    "\nError: password change aborted; refusing to publish Unsloth "
-                    "on a public URL with the default admin password. Re-run and "
-                    "set a password, or launch without --secure/--cloudflare.",
-                    err = True,
-                )
-                raise typer.Exit(1)
-            # A raw bind is not a publication, so Ctrl+C returns it to pre-prompt behaviour, as run.py's gate does.
+            # An abort needs the non-interactive hatch more than the old warn did.
             typer.echo(
-                "\nWarning: password change aborted, so Unsloth is starting with "
-                "the auto-generated admin password on a bind that is reachable "
-                f"from the network. {_deadline_sentence()} Change it by logging "
-                "in, with `unsloth studio reset-password`, or by passing "
-                "--password / UNSLOTH_STUDIO_PASSWORD.",
+                "\nError: password change aborted; refusing to expose Unsloth "
+                "with the default admin password. Re-run and set a password, or "
+                "pass one with --password / UNSLOTH_STUDIO_PASSWORD, or "
+                + (
+                    "launch without --secure/--cloudflare."
+                    if tunnel_will_start
+                    else "launch with -H 127.0.0.1 to stay off the network."
+                ),
                 err = True,
             )
-            os.environ[_UNATTENDED_PROMPT_DONE_ENV] = "1"
-            return
+            raise typer.Exit(1)
         _cli_update_password(conn, DEFAULT_ADMIN_USERNAME, new_password)
         typer.echo(f"Password updated for '{DEFAULT_ADMIN_USERNAME}'.", err = True)
     finally:
@@ -3182,18 +3171,47 @@ _PS_PROXY_DEFAULTS_PRELUDE = (
 )
 
 
-_UV_CACHE_BUCKETS = ("archive-", "builds-", "built-wheels-", "wheels-", "sdists-")
+_UV_CACHE_BUCKETS = ("archive", "builds", "built-wheels", "wheels", "sdists")
+# Every CacheBucket in uv 0.12.1 (UV_PINNED_VERSION) plus built-wheels, as install.sh lists them.
+_UV_CACHE_STORES = (
+    "archive",
+    "binaries",
+    "builds",
+    "built-wheels",
+    "environments",
+    "flat-index",
+    "git",
+    "interpreter",
+    "osv",
+    "python",
+    "sdists",
+    "simple",
+    "wheels",
+)
 _UV_CACHE_METADATA_SUFFIXES = (".lock", ".msgpack", ".http", ".rev")
+
+
+def _uv_is_bucket_name(name: str) -> bool:
+    """A name uv itself creates: <kind>-v<N>, whole suffix numeric, kind from the LAST `-v`.
+    Same shape rule as _uv_is_bucket_name in install.sh and Test-StudioUvBucketName in
+    install.ps1, over the narrower kind list: this one only answers whether a bucket holds
+    package BYTES, where the installers also probe the kinds uv merely writes."""
+    kind, marker, version = name.rpartition("-v")
+    # isascii too: str.isdigit() is true for Arabic-Indic and superscript digits, which the sh
+    # `*[!0-9]*` case and the PowerShell \A[0-9]+\z both reject. uv writes ASCII.
+    return bool(marker) and version.isascii() and version.isdigit() and kind in _UV_CACHE_BUCKETS
 
 
 def _uv_cache_has_packages(cache_dir: Path) -> bool:
     """wheels-* is metadata only on uv 0.10, so counting any file reads a merely-resolved cache
-    as warm. Same rule as install.sh:_configure_uv_cache."""
+    as warm. Same rule as install.sh:_configure_uv_cache, the WHOLE `-v` suffix included: a
+    prefix match also takes `archive-v0.backup` and `archive-backup-v0`, whose bytes uv cannot
+    reuse, so an update could prefer a cache that is cold in practice and redownload."""
     try:
         buckets = [
             entry
             for entry in cache_dir.iterdir()
-            if entry.name.startswith(_UV_CACHE_BUCKETS) and entry.is_dir()
+            if _uv_is_bucket_name(entry.name) and entry.is_dir()
         ]
     except (OSError, ValueError):
         return False
@@ -3219,14 +3237,19 @@ def _uv_platform_cache_dir() -> Optional[Path]:
     return Path(home) / ".cache" / "uv" if home else None
 
 
-# uv's boolish spelling. Anything outside it is a value uv refuses to run on.
-_UV_TRUE = ("1", "true", "yes", "on")
+# clap's literals, which is what uv binds UV_NO_CACHE to (BoolishValueParser). `y` and `t` are
+# real spellings uv honours, and were missing here, in install.sh and in install.ps1 alike.
+_UV_TRUE = ("1", "y", "yes", "t", "true", "on")
 
 
 def _uv_no_cache_requested() -> bool:
     """uv --no-cache caches in a temporary directory and discards it, outranks --cache-dir,
-    and recording it would aim later updates at a cache that never existed."""
-    return (os.environ.get("UV_NO_CACHE") or "").strip().lower() in _UV_TRUE
+    and recording it would aim later updates at a cache that never existed.
+
+    Not stripped, matching clap and therefore both installers: uv rejects a padded value
+    outright rather than reading it as true, so ` true ` leaves uv's cache ON and this must
+    not stand the selection down for it."""
+    return (os.environ.get("UV_NO_CACHE") or "").lower() in _UV_TRUE
 
 
 def _uv_default_cache_dir(cwd: Optional[Path] = None) -> Optional[Path]:
@@ -3310,17 +3333,32 @@ def _backfill_uv_cache_marker(env: Optional[dict]) -> None:
         pass
 
 
+def _uv_is_store_name(name: str) -> bool:
+    """Every kind uv writes, not just the ones holding package bytes: _uv_is_bucket_name answers
+    warmth, this answers what a write probe has to cover. Same list as install.sh's
+    _uv_is_bucket_name; re-read uv-cache/src/lib.rs on a pin bump."""
+    kind, marker, version = name.rpartition("-v")
+    return bool(marker) and version.isascii() and version.isdigit() and kind in _UV_CACHE_STORES
+
+
 def _uv_cache_is_writable(cache_dir: Path) -> bool:
     """A real create, as install.sh's write probe does: mode bits do not answer for a network mount, and uv aborts on a cache it
     cannot write rather than falling back.
 
     The stores too, not just the root: uv writes into them, so a root-only probe passes on a
-    cache uv then aborts on. Mirrors install.sh's _probe_uv_cache_usable."""
+    cache uv then aborts on. Mirrors install.sh's _uv_cache_is_writable."""
     probes = [cache_dir]
     try:
-        # uv's `<name>-v<n>` naming, not every subdirectory: an unrelated read-only directory
-        # must not disqualify a usable cache.
-        probes.extend(p for p in cache_dir.glob("*-v[0-9]*") if p.is_dir())
+        # Only the directories uv OWNS: an unrelated read-only one must not disqualify a
+        # usable cache, and that is what the kind list above is for.
+        for entry in cache_dir.iterdir():
+            if not _uv_is_store_name(entry.name):
+                continue
+            if not entry.is_dir():
+                # A file, or a symlink dangling or not, is an existing path to mkdir, so uv
+                # cannot make the store and aborts. Skipping it would report the cache writable.
+                return False
+            probes.append(entry)
     except OSError:
         return False
     for target in probes:
@@ -3356,7 +3394,9 @@ def _with_studio_uv_cache(env: Optional[dict], cwd: Optional[Path] = None) -> Op
         # Only while it holds something and uv can still write to it: a marker for an emptied cache loses to a warm one, and setup treats
         # the value this hands it as the caller's choice, so a cache gone read-only since the install would abort every uv command.
         return {**(env or os.environ), "UV_CACHE_DIR": str(recorded)}
-    # No marker, and content cannot settle it: one on-demand wheel warms the Studio cache even in shared mode, so use uv's default.
+    # Content cannot settle it: one on-demand wheel warms the Studio cache even in shared mode,
+    # so uv's default goes first and a warm Studio cache is the fallback below. The installers
+    # order the same three the same way.
     default_cache = _uv_default_cache_dir(cwd)
     if (
         default_cache is not None
@@ -3367,16 +3407,22 @@ def _with_studio_uv_cache(env: Optional[dict], cwd: Optional[Path] = None) -> Op
     # setup.sh treats an inherited UV_CACHE_DIR as the caller's choice and skips its own write
     # probe, so handing it an unwritable Studio cache aborts every uv command in the update --
     # the one branch here that was still unprobed. Left unset, setup.sh probes and falls back.
-    try:
-        studio_cache.mkdir(parents = True, exist_ok = True)
-    except OSError:
-        pass
-    if not _uv_cache_is_writable(studio_cache):
-        # Explicitly absent rather than a bare `return env`: the other branches all hand back a
-        # dict, and setup.sh's own probe wants the variable gone, not inherited from this process.
-        unset = {**(env or os.environ)}
-        unset.pop("UV_CACHE_DIR", None)
-        return unset
+    #
+    # Only for a root that already exists, and the root is never created here: setup.sh fails
+    # fast on a STUDIO_HOME override that does not, exactly so a typo cannot materialise an
+    # empty workspace, and making the cache under it first would satisfy that guard and let the
+    # update run on against a tree with no venv.
+    if STUDIO_HOME.is_dir():
+        try:
+            studio_cache.mkdir(parents = True, exist_ok = True)
+        except OSError:
+            pass
+        if not _uv_cache_is_writable(studio_cache):
+            # Explicitly absent rather than a bare `return env`: the other branches all hand back
+            # a dict, and setup.sh's own probe wants the variable gone, not inherited from here.
+            unset = {**(env or os.environ)}
+            unset.pop("UV_CACHE_DIR", None)
+            return unset
     return {**(env or os.environ), "UV_CACHE_DIR": str(studio_cache)}
 
 

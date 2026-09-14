@@ -19,6 +19,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 # The real helpers and selector, sliced out of setup.sh by their anchors (the selector is not a function).
 HELPERS=$(awk '
+    /^_uv_is_bucket_name\(\) \{/ { grab = 1 }
     /^_uv_no_cache_requested\(\) \{/ { grab = 1 }
     /^_uv_cache_probe_writable\(\) \{/ { grab = 1 }
     /^_uv_cache_usable\(\) \{/ { grab = 1 }
@@ -36,7 +37,7 @@ SELECTOR=$(awk '
     grab && /^fi$/ { exit }
 ' "$SETUP_SH")
 
-for _need in _uv_no_cache_requested _uv_cache_probe_writable _uv_cache_usable _uv_cache_warm _recorded_uv_cache; do
+for _need in _uv_is_bucket_name _uv_no_cache_requested _uv_cache_probe_writable _uv_cache_usable _uv_cache_warm _recorded_uv_cache; do
     if ! printf '%s\n' "$HELPERS" | grep -q "^${_need}() {"; then
         echo "FATAL: could not extract $_need from setup.sh" >&2
         exit 1
@@ -172,6 +173,29 @@ for shell in sh bash; do
         chmod 0755 "$MULTI/simple-v24" 2>/dev/null || true
     fi
 
+    # `archive-*` also matches `archive-v0.backup`, whose bytes uv cannot reuse. Counting them
+    # reads this cache as warm and then fails the offline update it was picked for (measured on
+    # uv 0.10.7: exit 1, "not found in the cache"). install.sh's scan rejects it the same way.
+    LOOKALIKE="$CASE/lookalike bucket/uv"
+    mkdir -p "$LOOKALIKE/archive-v0.backup/pkg"
+    : > "$LOOKALIKE/archive-v0.backup/pkg/torch.whl"
+    record "$HOME_DIR" "$LOOKALIKE\\n"
+    assert_eq "$shell: a lookalike bucket is not warmth" \
+        "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+
+    # A store path occupied by a FILE is an existing path to mkdir(2), so uv cannot create the
+    # store and aborts (measured: a plain file at archive-v0 exits 1, at interpreter-v4,
+    # sdists-v9, simple-v20 or wheels-v6 exits 2). Skipping it would call the cache usable.
+    BLOCKFILE="$CASE/store is a file/uv"
+    warm "$BLOCKFILE"
+    : > "$BLOCKFILE/interpreter-v4"
+    record "$HOME_DIR" "$BLOCKFILE\\n"
+    assert_eq "$shell: a file where a store belongs is not usable" \
+        "$STUDIO_CACHE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+    rm -f "$BLOCKFILE/interpreter-v4"
+    assert_eq "$shell: and the same cache is adopted once it is gone" \
+        "$BLOCKFILE" "$(run "$shell" unset "" unset "" "$HOME_DIR")"
+
     # An all-whitespace UV_CACHE_DIR is not a caller's choice. install.sh's selector decides
     # this with `case *[![:space:]]*`; a plain `-n` here would read the same value as a choice
     # and hand uv `--cache-dir '   '`, so the two selectors would answer differently for one
@@ -258,14 +282,17 @@ for shell in sh bash; do
     assert_eq "$shell: an explicit UV_CACHE_DIR wins over the marker" \
         "$OVERRIDE" "$(run "$shell" value "$OVERRIDE" unset "" "$HOME_DIR")"
 
-    for truthy in 1 true TRUE yes ON " on "; do
+    for truthy in 1 true TRUE yes ON y t; do
         assert_eq "$shell: UV_NO_CACHE=[$truthy] leaves the cache unset" \
             "<unset>" "$(run "$shell" unset "" value "$truthy" "$HOME_DIR")"
     done
     # An exported EMPTY UV_CACHE_DIR is not a caller value; uv fails on it, so no-cache mode unsets it.
     assert_eq "$shell: an empty UV_CACHE_DIR under UV_NO_CACHE is unset, not kept" \
         "<unset>" "$(run "$shell" value "" value 1 "$HOME_DIR")"
-    for falsy in 0 false "" maybe; do
+    # A padded value is not truthy: clap rejects ` on ` outright rather than reading it as
+    # true, so uv's cache stays ON and the selection must not stand down. install.sh and the
+    # CLI both strip nothing for the same reason.
+    for falsy in 0 false "" maybe " on "; do
         assert_eq "$shell: UV_NO_CACHE=[$falsy] changes nothing" \
             "$SHARED" "$(run "$shell" unset "" value "$falsy" "$HOME_DIR")"
     done
@@ -285,6 +312,7 @@ done
 
 # setup.sh must never become a marker writer: only an installer's own choice is one.
 _writes=$(awk '
+    /^_uv_is_bucket_name\(\) \{/ { grab = 1 }
     /^_uv_no_cache_requested\(\) \{/ { grab = 1 }
     /^if \[ -n "\$\{UV_CACHE_DIR:-\}" \]; then$/ { grab = 1 }
     grab { print }

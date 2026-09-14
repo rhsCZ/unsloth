@@ -6787,12 +6787,15 @@ def _write_marker(marker_path: Path, marker: dict) -> bool:
             os.fsync(handle.fileno())
         if original is not None:
             os.chmod(tmp_path, stat.S_IMODE(original.st_mode))
-            # Group only (uid -1), as core and node do (e8d128d24): chown is all-or-nothing, so
-            # asking for the owner too refuses the call and os.replace installs the caller's group.
+            # Owner then group, as prebuilt_core.write_live_marker explains: neither call
+            # alone is right for both root and a non-root member of a shared group.
             try:
-                os.chown(tmp_path, -1, original.st_gid)
+                os.chown(tmp_path, original.st_uid, original.st_gid)
             except (OSError, AttributeError):
-                pass
+                try:
+                    os.chown(tmp_path, -1, original.st_gid)
+                except (OSError, AttributeError):
+                    pass
         atomic_replace_from_tempfile(tmp_path, marker_path)
         return True
     except OSError:
@@ -7654,6 +7657,19 @@ def _expected_release_tag_without_plan(
     every update to close it would reintroduce the rate limit this path exists to avoid.
     Two things narrow it anyway, below: an explicit request for the API path gets the
     API's answer, and a payload this process already fetched is compared for free.
+
+    A SECOND DEFERRAL of the same class, in the macOS walk-back rather than the pointer.
+    iter_resolved_published_releases skips a release whose checksum index it cannot fetch
+    and logs it, and those skips are invisible to the planner, so a walk-back records only
+    that the NEWEST release was unusable. If a middle release was passed over for a
+    transient fetch failure rather than for its OS floor, walk_back_stands keeps answering
+    "current" for the older install while the newest is unchanged, and the middle one is
+    not reconsidered until something newer publishes. The pre-PR path re-planned every
+    update and would have taken it on the next run. Same consequence as above and left
+    alone for the same reason: both releases are compatible, so this is one deferred
+    update and never a wrong install, and it clears itself on the next publish. Suppressing
+    the walk-back whenever any release was skipped transiently is the fix if this is ever
+    worth closing; it costs a flag threaded out of the iterator.
     """
     pinned = (published_release_tag or "").strip()
     requested = normalized_requested_llama_tag(llama_tag)
@@ -7860,7 +7876,12 @@ def existing_install_current_without_plan(
     expected_release = _expected_release_tag_without_plan(
         marker, llama_tag, route.published_repo, route.published_release_tag, host = host
     )
-    if not _release_expectation_met(marker, expected_release, host):
+    if not _release_expectation_met(
+        marker,
+        expected_release,
+        host,
+        pinned = bool((route.published_release_tag or "").strip()),
+    ):
         return False
     # (4) the marker was written whole by this installer, so its fields can be trusted.
     if _marker_install_fingerprint(marker) != marker.get("install_fingerprint"):
@@ -7899,7 +7920,11 @@ def existing_install_current_without_plan(
 
 
 def _release_expectation_met(
-    marker: "dict[str, Any]", expected_release: "str | None", host: HostInfo
+    marker: "dict[str, Any]",
+    expected_release: "str | None",
+    host: HostInfo,
+    *,
+    pinned: bool = False,
 ) -> bool:
     """Whether the release this run would ask for is the one installed.
 
@@ -7908,11 +7933,22 @@ def _release_expectation_met(
     (prebuilt_core.WalkBack). While the newest published release is still that one and
     the host is still that macOS version, the walk-back stands and the install is
     current; a newer release or an OS upgrade takes the full path, which re-decides it.
+
+    *pinned* is the caller naming a release explicitly, and it disables that: the walk-back
+    explains why AUTOMATIC selection settled on an older release, and an explicit request is
+    not automatic selection. Without this, a Mac holding b9998 after walking back from b9999
+    answers "already matches selected release b9999" to a run that asked for b9999, which is
+    both a release the user did not get and a sentence that is not true. The full path
+    disables older-release fallback for a pinned request for the same reason
+    (allow_older_release_fallback in _fork_manifest_release_plans), so it reports the
+    incompatibility instead of quietly serving a different build.
     """
     if not expected_release:
         return False
     if expected_release == marker.get("release_tag"):
         return True
+    if pinned:
+        return False
     return _core.walk_back_stands(marker, host, expected_release)
 
 

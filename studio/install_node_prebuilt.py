@@ -700,6 +700,7 @@ def _write_metadata_payload(install_dir: Path, payload: dict) -> None:
             os.fsync(handle.fileno())
         # NamedTemporaryFile is 0600 and os.replace keeps it, so a refresh left a shared marker
         # unreadable to other users.
+        replacing_an_existing_marker = original_mode is not None
         if original_mode is None:
             mask = os.umask(0)
             os.umask(mask)
@@ -707,14 +708,21 @@ def _write_metadata_payload(install_dir: Path, payload: dict) -> None:
         try:
             os.chmod(tmp_path, original_mode)
         except OSError:
-            pass
+            # Only the REFRESH abandons: it is the one with another reader and a mode worth
+            # keeping. Raising on a FIRST write aborts a whole Node install over a cosmetic
+            # chmod, reachable on Windows through the sharing violation the swap already retries.
+            if replacing_an_existing_marker:
+                raise
         if original is not None:
-            # Group only (uid -1): os.replace installs the temp file's ownership, and asking for
-            # the owner too refuses the whole call for a non-root member.
+            # Owner then group, as prebuilt_core.write_live_marker explains: neither call
+            # alone is right for both root and a non-root member of a shared group.
             try:
-                os.chown(tmp_path, -1, original.st_gid)
+                os.chown(tmp_path, original.st_uid, original.st_gid)
             except (OSError, AttributeError):
-                pass
+                try:
+                    os.chown(tmp_path, -1, original.st_gid)
+                except (OSError, AttributeError):
+                    pass
         atomic_replace_from_tempfile(tmp_path, destination)
         tmp_path = None
     finally:

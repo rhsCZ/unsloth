@@ -1151,3 +1151,113 @@ def test_a_lock_that_is_not_a_regular_file_makes_the_cache_unusable(tmp_path):
     assert studio._uv_cache_is_writable(cache) is False
     lock.unlink()
     assert studio._uv_cache_is_writable(cache) is True
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason = "POSIX mode bits; chmod(0o555) denies nothing on Windows"
+)
+@pytest.mark.parametrize(
+    "store", ["binaries-v0", "osv-v0", "environments-v2", "python-v0", "flat-index-v2"]
+)
+def test_a_store_pip_install_never_writes_does_not_condemn_the_cache(tmp_path, store):
+    """setup.sh runs only `uv pip install`. Measured on uv 0.10.7 at 0555: binaries-v0, osv-v0,
+    environments-v2, flat-index-v2, git-v0 and python-v0 all install fine, so probing the ones
+    pip never writes only threw away the warm cache this path exists to find."""
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    _fill(cache)
+    (cache / store).mkdir()
+    (cache / store).chmod(0o555)
+    try:
+        assert studio._uv_cache_is_writable(cache) is True
+    finally:
+        (cache / store).chmod(0o755)
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason = "POSIX mode bits; chmod(0o555) denies nothing on Windows"
+)
+@pytest.mark.parametrize("store", ["archive-v0", "git-v0", "builds-v0"])
+def test_a_store_pip_install_does_write_still_condemns_it(tmp_path, store):
+    """git-v0 and builds-v0 count: a `git+` requirement writes both."""
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    _fill(cache)
+    (cache / store).mkdir(exist_ok = True)
+    (cache / store).chmod(0o555)
+    try:
+        assert studio._uv_cache_is_writable(cache) is False
+    finally:
+        (cache / store).chmod(0o755)
+
+
+def _simulate_case_folding(monkeypatch):
+    """Make lookups fold, as APFS and NTFS do, without a folding filesystem to hand.
+
+    A symlink will NOT do: on a folding filesystem there is ONE directory entry, and adding a
+    lowercase link creates a second one that the case-SENSITIVE code path matches directly. A
+    test built that way passes with the fold removed, which is how the first version of this
+    got through its own mutation check.
+    """
+    real = Path.samefile
+
+    def folding_samefile(self, other):
+        if str(self).lower() == str(other).lower():
+            return True
+        return real(self, other)
+
+    monkeypatch.setattr(Path, "samefile", folding_samefile)
+
+
+def test_a_folded_bucket_name_counts_as_warmth(tmp_path, monkeypatch):
+    """On APFS or NTFS `Archive-V0` IS the directory uv writes at `archive-v0`. A case-sensitive
+    match called such a cache cold while studio/setup.sh, which folds, called it warm, so the
+    two chose different caches on exactly the platform Studio ships a Mac build for."""
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    (cache / "Archive-V0" / "pkg").mkdir(parents = True)
+    (cache / "Archive-V0" / "pkg" / "torch.whl").write_bytes(b"\0" * 8)
+
+    # Case-sensitive: uv opens archive-v0, which is not there, so those bytes are unreachable.
+    assert studio._uv_cache_has_packages(cache) is False
+    _simulate_case_folding(monkeypatch)
+    assert studio._uv_cache_has_packages(cache) is True
+
+
+def test_a_folded_lookalike_is_still_not_a_bucket(tmp_path, monkeypatch):
+    """Folding must not smuggle in a name that is not uv's either way."""
+    studio = _studio()
+    cache = tmp_path / "shared-uv"
+    (cache / "Archive-V0.backup" / "pkg").mkdir(parents = True)
+    (cache / "Archive-V0.backup" / "pkg" / "torch.whl").write_bytes(b"\0" * 8)
+    _simulate_case_folding(monkeypatch)
+    assert studio._uv_cache_has_packages(cache) is False
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_no_cache_mode_removes_a_blank_inherited_cache_dir(monkeypatch, tmp_path, caches, blank):
+    """uv parses an exported EMPTY UV_CACHE_DIR as `--cache-dir ''` even under --no-cache, and
+    exits 2 with "a value is required for '--cache-dir'" (measured on uv 0.10.7, both `uv cache
+    dir` and `uv pip install`). setup.sh unsets it in its own no-cache branch; setup.ps1 has no
+    cache handling at all, so on Windows the blank reached uv and failed the update."""
+    studio = _studio()
+    monkeypatch.setenv("UV_CACHE_DIR", blank)
+    monkeypatch.setenv("UV_NO_CACHE", "1")
+    seen = _run_posix(monkeypatch, tmp_path)
+    assert seen["env"] is not None, "inheriting os.environ would keep the blank value"
+    assert "UV_CACHE_DIR" not in seen["env"], seen["env"].get("UV_CACHE_DIR")
+
+
+def test_no_cache_mode_still_leaves_a_real_caller_value_alone(monkeypatch, tmp_path, caches):
+    """--no-cache outranks --cache-dir inside uv; a caller's explicit path is still not ours
+    to strip, and uv accepts the pair."""
+    studio = _studio()
+    chosen = str(tmp_path / "caller cache")
+    monkeypatch.setenv("UV_CACHE_DIR", chosen)
+    monkeypatch.setenv("UV_NO_CACHE", "1")
+    seen = _run_posix(monkeypatch, tmp_path)
+    assert seen["env"] is None or seen["env"]["UV_CACHE_DIR"] == chosen

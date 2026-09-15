@@ -3172,18 +3172,17 @@ _PS_PROXY_DEFAULTS_PRELUDE = (
 
 
 _UV_CACHE_BUCKETS = ("archive", "builds", "built-wheels", "wheels", "sdists")
-# Every CacheBucket in uv 0.12.1 (UV_PINNED_VERSION) plus built-wheels, as install.sh lists them.
-_UV_CACHE_STORES = (
+# The subset `uv pip install` CREATES, which is the only uv command studio/setup.sh runs. The
+# rule is what uv is measured to write: a `git+` requirement creates git-v0 and builds-v0, so
+# those are in, while flat-index-v2 is not created even by `--find-links --no-index`, and
+# binaries, environments, osv and python belong to uv self-update, uv venv and uv python.
+# Probing a store uv never touches only throws warm caches away. Re-measure on a pin bump.
+_UV_PIP_STORES = (
     "archive",
-    "binaries",
     "builds",
     "built-wheels",
-    "environments",
-    "flat-index",
     "git",
     "interpreter",
-    "osv",
-    "python",
     "sdists",
     "simple",
     "wheels",
@@ -3202,6 +3201,24 @@ def _uv_is_bucket_name(name: str) -> bool:
     return bool(marker) and version.isascii() and version.isdigit() and kind in _UV_CACHE_BUCKETS
 
 
+def _uv_bucket_entry_name(cache_dir: Path, entry: Path) -> Optional[str]:
+    """The name uv opens this entry as, or None if uv does not own it.
+
+    On APFS or NTFS `Archive-V0` IS the directory uv writes at `archive-v0`, so a case-sensitive
+    match called a full cache cold while studio/setup.sh, which folds, called it warm, and the
+    two then chose different caches. samefile rather than a write probe: only existing entries
+    matter here, so the filesystem can be asked without creating anything."""
+    if _uv_is_bucket_name(entry.name):
+        return entry.name
+    lowered = entry.name.lower()
+    if lowered == entry.name or not _uv_is_bucket_name(lowered):
+        return None
+    try:
+        return lowered if (cache_dir / lowered).samefile(entry) else None
+    except OSError:
+        return None
+
+
 def _uv_cache_has_packages(cache_dir: Path) -> bool:
     """wheels-* is metadata only on uv 0.10, so counting any file reads a merely-resolved cache
     as warm. Same rule as install.sh:_configure_uv_cache, the WHOLE `-v` suffix included: a
@@ -3211,7 +3228,7 @@ def _uv_cache_has_packages(cache_dir: Path) -> bool:
         buckets = [
             entry
             for entry in cache_dir.iterdir()
-            if _uv_is_bucket_name(entry.name) and entry.is_dir()
+            if entry.is_dir() and _uv_bucket_entry_name(cache_dir, entry) is not None
         ]
     except (OSError, ValueError):
         return False
@@ -3334,11 +3351,11 @@ def _backfill_uv_cache_marker(env: Optional[dict]) -> None:
 
 
 def _uv_is_store_name(name: str) -> bool:
-    """Every kind uv writes, not just the ones holding package bytes: _uv_is_bucket_name answers
-    warmth, this answers what a write probe has to cover. Same list as install.sh's
-    _uv_is_bucket_name; re-read uv-cache/src/lib.rs on a pin bump."""
+    """The kinds `uv pip install` writes: _uv_is_bucket_name answers warmth, this answers what a
+    write probe has to cover. Narrower than install.sh's list on purpose, since install.sh also
+    runs uv venv and uv python; re-read uv-cache/src/lib.rs on a pin bump."""
     kind, marker, version = name.rpartition("-v")
-    return bool(marker) and version.isascii() and version.isdigit() and kind in _UV_CACHE_STORES
+    return bool(marker) and version.isascii() and version.isdigit() and kind in _UV_PIP_STORES
 
 
 def _uv_cache_folds_case(cache_dir: Path) -> bool:
@@ -3380,6 +3397,14 @@ def _uv_cache_is_writable(cache_dir: Path) -> bool:
                 # cannot make the store and aborts. Skipping it would report the cache writable.
                 return False
             probes.append(entry)
+            # One level inside the index stores, and only those. uv REWRITES this metadata on
+            # every resolve, so a shard another account owns aborts it. Measured on BOTH the
+            # pinned uv 0.12.1 and 0.10.7: a 0555 `simple-*/pypi` or `wheels-*/pypi` gives
+            # "Failed to write to the client cache", exit 2. One level is the leaf on both:
+            # 0.12.1 lays this out as `simple-v24/pypi`, not `simple-v24/index/<hash>`, and a
+            # 0555 `wheels-v6/pypi/requests` one deeper installs fine. Bounded on purpose.
+            if entry.name.lower().startswith(("simple-", "wheels-")):
+                probes.extend(shard for shard in entry.iterdir() if shard.is_dir())
     except OSError:
         return False
     for target in probes:
@@ -3420,7 +3445,13 @@ def _with_studio_uv_cache(env: Optional[dict], cwd: Optional[Path] = None) -> Op
     if (os.environ.get("UV_CACHE_DIR") or "").strip():
         return env
     if _uv_no_cache_requested():
-        return env
+        # Removed, not left alone: uv parses an exported EMPTY value as `--cache-dir ''` even
+        # under --no-cache and exits 2, "a value is required for '--cache-dir'". setup.sh unsets
+        # it in its own no-cache branch; setup.ps1 has no cache handling at all, so on Windows a
+        # blank inherited value reached uv and failed the update before no-cache took effect.
+        no_cache = {**(env or os.environ)}
+        no_cache.pop("UV_CACHE_DIR", None)
+        return no_cache
     studio_cache = STUDIO_HOME / "cache" / "uv"
     recorded = _recorded_install_uv_cache()
     if (

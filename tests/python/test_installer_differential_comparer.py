@@ -781,6 +781,7 @@ def test_a_contract_that_moved_without_changing_its_bytes_is_a_difference() -> N
     that opens the file now has to look somewhere else. That is exactly the layout change `foundAt`
     was added to make observable.
     """
+
     def side(found_at: str) -> dict:
         return {
             "studioHome": "X",

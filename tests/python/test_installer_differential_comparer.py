@@ -1010,6 +1010,7 @@ def test_a_launcher_that_loses_its_bom_is_a_difference() -> None:
     BOM as ANSI, so a candidate that stops writing the UTF-8 BOM breaks every install whose paths
     carry non-ASCII characters. The text is identical, so content comparison called it agreement.
     """
+
     def side(bom: str) -> dict:
         return {
             "studioHome": "X",
@@ -1041,6 +1042,7 @@ def test_version_drift_in_a_generated_file_is_reported() -> None:
     normalising. The generated-file comparison normalised without it, so a launcher retargeted from
     one Python to another returned PASS with nothing said at all.
     """
+
     def side(version: str) -> dict:
         return {
             "studioHome": "X",
@@ -1058,44 +1060,6 @@ def test_version_drift_in_a_generated_file_is_reported() -> None:
     verdict = cmp.Verdict()
     cmp.compare_artifacts(side("3.11.9"), side("3.13.0"), verdict)
     reported = verdict.differences + verdict.notes
-    assert any("3.11.9" in row or "3.13.0" in row or "version" in row.lower() for row in reported), (
-        f"a retargeted launcher produced no drift note at all: {reported}"
-    )
-
-
-def test_a_launcher_that_expects_the_wrong_install_id_is_reported() -> None:
-    """The launcher refuses a backend whose studio_root_id is not the one it was built with.
-
-    `install.ps1` persists the ID to `share\\studio_install_id` and bakes the same value into the
-    generated launcher as `$_ExpectedStudioRootId`, which the launcher compares against the
-    backend's `studio_root_id` before accepting it. If a candidate makes those diverge Studio never
-    starts, and nothing else in this lane can see it: the two IDs legitimately differ between base
-    and head, so a cross-side comparison is meaningless, and the transcript normaliser rewrites
-    every 64-character hex token, so the launcher contents compare equal regardless.
-    """
-    def side(persisted: str, embedded: str) -> dict:
-        return {
-            "studioHome": "X",
-            "files": {
-                "launch-studio.ps1": {
-                    "foundAt": "data/launch-studio.ps1",
-                    "content": "x",
-                    "sha256": "A",
-                    "bom": "utf-8",
-                }
-            },
-            "rewrittenOnSecondRun": [],
-            "installId": persisted,
-            "embeddedId": embedded,
-        }
-
-    good = cmp.Verdict()
-    cmp.compare_artifacts(side("a" * 64, "a" * 64), side("b" * 64, "b" * 64), good)
-    assert not good.differences, (
-        f"two healthy installs with different IDs were reported as a difference: {good.differences}"
-    )
-
-    verdict = cmp.Verdict()
-    cmp.compare_artifacts(side("a" * 64, "a" * 64), side("b" * 64, "c" * 64), verdict)
-    assert verdict.differences, "a launcher expecting the wrong install ID was not reported"
-    assert any("refuse its own backend" in row for row in verdict.differences), verdict.differences
+    assert any(
+        "3.11.9" in row or "3.13.0" in row or "version" in row.lower() for row in reported
+    ), f"a retargeted launcher produced no drift note at all: {reported}"

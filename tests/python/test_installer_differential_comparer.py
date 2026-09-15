@@ -986,9 +986,7 @@ def test_every_collected_contract_is_one_the_windows_installer_writes() -> None:
         # The file name is assigned to a variable and that VARIABLE is what gets written, so the
         # check follows the assignment rather than looking for the literal next to a write call.
         holders = set(
-            re.findall(
-                r"\$(\w+)\s*=\s*Join-Path[^\n]*" + re.escape(contract), windows_sources
-            )
+            re.findall(r"\$(\w+)\s*=\s*Join-Path[^\n]*" + re.escape(contract), windows_sources)
         )
         assert holders, (
             f"{contract!r} is collected as a contract but no variable in install.ps1 or "

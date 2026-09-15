@@ -488,31 +488,72 @@ def test_no_new_native_imports(name: str) -> None:
 
 @pytest.mark.parametrize("name", ("install.ps1", "studio/setup.ps1"))
 def test_virtual_terminal_answers_a_redirected_stream_without_defining_a_type(name: str) -> None:
-    """The answer we already know must come first, before any native work at all.
+    """The stronger contract this test's name always implied: nothing native happens here at all.
 
-    Only the redirected case is decided early, and it is decided FALSE: a redirected stdout is
-    not a console, GetConsoleMode fails on a non-console handle, and the native path could only
-    have returned false too. Anything claiming VT here would put raw escape sequences in the
-    Unsloth log panel, which is a pipe.
+    It used to assert an ordering -- that the redirect check came *before* the emit call -- because
+    the redirect check was the only thing keeping the desktop app off csc.exe. There is no emit call
+    now. A CI pre-flight measured Windows PowerShell 5.1 attached to a real console and found the
+    console mode already 0x7 before any of our code ran: bit 0x4,
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING, is set by the host at startup. The SetConsoleMode this
+    replaced was re-setting a bit that was already set, so reading
+    $Host.UI.SupportsVirtualTerminal loses nothing.
 
-    This used to guard an Add-Type, when the redirect check was all that kept the desktop app
-    off csc.exe. Nothing compiles now, so the ordering no longer matters to a scanner, but it is
-    still the cheaper answer and getting it wrong still corrupts the log panel.
+    Two things still have to hold. The redirected case must still be decided FALSE and decided
+    first: a redirected stdout is not a console, and anything claiming VT there puts raw escape
+    sequences in the Unsloth log panel, which is a pipe. And the function must stay free of native
+    work, or the three kernel32 imports come back one careful commit at a time.
     """
     text = _text(name)
     start = text.index("function Enable-StudioVirtualTerminal")
-    call = re.compile(r"(?m)^[ \t]*\$null = New-StudioEmittedNativeType\b").search(text, start)
-    assert call, f"{name} no longer emits the console thunk; update this guard"
-    define_at = call.start()
-    fast_path = text.index("if ($script:StudioStdoutRedirected) { return $false }", start)
-    assert fast_path < define_at, (
-        f"{name} builds the native console thunk before checking the stream: move the redirect "
-        f"guard above it, since a redirected stream can never render VT anyway."
+    # To the end of the function. The next top-level construct after it is the assignment of its
+    # result, which is a stable landmark in both files.
+    end = text.index("$script:StudioVtOk = Enable-StudioVirtualTerminal", start)
+    body = text[start:end]
+
+    fast_path = body.index("if ($script:StudioStdoutRedirected) { return $false }")
+    property_read = body.index("$Host.UI.SupportsVirtualTerminal")
+    assert fast_path < property_read, (
+        f"{name} consults the host before checking whether the stream is redirected. A redirected "
+        f"stream can never render VT, so that case has to be decided first and decided false."
     )
-    assert "$true" not in text[fast_path:define_at], (
-        f"{name} returns something other than $false before the native work. The early answer is "
-        f"only sound because a redirected stream can never render VT."
+
+    for banned in ("New-StudioEmittedNativeType", "DefinePInvokeMethod", "Add-Type",
+                   "GetStdHandle", "SetConsoleMode", "kernel32"):
+        assert banned not in _strip_comments(body), (
+            f"{name}'s Enable-StudioVirtualTerminal does native work again ({banned}). The host "
+            f"already enables virtual terminal processing at startup, measured: the console mode "
+            f"is 0x7 before we touch it. Colouring a banner is not worth three kernel32 imports."
+        )
+
+
+def _strip_comments(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("#")
     )
+
+
+def test_setup_declares_no_native_imports_at_all() -> None:
+    """studio/setup.ps1 reached zero native surface, and must not drift back.
+
+    Its entire emit apparatus -- Device Guard gate, child-process probe, dynamic assembly, type
+    emitter, roughly 290 lines -- existed for one consumer: a cosmetic ANSI colour thunk. Without
+    this test the deletion is one "just add a small helper" away from being undone, and nothing
+    else in the suite would notice, because every other check here is about how a native import is
+    declared rather than whether there is one.
+    """
+    text = _text("studio/setup.ps1")
+    assert not _native_imports(text), (
+        f"studio/setup.ps1 declares native imports again: {sorted(_native_imports(text))}"
+    )
+    code = _strip_comments(text)
+    for banned, why in (
+        ("DefineDynamicAssembly", "reflection emit is back"),
+        ("DefinePInvokeMethod", "a P/Invoke stub is back"),
+        ("Add-Type", "that compiles C# through csc.exe on 5.1"),
+        ("DeviceGuard", "the Device Guard CIM query came back with the emit gate"),
+        ("Test-StudioEmitInChildProcess", "the hidden child interpreter is back"),
+    ):
+        assert banned not in code, f"studio/setup.ps1: {why} ({banned})"
 
 
 @pytest.mark.parametrize("name", ALL_SCRIPTS)
@@ -580,13 +621,18 @@ def test_the_installer_never_runs_the_c_sharp_compiler(name: str) -> None:
         "DefinePInvokeMethod block where the script is generated and cannot call it; "
         "-MemberDefinition runs csc.exe just as -TypeDefinition does."
     )
-    # Conditional: only a script that declares a native import has an emit to still be doing.
-    # scripts/uninstall.ps1 and studio/setup.sh declare none, and demanding the token of them would
-    # be a guard that fails for being satisfied.
+    # Conditional, because "emits its native imports" only means anything for a file that HAS
+    # native imports. Three shipped files now declare none: scripts/uninstall.ps1 and
+    # studio/setup.sh never did, and studio/setup.ps1 stopped -- its whole emit apparatus existed
+    # to colour a banner, and the host turns out to enable virtual terminal processing before our
+    # code runs. Demanding the token of a file with zero native surface would be a guard that
+    # fails for being satisfied; test_setup_declares_no_native_imports_at_all is what keeps that
+    # zero honest.
     if _native_imports(text):
-        assert (
-            "DefinePInvokeMethod" in text
-        ), f"{name} declares native imports without emitting them; update this guard"
+        assert "DefinePInvokeMethod" in text, (
+            f"{name} declares native imports but no longer emits them. If they are compiled again "
+            f"instead, that is csc.exe on 5.1, which is the shape this whole file exists to keep out."
+        )
     # The private-%TEMP% retry is gone with it: redirecting TEMP to compile again cannot beat a
     # filter driver, and "blocked writing an executable to TEMP, change TEMP, write it again" is
     # itself an evasion heuristic. Scoped to the resolver, since Initialize-StudioTempEnvironment

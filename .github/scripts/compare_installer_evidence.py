@@ -59,7 +59,16 @@ _NORMALISERS: tuple[tuple[re.Pattern[str], str, str], ...] = (
         "<hash>",
         "commit SHAs and file digests: the two sides are different commits by construction",
     ),
-    (re.compile(r"unsloth-[A-Za-z0-9_]{6,}"), "unsloth-<temp>", "mkstemp-style temp names"),
+    (
+        re.compile(r"(\.?unsloth-[A-Za-z][A-Za-z-]*[.-])[0-9a-fA-F]{8}[0-9a-fA-F-]*"),
+        r"\1<temp>",
+        "the random tail of an unsloth-* scratch name: unsloth-probe-<hex8>.tmp, the "
+        "unsloth-uv-<hex8> work directory, .unsloth-write-probe.<guid>, "
+        "unsloth-torch-overrides-<guid>.txt. Anchored on the random part on purpose. The rule "
+        "this replaces matched any six characters after 'unsloth-', which also erased "
+        "unsloth-studio-managed-launcher becoming unsloth-desktop-managed-launcher inside "
+        "unsloth.cmd, a file whose text this lane treats as a contract",
+    ),
     (re.compile(r"\\Temp\\[A-Za-z0-9._-]{6,}"), r"\\Temp\\<temp>", "Windows temp directory names"),
     (re.compile(r"\b(pid|PID)[= ]\d+"), r"\1=<pid>", "process ids"),
     (
@@ -234,7 +243,36 @@ def _as_list(value) -> list[dict]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _shape_problem(value) -> str | None:
+    """Anything that is not a list of objects, or one unwrapped object, is not a manifest.
+
+    `_as_list` used to absorb the difference silently: handed a bare string it iterated characters,
+    kept none of them, and produced an empty list, which then compared against a populated side as
+    "every shortcut disappeared". That reads as a behaviour change and is nothing of the kind, so
+    the shape is checked rather than coerced.
+    """
+    if value is None or isinstance(value, dict):
+        return None
+    if isinstance(value, list):
+        bad = sum(1 for item in value if not isinstance(item, dict))
+        if bad:
+            return f"{bad} of {len(value)} entries are not objects"
+        return None
+    return f"the manifest is a {type(value).__name__}, not a list of shortcut objects"
+
+
 def compare_shortcuts(base, head, verdict: Verdict) -> None:
+    for side, value in (("base", base), ("head", head)):
+        problem = _shape_problem(value)
+        if problem:
+            verdict.void.append(
+                f"{side}'s shortcut manifest is not the shape this lane writes: {problem}. "
+                f"Evidence that cannot be parsed was not measured."
+            )
+    if verdict.is_void:
+        return
+
+    before_differences = len(verdict.differences)
     base, head = _as_list(base), _as_list(head)
     if not base and not head:
         verdict.void.append(
@@ -273,14 +311,55 @@ def compare_shortcuts(base, head, verdict: Verdict) -> None:
                 verdict.differences.append(
                     f"shortcut {name!r} field {field!r} changed:\n  base: {before}\n  head: {after}"
                 )
-    if not verdict.differences:
+    # Scoped to this comparison. Reading the whole verdict here meant a transcript difference
+    # suppressed the shortcut note, so a run that reported a changed line also stopped saying
+    # whether the launch contract had been looked at.
+    if len(verdict.differences) == before_differences:
         verdict.notes.append(f"shortcuts: {len(base_map)} compared, every field equal")
 
 
 def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
     """The installed files. Paths on both sides, content only where content is a contract."""
+    # The same reasoning as for shortcuts, which this did not have. The collector records a
+    # collection failure as an `error` field rather than a red step, and an error read as data is a
+    # green run: two sides that both failed to enumerate the install root list no files, compare
+    # equal, and report agreement. A per-file error is worse, because the entry still exists with
+    # the same key and only the `content` is gone, so the content check below skips it silently and
+    # the file that was never compared is the one whose text is the contract.
+    for side, data in (("base", base), ("head", head)):
+        if not isinstance(data, dict):
+            verdict.void.append(
+                f"{side}'s artifact manifest is a {type(data).__name__}, not an object"
+            )
+            continue
+        if data.get("error"):
+            verdict.void.append(
+                f"{side} could not collect its artifact manifest: {data['error']}. A collection "
+                f"failure is not evidence, and it is symmetric far more often than a behaviour "
+                f"change is."
+            )
+    if verdict.is_void:
+        return
+
     base_files = base.get("files") or {}
     head_files = head.get("files") or {}
+    for side, files in (("base", base_files), ("head", head_files)):
+        if not isinstance(files, dict):
+            verdict.void.append(
+                f"{side}'s artifact manifest lists files as a {type(files).__name__}, not an object"
+            )
+            continue
+        for name in sorted(files):
+            entry = files[name]
+            if isinstance(entry, dict) and entry.get("error"):
+                verdict.void.append(
+                    f"{side} could not read {name!r}: {entry['error']}. The file is still listed, "
+                    f"so without this the content check below would skip it and the run would "
+                    f"report agreement about a file it never read."
+                )
+    if verdict.is_void:
+        return
+
     if not base_files and not head_files:
         verdict.void.append("neither side listed any installed file, so nothing was measured")
         return
@@ -293,6 +372,16 @@ def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
     for name in sorted(set(base_files) & set(head_files)):
         before, after = base_files[name], head_files[name]
         if not isinstance(before, dict) or not isinstance(after, dict):
+            continue
+        if ("content" in before) != ("content" in after):
+            # One side captured the text and the other did not. Skipping quietly, which is what
+            # happened before, means the file whose content is the whole reason it is in the
+            # manifest goes uncompared while the run still reports agreement.
+            side = "head" if "content" in before else "base"
+            verdict.void.append(
+                f"{name!r} has captured content on one side only, so {side} never contributed the "
+                f"text this lane compares"
+            )
             continue
         if "content" in before and "content" in after:
             b = normalise_transcript(before["content"])
@@ -317,14 +406,57 @@ def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
             verdict.notes.append(f"{side}: the second run rewrote nothing")
 
 
+# The installer's own exit status, which the transcript does not carry. Recorded by the workflow,
+# which is the only thing that sees it.
+_RUN_CODES = (
+    ("installExit", "the installer"),
+    ("secondInstallExit", "the second, idempotency install"),
+)
+
+
+def compare_run_status(base, head, verdict: Verdict) -> None:
+    """An installer that failed measured nothing, however tidy its transcript looks.
+
+    This is the most dangerous symmetry the lane has. A host problem, a mirror outage, a Defender
+    definition push: any of them fails both installs the same way, at the same point, printing the
+    same lines. The transcripts then match, the shortcut manifests are both empty in the same way,
+    and the lane reports "no behaviour difference" about two installs that never happened. The exit
+    status is the only thing that distinguishes that from a real pass, so a missing one is VOID too:
+    the comparer is taken from the candidate on both sides, so evidence without it is evidence from
+    a run that was never in a position to say the installer finished.
+    """
+    for side, data in (("base", base), ("head", head)):
+        if not isinstance(data, dict):
+            verdict.void.append(
+                f"{side} recorded no usable installer exit status, so nothing establishes that its "
+                f"installer finished"
+            )
+            continue
+        for key, what in _RUN_CODES:
+            code = data.get(key)
+            if not isinstance(code, int) or isinstance(code, bool):
+                verdict.void.append(
+                    f"{side} recorded no exit status for {what} ({key!r} is {code!r}). Two runs "
+                    f"that both failed print matching transcripts, so a comparison that cannot see "
+                    f"the exit status cannot tell a pass from a shared failure."
+                )
+            elif code != 0:
+                verdict.void.append(
+                    f"{side}: {what} exited {code}. Nothing it left behind is evidence of what a "
+                    f"successful install does."
+                )
+
+
 def _load(path: Path, verdict: Verdict, what: str):
     if not path.is_file():
         verdict.void.append(f"{what} is missing at {path}, so this side produced no evidence")
         return None
     try:
+        # utf-8-sig, not utf-8: Windows PowerShell 5.1 writes a BOM for `Set-Content -Encoding
+        # utf8`, and a BOM makes json.loads fail on a file that is otherwise perfectly good.
         if path.suffix == ".json":
-            return json.loads(path.read_text(encoding = "utf-8", errors = "replace"))
-        return path.read_text(encoding = "utf-8", errors = "replace")
+            return json.loads(path.read_text(encoding = "utf-8-sig", errors = "replace"))
+        return path.read_text(encoding = "utf-8-sig", errors = "replace")
     except (OSError, ValueError) as exc:
         verdict.void.append(f"{what} at {path} could not be read: {exc}")
         return None
@@ -351,13 +483,23 @@ def compare_directories(
     head_shortcuts = _load(head_dir / "shortcuts.json", verdict, "the head shortcut manifest")
     base_artifacts = _load(base_dir / "artifacts.json", verdict, "the base artifact manifest")
     head_artifacts = _load(head_dir / "artifacts.json", verdict, "the head artifact manifest")
+    base_run = _load(base_dir / "run.json", verdict, "the base run status")
+    head_run = _load(head_dir / "run.json", verdict, "the head run status")
 
     if verdict.is_void:
         return verdict
 
+    compare_run_status(base_run, head_run, verdict)
+    if verdict.is_void:
+        return verdict
+
     compare_transcripts(base_transcript, head_transcript, verdict)
-    compare_shortcuts(base_shortcuts or [], head_shortcuts or [], verdict)
-    compare_artifacts(base_artifacts or {}, head_artifacts or {}, verdict)
+    # Passed through as loaded, not coerced with `or []` / `or {}`. The coercion turned a manifest
+    # of the wrong shape into an empty one of the right shape, and an empty manifest against a
+    # populated one reads as "every file disappeared" -- a behaviour difference, reported about
+    # evidence that was never parsed.
+    compare_shortcuts(base_shortcuts, head_shortcuts, verdict)
+    compare_artifacts(base_artifacts, head_artifacts, verdict)
     return verdict
 
 
@@ -447,6 +589,63 @@ def self_test() -> list[str]:
     v = compare_directories(Path("/nonexistent/base"), Path("/nonexistent/head"), "aaa", "bbb")
     if not v.is_void or v.exit_code() != 3:
         failures.append("missing evidence did not produce VOID with exit code 3")
+
+    # The normaliser that erased a renamed launcher marker. `unsloth-studio-managed-launcher` is
+    # written into unsloth.cmd and is how the installer recognises its own shim, so a rename is a
+    # behaviour change; the rule meant for `unsloth-uv-<hex8>` swallowed it.
+    v = Verdict()
+    compare_transcripts(
+        "  cmd            rem unsloth-studio-managed-launcher",
+        "  cmd            rem unsloth-desktop-managed-launcher",
+        v,
+    )
+    if not v.differences:
+        failures.append(
+            "a renamed unsloth-* marker was normalised away. The temp-name rule is anchored on a "
+            "random hex tail precisely so that it cannot reach a name that means something."
+        )
+    v = Verdict()
+    compare_transcripts(
+        r"  work           C:\Temp\unsloth-uv-1a2b3c4d\bin",
+        r"  work           C:\Temp\unsloth-uv-99ffee00\bin",
+        v,
+    )
+    if v.differences:
+        failures.append(
+            f"a random temp directory name was reported as a behaviour change: {v.differences}"
+        )
+
+    v = Verdict()
+    compare_artifacts(
+        {"files": {"launch-studio.ps1": {"content": "x\n"}}},
+        {"files": {"launch-studio.ps1": {"error": "access denied"}}},
+        v,
+    )
+    if not v.is_void:
+        failures.append(
+            "an artifact entry carrying an error was treated as data. The entry still has its key, "
+            "so the content check skips it and the run agrees about a file it never read."
+        )
+
+    v = Verdict()
+    compare_run_status(
+        {"installExit": 1, "secondInstallExit": 1}, {"installExit": 1, "secondInstallExit": 1}, v
+    )
+    if not v.is_void:
+        failures.append(
+            "two installers that both exited non-zero were not VOID. A shared failure produces "
+            "matching transcripts, which is the one symmetry that looks exactly like a pass."
+        )
+    v = Verdict()
+    compare_run_status({}, {}, v)
+    if not v.is_void:
+        failures.append("evidence with no recorded installer exit status was not VOID")
+    v = Verdict()
+    compare_run_status(
+        {"installExit": 0, "secondInstallExit": 0}, {"installExit": 0, "secondInstallExit": 0}, v
+    )
+    if v.is_void or v.differences:
+        failures.append(f"two successful installs were not accepted: {v.void} {v.differences}")
 
     return failures
 

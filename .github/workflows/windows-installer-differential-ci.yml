@@ -97,7 +97,9 @@ jobs:
           # the trigger list so that a labelled PR keeps being re-measured as it is pushed to;
           # without it the verdict would be about whichever commit happened to be there when the
           # label was applied.
-          if echo "$LABELS" | grep -q 'installer-differential'; then
+          # The quotes are part of the match. A bare substring would also fire on a future
+          # `installer-differential-skip`, which is the one label that must not start two installs.
+          if echo "$LABELS" | grep -q '"installer-differential"'; then
             echo "wanted=1" >> "$GITHUB_OUTPUT"
           else
             echo "wanted=0" >> "$GITHUB_OUTPUT"
@@ -206,9 +208,15 @@ jobs:
           foreach ($f in @('.github/scripts/Collect-InstallerEvidence.ps1',
                            '.github/scripts/compare_installer_evidence.py')) {
             $leaf = Split-Path $f -Leaf
-            git show "$($env:TOOLS_REF):$f" | Set-Content -LiteralPath (Join-Path $tools $leaf) -Encoding utf8
-            if (-not (Test-Path -LiteralPath (Join-Path $tools $leaf))) {
-              Write-Host "::error::could not extract $f from $env:TOOLS_REF; the two sides would be measured differently"
+            $dest = Join-Path $tools $leaf
+            git show "$($env:TOOLS_REF):$f" | Set-Content -LiteralPath $dest -Encoding utf8
+            # Test-Path is not the check it looks like: a failed `git show` writes nothing down the
+            # pipeline, Set-Content still creates the file, and the guard passes on a zero-byte
+            # collector that then collects nothing. Both the exit status and the size are checked.
+            $code = $LASTEXITCODE
+            $size = if (Test-Path -LiteralPath $dest) { (Get-Item -LiteralPath $dest).Length } else { -1 }
+            if ($code -ne 0 -or $size -lt 1) {
+              Write-Host "::error::could not extract $f from $env:TOOLS_REF (git exit $code, $size bytes); the two sides would be measured differently"
               exit 1
             }
           }
@@ -231,13 +239,22 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File ./install.ps1 2>&1 |
             Tee-Object -FilePath $transcript
           $code = $LASTEXITCODE
+          if ($null -eq $code) { $code = -1 }
           Write-Host "installer exited $code"
           "install_exit=$code" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # Into the evidence directory, not only into a step output. A step output does not cross
+          # into the compare job, so without this the comparer never sees whether the installer
+          # finished -- and two installs that failed the same way print matching transcripts, leave
+          # matching empty manifests, and read as "no behaviour difference".
+          [ordered]@{ side = '${{ matrix.side }}'; installExit = $code } |
+            ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $out 'run.json') -Encoding utf8
           # Not a failure here. An installer that did not finish is recorded, and the comparer calls
           # the run VOID -- which is the honest outcome, and distinguishable from "it changed".
           exit 0
 
       - name: Record what it left behind
+        if: always()
         shell: pwsh
         env:
           UNSLOTH_STUDIO_HOME: ${{ github.workspace }}\.studio-home
@@ -247,6 +264,7 @@ jobs:
             -OutDir (Join-Path $env:RUNNER_TEMP 'evidence')
 
       - name: Install a second time, and check it rewrote nothing
+        if: always()
         shell: pwsh
         env:
           UNSLOTH_STUDIO_HOME: ${{ github.workspace }}\.studio-home
@@ -261,10 +279,27 @@ jobs:
           # a contract that can break silently.
           & powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File ./install.ps1 2>&1 |
             Tee-Object -FilePath (Join-Path $out 'transcript-second-run.txt') | Out-Null
-          Write-Host "second install exited $LASTEXITCODE"
+          $code = $LASTEXITCODE
+          if ($null -eq $code) { $code = -1 }
+          Write-Host "second install exited $code"
 
           & (Join-Path $env:UNSLOTH_EVIDENCE_TOOLS 'Collect-InstallerEvidence.ps1') `
             -StudioHome $env:UNSLOTH_STUDIO_HOME -OutDir $out -CompareAgainst $first
+
+          # Merged rather than overwritten, so a second-install step that runs after a failed first
+          # one cannot quietly drop the first install's exit status and leave the evidence looking
+          # complete.
+          $runFile = Join-Path $out 'run.json'
+          $run = if (Test-Path -LiteralPath $runFile) {
+            Get-Content -Raw -LiteralPath $runFile | ConvertFrom-Json
+          } else { $null }
+          $first_code = if ($run -and $null -ne $run.installExit) { [int]$run.installExit } else { -1 }
+          [ordered]@{
+            side              = '${{ matrix.side }}'
+            installExit       = $first_code
+            secondInstallExit = $code
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $runFile -Encoding utf8
+          Get-Content -Raw -LiteralPath $runFile
           exit 0
 
       - name: Upload this side's evidence

@@ -59,12 +59,16 @@ ARTIFACTS = {
     "rewrittenOnSecondRun": [],
 }
 
+# The installer's own exit status, which the workflow records because nothing else sees it.
+RUN = {"side": "base", "installExit": 0, "secondInstallExit": 0}
+
 
 def _write(
     directory: Path,
     transcript: str = BASELINE,
     shortcuts = None,
     artifacts = None,
+    run = None,
 ) -> Path:
     directory.mkdir(parents = True, exist_ok = True)
     (directory / "transcript.txt").write_text(transcript, encoding = "utf-8")
@@ -74,6 +78,7 @@ def _write(
     (directory / "artifacts.json").write_text(
         json.dumps(ARTIFACTS if artifacts is None else artifacts), encoding = "utf-8"
     )
+    (directory / "run.json").write_text(json.dumps(RUN if run is None else run), encoding = "utf-8")
     return directory
 
 
@@ -317,3 +322,279 @@ def test_a_symmetric_collection_failure_is_void_not_a_pass(tmp_path: Path) -> No
     result = _run(base, head)
     assert result.returncode == 3, f"a shared collection failure read as agreement: {result.stdout}"
     assert "prove nothing" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# The installer's exit status
+# ---------------------------------------------------------------------------
+#
+# The transcript does not carry it, and it is the only thing that separates a pass from the most
+# likely shared failure this lane will ever see. A mirror outage, a runner image change, a Defender
+# definition push: each fails both installs at the same point, printing the same lines, leaving the
+# same empty manifests. Everything the comparer looks at then matches.
+
+
+def test_two_installers_that_both_failed_are_void_not_a_pass(tmp_path: Path) -> None:
+    dead = {"installExit": 1, "secondInstallExit": 1}
+    base = _write(tmp_path / "base", transcript = BASELINE, run = dead)
+    head = _write(tmp_path / "head", transcript = BASELINE, run = dead)
+    result = _run(base, head)
+    assert result.returncode == 3, f"two failed installs read as agreement: {result.stdout}"
+    assert "exited 1" in result.stdout
+
+
+def test_one_installer_that_failed_is_void(tmp_path: Path) -> None:
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head", run = {"installExit": 5, "secondInstallExit": 0})
+    assert _run(base, head).returncode == 3
+
+
+def test_a_failed_second_install_is_void(tmp_path: Path) -> None:
+    """The idempotency install is a measurement too, and one that did not run measured nothing."""
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head", run = {"installExit": 0, "secondInstallExit": 3})
+    assert _run(base, head).returncode == 3
+
+
+def test_evidence_with_no_recorded_exit_status_is_void(tmp_path: Path) -> None:
+    """Both sides are measured with the candidate's tools, so evidence without a run status came
+    from a workflow that was never in a position to say the installer finished."""
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head")
+    (head / "run.json").unlink()
+    result = _run(base, head)
+    assert result.returncode == 3
+    assert "VOID" in result.stdout
+
+
+@pytest.mark.parametrize("bad", [{"installExit": "0"}, {"installExit": True}, {}, []])
+def test_an_unusable_exit_status_is_void(tmp_path: Path, bad) -> None:
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head")
+    (head / "run.json").write_text(json.dumps(bad), encoding = "utf-8")
+    assert _run(base, head).returncode == 3
+
+
+# ---------------------------------------------------------------------------
+# An error in the artifact manifest is not data
+# ---------------------------------------------------------------------------
+#
+# The shortcut side of this was already closed. The artifact side was not, and it fails more
+# quietly: the entry keeps its key and loses only its `content`, so the content check skips it and
+# the file that goes uncompared is the one whose text is the contract.
+
+
+def test_an_unreadable_artifact_is_void_not_a_skipped_comparison(tmp_path: Path) -> None:
+    broken = json.loads(json.dumps(ARTIFACTS))
+    broken["files"]["launch-studio.ps1"] = {"error": "access is denied"}
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head", artifacts = broken)
+    result = _run(base, head)
+    assert result.returncode == 3, f"an unreadable contract file read as agreement: {result.stdout}"
+    assert "never read" in result.stdout
+
+
+def test_a_symmetric_artifact_read_failure_is_void(tmp_path: Path) -> None:
+    broken = json.loads(json.dumps(ARTIFACTS))
+    broken["files"]["unsloth.cmd"] = {"error": "access is denied"}
+    base = _write(tmp_path / "base", artifacts = broken)
+    head = _write(tmp_path / "head", artifacts = broken)
+    assert _run(base, head).returncode == 3
+
+
+def test_an_install_root_that_does_not_exist_is_void(tmp_path: Path) -> None:
+    """What the collector writes when the installer did not finish. It is an error field, and an
+    error field on both sides compares equal to itself."""
+    failed = {"studioHome": r"C:\x", "files": {}, "error": "the install root C:\\x does not exist"}
+    base = _write(tmp_path / "base", artifacts = failed)
+    head = _write(tmp_path / "head", artifacts = failed)
+    result = _run(base, head)
+    assert result.returncode == 3
+    assert "not evidence" in result.stdout
+
+
+def test_content_captured_on_one_side_only_is_void(tmp_path: Path) -> None:
+    half = json.loads(json.dumps(ARTIFACTS))
+    half["files"]["launch-studio.ps1"] = {"sha256": "a" * 64}
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head", artifacts = half)
+    assert _run(base, head).returncode == 3
+
+
+# ---------------------------------------------------------------------------
+# Evidence of the wrong shape was not measured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("blob", ['"nothing here"', "42", '["Unsloth.lnk"]'])
+def test_a_shortcut_manifest_of_the_wrong_shape_is_void(tmp_path: Path, blob: str) -> None:
+    """Coercing it to an empty list made it compare against a populated side as "every shortcut
+    disappeared", which is a behaviour difference reported about evidence nobody parsed."""
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head")
+    (head / "shortcuts.json").write_text(blob, encoding = "utf-8")
+    assert _run(base, head).returncode == 3
+
+
+@pytest.mark.parametrize("blob", ["[]", '"x"'])
+def test_an_artifact_manifest_of_the_wrong_shape_is_void(tmp_path: Path, blob: str) -> None:
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head")
+    (head / "artifacts.json").write_text(blob, encoding = "utf-8")
+    assert _run(base, head).returncode == 3
+
+
+@pytest.mark.parametrize("name", ["shortcuts.json", "artifacts.json", "run.json"])
+def test_a_byte_order_mark_does_not_turn_good_evidence_into_void(tmp_path: Path, name: str) -> None:
+    """Windows PowerShell 5.1 writes a BOM for `Set-Content -Encoding utf8`, and json.loads
+    rejects one. A lane that goes VOID on a valid file stops being read."""
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head")
+    text = (head / name).read_text(encoding = "utf-8")
+    (head / name).write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+    assert _run(base, head).returncode == 0
+
+
+def test_a_byte_order_mark_does_not_hide_a_real_change(tmp_path: Path) -> None:
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head")
+    relaxed = [
+        dict(SHORTCUTS[0], arguments = SHORTCUTS[0]["arguments"].replace("RemoteSigned", "Bypass"))
+    ]
+    (head / "shortcuts.json").write_bytes(b"\xef\xbb\xbf" + json.dumps(relaxed).encode("utf-8"))
+    result = _run(base, head)
+    assert result.returncode == 2
+    assert "Bypass" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# The normalisers, and how far each one reaches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        (
+            r"  work           C:\Temp\unsloth-uv-1a2b3c4d\bin",
+            r"  work           C:\Temp\unsloth-uv-99ffee00\bin",
+        ),
+        (
+            "  probe          unsloth-probe-1a2b3c4d.tmp",
+            "  probe          unsloth-probe-ffee9900.tmp",
+        ),
+        (
+            "  probe          .unsloth-write-probe.1a2b3c4d5e6f7a8b",
+            "  probe          .unsloth-write-probe.ffee99001a2b3c4d",
+        ),
+    ],
+)
+def test_a_random_scratch_name_is_still_normalised(before: str, after: str) -> None:
+    verdict = cmp.Verdict()
+    cmp.compare_transcripts(BASELINE + "\n" + before, BASELINE + "\n" + after, verdict)
+    assert not verdict.differences, verdict.differences
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        ("unsloth-studio-managed-launcher", "unsloth-desktop-managed-launcher"),
+        ("pip install unsloth-studio", "pip install unsloth-nightly"),
+        (".unsloth-studio-owned", ".unsloth-desktop-owned"),
+    ],
+)
+def test_a_renamed_unsloth_marker_is_not_a_scratch_name(before: str, after: str) -> None:
+    """`unsloth-studio-managed-launcher` is written into unsloth.cmd and is how the installer
+    recognises its own shim, so a rename is a behaviour change. The rule meant for
+    `unsloth-uv-<hex8>` matched any six characters after `unsloth-` and swallowed it."""
+    verdict = cmp.Verdict()
+    cmp.compare_transcripts(
+        BASELINE + "\n  cmd            " + before, BASELINE + "\n  cmd            " + after, verdict
+    )
+    assert verdict.differences, f"{before!r} -> {after!r} was normalised away"
+
+
+def test_a_renamed_launcher_marker_inside_unsloth_cmd_is_reported(tmp_path: Path) -> None:
+    marked = json.loads(json.dumps(ARTIFACTS))
+    marked["files"]["unsloth.cmd"]["content"] = "@echo off\nrem unsloth-studio-managed-launcher\n"
+    renamed = json.loads(json.dumps(marked))
+    renamed["files"]["unsloth.cmd"]["content"] = "@echo off\nrem unsloth-desktop-managed-launcher\n"
+    base = _write(tmp_path / "base", artifacts = marked)
+    head = _write(tmp_path / "head", artifacts = renamed)
+    assert _run(base, head).returncode == 2
+
+
+def test_the_shortcut_note_is_not_suppressed_by_a_transcript_difference(tmp_path: Path) -> None:
+    """Reading the whole verdict meant a changed output line also stopped the run saying whether
+    the launch contract had been looked at at all."""
+    base = _write(tmp_path / "base")
+    head = _write(tmp_path / "head", transcript = BASELINE.replace("ready", "prepared"))
+    result = _run(base, head)
+    assert result.returncode == 2
+    assert "every field equal" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# The collector, run for real
+# ---------------------------------------------------------------------------
+
+
+def test_the_collector_parses_and_emits_json_the_comparer_accepts(tmp_path: Path) -> None:
+    """`ConvertTo-Json` unwraps a one-element collection and 5.1 has no `-AsArray`, so the collector
+    forces the array itself. Run rather than reasoned about: the shape of that file is the one thing
+    that decides whether a single shortcut is compared as a shortcut or as a bag of dictionary keys.
+    """
+    sys.path.insert(0, str(REPO / "tests" / "_shared"))
+    from unsloth_pwsh_runner import PWSH, run_pwsh  # noqa: PLC0415
+
+    if PWSH is None:
+        pytest.skip("no PowerShell on this host")
+
+    collector = REPO / ".github" / "scripts" / "Collect-InstallerEvidence.ps1"
+    out = tmp_path / "evidence"
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$errors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+    '{collector.as_posix()}', [ref]$null, [ref]$errors) | Out-Null
+if ($errors) {{ $errors | ForEach-Object {{ "PARSE: $_" }}; exit 1 }}
+
+& '{collector.as_posix()}' -StudioHome '{(tmp_path / "home").as_posix()}' -OutDir '{out.as_posix()}' |
+    Out-Null
+
+# The forcing, exercised directly with exactly one entry, which is the case that produced an
+# object on a real run.
+$one = New-Object System.Collections.ArrayList
+[void]$one.Add([ordered]@{{ name = 'Unsloth.lnk'; arguments = '-ExecutionPolicy RemoteSigned' }})
+$json = $one | ConvertTo-Json -Depth 6
+if ($one.Count -le 1) {{ $json = "[$($json)]" }}
+Set-Content -LiteralPath '{(tmp_path / "one.json").as_posix()}' -Value $json -Encoding utf8
+Write-Output 'COLLECTOR-OK'
+"""
+    result = run_pwsh(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output = True,
+        text = True,
+        verdict = "COLLECTOR-OK",
+        timeout = 300,
+    )
+    assert "COLLECTOR-OK" in result.stdout, result.stdout + result.stderr
+
+    one = json.loads((tmp_path / "one.json").read_text(encoding = "utf-8-sig"))
+    assert (
+        isinstance(one, list) and len(one) == 1
+    ), f"a single shortcut did not serialise as a list: {one!r}"
+    assert one[0]["arguments"] == "-ExecutionPolicy RemoteSigned"
+
+    shortcuts = json.loads((out / "shortcuts.json").read_text(encoding = "utf-8-sig"))
+    assert isinstance(shortcuts, list), f"shortcuts.json is not a list: {shortcuts!r}"
+
+    # Off Windows there is no WScript.Shell, so the collector records an error rather than data.
+    # That is the shape the comparer must call VOID, and the one that used to compare equal to
+    # itself and exit zero.
+    artifacts = json.loads((out / "artifacts.json").read_text(encoding = "utf-8-sig"))
+    verdict = cmp.Verdict()
+    cmp.compare_shortcuts(shortcuts, shortcuts, verdict)
+    cmp.compare_artifacts(artifacts, artifacts, verdict)
+    assert verdict.is_void, "the collector's own failure output did not read as VOID"
+    assert verdict.exit_code() == 3

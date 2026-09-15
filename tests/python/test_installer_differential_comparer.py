@@ -634,9 +634,8 @@ Write-Output 'COLLECTOR-OK'
 
 def _differential_workflow() -> dict:
     import yaml
-
     path = REPO / ".github" / "workflows" / "windows-installer-differential-ci.yml"
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    return yaml.safe_load(path.read_text(encoding = "utf-8"))
 
 
 def test_the_lane_never_installs_in_env_override_mode() -> None:

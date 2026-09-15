@@ -1298,7 +1298,7 @@ def test_a_comment_never_points_at_a_file_that_is_not_here(name: str) -> None:
     is worse than saying nothing: the justification for deleting a native call becomes unverifiable.
     Referring to a PR number is fine and stays true; referring to a path is a claim about this tree.
     """
-    text = (REPO / name).read_text(encoding="utf-8")
+    text = (REPO / name).read_text(encoding = "utf-8")
     cited = set()
     for line in _comment_lines(text, name):
         cited.update(_REPO_PATH_IN_PROSE.findall(line))

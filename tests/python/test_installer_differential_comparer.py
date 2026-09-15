@@ -15,6 +15,7 @@ the same coverage by a slower route.
 
 from __future__ import annotations
 
+import re
 import json
 import subprocess
 import sys
@@ -947,3 +948,58 @@ def test_two_roots_with_the_same_leaf_name_stay_distinct() -> None:
     assert cmp._shortcut_key(
         {"name": "Unsloth Studio.lnk", "root": "UserDesktop"}
     ) != cmp._shortcut_key({"name": "Unsloth Studio.lnk", "root": "CommonDesktop"})
+
+
+def test_every_collected_contract_is_one_the_windows_installer_writes() -> None:
+    """A contract Windows never writes turns the missing-contract VOID into a permanent VOID.
+
+    `studio.conf` was in the list and is only ever written by `install.sh`; `install.ps1` and
+    `studio/setup.ps1` merely `Test-Path` it. That was harmless while an unresolved contract was
+    silently skipped, and became fatal as soon as absence started being recorded as a collection
+    error, because then every clean normal-profile Windows run voided on a file that is correct to
+    be absent. This lane runs on windows-latest only, so the list has to stay Windows-specific.
+    """
+    repo = Path(__file__).resolve().parents[2]
+    script = (repo / ".github" / "scripts" / "Collect-InstallerEvidence.ps1").read_text(
+        encoding = "utf-8"
+    )
+    block = script[script.index("$contentFiles = [ordered]@{") :]
+    block = block[: block.index("\n}")]
+    contracts = re.findall(r"^\s*'([^']+)'\s*=", block, re.M)
+    assert contracts, "the contract list is empty"
+
+    windows_sources = "\n".join(
+        (repo / name).read_text(encoding = "utf-8", errors = "ignore")
+        for name in ("install.ps1", "studio/setup.ps1")
+    )
+    # Move-Item counts: unsloth.cmd is written atomically, WriteAllBytes to a temp then renamed
+    # onto the destination, so the destination variable never appears next to a write API.
+    writers = (
+        "Set-Content",
+        "Out-File",
+        "WriteAllText",
+        "WriteAllBytes",
+        "WriteAllLines",
+        "Move-Item",
+    )
+    for contract in contracts:
+        # The file name is assigned to a variable and that VARIABLE is what gets written, so the
+        # check follows the assignment rather than looking for the literal next to a write call.
+        holders = set(
+            re.findall(
+                r"\$(\w+)\s*=\s*Join-Path[^\n]*" + re.escape(contract), windows_sources
+            )
+        )
+        assert holders, (
+            f"{contract!r} is collected as a contract but no variable in install.ps1 or "
+            f"studio/setup.ps1 is ever set to its path"
+        )
+        written = any(
+            re.search(r"(?:" + "|".join(writers) + r")[^\n]*\$" + holder, windows_sources)
+            for holder in holders
+        )
+        assert written, (
+            f"{contract!r} is collected as a contract but nothing in install.ps1 or "
+            f"studio/setup.ps1 writes it -- it is only read -- so a clean Windows run records it "
+            f"as missing and the lane voids every time. That is exactly what studio.conf did."
+        )

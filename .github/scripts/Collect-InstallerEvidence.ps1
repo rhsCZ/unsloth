@@ -180,10 +180,16 @@ foreach ($s in $shortcuts) {
 # env-override install puts them under share\ and bin\. Looking in one place only meant that under
 # the other layout both files were silently absent from the evidence, leaving directory-presence
 # entries behind and no content comparison at all for two of the three contracts.
+#
+# Windows contracts only. studio.conf was listed here and is never written on Windows: the only
+# writer in the repository is install.sh, and both install.ps1 and studio/setup.ps1 merely Test-Path
+# it (install.ps1:1652, :5215, studio/setup.ps1:4486). Listing it was harmless while an unresolved
+# contract was silently skipped, and became fatal the moment that turned into a collection error,
+# because every clean Windows run would then VOID on a file that is correct to be absent. Anything
+# added here has to be something the WINDOWS installer actually writes.
 $contentFiles = [ordered]@{
     'launch-studio.ps1' = @('launch-studio.ps1', 'share\launch-studio.ps1')
     'unsloth.cmd'       = @('unsloth.cmd', 'bin\unsloth.cmd')
-    'studio.conf'       = @('share\studio.conf', 'studio.conf')
 }
 
 $files = [ordered]@{}

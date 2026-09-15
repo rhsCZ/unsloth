@@ -1063,3 +1063,42 @@ def test_version_drift_in_a_generated_file_is_reported() -> None:
     assert any(
         "3.11.9" in row or "3.13.0" in row or "version" in row.lower() for row in reported
     ), f"a retargeted launcher produced no drift note at all: {reported}"
+
+
+def test_a_launcher_that_expects_the_wrong_install_id_is_reported() -> None:
+    """The launcher refuses a backend whose studio_root_id is not the one it was built with.
+
+    `install.ps1` persists the ID and bakes the same value into the generated launcher as
+    `$_ExpectedStudioRootId`, which the launcher compares against the backend's `studio_root_id`
+    before accepting it. If a candidate makes those diverge Studio never starts, and nothing else
+    here can see it: the two IDs legitimately differ between base and head, so a cross-side
+    comparison is meaningless, and the transcript normaliser rewrites every 64-character hex token,
+    so the launcher contents compare equal regardless.
+    """
+
+    def side(persisted: str, embedded: str) -> dict:
+        return {
+            "studioHome": "X",
+            "files": {
+                "launch-studio.ps1": {
+                    "foundAt": "data/launch-studio.ps1",
+                    "content": "x",
+                    "sha256": "A",
+                    "bom": "utf-8",
+                }
+            },
+            "rewrittenOnSecondRun": [],
+            "installId": persisted,
+            "embeddedId": embedded,
+        }
+
+    good = cmp.Verdict()
+    cmp.compare_artifacts(side("a" * 64, "a" * 64), side("b" * 64, "b" * 64), good)
+    assert not good.differences, (
+        f"two healthy installs with different IDs were reported as a difference: {good.differences}"
+    )
+
+    verdict = cmp.Verdict()
+    cmp.compare_artifacts(side("a" * 64, "a" * 64), side("b" * 64, "c" * 64), verdict)
+    assert verdict.differences, "a launcher expecting the wrong install ID was not reported"
+    assert any("refuse its own backend" in row for row in verdict.differences), verdict.differences

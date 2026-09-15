@@ -1263,3 +1263,48 @@ def test_setup_bat_steps_down_to_bypass_only_for_a_remote_script() -> None:
 
     # The launch line, the -NoProfile asymmetry and the Unblock-File ordering are asserted by
     # test_setup_bat_clears_the_mark_before_loading_under_remotesigned above; not repeated here.
+
+
+# Whole-line comments only. Both defects this guards against were whole-line, and a trailing `#`
+# cannot be told from a `#` inside a string without re-parsing, which would trade a real check for
+# a source of false alarms.
+_COMMENT_PREFIXES = {".bat": ("rem ", "::"), ".ps1": ("#",), ".sh": ("#",)}
+
+# A repo-relative path, which is a claim about THIS tree, as opposed to a PR number or a URL.
+# Anchored on the real top-level directories and required to carry a file extension, so
+# `unsloth.ai/install.ps1` (a URL) and a bare directory mention do not match.
+_REPO_PATH_IN_PROSE = re.compile(
+    r"(?<![\w./-])((?:\.github|docs|tests|scripts|studio|unsloth|unsloth_cli|unsloth_zoo)"
+    r"/[\w./-]+\.\w+)"
+)
+
+
+def _comment_lines(text: str, name: str):
+    prefixes = _COMMENT_PREFIXES[Path(name).suffix]
+    for line in text.splitlines():
+        stripped = line.strip().lower() if name.endswith(".bat") else line.strip()
+        if stripped.startswith(prefixes):
+            yield line
+
+
+@pytest.mark.parametrize("name", DOCUMENTED_SCRIPTS)
+def test_a_comment_never_points_at_a_file_that_is_not_here(name: str) -> None:
+    """A comment citing evidence must cite something a reader can actually open.
+
+    Twice now a shipped script has carried a pointer to a file that was not in the tree: first
+    `docs/windows-installer-av-shapes.md` after the doc was folded into AV_SHAPES_RECORD, then
+    `.github/workflows/windows-vt-preflight.yml`, which lives in a separate PR and therefore does
+    not exist on this branch at all. Both read as authoritative and neither could be followed, which
+    is worse than saying nothing: the justification for deleting a native call becomes unverifiable.
+    Referring to a PR number is fine and stays true; referring to a path is a claim about this tree.
+    """
+    text = (REPO / name).read_text(encoding="utf-8")
+    cited = set()
+    for line in _comment_lines(text, name):
+        cited.update(_REPO_PATH_IN_PROSE.findall(line))
+
+    missing = sorted(p for p in cited if not (REPO / p).exists())
+    assert not missing, (
+        f"{name} has a comment pointing at {missing}, which is not in this tree. Cite a PR number, "
+        "or cite tests/studio/test_installer_av_shapes.py (AV_SHAPES_RECORD), which travels with the repo."
+    )

@@ -2112,8 +2112,8 @@ exit 1
         # Measured on Windows PowerShell 5.1.26100 attached to a real console: the property answers True,
         # the native call answers True, and the console mode read BEFORE touching it is already 0x7 --
         # which contains 0x4, ENABLE_VIRTUAL_TERMINAL_PROCESSING. The SetConsoleMode this replaced was
-        # re-setting a bit the host had already set. It was a no-op. The lane that measured it is
-        # .github/workflows/windows-vt-preflight.yml; the record is in
+        # re-setting a bit the host had already set. It was a no-op. The measurement and the lane that
+        # produced it are in PR #10984; the record that travels with this repo is in
         # tests/studio/test_installer_av_shapes.py (AV_SHAPES_RECORD).
         #
         # This removes three of the script's native imports, and with them the only reason the

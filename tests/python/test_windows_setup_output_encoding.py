@@ -820,9 +820,7 @@ def test_a_redirected_stream_is_answered_false_and_gets_no_escape_bytes(path: Pa
     # The guard is load-bearing, and this is what says so. Without it the property alone decides,
     # and on a redirected stream it says True. If this ever stops differing, the early return has
     # become redundant and the comment above it is wrong.
-    bare_code, _, bare_err = _run_console_less(
-        path, source = _probe_without_the_vt_fast_path(path)
-    )
+    bare_code, _, bare_err = _run_console_less(path, source = _probe_without_the_vt_fast_path(path))
     assert bare_code == 0, f"the fast-path-less probe exited {bare_code}:\n{bare_err}"
     assert _vt_verdict(bare_err) == "True", (
         f"without the redirect check the property answered {_vt_verdict(bare_err)}, not True. The "

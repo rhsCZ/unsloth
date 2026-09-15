@@ -878,3 +878,68 @@ def test_the_collector_treats_a_second_run_shortcut_creation_as_a_write() -> Non
         "a first-run manifest with no shortcut write times still yields a clean measurement "
         "rather than voiding the half it could not measure"
     )
+
+
+def test_a_contract_missing_on_both_sides_is_void_not_agreement() -> None:
+    """Absence on both sides is the one kind of agreement that proves nothing.
+
+    The collector used to skip a contract it could not find at any supported location, so a shim
+    writer that fails the same way on two identical runners, or an endpoint policy that deletes the
+    same generated file, removed it from BOTH manifests. The other entries kept the maps non-empty,
+    the key sets matched, and the run reported agreement about a file it never looked at.
+    """
+    missing = {
+        "studioHome": "X",
+        "files": {
+            "launch-studio.ps1": {"foundAt": "data/launch-studio.ps1", "content": "a", "sha256": "A"},
+            "unsloth.cmd": {"error": "not found at any supported location under home, data"},
+        },
+        "rewrittenOnSecondRun": [],
+    }
+    verdict = cmp.Verdict()
+    cmp.compare_artifacts(missing, dict(missing), verdict)
+    assert verdict.is_void, "a contract missing on both sides was treated as agreement"
+    assert verdict.exit_code() == 3, verdict.void
+
+    script = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "scripts"
+        / "Collect-InstallerEvidence.ps1"
+    )
+    assert "not found at any supported location" in script.read_text(encoding = "utf-8"), (
+        "the collector still drops an unresolved contract instead of recording it as an error"
+    )
+
+
+def test_two_roots_with_the_same_leaf_name_stay_distinct() -> None:
+    """The per-user and the common Desktop are both called `Desktop`.
+
+    Keying the root on `Split-Path -Leaf` mapped them to one label, and every Start Menu entry to
+    `Programs` however deeply nested, so moving `Unsloth Studio.lnk` from the user's desktop to the
+    public one, or into a Programs subdirectory, kept the same key with identical fields.
+    """
+    script = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "scripts"
+        / "Collect-InstallerEvidence.ps1"
+    )
+    text = script.read_text(encoding = "utf-8")
+    assert "Get-UnslothRootLabel" in text, "the root is no longer canonicalised"
+    assert "CommonDesktop" in text and "UserDesktop" in text, (
+        "the two desktops are not distinguished, so a move between them compares equal"
+    )
+    assert "root             = (Split-Path $root -Leaf)" not in text, (
+        "the shortcut root is still keyed on the leaf name alone"
+    )
+    # The nested case: the name has to carry the path relative to its root, not just the file name.
+    assert "$file.FullName.Substring($root.Length)" in text, (
+        "a shortcut nested under Programs is still keyed on its bare file name, so a move into or "
+        "out of a subdirectory is invisible"
+    )
+
+    # And the two keys must genuinely differ once the labels do.
+    assert cmp._shortcut_key(
+        {"name": "Unsloth Studio.lnk", "root": "UserDesktop"}
+    ) != cmp._shortcut_key({"name": "Unsloth Studio.lnk", "root": "CommonDesktop"})

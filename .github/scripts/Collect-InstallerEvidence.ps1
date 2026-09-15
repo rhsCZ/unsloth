@@ -70,6 +70,32 @@ if (-not $ShortcutRoot -or $ShortcutRoot.Count -eq 0) {
     }
 }
 
+function Get-UnslothRootLabel {
+    <#
+    .SYNOPSIS
+    A stable name for a shortcut root that does not vary between the two workspaces.
+
+    Split-Path -Leaf was not stable ENOUGH: it maps the per-user Desktop and CommonDesktopDirectory
+    to the same "Desktop", so a candidate that moved a shortcut from one to the other produced an
+    identical key with identical fields and compared equal.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $known = [ordered]@{
+        UserDesktop   = [Environment]::GetFolderPath('Desktop')
+        CommonDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+        CommonPrograms = [Environment]::GetFolderPath('CommonPrograms')
+    }
+    if ($env:APPDATA) {
+        $known['UserPrograms'] = (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs')
+    }
+    foreach ($entry in $known.GetEnumerator()) {
+        if ($entry.Value -and $Path -ieq $entry.Value) { return $entry.Key }
+    }
+    # Not one of the known roots: fall back to the leaf, which is still better than nothing, and
+    # say so in the label so a reader is not misled into thinking it is canonical.
+    return "other:" + (Split-Path $Path -Leaf)
+}
+
 $shortcuts = New-Object System.Collections.ArrayList
 $shell = $null
 try {
@@ -91,11 +117,19 @@ if ($shell) {
         foreach ($file in $found) {
             try {
                 $lnk = $shell.CreateShortcut($file.FullName)
-                # Keyed on the file name, not the full path: the two sides run in different
-                # workspaces, so a path would differ for a reason that is not a behaviour change.
+                # Keyed on a canonical root label plus the path RELATIVE to that root, never the
+                # absolute path: the two sides run in different workspaces, so an absolute path
+                # would differ for a reason that is not a behaviour change. The leaf of the root
+                # is not enough on its own -- the per-user and the common Desktop are both called
+                # "Desktop", and every Start Menu entry is under "Programs" however deeply it is
+                # nested -- so moving a shortcut between them kept the same key and compared equal.
+                $relative = $file.FullName
+                if ($file.FullName.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                    $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/')
+                }
                 [void]$shortcuts.Add([ordered]@{
-                    name             = $file.Name
-                    root             = (Split-Path $root -Leaf)
+                    name             = $relative
+                    root             = (Get-UnslothRootLabel $root)
                     # Same reason the content contracts carry one: a regression that calls Save()
                     # unconditionally leaves every property identical, so the manifests compare
                     # equal and the reinstall looks like it wrote nothing.
@@ -173,7 +207,19 @@ if (Test-Path -LiteralPath $StudioHome) {
             }
             if ($full) { break }
         }
-        if (-not $full) { continue }
+        if (-not $full) {
+            # Recorded as an error, not skipped. Skipping removed the contract from both manifests
+            # whenever it was missing on both sides -- a shim writer that fails the same way on two
+            # identical runners, an endpoint policy that deletes the same generated file, or simply
+            # a supported layout nobody listed above -- and the remaining entries kept both maps
+            # non-empty, so the key sets matched and the run could report agreement about a file it
+            # never looked at. The comparer already voids on a per-file error.
+            $files[$contract] = [ordered]@{
+                error = "not found at any supported location under " +
+                        (($searchRoots.Keys | ForEach-Object { $_ }) -join ', ')
+            }
+            continue
+        }
         try {
             $item = Get-Item -LiteralPath $full -ErrorAction Stop
             $files[$contract] = [ordered]@{

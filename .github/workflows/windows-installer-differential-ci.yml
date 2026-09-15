@@ -226,6 +226,14 @@ jobs:
       - name: Install, capturing every line it prints
         id: install
         shell: pwsh
+        env:
+          # Without this, install.ps1 installs `unsloth` from PyPI and the `studio setup` handoff
+          # resolves studio/setup.ps1 from the RELEASED wheel, so both legs would exercise the same
+          # released setup code and report PASS without ever running the candidate -- even though
+          # studio/setup.ps1 and studio/setup.bat are two of this workflow's own triggers.
+          # install.ps1:7172-7185 documents the mechanism; the overlay makes _PACKAGE_ROOT resolve
+          # to this leg's checkout by PEP 660 __file__.
+          UNSLOTH_CI_SOURCE_OVERLAY: ${{ github.workspace }}
         run: |
           $ErrorActionPreference = 'Continue'
           # Deliberately NO UNSLOTH_STUDIO_HOME. Setting it puts install.ps1 into
@@ -265,16 +273,21 @@ jobs:
           # The default install root, matching the install above. install.ps1 derives it the same
           # way when no override is set (install.ps1:1566).
           $studioHome = Join-Path $env:USERPROFILE '.unsloth\studio'
+          # The launcher lives here on a normal-profile install, not under $StudioHome.
+          $studioData = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Unsloth Studio' } else { $studioHome }
           & (Join-Path $env:UNSLOTH_EVIDENCE_TOOLS 'Collect-InstallerEvidence.ps1') `
-            -StudioHome $studioHome `
+            -StudioHome $studioHome -StudioDataDir $studioData `
             -OutDir (Join-Path $env:RUNNER_TEMP 'evidence')
 
       - name: Install a second time, and check it rewrote nothing
         if: always()
         shell: pwsh
+        env:
+          UNSLOTH_CI_SOURCE_OVERLAY: ${{ github.workspace }}
         run: |
           $ErrorActionPreference = 'Continue'
           $studioHome = Join-Path $env:USERPROFILE '.unsloth\studio'
+          $studioData = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Unsloth Studio' } else { $studioHome }
           $out = Join-Path $env:RUNNER_TEMP 'evidence'
           $first = Join-Path $env:RUNNER_TEMP 'first-run-artifacts.json'
           Copy-Item -LiteralPath (Join-Path $out 'artifacts.json') -Destination $first -Force
@@ -289,7 +302,7 @@ jobs:
           Write-Host "second install exited $code"
 
           & (Join-Path $env:UNSLOTH_EVIDENCE_TOOLS 'Collect-InstallerEvidence.ps1') `
-            -StudioHome $studioHome -OutDir $out -CompareAgainst $first
+            -StudioHome $studioHome -StudioDataDir $studioData -OutDir $out -CompareAgainst $first
 
           # Merged rather than overwritten, so a second-install step that runs after a failed first
           # one cannot quietly drop the first install's exit status and leave the evidence looking

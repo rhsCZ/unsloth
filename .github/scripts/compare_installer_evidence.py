@@ -425,7 +425,17 @@ def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
     for side, data in (("base", base), ("head", head)):
         rewritten = data.get("rewrittenOnSecondRun")
         if rewritten is None:
-            verdict.notes.append(f"{side}: no idempotency evidence was collected")
+            # VOID, not a note. `None` and `[]` mean different things here and the collector is
+            # careful to keep them apart: `[]` is "measured, nothing was rewritten" and `None` is
+            # "not measured". Treating the second as optional evidence let the lane report equality
+            # while one of the four contracts it advertises had never been checked, which happens
+            # whenever the first collector or the non-terminating Copy-Item ahead of the second
+            # install fails while everything after it succeeds.
+            verdict.void.append(
+                f"{side}: idempotency was never measured, so there is no evidence that a reinstall "
+                f"writes nothing. That is one of this lane's four contracts, and an unmeasured "
+                f"contract is not a passing one."
+            )
         elif rewritten:
             verdict.differences.append(
                 f"{side}: running the installer a second time rewrote {sorted(rewritten)}. "

@@ -30,6 +30,12 @@ param(
     # Where the installer put Studio.
     [Parameter(Mandatory = $true)][string]$StudioHome,
 
+    # Where the installer put the generated launcher and the Studio data. On a normal-profile
+    # install this is %LOCALAPPDATA%\Unsloth Studio, which is OUTSIDE $StudioHome, and
+    # launch-studio.ps1 is written there ($appDir = $StudioDataDir, install.ps1:2971). Searching
+    # only $StudioHome meant the launcher was absent from every manifest on a normal run.
+    [string]$StudioDataDir,
+
     # Where to write the evidence.
     [Parameter(Mandatory = $true)][string]$OutDir,
 
@@ -90,6 +96,10 @@ if ($shell) {
                 [void]$shortcuts.Add([ordered]@{
                     name             = $file.Name
                     root             = (Split-Path $root -Leaf)
+                    # Same reason the content contracts carry one: a regression that calls Save()
+                    # unconditionally leaves every property identical, so the manifests compare
+                    # equal and the reinstall looks like it wrote nothing.
+                    lastWriteUtc     = $file.LastWriteTimeUtc.ToString('o')
                     targetPath       = $lnk.TargetPath
                     arguments        = $lnk.Arguments
                     workingDirectory = $lnk.WorkingDirectory
@@ -145,13 +155,23 @@ $contentFiles = [ordered]@{
 $files = [ordered]@{}
 $artifactError = $null
 
+# Ordered, and $StudioHome first, so a layout that has a file in both places reports the one the
+# installer treats as canonical.
+$searchRoots = [ordered]@{ 'home' = $StudioHome }
+if ($StudioDataDir -and $StudioDataDir -ne $StudioHome) { $searchRoots['data'] = $StudioDataDir }
+
 if (Test-Path -LiteralPath $StudioHome) {
     foreach ($contract in $contentFiles.Keys) {
         $full = $null
         $foundAt = $null
-        foreach ($candidate in $contentFiles[$contract]) {
-            $probe = Join-Path $StudioHome $candidate
-            if (Test-Path -LiteralPath $probe) { $full = $probe; $foundAt = $candidate; break }
+        foreach ($rootLabel in $searchRoots.Keys) {
+            $root = $searchRoots[$rootLabel]
+            if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
+            foreach ($candidate in $contentFiles[$contract]) {
+                $probe = Join-Path $root $candidate
+                if (Test-Path -LiteralPath $probe) { $full = $probe; $foundAt = "$rootLabel/$candidate"; break }
+            }
+            if ($full) { break }
         }
         if (-not $full) { continue }
         try {
@@ -221,6 +241,16 @@ if ($CompareAgainst) {
                     [void]$rewritten.Add("$contract (moved from $($b.foundAt) to $($a.foundAt))")
                 }
             }
+            # The shortcuts too. Their properties are compared between the two SIDES elsewhere; this
+            # is the other question, whether the second install on ONE side rewrote them.
+            if ($before.shortcutWrites) {
+                foreach ($key in $shortcutWrites.Keys) {
+                    $wasWritten = $before.shortcutWrites.$key
+                    if ($wasWritten -and $wasWritten -ne $shortcutWrites[$key]) {
+                        [void]$rewritten.Add("shortcut $key (rewritten at $($shortcutWrites[$key]))")
+                    }
+                }
+            }
         } catch {
             Write-Host "::warning::could not compare against $CompareAgainst : $($_.Exception.Message)"
             $rewritten = $null
@@ -228,9 +258,17 @@ if ($CompareAgainst) {
     }
 }
 
+# Keyed the same way the comparer keys shortcuts, and kept in the artifact manifest rather than in
+# shortcuts.json, because the idempotency comparison reads the first run's artifacts.json.
+$shortcutWrites = [ordered]@{}
+foreach ($s in $shortcuts) {
+    if ($s.Contains('lastWriteUtc')) { $shortcutWrites["$($s.root)/$($s.name)"] = $s.lastWriteUtc }
+}
+
 $artifacts = [ordered]@{
-    studioHome = $StudioHome
-    files      = $files
+    studioHome     = $StudioHome
+    files          = $files
+    shortcutWrites = $shortcutWrites
 }
 if ($artifactError) { $artifacts['error'] = $artifactError }
 if ($null -ne $rewritten) { $artifacts['rewrittenOnSecondRun'] = @($rewritten) }

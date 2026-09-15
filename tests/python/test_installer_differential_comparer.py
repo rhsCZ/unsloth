@@ -684,3 +684,85 @@ def test_a_desktop_and_a_start_menu_shortcut_stay_separate() -> None:
     cmp.compare_shortcuts(both, desktop_only, verdict)
     assert verdict.differences, "losing the Start Menu shortcut was reported as no change"
     assert any("Programs" in d for d in verdict.differences), verdict.differences
+
+
+def test_unmeasured_idempotency_is_void_not_a_note() -> None:
+    """`None` and `[]` are different answers and the collector keeps them apart deliberately.
+
+    `[]` means measured and nothing was rewritten; `None` means not measured. Treating the second
+    as optional evidence let the lane report equality while one of its four advertised contracts
+    had never been checked, which is what happens when the first collector, or the non-terminating
+    Copy-Item ahead of the second install, fails while everything after it succeeds.
+    """
+    # Deliberately well-formed and identical apart from the missing idempotency evidence, so the
+    # only thing that can void this is the thing under test. An empty `files` map voids for its own
+    # reason and would let this pass without the fix.
+    complete = {
+        "studioHome": "X",
+        "files": {
+            "launch-studio.ps1": {"foundAt": "data/launch-studio.ps1", "content": "a", "sha256": "A"},
+            "unsloth.cmd": {"foundAt": "home/bin\\unsloth.cmd", "content": "b", "sha256": "B"},
+        },
+    }
+    measured = dict(complete, rewrittenOnSecondRun=[])
+
+    ok = cmp.Verdict()
+    cmp.compare_artifacts(measured, dict(measured), ok)
+    assert not ok.is_void, f"the control case voided for an unrelated reason: {ok.void}"
+
+    verdict = cmp.Verdict()
+    cmp.compare_artifacts(complete, dict(complete), verdict)
+    assert verdict.is_void, "a run that never measured idempotency was still eligible to pass"
+    assert verdict.exit_code() == 3, verdict.void
+    assert any("idempotency" in row for row in verdict.void), verdict.void
+
+
+def test_the_lane_overlays_the_checkout_so_setup_ps1_is_the_candidates() -> None:
+    """Without the overlay both legs run the RELEASED studio/setup.ps1 and agree about nothing.
+
+    `install.ps1` installs `unsloth` from PyPI, and the `studio setup` handoff resolves its scripts
+    from that wheel, so a change to studio/setup.ps1 or studio/setup.bat -- both of which are
+    triggers for this very workflow -- would never execute. install.ps1:7172-7185 documents the
+    mechanism and the overlay is the supported CI answer to it.
+    """
+    workflow = _differential_workflow()
+    installs = [
+        step
+        for job in workflow["jobs"].values()
+        for step in (job.get("steps") or [])
+        # Steps that EXECUTE it, not ones that merely name the file (the commit-picking step
+        # mentions it in a path list).
+        if "-File ./install.ps1" in str(step.get("run", ""))
+    ]
+    assert installs, "no step invokes install.ps1 any more"
+    for step in installs:
+        env = step.get("env") or {}
+        assert "UNSLOTH_CI_SOURCE_OVERLAY" in env, (
+            f"step {step.get('name')!r} runs install.ps1 without UNSLOTH_CI_SOURCE_OVERLAY, so the "
+            f"Python side including studio/setup.ps1 comes from the released wheel rather than "
+            f"from this leg's checkout"
+        )
+
+
+def test_the_collector_is_given_the_data_directory_too() -> None:
+    """On a normal-profile install the launcher is written outside $StudioHome.
+
+    `$appDir = $StudioDataDir` (install.ps1:2971) and in that mode `$StudioDataDir` is
+    `%LOCALAPPDATA%\\Unsloth Studio`, so a collector pointed only at `$StudioHome` never sees
+    launch-studio.ps1 and a candidate that changes only its generated contents passes.
+    """
+    workflow = _differential_workflow()
+    calls = [
+        step
+        for job in workflow["jobs"].values()
+        for step in (job.get("steps") or [])
+        # Invocations, not the step that copies the tools into place.
+        if "& (Join-Path $env:UNSLOTH_EVIDENCE_TOOLS 'Collect-InstallerEvidence.ps1')"
+        in str(step.get("run", ""))
+    ]
+    assert calls, "nothing invokes the collector any more"
+    for step in calls:
+        assert "-StudioDataDir" in str(step["run"]), (
+            f"step {step.get('name')!r} calls the collector without -StudioDataDir, so "
+            f"launch-studio.ps1 is absent from its manifest on a normal-profile install"
+        )

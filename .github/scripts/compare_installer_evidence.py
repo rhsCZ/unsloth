@@ -233,7 +233,18 @@ def compare_transcripts(base: str, head: str, verdict: Verdict) -> None:
 
 
 def _shortcut_key(entry: dict) -> str:
-    return str(entry.get("name") or entry.get("path") or "<unnamed>")
+    """Location AND file name.
+
+    A normal install writes the same file name to the Desktop and to the Start Menu, so a key of
+    just the name collapses the pair into one entry. If one of the two stopped being created and
+    the survivor kept its fields, both maps still held one identical key and the comparison
+    reported equality -- the disappearance of a shortcut being exactly what this lane is for. The
+    collector already records `root` as a leaf name, so it costs nothing and does not reintroduce
+    the workspace path that deliberately is not part of the key.
+    """
+    name = str(entry.get("name") or entry.get("path") or "<unnamed>")
+    root = entry.get("root")
+    return f"{root}/{name}" if root else name
 
 
 # Read back from the shell, and every one of them is a contract. Arguments especially: it carries

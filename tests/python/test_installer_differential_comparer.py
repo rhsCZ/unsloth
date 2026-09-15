@@ -625,3 +625,63 @@ Write-Output 'COLLECTOR-OK'
     cmp.compare_artifacts(artifacts, artifacts, verdict)
     assert verdict.is_void, "the collector's own failure output did not read as VOID"
     assert verdict.exit_code() == 3
+
+
+# ---------------------------------------------------------------------------
+# The lane must actually be in a mode where there is something to measure
+# ---------------------------------------------------------------------------
+
+
+def _differential_workflow() -> dict:
+    import yaml
+
+    path = REPO / ".github" / "workflows" / "windows-installer-differential-ci.yml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_the_lane_never_installs_in_env_override_mode() -> None:
+    """Setting UNSLOTH_STUDIO_HOME silently removes the shortcut comparison entirely.
+
+    `install.ps1` selects `StudioRedirectMode = 'env'` from that variable, and
+    `New-StudioShortcuts` then returns before writing any `.lnk`, because in that mode a shortcut
+    can point at a deleted workspace. Both manifests come back empty, so the comparison that would
+    see a changed `-WindowStyle` or `-ExecutionPolicy` -- the pair this entire effort is about --
+    compares nothing. It does not even fail loudly: empty against empty is equal.
+
+    Isolation was the reason it was there, and it is not needed: base and head are separate matrix
+    legs on separate throwaway runners.
+    """
+    workflow = _differential_workflow()
+    offenders = []
+    for job_name, job in workflow["jobs"].items():
+        for step in job.get("steps") or []:
+            env = step.get("env") or {}
+            if "UNSLOTH_STUDIO_HOME" in env:
+                offenders.append(f"{job_name}/{step.get('name', '<unnamed>')}")
+    assert not offenders, (
+        f"these steps set UNSLOTH_STUDIO_HOME: {offenders}. That puts the installer into "
+        f"env-override mode, where it creates no shortcuts at all, so the lane measures no "
+        f"shortcuts on either side and reports them equal."
+    )
+
+
+def test_a_desktop_and_a_start_menu_shortcut_stay_separate() -> None:
+    """Same file name, two locations. Keyed on the name alone they collapse into one entry.
+
+    A normal install writes `Unsloth Studio.lnk` to both the Desktop and the Start Menu. If one
+    stopped being created and the survivor kept its fields, both sides still held one identical key
+    and the comparer reported equality, which is precisely the regression it exists to catch.
+    """
+    both = [
+        {"name": "Unsloth Studio.lnk", "root": "Desktop", "targetPath": "p", "arguments": "a"},
+        {"name": "Unsloth Studio.lnk", "root": "Programs", "targetPath": "p", "arguments": "a"},
+    ]
+    desktop_only = [both[0]]
+
+    keys = {cmp._shortcut_key(e) for e in both}
+    assert len(keys) == 2, f"the two locations collapsed to one key: {keys}"
+
+    verdict = cmp.Verdict()
+    cmp.compare_shortcuts(both, desktop_only, verdict)
+    assert verdict.differences, "losing the Start Menu shortcut was reported as no change"
+    assert any("Programs" in d for d in verdict.differences), verdict.differences

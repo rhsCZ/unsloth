@@ -198,7 +198,7 @@ def test_version_drift_is_normalised_but_still_printed(tmp_path: Path) -> None:
     head = _write(tmp_path / "head", transcript = BASELINE.replace("0.12.1", "0.12.4"))
     result = _run(base, head)
     assert result.returncode == 0
-    assert "version drift" in result.stdout and "0.12.4" in result.stdout
+    assert "version drift in the transcript" in result.stdout and "0.12.4" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -522,6 +522,33 @@ def test_a_renamed_launcher_marker_inside_unsloth_cmd_is_reported(tmp_path: Path
     base = _write(tmp_path / "base", artifacts = marked)
     head = _write(tmp_path / "head", artifacts = renamed)
     assert _run(base, head).returncode == 2
+
+
+def test_a_version_drift_inside_a_shortcut_is_printed_even_though_it_is_normalised(
+    tmp_path: Path,
+) -> None:
+    """normalise_line runs on shortcut fields too, so a launcher retargeted at a different python
+    is erased in exactly the same way a patch release is. That is the right call and the wrong one
+    to make silently, so wherever the rule reaches, the drift is said out loud."""
+    base = _write(tmp_path / "base")
+    retargeted = [
+        dict(
+            SHORTCUTS[0],
+            targetPath = r"C:\Users\runneradmin\.unsloth\python-3.13.14\python.exe",
+        )
+    ]
+    bumped = [
+        dict(
+            SHORTCUTS[0],
+            targetPath = r"C:\Users\runneradmin\.unsloth\python-3.11.9\python.exe",
+        )
+    ]
+    base = _write(tmp_path / "base", shortcuts = retargeted)
+    head = _write(tmp_path / "head", shortcuts = bumped)
+    result = _run(base, head)
+    assert result.returncode == 0
+    assert "version drift in the shortcut fields" in result.stdout, result.stdout
+    assert "3.11.9" in result.stdout
 
 
 def test_the_shortcut_note_is_not_suppressed_by_a_transcript_difference(tmp_path: Path) -> None:

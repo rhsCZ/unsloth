@@ -105,6 +105,27 @@ def collect_versions(text: str) -> dict[str, set[str]]:
     return found
 
 
+def report_version_drift(base: str, head: str, where: str, verdict: "Verdict") -> None:
+    """Print what the version normaliser erased, wherever it was applied.
+
+    `normalise_line` runs on shortcut fields and on generated-file content too, not only on the
+    transcript, so a launcher retargeted from a python-3.11 directory to a python-3.13 one is
+    erased in exactly the same way. That is the right call for a patch release that shipped between
+    the two jobs, and the wrong one to make silently: this is the only rule in the set that can
+    reach a deliberate change, so everywhere it reaches, the drift is said out loud.
+    """
+    base_versions = collect_versions(base)
+    head_versions = collect_versions(head)
+    for tool in sorted(set(base_versions) | set(head_versions)):
+        before = ",".join(sorted(base_versions.get(tool, {"-"})))
+        after = ",".join(sorted(head_versions.get(tool, {"-"})))
+        if before != after:
+            verdict.notes.append(
+                f"version drift in the {where} (normalised away, not a failure): "
+                f"{tool} base={before} head={after}"
+            )
+
+
 def normalise_line(line: str) -> str:
     out = line
     for pattern, replacement, _why in _NORMALISERS:
@@ -200,15 +221,7 @@ def compare_transcripts(base: str, head: str, verdict: Verdict) -> None:
             "An installer that printed nothing did not run."
         )
         return
-    base_versions = collect_versions(base)
-    head_versions = collect_versions(head)
-    for tool in sorted(set(base_versions) | set(head_versions)):
-        before = ",".join(sorted(base_versions.get(tool, {"-"})))
-        after = ",".join(sorted(head_versions.get(tool, {"-"})))
-        if before != after:
-            verdict.notes.append(
-                f"version drift (normalised away, not a failure): {tool} base={before} head={after}"
-            )
+    report_version_drift(base, head, "transcript", verdict)
 
     if base_lines == head_lines:
         verdict.notes.append(f"transcript: identical over {len(base_lines)} normalised lines")
@@ -297,6 +310,11 @@ def compare_shortcuts(base, head, verdict: Verdict) -> None:
 
     base_map = {_shortcut_key(e): e for e in base}
     head_map = {_shortcut_key(e): e for e in head}
+
+    def _fields(entries: list[dict]) -> str:
+        return "\n".join(str(e.get(f, "")) for e in entries for f in _SHORTCUT_FIELDS)
+
+    report_version_drift(_fields(base), _fields(head), "shortcut fields", verdict)
 
     for missing in sorted(set(base_map) - set(head_map)):
         verdict.differences.append(f"shortcut {missing!r} exists on base and not on head")

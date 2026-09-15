@@ -891,7 +891,11 @@ def test_a_contract_missing_on_both_sides_is_void_not_agreement() -> None:
     missing = {
         "studioHome": "X",
         "files": {
-            "launch-studio.ps1": {"foundAt": "data/launch-studio.ps1", "content": "a", "sha256": "A"},
+            "launch-studio.ps1": {
+                "foundAt": "data/launch-studio.ps1",
+                "content": "a",
+                "sha256": "A",
+            },
             "unsloth.cmd": {"error": "not found at any supported location under home, data"},
         },
         "rewrittenOnSecondRun": [],
@@ -907,9 +911,9 @@ def test_a_contract_missing_on_both_sides_is_void_not_agreement() -> None:
         / "scripts"
         / "Collect-InstallerEvidence.ps1"
     )
-    assert "not found at any supported location" in script.read_text(encoding = "utf-8"), (
-        "the collector still drops an unresolved contract instead of recording it as an error"
-    )
+    assert "not found at any supported location" in script.read_text(
+        encoding = "utf-8"
+    ), "the collector still drops an unresolved contract instead of recording it as an error"
 
 
 def test_two_roots_with_the_same_leaf_name_stay_distinct() -> None:
@@ -927,12 +931,12 @@ def test_two_roots_with_the_same_leaf_name_stay_distinct() -> None:
     )
     text = script.read_text(encoding = "utf-8")
     assert "Get-UnslothRootLabel" in text, "the root is no longer canonicalised"
-    assert "CommonDesktop" in text and "UserDesktop" in text, (
-        "the two desktops are not distinguished, so a move between them compares equal"
-    )
-    assert "root             = (Split-Path $root -Leaf)" not in text, (
-        "the shortcut root is still keyed on the leaf name alone"
-    )
+    assert (
+        "CommonDesktop" in text and "UserDesktop" in text
+    ), "the two desktops are not distinguished, so a move between them compares equal"
+    assert (
+        "root             = (Split-Path $root -Leaf)" not in text
+    ), "the shortcut root is still keyed on the leaf name alone"
     # The nested case: the name has to carry the path relative to its root, not just the file name.
     assert "$file.FullName.Substring($root.Length)" in text, (
         "a shortcut nested under Programs is still keyed on its bare file name, so a move into or "

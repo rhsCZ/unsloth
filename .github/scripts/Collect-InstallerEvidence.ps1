@@ -251,13 +251,28 @@ if ($CompareAgainst) {
             }
             # The shortcuts too. Their properties are compared between the two SIDES elsewhere; this
             # is the other question, whether the second install on ONE side rewrote them.
-            if ($before.shortcutWrites) {
+            if ($before.PSObject.Properties.Name -contains 'shortcutWrites' -and $before.shortcutWrites) {
+                $beforeKeys = @($before.shortcutWrites.PSObject.Properties.Name)
                 foreach ($key in $shortcutWrites.Keys) {
+                    if ($beforeKeys -notcontains $key) {
+                        # Present now, absent after the first install. A reinstall that CREATES a
+                        # shortcut is as much a second-run write as one that rewrites it, and the
+                        # final manifest looks identical to a normal run, so ignoring a key with no
+                        # prior timestamp let that pass.
+                        [void]$rewritten.Add("shortcut $key (created by the second run)")
+                        continue
+                    }
                     $wasWritten = $before.shortcutWrites.$key
                     if ($wasWritten -and $wasWritten -ne $shortcutWrites[$key]) {
                         [void]$rewritten.Add("shortcut $key (rewritten at $($shortcutWrites[$key]))")
                     }
                 }
+            } elseif ($shortcuts.Count -gt 0) {
+                # Shortcuts exist now and the first run recorded nothing about them, so the shortcut
+                # half of this measurement did not happen. VOID rather than a silent pass: the
+                # comparer treats a missing rewrittenOnSecondRun as unmeasured for the same reason.
+                Write-Host '::warning::the first-run manifest carries no shortcut write times, so second-run shortcut writes could not be measured'
+                throw 'first-run shortcut evidence is missing'
             }
         } catch {
             Write-Host "::warning::could not compare against $CompareAgainst : $($_.Exception.Message)"

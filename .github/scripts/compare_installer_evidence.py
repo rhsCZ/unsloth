@@ -250,7 +250,17 @@ def _shortcut_key(entry: dict) -> str:
 # Read back from the shell, and every one of them is a contract. Arguments especially: it carries
 # -WindowStyle and -ExecutionPolicy, which is the pair this whole effort is about, and a change
 # there is completely invisible in the transcript.
-_SHORTCUT_FIELDS = ("targetPath", "arguments", "workingDirectory", "windowStyle", "iconLocation")
+_SHORTCUT_FIELDS = (
+    "targetPath",
+    "arguments",
+    "workingDirectory",
+    "windowStyle",
+    "iconLocation",
+    # The tooltip. It is user-visible, the collector records it, and install.ps1 reads it back at
+    # :3455 as part of deciding whether a shortcut is already correct, so a change to it is both a
+    # behaviour change and invisible in the transcript. Leaving it out made those compare equal.
+    "description",
+)
 
 
 def _as_list(value) -> list[dict]:

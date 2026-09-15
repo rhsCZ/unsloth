@@ -820,3 +820,60 @@ def test_the_collector_builds_shortcut_timestamps_before_it_compares_them() -> N
         "$shortcutWrites is still built after the comparison that reads it, so the shortcut half of "
         "the idempotency measurement cannot run"
     )
+
+
+def test_a_shortcut_description_change_is_a_difference() -> None:
+    """The tooltip is collected, is user-visible, and was excluded from the comparison.
+
+    `install.ps1` sets the shortcut Description and reads it back when deciding whether an existing
+    shortcut is already correct, so a candidate that changes only that value leaves both installs
+    succeeding, the transcript identical and idempotency clean. With `description` outside the
+    compared field set the two manifests matched and the lane returned PASS.
+    """
+    def side(description: str) -> list[dict]:
+        return [
+            {
+                "root": "desktop",
+                "name": "Unsloth Studio.lnk",
+                "targetPath": "C:\\ps.exe",
+                "arguments": "-File x",
+                "workingDirectory": "C:\\",
+                "windowStyle": 7,
+                "iconLocation": "C:\\i.ico,0",
+                "description": description,
+            }
+        ]
+
+    same = cmp.Verdict()
+    cmp.compare_shortcuts(side("Launch Unsloth Studio"), side("Launch Unsloth Studio"), same)
+    assert not same.differences, same.differences
+
+    verdict = cmp.Verdict()
+    cmp.compare_shortcuts(side("Launch Unsloth Studio"), side("Start Unsloth"), verdict)
+    assert verdict.differences, "a changed shortcut description was reported as no change"
+    assert any("description" in row for row in verdict.differences), verdict.differences
+
+
+def test_the_collector_treats_a_second_run_shortcut_creation_as_a_write() -> None:
+    """A reinstall that creates a shortcut is a second-run write, and it measured as nothing.
+
+    The loop read the first run's timestamp for each key it found now. A key with no prior entry
+    got a null timestamp and fell through both branches, so a candidate that failed to create the
+    shortcut on the first install and created it on the second produced an empty
+    `rewrittenOnSecondRun` and a final manifest indistinguishable from a normal run.
+    """
+    script = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "scripts"
+        / "Collect-InstallerEvidence.ps1"
+    )
+    text = script.read_text(encoding = "utf-8")
+    assert "created by the second run" in text, (
+        "a shortcut present now and absent from the first-run manifest is still ignored, so a "
+        "reinstall that created one measures as writing nothing"
+    )
+    assert "first-run shortcut evidence is missing" in text, (
+        "a first-run manifest with no shortcut write times still yields a clean measurement "
+        "rather than voiding the half it could not measure"
+    )

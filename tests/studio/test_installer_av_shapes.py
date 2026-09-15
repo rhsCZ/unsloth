@@ -517,8 +517,14 @@ def test_virtual_terminal_answers_a_redirected_stream_without_defining_a_type(na
         f"stream can never render VT, so that case has to be decided first and decided false."
     )
 
-    for banned in ("New-StudioEmittedNativeType", "DefinePInvokeMethod", "Add-Type",
-                   "GetStdHandle", "SetConsoleMode", "kernel32"):
+    for banned in (
+        "New-StudioEmittedNativeType",
+        "DefinePInvokeMethod",
+        "Add-Type",
+        "GetStdHandle",
+        "SetConsoleMode",
+        "kernel32",
+    ):
         assert banned not in _strip_comments(body), (
             f"{name}'s Enable-StudioVirtualTerminal does native work again ({banned}). The host "
             f"already enables virtual terminal processing at startup, measured: the console mode "
@@ -527,9 +533,7 @@ def test_virtual_terminal_answers_a_redirected_stream_without_defining_a_type(na
 
 
 def _strip_comments(text: str) -> str:
-    return "\n".join(
-        line for line in text.splitlines() if not line.strip().startswith("#")
-    )
+    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
 
 
 def test_setup_declares_no_native_imports_at_all() -> None:
@@ -542,9 +546,9 @@ def test_setup_declares_no_native_imports_at_all() -> None:
     declared rather than whether there is one.
     """
     text = _text("studio/setup.ps1")
-    assert not _native_imports(text), (
-        f"studio/setup.ps1 declares native imports again: {sorted(_native_imports(text))}"
-    )
+    assert not _native_imports(
+        text
+    ), f"studio/setup.ps1 declares native imports again: {sorted(_native_imports(text))}"
     code = _strip_comments(text)
     for banned, why in (
         ("DefineDynamicAssembly", "reflection emit is back"),

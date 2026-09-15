@@ -830,6 +830,7 @@ def test_a_shortcut_description_change_is_a_difference() -> None:
     succeeding, the transcript identical and idempotency clean. With `description` outside the
     compared field set the two manifests matched and the lane returned PASS.
     """
+
     def side(description: str) -> list[dict]:
         return [
             {

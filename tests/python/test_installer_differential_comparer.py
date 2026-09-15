@@ -30,22 +30,26 @@ sys.path.insert(0, str(SCRIPT.parent))
 import compare_installer_evidence as cmp  # noqa: E402
 
 
-BASELINE = "\n".join([
-    "  python         3.13.14 ready",
-    "  uv             0.12.1 installed",
-    "  studio         installed in 12.4s",
-    "  shortcut       desktop and Start Menu",
-    "  next           run: unsloth studio",
-])
+BASELINE = "\n".join(
+    [
+        "  python         3.13.14 ready",
+        "  uv             0.12.1 installed",
+        "  studio         installed in 12.4s",
+        "  shortcut       desktop and Start Menu",
+        "  next           run: unsloth studio",
+    ]
+)
 
-SHORTCUTS = [{
-    "name": "Unsloth.lnk",
-    "targetPath": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-    "arguments": "-NoProfile -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File launch-studio.ps1",
-    "workingDirectory": r"C:\Users\runneradmin\.unsloth\studio",
-    "windowStyle": "1",
-    "iconLocation": r"C:\Users\runneradmin\.unsloth\studio\unsloth.ico,0",
-}]
+SHORTCUTS = [
+    {
+        "name": "Unsloth.lnk",
+        "targetPath": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "arguments": "-NoProfile -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File launch-studio.ps1",
+        "workingDirectory": r"C:\Users\runneradmin\.unsloth\studio",
+        "windowStyle": "1",
+        "iconLocation": r"C:\Users\runneradmin\.unsloth\studio\unsloth.ico,0",
+    }
+]
 
 ARTIFACTS = {
     "files": {
@@ -56,21 +60,40 @@ ARTIFACTS = {
 }
 
 
-def _write(directory: Path, transcript: str = BASELINE, shortcuts = None, artifacts = None) -> Path:
+def _write(
+    directory: Path,
+    transcript: str = BASELINE,
+    shortcuts = None,
+    artifacts = None,
+) -> Path:
     directory.mkdir(parents = True, exist_ok = True)
     (directory / "transcript.txt").write_text(transcript, encoding = "utf-8")
     (directory / "shortcuts.json").write_text(
-        json.dumps(SHORTCUTS if shortcuts is None else shortcuts), encoding = "utf-8")
+        json.dumps(SHORTCUTS if shortcuts is None else shortcuts), encoding = "utf-8"
+    )
     (directory / "artifacts.json").write_text(
-        json.dumps(ARTIFACTS if artifacts is None else artifacts), encoding = "utf-8")
+        json.dumps(ARTIFACTS if artifacts is None else artifacts), encoding = "utf-8"
+    )
     return directory
 
 
 def _run(base: Path, head: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--base", str(base), "--head", str(head),
-         "--base-sha", "a" * 40, "--head-sha", "b" * 40],
-        capture_output = True, text = True, timeout = 120,
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--base",
+            str(base),
+            "--head",
+            str(head),
+            "--base-sha",
+            "a" * 40,
+            "--head-sha",
+            "b" * 40,
+        ],
+        capture_output = True,
+        text = True,
+        timeout = 120,
     )
 
 
@@ -78,19 +101,23 @@ def _run(base: Path, head: Path) -> subprocess.CompletedProcess:
 # It must be able to fail
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("mutation, why", [
-    ("shortcut       desktop only",
-     "a line of user-visible output changed"),
-    ("  shortcut       desktop and Start Menu ",
-     "trailing space only, which must NOT fail"),
-])
+
+@pytest.mark.parametrize(
+    "mutation, why",
+    [
+        ("shortcut       desktop only", "a line of user-visible output changed"),
+        ("  shortcut       desktop and Start Menu ", "trailing space only, which must NOT fail"),
+    ],
+)
 def test_a_changed_output_line_is_reported(tmp_path: Path, mutation: str, why: str) -> None:
     base = _write(tmp_path / "base")
     mutated = BASELINE.replace("  shortcut       desktop and Start Menu", mutation)
     head = _write(tmp_path / "head", transcript = mutated)
     result = _run(base, head)
     if "must NOT fail" in why:
-        assert result.returncode == 0, f"trailing whitespace was treated as a change: {result.stdout}"
+        assert (
+            result.returncode == 0
+        ), f"trailing whitespace was treated as a change: {result.stdout}"
     else:
         assert result.returncode == 2, f"{why} was not reported: {result.stdout}\n{result.stderr}"
 
@@ -105,8 +132,9 @@ def test_a_lost_indent_is_reported(tmp_path: Path) -> None:
 def test_a_relaxed_execution_policy_in_a_shortcut_is_reported(tmp_path: Path) -> None:
     """The single substitution this whole effort is about, and invisible in the transcript."""
     base = _write(tmp_path / "base")
-    relaxed = [dict(SHORTCUTS[0], arguments = SHORTCUTS[0]["arguments"].replace(
-        "RemoteSigned", "Bypass"))]
+    relaxed = [
+        dict(SHORTCUTS[0], arguments = SHORTCUTS[0]["arguments"].replace("RemoteSigned", "Bypass"))
+    ]
     head = _write(tmp_path / "head", shortcuts = relaxed)
     result = _run(base, head)
     assert result.returncode == 2
@@ -142,14 +170,17 @@ def test_a_second_run_that_rewrites_files_is_reported(tmp_path: Path) -> None:
 # It must not fail on noise, or it gets disabled
 # ---------------------------------------------------------------------------
 
+
 def test_known_noise_does_not_fail(tmp_path: Path) -> None:
-    noisy = "\n".join([
-        "  python         3.13.9 ready",
-        "  uv             0.12.4 installed",
-        "  studio         installed in 41.9s",
-        "  shortcut       desktop and Start Menu",
-        "  next           run: unsloth studio",
-    ])
+    noisy = "\n".join(
+        [
+            "  python         3.13.9 ready",
+            "  uv             0.12.4 installed",
+            "  studio         installed in 41.9s",
+            "  shortcut       desktop and Start Menu",
+            "  next           run: unsloth studio",
+        ]
+    )
     base = _write(tmp_path / "base")
     head = _write(tmp_path / "head", transcript = noisy)
     result = _run(base, head)
@@ -168,6 +199,7 @@ def test_version_drift_is_normalised_but_still_printed(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # VOID is not a pass
 # ---------------------------------------------------------------------------
+
 
 def test_missing_evidence_is_void_and_not_a_pass(tmp_path: Path) -> None:
     base = _write(tmp_path / "base")
@@ -213,11 +245,13 @@ def test_void_and_different_have_distinct_exit_codes() -> None:
 # The comparer's own controls
 # ---------------------------------------------------------------------------
 
+
 def test_the_self_test_passes() -> None:
     """CI runs this before any real comparison, so a broken normaliser refuses to produce a
     verdict instead of producing a reassuring one."""
-    result = subprocess.run([sys.executable, str(SCRIPT), "--self-test"],
-                            capture_output = True, text = True, timeout = 120)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--self-test"], capture_output = True, text = True, timeout = 120
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -227,6 +261,7 @@ def test_the_self_test_can_fail() -> None:
     original = cmp._NORMALISERS
     try:
         import re
+
         cmp._NORMALISERS = original + ((re.compile(r".*"), "", "everything"),)
         failures = cmp.self_test()
         assert failures, "a normaliser that erases every line still passed the controls"
@@ -257,14 +292,15 @@ def test_a_single_shortcut_serialised_as_an_object_still_compares(tmp_path: Path
     base = _write(tmp_path / "base")
     (base / "shortcuts.json").write_text(json.dumps(SHORTCUTS[0]), encoding = "utf-8")
     head = _write(tmp_path / "head")
-    relaxed = dict(SHORTCUTS[0], arguments = SHORTCUTS[0]["arguments"].replace(
-        "RemoteSigned", "Bypass"))
+    relaxed = dict(
+        SHORTCUTS[0], arguments = SHORTCUTS[0]["arguments"].replace("RemoteSigned", "Bypass")
+    )
     (head / "shortcuts.json").write_text(json.dumps(relaxed), encoding = "utf-8")
 
     result = _run(base, head)
-    assert result.returncode == 2, (
-        f"an unwrapped single shortcut was not compared as a shortcut: {result.stdout}"
-    )
+    assert (
+        result.returncode == 2
+    ), f"an unwrapped single shortcut was not compared as a shortcut: {result.stdout}"
     assert "Bypass" in result.stdout
 
 

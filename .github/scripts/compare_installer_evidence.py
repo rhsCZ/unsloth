@@ -46,28 +46,33 @@ from pathlib import Path
 # one of these needs to know what it was for, and a rule with no recorded cause is a rule nobody can
 # argue with.
 _NORMALISERS: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    (re.compile(r"\b\d+\.\d+s\b"), "<duration>",
-     "elapsed times, printed by every step"),
-    (re.compile(r"\b\d{1,3}(?:\.\d+)?\s?%"), "<percent>",
-     "download progress"),
-    (re.compile(r"\b\d+(?:\.\d+)?\s?(?:[KMGT]i?B|bytes)\b", re.I), "<size>",
-     "download sizes, which differ with a CDN or a patch release"),
-    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*"), "<timestamp>",
-     "timestamps"),
-    (re.compile(r"\b[0-9a-f]{40}\b|\b[0-9A-F]{64}\b|\b[0-9a-f]{64}\b"), "<hash>",
-     "commit SHAs and file digests: the two sides are different commits by construction"),
-    (re.compile(r"unsloth-[A-Za-z0-9_]{6,}"), "unsloth-<temp>",
-     "mkstemp-style temp names"),
-    (re.compile(r"\\Temp\\[A-Za-z0-9._-]{6,}"), r"\\Temp\\<temp>",
-     "Windows temp directory names"),
-    (re.compile(r"\b(pid|PID)[= ]\d+"), r"\1=<pid>",
-     "process ids"),
-    (re.compile(r"127\.0\.0\.1:\d+|localhost:\d+"), "127.0.0.1:<port>",
-     "the port Studio bound, which is chosen from what is free"),
-    (re.compile(r"\x1b\[[0-9;?]*[A-Za-z]"), "",
-     "ANSI sequences, in case a run was not redirected after all"),
-    (re.compile(r"[\r\x08]"), "",
-     "carriage returns and backspaces from progress redraws"),
+    (re.compile(r"\b\d+\.\d+s\b"), "<duration>", "elapsed times, printed by every step"),
+    (re.compile(r"\b\d{1,3}(?:\.\d+)?\s?%"), "<percent>", "download progress"),
+    (
+        re.compile(r"\b\d+(?:\.\d+)?\s?(?:[KMGT]i?B|bytes)\b", re.I),
+        "<size>",
+        "download sizes, which differ with a CDN or a patch release",
+    ),
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*"), "<timestamp>", "timestamps"),
+    (
+        re.compile(r"\b[0-9a-f]{40}\b|\b[0-9A-F]{64}\b|\b[0-9a-f]{64}\b"),
+        "<hash>",
+        "commit SHAs and file digests: the two sides are different commits by construction",
+    ),
+    (re.compile(r"unsloth-[A-Za-z0-9_]{6,}"), "unsloth-<temp>", "mkstemp-style temp names"),
+    (re.compile(r"\\Temp\\[A-Za-z0-9._-]{6,}"), r"\\Temp\\<temp>", "Windows temp directory names"),
+    (re.compile(r"\b(pid|PID)[= ]\d+"), r"\1=<pid>", "process ids"),
+    (
+        re.compile(r"127\.0\.0\.1:\d+|localhost:\d+"),
+        "127.0.0.1:<port>",
+        "the port Studio bound, which is chosen from what is free",
+    ),
+    (
+        re.compile(r"\x1b\[[0-9;?]*[A-Za-z]"),
+        "",
+        "ANSI sequences, in case a run was not redirected after all",
+    ),
+    (re.compile(r"[\r\x08]"), "", "carriage returns and backspaces from progress redraws"),
 )
 
 # Volatile only because the two jobs ran minutes apart. A version drift is not a behaviour change,
@@ -110,8 +115,18 @@ def normalise_transcript(text: str) -> list[str]:
             continue
         # Runner-injected noise. These carry the workflow's own group names and the side's SHA, so
         # they differ between sides for reasons that have nothing to do with the installer.
-        if line.lstrip().startswith(("##[group]", "##[endgroup]", "::group::", "::endgroup::",
-                                     "##[debug]", "Run ", "shell: ", "env:")):
+        if line.lstrip().startswith(
+            (
+                "##[group]",
+                "##[endgroup]",
+                "::group::",
+                "::endgroup::",
+                "##[debug]",
+                "Run ",
+                "shell: ",
+                "env:",
+            )
+        ):
             continue
         lines.append(line)
     return lines
@@ -120,6 +135,7 @@ def normalise_transcript(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Comparison
 # ---------------------------------------------------------------------------
+
 
 class Verdict:
     """The outcome, with every difference kept rather than only the first."""
@@ -147,10 +163,19 @@ class Verdict:
         return 0
 
 
-def _unified(base: list[str], head: list[str], label: str, limit: int = 60) -> list[str]:
+def _unified(
+    base: list[str],
+    head: list[str],
+    label: str,
+    limit: int = 60,
+) -> list[str]:
     import difflib
-    diff = list(difflib.unified_diff(base, head, fromfile = f"base/{label}",
-                                     tofile = f"head/{label}", lineterm = "", n = 2))
+
+    diff = list(
+        difflib.unified_diff(
+            base, head, fromfile = f"base/{label}", tofile = f"head/{label}", lineterm = "", n = 2
+        )
+    )
     if len(diff) > limit:
         omitted = len(diff) - limit
         diff = diff[:limit] + [f"... {omitted} more diff lines omitted; the artifact has all of it"]
@@ -180,8 +205,8 @@ def compare_transcripts(base: str, head: str, verdict: Verdict) -> None:
         verdict.notes.append(f"transcript: identical over {len(base_lines)} normalised lines")
         return
     verdict.differences.append(
-        "the installer's user-visible output changed:\n" +
-        "\n".join(_unified(base_lines, head_lines, "transcript"))
+        "the installer's user-visible output changed:\n"
+        + "\n".join(_unified(base_lines, head_lines, "transcript"))
     )
 
 
@@ -305,8 +330,12 @@ def _load(path: Path, verdict: Verdict, what: str):
         return None
 
 
-def compare_directories(base_dir: Path, head_dir: Path, base_sha: str = "",
-                        head_sha: str = "") -> Verdict:
+def compare_directories(
+    base_dir: Path,
+    head_dir: Path,
+    base_sha: str = "",
+    head_sha: str = "",
+) -> Verdict:
     verdict = Verdict()
 
     if base_sha and head_sha and base_sha == head_sha:
@@ -340,21 +369,25 @@ def compare_directories(base_dir: Path, head_dir: Path, base_sha: str = "",
 # before the real comparison is trusted, it is handed a pair it MUST call different, and a pair it
 # MUST call equal. Both directions matter: a differ that flags everything is as useless as one that
 # flags nothing, it just fails more loudly.
-_CONTROL_TRANSCRIPT = "\n".join([
-    "  python         3.13.14 ready",
-    "  studio         installed in 12.4s",
-    "  shortcut       desktop and Start Menu",
-])
+_CONTROL_TRANSCRIPT = "\n".join(
+    [
+        "  python         3.13.14 ready",
+        "  studio         installed in 12.4s",
+        "  shortcut       desktop and Start Menu",
+    ]
+)
 
 
 def self_test() -> list[str]:
     failures: list[str] = []
 
-    noisy = "\n".join([
-        "  python         3.13.9 ready",
-        "  studio         installed in 41.9s",
-        "  shortcut       desktop and Start Menu",
-    ])
+    noisy = "\n".join(
+        [
+            "  python         3.13.9 ready",
+            "  studio         installed in 41.9s",
+            "  shortcut       desktop and Start Menu",
+        ]
+    )
     v = Verdict()
     compare_transcripts(_CONTROL_TRANSCRIPT, noisy, v)
     if v.differences:
@@ -384,8 +417,18 @@ def self_test() -> list[str]:
 
     v = Verdict()
     compare_shortcuts(
-        [{"name": "Unsloth.lnk", "arguments": "-NoProfile -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File x"}],
-        [{"name": "Unsloth.lnk", "arguments": "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File x"}],
+        [
+            {
+                "name": "Unsloth.lnk",
+                "arguments": "-NoProfile -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File x",
+            }
+        ],
+        [
+            {
+                "name": "Unsloth.lnk",
+                "arguments": "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File x",
+            }
+        ],
         v,
     )
     if not v.differences:
@@ -397,7 +440,9 @@ def self_test() -> list[str]:
     v = Verdict()
     compare_shortcuts([], [], v)
     if not v.is_void:
-        failures.append("two empty shortcut manifests were treated as agreement rather than as VOID")
+        failures.append(
+            "two empty shortcut manifests were treated as agreement rather than as VOID"
+        )
 
     v = compare_directories(Path("/nonexistent/base"), Path("/nonexistent/head"), "aaa", "bbb")
     if not v.is_void or v.exit_code() != 3:
@@ -408,14 +453,16 @@ def self_test() -> list[str]:
 
 # ---------------------------------------------------------------------------
 
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description = __doc__)
     parser.add_argument("--base", type = Path, help = "directory holding the base side's evidence")
     parser.add_argument("--head", type = Path, help = "directory holding the head side's evidence")
     parser.add_argument("--base-sha", default = "")
     parser.add_argument("--head-sha", default = "")
-    parser.add_argument("--self-test", action = "store_true",
-                        help = "run the positive controls and exit")
+    parser.add_argument(
+        "--self-test", action = "store_true", help = "run the positive controls and exit"
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -423,8 +470,10 @@ def main(argv: list[str] | None = None) -> int:
         for failure in failures:
             print(f"::error::self-test: {failure}")
         if failures:
-            print("::error::the comparer's own controls failed, so no verdict it produces can be "
-                  "trusted. Refusing to compare.")
+            print(
+                "::error::the comparer's own controls failed, so no verdict it produces can be "
+                "trusted. Refusing to compare."
+            )
             return 1
         print("self-test: the comparer reports real changes and ignores known noise")
         return 0
@@ -441,22 +490,28 @@ def main(argv: list[str] | None = None) -> int:
         print()
         for reason in verdict.void:
             print(f"::error::VOID: {reason}")
-        print("::error::VOID is not a pass. Nothing was compared, so nothing was shown to be "
-              "unchanged.")
+        print(
+            "::error::VOID is not a pass. Nothing was compared, so nothing was shown to be "
+            "unchanged."
+        )
         return verdict.exit_code()
 
     if verdict.differences:
         print()
         for difference in verdict.differences:
             print(f"::error::{difference}")
-        print(f"::error::{len(verdict.differences)} behaviour difference(s) between "
-              f"{args.base_sha[:12] or 'base'} and {args.head_sha[:12] or 'head'}. A hardening "
-              f"change must not alter what the installer does or what a user sees.")
+        print(
+            f"::error::{len(verdict.differences)} behaviour difference(s) between "
+            f"{args.base_sha[:12] or 'base'} and {args.head_sha[:12] or 'head'}. A hardening "
+            f"change must not alter what the installer does or what a user sees."
+        )
         return verdict.exit_code()
 
     print()
-    print(f"PASS: {args.base_sha[:12] or 'base'} and {args.head_sha[:12] or 'head'} produced the "
-          f"same user-visible output, the same shortcuts and the same installed files.")
+    print(
+        f"PASS: {args.base_sha[:12] or 'base'} and {args.head_sha[:12] or 'head'} produced the "
+        f"same user-visible output, the same shortcuts and the same installed files."
+    )
     return 0
 
 

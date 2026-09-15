@@ -700,11 +700,15 @@ def test_unmeasured_idempotency_is_void_not_a_note() -> None:
     complete = {
         "studioHome": "X",
         "files": {
-            "launch-studio.ps1": {"foundAt": "data/launch-studio.ps1", "content": "a", "sha256": "A"},
+            "launch-studio.ps1": {
+                "foundAt": "data/launch-studio.ps1",
+                "content": "a",
+                "sha256": "A",
+            },
             "unsloth.cmd": {"foundAt": "home/bin\\unsloth.cmd", "content": "b", "sha256": "B"},
         },
     }
-    measured = dict(complete, rewrittenOnSecondRun=[])
+    measured = dict(complete, rewrittenOnSecondRun = [])
 
     ok = cmp.Verdict()
     cmp.compare_artifacts(measured, dict(measured), ok)

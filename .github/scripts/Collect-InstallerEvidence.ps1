@@ -234,6 +234,20 @@ if (Test-Path -LiteralPath $StudioHome) {
                 foundAt      = $foundAt
                 content      = (Get-Content -Raw -LiteralPath $full -ErrorAction Stop)
                 sha256       = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
+                # The byte order mark, separately from the text. Get-Content -Raw decodes and
+                # discards it, so a candidate that stops writing the UTF-8 BOM on launch-studio.ps1
+                # leaves identical text and compared equal. That is not cosmetic: the shortcut runs
+                # the launcher under Windows PowerShell 5.1, which reads a BOM-less file as ANSI, so
+                # dropping it breaks any install whose paths carry non-ASCII characters.
+                bom          = (& {
+                    $head = [byte[]]::new(3)
+                    $stream = [System.IO.File]::OpenRead($full)
+                    try { $read = $stream.Read($head, 0, 3) } finally { $stream.Dispose() }
+                    if ($read -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) { 'utf-8' }
+                    elseif ($read -ge 2 -and $head[0] -eq 0xFF -and $head[1] -eq 0xFE) { 'utf-16le' }
+                    elseif ($read -ge 2 -and $head[0] -eq 0xFE -and $head[1] -eq 0xFF) { 'utf-16be' }
+                    else { 'none' }
+                })
                 # For idempotency. Content equality cannot show that nothing was WRITTEN, only that
                 # the bytes ended up the same, and an unconditional rewrite of identical bytes is
                 # precisely the regression the second install exists to catch.

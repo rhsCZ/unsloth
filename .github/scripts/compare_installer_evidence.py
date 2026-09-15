@@ -423,12 +423,26 @@ def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
             )
             continue
         if "content" in before and "content" in after:
+            # The drift note first, on the RAW text, exactly as the transcript and shortcut
+            # comparisons do it. Without this a launcher retargeted from python-3.11.9 to
+            # python-3.13.0 was normalised away and the lane returned PASS with no note at all,
+            # which is the one thing normalisation is supposed to buy back.
+            report_version_drift(before["content"], after["content"], f"generated {name}", verdict)
             b = normalise_transcript(before["content"])
             a = normalise_transcript(after["content"])
             if b != a:
                 verdict.differences.append(
                     f"the generated {name} changed:\n" + "\n".join(_unified(b, a, name))
                 )
+        # Encoding is part of the contract and is invisible in the decoded text. Windows PowerShell
+        # 5.1 reads a BOM-less file as ANSI, so a launcher that silently stops carrying its UTF-8
+        # BOM breaks every install whose paths contain non-ASCII characters while comparing equal.
+        bom_before, bom_after = before.get("bom"), after.get("bom")
+        if bom_before and bom_after and bom_before != bom_after:
+            verdict.differences.append(
+                f"{name!r} changed encoding: base wrote {bom_before} and head wrote {bom_after}. "
+                f"Windows PowerShell 5.1 reads a file with no BOM as ANSI."
+            )
         # Where it landed, not only what is in it. The collector probes each contract at several
         # supported locations and records the one it found, so a candidate that moves studio.conf
         # between `share\studio.conf` and `studio.conf` without touching a byte keeps the same key

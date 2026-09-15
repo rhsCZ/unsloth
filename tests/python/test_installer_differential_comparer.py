@@ -986,9 +986,7 @@ def test_every_collected_contract_is_one_the_windows_installer_writes() -> None:
         # The file name is assigned to a variable and that VARIABLE is what gets written, so the
         # check follows the assignment rather than looking for the literal next to a write call.
         holders = set(
-            re.findall(
-                r"\$(\w+)\s*=\s*Join-Path[^\n]*" + re.escape(contract), windows_sources
-            )
+            re.findall(r"\$(\w+)\s*=\s*Join-Path[^\n]*" + re.escape(contract), windows_sources)
         )
         assert holders, (
             f"{contract!r} is collected as a contract but no variable in install.ps1 or "
@@ -1003,3 +1001,63 @@ def test_every_collected_contract_is_one_the_windows_installer_writes() -> None:
             f"studio/setup.ps1 writes it -- it is only read -- so a clean Windows run records it "
             f"as missing and the lane voids every time. That is exactly what studio.conf did."
         )
+
+
+def test_a_launcher_that_loses_its_bom_is_a_difference() -> None:
+    """Encoding is part of the contract and `Get-Content -Raw` decodes it away.
+
+    The shortcut runs `launch-studio.ps1` under Windows PowerShell 5.1, which reads a file with no
+    BOM as ANSI, so a candidate that stops writing the UTF-8 BOM breaks every install whose paths
+    carry non-ASCII characters. The text is identical, so content comparison called it agreement.
+    """
+    def side(bom: str) -> dict:
+        return {
+            "studioHome": "X",
+            "files": {
+                "launch-studio.ps1": {
+                    "foundAt": "data/launch-studio.ps1",
+                    "content": "Write-Host 'hi'\n",
+                    "sha256": "A",
+                    "bom": bom,
+                }
+            },
+            "rewrittenOnSecondRun": [],
+        }
+
+    same = cmp.Verdict()
+    cmp.compare_artifacts(side("utf-8"), side("utf-8"), same)
+    assert not same.differences, same.differences
+
+    verdict = cmp.Verdict()
+    cmp.compare_artifacts(side("utf-8"), side("none"), verdict)
+    assert verdict.differences, "a launcher that lost its BOM compared equal"
+    assert any("encoding" in row for row in verdict.differences), verdict.differences
+
+
+def test_version_drift_in_a_generated_file_is_reported() -> None:
+    """The normaliser exists so drift does not fail the lane, not so it disappears.
+
+    The transcript and shortcut comparisons both call `report_version_drift` on the raw text before
+    normalising. The generated-file comparison normalised without it, so a launcher retargeted from
+    one Python to another returned PASS with nothing said at all.
+    """
+    def side(version: str) -> dict:
+        return {
+            "studioHome": "X",
+            "files": {
+                "launch-studio.ps1": {
+                    "foundAt": "data/launch-studio.ps1",
+                    "content": f"& 'C:\\\\py\\\\python-{version}\\\\python.exe' -m unsloth\n",
+                    "sha256": "A",
+                    "bom": "utf-8",
+                }
+            },
+            "rewrittenOnSecondRun": [],
+        }
+
+    verdict = cmp.Verdict()
+    cmp.compare_artifacts(side("3.11.9"), side("3.13.0"), verdict)
+    reported = verdict.differences + verdict.notes
+    assert any("3.11.9" in row or "3.13.0" in row or "version" in row.lower() for row in reported), (
+        f"a retargeted launcher produced no drift note at all: {reported}"
+    )

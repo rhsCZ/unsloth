@@ -211,6 +211,14 @@ if (Test-Path -LiteralPath $StudioHome) {
 # Idempotency, when asked
 # ---------------------------------------------------------------------------
 
+# Built BEFORE the comparison below, which reads it. Keyed the same way the comparer keys shortcuts,
+# and kept in the artifact manifest rather than in shortcuts.json, because the idempotency
+# comparison reads the first run's artifacts.json.
+$shortcutWrites = [ordered]@{}
+foreach ($s in $shortcuts) {
+    if ($s.Contains('lastWriteUtc')) { $shortcutWrites["$($s.root)/$($s.name)"] = $s.lastWriteUtc }
+}
+
 $rewritten = $null
 if ($CompareAgainst) {
     if (-not (Test-Path -LiteralPath $CompareAgainst)) {
@@ -256,13 +264,6 @@ if ($CompareAgainst) {
             $rewritten = $null
         }
     }
-}
-
-# Keyed the same way the comparer keys shortcuts, and kept in the artifact manifest rather than in
-# shortcuts.json, because the idempotency comparison reads the first run's artifacts.json.
-$shortcutWrites = [ordered]@{}
-foreach ($s in $shortcuts) {
-    if ($s.Contains('lastWriteUtc')) { $shortcutWrites["$($s.root)/$($s.name)"] = $s.lastWriteUtc }
 }
 
 $artifacts = [ordered]@{

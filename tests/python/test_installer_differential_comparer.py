@@ -770,3 +770,52 @@ def test_the_collector_is_given_the_data_directory_too() -> None:
             f"step {step.get('name')!r} calls the collector without -StudioDataDir, so "
             f"launch-studio.ps1 is absent from its manifest on a normal-profile install"
         )
+
+
+def test_a_contract_that_moved_without_changing_its_bytes_is_a_difference() -> None:
+    """The collector records where it found each contract, and the comparer never read it.
+
+    Each contract is probed at several supported locations, so a candidate that writes
+    `studio.conf` to `share\\studio.conf` instead of the install root keeps both the manifest key
+    and every byte of the content. Comparing content alone calls that agreement, while everything
+    that opens the file now has to look somewhere else. That is exactly the layout change `foundAt`
+    was added to make observable.
+    """
+    def side(found_at: str) -> dict:
+        return {
+            "studioHome": "X",
+            "files": {"studio.conf": {"foundAt": found_at, "content": "a", "sha256": "A"}},
+            "rewrittenOnSecondRun": [],
+        }
+
+    same = cmp.Verdict()
+    cmp.compare_artifacts(side("home/studio.conf"), side("home/studio.conf"), same)
+    assert not same.differences, f"an unmoved contract was reported as moved: {same.differences}"
+
+    verdict = cmp.Verdict()
+    cmp.compare_artifacts(side("home/studio.conf"), side("home/share\\studio.conf"), verdict)
+    assert verdict.differences, "a relocated contract with identical bytes was reported as equal"
+    assert any("moved" in row for row in verdict.differences), verdict.differences
+
+
+def test_the_collector_builds_shortcut_timestamps_before_it_compares_them() -> None:
+    """The shortcut half of the idempotency check read a map that did not exist yet.
+
+    `$shortcutWrites` was constructed after the `CompareAgainst` block that reads it, so under
+    `Set-StrictMode -Version Latest` the loop either saw no keys or threw into the catch that voids
+    the measurement. Either way an installer regression that calls Save() unconditionally and
+    rewrites identical .lnk files left `rewrittenOnSecondRun` empty and could pass.
+    """
+    script = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "scripts"
+        / "Collect-InstallerEvidence.ps1"
+    )
+    text = script.read_text(encoding = "utf-8")
+    built = text.index("$shortcutWrites = [ordered]@{}")
+    read = text.index("foreach ($key in $shortcutWrites.Keys)")
+    assert built < read, (
+        "$shortcutWrites is still built after the comparison that reads it, so the shortcut half of "
+        "the idempotency measurement cannot run"
+    )

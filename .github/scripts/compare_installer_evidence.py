@@ -419,6 +419,17 @@ def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
                 verdict.differences.append(
                     f"the generated {name} changed:\n" + "\n".join(_unified(b, a, name))
                 )
+        # Where it landed, not only what is in it. The collector probes each contract at several
+        # supported locations and records the one it found, so a candidate that moves studio.conf
+        # between `share\studio.conf` and `studio.conf` without touching a byte keeps the same key
+        # and the same content. Comparing content alone reports that as agreement, while everything
+        # that has to open the file now looks in the wrong place.
+        found_before, found_after = before.get("foundAt"), after.get("foundAt")
+        if found_before and found_after and found_before != found_after:
+            verdict.differences.append(
+                f"{name!r} moved: base wrote it to {found_before} and head wrote it to "
+                f"{found_after}. The bytes may match, but consumers must now look elsewhere."
+            )
 
     # Idempotency is reported by the Windows side, which is the only place it can be observed: it
     # runs the installer twice and records whether the second run rewrote anything.

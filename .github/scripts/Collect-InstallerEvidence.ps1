@@ -347,10 +347,39 @@ if ($CompareAgainst) {
     }
 }
 
+# The install ID, both where it is persisted and where it is embedded. install.ps1 writes
+# share\studio_install_id and bakes the same value into the generated launcher as
+# $_ExpectedStudioRootId, which the launcher compares against the backend's studio_root_id before
+# accepting it (install.ps1:3018, :3085, :3095). If those two ever disagree Studio does not launch
+# at all -- and the content comparison cannot see it, because the transcript normaliser rewrites
+# every 64-character hex token, so any ID change compares equal. The two values are only meaningful
+# against EACH OTHER within one install; they are expected to differ between base and head.
+$installId = $null
+foreach ($rootLabel in $searchRoots.Keys) {
+    $root = $searchRoots[$rootLabel]
+    if (-not $root) { continue }
+    foreach ($candidate in @('share\studio_install_id', 'studio_install_id')) {
+        $probe = Join-Path $root $candidate
+        if (Test-Path -LiteralPath $probe) {
+            try { $installId = (Get-Content -Raw -LiteralPath $probe -ErrorAction Stop).Trim() } catch {}
+            break
+        }
+    }
+    if ($installId) { break }
+}
+
+$embeddedId = $null
+if ($files['launch-studio.ps1'] -and $files['launch-studio.ps1'].Contains('content')) {
+    $m = [regex]::Match($files['launch-studio.ps1'].content, "_ExpectedStudioRootId\s*=\s*'([^']*)'")
+    if ($m.Success) { $embeddedId = $m.Groups[1].Value }
+}
+
 $artifacts = [ordered]@{
     studioHome     = $StudioHome
     files          = $files
     shortcutWrites = $shortcutWrites
+    installId      = $installId
+    embeddedId     = $embeddedId
 }
 if ($artifactError) { $artifacts['error'] = $artifactError }
 if ($null -ne $rewritten) { $artifacts['rewrittenOnSecondRun'] = @($rewritten) }

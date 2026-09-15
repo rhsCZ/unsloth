@@ -455,6 +455,24 @@ def compare_artifacts(base: dict, head: dict, verdict: Verdict) -> None:
                 f"{found_after}. The bytes may match, but consumers must now look elsewhere."
             )
 
+    # The install ID, checked WITHIN each side rather than across them. The launcher embeds the ID
+    # it will accept from the backend, and the backend reads the persisted one, so if those two
+    # disagree Studio refuses its own server and never starts. They are expected to differ between
+    # base and head, which is precisely why a cross-side comparison cannot see this and why the
+    # transcript normaliser rewriting every 64-hex token hides it completely.
+    for side, data in (("base", base), ("head", head)):
+        persisted, embedded = data.get("installId"), data.get("embeddedId")
+        if persisted and embedded and persisted != embedded:
+            verdict.differences.append(
+                f"{side}: the launcher expects studio_root_id {embedded!r} but the install "
+                f"persisted {persisted!r}. Studio would refuse its own backend."
+            )
+        elif embedded and not persisted:
+            verdict.void.append(
+                f"{side}: the launcher embeds an expected studio_root_id but no persisted "
+                f"studio_install_id was found, so the pair could not be checked"
+            )
+
     # Idempotency is reported by the Windows side, which is the only place it can be observed: it
     # runs the installer twice and records whether the second run rewrote anything.
     for side, data in (("base", base), ("head", head)):

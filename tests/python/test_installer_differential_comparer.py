@@ -1010,6 +1010,7 @@ def test_a_launcher_that_loses_its_bom_is_a_difference() -> None:
     BOM as ANSI, so a candidate that stops writing the UTF-8 BOM breaks every install whose paths
     carry non-ASCII characters. The text is identical, so content comparison called it agreement.
     """
+
     def side(bom: str) -> dict:
         return {
             "studioHome": "X",
@@ -1041,6 +1042,7 @@ def test_version_drift_in_a_generated_file_is_reported() -> None:
     normalising. The generated-file comparison normalised without it, so a launcher retargeted from
     one Python to another returned PASS with nothing said at all.
     """
+
     def side(version: str) -> dict:
         return {
             "studioHome": "X",
@@ -1058,6 +1060,6 @@ def test_version_drift_in_a_generated_file_is_reported() -> None:
     verdict = cmp.Verdict()
     cmp.compare_artifacts(side("3.11.9"), side("3.13.0"), verdict)
     reported = verdict.differences + verdict.notes
-    assert any("3.11.9" in row or "3.13.0" in row or "version" in row.lower() for row in reported), (
-        f"a retargeted launcher produced no drift note at all: {reported}"
-    )
+    assert any(
+        "3.11.9" in row or "3.13.0" in row or "version" in row.lower() for row in reported
+    ), f"a retargeted launcher produced no drift note at all: {reported}"

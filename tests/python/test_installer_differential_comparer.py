@@ -1094,9 +1094,9 @@ def test_a_launcher_that_expects_the_wrong_install_id_is_reported() -> None:
 
     good = cmp.Verdict()
     cmp.compare_artifacts(side("a" * 64, "a" * 64), side("b" * 64, "b" * 64), good)
-    assert not good.differences, (
-        f"two healthy installs with different IDs were reported as a difference: {good.differences}"
-    )
+    assert (
+        not good.differences
+    ), f"two healthy installs with different IDs were reported as a difference: {good.differences}"
 
     verdict = cmp.Verdict()
     cmp.compare_artifacts(side("a" * 64, "a" * 64), side("b" * 64, "c" * 64), verdict)

@@ -46,9 +46,10 @@ import {
 } from "@assistant-ui/react";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { type VariantProps, cva } from "class-variance-authority";
-import { ChevronDownIcon, CopyIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { BulbIcon } from "@/lib/bulb-icon";
 import { Tick02Icon } from "@/lib/tick-icon";
+import { Copy01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   type CSSProperties,
@@ -474,7 +475,7 @@ function ReasoningCopyButton({
       {copied ? (
         <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="size-3" />
       ) : (
-        <CopyIcon className="size-3" />
+        <HugeiconsIcon icon={Copy01Icon} className="size-3" />
       )}
       {copied ? "Copied" : "Copy"}
     </button>

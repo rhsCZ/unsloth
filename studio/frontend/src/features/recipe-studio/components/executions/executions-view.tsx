@@ -182,7 +182,7 @@ export function ExecutionsView({
         const value = formatCellValue(rawValue);
         const isWide = wideColumns.has(name);
         return (
-          <div className={cn(isWide ? "min-w-[48rem]" : "min-w-[12rem]")}>
+          <div className={cn(isWide ? "min-w-[48rem] max-md:min-w-[20rem]" : "min-w-[12rem]")}>
             <p className="whitespace-pre-wrap break-all">{value}</p>
           </div>
         );
@@ -393,7 +393,7 @@ export function ExecutionsView({
   }, [terminalLines.length]);
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex h-full min-h-0 max-md:w-full max-md:flex-col">
       <ExecutionSidebar
         executions={executions}
         selectedExecutionId={selectedExecutionId}

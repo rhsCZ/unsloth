@@ -76,7 +76,7 @@ export function ChartsSection({
           {SKELETON_KEYS.map((key) => (
             <div
               key={key}
-              className="h-[280px] rounded-xl border bg-muted/30 animate-pulse"
+              className="h-[280px] 4xl:h-[360px] rounded-xl border bg-muted/30 animate-pulse"
             />
           ))}
         </div>

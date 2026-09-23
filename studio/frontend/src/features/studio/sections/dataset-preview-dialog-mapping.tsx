@@ -49,7 +49,7 @@ export function HeaderRolePicker({
       value={currentRole ?? "_none"}
       onValueChange={(v) => onRoleChange(v === "_none" ? undefined : v)}
     >
-      <SelectTrigger className="h-6 w-[90px] text-ui-10 px-2 py-0 border-dashed cursor-pointer">
+      <SelectTrigger className="h-6 w-[90px] max-md:h-8 max-md:w-[104px] text-ui-10 px-2 py-0 border-dashed cursor-pointer">
         <SelectValue placeholder="Role..." />
       </SelectTrigger>
       <SelectContent>

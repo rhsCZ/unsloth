@@ -504,7 +504,7 @@ export function GeneralTab() {
         >
           <div className="flex flex-col items-end gap-1.5">
             <div className="flex items-center gap-2">
-              <div className="relative w-[260px]">
+              <div className="relative w-[260px] max-sm:w-[min(260px,calc(100vw-8.5rem))]">
                 <Input
                   type={showToken ? "text" : "password"}
                   name="hf-token"

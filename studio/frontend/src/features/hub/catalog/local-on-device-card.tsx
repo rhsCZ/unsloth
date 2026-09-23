@@ -496,7 +496,7 @@ export function LocalOnDeviceCard({
                     side="bottom"
                     sideOffset={8}
                     avoidCollisions={false}
-                    className="hub-menu-instant menu-soft-surface w-[var(--radix-popover-trigger-width)] min-w-[220px] gap-0 overflow-hidden p-0 py-2 ring-0"
+                    className="hub-menu-instant menu-soft-surface w-[var(--radix-popover-trigger-width)] min-w-[220px] max-sm:min-w-0 max-sm:max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0 py-2 ring-0"
                   >
                     <div className="max-h-[280px] overflow-y-auto [scrollbar-width:thin]">
                       {sortedVariants?.map((variant) => {

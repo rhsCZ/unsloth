@@ -180,7 +180,6 @@ import {
 } from "@/features/settings";
 import { FIND_SKIP_ATTRIBUTE } from "@/features/find-in-page";
 import { useT } from "@/i18n";
-import { create } from "zustand";
 import {
   clampReasoningEffortToLevels,
   getExternalReasoningCapabilities,
@@ -195,6 +194,11 @@ import {
   settleThreadScopedSettingsForCopy,
   useChatRuntimeStore,
 } from "@/features/chat/stores/chat-runtime-store";
+import {
+  forkBoundaryAnchor,
+  setForkBoundaryAnchor,
+  useForkBoundaryStore,
+} from "@/features/chat/stores/fork-boundary-store";
 import {
   PROMPT_QUEUE_RUN_FAILED_EVENT,
   PROMPT_QUEUE_STOP_EVENT,
@@ -244,6 +248,8 @@ import {
   usePromptQueueUI,
   forkCountFor,
   subscribeForkCounts,
+  useForkInFlight,
+  showForkCreatedToast,
   type PlusMenuItemId,
   usePlusMenuPrefsStore,
   writeComposerDraft,
@@ -258,6 +264,7 @@ import {
 } from "@/features/chat/utils/composer-send-guard";
 import { deleteThreadMessage } from "@/features/chat/utils/delete-thread-message";
 import {
+  readBackendChatThread,
   getStoredChatThread,
   updateStoredChatThread,
 } from "@/features/chat/utils/chat-history-storage";
@@ -370,6 +377,7 @@ import {
 import { extractTaggedText, updateThreadMessage } from "@/features/chat/utils/update-thread-message";
 import { useComposerPillFit } from "@/hooks/use-composer-pill-fit";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useUiSpaceScale } from "@/hooks/use-ui-space-scale";
 
 // True while a file is dragged anywhere over the chat page, so the composer
 // can show its "Drop files here" affordance.
@@ -1757,16 +1765,125 @@ const RUN_SHRINK_WINDOW_MS = 1000;
 const ThreadMessage: FC = () => {
   const role = useAuiState(({ message }) => message.role);
   const isEditing = useAuiState(({ message }) => message.composer.isEditing);
+  let body: ReactNode = null;
   switch (threadMessageKind(role, isEditing)) {
     case "edit":
-      return <EditComposer />;
+      body = <EditComposer />;
+      break;
     case "user":
-      return <UserMessage />;
+      body = <UserMessage />;
+      break;
     case "assistant":
-      return <AssistantMessage />;
+      body = <AssistantMessage />;
+      break;
     default:
       return null;
   }
+  return (
+    <>
+      {body}
+      <ForkContinuationRule />
+    </>
+  );
+};
+
+/**
+ * Resolves the divider against the branch on screen, once for the thread.
+ *
+ * Which inherited message closes the history depends on the branch: editing an inherited turn
+ * starts a sibling and leaves the fork's anchor off screen with earlier inherited messages
+ * still above it. Selecting the message array in each ROW is what the delete render budget
+ * forbids, so it is selected here, in one component, and the rows read the id it publishes.
+ * The walk stops at the first message the fork did not inherit, so it costs the inherited
+ * count rather than the thread length.
+ */
+const useTrackForkBoundaryAnchor = (threadId: string | null): void => {
+  const inherited = useForkBoundaryStore((s) =>
+    threadId === null
+      ? undefined
+      : s.boundaryByThreadId[threadId]?.messageIds,
+  );
+  const anchor = useAuiState(({ thread }) =>
+    forkBoundaryAnchor(thread.messages, inherited),
+  );
+  useEffect(() => {
+    setForkBoundaryAnchor(threadId, anchor);
+  }, [threadId, anchor]);
+};
+
+// Closes the history a fork inherited. Rendered by the message it follows, since the row slot
+// is propless and the boundary arrives through the store.
+const ForkContinuationRule: FC = () => {
+  const threadId = useChatRuntimeStore((s) => s.activeThreadId);
+  const messageId = useAuiState(({ message }) => message.id);
+  // Two plain values rather than the record: both stay identical between renders, so a row
+  // subscribed to them does not re-render when an unrelated thread publishes.
+  const anchor = useForkBoundaryStore((s) =>
+    threadId === null ? undefined : s.anchorByThreadId[threadId],
+  );
+  const sourceThreadId = useForkBoundaryStore((s) =>
+    threadId === null
+      ? null
+      : (s.boundaryByThreadId[threadId]?.sourceThreadId ?? null),
+  );
+  const navigate = useNavigate();
+  if (anchor === undefined || anchor !== messageId) return null;
+  const label = (
+    <>
+      <GitBranchIcon strokeWidth={1.75} className="size-3.5" />
+      Continued from chat
+    </>
+  );
+  const labelClass =
+    "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap leading-none";
+  return (
+    <div
+      data-slot="fork-continuation-rule"
+      // Same column as the messages it sits between: it is their sibling, not their child,
+      // so it takes the width constraint every message root applies to itself.
+      className="mx-auto mt-6 mb-2 flex w-full max-w-(--thread-content-max-width) items-center gap-3 text-muted-foreground text-sm"
+    >
+      <span aria-hidden={true} className="h-px flex-1 bg-border" />
+      {sourceThreadId ? (
+        <button
+          type="button"
+          data-slot="fork-continuation-link"
+          title="Open the chat this was forked from"
+          // Checked on the way out, not on render: the tombstone set is this tab's own, so a
+          // source deleted on another device still looks openable until something asks for it.
+          // Only a definite "no" stops the trip; an unreachable backend is not a deletion.
+          onClick={async () => {
+            const source = await readBackendChatThread(sourceThreadId);
+            if (source === null) {
+              toast.info("That chat has been deleted.");
+              return;
+            }
+            navigate({
+              to: "/chat",
+              // A paired source is one half of a comparison, and the fork button is offered
+              // inside those panes. Opening it as a single chat would show one model's side
+              // rather than the view it was forked from. Same shape the sidebar opens a pair
+              // with. An unreachable backend has no record to ask, so it falls through.
+              search: source?.pairId
+                ? { compare: source.pairId }
+                : { thread: sourceThreadId },
+              replace: false,
+            });
+          }}
+          className={cn(
+            labelClass,
+            "cursor-pointer rounded-sm underline decoration-transparent underline-offset-2 transition-colors hover:text-foreground hover:decoration-current focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2",
+          )}
+        >
+          {label}
+        </button>
+      ) : (
+        // The source is gone, so the text stays but leads nowhere.
+        <span className={labelClass}>{label}</span>
+      )}
+      <span aria-hidden={true} className="h-px flex-1 bg-border" />
+    </div>
+  );
 };
 
 // Hoisted, so ThreadPrimitive.Messages sees the same children function on every Thread render. An
@@ -1797,6 +1914,7 @@ export const Thread: FC<{
   const threadId = targetThreadId ?? activeThreadId ?? null;
   const aui = useAui();
   useThreadForkCounts();
+  useTrackForkBoundaryAnchor(threadId);
 
   // Measured height of the floating composer dock (null until measured).
   // Drives the bottom spacer and the scroll-to-bottom footer offset.
@@ -2029,7 +2147,7 @@ export const Thread: FC<{
                 : // + the chat-model notice, which is an opaque absolute bar
                   // directly under the header. 0px whenever it is not showing,
                   // so every other surface keeps the padding it had.
-                  "pt-[calc(var(--studio-content-top-inset,0px)+48px+var(--studio-chat-notice-height,0px))]",
+                  "pt-[calc(var(--studio-content-top-inset,0px)+var(--studio-chat-header-height,48px)+var(--studio-chat-notice-height,0px))]",
             )}
           >
             {!hideWelcome && (
@@ -2400,14 +2518,14 @@ const ThreadWelcome: FC<{
     <div className="aui-thread-welcome-root mx-auto my-auto flex w-full max-w-(--thread-max-width) grow flex-col">
       <div className="aui-thread-welcome-center flex w-full grow flex-col items-center justify-start pt-[27.5dvh]">
         {/* Matches the docked composer's gutter; index.css trims both. */}
-        <div className="aui-thread-welcome-message flex w-full flex-col justify-center gap-9 px-[var(--custom-chat-welcome-padding,1rem)]">
+        <div className="aui-thread-welcome-message flex w-full flex-col justify-center gap-9 px-[var(--custom-chat-welcome-padding,calc(1rem*var(--ui-space-scale,1)))]">
           {/* Center the greeting (sloth + title) over the composer. */}
-          <div className="unsloth-welcome-greeting flex flex-row items-center justify-center gap-[15px]">
+          <div className="unsloth-welcome-greeting flex flex-row items-center justify-center gap-[calc(15px*var(--ui-space-scale,1))]">
             {/* Temporary chat keeps the title on its own, no mascot. */}
             {showGreetingSloth && !incognito && (
               <MascotImg
                 src={currentEmojiSrc}
-                className="unsloth-welcome-sloth size-[44px] -translate-y-[2px]"
+                className="unsloth-welcome-sloth size-[calc(44px*var(--ui-space-scale,1))] -translate-y-[2px]"
               />
             )}
             <h1 className="aui-thread-welcome-message-inner unsloth-welcome-title fade-in slide-in-from-bottom-1 animate-in text-3xl tracking-[-0.02em] duration-200">
@@ -2478,7 +2596,7 @@ const PendingAudioChip: FC = () => {
   }
   return (
     <div className="mb-2 flex w-full flex-row items-center gap-2 px-1.5 pt-0.5 pb-1">
-      <div className="flex items-center gap-2 rounded-lg border border-foreground/20 bg-muted px-3 py-1.5 text-xs">
+      <div className="flex items-center gap-2 rounded-lg border border-[color-mix(in_oklab,var(--foreground)_calc(20%*var(--contrast-edge-gain,1)),transparent)] bg-muted px-3 py-1.5 text-xs">
         <HeadphonesIcon className="size-3.5 text-muted-foreground" />
         <span className="max-w-48 truncate">{audioName}</span>
         <button
@@ -2774,6 +2892,9 @@ const Composer: FC<{
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const inputId = useId();
+  // One empty row, at whatever the UI font size makes a row.
+  const uiSpaceScale = useUiSpaceScale();
+  const oneRowHeight = Math.round(40 * uiSpaceScale);
   const [editorHeight, setEditorHeight] = useState(40);
   const [isWritingExpanded, setIsWritingExpanded] = useState(false);
   const toggleWritingExpanded = () => {
@@ -5157,7 +5278,7 @@ const Composer: FC<{
               className="unsloth-composer-editor"
               style={
                 {
-                  "--composer-editor-height": `${composerText.length === 0 ? 40 : Math.max(40, editorHeight)}px`,
+                  "--composer-editor-height": `${composerText.length === 0 ? oneRowHeight : Math.max(oneRowHeight, editorHeight)}px`,
                 } as CSSProperties
               }
             >
@@ -7886,22 +8007,6 @@ const ForkCountBadge: FC = () => {
   );
 };
 
-/**
- * One fork at a time, across every caller of the hook below.
- *
- * The chord and the button each hold their own instance, so a `useState` flag
- * only disables the one that was used: pressing the chord and then clicking
- * Fork before the first request lands would post two, each with its own new
- * thread id, and race their navigations. A store is what both of them read.
- */
-const useForkInFlight = create<{
-  forking: boolean;
-  setForking: (forking: boolean) => void;
-}>((set) => ({
-  forking: false,
-  setForking: (forking) => set({ forking }),
-}));
-
 const useForkMessageAction = () => {
   const aui = useAui();
   const navigate = useNavigate();
@@ -7948,13 +8053,7 @@ const useForkMessageAction = () => {
         search: { thread: result.thread.id },
         replace: false,
       });
-      if (result.containerSnapshotWarning) {
-        toast.info("Fork created", {
-          description: result.containerSnapshotWarning,
-        });
-      } else {
-        toast.success("Fork created");
-      }
+      showForkCreatedToast(result.containerSnapshotWarning);
     } catch (error) {
       console.error("Failed to fork", error);
       toast.error("Failed to fork", {
@@ -8307,7 +8406,7 @@ const AssistantActionBar: FC = () => {
             side="bottom"
             align="start"
             onCloseAutoFocus={(e) => e.preventDefault()}
-            className="aui-action-bar-more-content z-50 min-w-32 overflow-hidden rounded-[21px] bg-popover px-[9px] py-2 text-popover-foreground shadow-[0_2px_8px_-2px_rgba(0,0,0,0.16)] dark:shadow-none"
+            className="aui-action-bar-more-content z-50 min-w-32 overflow-hidden rounded-[21px] bg-popover px-[calc(9px*var(--ui-space-scale,1))] py-2 text-popover-foreground shadow-[0_2px_8px_-2px_rgba(0,0,0,0.16)] dark:shadow-none"
           >
             {/* Prevent an outside dismissal from triggering Delete. */}
             <MenuDismissGuard triggerRef={moreMenuTriggerRef} />
@@ -8417,7 +8516,7 @@ const UserMessageAudio: FC = () => {
   }
   return (
     <div className="col-start-2 flex justify-end">
-      <div className="flex items-center gap-2 rounded-lg border border-foreground/20 bg-muted px-3 py-1.5 text-xs">
+      <div className="flex items-center gap-2 rounded-lg border border-[color-mix(in_oklab,var(--foreground)_calc(20%*var(--contrast-edge-gain,1)),transparent)] bg-muted px-3 py-1.5 text-xs">
         <HeadphonesIcon className="size-3.5 text-muted-foreground" />
         <span className="max-w-48 truncate">{audioName}</span>
       </div>
@@ -8559,7 +8658,7 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
           aria-label="Previous"
           className="aui-branch-chevron-btn"
         >
-          <ChevronLeftIcon strokeWidth={1.25} className="size-[36px]" />
+          <ChevronLeftIcon strokeWidth={1.25} className="size-[calc(36px*var(--ui-space-scale,1))]" />
         </button>
       </BranchPickerPrimitive.Previous>
       <span className="aui-branch-picker-state font-mono text-ui-13 tabular-nums">
@@ -8571,7 +8670,7 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
           aria-label="Next"
           className="aui-branch-chevron-btn"
         >
-          <ChevronRightIcon strokeWidth={1.25} className="size-[36px]" />
+          <ChevronRightIcon strokeWidth={1.25} className="size-[calc(36px*var(--ui-space-scale,1))]" />
         </button>
       </BranchPickerPrimitive.Next>
     </BranchPickerPrimitive.Root>

@@ -98,6 +98,7 @@ import {
   Globe02Icon,
   HelpCircleIcon,
   Image03Icon,
+  LibrariesIcon,
   Logout05Icon,
   MoreHorizontalIcon,
   MoreVerticalIcon,
@@ -175,6 +176,7 @@ import {
   RECENTS_ORDER_SCOPE,
   type SidebarChatSort,
   type SidebarOrganizeBy,
+  type SidebarProjectSort,
   type ProjectRecord,
   type SidebarItem,
   type ChatNavigationState,
@@ -249,6 +251,10 @@ import {
   type SidebarSection,
 } from "@/features/chat";
 import { ShutdownDialog } from "@/components/shutdown-dialog";
+import {
+  buildChatItemMarkdown,
+  saveChatItemAsProjectSource,
+} from "@/features/chat/prompt-storage/prompt-storage-dialog";
 import { translate, useT, type TranslationKey } from "@/i18n";
 
 const RECENT_SLOT_NUMBERS = [1, 2, 3, 4, 5, 6] as const;
@@ -325,15 +331,21 @@ const SELECT_WITH_META =
   /mac/i.test(navigator.platform || navigator.userAgent);
 
 // Insertion line on the landing edge, drawn inside the row: a section's collapsible clips its
-// overflow, and the first and last rows are exactly where a row is dragged to.
+// overflow, and the first and last rows are exactly where a row is dragged to. A border, not a
+// filled bar: border widths snap to whole device pixels, so the line keeps one thickness at any
+// zoom or UI scale instead of rounding differently per row.
 const DROP_CUE_BASE =
-  "before:pointer-events-none before:absolute before:inset-x-2 before:z-10 before:h-0.5 before:rounded-full before:bg-primary before:content-['']";
+  "before:pointer-events-none before:absolute before:inset-x-2 before:z-10 before:h-0 before:border-t-[1.5px] before:border-primary before:content-['']";
 const DROP_CUE_TOP = `${DROP_CUE_BASE} before:top-0`;
-const DROP_CUE_BOTTOM = `${DROP_CUE_BASE} before:bottom-0`;
-// A row dropped onto a folder or section joins it, so the whole target is tinted and outlined.
-// Kept inside the box for the same clipping reason.
+// bottom-px: on the last row, DROP_ROW_HIT's extra pixel is clipped by the list.
+const DROP_CUE_BOTTOM = `${DROP_CUE_BASE} before:bottom-px`;
+// A row dropped onto a folder or section joins it, so the whole target is tinted and outlined,
+// with the same border as the line. Kept inside the box for the same clipping reason.
 const DROP_INTO_CUE =
-  "before:pointer-events-none before:absolute before:inset-x-1 before:inset-y-0 before:rounded-2xl before:bg-primary/8 before:ring-1 before:ring-inset before:ring-primary/70 before:content-['']";
+  "before:pointer-events-none before:absolute before:inset-x-1 before:inset-y-0 before:rounded-2xl before:bg-primary/8 before:border-[1.5px] before:border-primary before:content-['']";
+// Folder rows match their hover pill.
+const DROP_INTO_ROW_CUE =
+  "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:bottom-px before:rounded-full before:bg-primary/8 before:border-[1.5px] before:border-primary before:content-['']";
 // The menu keeps a 1px gap between rows. A pointer resting on that gap would hit the section
 // instead, which answers with its last slot, so each row's box reaches over the gap below it.
 const DROP_ROW_HIT = "pb-px -mb-px";
@@ -351,13 +363,13 @@ function landedOrder(
 
 // A closed section has no body to light, so its header takes the tint.
 const DROP_INTO_HEADER_CUE =
-  "rounded-full bg-primary/8 ring-1 ring-inset ring-primary/70";
+  "rounded-full bg-primary/8 outline-solid outline-[length:1.5px] outline-primary -outline-offset-[1.5px]";
 
 // The sort a list is on and its setter: a reorder switches a sorted list to Manual, or the
 // sort would undo the drop.
 type RowSort = {
-  value: SidebarChatSort;
-  set: (next: SidebarChatSort) => void;
+  value: SidebarChatSort | SidebarProjectSort;
+  set: (next: "manual") => void;
 };
 // The list a chat row is rendered in: its ids, for shift-click ranges and for the order a drag
 // rewrites; the sort a drop switches to Manual; and, where the list is a folder's or Recents',
@@ -446,6 +458,15 @@ const CHAT_SORT_OPTIONS: Array<{
   { value: "updated", key: "shell.organize.lastUpdated" },
   { value: "manual", key: "shell.organize.manualOrder" },
 ];
+const PROJECT_SORT_OPTIONS: Array<{
+  value: SidebarProjectSort;
+  key: TranslationKey;
+}> = [
+  { value: "updated", key: "shell.organize.lastUpdated" },
+  { value: "name", key: "shell.organize.name" },
+  { value: "created", key: "shell.organize.dateCreated" },
+  { value: "manual", key: "shell.organize.manualOrder" },
+];
 const ORGANIZE_OPTIONS: Array<{
   value: SidebarOrganizeBy;
   key: TranslationKey;
@@ -458,9 +479,6 @@ async function saveChatToProjectSources(
   item: SidebarItem,
   projectId: string,
 ): Promise<void> {
-  const { saveChatItemAsProjectSource } = await import(
-    "@/features/chat/prompt-storage/prompt-storage-dialog"
-  );
   await saveChatItemAsProjectSource(item, projectId);
 }
 
@@ -1097,6 +1115,8 @@ export function AppSidebar() {
   const setOrganizeBy = useSidebarOrganizationStore((s) => s.setOrganizeBy);
   const setChatSort = useSidebarOrganizationStore((s) => s.setChatSort);
   const setPinnedSort = useSidebarOrganizationStore((s) => s.setPinnedSort);
+  const projectSort = useSidebarOrganizationStore((s) => s.projectSort);
+  const setProjectSort = useSidebarOrganizationStore((s) => s.setProjectSort);
   const setManualOrder = useSidebarOrganizationStore((s) => s.setManualOrder);
   // With the Projects section on, a project chat lives in its folder and repeating it here would be
   // noise. With it off there are no folders, so Recents is where those chats go. Pinned chats are
@@ -1119,15 +1139,14 @@ export function AppSidebar() {
     () => new Set(pinnedProjectIds),
     [pinnedProjectIds],
   );
-  // Pinned chats, in pin order. A pinned project chat also stays in its folder.
+  // Pinned chats, in pin order. A pinned project chat shows here only.
   const pinnedChatItems = useMemo(() => {
     const byId = new Map(allChatItems.map((item) => [item.id, item]));
     return pinnedIds
       .map((id) => byId.get(id))
       .filter((item): item is SidebarItem => Boolean(item));
   }, [allChatItems, pinnedIds]);
-  // Chats per project, newest first. Pinned ones stay: a chat belongs to its
-  // project either way, and these rows are mirrored in Recents regardless.
+  // Chats per project, newest first. Pinned ones included, as they still count as activity.
   const chatsByProjectId = useMemo(() => {
     const map = new Map<string, SidebarItem[]>();
     for (const item of allChatItems) {
@@ -1169,13 +1188,17 @@ export function AppSidebar() {
     };
     const rest = projects
       .filter((p) => !pinnedProjectIdSet.has(p.id))
-      .sort((a, b) => lastActivityAt(b) - lastActivityAt(a));
-    return applyManualOrder(
-      rest,
-      manualOrder[PROJECT_ORDER_SCOPE],
-      (project) => project.id,
-    );
-  }, [projects, pinnedProjectIdSet, manualOrder, chatsByProjectId]);
+      .sort((a, b) =>
+        projectSort === "name"
+          ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+          : projectSort === "created"
+            ? b.createdAt - a.createdAt
+            : lastActivityAt(b) - lastActivityAt(a),
+      );
+    return projectSort === "manual"
+      ? applyManualOrder(rest, manualOrder[PROJECT_ORDER_SCOPE], (project) => project.id)
+      : rest;
+  }, [projects, pinnedProjectIdSet, manualOrder, chatsByProjectId, projectSort]);
   // Memoised for its identity, not for the slice. It feeds the rendered-row set the selection guard
   // depends on, and that effect sets state: React re-renders once to find the bail-out, which would
   // rebuild this array and schedule the effect again, without end.
@@ -1345,11 +1368,15 @@ export function AppSidebar() {
     for (const [projectId, items] of chatsByProjectId) {
       map.set(
         projectId,
-        sortChatItems(items, projectOrderScope(projectId), chatSort),
+        sortChatItems(
+          items.filter((item) => !pinnedIdSet.has(item.id)),
+          projectOrderScope(projectId),
+          chatSort,
+        ),
       );
     }
     return map;
-  }, [chatsByProjectId, sortChatItems, chatSort]);
+  }, [chatsByProjectId, sortChatItems, chatSort, pinnedIdSet]);
   // One id array per list, shared by every row in it. Built per row, these
   // would be N arrays of length N on each render.
   const recentRowIds = useMemo(
@@ -1864,6 +1891,7 @@ export function AppSidebar() {
       organizeBy,
       chatSort,
       pinnedSort,
+      projectSort,
       pinnedChatIds: pinnedIdSet,
       pinnedProjectIds: pinnedProjectIdSet,
       orders: {
@@ -1877,6 +1905,7 @@ export function AppSidebar() {
       organizeBy,
       chatSort,
       pinnedSort,
+      projectSort,
       pinnedIdSet,
       pinnedProjectIdSet,
       pinnedRowIds,
@@ -1946,6 +1975,10 @@ export function AppSidebar() {
       }
       if (effects.switchSort === "pinned") {
         setPinnedSort("manual");
+        toast.info(t("shell.organize.switchedToManual"));
+      }
+      if (effects.switchSort === "projects") {
+        setProjectSort("manual");
         toast.info(t("shell.organize.switchedToManual"));
       }
     };
@@ -2169,8 +2202,8 @@ export function AppSidebar() {
   // the list scroller add the rail width it does not lose, so both end on the same edge whether or
   // not the scrollbar takes space. Logical sides, since the rail moves under rtl.
   const rowPadding = usesDesktopTitlebar
-    ? "ps-[5px] pe-[calc(var(--sidebar-rail,0px)+5px)]"
-    : "ps-1.5 pe-[calc(var(--sidebar-rail,0px)+6px)]";
+    ? "ps-[calc(5px*var(--ui-space-scale,1))] pe-[calc(var(--sidebar-rail,0px)+5px*var(--ui-space-scale,1))]"
+    : "ps-1.5 pe-[calc(var(--sidebar-rail,0px)+6px*var(--ui-space-scale,1))]";
 
   // Inside the scroller the rail already occupies that space. The profile footer also uses this
   // padding deliberately: its width is independent of whether the recent-chat list has a scrollbar.
@@ -2222,6 +2255,18 @@ export function AppSidebar() {
           </span>
         </button>
       ),
+    },
+    library: {
+      icon: LibrariesIcon,
+      label: t("shell.navigation.library"),
+      active: pathname === "/library",
+      onClick: () => {
+        navigate({ to: "/library" });
+        closeMobileIfOpen();
+      },
+      onIntent: () => {
+        preloadSilently(router.preloadRoute({ to: "/library" }));
+      },
     },
     hub: {
       icon: DashboardCircleIcon,
@@ -2355,9 +2400,11 @@ export function AppSidebar() {
   const inlineNavIds = sidebarNav
     .filter((item) => navRowPinned(item))
     .map((item) => item.id);
+  // The mobile sheet shows labels regardless of the desktop pin state.
+  const sidebarRowsLabelled = isMobile || sidebarState !== "collapsed";
   // Mirrors ImagesWorkflowList's own test: it decides which row owns the highlight.
   const imagesWorkflowsListed =
-    sidebarState !== "collapsed" &&
+    sidebarRowsLabelled &&
     !(navRows.images.active && imagesPageMode === "train");
 
   const showSidebarBrand = true;
@@ -2788,9 +2835,6 @@ export function AppSidebar() {
     // The read runs inside the write: Safari drops the gesture across an
     // await, and a chord has no second one to fall back on.
     const copied = await copyToClipboardFrom(async () => {
-      const { buildChatItemMarkdown } = await import(
-        "@/features/chat/prompt-storage/prompt-storage-dialog"
-      );
       // A compare row is two threads: keep both, each under its model's name.
       const markdown = await buildChatItemMarkdown(item);
       if (!markdown) {
@@ -3093,6 +3137,7 @@ export function AppSidebar() {
     sortValue: SidebarChatSort;
     onSortChange: (next: SidebarChatSort) => void;
     includeOrganize?: boolean;
+    includeProjectSort?: boolean;
   }) {
     return (
       <NonModalDropdownMenu
@@ -3123,6 +3168,25 @@ export function AppSidebar() {
               }
             >
               {ORGANIZE_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem
+                  key={option.value}
+                  value={option.value}
+                  className={menuRadioItemClass}
+                >
+                  {t(option.key)}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </>
+        )}
+        {options.includeProjectSort && (
+          <>
+            <DropdownMenuLabel>{t("shell.organize.sortProjectsBy")}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={projectSort}
+              onValueChange={(value) => setProjectSort(value as SidebarProjectSort)}
+            >
+              {PROJECT_SORT_OPTIONS.map((option) => (
                 <DropdownMenuRadioItem
                   key={option.value}
                   value={option.value}
@@ -3848,7 +3912,7 @@ export function AppSidebar() {
             draggingRow?.id === project.id && "opacity-50",
             dropCueClass(order.scope, project.id),
             // Lit while a chat is over the folder row or any of the chats inside it.
-            dnd.ringLit(folderRingKey(project.id)) && DROP_INTO_CUE,
+            dnd.ringLit(folderRingKey(project.id)) && DROP_INTO_ROW_CUE,
           )}
           onContextMenu={() =>
             selectProjectForContextMenu(project.id)
@@ -4277,7 +4341,7 @@ export function AppSidebar() {
                     overlay={
                       id === "images" &&
                       !row.active &&
-                      sidebarState !== "collapsed" ? (
+                      sidebarRowsLabelled ? (
                         <ImagesNavDisclosure />
                       ) : undefined
                     }
@@ -4286,7 +4350,7 @@ export function AppSidebar() {
                     {id === "images" ? (
                       <ImagesWorkflowList
                         active={row.active}
-                        collapsed={sidebarState === "collapsed"}
+                        collapsed={!sidebarRowsLabelled}
                         onPick={(workflowId) => {
                           useImageWorkflowStore
                             .getState()
@@ -4414,7 +4478,9 @@ export function AppSidebar() {
         {/* Pinned: folders and chats in one list, in the order they were dropped into. */}
         {!isStudioRoute && !showTrainingRecents && pinnedRows.length > 0 && (
           <Collapsible open={pinnedOpen} onOpenChange={setPinnedOpen} asChild>
-            <SidebarGroup className="group/sb-section group-data-[collapsible=icon]:hidden px-0 py-0">
+            {/* While open, the next section rides up over the tail strip below, so the strip adds
+                no space. */}
+            <SidebarGroup className="group/sb-section group-data-[collapsible=icon]:hidden px-0 py-0 data-[state=open]:-mb-[calc(8px*var(--ui-space-scale,1))]">
               {/* The header takes drops too: above the first row, or into a closed section. */}
               <SidebarGroupLabel
                 className={cn(
@@ -4482,7 +4548,8 @@ export function AppSidebar() {
                     <SidebarMenuItem
                       aria-hidden
                       className={cn(
-                        "relative h-[calc(8px*var(--ui-space-scale,1))]",
+                        // z-[1]: above the next section's header, which overlaps it.
+                        "relative z-[1] h-[calc(8px*var(--ui-space-scale,1))]",
                         dropCueClass(SIDEBAR_TAIL_SCOPE, "pinned"),
                       )}
                       {...dnd.dropZoneProps({
@@ -4550,6 +4617,7 @@ export function AppSidebar() {
                   {renderSidebarHeaderMenu({
                     ariaLabel: t("shell.organize.organizeProjects"),
                     includeOrganize: true,
+                    includeProjectSort: true,
                     sortLabel: t("shell.organize.sortChatsBy"),
                     sortValue: chatSort,
                     onSortChange: setChatSort,
@@ -4571,6 +4639,7 @@ export function AppSidebar() {
                           scope: PROJECT_ORDER_SCOPE,
                           orderedIds: projectRowIds,
                           section: "projects",
+                          sort: { value: projectSort, set: setProjectSort },
                         }),
                       )}
                       {/* Every project is pinned, so the section is drawn with nothing in it. The
@@ -4842,7 +4911,7 @@ export function AppSidebar() {
                   <HugeiconsIcon
                     icon={BadgeInfoIcon}
                     strokeWidth={1.75}
-                    className="size-[21px] text-nav-fg"
+                    className="size-[calc(21px*var(--ui-space-scale,1))] text-nav-fg"
                   />
                 </span>
                 <div className="flex min-w-0 flex-col gap-px leading-tight group-data-[collapsible=icon]:hidden">
@@ -4860,7 +4929,7 @@ export function AppSidebar() {
                   className="ml-auto flex size-[calc(32px*var(--ui-space-scale,1))] shrink-0 items-center justify-center text-muted-foreground group-data-[collapsible=icon]:hidden"
                 >
                   <ArrowRightIcon
-                    className="size-[17px]"
+                    className="size-[calc(17px*var(--ui-space-scale,1))]"
                     strokeWidth={1.75}
                   />
                 </span>
@@ -4884,7 +4953,7 @@ export function AppSidebar() {
               side="top"
               align="center"
               sideOffset={8}
-              className="app-user-menu menu-soft-surface-up ring-0 w-[16rem] rounded-[20px] border border-transparent px-2.5 py-2.5 font-heading dark:border-[rgb(255_255_255_/_calc(0.05*var(--contrast-edge-gain,1)))]"
+              className="app-user-menu menu-soft-surface-up ring-0 w-[calc(16rem*var(--ui-space-scale,1))] rounded-[20px] border border-transparent px-2.5 py-2.5 font-heading dark:border-[rgb(255_255_255_/_calc(0.05*var(--contrast-edge-gain,1)))]"
               trigger={(triggerRef) => (
                 <SidebarMenuButton
                   ref={triggerRef}
@@ -4932,7 +5001,7 @@ export function AppSidebar() {
                         key={item.id}
                         onSelect={() => useSettingsDialogStore.getState().openDialog("api-keys")}
                       >
-                        <HugeiconsIcon icon={Globe02Icon} strokeWidth={1.75} className="size-[18px]" />
+                        <HugeiconsIcon icon={Globe02Icon} strokeWidth={1.75} className="size-[calc(18px*var(--ui-space-scale,1))]" />
                         <span>{t("shell.navigation.api")}</span>
                       </DropdownMenuItem>
                     );
@@ -5027,7 +5096,7 @@ export function AppSidebar() {
               <HugeiconsIcon
                 icon={Settings02Icon}
                 strokeWidth={1.5}
-                className="!size-[18px]"
+                className="!size-[calc(18px*var(--ui-space-scale,1))]"
               />
             </button>
           </SidebarMenuItem>

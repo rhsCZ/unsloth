@@ -332,18 +332,22 @@ def test_chat_exports_await_native_saves_and_markdown_uses_shared_helper():
         "features/chat/components/project-menu-items.tsx",
         "features/library/chats/chats-library.tsx",
     } <= set(callers), sorted(callers)
-    # Every export call that sits in a try swallows a cancelled native save in that try's own
-    # catch; a call outside any try (exportThreads, the format switch) hands the rejection to
-    # its caller, which is checked in turn.
+    # Each export call's own handler (a chained .catch, or the catch of the try it is awaited
+    # in) swallows a cancelled native save; a call with neither is a pass-through that hands
+    # the rejection to its caller, which is checked in turn.
+    calls = [(name, *call) for name, text in callers.items() for call in _export_calls(text)]
     unguarded = [
-        f"{name}: {call}"
-        for name, text in callers.items()
-        for call, catch in _export_calls_and_catches(text)
-        if catch is not None and "isDownloadCancelled(" not in catch
+        f"{name}: {label}"
+        for name, label, handler, _ in calls
+        if handler is not None and "isDownloadCancelled(" not in handler
     ]
     assert (
         not unguarded
     ), f"chat exports that would report a cancelled save as a failure: {unguarded}"
+    # A save neither awaited, returned nor given its own .catch runs alongside the next one,
+    # and its rejection escapes every try around it.
+    floating = [f"{name}: {label}" for name, label, _, handled in calls if not handled]
+    assert not floating, f"chat exports that are not awaited: {floating}"
     # Saves run one at a time: overlapping native save dialogs are the failure this guards.
     overlapping = [
         f"{name}: {head}"
@@ -1180,13 +1184,37 @@ def _chat_export_callers() -> dict[str, str]:
     return {name: text for name, text in sources.items() if pattern.search(text)}
 
 
-def _export_calls_and_catches(text: str):
-    """Each export call with the catch block of the innermost try around it, or None."""
+def _promise_catch(text: str, call_end: int):
+    """The handler of a `.catch(...)` chained onto the call ending at `call_end`, or None."""
+    at = call_end
+    while True:
+        link = re.match(r"\s*\.(then|finally|catch)\s*\(", text[at:])
+        if link is None:
+            return None
+        open_at = at + link.end() - 1
+        group_end = _block_end(text, open_at)
+        if link.group(1) == "catch":
+            return text[open_at:group_end]
+        at = group_end
+
+
+def _export_calls(text: str):
+    """(label, handler, awaited) for each export call in `text`.
+
+    `handler` is a `.catch(...)` chained onto the call, else the catch of the innermost try
+    around it if the call is awaited or returned there, else None (a pass-through whose
+    caller is checked). `awaited` says the promise is awaited or returned, so a loop runs one
+    save at a time and a try around it sees the rejection.
+    """
     _, pattern = _chat_export_sources()
     tries = list(_tries(text))
     for call in pattern.finditer(text):
+        handler = _promise_catch(text, _block_end(text, call.end() - 1))
+        awaited = re.search(r"(?:\bawait|\breturn|=>)\s*$", text[: call.start()]) is not None
+        if handler is None and awaited:
+            handler = _innermost_catch(tries, call.start())
         line = text.count("\n", 0, call.start()) + 1
-        yield f"line {line} {call.group(0)}", _innermost_catch(tries, call.start())
+        yield f"line {line} {call.group(0)}", handler, awaited or handler is not None
 
 
 def _call_arguments(text: str, heads):

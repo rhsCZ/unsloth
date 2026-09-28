@@ -322,8 +322,25 @@ def test_chat_exports_await_native_saves_and_markdown_uses_shared_helper():
     assert "catch (error)" not in download_blob
     assert "isDownloadCancelled(error)" in prompt_storage
 
-    for source in (app_sidebar, thread, thread_sidebar, shared_composer, data_tab, projects):
+    for source in (thread, thread_sidebar, shared_composer, data_tab, projects):
         assert "isDownloadCancelled(error)" in source
+    # #12122 moved the sidebar's chat export into the Library and the project menu, so the
+    # check follows the export calls rather than a fixed list of files: every file that
+    # calls a chat export swallows a cancelled native save instead of toasting a failure.
+    callers = _chat_export_callers()
+    assert {
+        "features/chat/components/project-menu-items.tsx",
+        "features/library/chats/chats-library.tsx",
+    } <= set(callers), sorted(callers)
+    # A pass-through helper (exportThreads) catches nothing, so the rejection reaches its caller.
+    unguarded = sorted(
+        name
+        for name, text in callers.items()
+        if "catch" in text and "isDownloadCancelled(" not in text
+    )
+    assert (
+        not unguarded
+    ), f"chat exports that would report a cancelled save as a failure: {unguarded}"
     assert "const handleExport = useCallback(async () =>" in prompt_storage
     assert prompt_storage.count("await export") >= 12
     assert "await Promise.all(" not in app_sidebar
@@ -1064,6 +1081,24 @@ RAIL_WIDTH_SCALED = (
 )
 # The header's first column tracks the same variable, so the header divider stays on the rail's.
 HEADER_COLUMNS = "grid-cols-[minmax(0,var(--media-rail-width,408px))_minmax(13rem,1fr)]"
+
+
+_CHAT_EXPORT_CALL = re.compile(
+    r"(?<!function )\b(?:exportThreads|exportConversationByFormat|exportProjectConversations"
+    r"|exportBulkConversationsMerged|exportBulkConversationsSeparate)\("
+)
+
+
+def _chat_export_callers() -> dict[str, str]:
+    """Frontend sources that call a chat export, keyed by path under src; definitions excluded."""
+    callers = {}
+    for path in sorted(FRONTEND.rglob("*.ts*")):
+        if ".test." in path.name:
+            continue
+        text = path.read_text(encoding = "utf-8")
+        if _CHAT_EXPORT_CALL.search(text):
+            callers[path.relative_to(FRONTEND).as_posix()] = text
+    return callers
 
 
 def _ui_source(path) -> str:

@@ -325,26 +325,35 @@ def test_chat_exports_await_native_saves_and_markdown_uses_shared_helper():
     for source in (thread, thread_sidebar, shared_composer, data_tab, projects):
         assert "isDownloadCancelled(error)" in source
     # #12122 moved the sidebar's chat export into the Library and the project menu, so the
-    # check follows the export calls rather than a fixed list of files: every file that
-    # calls a chat export swallows a cancelled native save instead of toasting a failure.
+    # checks follow the export calls rather than a fixed list of files.
     callers = _chat_export_callers()
     assert {
+        "features/chat/chat-page.tsx",
         "features/chat/components/project-menu-items.tsx",
         "features/library/chats/chats-library.tsx",
     } <= set(callers), sorted(callers)
-    # A pass-through helper (exportThreads) catches nothing, so the rejection reaches its caller.
-    unguarded = sorted(
-        name
+    # Every export call that sits in a try swallows a cancelled native save in that try's own
+    # catch; a call outside any try (exportThreads, the format switch) hands the rejection to
+    # its caller, which is checked in turn.
+    unguarded = [
+        f"{name}: {call}"
         for name, text in callers.items()
-        if "catch" in text and "isDownloadCancelled(" not in text
-    )
+        for call, catch in _export_calls_and_catches(text)
+        if catch is not None and "isDownloadCancelled(" not in catch
+    ]
     assert (
         not unguarded
     ), f"chat exports that would report a cancelled save as a failure: {unguarded}"
+    # Saves run one at a time: overlapping native save dialogs are the failure this guards.
+    overlapping = [
+        f"{name}: {head}"
+        for name, text in callers.items()
+        for head, body in _call_arguments(text, ("Promise.all(", ".forEach("))
+        if _chat_export_sources()[1].search(body)
+    ]
+    assert not overlapping, f"chat exports started concurrently: {overlapping}"
     assert "const handleExport = useCallback(async () =>" in prompt_storage
     assert prompt_storage.count("await export") >= 12
-    assert "await Promise.all(" not in app_sidebar
-    assert "for (const id of ids)" in app_sidebar
     assert prompt_storage.count("await downloadBlob(") >= 5
 
     assert "await downloadBlob(zipped," in prompt_storage
@@ -1083,22 +1092,109 @@ RAIL_WIDTH_SCALED = (
 HEADER_COLUMNS = "grid-cols-[minmax(0,var(--media-rail-width,408px))_minmax(13rem,1fr)]"
 
 
-_CHAT_EXPORT_CALL = re.compile(
-    r"(?<!function )\b(?:exportThreads|exportConversationByFormat|exportProjectConversations"
-    r"|exportBulkConversationsMerged|exportBulkConversationsSeparate)\("
+_CHAT_EXPORT_NAME = (
+    r"export(?:Threads|Conversation[A-Za-z]*|ProjectConversations?|BulkConversations[A-Za-z]*)"
+)
+_FUNCTION_HEAD = re.compile(
+    r"(?:\bfunction\s+(\w+)\s*\(|\bconst\s+(\w+)\s*=\s*(?:useCallback\(\s*)?async\s*\()"
 )
 
 
-def _chat_export_callers() -> dict[str, str]:
-    """Frontend sources that call a chat export, keyed by path under src; definitions excluded."""
-    callers = {}
-    for path in sorted(FRONTEND.rglob("*.ts*")):
-        if ".test." in path.name:
+def _calls(names) -> re.Pattern:
+    """A call to one of `names`, not its definition and not a method of something else."""
+    return re.compile(r"(?<!function )(?<![\w.])(" + "|".join(names) + r")\(")
+
+
+def _block_end(text: str, open_at: int) -> int:
+    """Index just past the brace or paren group opening at `open_at`."""
+    pairs = {"{": "}", "(": ")"}
+    closer, depth = pairs[text[open_at]], 0
+    for i in range(open_at, len(text)):
+        if text[i] == text[open_at]:
+            depth += 1
+        elif text[i] == closer:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(text)
+
+
+def _tries(text: str):
+    """(start, end of try body, catch block text or None) for each try in `text`."""
+    for match in re.finditer(r"\btry\s*\{", text):
+        body_end = _block_end(text, match.end() - 1)
+        catch = re.match(r"\s*catch\s*(?:\([^)]*\))?\s*\{", text[body_end:])
+        catch_text = None
+        if catch is not None:
+            open_at = body_end + catch.end() - 1
+            catch_text = text[open_at : _block_end(text, open_at)]
+        yield match.start(), body_end, catch_text
+
+
+def _innermost_catch(tries, at: int):
+    around = [t for t in tries if t[0] < at < t[1]]
+    return max(around, key = lambda t: t[0])[2] if around else None
+
+
+def _functions(text: str):
+    """(name, body start, body end) for function declarations and async arrow consts."""
+    for match in _FUNCTION_HEAD.finditer(text):
+        params_end = _block_end(text, match.end() - 1)
+        body = text.find("{", params_end)
+        if body == -1:
             continue
-        text = path.read_text(encoding = "utf-8")
-        if _CHAT_EXPORT_CALL.search(text):
-            callers[path.relative_to(FRONTEND).as_posix()] = text
-    return callers
+        yield match.group(1) or match.group(2), body, _block_end(text, body)
+
+
+@functools.lru_cache(maxsize = 1)
+def _chat_export_sources():
+    """Frontend sources and the export names they reach, wrappers included.
+
+    A function whose body calls an export outside any try hands the rejection to its own
+    caller, so it is an export too: chat-page's handleExport reaches the direct exporters
+    through exportProjectChatItem and exportProjectConversation.
+    """
+    sources = {}
+    for path in sorted(FRONTEND.rglob("*.ts*")):
+        if ".test." not in path.name:
+            sources[path.relative_to(FRONTEND).as_posix()] = path.read_text(encoding = "utf-8")
+    names = {_CHAT_EXPORT_NAME}
+    while True:
+        pattern, grown = _calls(sorted(names)), set(names)
+        for text in sources.values():
+            tries = list(_tries(text))
+            for name, start, end in _functions(text):
+                if any(
+                    _innermost_catch(tries, call.start()) is None
+                    for call in pattern.finditer(text, start, end)
+                ):
+                    grown.add(name)
+        if grown == names:
+            return sources, pattern
+        names = grown
+
+
+def _chat_export_callers() -> dict[str, str]:
+    """Frontend sources that call a chat export or a wrapper of one, keyed by path under src."""
+    sources, pattern = _chat_export_sources()
+    return {name: text for name, text in sources.items() if pattern.search(text)}
+
+
+def _export_calls_and_catches(text: str):
+    """Each export call with the catch block of the innermost try around it, or None."""
+    _, pattern = _chat_export_sources()
+    tries = list(_tries(text))
+    for call in pattern.finditer(text):
+        line = text.count("\n", 0, call.start()) + 1
+        yield f"line {line} {call.group(0)}", _innermost_catch(tries, call.start())
+
+
+def _call_arguments(text: str, heads):
+    """(head, argument text) for each call to one of `heads`."""
+    for head in heads:
+        for match in re.finditer(re.escape(head), text):
+            open_at = match.end() - 1
+            yield head, text[open_at : _block_end(text, open_at)]
 
 
 def _ui_source(path) -> str:

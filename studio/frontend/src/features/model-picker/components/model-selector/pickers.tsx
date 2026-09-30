@@ -25,7 +25,9 @@ import {
   listGgufVariants,
   listRecommendedFolders,
   listScanFolders,
+  listLoras,
   removeScanFolder,
+  revealFineTunedModel,
 } from "@/features/chat";
 import {
   chatModelLoaded,
@@ -69,6 +71,8 @@ import {
   scanFolderStatusCopy,
   useDownloadManagerStore,
   useHfTokenStore,
+  HubFailureHint,
+  useHubAvailability,
   useOnlineStatus,
   pendingDrafterPresentation,
 } from "@/features/hub";
@@ -215,6 +219,7 @@ import {
   matchesFormatFilter,
   orderRecommendedRows,
   paramsFromId,
+  recommendedEmptyState,
   searchRowFitsDevice,
   searchableRecommendedIds,
   type CuratedBudget,
@@ -511,11 +516,15 @@ function formatBytes(bytes: number): string {
 const CAPABILITY_BADGES: {
   key: keyof ModelCapabilities;
   title: string;
+  /** Glyph colour, one per capability like the vision badge's indigo, so the kinds tell apart at a glance. */
+  tone: string;
   Glyph: (props: { className: string }) => ReactNode;
 }[] = [
   {
     key: "videoGen",
     title: "Generates video",
+    // Warm, at the vision indigo's lightness and chroma: amber-300 outshone every other tag.
+    tone: "text-[oklch(0.5_0.1_55)] dark:text-[oklch(0.78_0.09_60)]",
     Glyph: (props) => (
       <HugeiconsIcon icon={FlimSlateIcon} strokeWidth={1.8} {...props} />
     ),
@@ -523,6 +532,8 @@ const CAPABILITY_BADGES: {
   {
     key: "imageGen",
     title: "Generates images",
+    // Pink, as the Hub tags diffusion models.
+    tone: "text-pink-700 dark:text-pink-300",
     Glyph: (props) => (
       <HugeiconsIcon icon={Image03Icon} strokeWidth={1.8} {...props} />
     ),
@@ -532,6 +543,9 @@ const CAPABILITY_BADGES: {
     // Direction-neutral, unlike the two above: `audio` covers ASR and classification as well as
     // synthesis, so a Whisper row would claim to generate what it consumes.
     title: "Audio",
+    // Teal, not the Hub's rose, which is too close to the image pink at this size; held to the
+    // vision indigo's lightness and chroma, as sky-300 read brighter than the tags beside it.
+    tone: "text-[oklch(0.5_0.08_190)] dark:text-[oklch(0.78_0.08_190)]",
     Glyph: (props) => (
       <HugeiconsIcon icon={AudioWave01Icon} strokeWidth={1.8} {...props} />
     ),
@@ -562,12 +576,16 @@ function CapabilityIcons({ caps }: { caps: ModelCapabilities }) {
   const scope = useContext(CapabilityScope);
   return (
     <>
-      {visibleCapabilityBadges(caps, scope).map(({ key, title, Glyph }) => (
+      {visibleCapabilityBadges(caps, scope).map(({ key, title, tone, Glyph }) => (
+        // The vision badge's pill (same height and px-1.5), so every glyph tag in the row is one width.
         <span
           key={key}
           title={title}
           aria-label={title}
-          className="flex size-[calc(18px*var(--ui-space-scale,1))] shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground"
+          className={cn(
+            "flex h-[calc(18px*var(--ui-space-scale,1))] shrink-0 items-center justify-center rounded-md border border-border px-1.5",
+            tone,
+          )}
         >
           <Glyph className="size-3" />
         </span>
@@ -948,17 +966,17 @@ const META_COLUMN = {
   // Fits "UD-Q4_K_XL"; a hard cap, so longer quants clip.
   quant: "min-[560px]:w-[7.2em]",
   // Each width below is the widest set its scope can draw: anything wider makes min-w-min expand the
-  // slot and shift every column after it. This slot holds capability glyphs (18px), the vision badge
-  // (24px) and the "on disk" mark (14px), gap-1 between them; scope draws no glyph.
-  badge: "min-w-min min-[560px]:w-[calc(24px*var(--ui-space-scale,1))]",
-  // One glyph plus the disk mark (18 + 4 + 14).
-  badgeMid: "min-w-min min-[560px]:w-[calc(36px*var(--ui-space-scale,1))]",
+  // slot and shift every column after it. This slot holds capability glyphs and the vision badge
+  // (both 26px pills) and the "on disk" mark (14px), gap-1 between them; scope draws no glyph.
+  badge: "min-w-min min-[560px]:w-[calc(26px*var(--ui-space-scale,1))]",
+  // One glyph plus the disk mark (26 + 4 + 14).
+  badgeMid: "min-w-min min-[560px]:w-[calc(44px*var(--ui-space-scale,1))]",
   // On Device draws the vision badge (26px) and, since partials are listed, the partial mark
   // (14px) beside it. 44px is that pair with its gap: reserving only the badge let a row drawing
   // both grow past the slot and carry its quant chip 18px left of every other row.
   badgeDevice: "min-w-min min-[560px]:w-[calc(44px*var(--ui-space-scale,1))]",
-  // Hub draws the disk mark and no vision badge (18+4+14). A second glyph grows it via min-w-min.
-  badgeWide: "min-w-min min-[560px]:w-[calc(36px*var(--ui-space-scale,1))]",
+  // Hub draws the disk mark and no vision badge (26+4+14). A second glyph grows it via min-w-min.
+  badgeWide: "min-w-min min-[560px]:w-[calc(44px*var(--ui-space-scale,1))]",
   // The fit mark (Hub rows), one 18px glyph.
   vram: "min-w-min min-[560px]:w-[calc(18px*var(--ui-space-scale,1))]",
   // Device rows reserve the slot rather than hug the chip. This is the last variable column, so
@@ -972,6 +990,21 @@ const META_COLUMN = {
   // The format dot that leads the row; the name lives in its tooltip.
   format: "min-[560px]:w-[calc(14px*var(--ui-space-scale,1))]",
 } as const;
+
+const downloadedRowButtonClassName =
+  "bg-transparent pr-1 hover:bg-transparent focus-visible:bg-transparent dark:bg-transparent dark:hover:bg-transparent dark:focus-visible:bg-transparent";
+// Not focus-within: the dots menu returns focus to its trigger on close, so the row stayed lit
+// after the pointer left. A row carrying a memory bar is two lines tall and the shell paints
+// the background, so the radius relaxes with it or the row renders as a stadium.
+const downloadedRowShellClassName = (
+  selected: boolean,
+  hasMemoryBar = false,
+) =>
+  cn(
+    "group flex items-center transition-colors hover:bg-sidebar-accent has-[:focus-visible]:bg-sidebar-accent has-[[data-state=open]]:bg-sidebar-accent",
+    hasMemoryBar ? "rounded-2xl" : "rounded-full",
+    selected && "bg-sidebar-accent",
+  );
 
 // One gutter for every row, gear or no gear, so the columns never shift by a button; the
 // buttons show on hover or while their menu is open.
@@ -2939,6 +2972,7 @@ export function HubModelPicker({
   const debouncedQuery = useDebouncedValue(query);
   // Shared Hub search stack so the picker and Hub run one implementation. Scoped to unsloth like the old listing.
   const online = useOnlineStatus();
+  const { phase: hubPhase } = useHubAvailability();
   // Sanitize to anonymous on a malformed token, matching the Hub page.
   const accessToken = hfApiToken(hfToken);
   // Recommended section: a live unsloth listing sorted by the dropdown, the same sort that drives search results.
@@ -2951,6 +2985,8 @@ export function HubModelPicker({
     fetchMore,
     scannedCount,
     hasMore,
+    error: searchError,
+    retry: retrySearch,
   } = useHubModelSearch(debouncedQuery, {
     ownerScope: "unsloth",
     sortBy: recommendedSort,
@@ -4784,6 +4820,16 @@ export function HubModelPicker({
     [visibleCachedModelRows, pinnedSet],
   );
 
+  // Pinned fine-tunes leave the Fine-tuned section; both hide under a task filter.
+  const pinnedFineTunedRows = useMemo(
+    () => (task ? [] : fineTunedRows.filter((m) => pinnedSet.has(pinKey(m.id)))),
+    [task, fineTunedRows, pinnedSet],
+  );
+  const unpinnedFineTunedRows = useMemo(
+    () => fineTunedRows.filter((m) => !pinnedSet.has(pinKey(m.id))),
+    [fineTunedRows, pinnedSet],
+  );
+
   const pinnedRows = useMemo(() => {
     const rank = makePinRank(pinnedIds);
     const rows = [
@@ -4791,16 +4837,24 @@ export function HubModelPicker({
         key: pinKey(entry.repoId, entry.quant),
         entry,
         model: null,
+        fineTuned: null,
       })),
       ...pinnedCachedModelRows.map((model) => ({
         key: pinKey(model.repo_id),
         entry: null,
         model,
+        fineTuned: null,
+      })),
+      ...pinnedFineTunedRows.map((fineTuned) => ({
+        key: pinKey(fineTuned.id),
+        entry: null,
+        model: null,
+        fineTuned,
       })),
     ];
     rows.sort((a, b) => rank(a.key) - rank(b.key));
     return rows;
-  }, [pinnedIds, pinnedQuants, pinnedCachedModelRows]);
+  }, [pinnedIds, pinnedQuants, pinnedCachedModelRows, pinnedFineTunedRows]);
 
   // A repo whose only quant is pinned moves its sole-quant row into Pinned instead of showing
   // twice. Multi-quant repos stay, since their row picks the other quants.
@@ -5185,20 +5239,18 @@ export function HubModelPicker({
       return keys;
     }
 
-    // Pinned rows sit above the Unsloth heading on the On Device tab.
-    if (
-      section === "downloaded" &&
-      cachedReady &&
-      !pinnedCollapsed &&
-      pinnedRows.length > 0
-    ) {
+    // Pinned rows sit above the Unsloth heading on the On Device tab. They render before the
+    // cache scan settles, so their keys do not wait for it either.
+    if (section === "downloaded" && !pinnedCollapsed && pinnedRows.length > 0) {
       keys.push(
         ...pinnedRows.map((row) =>
           row.entry
             ? pinnedSoleQuantRows.has(row.key)
               ? makeModelOptionKey("downloaded-gguf", row.entry.repoId)
               : makeModelOptionKey("pinned-quant", row.key)
-            : makeModelOptionKey("downloaded-model", row.model.repo_id),
+            : row.model
+              ? makeModelOptionKey("downloaded-model", row.model.repo_id)
+              : makeModelOptionKey("lora", row.fineTuned.id),
         ),
       );
     }
@@ -5270,7 +5322,9 @@ export function HubModelPicker({
 
     // Fine-tuned models sit below downloaded, above custom folders.
     if (section === "downloaded" && !fineTunedCollapsed) {
-      keys.push(...fineTunedRows.map((m) => makeModelOptionKey("lora", m.id)));
+      keys.push(
+        ...unpinnedFineTunedRows.map((m) => makeModelOptionKey("lora", m.id)),
+      );
     }
 
     // Custom folders sit right below the downloaded models on On Device.
@@ -5318,7 +5372,7 @@ export function HubModelPicker({
     pinnedCollapsed,
     pinnedSoleQuantRows,
     downloadedCollapsed,
-    fineTunedRows,
+    unpinnedFineTunedRows,
     fineTunedCollapsed,
     filteredRecommendedIds,
     searchRowIds,
@@ -5557,6 +5611,16 @@ export function HubModelPicker({
   const showDownloaded = section === "downloaded";
   const showCustom = section === "downloaded";
   const showRecommendedSection = !showHfSection && section === "recommended";
+  const recommendedEmpty = recommendedEmptyState({
+    isLoading: recommendedSearch.isLoading,
+    error: recommendedSearch.error,
+    hubPhase,
+  });
+  const searchEmpty = recommendedEmptyState({
+    isLoading,
+    error: searchError,
+    hubPhase,
+  });
   const downloadedEmpty =
     pinnedRows.length === 0 &&
     visibleCachedGguf.length === 0 &&
@@ -5566,7 +5630,7 @@ export function HubModelPicker({
     sortedLmStudio.length === 0 &&
     sortedLocalDir.length === 0 &&
     // Fine-tuned models are on-device too: do not show the empty state above a non-empty Fine-tuned section.
-    fineTunedRows.length === 0;
+    unpinnedFineTunedRows.length === 0;
 
   // Sort dropdown inline right of the section toggle; options depend on the tab and stay visible
   // while searching. Fixed width matches the Search Hub button.
@@ -5669,21 +5733,6 @@ export function HubModelPicker({
     otherCachedGguf.length > 0 ||
     otherCachedModelRows.length > 0 ||
     otherAdditionalOnDeviceModels.length > 0;
-
-  const downloadedRowButtonClassName =
-    "bg-transparent pr-1 hover:bg-transparent focus-visible:bg-transparent dark:bg-transparent dark:hover:bg-transparent dark:focus-visible:bg-transparent";
-  // Not focus-within: the dots menu returns focus to its trigger on close, so the row stayed lit
-  // after the pointer left. A row carrying a memory bar is two lines tall and the shell paints
-  // the background, so the radius relaxes with it or the row renders as a stadium.
-  const downloadedRowShellClassName = (
-    selected: boolean,
-    hasMemoryBar = false,
-  ) =>
-    cn(
-      "group flex items-center transition-colors hover:bg-sidebar-accent has-[:focus-visible]:bg-sidebar-accent has-[[data-state=open]]:bg-sidebar-accent",
-      hasMemoryBar ? "rounded-2xl" : "rounded-full",
-      selected && "bg-sidebar-accent",
-    );
 
   // A draggable Pinned row: faded while carried, lined where it would land.
   const renderPinnedDragRow = (
@@ -6618,9 +6667,12 @@ export function HubModelPicker({
           ref={scrollRef}
           onScroll={(e) => updateListFades(e.currentTarget)}
           className={cn(
-            // The list sits within the menu padding so gaps match; scroll-py and symmetric px keep the
-            // focus ring off the overflow clip edges during keyboard nav.
-            "model-list-scroll max-h-[calc(335px*var(--ui-space-scale,1))] overflow-y-auto scroll-py-1.5 px-0.5 mr-1",
+            // The list sits within the menu padding so gaps match; scroll-py and the side padding keep
+            // the focus ring off the overflow clip edges during keyboard nav. The panel is padded 16px
+            // on the left but 8px on the right (16px with external providers), so the scroller can run
+            // near the edge for its scrollbar; the right inset makes up the difference, and a row's
+            // hover pill sits 18px from both edges.
+            "model-list-scroll max-h-[calc(335px*var(--ui-space-scale,1))] overflow-y-auto scroll-py-1.5 pl-0.5 pr-1.5 mr-1 in-data-[external=true]:pr-0.5 in-data-[external=true]:mr-0",
             listScrolled && "is-scrolled",
             listMoreBelow && "is-bottom-faded",
           )}
@@ -6757,9 +6809,26 @@ export function HubModelPicker({
                         renderPinnedDragRow(
                           pinnedDrag,
                           row.key,
-                          row.entry
-                            ? renderPinnedQuantRow(row.entry)
-                            : renderDownloadedModelRow(row.model),
+                          row.entry ? (
+                            renderPinnedQuantRow(row.entry)
+                          ) : row.model ? (
+                            renderDownloadedModelRow(row.model)
+                          ) : (
+                            <FineTunedRows
+                              adapters={[row.fineTuned]}
+                              value={value}
+                              loadedModelId={loadedModelId}
+                              activeGgufVariant={activeGgufVariant}
+                              onSelect={onSelect}
+                              onConfigure={onConfigure}
+                              onModelsChange={onModelsChange}
+                              deleteDisabled={deleteDisabled}
+                              loraModelList={hubModelList}
+                              expandedGguf={expandedGguf}
+                              setExpandedGguf={setExpandedGguf}
+                              gpu={inferenceGpu}
+                            />
+                          ),
                         ),
                       )}
                   </>
@@ -6937,9 +7006,9 @@ export function HubModelPicker({
                         </button>
                       </div>
                     </div>
-                    {!fineTunedCollapsed && fineTunedRows.length > 0 && (
+                    {!fineTunedCollapsed && unpinnedFineTunedRows.length > 0 && (
                       <FineTunedRows
-                        adapters={fineTunedRows}
+                        adapters={unpinnedFineTunedRows}
                         value={value}
                         loadedModelId={loadedModelId}
                         activeGgufVariant={activeGgufVariant}
@@ -7615,14 +7684,20 @@ export function HubModelPicker({
                     {showNpuBrowse ? (
                       <ListLabel divider={!npuBrowseFolded}>Unsloth</ListLabel>
                     ) : null}
-                    {recommendedSearch.isLoading &&
-                    recommendedRows.length === 0 ? (
+                    {recommendedRows.length === 0 &&
+                    recommendedEmpty === "loading" ? (
                       <div className="flex items-center gap-2 px-5 py-3">
                         <Spinner className="size-3 text-muted-foreground" />
                         <span className="text-xs text-muted-foreground">
                           Loading models…
                         </span>
                       </div>
+                    ) : recommendedRows.length === 0 &&
+                      recommendedEmpty === "failed" ? (
+                      <HubFailureHint
+                        message={recommendedSearch.error}
+                        onRetry={recommendedSearch.retry}
+                      />
                     ) : recommendedRows.length === 0 ? (
                       <div className="px-2.5 py-2 text-xs text-muted-foreground">
                         No models found.
@@ -7862,13 +7937,15 @@ export function HubModelPicker({
                 formatFilter !== "npu" ? (
                   <>
                     {searchRowIds.length === 0 && !isLoading ? (
-                      filteredRecommendedIds.length === 0 ? (
+                      filteredRecommendedIds.length > 0 ? null : searchEmpty === "failed" ? (
+                        <HubFailureHint message={searchError} onRetry={retrySearch} />
+                      ) : (
                         <div className="px-2.5 py-2 text-xs text-muted-foreground">
                           {communityDiscoveryEnabled
                             ? "No matching models."
                             : "No matching Unsloth models."}
                         </div>
-                      ) : null
+                      )
                     ) : (
                       searchRowIds.map((id) => {
                         const vram = vramMap.get(id);
@@ -8083,6 +8160,24 @@ function FineTunedRows({
     systemRamAvailableGb: number;
   };
 }) {
+  const pinnedKeys = usePinnedModelsStore((s) => s.pinned);
+  const togglePinned = usePinnedModelsStore((s) => s.togglePinned);
+  const unpinRepo = usePinnedModelsStore((s) => s.unpinRepo);
+  const replacePinned = usePinnedModelsStore((s) => s.replacePinned);
+  // A GGUF export's id is its first file, so deleting a variant can change or end it.
+  const repinExportedGguf = async (oldId: string) => {
+    const folder = oldId.slice(0, Math.max(oldId.lastIndexOf("/"), oldId.lastIndexOf("\\")));
+    const { loras } = await listLoras();
+    const next = loras.find(
+      (lora) =>
+        lora.source === "exported" &&
+        lora.export_type === "gguf" &&
+        (lora.adapter_path.startsWith(`${folder}/`) ||
+          lora.adapter_path.startsWith(`${folder}\\`)),
+    );
+    if (!next) unpinRepo(oldId);
+    else replacePinned(pinKey(oldId), pinKey(next.adapter_path));
+  };
   return (
     <>
       {adapters.map((adapter) => {
@@ -8138,11 +8233,15 @@ function FineTunedRows({
               : tag;
         return (
           <div key={adapter.id}>
-            <div className="group flex items-center">
+            <div className={downloadedRowShellClassName(value === adapter.id)}>
               <div className="min-w-0 flex-1">
                 <ModelRow
                   label={adapter.name}
-                  meta={meta}
+                  meta={
+                    adapter.sizeBytes
+                      ? `${meta} · ${formatBytes(adapter.sizeBytes)}`
+                      : meta
+                  }
                   selected={value === adapter.id}
                   loaded={isRuntimeLoadedModel(
                     loadedModelId,
@@ -8184,6 +8283,7 @@ function FineTunedRows({
                       : undefined
                   }
                   alignMeta="device"
+                  className={downloadedRowButtonClassName}
                 />
               </div>
               <span className={ROW_ACTIONS_CLASS}>
@@ -8193,31 +8293,51 @@ function FineTunedRows({
                     onConfigure={() => onConfigure(adapter.id, selectionMeta)}
                   />
                 )}
-                {canDelete && (
-                  <ModelDeleteAction
-                    ariaLabel={`Delete ${adapter.name}`}
-                    title="Delete fine-tuned model?"
-                    description={
-                      <>
-                        This will remove{" "}
-                        <span className="font-medium text-foreground">
-                          {adapter.name}
-                        </span>{" "}
-                        from disk. This cannot be undone.
-                      </>
-                    }
-                    successMessage={`Deleted ${adapter.name}`}
-                    disabled={deleteDisabled}
-                    onConfirm={() =>
-                      deleteFineTunedModel({
-                        modelPath: adapter.id,
-                        source: isExported ? "exported" : "training",
-                        exportType: adapter.exportType,
-                      })
-                    }
-                    onDeleted={() => onModelsChange?.({ id: adapter.id })}
-                  />
-                )}
+                <ModelRowMenu
+                  ariaLabel={`More options for ${adapter.name}`}
+                  pin={{
+                    pinned: pinnedKeys.includes(pinKey(adapter.id)),
+                    pinLabel: "Pin to top",
+                    unpinLabel: "Unpin",
+                    onToggle: () => togglePinned(adapter.id),
+                  }}
+                  onReveal={
+                    isLocal
+                      ? undefined
+                      : () =>
+                          revealFineTunedModel(
+                            adapter.id,
+                            isExported ? "exported" : "training",
+                          )
+                  }
+                  del={
+                    canDelete
+                      ? {
+                          title: "Delete fine-tuned model?",
+                          description: (
+                            <>
+                              This will remove{" "}
+                              <span className="font-medium text-foreground">
+                                {adapter.name}
+                              </span>{" "}
+                              from disk. This cannot be undone.
+                            </>
+                          ),
+                          successMessage: `Deleted ${adapter.name}`,
+                          disabled: deleteDisabled,
+                          onConfirm: async () => {
+                            await deleteFineTunedModel({
+                              modelPath: adapter.id,
+                              source: isExported ? "exported" : "training",
+                              exportType: adapter.exportType,
+                            });
+                            unpinRepo(adapter.id);
+                          },
+                          onDeleted: () => onModelsChange?.({ id: adapter.id }),
+                        }
+                      : undefined
+                  }
+                />
               </span>
             </div>
             {expandedGguf === adapter.id && (
@@ -8257,6 +8377,10 @@ function FineTunedRows({
                           exportType: "gguf",
                           ggufVariant: quant,
                         });
+                        if (pinnedKeys.includes(pinKey(adapter.id))) {
+                          // If the rescan fails, drop the pin rather than leave it pointing at a gone file.
+                          await repinExportedGguf(adapter.id).catch(() => unpinRepo(adapter.id));
+                        }
                         onModelsChange?.({
                           id: adapter.id,
                           ggufVariant: quant,

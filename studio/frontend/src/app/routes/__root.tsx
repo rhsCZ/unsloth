@@ -3,6 +3,7 @@
 
 import { useAppShellReadySignal } from "@/components/app-readiness";
 import { AppSidebar } from "@/components/app-sidebar";
+import { CommandPalette } from "@/components/command-palette";
 import { Navbar } from "@/components/navbar";
 import { SidebarEdgeTrigger } from "@/components/sidebar-edge-trigger";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -13,6 +14,8 @@ import {
   AUTH_SESSION_CLEARED_EVENT,
   AUTH_SESSION_STORED_EVENT,
   hasAuthToken,
+  hasSettledAuthSession,
+  useIsAccountOwner,
 } from "@/features/auth";
 import {
   ChatPage,
@@ -20,6 +23,7 @@ import {
   clearNewChatDraft,
   hydrateModelDisclaimerPreference,
   openFolderAsProject,
+  startLlamaCppAutoReload,
   StopRunningChatsDialog,
   useOpeningFolder,
   useChatRuntimeStore,
@@ -32,10 +36,13 @@ import { backfillModelOverrides } from "@/features/model-picker/api/migrate-mode
 import { usePersonalizationSync } from "@/features/profile";
 import { RemoteCodeConsentDialog } from "@/features/security";
 import {
+  SETTINGS_TABS,
   SettingsDialogMount,
+  settingsTabVisible,
   stepInterfaceScale,
   triggerShortcut,
   useInterfaceScaleStore,
+  useHubSourceNotice,
   useSettingsDialogStore,
   useShortcut,
   useShortcutAvailable,
@@ -49,6 +56,7 @@ import { useIsMobileShell } from "@/hooks/use-mobile";
 import { useSidebarPin } from "@/hooks/use-sidebar-pin";
 import { type TranslationKey, useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
+import { createNavigationNonce } from "@/lib/navigation-nonce";
 import {
   Outlet,
   createRootRoute,
@@ -72,6 +80,8 @@ import {
 } from "react";
 import { AppProvider } from "../provider";
 import { useDesktopShellReady } from "../desktop-shell-ready";
+import { type HelpAction, helpActionAvailable, runHelpAction } from "@/components/help-actions";
+import type { SettingsMenuAction } from "../app-menu-chords";
 import { useAppMenuActions } from "../use-app-menu-actions";
 
 declare module "@tanstack/react-router" {
@@ -162,8 +172,12 @@ const AudioPage = lazy(() =>
   import("@/features/audio").then((m) => ({ default: m.AudioPage })),
 );
 
+// Enabled once the session is settled, not once a token exists. The first read runs once per session, so a read
+// refused mid password change would leave personalization unhydrated, and every save paused, until a reload. The
+// pathname subscription re-reads the gate on the navigation that ends the change.
 function PersonalizationSyncMount() {
-  usePersonalizationSync(hasAuthToken());
+  useRouterState({ select: (s) => s.location.pathname });
+  usePersonalizationSync(hasSettledAuthSession());
   return null;
 }
 
@@ -173,6 +187,11 @@ function PersonalizationSyncMount() {
 // subscribed across navigation, instead of coming and going with /studio.
 function LowDiskNoticeMount() {
   useLowDiskNotice();
+  return null;
+}
+
+function HubSourceNoticeMount() {
+  useHubSourceNotice();
   return null;
 }
 
@@ -235,6 +254,10 @@ function CredentialBootstrapGate({
       window.removeEventListener(AUTH_SESSION_STORED_EVENT, reconcile);
     };
   }, [active]);
+  useEffect(() => {
+    if (active && ready) return startLlamaCppAutoReload();
+  }, [active, ready]);
+
   return (
     <>
       <SettingsDialogMount active={active && ready} />
@@ -492,7 +515,7 @@ function RootLayout() {
     chatRuntime.setIncognito(Boolean(options?.incognito));
     void navigate({
       to: "/chat",
-      search: projectId ? { project: projectId } : { new: crypto.randomUUID() },
+      search: projectId ? { project: projectId } : { new: createNavigationNonce() },
     });
   };
 
@@ -527,6 +550,23 @@ function RootLayout() {
     const scale = useInterfaceScaleStore.getState();
     scale.setScale(stepInterfaceScale(scale.scale, direction));
   };
+  // Help opens settings or a web page, so it works anywhere past sign-in.
+  // Pages this account cannot open stay disabled, as in Go > Settings.
+  const isOwner = useIsAccountOwner();
+  const helpAction = (action: HelpAction) =>
+    isAuthFlowRoute || !helpActionAvailable(action, isOwner) ? null : () => runHelpAction(action);
+  // Workspaces for the Go menu, gated like their chords below.
+  const goTo = (to: string) => () => void navigate({ to });
+  const goAction = (enabled: boolean, go: () => void) => (enabled ? go : null);
+  // Go > Settings: the pages this account can open.
+  const settingsActions = Object.fromEntries(
+    SETTINGS_TABS.map((tab) => [
+      `settings-${tab}`,
+      !isAuthFlowRoute && settingsTabVisible(tab, isOwner)
+        ? () => useSettingsDialogStore.getState().openDialog(tab)
+        : null,
+    ]),
+  ) as Record<SettingsMenuAction, (() => void) | null>;
   useAppMenuActions({
     "new-chat": routeShortcutEnabled ? () => startNewChat() : null,
     "new-temporary-chat": routeShortcutEnabled
@@ -552,10 +592,29 @@ function RootLayout() {
     "zoom-in": zoomBy(1),
     "zoom-out": zoomBy(-1),
     "actual-size": () => useInterfaceScaleStore.getState().reset(),
+    "help-documentation": helpAction("help-documentation"),
+    "help-keyboard-shortcuts": helpAction("help-keyboard-shortcuts"),
+    "help-whats-new": helpAction("help-whats-new"),
+    "help-troubleshooting": helpAction("help-troubleshooting"),
+    "help-system-status": helpAction("help-system-status"),
+    "help-send-feedback": helpAction("help-send-feedback"),
+    "go-chat": goAction(
+      routeShortcutEnabled,
+      () => void navigate({ to: "/chat", search: chatSearch }),
+    ),
+    "go-projects": goAction(routeShortcutEnabled, goTo("/projects")),
+    "go-library": goAction(routeShortcutEnabled, goTo("/library")),
+    "go-hub": goAction(routeShortcutEnabled, goTo("/hub")),
+    "go-train": goAction(routeShortcutEnabled && !chatOnlyMeasured, goTo("/studio")),
+    "go-recipes": goAction(routeShortcutEnabled, goTo("/data-recipes")),
+    "go-images": goAction(routeShortcutEnabled, goTo("/images")),
+    "go-video": goAction(routeShortcutEnabled && !videoDisabled, goTo("/video")),
+    "go-audio": goAction(routeShortcutEnabled, goTo("/audio")),
+    "go-export": goAction(routeShortcutEnabled, goTo("/export")),
+    ...settingsActions,
   }, desktopShellReady);
 
   // Workspaces. The shell is mounted on every route, so the chords live here.
-  const goTo = (to: string) => () => void navigate({ to });
   // Carry the frozen search back: a bare /chat is a fresh chat, so switching
   // away and back would drop the thread, compare pair or project.
   useShortcut(
@@ -622,6 +681,7 @@ function RootLayout() {
       <TransformersUpgradeDialog />
       {/* At the root, not under /chat: a swap can start from the Hub too. */}
       <StopRunningChatsDialog />
+      {!hideNavbar && <CommandPalette />}
       {hideNavbar ? (
         <main className="flex-1 pt-[var(--studio-hidden-route-top-inset,0px)] [--studio-titlebar-height:var(--studio-hidden-route-top-inset,0px)]">
           <RouteBoundary readyWhenCommitted={!routeOwnsReloadReadiness}>
@@ -754,6 +814,8 @@ function RootLayout() {
           </SidebarInset>
         </SidebarProvider>
       )}
+      {/* This side-effect-only mount stays last so it cannot shift existing React useId paths. */}
+      {!isAuthFlowRoute && <HubSourceNoticeMount />}
     </>
   );
 

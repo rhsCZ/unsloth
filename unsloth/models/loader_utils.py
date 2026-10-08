@@ -554,6 +554,29 @@ def resolve_unsloth_device_map(
         print(f"Unsloth: Not planning a device map; {reason}. Using `{_declined}`.")
         return _declined
 
+    def _plan_fits_first_device(
+        plan,
+        explicit_reserve,
+        activation_share = 0.2,
+    ):
+        """First allowed card if weights + headroom + load transient leave `activation_share` (about
+        Gemma 3n E4B fp32 on a T4) and any passed reserve free; None for a planner without sizes."""
+        try:
+            budgets = plan.raw_budgets
+            first = min(budgets)
+            budget = int(budgets[first])
+            transient = max((plan.load_transient_by_device or {}).values(), default = 0)
+            need = int(plan.total_weight_bytes) + int(plan.headroom_bytes) + int(transient)
+            free = budget * activation_share
+            if explicit_reserve:
+                # A passed reserve is a hard constraint to the planner.
+                free = max(free, int(plan.activation_reserve_by_device.get(first, 0)))
+        except Exception:
+            return None
+        if budget > 0 and need + free <= budget:
+            return first
+        return None
+
     if skip_reason is not None:
         return _fallback(skip_reason)
     if fast_inference:
@@ -639,6 +662,18 @@ def resolve_unsloth_device_map(
 
     if plan is None:
         return _declined
+    single_device = (
+        _plan_fits_first_device(plan, planner_kwargs.get("activation_reserve_bytes") is not None)
+        if device_map == UNSLOTH_DEVICE_MAP
+        else None
+    )
+    if single_device is not None:
+        # Splitting a model one card holds only adds cross-device bugs (Kaggle T4x2).
+        print(
+            f"Unsloth: Not splitting across GPUs; the model fits on cuda:{single_device} with room "
+            f'to train. Pass device_map = "{UNSLOTH_BALANCED_DEVICE_MAP}" to split it anyway.'
+        )
+        return {"": single_device}
     print(plan.describe())
     return plan.device_map
 
@@ -668,7 +703,7 @@ def resolve_auto_block_swap(
     placement = "tail",
     **config_kwargs,
 ):
-    """`from_pretrained(block_swap_layers = "auto")`: `(layers, device_map, embedding)`, the trailing
+    """`from_pretrained(offload_layers = "auto")`: `(layers, device_map, embedding)`, the trailing
     decoder layers to build in host RAM so the rest plus a training step's reserve fits, the map to load
     the rest with, and whether to move the input embedding to host RAM first (one GPU, when
     `offload_embedding` allows; None when nothing was planned). 0, the map unchanged and no move when
@@ -676,7 +711,7 @@ def resolve_auto_block_swap(
     card through the multi-GPU planner; anything else sizes the one card the load uses."""
 
     def _none(reason):
-        print(f"Unsloth: block_swap_layers = 'auto' loads every layer onto the GPU: {reason}.")
+        print(f"Unsloth: offload_layers = 'auto' loads every layer onto the GPU: {reason}.")
         return 0, device_map, None
 
     if skip_reason is not None:
@@ -752,7 +787,7 @@ def resolve_auto_block_swap(
     )
     print(
         "Unsloth: "
-        + plan.describe().splitlines()[0].replace("block swap:", "block_swap_layers = 'auto':")
+        + plan.describe().splitlines()[0].replace("block swap:", "offload_layers = 'auto':")
     )
     embedding = bool(getattr(plan, "offload_embedding", False))
     if not plan.layers:
@@ -1538,12 +1573,13 @@ def _offline_quantize_to_fp8(
             config = text_config
         auto_model = AutoModelForImageTextToText if is_vlm else AutoModelForCausalLM
         auto_processor = AutoProcessor if is_vlm else AutoTokenizer
-        model = auto_model.from_pretrained(
-            model_name,
-            config = config,
-            revision = revision,
-            **load_kwargs,
-        )
+        with sync_load_when_quantizing(qconfig, config):
+            model = auto_model.from_pretrained(
+                model_name,
+                config = config,
+                revision = revision,
+                **load_kwargs,
+            )
         tokenizer = auto_processor.from_pretrained(model_name, revision = revision)
         model.save_pretrained(new_model_name, safe_serialization = False)
         del model
@@ -3064,6 +3100,27 @@ def _bnb_bits_requested(quantization_config):
     return None
 
 
+_ASYNC_LOAD_ENV = "HF_DEACTIVATE_ASYNC_LOAD"
+
+
+@contextlib.contextmanager
+def sync_load_when_quantizing(quantization_config, model_config):
+    """Sync-load on-the-fly quantization: transformers 5.0-5.3 worker threads put full-precision
+    tensors on the card faster than they are quantized (5.4+ already loads these synchronously)."""
+    if (
+        quantization_config is None
+        or getattr(model_config, "quantization_config", None) is not None
+        or _ASYNC_LOAD_ENV in os.environ
+    ):
+        yield
+        return
+    os.environ[_ASYNC_LOAD_ENV] = "1"
+    try:
+        yield
+    finally:
+        os.environ.pop(_ASYNC_LOAD_ENV, None)
+
+
 def warn_if_bitsandbytes_quantized_nothing(
     model,
     quantization_config,
@@ -3646,6 +3703,26 @@ def _note_offline_retry(error, retry_error):
         add_note(text)
     except Exception:
         pass
+
+
+# Set per load (family branches in FastModel.from_pretrained, the compiler's norm check) and read only during it. Left set, a later load of another family gets float32 norms beside 16 bit projections and fails with "float != BFloat16".
+LOAD_SCOPED_ENV_VARS = ("UNSLOTH_HIGH_PRECISION_LAYERNORM",)
+
+
+def _restore_load_scoped_env(fn):
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        saved = {name: os.environ.get(name) for name in LOAD_SCOPED_ENV_VARS}
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    return _wrapper
 
 
 def _offline_aware_load(fn):

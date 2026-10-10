@@ -82,6 +82,7 @@ _TOOL_CLOSED_PATS = [
     _TC_GEMMA_CLOSED_PAT,
     re.compile(r"<tool_call\|>"),
     _TC_FUNC_CLOSED_PAT,
+    # Mirror the parser regexes: tolerate whitespace and v11 [CALL_ID]/[ARGS] metadata.
     re.compile(
         r"\[TOOL_CALLS\]\s*[\w-]+(?:\[CALL_ID\][\w-]+)?(?:\[ARGS\])?\s*"
         + _BRACKETED_JSON_ONE_LEVEL,

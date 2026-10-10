@@ -3812,8 +3812,11 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
         except Exception as _gm_lin_exc:
             logger.warning("Linux ROCm gfx120X: could not patch _grouped_mm: %s", _gm_lin_exc)
 
-    # Exhausting VRAM can hang the HIP driver, so the cap makes PyTorch raise OutOfMemoryError
-    # first.
+    # ROCm OOM guard: exhausting VRAM can hang the HIP driver instead of raising, so set_per_process_memory_fraction
+    # caps the allocator and PyTorch raises OutOfMemoryError first. Unified hosts share GPU+system RAM and need OS
+    # headroom, so the cap depends on the classification and the pool size (see _rocm_memory_fraction and
+    # _rocm_classify_unified_memory). Skipped if no torch.
+    # ── 1g. ROCm OOM guard ──
     if _hw.IS_ROCM:
         try:
             import torch as _torch_mem
@@ -3994,8 +3997,10 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
         )
         return
 
-    # Offload layers set to auto size to the VRAM budget, so two runs on one card each get their
-    # share.
+    # Offload layers sizes "auto" to what the allocator may use, so a budget makes the run fit in it,
+    # and two runs on one card can each take their share.
+    # ── 2b. Training VRAM budget ──
+    # Only "auto" sizes to a budget, and only LoRA runs outside decision / embedding offload.
     _wants_budget = bool(
         (config.get("offload_vram_gb") or config.get("offload_vram_gb_per_device"))
         and config.get("offload_layers") == "auto"

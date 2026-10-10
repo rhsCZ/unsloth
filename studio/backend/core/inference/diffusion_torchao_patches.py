@@ -284,7 +284,12 @@ def _guard_peft_torchao_dispatcher(original):
         return getattr(importlib.import_module(module_name), name, None)
 
     def _redo_dispatch(classes, args, kwargs):
-        """Reads arguments by position: peft 0.19 renamed the third parameter from lora_config to config."""
+        """Upstream's body, with `classes` standing in for the two-class isinstance tuple.
+
+        Arguments are read by POSITION because peft 0.19 renamed the third parameter from
+        `lora_config` to `config`, and forwarded as `target, adapter_name, **kwargs`, which is
+        exactly how peft <= 0.18 builds TorchaoLoraLinear.
+        """
         try:
             signature = inspect.signature(original)
             bound = signature.bind(*args, **kwargs)

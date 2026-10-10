@@ -3165,8 +3165,10 @@ class UnslothTrainer:
                 logger.info("Stopped before applying chat template\n")
                 return None
 
-            # An inconclusive probe must not fall to the text path; the dataset check breaks the
-            # tie.
+            # An inconclusive probe must not read as "not an audio model": falling through lands on the text path,
+            # which fails later with a column-mapping complaint. _dataset_has_audio_column is the tiebreaker because
+            # _is_dataset_audio is true on a column-NAME match alone; raw/CPT is exempt.
+            # ========== AUDIO MODELS: custom preprocessing ==========
             if (
                 not self._audio_type
                 and not getattr(self, "_audio_type_known", True)

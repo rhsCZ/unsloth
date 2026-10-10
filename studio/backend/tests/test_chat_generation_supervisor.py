@@ -691,11 +691,7 @@ async def test_subscribers_detach_then_replay_the_same_engine_run(durable_run, m
 
 
 async def _await_chunk_payloads(run_id: str, count: int, deadline_s: float) -> list:
-    """Chunk payloads once `count` of them are durable, or whatever arrived by the deadline.
-
-    Returned rather than asserted so the caller owns the comparison and pytest still
-    shows the payload diff on failure.
-    """
+    """Returns chunk payloads once count are durable or the deadline passes; the caller asserts."""
     started = time.monotonic()
     while True:
         stored = [e["payload"] for e in runs_db.list_events(run_id) if e["type"] == "chunk"]

@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic CPU tests for attention-backend selection. No torch/diffusers needed:
-``_is_cuda_nvidia`` is monkeypatched for the policy tests, and the apply path uses a fake
-transformer that records / raises on ``set_attention_backend``.
-"""
+"""Attention-backend tests run without torch: _is_cuda_nvidia is patched, the apply path faked."""
 
 from __future__ import annotations
 
@@ -331,10 +328,7 @@ def test_install_uses_no_deps_to_protect_core_deps(monkeypatch):
 
 
 def test_xformers_installs_the_cuda_matched_wheel_not_the_package_name(monkeypatch):
-    """`pip install xformers` resolves the PyPI build, which exists only in the CUDA-12.8
-    flavour: beside a cu130 torch its extension fails to load and xformers/_cpp_lib.py
-    logs a warning instead of raising, so memory-efficient attention vanishes silently
-    while the import still succeeds. Only a URL resolved against the running torch is safe."""
+    """Install xformers from a URL matched to the running torch; the PyPI wheel is CUDA 12.8 only."""
     monkeypatch.setenv("UNSLOTH_DIFFUSION_ATTENTION_INSTALL", "auto")
     import importlib.util
 

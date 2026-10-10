@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermes Desktop stages its one-click downloads as flat GGUFs in <root>/models.
-
-The staging rules mirror hermes_cli.local_runtime.bootstrap.staged_models: a file
-Hermes will not serve is one Studio must not offer to load.
-"""
+"""Studio must not offer a staged GGUF that Hermes itself will not serve."""
 
 import sys
 from pathlib import Path

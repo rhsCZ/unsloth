@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""install_llama_prebuilt.py: naming a llama.cpp backend, and keeping that choice.
-
-The picker in Settings > System, `UNSLOTH_LLAMA_CPP_BACKEND`, and
-`--llama-backend` are three spellings of one thing: a backend request, resolved
-here and recorded in the install marker so every later entry point -- setup.sh,
-`unsloth studio update`, the desktop updater -- installs the same backend without
-being told again.
-
-Network and host detection are stubbed; no GPU or internet needed.
-"""
+"""The picker, UNSLOTH_LLAMA_CPP_BACKEND and --llama-backend all record one backend in the marker."""
 
 from __future__ import annotations
 
@@ -59,13 +50,7 @@ def _choice(install_kind: str, name: str = "bundle.tar.gz") -> ilp.AssetChoice:
 
 
 def test_every_install_kind_the_installer_can_select_names_a_backend():
-    """The marker describes each install by backend, so a bundle kind with no
-    mapping would install as an unknown one the picker cannot show or re-assert.
-
-    Reads the kinds out of the module source rather than a hand-kept list, so
-    adding a bundle family without extending INSTALL_KIND_BACKENDS fails here
-    instead of silently shipping an undescribed install.
-    """
+    """Every install_kind the installer selects must map to a backend in INSTALL_KIND_BACKENDS."""
     source = Path(ilp.__file__).read_text(encoding = "utf-8")
     # assignments only: the validate-install CLI also names kinds in help text
     selected = set(re.findall(r'install_kind = "([a-z0-9-]+)"', source))

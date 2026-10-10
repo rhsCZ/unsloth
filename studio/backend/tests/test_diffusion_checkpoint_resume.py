@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only tests for diffusion training resume.
-
-A stop-and-save used to leave only the adapter, so restarting the same configuration began
-again at step 1. These cover the pieces that fix it: the atomically written checkpoint
-bundle, the optimizer / scheduler / RNG round-trip, the loop resuming at N+1 up to the same
-TARGET total, the identity gate that rejects a mismatched checkpoint before the resident GPU
-model is evicted, the ``can_resume`` reported for stopped / completed / errored runs, and the
-LoRA sidecar recording the step actually reached.
-
-No GPU and no diffusers/peft: the trainers' family-specific halves are exercised elsewhere,
-while everything here runs against a two-parameter ``torch.nn.Linear`` through the same
-shared helpers both trainers call. The one bitsandbytes case skips without CUDA.
-"""
+"""Resume tests on CPU: bundle round-trip, identity gate before GPU eviction, and can_resume states."""
 
 from __future__ import annotations
 
@@ -163,15 +151,7 @@ def _cosine_schedule(
     num_training_steps: int,
     num_warmup_steps: int = 0,
 ):
-    """The zero-warmup cosine ``LambdaLR`` that ``diffusers.optimization.get_scheduler("cosine")``
-    builds, written out here rather than imported.
-
-    Byte-for-byte the same lambda diffusers uses (half a cosine period, ``num_cycles = 0.5``,
-    floored at 0), so what the trainers get from get_scheduler and what this returns step
-    identically. Rebuilt locally because this file is CPU-and-stdlib only by design -- diffusers
-    is not in the backend requirements and is not installed on the CI runners, so importing it
-    here would turn the assertion below into a skip on exactly the machines that gate merges,
-    which is the one place this regression has to be caught."""
+    """Copy of diffusers' cosine LambdaLR: CI lacks diffusers, and importing it would skip the test."""
     import math
 
     def lr_lambda(current_step: int) -> float:
@@ -193,10 +173,7 @@ def _STREAMS() -> dict:
 
 
 def test_a_failed_promotion_puts_the_old_checkpoint_back(run_dir, monkeypatch):
-    """Re-saving an OCCUPIED step swaps the old bundle out to make room. If the rename that
-    puts the new one in place then fails, the slot is empty and the only copy of the run's
-    last resumable state is the hidden stale directory -- which the next _prune_staging
-    deletes. A resumed run overwriting checkpoint-N would lose its resume point outright."""
+    """A failed promotion must restore the old checkpoint, or the run loses its only resume point."""
     run = _Run(run_dir)
     first, error = run.save(4)
     assert error is None and first is not None
@@ -417,14 +394,7 @@ def _forge_8bit_optimizer_class(run_dir) -> None:
 
 
 def _pretend_bitsandbytes(monkeypatch, installed: bool) -> None:
-    """Pin what ``_assert_optimizer_buildable`` sees, instead of inheriting it from the host.
-
-    That guard asks ``importlib.util.find_spec("bitsandbytes")``, so which of the two foreign
-    optimizer refusals fires depends on whether the machine running the tests happens to have
-    bitsandbytes -- the CPU CI runners do not, developer boxes with a GPU stack do. Both
-    refusals are correct and both need covering, so each test states the host it is about.
-    ``UNSLOTH_DIFFUSION_FP32_OPTIM`` is cleared for the same reason: set in the environment, it
-    short-circuits the guard before find_spec is ever consulted."""
+    """Each test states bitsandbytes presence; the optimizer guard reads find_spec and an FP32 env var."""
     import importlib.util as _importlib_util
 
     monkeypatch.delenv("UNSLOTH_DIFFUSION_FP32_OPTIM", raising = False)
@@ -744,16 +714,7 @@ def client(monkeypatch):
 
 
 def _resolved_request_precision() -> str:
-    """The mixed precision a run started from ``_RESUME_BODY`` on THIS host actually trains in.
-
-    ``identity_for_config`` records the EFFECTIVE precision, not the requested one, and it is
-    resolved from the live hardware: a CUDA Ampere-or-newer box resolves the default bf16
-    request to "bf16", a pre-Ampere card to "fp16", and a machine with no CUDA at all -- every
-    CPU CI runner -- to "no". Hard-coding one of those into the fixtures below made the route
-    tests pass on a GPU developer box and fail on CI with a mixed-precision refusal that was
-    the guard working correctly on a bundle claiming a precision the run could not have used.
-    Resolved through the same helper the route reaches, so the fixture describes the host it is
-    running on instead of guessing."""
+    """Effective precision depends on the host's GPU, so fixtures resolve it instead of hard-coding it."""
     from core.training.diffusion_lora_trainer import _config_from_dict
     from core.training.diffusion_train_common import effective_mixed_precision
 
@@ -1117,11 +1078,7 @@ def test_sampler_state_round_trips_and_rejects_a_foreign_dataset_size():
 
 
 def test_a_truncated_tensor_storage_is_refused(run_dir):
-    """The state-file validator walks a torch zip's pickle to STOP and wants one non-empty
-    ``data/`` member. Truncating the moment STORAGES leaves both intact, and ``torch.load``
-    then hands back uninitialized memory -- non-finite, order 1e22 -- which a resume feeds
-    into the optimizer as Adam moments. The run diverges on its first step and reports a
-    clean resume while doing it. The recorded size is what catches this."""
+    """Truncated storages load as uninitialised memory, so the recorded size must catch them."""
     import zipfile
 
     run = _Run(run_dir)
@@ -1147,10 +1104,7 @@ def test_a_truncated_tensor_storage_is_refused(run_dir):
 
 
 def test_a_bundle_torch_load_refuses_is_rejected_by_the_preflight(run_dir):
-    """A ``.pt`` carrying a global outside the ``weights_only`` allowlist walks to STOP like
-    any other, so the header check passes it. Before the preflight actually loaded, the start
-    route returned 200, evicted the resident GPU model, and only then did the child die on a
-    raw UnpicklingError -- exactly what the preflight exists to prevent."""
+    """Checkpoints outside the weights_only allowlist must fail the preflight, before GPU eviction."""
     run = _Run(run_dir)
     run.save(2)
     checkpoint = run_dir / "checkpoint-2"
@@ -1167,11 +1121,7 @@ def test_a_bundle_torch_load_refuses_is_rejected_by_the_preflight(run_dir):
 
 
 def test_a_finished_run_does_not_offer_its_successors_checkpoint(run_dir):
-    """``not_before`` fences off an EARLIER run's bundles. Without the matching upper fence a
-    finished run still sees every bundle a LATER run wrote into the shared folder and offers
-    the newest of them as its own. The identity gate cannot catch it -- same family, base,
-    dataset and LoRA shape -- so the earlier run would resume its successor's optimizer
-    moments, LR position and RNG under its own config."""
+    """not_before fences a finished run off bundles a later run wrote into the shared folder."""
     early = _Run(run_dir)
     early.save(10)
     early_manifest = json.loads(
@@ -1215,15 +1165,7 @@ def test_a_bundle_with_no_created_at_survives_the_upper_fence(run_dir):
 
 
 def test_cuda_rng_restores_the_devices_the_bundle_covers(monkeypatch):
-    """A bundle written with one device visible, restored where two are.
-
-    ``set_rng_state_all`` needs one state per visible device, and guarding that with
-    all-or-nothing meant this case restored NOTHING -- including cuda:0, the only device the
-    trainer touches. Every other part of the resume looked correct, so the run finished
-    healthy and silently wrong: on a real B200 SDXL run all 192 LoRA tensors diverged from
-    the uninterrupted control. The trainer is a spawned child inheriting
-    CUDA_VISIBLE_DEVICES, so a change to the mask between the run and the Resume click was
-    enough to trigger it."""
+    """CUDA RNG restores each device the bundle covers; an all-or-nothing guard silently skipped cuda:0."""
     restored: list[tuple[int, bytes]] = []
 
     fake_cuda = type(
@@ -1249,14 +1191,7 @@ def test_cuda_rng_restores_the_devices_the_bundle_covers(monkeypatch):
 
 
 def test_a_checkpoint_missing_a_live_tensor_is_refused():
-    """The other direction, which the count alone could not see.
-
-    Matching the number restored against the checkpoint's own key count proves every SAVED
-    tensor landed somewhere. It says nothing about a live trainable parameter the checkpoint
-    never had: a truncated or hand-edited adapter holding a strict SUBSET passed, and the full
-    optimizer state was then loaded on top, so restored Adam moments drove freshly initialised
-    weights while the run reported a clean resume.
-    """
+    """A checkpoint missing a live trainable tensor must be refused, not just a count mismatch."""
     from core.training.diffusion_train_common import (
         load_trainable_state_dict,
         trainable_state_dict,
@@ -1276,11 +1211,7 @@ def test_a_checkpoint_missing_a_live_tensor_is_refused():
 
 
 def test_the_bundle_just_written_survives_pruning(run_dir):
-    """Pruning is by STEP, and a resume legitimately writes a bundle that is not the highest
-    numbered one in the folder. Resume 10, stop at 15 with 20 and 30 still present and a limit
-    of 2, and the checkpoint just promoted is the one deleted -- while the service reports
-    checkpoint_saved for a path that no longer exists and the run's own start fence stops those
-    older bundles from making it resumable."""
+    """Pruning is by step and must never delete the bundle just written, even when it is not the newest."""
     seed = _Run(run_dir, save_total_limit = 0)
     for step in (10, 20, 30):
         seed.save(step)
@@ -1350,10 +1281,7 @@ def test_clearing_this_runs_checkpoints_spares_the_one_it_resumed_from(run_dir):
 
 
 def test_enabling_ema_on_a_resume_starts_from_the_restored_weights():
-    """EMA is not part of the validated identity, so a resume can turn it on for a run that had
-    it off. The trainer builds the EMA before restoring the adapter, so its shadow holds freshly
-    initialised LoRA weights and the checkpoint carries no shadow to replace them -- every later
-    update, and the exported EMA adapter, would blend the restored weights with that noise."""
+    """Enabling EMA on resume must start from restored weights, not from a shadow built on fresh init."""
     from core.training.diffusion_train_extras import LoRAEMA
 
     model = torch.nn.Linear(4, 4, bias = False)
@@ -1389,10 +1317,7 @@ def test_an_output_directory_named_like_a_checkpoint_is_still_scanned(tmp_path, 
 
 
 def test_an_image_replaced_in_place_changes_the_dataset_fingerprint(tmp_path):
-    """Same filename, same caption, same byte length, different picture. On size alone the
-    preflight accepted the dataset and the restored optimizer and scheduler carried an old
-    experiment on against different training images, which is exactly what the fingerprint
-    exists to refuse."""
+    """Dataset fingerprint must catch an image replaced in place with the same name, caption and size."""
     image = tmp_path / "cat.png"
     image.write_bytes(b"A" * 4096)
     entries = [(str(image), "a cat")]
@@ -1437,13 +1362,7 @@ def test_the_fingerprint_probe_does_not_read_whole_images(tmp_path):
 
 
 def test_a_mid_sized_image_is_covered_end_to_end(tmp_path):
-    """A file between one and two probe windows is read IN FULL, not head-only.
-
-    The old gate only sampled a tail past 2 x _PROBE_BYTES, so anything from 64 KiB to
-    128 KiB -- which is most JPEGs in a LoRA dataset -- contributed its first 64 KiB and
-    nothing else. A same-length replacement sharing that head kept the fingerprint intact
-    and the preflight accepted changed training images.
-    """
+    """Files between one and two probe windows must be hashed in full, not head-only."""
     path = tmp_path / "mid.jpg"
     head = b"H" * dc._PROBE_BYTES
     path.write_bytes(head + b"A" * (dc._PROBE_BYTES // 2))
@@ -1456,13 +1375,7 @@ def test_a_mid_sized_image_is_covered_end_to_end(tmp_path):
 
 
 def test_a_failed_first_save_does_not_retire_the_discard(run_dir, monkeypatch):
-    """A run that has written nothing yet still owns its output directory.
-
-    A transient failure at the first save_steps interval used to flip wrote_checkpoint
-    anyway, so the next successful save ran with discard_existing=False and an earlier run's
-    higher-numbered bundle survived beside it -- and a later Resume by output directory
-    picked that stale bundle over this run's state.
-    """
+    """A failed first save must keep the discard flag, or an earlier run's higher bundle survives."""
     import core.training.diffusion_train_common as dtc
 
     stale = _Run(run_dir)
@@ -1509,13 +1422,7 @@ def test_a_failed_first_save_does_not_retire_the_discard(run_dir, monkeypatch):
 
 
 def test_a_partial_ema_shadow_is_refused_rather_than_half_restored():
-    """A readable EMA file covering only SOME of the live shadows is not a resumable EMA.
-
-    load_state_dict skips what it cannot match by design, so continuing here averages
-    restored shadows for some parameters against freshly initialised ones for the rest --
-    for every later update and for the exported EMA adapter -- while the run reports a
-    clean resume.
-    """
+    """A partial EMA shadow file must be refused, not half-restored against freshly initialised shadows."""
     from core.training.diffusion_train_extras import LoRAEMA
 
     model = torch.nn.Sequential(torch.nn.Linear(4, 4, bias = False), torch.nn.Linear(4, 4))
@@ -1571,10 +1478,7 @@ def test_a_resume_refuses_a_checkpoint_whose_ema_is_incomplete(run_dir):
 
 
 def test_the_sdxl_trainer_binds_its_output_dir_before_scanning_checkpoints():
-    """`out_dir` was assigned only inside two early-return branches and at export time, so the
-    pre-run checkpoint snapshot read it before any binding existed: every normal SDXL run raised
-    UnboundLocalError after the whole model and cache setup, fresh and resumed alike. The loop
-    needs a GPU to drive, so the ordering is checked against the source."""
+    """out_dir must be bound before the checkpoint scan, or every SDXL run raises UnboundLocalError."""
     import inspect
 
     from core.training import diffusion_lora_trainer
@@ -1593,12 +1497,7 @@ def test_the_sdxl_trainer_binds_its_output_dir_before_scanning_checkpoints():
 
 
 def test_a_bundle_overwritten_by_this_run_is_discarded_with_it(run_dir):
-    """Ownership by pathname alone kept a bundle this run REPLACED.
-
-    Resume checkpoint-10 in a folder that also holds checkpoint-15, periodically save at 15
-    (which overwrites it), then discard: the original is already gone, and matching on the name
-    preserved the replacement as though it were the bundle it destroyed.
-    """
+    """Discard must match the bundle by identity, not pathname, or a bundle this run replaced is kept."""
     seeded = _Run(run_dir)
     seeded.save(10)
     seeded.step_once(0.5)
@@ -1669,12 +1568,7 @@ def test_a_bundle_without_optimizer_state_is_refused(run_dir):
 
 
 def test_a_shortened_or_repeating_permutation_is_refused(run_dir):
-    """An order that is in range and the right length is not necessarily a permutation.
-
-    A shortened or duplicate-carrying one makes the cycle reshuffle early or serve the same
-    image twice, while the RNG has already been restored to a point AFTER the original draw.
-    That is the silent reorder the boolean exists to prevent, arriving through a truncated
-    manifest instead of a missing one."""
+    """A resume permutation must be a real permutation of the right length, not merely in range."""
     rng = __import__("random").Random(0)
     sampler = PermutationBatchSampler(4, rng)
     assert sampler.load_state_dict({"n": 4, "order": [0, 1, 2, 3], "pos": 2}) is True
@@ -1844,10 +1738,7 @@ def test_the_identity_covers_the_input_stream(run_dir):
 
 
 def test_the_identity_covers_the_update_shape_and_the_resolution(run_dir):
-    """The batch and accumulation counts decide how many samples an optimizer step consumes,
-    the clip norm is applied to the restored moments on the very next update, and the
-    resolution decides what the images are cropped to before the restored sampler sees them.
-    All four were loadable-but-different resumes reported as clean."""
+    """Batch, accumulation, clip norm and resolution belong in the identity, or resumes change silently."""
     import dataclasses
 
     base = _Run(run_dir)
@@ -1887,10 +1778,7 @@ def test_pruning_spares_the_bundle_the_run_resumed_from(run_dir):
 
 
 def test_the_resolved_cache_path_is_recorded_not_the_request(run_dir):
-    """UNSLOTH_DIFFUSION_NO_LATENT_CACHE and the over-budget fallback both turn the cache off
-    behind the request, and the two paths draw crops and flips from different RNG streams, so
-    a bundle written on one and resumed on the other restores a state that no longer
-    reproduces the run."""
+    """Record the resolved cache path; cached and uncached runs draw crops from different RNG streams."""
     base = dc.identity_for_config(_Run(run_dir).cfg)
     cached = dc.with_cache_mode(base, True)
     in_loop = dc.with_cache_mode(base, False)
@@ -1909,10 +1797,7 @@ def test_the_resolved_cache_path_is_recorded_not_the_request(run_dir):
 
 
 def test_a_first_periodic_save_does_not_spend_the_previous_runs_bundles(run_dir):
-    """Deleting them at the first save spends them before this run has produced anything: a
-    later "stop without saving" removes only what this run wrote, leaves the previous adapter
-    in place, and the run it belonged to is unresumable -- cancelling a retrain destroyed the
-    thing being retrained."""
+    """Periodic saves must leave the previous run's bundles alone, so cancelling a retrain keeps them."""
     earlier = _Run(run_dir)
     kept, error = earlier.save(9)
     assert error is None and kept is not None
@@ -2065,11 +1950,7 @@ def test_the_resumed_event_seeds_the_live_counters(runs_dir):
 
 
 def test_a_resume_into_a_new_folder_that_died_first_is_still_resumable(run_dir, tmp_path):
-    """An OOM on the first restored step leaves the new output dir nonexistent.
-
-    The bundle it was validated against is still sitting in the source dir, and continuing from
-    it is the obvious retry -- but the missing-folder refusal returned before the source
-    fallback could be consulted, so the run read as unresumable."""
+    """A resume into a new folder that died first must still fall back to the source bundle."""
     from utils.paths import outputs_root
 
     source = _Run(run_dir)
@@ -2166,18 +2047,7 @@ def test_the_revision_is_pinned_once_the_base_is_on_disk(monkeypatch, run_dir):
 
 
 def test_a_mirror_backed_run_pairs_the_revision_with_the_repo_it_came_from(monkeypatch, run_dir):
-    """The revision follows the FETCHED repo, and carries which repo that was.
-
-    Both single-value shapes are wrong. Recording the canonical repo loses the check
-    completely, because the mirror is selected precisely WHEN the canonical repo is not
-    cached, so it has no local ref and every mirror-backed bundle reads "unresolved" --
-    which ``mismatch_reason`` skips, so a mirror that advanced under a resume goes
-    unnoticed. Recording the mirror alone refuses byte-identical weights the moment the
-    fetch repo changes, and refuses every bundle written before mirrors existed.
-
-    Pairing the two keeps the comparison wherever it can be made and drops it only where
-    it genuinely cannot.
-    """
+    """A mirror-backed run must pair the revision with the repo it was fetched from, not either alone."""
     import dataclasses
 
     from core.training import diffusion_train_extras as dte
@@ -2234,10 +2104,7 @@ def test_both_trainers_pin_the_revision_after_the_load():
 
 
 def test_a_raised_target_survives_a_run_that_died_before_the_resumed_event(run_dir):
-    """Raise the target to continue a checkpoint already at its original one, then die during
-    model loading. total_steps is seeded by the "resumed" event, which never arrived, so zero
-    sent the calculation back to the manifest's older target and the run reported that there
-    was nothing left to train -- for the one request that had something left."""
+    """A raised target must survive a run that dies before its resumed event, or it reads as finished."""
     from core.training import diffusion_training_service as svc
 
     run = _Run(run_dir)
@@ -2260,11 +2127,7 @@ def test_a_raised_target_survives_a_run_that_died_before_the_resumed_event(run_d
 
 
 def test_a_swap_aside_that_cannot_run_fails_the_save_and_keeps_the_old_bundle(run_dir, monkeypatch):
-    """Re-saving an OCCUPIED step has to move the old bundle out of the way first. When that
-    rename cannot run at all -- Windows holding a file open, a cross-device oddity -- deleting
-    the occupant to free the slot was the old way out, and a delete that then failed part-way
-    could fail the promotion too, with no copy left to restore. Fail the save instead: the
-    existing bundle is untouched and the run keeps the resume point it already had."""
+    """A swap-aside that cannot run must fail the save and keep the old bundle, not delete it first."""
     run = _Run(run_dir)
     first, error = run.save(4)
     assert error is None and first is not None
@@ -2290,10 +2153,7 @@ def test_a_swap_aside_that_cannot_run_fails_the_save_and_keeps_the_old_bundle(ru
 
 
 def test_a_bundle_that_lost_its_random_streams_is_refused(run_dir):
-    """The torch generator lives in the rng FILE; the two random.Random streams the trainers own
-    live in the manifest beside it. restore_rng_state is per-part best-effort, so a bundle that
-    keeps the file and loses the streams restored torch and left the crop/flip and variant draws
-    at their fresh seeds -- a divergence on the first step, under a resume reporting success."""
+    """A bundle that lost its random streams must be refused, not restored with torch RNG alone."""
     run = _Run(run_dir)
     path, error = run.save(4)
     assert error is None and path is not None
@@ -2313,10 +2173,7 @@ def test_a_bundle_that_lost_its_random_streams_is_refused(run_dir):
 
 
 def test_optimizer_moments_are_refused_when_the_parameter_order_moved(run_dir):
-    """Optimizer state is keyed by parameter POSITION while the adapter is restored by NAME. A
-    PEFT/diffusers upgrade that reorders traversal without renaming anything therefore rebinds
-    every Adam moment to a different tensor -- and LoRA projections share shapes, so it loads
-    cleanly and silently corrupts the continued trajectory."""
+    """Optimizer moments are keyed by parameter position, so a reordered traversal must be refused."""
     run = _Run(run_dir)
     run.step_once(0.5)
     path, error = run.save(4)
@@ -2338,13 +2195,7 @@ def test_optimizer_moments_are_refused_when_the_parameter_order_moved(run_dir):
     ["core.training.diffusion_lora_trainer", "core.training.diffusion_dit_trainer"],
 )
 def test_every_completion_reports_whether_the_run_was_discarded(module):
-    """A stop with save=false is a DISCARD however early it lands.
-
-    Both trainers leave early when the stop arrives during the base-model load or the latent
-    cache build, and those completions omitted `discarded`. The service then never marked the
-    attempt discarded, and describe_resume_state's source fallback offered the bundle the run
-    had been validated against -- so the UI showed Resume for an attempt the user had explicitly
-    thrown away."""
+    """A stop with save=false is a discard however early it lands, and every completion must report it."""
     import builtins
     import importlib
     from pathlib import Path as _Path
@@ -2423,10 +2274,7 @@ def test_every_completion_reports_whether_the_run_was_discarded(module):
 
 
 def test_a_branched_resume_does_not_prune_the_bundles_it_found(run_dir):
-    """The supported explicit-checkpoint flow: continue checkpoint-10 while 20 and 30 are still
-    in the directory. Saving 15 with the default limit of 2 pinned 10 and 15, dropped keep to
-    zero and deleted 20 and 30 outright -- bundles this run never wrote and a later
-    stop-without-saving cannot bring back."""
+    """A branched resume must not prune bundles it did not write; the default limit would delete them."""
     seeded = _Run(run_dir, save_total_limit = 0)
     for step in (10, 20, 30):
         seeded.step_once(0.5)
@@ -2453,10 +2301,7 @@ def test_a_branched_resume_does_not_prune_the_bundles_it_found(run_dir):
 
 
 def test_the_tf32_setting_is_part_of_the_identity(run_dir):
-    """_apply_perf_flags routes CUDA matmuls through TF32 or strict fp32 from this flag, so a
-    resume that silently defaults it back on continues the restored moments under different
-    numeric kernels -- and undoes the strict-reproducibility mode the user asked for. The API
-    field is optional, so omitting it on the resume request is the ordinary way to hit this."""
+    """TF32 must be part of the identity; a resume that omits it changes the numeric kernels."""
     import dataclasses
 
     strict = _Run(run_dir)
@@ -2474,11 +2319,7 @@ def test_the_tf32_setting_is_part_of_the_identity(run_dir):
 
 
 def test_a_stopped_retrain_fences_the_older_runs_checkpoints(run_dir):
-    """A fresh retrain into a directory that still holds an earlier run's higher-step bundle,
-    stopped WITH save. The stop bundle is a lower step, resume-by-directory picks the newest by
-    step, and the leftovers therefore outranked the partial the user had just saved -- a Resume
-    continued the wrong training. A run that RESUMED here keeps what it found; this one does
-    not, because it has just overwritten the adapter those bundles belong to."""
+    """A fresh retrain must fence off an earlier run's higher bundles, or resume picks the wrong one."""
     earlier = _Run(run_dir, save_total_limit = 0)
     for step in (20, 30):
         earlier.step_once(0.5)
@@ -2520,10 +2361,7 @@ def test_the_fencing_keeps_a_bundle_this_run_wrote_over_an_old_one(run_dir):
 
 
 def test_directory_resume_falls_back_past_a_bundle_that_fails_full_validation(run_dir):
-    """read_checkpoint is a header scan; the preflight's own checks (a real torch.load, the
-    required state) are stricter. Stopping at the newest bundle it accepted meant one unloadable
-    optimizer file left the run unresumable with the retained older copy intact beside it --
-    which is the whole point of keeping two."""
+    """Directory resume falls back past a bundle that fails full validation, not just the header scan."""
     run = _Run(run_dir, save_total_limit = 0)
     good, error = run.save(4)
     assert error is None and good is not None
@@ -2544,10 +2382,7 @@ def test_directory_resume_falls_back_past_a_bundle_that_fails_full_validation(ru
 
 
 def test_a_replaced_source_bundle_is_not_offered_back(run_dir):
-    """A resumed run that dies before its first save falls back to the bundle it was validated
-    against. Identified by pathname alone, another run writing its own checkpoint-<N> over the
-    same slot was handed back under the failed run's lineage -- a different branch's adapter and
-    moments, with a matching identity so nothing else would catch it."""
+    """A replaced source bundle must not be offered back by pathname; another run may reuse the slot."""
     seeded = _Run(run_dir, save_total_limit = 0)
     source, error = seeded.save(10)
     assert error is None and source is not None
@@ -2623,10 +2458,7 @@ def test_a_dit_family_records_the_bf16_it_actually_runs_in(run_dir):
 
 
 def test_a_checkpoint_at_the_target_does_not_roll_back_to_an_older_one(run_dir):
-    """The directory scan walks past a bundle it cannot USE. "Already at the target" is not
-    that: nothing is wrong with the newest bundle, and falling past it returned checkpoint-400
-    of a run that finished at 500 -- rolling the model, optimizer, scheduler and RNG back and
-    retraining completed work, which is the exact rollback the fence exists to prevent."""
+    """Reaching the target is not a bad bundle: falling past it rolls the run back to older work."""
     run = _Run(run_dir, save_total_limit = 0)
     run.step_once(0.5)
     run.save(400)
@@ -2641,10 +2473,7 @@ def test_a_checkpoint_at_the_target_does_not_roll_back_to_an_older_one(run_dir):
 
 
 def test_the_latest_displaced_bundle_is_the_one_restored(run_dir):
-    """Replacements stack. A run that crashed after displacing checkpoint-15 leaves its copy
-    behind, and a later run displacing the same slot leaves another; restoring whichever sorted
-    first by NAME (a uuid) resurrected an older branch's state instead of the predecessor that
-    was actually in the slot."""
+    """Displaced bundles stack, so restore the most recent displacement, not the first by name."""
     first = _Run(run_dir, save_total_limit = 0)
     first.save(15)
     original = (run_dir / "checkpoint-15" / dc.TRAINER_STATE_FILENAME).read_text(encoding = "utf-8")
@@ -2673,10 +2502,7 @@ def test_the_latest_displaced_bundle_is_the_one_restored(run_dir):
 
 
 def test_the_first_preflight_does_not_pin_the_bundle_it_accepted(run_dir):
-    """The pre-dataset pass has no fingerprint, so that comparison is SKIPPED and it can accept
-    the newest bundle on the strength of a check it did not make. Rewriting the request to that
-    bundle left the dataset-aware pass able only to reject it, when scanning the original
-    directory would have found an older retained checkpoint matching the current images."""
+    """The first preflight must not pin the bundle it accepted, since its dataset check was skipped."""
     import inspect
 
     from routes.training import _preflight_diffusion_resume
@@ -2702,10 +2528,7 @@ def test_the_first_preflight_does_not_pin_the_bundle_it_accepted(run_dir):
 
 
 def test_a_read_does_not_undo_a_promotion_in_flight(run_dir):
-    """_promote leaves the slot empty for the instant between the swap-aside and the rename. A
-    history or detail read landing there used to hand the displaced bundle back, and the
-    writer's own os.replace then failed against a directory that had reappeared -- losing the
-    periodic or stop-and-save checkpoint and marking the run unresumable from its latest work."""
+    """A read during promotion must not hand back the displaced bundle; the slot is briefly empty."""
     run = _Run(run_dir, save_total_limit = 0)
     run.save(4)
     in_flight = run_dir / f"{dc._STAGING_PREFIX}replaced-4-cafebabe"
@@ -2751,10 +2574,7 @@ def test_read_side_recovery_restores_the_newest_stacked_bundle(run_dir):
 
 
 def test_a_checkpoint_with_no_rng_state_is_not_written(run_dir, monkeypatch):
-    """capture_rng_state never raises -- it returns what it managed to read -- so a torch
-    generator it could not snapshot produced a bundle with no rng file. The write returned
-    happily, the service emitted checkpoint_saved, and the history advertised a resumable stop
-    that the preflight then refuses the moment the user clicks Resume."""
+    """A checkpoint with no RNG state must not be written, since the preflight later refuses it."""
     run = _Run(run_dir)
     monkeypatch.setattr(dc, "capture_rng_state", lambda streams = None: {"json": {}, "tensors": {}})
 
@@ -2767,10 +2587,7 @@ def test_a_checkpoint_with_no_rng_state_is_not_written(run_dir, monkeypatch):
 
 
 def test_a_cuda_capture_that_half_failed_is_not_a_capture(run_dir, monkeypatch):
-    """A secondary visible device erroring left the CPU half in place, so the result was
-    non-empty, the write-time check accepted it, and the preflight -- which only requires
-    torch_cpu -- offered it. The restore then left the CUDA generator at its freshly seeded
-    position, silently changing every latent, noise and timestep draw after the resume."""
+    """A half-failed CUDA RNG capture is not a capture: the CPU half alone would resume silently wrong."""
     import torch
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
@@ -2789,10 +2606,7 @@ def test_a_cuda_capture_that_half_failed_is_not_a_capture(run_dir, monkeypatch):
 
 
 def test_the_resume_action_names_a_bundle_that_actually_loads(run_dir):
-    """read_checkpoint is a header scan, so the newest bundle can pass it and still fail the
-    required-state or torch.load checks. Naming THAT one pinned it: the UI sends the exact
-    checkpoint_path back, the preflight treats it as explicit and cannot scan past it, and the
-    directory fallback built for exactly this case never runs."""
+    """Resume must name a checkpoint that loads, since an explicit path disables the directory fallback."""
     run = _Run(run_dir, save_total_limit = 0)
     run.save(4)
     run.step_once(0.5)
@@ -2838,10 +2652,7 @@ def test_a_displaced_bundle_is_stamped_when_it_is_moved_aside(run_dir):
 
 
 def test_an_overwritten_startup_slot_counts_toward_the_limit(run_dir):
-    """The exclusion is about bundles this run did not write. A save at a step whose directory
-    was already there REPLACES it, and the bundle occupying that path afterwards is this run's,
-    so excluding it by pathname let the limit be exceeded once per overwritten slot -- real disk
-    on a long run."""
+    """Overwritten startup slots must count toward the save limit, or disk use grows per slot."""
     seeded = _Run(run_dir, save_total_limit = 0)
     seeded.step_once(0.5)
     seeded.save(10)
@@ -2859,10 +2670,7 @@ def test_an_overwritten_startup_slot_counts_toward_the_limit(run_dir):
 
 
 def test_the_resolved_base_precision_is_part_of_the_identity(run_dir):
-    """_apply_fp8_training and _apply_mxfp8_training can fail on the host and both fall back to
-    bf16 with only a warning. A bundle requested as fp8 recorded fp8 while its moments were
-    produced against bf16 linears, so resuming on a host where the conversion does take
-    restored them onto an fp8 frozen base and called it a clean continue."""
+    """Record the resolved base precision: fp8 and mxfp8 can fall back to bf16 with only a warning."""
     fell_back = _Run(run_dir)
     fell_back.identity = dc.with_resolved_base_precision(fell_back.identity, "bf16")
     assert fell_back.identity.base_precision_effective == "bf16"
@@ -2880,10 +2688,7 @@ def test_the_resolved_base_precision_is_part_of_the_identity(run_dir):
 
 
 def test_the_ema_decay_is_part_of_the_identity(run_dir):
-    """restore_resume_state loads the old shadow tensors and update count while the trainer
-    builds LoRAEMA from the INCOMING decay, so resuming with a different nonzero decay applies
-    a new coefficient to an average produced under the old one. The exported EMA adapter is a
-    hybrid, and the resume reports success."""
+    """The EMA decay is part of the identity, since a resumed average under a new decay is a hybrid."""
     import dataclasses
 
     slow = _Run(run_dir)

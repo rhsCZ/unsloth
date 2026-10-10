@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the vetted patch entry point (``diffusion_patch_backend.py``).
-
-Focused on the gate around the ``unsloth`` retry: it exists so a process that never imported
-unsloth (the test suite, a worker) still installs patches instead of silently running unpatched,
-but it must never fire where the import cannot succeed, because it is expensive enough there to
-take a small CI runner down.
-"""
+"""Patch entry point: the unsloth import retry must not fire where it cannot succeed."""
 
 from __future__ import annotations
 

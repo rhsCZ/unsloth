@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Watchdog escalation for a training worker that will not exit.
-
-A save-stop signals the worker and waits for it to save and exit. On some platforms the
-worker saves but then wedges in post-save GPU/driver teardown and never exits, leaving the
-run stuck in "Stopping..." forever. These tests pin the bounded recovery: the watchdog
-escalates to force_terminate() a short grace after "complete" (save done) or after an
-absolute timeout (hang during save), and never force-kills a worker that exits cleanly.
-
-Section (d) covers the same wedge on a run that ends by itself: the model is on disk but the
-process lingers, so the liveness-based bar sits at 100% forever (#7897). The pump arms the
-same watchdog on a terminal event, and escalation must not relabel a completed run.
-
-Fakes only; no GPU, network, or subprocess.
-"""
+"""The watchdog force-terminates only a worker that will not exit after save or timeout."""
 
 from __future__ import annotations
 
@@ -1184,10 +1171,7 @@ def test_is_run_finished_true_when_a_stall_is_unrecoverable():
 
 
 def test_mlx_worker_never_withholds_a_terminal_send_behind_tracking_teardown():
-    """MLX teardown closes the TensorBoard writer and calls wandb_run.finish(), either of
-    which can block for minutes. Ahead of `complete` that would withhold the event the UI
-    waits on, so the teardown stays in the finally and runs only after the send.
-    """
+    """MLX tracking teardown stays after the terminal send, since its close and finish calls can block."""
     import ast
     from pathlib import Path as _P
 

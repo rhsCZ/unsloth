@@ -2015,12 +2015,7 @@ def test_a_cached_community_repack_is_reused_instead_of_re_downloading_the_mirro
 def test_a_repack_left_in_the_pre_change_cache_root_still_wins_over_the_mirror(
     monkeypatch, tmp_path
 ):
-    """Changing Unsloth's cache folder must not cost the user the repack they already hold.
-
-    The fetch passes reuse_other_cache_root, so a file cached only under huggingface_hub's
-    import-time root resolves through that root -- but only under the repo id it was filed as.
-    Picking the mirror because the LIVE root looks empty makes those bytes unreachable: several GB
-    re-download online, and offline the load fails."""
+    """A repack cached under the pre-change cache root must still win over the mirror, not re-download."""
     from core.inference.sd_cpp_backend import _fetch_repo_map
 
     repack = "Comfy-Org/z_image_turbo"
@@ -2053,14 +2048,7 @@ def test_the_delete_guard_names_the_repack_as_well_as_the_mirror(monkeypatch):
 
 
 def test_begin_load_answers_without_waiting_on_the_header_probe(monkeypatch):
-    """begin_load returns at once by contract: the route thread hands the UI a status and the
-    multi-gigabyte pull happens on the worker. The FLUX.2 encoder pick needs the checkpoint's
-    inner_dim, which for an uncached pick means a range request over the wire -- bounded, but
-    bounded in SECONDS, and the route would wear every one of them on a load button press.
-
-    So the pre-lock probe is offline-only. The guard it feeds is a hint at that moment; the worker
-    re-probes with the network and publishes the real repos before it fetches a byte, which is the
-    second half of this test."""
+    """begin_load must not wait on the network probe, which the worker repeats before any fetch."""
     import time as _time
 
     from core.inference import diffusion_compat

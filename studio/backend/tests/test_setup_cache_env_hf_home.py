@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""_setup_cache_env() must seed HF_HUB_CACHE / HF_XET_CACHE from a user-set
-HF_HOME, so models download to and load from the same custom location (issue
-#5182). Both the Xet and HTTP-fallback download workers call snapshot_download
-without a cache_dir, so they follow HF_HUB_CACHE; getting it right here fixes
-detection and both transports at once.
-"""
+"""HF_HOME must seed HF_HUB_CACHE and HF_XET_CACHE, since both download workers follow HF_HUB_CACHE."""
 
 import contextlib
 import importlib.util

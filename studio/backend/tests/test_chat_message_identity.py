@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A user turn is identified by its id, never by its text (#9984).
-
-These run the real studio_db, so they cover the behaviour rather than the source. The frontend
-guards in studio/frontend/tests/chat-user-turn-identity.test.ts only read source and say so.
-"""
+"""A user turn is identified by its id, never by its text."""
 
 import itertools
 import random
@@ -139,11 +135,8 @@ def test_sync_keeps_every_message_and_its_links(db):
 
 
 def _regenerate_sequence(regenerations = 3):
-    """The rows a regenerate writes: one assistant sibling per attempt, no new user turn.
-
-    reload calls startRun({ parentId }), so there is no user append to replay, and nothing in
-    this repo drives that path end to end: chat-adapter.ts will not import under node --test.
-    """
+    """A regenerate writes one assistant sibling per attempt with no new user turn; no e2e test
+    drives it."""
     yield _msg("u-doc", "user", None, "summarise the attached spec", 1000, _doc())
     for attempt in range(regenerations + 1):
         yield _msg(f"a-{attempt}", "assistant", "u-doc", f"attempt {attempt}", 1100 + attempt)

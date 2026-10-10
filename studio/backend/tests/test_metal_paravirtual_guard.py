@@ -1573,10 +1573,7 @@ def test_the_normalizer_is_idempotent():
 
 
 def test_the_normalizer_still_runs_for_a_request_that_already_asks_for_cpu():
-    """The severe one: the whole block used to be skipped for Manual + 0 layers, so an
-    --override-tensor in extras (never stripped by the route, and applied while choosing
-    each weight's buffer type, before any layer is assigned) put the weights straight back
-    on the corrupt device."""
+    """Manual + 0 layers must be normalized too, or an -ot in extras lands weights on the corrupt device."""
     out = _normalized(
         gpu_memory_mode = "manual",
         gpu_layers = 0,
@@ -1896,11 +1893,7 @@ def test_the_restore_is_scoped_to_a_drop_that_owned_spec_type():
 
 
 def test_the_route_really_can_deliver_a_manual_cpu_request_carrying_an_override():
-    """The reachability leg for the block above: manual mode owns the offload flags at the
-    route, but that strip is the --gpu-layers family only. An -ot survives it untouched
-    and parse_gpu_layers_override reads nothing from it, so the request arrives as Manual
-    + 0 with a GPU-bound override still in the extras. (An -ngl cannot: the route
-    translates it into gpu_layers first.)"""
+    """The -ot survives the route's --gpu-layers strip, so Manual + 0 can reach the normalizer with it."""
     extras = ["-ot", ".*=Metal", "--top-k", "40"]
     assert llama_server_args.parse_gpu_layers_override(extras) is None
     assert (

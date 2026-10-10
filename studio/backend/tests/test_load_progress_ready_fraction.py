@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""load_progress() must report a complete load once llama-server is healthy.
-
-With layers offloaded to VRAM (-ngl) the server releases the mmap'd weight pages
-after upload, so its VmRSS sinks back well below the shard total. The raw RSS
-fraction would then sit at a partial (~8%) value forever and freeze a
-fraction-driven progress bar even though the model is ready -- the "stuck around
-8% on the second pass" symptom in #5740. In the ready phase the fraction must be
-1.0 regardless of resident set size.
-"""
+"""Progress stays at 1.0 once the model reports ready."""
 
 from __future__ import annotations
 

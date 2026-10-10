@@ -20,21 +20,7 @@ BOB = AccountContext("bob-id", "bob")
 
 
 def _keep_the_interpreter_walk_out_of_the_fixtures(tmp_path, monkeypatch):
-    """Drop the interpreter roots that contain *tmp_path*.
-
-    ``_landlock_rules`` grants an interpreter root child by child, descending
-    past whatever is protected. A checkout whose virtualenv sits above the
-    pytest tmp directory therefore walks straight into the fake /etc and /run
-    these tests build, and grants them on a path that has nothing to do with
-    the system-root split being measured: the fake root lands in the rule list
-    whole, and the whole-list comparison picks up every other worker's tmp
-    directory as it comes and goes. On CI the venv is never an ancestor of the
-    tmp dir, so it does not show there.
-
-    None of these tests is about interpreter roots, which have their own
-    coverage, so take those roots out rather than read a rule list that cannot
-    answer the question being asked.
-    """
+    """Drop interpreter roots that contain tmp_path, since the walk would grant fake /etc and /run paths."""
     original = tool_confinement._interpreter_roots
     monkeypatch.setattr(
         tool_confinement,
@@ -786,12 +772,7 @@ def _make_private_roots(account):
 
 
 def test_a_tool_launch_after_deletion_refuses_instead_of_recreating_the_roots(matrix):  # noqa: F811
-    """A chat authenticated before the delete must not rematerialize the private roots.
-
-    ``_ensure_dirs`` used to create the workspace, sandbox, temporary and project roots
-    with a raw ``Path.mkdir``, so a tool process launched after ``delete_account`` returned
-    rebuilt an orphaned account tree and ran in it.
-    """
+    """A launch after deletion must refuse: _ensure_dirs used raw mkdir and recreated orphaned roots."""
     _, _, accounts = matrix
     alice = storage.get_account("alice")
     _make_private_roots(alice)

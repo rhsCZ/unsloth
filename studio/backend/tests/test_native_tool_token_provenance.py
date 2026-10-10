@@ -19,12 +19,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Stub a dep the backend pytest matrix does not install, as test_trainer_stdout_quiet.py does.
-
-    That matrix stops at studio.txt plus torch and transformers; repo-cpu-tests is the job that
-    installs unsloth_zoo. Unstubbed, this module fails COLLECTION and takes the job down. A real
-    install is left alone, and __spec__ = None keeps the namespace-shadow guard a no-op here.
-    """
+    """Stub a dep the backend test matrix does not install, or collection fails and takes the job down."""
     if name in sys.modules:
         return
     try:
@@ -347,13 +342,7 @@ def test_blocked_rehearsal_is_opaque_but_outside_sibling_remains_eligible():
 
 
 def test_a_tokenizer_whose_special_ids_raise_falls_back_instead_of_killing_the_turn():
-    """The streamers build this decoder unguarded on every tool-enabled turn.
-
-    ``all_special_ids`` is a property on third-party tokenizer adapters, and they raise
-    their own exception types from it. Anything that escapes here takes down generation
-    for a model that worked before, so every failure has to land on the documented
-    fail-closed path instead.
-    """
+    """Adapters may raise any type from all_special_ids: every failure must reach the fail-closed path."""
 
     class RaisesOnSpecialIds:
         def __init__(self, exc):
@@ -383,10 +372,7 @@ def test_a_tokenizer_whose_special_ids_raise_falls_back_instead_of_killing_the_t
 
 
 def test_a_stop_token_is_named_by_decoding_when_conversion_cannot_name_it():
-    """``_special_token_sets`` keeps a control it recognised through the DECODE fallback, so
-    an adapter that cannot name an id can still have that control preserved. Naming the stop
-    token by conversion alone then left it unmatched, and an allowlisted control that is also
-    EOS stayed in the reply as raw markup."""
+    """Controls named only by decoding must stay special, or an allowlisted EOS control leaks as markup."""
 
     class ConvertUnavailable:
         all_special_ids = [7]

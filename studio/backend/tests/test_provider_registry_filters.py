@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Provider registry model-id filter regression tests.
-
-The OpenAI ``model_id_allowlist`` previously hardcoded the gpt-5.3/4/5
-families plus gpt-4.5 / o3 -- silently dropping every future family
-OpenAI shipped. Anthropic's ``model_id_denylist`` previously stripped
-every dated id, hiding the canonical names of every pre-4.6 model
-(Opus 4.5, Sonnet 4.5, Haiku 4.5, Opus 4.1, the 4.0 family).
-
-These tests pin the new denylist (OpenAI) and the empty denylist
-(Anthropic) by walking realistic ``/v1/models`` listings through
-``PROVIDER_REGISTRY`` and asserting the surviving set. The OpenAI bar is
-"servable on /v1/responses with stream: true", not merely "chat model" --
-Studio has no other OpenAI transport.
-"""
+"""OpenAI ids must be servable on /v1/responses with stream: true; Anthropic's denylist is empty."""
 
 from core.inference.providers import PROVIDER_REGISTRY
 
@@ -153,10 +140,7 @@ def test_openai_realtime_translate_variants_are_dropped():
 
 
 def test_openai_legacy_instruct_completion_ids_are_dropped():
-    """Legacy `*-instruct` completion-only ids (gpt-3.5-turbo-instruct
-    and friends) speak /v1/completions, not chat/responses. Our OpenAI
-    bridge only knows the chat/responses transport, so admitting them
-    into the picker would 4xx every selection."""
+    """*-instruct ids speak /v1/completions, which the chat/responses bridge cannot serve; drop them."""
     dropped = _apply(
         "openai",
         [
@@ -169,13 +153,7 @@ def test_openai_legacy_instruct_completion_ids_are_dropped():
 
 
 def test_openai_legacy_compact_snapshot_suffixes_are_dropped():
-    """Legacy `-MMDD` snapshot suffixes (gpt-3.5-turbo-0125,
-    gpt-4-0613, gpt-4-1106-preview, etc.) hide behind the canonical
-    id which the listing also returns; surface only the canonical so
-    users do not pick a deprecated snapshot by accident. The
-    `-\\d{4}(?:-preview)?$` rule must not catch canonical ids whose
-    minor version happens to be a year-like number (e.g. gpt-4.5,
-    o3) -- those are tested as KEEP below."""
+    """Hide -MMDD snapshots behind canonical ids; the year-suffix rule must not catch gpt-4.5 or o3."""
     dropped = _apply(
         "openai",
         [

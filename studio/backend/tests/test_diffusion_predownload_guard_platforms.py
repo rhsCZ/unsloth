@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Where the pre-download guard from issue #9130 is allowed to speak, and what it does when
-the Hub answers badly.
-
-test_diffusion_predownload_memory_guard.py hand-builds a DeviceMemory, which proves the
-arithmetic but assumes the classification. These drive the REAL ``snapshot_device_memory``
-over a faked driver, once per platform and vendor, so "discrete VRAM and plain CPU are
-untouched" is tested rather than asserted.
-
-The second half covers the one new network read: however model_index.json comes back,
-staging must fall back to the old best-effort listing rather than refuse or raise.
-"""
+"""Pre-download guard runs on real snapshot_device_memory per platform; bad Hub replies fall back."""
 
 from __future__ import annotations
 

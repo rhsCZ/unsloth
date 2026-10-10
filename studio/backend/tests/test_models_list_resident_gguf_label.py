@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GET /api/models/list must label the resident GGUF the way the chat model bar reads it.
-
-The bar renders the ``name`` of the models[] entry whose ``id`` is the client's
-``params.checkpoint``, which for a cached GGUF is the snapshot directory. Splitting that
-raw identifier on "/" showed the commit sha on POSIX and the whole home dir on Windows.
-"""
+"""The bar renders the models[] name; splitting the snapshot path on slash showed a commit sha."""
 
 import asyncio
 import sys

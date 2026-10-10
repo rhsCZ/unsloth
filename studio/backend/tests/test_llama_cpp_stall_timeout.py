@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression test for the post-first-token stall timeout in the cancel-aware read.
-
-httpcore snapshots ``request.extensions["timeout"]["read"]`` once at body start, so
-when ``_iter_text_cancellable`` lowers it after the first token, a one-token-then-silent
-server hangs for the full prefill window. The fix re-reads the live extensions timeout
-per call; a fake clock and always-silent stream check the read gives up after the live
-stall timeout, not the stale prefill one.
-"""
+"""httpcore snapshots the read timeout at body start, so the stall timeout must be re-read per call."""
 
 from __future__ import annotations
 

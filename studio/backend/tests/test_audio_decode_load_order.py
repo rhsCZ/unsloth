@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The training worker installs the soundfile decoder before it reads any row.
-
-Dependency-free on purpose: test_audio_dataset_decode.py importorskips soundfile and
-librosa, and a host with neither is exactly where this ordering is load-bearing.
-"""
+"""Training worker installs the soundfile decoder before reading any row; it needs no optional deps."""
 
 from __future__ import annotations
 

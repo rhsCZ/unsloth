@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A bad cache entry must not hide an otherwise usable repo.
-
-Recovery handles dangling refs, broken snapshot links, and stray snapshot files without mutating
-the cache. Ref deletion cannot be race-free because Hub writes refs in place.
-"""
+"""Recovery never mutates the cache: ref deletion is not race-free, since the Hub writes refs in place."""
 
 from __future__ import annotations
 
@@ -631,10 +627,8 @@ def test_a_broken_symlink_costs_its_quant_and_leaves_the_clean_one_loadable(tmp_
 
 
 def test_a_whole_quant_in_a_mixed_newest_snapshot_beats_an_older_larger_one(tmp_path, monkeypatch):
-    """A whole small quant can sit in the newest snapshot beside an interrupted split one while an
-    older snapshot holds only a whole larger quant. Auto-load takes the smallest offered, so skipping
-    the newest snapshot spends the attempt on the larger one; only its completed subset is offered,
-    so both ends still name one directory."""
+    """Auto-load takes the smallest offered quant, so a whole small quant in the newest snapshot
+    must win."""
     from hub.utils.gguf import list_local_gguf_variants
 
     repo_dir = _two_snapshot_repo(
@@ -1998,10 +1992,7 @@ def test_a_family_in_a_subdirectory_does_not_stand_in_for_the_root_one(tmp_path,
 def test_a_layout_that_keeps_every_weight_in_a_subdirectory_cannot_serve_the_root(
     tmp_path, monkeypatch
 ):
-    """Companion to the test above: from_pretrained opens the names it finds at the snapshot root,
-    so a set that lives only under backup/ is not one the pinned load can reach either. A layout
-    that genuinely keeps its weights in subdirectories names no family this walk groups, so it is
-    carried by the ungrouped payload rather than by this one."""
+    """Weights only under backup/ are unreachable, since from_pretrained opens only snapshot-root names."""
     _snapshot_repo(
         tmp_path,
         OLDER,
@@ -3054,10 +3045,7 @@ def _split_payload_rows(tmp_path, monkeypatch, *, where: str, refs: dict) -> lis
 def test_a_split_payload_is_partial_wherever_it_is_cached(
     where, ref_label, refs, tmp_path, monkeypatch
 ):
-    """The payload flags are OR-ed over revisions, so a repo holding config.json in one snapshot and
-    the weights in another reads as runnable while nothing on disk can serve it. Neither the cache it
-    sits in nor the state of refs/main changes that: a resolving ref only ever lands on one half,
-    since a directory that could serve the payload would be a payload snapshot."""
+    """Payload flags OR across revisions: config in one snapshot and weights in another is still partial."""
     rows = _split_payload_rows(tmp_path, monkeypatch, where = where, refs = refs)
     assert [row["repo_id"] for row in rows] == ["Org/Model"]
     assert rows[0]["partial"] is True
@@ -3110,13 +3098,7 @@ def test_a_self_contained_snapshot_is_not_made_partial_by_a_second_one(
 def test_a_newer_companion_only_snapshot_does_not_make_the_ref_snapshot_partial(
     tmp_path, monkeypatch
 ):
-    """The pipeline signals must read the snapshot the row loads, not the newest one.
-
-    A GGUF image load leaves a companion-only prefetch (root ``model_index.json`` + VAE /
-    text-encoder, no ``transformer/``) in a NEW revision beside the complete pipeline that
-    ``refs/main`` still resolves to. huggingface_hub reads ``refs/main`` to turn ``main`` into a
-    commit, so ``from_pretrained(repo_id)`` opens the OLD, complete directory -- judging the row on
-    the newest revision instead marks a fully downloaded model partial and unchattable."""
+    """Pipeline completeness is judged on the refs/main snapshot, not a newer companion-only prefetch."""
     from types import SimpleNamespace
 
     from hub.services.models import cache_inventory
@@ -3309,13 +3291,7 @@ def test_an_orphan_variant_index_does_not_veto_the_default_weight(
 
 
 def test_a_variant_only_component_is_missing_its_denoiser_whole_or_not(tmp_path):
-    """A dtype twin is not the weight a default load asks for, so a bf16 set does not make the
-    component readable -- not half landed, and not even whole.
-
-    ``from_pretrained`` without ``variant`` resolves the plain name and has no fallback to the
-    twin, raising ``Error no file named diffusion_pytorch_model.safetensors``. The download plan
-    skips those files for that reason, so a cache holding only them cannot serve this row.
-    """
+    """A dtype twin is not the weight a default from_pretrained opens, so the component stays missing."""
     snapshot = _pipeline_snapshot(
         tmp_path,
         _FLUX_INDEX,
@@ -3334,12 +3310,7 @@ def test_a_variant_only_component_is_missing_its_denoiser_whole_or_not(tmp_path)
 
 @pytest.mark.parametrize("whole_suffix", [".safetensors", ".bin"])
 def test_a_corrupt_selected_index_hides_the_whole_weight_beside_it(whole_suffix, tmp_path):
-    """An unreadable selected index is the failure, not an absence of evidence.
-
-    ``is_sharded`` is set from that file merely existing, so the parse then raises with neither the
-    ``except IOError`` branch nor the pickle fallback reachable. The whole weight beside it is
-    never opened.
-    """
+    """A corrupt selected index is a failure, not missing evidence; it hides the whole weight beside it."""
     snapshot = _pipeline_snapshot(
         tmp_path,
         _FLUX_INDEX,
@@ -3407,12 +3378,7 @@ def test_shards_whose_index_never_landed_do_not_stand_in_for_the_whole_weight(tm
     "default_name", ["diffusion_pytorch_model.safetensors", "diffusion_pytorch_model.bin"]
 )
 def test_an_ignored_index_cannot_claim_the_default_weight(default_name, tmp_path):
-    """A map naming the file a default load opens does not hide it.
-
-    Every index that gets to claim shards here is one ``_fetch_index_file`` never builds, so a
-    stale or malformed ``.bin`` map naming the default weight would otherwise suppress the only
-    file ``_get_model_file`` asks for and report a loadable component torn.
-    """
+    """An ignored index map must not claim the default weight, or a loadable component is reported torn."""
     snapshot = _pipeline_snapshot(
         tmp_path,
         _FLUX_INDEX,
@@ -3682,13 +3648,7 @@ def test_a_multi_denoiser_pipeline_needs_every_denoiser_it_declares(manifest, se
     ],
 )
 def test_json_too_deep_to_parse_is_contained_rather_than_raising(target, missing, tmp_path):
-    """json.load raises RecursionError, which is neither a ValueError nor an OSError, so an
-    unguarded parse would escape past the caller and drop the row from the scan entirely.
-
-    Contained is not ignored, and which one it is depends on the file. An unreadable MANIFEST
-    proves nothing about the denoiser, so the row stays. An unreadable SELECTED INDEX is the
-    failure itself, since the whole weight lying beside it is then never opened.
-    """
+    """A too-deep JSON raises RecursionError, not ValueError or OSError, so the parse must be guarded."""
     snapshot = _pipeline_snapshot(
         tmp_path,
         _FLUX_INDEX,
@@ -4005,13 +3965,7 @@ def _compat_cached_rows(cache_root: Path, monkeypatch) -> list[dict]:
 def test_the_compatibility_route_withholds_a_recovery_it_cannot_describe(
     snapshot_files, listed, tmp_path, monkeypatch
 ):
-    """Un-hiding a repo must not smuggle it into a response that cannot say what is wrong with it.
-
-    A torn recovery stays withheld: nothing in the schema says "short a shard", so it would read
-    as a plain cached model. The whole one is no longer withheld, because the premise changed --
-    this schema now carries ``load_id``, so the row can name the snapshot to load instead of an
-    id that does not resolve. Withholding it hid a model whose weights are on disk and loadable.
-    """
+    """A torn recovery stays withheld; a whole one is listed, since load_id now names its snapshot."""
     _repo_with(tmp_path, snapshots = {SNAPSHOT: snapshot_files}, refs = {"main": UPSTREAM_HEAD})
     rows = _compat_cached_rows(tmp_path, monkeypatch)
     assert [row["repo_id"] for row in rows] == (["Org/Model"] if listed else [])
@@ -4059,10 +4013,7 @@ def test_a_recovery_whose_default_ref_resolves_is_still_listed(tmp_path, monkeyp
 def test_a_stale_ref_does_not_suppress_the_manifest_on_the_loaded_snapshot(
     refs, on_disk, partial, tmp_path
 ):
-    """Repo-wide signals are excused only when the load target itself is absent. Keying that on any
-    dangling ref let a leftover tag hide a manifest mismatch on the very snapshot refs/main
-    resolves to, so a truncated download went out ready. Only attribution narrowed; the recovery
-    guard still keys on any ref."""
+    """A leftover dangling ref must not hide a manifest mismatch on the snapshot refs/main resolves to."""
     from hub.utils import download_manifest
 
     repo = _repo_with(

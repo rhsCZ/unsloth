@@ -1,40 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""[OS x GPU vendor] for the Auto host-offload context (``_AUTO_OFFLOAD_CTX``).
-
-The failure mode guarded: raising the context Auto settles on when no discrete-GPU
-subset can hold the model (4096 -> 8192) is a change to a value that is read inside
-the *placement* decision, so it could move which devices a load pins, whether
-``--fit`` owns placement, or which arm of ``load_model``'s placement chain runs at
-all. It must not. The only thing allowed to differ is the emitted context, and only
-on the two arms that reach one of the two sites.
-
-The chain under test, in source order:
-
-  1. tensor-parallel        -- ``_plan_tensor_parallel`` owns everything
-  2. measured-KV            -- gpus + ``_can_estimate_kv()``; holds SITE A, the
-                               subset loop's ``else:`` plus its residency re-check
-  3. file-size-only         -- gpus, no KV metadata; holds SITE B, which only
-                               relabels the context ``--fit`` was already given
-  4. Apple unified memory   -- no gpus, a Metal budget; floors at _FIT_MIN_CTX
-                               like every other arm, since its four hardcoded
-                               4096s were replaced by the constant
-  5. (no arm)               -- no gpus and no Metal budget: CPU, no context math
-
-Each cell records the arm taken, the emitted context, ``--fit`` and the pinned
-device list. The arm is read from a line tracer over ``load_model`` rather than
-inferred from the output, because "the arm ran and changed nothing" and "the arm
-never ran" produce the same argv on most cells.
-
-Simulation notice: this suite runs on one host. Only Linux/NVIDIA is native.
-Windows, WSL2 and macOS are ``sys.platform`` / ``platform.release`` monkeypatches
-via the shared ``_apply_platform`` seam, Metal is a non-zero
-``_apple_metal_memory_budget_bytes`` with an empty GPU probe, and every AMD cell is
-a memory shape plus ``utils.hardware.IS_ROCM``. No ROCm runtime, no Metal device
-and no Windows kernel is exercised. The authoritative signal for those remains the
-per-OS CI matrix on real runners; this is the branch coverage one host can give.
-"""
+"""Raising the Auto offload context may change only the emitted context, not device placement."""
 
 from __future__ import annotations
 
@@ -143,13 +110,7 @@ IGPU_FREE_MIB = _apply_igpu_host_reserve_mib(IGPU_RAW_FREE_MIB, True)
 
 @dataclasses.dataclass(frozen = True)
 class Accelerator:
-    """One column of the matrix.
-
-    ``memory`` rows are ``(index, free_mib, total_mib)`` exactly as
-    ``_get_gpu_memory`` answers. A ``total_mib`` of 0 is the shared-pool marker both
-    the Vulkan iGPU and the ROCm APU paths emit, because that "total" would be
-    system RAM; the placement math reads it as "no absolute headroom known".
-    """
+    """total_mib of 0 marks a shared pool (iGPU or APU); placement reads it as no known headroom."""
 
     label: str
     vulkan: bool
@@ -202,15 +163,7 @@ def _flag(cmd, *names) -> Optional[str]:
 
 
 def _selected_devices(cmd, env) -> Optional[tuple]:
-    """The devices placement actually chose, as the child sees them.
-
-    ``backend.gpu_ids`` only carries an explicit user pick, so an automatic
-    selection is invisible there. What placement emits instead is a visibility
-    mask (CUDA / HIP / ROCR) or, on a Vulkan build, ``--device VulkanN``. A mask of
-    -1 is the deliberate CPU pin. Note that a Vulkan build names its devices even
-    when ``--fit`` owns placement, so this is the device set the child may use, not
-    proof that residency was awarded; ``Outcome.awarded`` is that proof.
-    """
+    """Devices as the child sees them: a visibility mask, or --device VulkanN; mask -1 is the CPU pin."""
     device = _flag(cmd, "--device", "-dev")
     if device:
         return tuple(
@@ -288,12 +241,7 @@ def run_cell(tmp_path, monkeypatch, platform, accelerator: Accelerator, **kwargs
 def test_an_overflowing_model_reaches_the_expected_arm_and_pins_nothing(
     tmp_path, monkeypatch, platform, accelerator
 ):
-    """G1. A model no subset can hold: the placement half of the answer.
-
-    This is the only shape that reaches Site A, so it is the shape where the
-    constant could do damage. On every cell the answer is the same one the 4096
-    fallback gave: no device is pinned and ``--fit`` owns placement.
-    """
+    """An overflowing model reaches Site A and must pin no device, leaving placement to --fit."""
     outcome = run_cell(tmp_path, monkeypatch, platform, accelerator)
 
     if accelerator.memory:
@@ -369,24 +317,7 @@ def test_the_file_size_only_arm_relabels_the_context_without_moving_a_device(
 
 @pytest.mark.parametrize("platform", PLATFORMS, ids = [p[0] for p in PLATFORMS])
 def test_metal_auto_still_floors_at_the_fit_minimum(tmp_path, monkeypatch, platform):
-    """G3. Pins the CURRENT Metal behaviour so it cannot drift silently.
-
-    This used to measure an ASYMMETRY: the Apple arm held four hardcoded 4096s while
-    a discrete GPU got ``_AUTO_OFFLOAD_CTX``, so the same offloading model published
-    half the context on a Mac. Those four sites now read ``_FIT_MIN_CTX``, the
-    asymmetry is gone by design, and what is worth pinning is the symmetry -- the two
-    arms agreeing is the property that regresses if anyone re-introduces a separate
-    Metal literal.
-
-    The equality is asserted against the CONSTANTS on both sides rather than against
-    8192, so the pair keeps agreeing through the next floor move instead of failing
-    here. The old form asserted ``on_discrete.ctx == 2 * on_metal.ctx``, which was a
-    correct reading of the ratio at the time and is exactly the shape that turns a
-    deliberate change into a puzzling failure.
-
-    Parametrised over every platform on purpose: the arm is gated on a non-zero
-    Metal budget, not on ``sys.platform``, and that is worth having on record.
-    """
+    """Metal Auto must floor at _FIT_MIN_CTX, like discrete GPUs; no separate Metal literal."""
     metal = next(a for a in ACCELERATORS if a.label == "apple-metal")
     on_metal = run_cell(_subdir(tmp_path, "metal"), monkeypatch, platform, metal)
 
@@ -489,13 +420,7 @@ def _rocm_torch(free_mib: int, total_mib: int, reserved_mib: int):
 def test_windows_rocm_feeds_a_smaller_free_reading_into_the_planner(
     monkeypatch, os_key, expected_free_mib
 ):
-    """G6, first half: identical hardware, two different numbers.
-
-    ``rocm_windows_free_is_untrusted`` is True only for win32 + IS_ROCM, and
-    ``trusted_mem_get_info`` then caps free at ``total - reserved``. WDDM
-    virtualises video memory, so the driver's 16000 is the process's own budget
-    rather than the card's residency; the cap is the only ceiling there is.
-    """
+    """Windows ROCm caps free VRAM at total minus reserved, as WDDM reports the process budget."""
     monkeypatch.setitem(sys.modules, "torch", _rocm_torch(16_000, 16_384, 6_000))
     monkeypatch.setattr(_hw.sys, "platform", os_key)
     monkeypatch.setattr(_hw, "IS_ROCM", True, raising = False)
@@ -507,23 +432,7 @@ def test_windows_rocm_feeds_a_smaller_free_reading_into_the_planner(
 
 
 def test_the_windows_rocm_cap_is_what_pushes_a_load_into_the_fallback(tmp_path, monkeypatch):
-    """G6, second half: the smaller number changes the outcome.
-
-    Same card, same model. Linux keeps the driver's 16000 MiB and the subset loop
-    awards residency; Windows sees 10384 MiB, nothing holds the model, and the load
-    lands on Site A. So Windows AMD users meet the new Auto offload context on
-    hardware where Linux AMD users never see it. Not a regression the constant
-    introduced -- the same asymmetry sent them to 4096 before -- but it is the cell
-    where the new value is most often visible.
-
-    The weights are 10 GiB rather than the 12 GiB this started at. At 12 GiB both
-    sides offload now: 12288 + 320 MiB leaves 2900 of a 15508 MiB Linux budget,
-    which held a 4096 context and does not hold an 8192 one, so the cell stopped
-    contrasting anything the moment the fit floor moved. 10 GiB restores the
-    contrast and leaves it a measurement rather than a floor -- Linux pins at 9728,
-    1536 above the floor -- so the next floor move shows up as this test failing
-    only once it would really have changed the placement.
-    """
+    """Windows' smaller free reading pushes identical AMD hardware into the offload fallback."""
     windows = next(p for p in PLATFORMS if p[0] == "windows")
     linux = next(p for p in PLATFORMS if p[0] == "linux")
     model_mib = 10 * 1024

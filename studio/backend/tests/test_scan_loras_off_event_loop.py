@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GET /api/models/loras must not block the event loop.
-
-The scan walks two directories and reads a tokenizer per checkpoint. It ran directly in
-the coroutine, so for its whole duration the server could not serve anything else,
-streamed chat tokens included. The page polls this route, so the stall repeated.
-"""
+"""GET /api/models/loras must run its scan off the event loop, so other requests keep being served."""
 
 from __future__ import annotations
 
@@ -17,11 +12,7 @@ import routes.models as models_routes
 
 
 def test_the_scan_does_not_stall_other_requests(monkeypatch, tmp_path):
-    """A heartbeat coroutine keeps ticking while a deliberately slow scan runs.
-
-    On the unfixed route the sleep happens inside the coroutine, so the heartbeat gets no
-    turn at all between the call and its return.
-    """
+    """A heartbeat coroutine must keep ticking during a slow scan; blocking would stop it entirely."""
     scan_seconds = 0.3
     heartbeat_seconds = 0.01
 

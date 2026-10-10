@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unsloth's UI control frames are opt-in on OpenAI-compatible streams.
-
-Frames like ``tool_status`` / ``reasoning_summary`` carry no ``choices``, so
-strict OpenAI clients (openai-python, the Vercel AI SDK, opencode) fail schema
-validation mid-stream when they arrive. /v1/chat/completions therefore emits a
-clean OpenAI stream by default; the Studio UI opts in with X-Unsloth-Events: 1,
-and durable runs (whose event log is replayed to that UI) opt in internally.
-"""
+"""UI control frames are opt-in via X-Unsloth-Events: 1; strict OpenAI clients reject them."""
 
 from __future__ import annotations
 

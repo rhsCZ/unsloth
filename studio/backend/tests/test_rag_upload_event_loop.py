@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A document upload must not occupy the event loop while it runs.
-
-The upload routes copy the file and call start_ingestion inline, and start_ingestion
-re-hashes the file and probes nvidia-smi through embedding_identity. Run on the event
-loop that is seconds of dead backend: a streaming reply stops mid-token and every other
-request queues behind the attachment. These tests count the trivial concurrent requests
-answered while an upload is in flight, so they fail whenever the blocking work moves back
-onto the loop, regardless of how the routes are spelled.
-"""
+"""Upload routes must not block the event loop; ingestion hashing and nvidia-smi probes run off-loop."""
 
 import asyncio
 import time

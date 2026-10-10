@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: /api/liveness says whether the backend is still warming up, and stays cheap.
-
-The desktop health watchdog probes this route every 15s and kills the backend after 3
-consecutive misses. It cannot use /api/health for that -- health awaits hardware detection,
-so a probe is billed for the warm thread's `import torch` -- and it cannot treat one reply
-as "startup finished" either, because those C-extension imports hold the GIL and stall the
-next probes on a process that is perfectly healthy. So liveness carries a
-`torch_warm_in_progress` marker and the watchdog holds its startup grace open until a reply
-omits it. See studio/src-tauri/src/commands.rs.
-
-That marker tracks the whole coordinated warm, not hardware detection alone: detection is
-only the first of utils/torch_warmup.py's stages and the inference_backend, transformers,
-datasets and unsloth_zoo imports that follow it are the ones that stall a probe. The older
-`hardware_detecting` marker stays exactly what it was, a "this verdict is provisional"
-signal the frontend reads, and is still published beside it.
-
-The markers must not cost what health costs: liveness reads settled snapshots, it must
-never start detection or wait on it.
-
-CPU-only, no network, no GPU, no weights: the subprocess tests stub detection.
-"""
+"""torch_warm_in_progress covers the whole warm, not only detection, so the startup grace stays open."""
 
 from __future__ import annotations
 
@@ -178,14 +158,7 @@ def test_an_unsettled_verdict_is_published_as_still_warming_up():
 
 
 def test_a_late_warm_stage_still_holds_the_startup_grace_open():
-    """The regression: hardware detection is _STAGES[0], and inference_backend,
-    transformers, datasets and unsloth_zoo import after it.
-
-    So hardware_detecting is already gone while the warm is at its most expensive. A
-    watchdog reading only that marker ends its grace mid-warm and the next GIL stall,
-    which is exactly what the reported "torch warm finished in 8190.4ms" timeline shows
-    happening well after detection, is billed as three dead probes against a healthy
-    backend."""
+    """Detection is only the first warm stage, so hardware_detecting alone would end the grace too early."""
     result = _probe(settled = True, warm = "running")
 
     assert not result["has_detecting_key"], (
@@ -241,13 +214,7 @@ def test_a_warm_retired_mid_stage_is_not_reported_as_warming_forever():
 
 
 def _watchdog_probe_budget_s() -> float:
-    """The launcher's per-probe HTTP budget, read out of the Rust that owns it.
-
-    A ceiling on this route has to sit under the number the watchdog actually allows, or a
-    regression that makes /api/liveness block for most of a probe passes here while every
-    real probe times out. Derived rather than written down so the two cannot drift apart,
-    the way test_health_answers_within_probe_budget.py derives its own budget.
-    """
+    """Reads HEALTH_PROBE_TIMEOUT from the Rust launcher so the liveness ceiling cannot drift past it."""
     assert _COMMANDS_RS.is_file(), f"{_COMMANDS_RS} moved; update this guard"
     match = re.search(
         r"const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs\((\d+)\)",

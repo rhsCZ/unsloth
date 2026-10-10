@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the offload-avoidance serving-slot reduction (`_slots_that_fit_on_gpu`).
-
-When a pinned context does not fit at the requested `--parallel` slot count, Unsloth would
-flip to `--fit on` and llama-server offloads layers to host RAM, collapsing decode ~3x
-(oobabooga #6718). Instead the loader retries the on-GPU fit at fewer slots and keeps the
-largest count that stays fully on GPU (`-ngl -1`). These tests drive the real helper with
-synthetic VRAM maps; the KV term is mocked so totals are controlled and the reduction logic
-is asserted directly (no GPU, network, or subprocess).
-"""
+"""Fewer serving slots keep the context fully on GPU, avoiding --fit on offload that collapses decode."""
 
 from __future__ import annotations
 
@@ -193,10 +185,7 @@ class TestSlotsThatFitOnGpu:
 
 
 class TestMtpReserveIsRepricedPerCandidate:
-    """The MTP reserve is not slot-independent: compact SWA scales its window allowance by
-    the slot count under kv_unified, and an MLA target with recurrent (KDA) layers charges
-    per slot. Holding it at the requested count over-charged every candidate, so a smaller
-    one that fits was rejected and the load kept --fit and offloaded to host (PR #8172)."""
+    """The MTP reserve scales with the slot count, so it must be repriced per candidate, not held fixed."""
 
     def _fit(
         self,

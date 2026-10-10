@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic CPU tests for the pre-cast text-encoder load path.
-
-Mirrors tests/test_diffusion_prequant.py: resolution priority, checkpoint validation,
-fallback behaviour, the local-path allowlist gate, and the pipeline-assembly injection
-gating -- all without CUDA, the Hub, or a real transformers model."""
+"""Pre-cast text-encoder load path: resolution, fallback and gating, with no CUDA or Hub."""
 
 from __future__ import annotations
 
@@ -93,13 +89,7 @@ def test_resolve_priority_and_scheme_gate():
 
 
 def test_a_hosted_safetensors_encoder_is_asked_for_and_a_pickle_repo_still_resolves(monkeypatch):
-    """The regression this exists for: the resolver only ever asked for ``.pt``.
-
-    A repo hosting the encoder as safetensors then 404'd, and because the loader is best effort the
-    user silently got the dense encoder instead (17.5 GB against 9.4 GB on Qwen-Image-2.1) with no
-    error anywhere. Both extensions have to be reachable, and the repos that still host a pickle
-    have to keep working, so this drives the download path with each in turn.
-    """
+    """Resolver must ask for safetensors as well as .pt, or the dense encoder loads silently."""
     from huggingface_hub.errors import EntryNotFoundError
 
     asked = []
@@ -138,12 +128,7 @@ def test_a_hosted_safetensors_encoder_is_asked_for_and_a_pickle_repo_still_resol
 
 
 def test_a_transport_failure_is_not_mistaken_for_a_missing_file(monkeypatch):
-    """Only "this name is not in this repo" may advance to the next candidate.
-
-    An auth failure or a dead network must not be retried as a different extension and then
-    reported as an absent artifact: that would turn a fixable error into a silent 17.5 GB
-    download on every load.
-    """
+    """Only a missing filename advances to the next candidate; auth and network errors must surface."""
 
     def fake_download(*, repo_id, filename, token, cache_dir, local_files_only):
         raise PermissionError("401 unauthorized")
@@ -861,12 +846,7 @@ def test_shipped_video_and_image_families_resolve_the_scale(monkeypatch):
 
 
 def test_a_sibling_release_keeps_the_pre_cast_encoder(monkeypatch):
-    """The base gate must not refuse a release that republishes the SAME encoder.
-
-    Qwen-Image-2512 and Krea-2-Raw ship their sibling's text encoder byte for byte (shard
-    LFS sha256 compared 2026-08-25), so dropping the hosted pre-cast artifact for them
-    would stage 16.6 GB / 8.9 GB of dense encoder the load never opens -- and would widen
-    the memory budget that the pre-download unified-memory guard is sized against."""
+    """Releases that ship their sibling's text encoder byte for byte must keep the pre-cast encoder."""
     import core.inference.diffusion_precision as precision
     from core.inference.diffusion_families import detect_family_for_pick
 
@@ -901,14 +881,7 @@ def test_an_unrelated_custom_base_still_loses_it(monkeypatch):
 
 
 def test_the_plan_recognises_the_pt_repos_that_already_exist(monkeypatch):
-    """Preferring safetensors may only ADD a name, and the resolver is not the only reader.
-
-    Every pre-cast encoder repo published so far hosts a ``.pt``. The download plan matched the
-    PRIMARY name alone, so the moment the preferred spelling became safetensors it reported those
-    repos as having no pre-cast encoder: the dense shards went back into the pull AND the loader
-    still fetched the ``.pt``, so the user downloaded both. That is the opposite of what this
-    change is for, and no test covered it because the plan lives beside the resolver, not in it.
-    """
+    """Preferring safetensors may only add a name: the plan must still recognise existing .pt repos."""
     src = TePrequantSource(
         kind = "repo",
         location = "unsloth/LTX-2-FP8",
@@ -1023,13 +996,7 @@ def test_an_unreachable_hub_is_not_a_missing_filename(monkeypatch):
 
 
 def test_the_video_prefetch_advances_only_on_a_missing_name():
-    """The prefetch plan and the load have to agree about what a failure MEANS.
-
-    The resolver advances to the next spelling only for "this name is absent"; if the prefetch
-    advanced on an unreachable Hub too, it could report a legacy artifact as fetched, the plan would
-    drop the dense encoder, and the load would then refuse to advance past the same error and have
-    neither.
-    """
+    """The video prefetch must advance only on a missing name, matching the resolver and the load."""
     from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
 
     from core.inference.video import VideoBackend
@@ -1045,10 +1012,7 @@ def test_the_video_prefetch_advances_only_on_a_missing_name():
 
 
 def test_every_family_default_scheme_is_one_we_actually_host_for_that_family():
-    """``te_quant_auto`` promises a scheme an UNSET request gets. If the family has no hosted
-    pre-cast encoder for it, that promise costs a dense download and an in-place cast on every
-    default load, which is the opposite of why the field exists. Catches a family opting in
-    before its artifact is published, and a scheme/component pair that does not line up."""
+    """Every family's default te_quant_auto scheme must be one actually hosted for that family."""
     from core.inference.diffusion_families import _FAMILIES
     from core.inference.diffusion_te_prequant import resolve_te_prequant_source
 
@@ -1071,11 +1035,7 @@ def test_every_family_default_scheme_is_one_we_actually_host_for_that_family():
 
 
 def test_qwen_image_2_1_defaults_to_a_hosted_encoder():
-    """The family this was built for. Its encoder (Qwen3-VL-8B, 16.33 GiB dense) is bigger than
-    its INT8 denoiser (6.76 GiB), so leaving it dense is what made a quantised pick still cost
-    ~26 GB. Named rather than covered only by the sweep above, because the whole change is
-    pointless if this one row regresses. The default is the int8 ConvRot encoder, with the fp8
-    one behind it in the same repo."""
+    """Qwen-Image-2.1 must default to a hosted encoder; dense, it outweighs the int8 denoiser."""
     from core.inference.diffusion_families import detect_family
     from core.inference.diffusion_te_prequant import resolve_te_prequant_source
 

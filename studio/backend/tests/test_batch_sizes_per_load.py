@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""First-class n_batch / n_ubatch load fields (llama-server --batch-size / --ubatch-size).
-
-Compact sibling of test_parallel_slots_per_load.py: pydantic bounds, VRAM-budget
-precedence, reload dedupe, shadow stripping and the stored-override mapping.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -277,11 +271,7 @@ def test_remote_gguf_guard_counts_explicit_micro_batch():
 
 
 def _header_reader(**dims):
-    """Stand in for _read_gguf_metadata, which would otherwise reset the dims we set.
-
-    _estimate_gguf_kv_gb builds its own LlamaCppBackend and reads the file, so patching
-    the instance is not enough; the reader itself has to be replaced.
-    """
+    """Replace the reader itself: _estimate_gguf_kv_gb builds its own backend, so instance patches miss."""
 
     def _reader(self, *args, **kwargs):
         for key, value in dims.items():
@@ -513,12 +503,7 @@ def test_override_strips_shadowing_batch_flags():
 
 
 def test_the_local_guard_charges_diffusion_nothing_for_the_batch_flags():
-    """The diffusion runner takes neither --batch-size nor --ubatch-size, but SWA metadata
-    prices the KV against the micro-batch (swa_limit = swa * slots + ubatch), so deriving
-    one from the ignored fields charged a diffusion load for a graph it never builds:
-    measured 5.449 GB against 4.658, or 0.79 GB of phantom cache that can 409 a chat
-    coexisting with training. The remote branch was already gated on is_diffusion; this
-    is the local one."""
+    """Diffusion runners take no batch flags, so the local guard must not price a micro-batch."""
     from unittest.mock import patch
 
     from routes import inference as route
@@ -589,11 +574,7 @@ def test_embedding_guard_uses_identifier_when_pooling_is_missing():
 
 
 def test_the_recorded_micro_batch_is_derived_from_the_slots_that_launched():
-    """self._n_ubatch is recorded next to _commit_effective_parallel_slots and the two are
-    read together later (the slot save re-estimates the KV from both). The fit-time reduction
-    moves the count after the sizing pass, so recording that pass's value would pair the launched
-    slots with a micro-batch derived at the old count and under-state that cache. Pinned on the
-    source, since reaching the record needs a real spawn."""
+    """Micro-batch must come from the launched slot count, as fit reduction can cut slots after sizing."""
     import ast
     import inspect
     import textwrap

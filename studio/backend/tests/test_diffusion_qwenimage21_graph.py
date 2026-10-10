@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Qwen-Image-2.1 decode steps as CUDA graphs: ``diffusion_qwenimage21.graph_plan`` + ``GraphedForward``.
-
-CPU tests check the plan (what runs eager, that the planned call is tensors-only and bit-identical to the eager
-fast step). CUDA tests record real graphs on a tiny random transformer and compare whole renders against the
-stock diffusers forward, bit for bit."""
+"""Graph plan checked on CPU; CUDA renders must match the stock diffusers forward bit for bit."""
 
 from __future__ import annotations
 

@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: the diffusion paths must stub xformers and torchao before importing diffusers.
-
-The Windows xformers pin is CUDA-only, so against a ROCm torch (no distributed backend) ``import
-xformers.ops`` dies inside torch.distributed, and diffusers imports xformers on sight, so such a
-host cannot load any image or video model and the error names neither xformers nor the cause.
-diffusers reaches torchao the same way, through its quantizers. An xformers built for a newer
-torch than the venv has fails the same import on any platform (#11545), so the same places hide it.
-
-Every ``import diffusers`` there is lazy, so a module-scope install is what puts the stubs in
-first; asserting module scope stops a later edit tucking one inside a skippable function. Those
-modules are not enough alone: a stub only seeds names nothing has imported yet, and the server has
-already pulled torchao in via the route tree, so run.py installs both before its first import.
-
-CPU-only: source is parsed with ``ast``, and the behaviour tests fake the platform probe.
-"""
+"""Stubs for xformers and torchao must load at module scope, before diffusers imports them on sight."""
 
 from __future__ import annotations
 

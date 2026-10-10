@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Safetensors/MLX reasoning-block parity with GGUF.
-
-Some enable_thinking templates prefill an unclosed ``<think>`` so the model emits only
-the closing ``</think>`` then the answer; the safetensors stream must split the leading
-text into ``reasoning_content`` deltas (plain stream and tool loop), resetting per turn
-and appending only visible text to the monitor. Others render a closed block or none at
-all and the answer is visible from the first token, so the prefill mode is read from the
-generation prompt the request renders. Replays a copy of ``sf_tool_stream``'s reasoning
-loop against synthetic events, and covers the split through the route itself.
-"""
+"""Prefill mode comes from the generation prompt; safetensors reasoning must split like GGUF's."""
 
 from __future__ import annotations
 
@@ -50,29 +41,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Register a stub module for a dep the backend pytest job does not install.
-
-    Same helper and reason as test_audio_type_inconclusive.py and
-    test_trainer_stdout_quiet.py: ``core.inference.inference`` imports ``unsloth``
-    (and through it ``unsloth_zoo``) at module scope, while the pytest matrix in
-    studio-backend-ci.yml installs studio.txt plus torch and transformers and
-    deliberately stops there. A real install is left alone.
-
-    This file used to have no stub at all. The three tests below reach
-    ``core.inference.inference`` through ``pytest.importorskip`` inside the test
-    body, which is lazy enough that the module-scope guard in
-    test_backend_tests_stub_heavy_imports.py does not look at it, so the omission
-    was invisible. They passed anyway, because some earlier file in the same
-    session had installed this stub and left the imported module in
-    ``sys.modules`` for them. Run this file first, or on its own, and the import
-    raises ``ImportError: Please install unsloth_zoo``, which pytest 8.2+ no
-    longer converts to a skip (only ``ModuleNotFoundError`` does that), so it is
-    a hard failure rather than the intended skip.
-
-    Stubbing here rather than switching to skipif keeps the coverage: the module
-    under test is the real ``core.inference.inference``, and only ``unsloth``
-    itself is faked.
-    """
+    """Stubs unsloth, which core.inference.inference imports at module scope and the backend job omits."""
     if name in sys.modules:
         return
     try:
@@ -550,18 +519,7 @@ def test_text_only_vlm_fallback_resolves_native_markers_off():
 
 
 def test_the_eager_import_under_the_stubs_actually_succeeded():
-    """A failed eager import turns the three importorskip tests into silent skips.
-
-    They resolve out of ``sys.modules``, so if the import above did not put
-    ``core.inference.inference`` there, ``importorskip`` finds the dependency
-    genuinely missing and skips. The job stays green while a third of this file
-    stops running, which is how the missing ``peft`` stub went unnoticed: 10 passed
-    and 3 skipped on the matrix, reported as success.
-
-    So the swallow records the error instead of dropping it, and this reads it back.
-    A module-scope dependency added to core/inference/inference.py that the backend
-    job does not install fails here by name rather than quietly reducing coverage.
-    """
+    """A failed eager import turns importorskip tests into silent skips; assert the import error is None."""
     assert _EAGER_IMPORT_ERROR is None, (
         f"the eager import of core.inference.inference failed ({_EAGER_IMPORT_ERROR}), so the "
         f"importorskip tests in this file skip instead of running. Install what it names in "

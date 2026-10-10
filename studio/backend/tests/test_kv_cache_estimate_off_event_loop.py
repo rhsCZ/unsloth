@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""GET /kv-cache-estimate must not block the event loop.
-
-The route reads a GGUF header, walks every HF cache root in _resolve_quant_gguf,
-looks for a drafter and probes the llama-server binary. All of that is blocking
-disk work, and the memory bar calls it once per visible row, so a long model list
-ran it many times over. Doing that inside the coroutine stalls everything else
-the process is serving, streamed chat tokens included.
-
-Mirrors test_scan_loras_off_event_loop.py.
-"""
+"""Blocking disk reads run once per row, so they must leave the event loop or streamed chat stalls."""
 
 from __future__ import annotations
 
@@ -30,11 +21,7 @@ import routes.models as models_routes  # noqa: E402
 
 
 def test_the_estimate_does_not_stall_other_requests(monkeypatch, tmp_path):
-    """A heartbeat coroutine keeps ticking while a deliberately slow resolve runs.
-
-    On the unfixed route the sleep happens inside the coroutine, so the heartbeat
-    gets no turn at all between the call and its return.
-    """
+    """A heartbeat must keep ticking during a slow resolve; the unfixed route gave it no turn at all."""
     resolve_seconds = 0.3
     heartbeat_seconds = 0.01
 

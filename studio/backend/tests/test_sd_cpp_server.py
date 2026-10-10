@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the persistent sd-server process manager (SdCppServer).
-
-Hermetic: subprocess.Popen and the httpx client are faked, so nothing spawns a real
-binary or opens a socket beyond the free-port probe."""
+"""Persistent sd-server manager tests with faked Popen and httpx."""
 
 from __future__ import annotations
 

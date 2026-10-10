@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the non-chat GGUF refusal on a REPO load.
-
-The local-file refusal already runs before Phase 1; a repo load did not, because the file
-only exists after Phase 2, so the resident chat model had already been killed for a load
-that was never going to start. That is the path the Model Hub takes (the route resolves
-every Hub model to hf_repo), so it was the reported case, not an API-only corner.
-
-The fix decides it from a header-sized byte range instead of the download. Measured over the
-Hub, media GGUFs finish their KV walk in 144-3,987 bytes while a chat model's
-tokenizer.ggml.tokens array pushes its KV block past 5 MB, so a 256 KiB prefix is decisive
-for the first and truncated for the second -- and truncated means no verdict, which is the
-direction it has to fail in.
-"""
+"""A repo load decides from a 256 KiB header range, since a truncated KV walk must yield no verdict."""
 
 from __future__ import annotations
 
@@ -727,11 +715,7 @@ def test_an_incomplete_shard_set_after_config_resolution_is_not_reused(monkeypat
 
 
 def test_a_shard_truncated_after_config_resolution_is_not_reused(monkeypatch, tmp_path):
-    """A shard that shrinks is as unusable as one that disappears.
-
-    The shard set alone only proves the siblings exist, so the carried value records
-    every shard's byte count and Phase 2 rechecks all of them.
-    """
+    """Carry every shard's byte count so Phase 2 rechecks each one; a shrunk shard is unusable."""
     _hub_cache(monkeypatch, tmp_path)
     main = _cached_gguf(tmp_path, "model-Q4_K_M-00001-of-00003.gguf", b"first shard")
     second = _cached_gguf(tmp_path, "model-Q4_K_M-00002-of-00003.gguf", b"second shard")

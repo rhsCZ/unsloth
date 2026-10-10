@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the OS-trust-store TLS activation (utils/native_tls.py).
-
-truststore is stubbed: these assert only Unsloth's seam -- the platform defaults,
-the UNSLOTH_STUDIO_NATIVE_TLS tri-state, idempotency, and the fail-open-to-certifi
-behaviour when truststore is unavailable. CPU-only, no network.
-"""
+"""truststore is stubbed; this pins Unsloth's seam, incl. the UNSLOTH_STUDIO_NATIVE_TLS switch."""
 
 from __future__ import annotations
 

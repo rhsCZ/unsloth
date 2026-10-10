@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for core/inference/passthrough_healing.py: promoting text-form
-tool calls back into structured calls on the client-tool passthrough. The
-route-level wiring (OpenAI / Anthropic / Responses endpoints) is covered in
-their own endpoint test files; this file exercises the shared state machine
-and helpers directly.
-"""
+"""Tests the shared healer that promotes text-form tool calls to structured calls on passthrough."""
 
 from __future__ import annotations
 
@@ -1060,12 +1055,7 @@ class TestAnthropicForcedToolChoice:
 
 
 class TestAnthropicPassthroughHealingText:
-    """Non-streaming Anthropic passthrough must relay unpromoted (undeclared)
-    text-form calls as text, matching the OpenAI passthrough contract. Once
-    heal_openai_message promotes the declared call it span-trims only that
-    markup and deliberately leaves the undeclared bytes in the content; the
-    legacy blanket _TOOL_XML_RE strip must not delete them.
-    """
+    """Non-streaming Anthropic passthrough relays undeclared text-form calls as text, not stripped."""
 
     async def _drive(self, monkeypatch, upstream):
         import routes.inference as inf_mod
@@ -1539,10 +1529,7 @@ class TestOpenaiStreamingRoute:
 
 
 class TestHealerSignalAlignment:
-    """The passthrough healer buffers only formats its parser can promote.
-    The loops' bare [ARGS] rehearsal signal is gated on active tool names
-    there; ungated in the healer it would stall legitimate prose until
-    finalization without ever producing a promotable call."""
+    """The healer buffers only promotable formats; a bare [ARGS] signal would stall prose uselessly."""
 
     def test_heal_signals_are_promotable_formats_only(self):
         from core.inference.passthrough_healing import _HEAL_SIGNALS

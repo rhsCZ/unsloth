@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the hub download path's transport selection, RAM caps, and stall -> HTTP recovery.
-
-The model-hub page is how most users download, and it was the ONE download path with no stall
-detection: it relied on the worker's exit code, and a Xet transfer that hangs with no progress and
-no error never produces one. These tests pin the three pieces that close that gap.
-
-CPU-only, no network, no real worker subprocess.
-"""
+"""Transport choice, RAM caps and stall-to-HTTP recovery; the hub download path needs stall detection."""
 
 from __future__ import annotations
 
@@ -465,13 +458,7 @@ def test_download_start_probe_loads_health_after_cached_browse(monkeypatch):
 
 
 def test_gpu_init_override_is_serialized(monkeypatch):
-    """The optional-module retry must not leak the process-wide GPU-init override: a leaked
-    UNSLOTH_ZOO_DISABLE_GPU_INIT=1 is inherited by every spawned worker for the life of the process.
-
-    Scope: this races the loader against itself. The cross-loader interleave with _load_shared is
-    not reproducible by thread timing, and is established by construction instead (both take the
-    same `_load_lock` around their save/set/restore) -- see the test below.
-    """
+    """A leaked UNSLOTH_ZOO_DISABLE_GPU_INIT=1 reaches every later worker; save and restore share a lock."""
     import threading
 
     monkeypatch.delenv("UNSLOTH_ZOO_DISABLE_GPU_INIT", raising = False)
@@ -508,10 +495,7 @@ def test_both_loaders_share_one_env_lock():
 
 
 def test_the_worker_never_gets_the_flag_and_our_caps_together(monkeypatch):
-    """End to end against whichever unsloth_zoo is installed, with nothing stubbed. Which of the
-    two the zoo picks is its call and changes with the version; what must never happen either way
-    is both at once, because xet-core applies the preset after reading the environment, so it
-    voids the limit while still honouring the smaller per-file and concurrency numbers."""
+    """Never pass HF_XET_HIGH_PERFORMANCE and our buffer caps together; xet-core then voids the limit."""
     env = _spawn_env(monkeypatch, use_xet = True, parent_env = {"HF_XET_HIGH_PERFORMANCE": "1"})
     flag_on = env.get("HF_XET_HIGH_PERFORMANCE", "0").strip().lower() in ("1", "true", "yes", "on")
     sized = "HF_XET_RECONSTRUCTION_DOWNLOAD_BUFFER_PERFILE_SIZE" in env
@@ -723,13 +707,7 @@ def test_a_failed_spawn_releases_its_reservation(monkeypatch):
 
 
 def test_the_force_xet_escape_hatch_still_wins_over_the_free_ram_gate(monkeypatch):
-    """`UNSLOTH_FORCE_XET=1` is an operator override, not a measurement.
-
-    `unsloth_zoo.hf_xet_health` stamps `source = "forced"` on both env verdicts, and the OFF
-    switches already win (the `not health.use_xet` return above). Without the same stand-down for
-    the ON switch the pair is asymmetric: the zoo's own log tells the operator to "set
-    UNSLOTH_FORCE_XET=1 to override", and the new RAM gate would ignore it. Buffers are still
-    clamped to free RAM, so forcing costs the transport choice, not the memory bound."""
+    """UNSLOTH_FORCE_XET=1 is an operator override, so the free-RAM gate must not veto it."""
     monkeypatch.setattr(dl, "resolve_effective_use_xet", lambda requested: requested)
 
     forced = _types.SimpleNamespace(

@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Contract: a saved image's recipe records the build that ENGAGED, not the one requested.
-
-``transformer_quant`` is a *request*: the loader may decline it (no dense source, not
-enough VRAM, torchao missing) and run the GGUF as-is, or resolve "auto" to a concrete
-scheme. Only ``_LoadState`` knows what actually ran, so the whole chain reads from it:
-
-    load_pipeline(transformer_quant=...)  ->  _LoadState.transformer_quant  (ENGAGED)
-                                                  |
-                       diffusion.generate() returns state.kind / .gguf_filename / .transformer_quant
-                                                  |
-                        routes/inference.py persists result[...] into the PNG recipe
-                                                  |
-                                     images-page.tsx RecipePopover "Quant" row
-
-If any hop starts echoing the request instead, a Recipe popover claims an image was made
-with a quant that never loaded. These tests pin the divergent case at both ends.
-
-They also pin ``image_gallery._REQUIRED_META``: the build keys are additive, so a PNG
-written before they existed must still list rather than be dropped as foreign.
-
-Hermetic: torch / diffusers are stubbed via ``sys.modules`` (same approach as
-``test_diffusion_backend.py``, stubbed as packages so the loader's submodule imports resolve
-without a real install), and the route half runs against a fake backend.
-"""
+"""Recipe records the quant that ENGAGED, read from _LoadState, not the request's transformer_quant."""
 
 from __future__ import annotations
 
@@ -137,11 +114,7 @@ class _FakeTransformer:
 
 
 def _stub_package(name: str) -> types.ModuleType:
-    """A stub module the import machinery will treat as a PACKAGE.
-
-    ``types.ModuleType`` alone has no ``__path__``, so ``import torch.nn.functional`` cannot
-    resolve a submodule through it -- see ``stub_runtime`` for why that matters.
-    """
+    """A stub module needs a __path__, or submodule imports like torch.nn.functional fail to resolve."""
     module = types.ModuleType(name)
     module.__path__ = []
     module.__spec__ = importlib.machinery.ModuleSpec(name, loader = None, is_package = True)
@@ -150,18 +123,7 @@ def _stub_package(name: str) -> types.ModuleType:
 
 @pytest.fixture
 def stub_runtime(monkeypatch):
-    """Enough torch / diffusers for a z-image GGUF load + one txt2img generate.
-
-    ``load_pipeline`` lazily imports ``diffusion_eager_patches``, whose module body runs
-    ``import torch.nn.functional as F``, and the GGUF prefix-strip shim imports
-    ``diffusers.loaders.single_file_model``. Neither resolves through a bare ``ModuleType``.
-    A dev box hides that -- something (``tests/conftest.py`` -> ``unsloth_zoo`` -> ``import
-    torch``) has usually already seeded ``sys.modules["torch.nn.functional"]``, so the import
-    short-circuits on the cached entry and never looks at the stub's missing ``__path__``. On a
-    clean CPU-only CI interpreter nothing seeds it and the load dies with "'torch' is not a
-    package". So register the submodules explicitly and make the stubs real packages: same
-    hermetic runtime in both environments, whatever ran before.
-    """
+    """Stub torch and diffusers as real packages, so the load does not depend on prior imports."""
     torch = _stub_package("torch")
     torch.bfloat16 = _FakeDtype("bfloat16")
     torch.float16 = _FakeDtype("float16")
@@ -517,10 +479,7 @@ def test_the_openai_route_persists_the_same_build(engaged_client):
 
 
 def test_the_stub_runtime_does_not_outlive_its_own_test(stub_runtime):
-    """The patch modules are imported lazily by load_pipeline, i.e. WHILE the fakes are
-    installed, so their module globals close over them. monkeypatch restores sys.modules["torch"]
-    but not those, and every later test in the process would then run against module bodies
-    bound to a fake torch. The fixture has to evict them."""
+    """Patch modules imported under the stubs must be evicted, or later tests run against a fake torch."""
     import core.inference.diffusion_eager_patches  # noqa: F401 — imported under the stubs
     assert sys.modules["torch"] is stub_runtime
 

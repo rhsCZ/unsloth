@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Where the Windows orphan guarantee holds, and where it stops.
-
-Children inherit a Job Object with KILL_ON_JOB_CLOSE. The desktop updater clears
-that flag before launching the installer, so both sides are pinned here with
-real processes.
-"""
+"""Child processes inherit a KILL_ON_JOB_CLOSE Job Object on Windows; the desktop updater clears it."""
 
 import os
 import subprocess

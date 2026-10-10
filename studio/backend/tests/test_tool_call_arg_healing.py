@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Healing must not invent an argument the tool does not have.
-
-`_CANONICAL_HEAL_ARG` was hand-kept and defaulted to "query" for anything absent, so it
-went stale the moment a tool was added: `edit_file` landed with three required arguments
-and no entry, and a call whose JSON was cut off mid-string was healed into `{"query": ...}`
-and reported back as "'old_string' and 'new_string' must both be strings" -- a type error
-blaming the model for a key it never sent.
-"""
+"""Healing must not invent an argument: a hand-kept key map defaulted to query and went stale."""
 
 import json
 import sys
@@ -90,13 +83,7 @@ def test_unparseable_but_complete_arguments_are_not_called_truncated():
 
 
 def test_a_healable_tool_still_reaches_the_tool_not_the_guard():
-    """The guard must catch only the calls that could not be read, not every healed one.
-
-    Retargeted: this once passed `_TRUNCATED` and asserted python healed it into `code`.
-    That WAS the defect -- broken JSON became the program -- so the case is now covered by
-    `test_broken_json_is_not_healed_even_for_a_single_string_tool`, and what belongs here
-    is the bare string healing actually exists for.
-    """
+    """The guard catches only unreadable calls; a bare string still heals into its one argument."""
     coerced = coerce_tool_arguments("print('hi')", heal = True, tool_name = "python")
 
     assert UNPARSED_ARGUMENTS_KEY not in coerced.arguments
@@ -107,12 +94,7 @@ _TRUNCATED_PYTHON = "{\"code\":\"html = open('game.html','w')\\nhtml.write('<!DO
 
 
 def test_broken_json_is_not_healed_even_for_a_single_string_tool():
-    """`python` has one `code` argument, which hid this defect rather than avoiding it.
-
-    A truncated call arrived as `{"code":"html = ...`, healing wrapped the whole fragment
-    as the PROGRAM, and the model then read its own file back as `{"code":"html = ...` and
-    spent the rest of the turn convinced the sandbox had mangled its content.
-    """
+    """Truncated JSON must not heal into python's single code argument, which hid this defect."""
     coerced = coerce_tool_arguments(_TRUNCATED_PYTHON, heal = True, tool_name = "python")
 
     assert coerced.healed is False
@@ -132,11 +114,7 @@ def test_broken_json_is_not_healed_even_for_a_single_string_tool():
     ],
 )
 def test_text_that_merely_opens_with_a_brace_still_heals(raw):
-    """Guarding on the opening bracket alone refused calls that were never truncated.
-
-    `test_non_json_arguments_still_reach_the_tool_as_a_dict` covers the contract from the
-    other side: a single-required-argument tool is handed the raw text rather than a blob.
-    """
+    """Guarding on the opening bracket alone refused calls that were never truncated."""
     assert _looks_like_broken_json(raw) is False
 
     coerced = coerce_tool_arguments(raw, heal = True, tool_name = "web_search")
@@ -181,11 +159,7 @@ def _decision_for(raw: str):
 
 
 def test_the_sentinel_never_reaches_the_tool_card():
-    """It is plumbing between the coercion and execute_tool, and it escaped into the UI.
-
-    Reported from a live thread as a tool card reading
-    `{"__unsloth_unparsed_arguments__":"{\\"path\\":\\"flappy-bird.html\\", ...`
-    """
+    """The unparsed-arguments sentinel is internal plumbing; it once escaped into a tool card."""
     payload = _decision_for(_TRUNCATED).tool_start_payload()
 
     assert UNPARSED_ARGUMENTS_KEY not in json.dumps(payload)
@@ -203,17 +177,7 @@ def test_the_sentinel_never_reaches_the_tool_card():
     ],
 )
 def test_replayed_arguments_always_parse_as_json(raw):
-    """The invariant that matters more than any of the wording below.
-
-    llama-server parses this field while rendering the template, so a value that does not
-    parse fails the WHOLE request, not just the one call. Replaying the fragment verbatim
-    looked like the honest thing to do and produced a live 500:
-
-        Failed to parse tool call arguments as JSON: [json.exception.parse_error.101]
-        parse error at line 1, column 7201: missing closing quote
-
-    A fragment is unparseable by definition, that being why it is here at all.
-    """
+    """llama-server parses replayed arguments while rendering, so one bad value fails the whole request."""
     tool_call = _decision_for(raw).as_assistant_tool_call()
 
     parsed = json.loads(tool_call["function"]["arguments"])
@@ -288,12 +252,7 @@ _MCP_TOOL = {
 
 
 def test_an_mcp_tool_with_one_string_argument_is_healed_from_the_request_schemas():
-    """MCP tools are discovered at runtime, so `ALL_TOOLS` cannot know them.
-
-    Deriving the key from the static catalogue alone silently withdrew healing from
-    every MCP tool: a bare string reached `execute_tool` as the unparsed sentinel and
-    was answered as a call that could not be read, though nothing was wrong with it.
-    """
+    """MCP tools are found at runtime, so healing keys must come from the request schemas, not ALL_TOOLS."""
     coerced = coerce_tool_arguments(
         "quarterly report",
         heal = True,

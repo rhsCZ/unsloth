@@ -242,12 +242,7 @@ def test_a_hyperlink_escape_does_not_swallow_the_line():
 
 
 def test_studio_s3_secret_key_spellings_are_masked():
-    """models/training.py:60 takes secret_access_key, alias secretAccessKey.
-
-    Neither reaches the bare "secret" alternative: its trailing \\b cannot fire
-    before "_access" or "Access", and an AWS secret key has no prefix of its own
-    for a shape rule to catch, so both spellings went out in the clear.
-    """
+    """secret_access_key and secretAccessKey need key-name matching: AWS secrets have no shape prefix."""
     secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
     for line in (
         f"secret_access_key={secret}",
@@ -333,17 +328,7 @@ _ANSI_SHAPES = [
 
 
 def test_the_strip_is_unchanged_by_the_rewrite():
-    """The contract. The lazy alternation was replaced because it backtracked,
-    not because its answers were wrong, so the walk has to agree with it
-    everywhere: same alternatives, same order, same lazy shortest match, same
-    fallthrough when a control string never terminates.
-
-    A redactor is the wrong place to smuggle a behaviour change into a
-    performance fix, and every way of "improving" the truncated cases that was
-    tried here moved a leak rather than removing one: consuming an aborted body
-    ate the separator out of "api_key<cut>=value", and dropping a lone escape
-    welded "prefix" onto "api_key".
-    """
+    """The rewritten _strip_ansi must match the lazy alternation it replaced, even on truncated input."""
     from utils.log_redaction import _strip_ansi
 
     lines = [
@@ -390,19 +375,8 @@ def test_the_strip_is_unchanged_on_random_records():
 
 
 def test_an_unterminated_ansi_introducer_does_not_cost_quadratic_time():
-    """A lazy scan for the terminator backtracks: the introducer with no
-    terminator scans to end of string, fails, and falls through to the single
-    character Fe branch, so the cost grows with the square of the record.
-
-    Before the negated body classes, 40k of these took ~15.8s against ~0.005s
-    for the same length of ordinary text, and the log viewer hands whole lines
-    to this function once a second. An unterminated introducer is not exotic; a
-    rotated log or a writer cut mid sequence leaves one behind.
-
-    Timing is asserted loosely, as a shape rather than a number: quadratic here
-    is seconds and linear is milliseconds, so any threshold in between separates
-    them on any host.
-    """
+    """Unterminated ANSI introducers must not cost quadratic time; the lazy scan rescans to end of
+    string."""
     import time
 
     shapes = [

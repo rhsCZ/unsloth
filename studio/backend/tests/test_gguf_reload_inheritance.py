@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Backend contract for the GGUF reload duplicate-load guard.
-
-``LlamaCppBackend.adopt_load_intent_if_matched`` short-circuits a duplicate /load so
-it cannot kill the just-spawned llama-server. Pins local-file identity, the
-HF-mode hf_variant fallback, and ``extra_args`` None-vs-[] inherit semantics.
-"""
+"""adopt_load_intent_if_matched short-circuits a duplicate /load so the just-spawned server survives."""
 
 from __future__ import annotations
 
@@ -373,15 +368,7 @@ def test_route_checks_reasoning_budget_capabilities_before_teardown():
 
 
 class TestRepeatLoadMatchesTheEffectiveCache:
-    """A repeat /load of an identical request must reuse the healthy server.
-
-    self._cache_type_kv records only what Unsloth emitted as a MANAGED flag, so a
-    cache set through extras or the environment leaves it None on one side and a
-    type on the other; the old scalar-against-scalar comparison then read an
-    identical repeat as a mismatch and tore the server down to relaunch the same
-    thing. Before ggml-org/llama.cpp#23792 the tensor gate hid this by rewriting
-    the cache away; a layer load has always had it.
-    """
+    """A repeat /load compares effective cache types, so a cache set via env or extras is not a mismatch."""
 
     @staticmethod
     def _backend_running(effective):
@@ -430,14 +417,8 @@ class TestRepeatLoadMatchesTheEffectiveCache:
         assert "_norm(self._cache_type_kv)!=_norm(intent.cache_type_kv)" not in src
 
     def test_a_launch_time_rewrite_does_not_force_a_reload(self):
-        """The comparison is requested-against-requested, so a rewrite the launch
-        performed does not make the next identical request look different.
-
-        A build with no --flash-attn resets a quantized V cache to f16 before the
-        spawn (and the flash-attn crash recovery does the same), so the pair that
-        LAUNCHED is not the pair that was ASKED for. Comparing the running pair
-        would then reject every repeat and redo that normalization each time.
-        """
+        """Compare requested cache types, not launched ones: a launch-time f16 rewrite would force
+        reloads."""
         from core.inference.llama_cpp import (
             LlamaCppBackend,
             _effective_main_cache_types,

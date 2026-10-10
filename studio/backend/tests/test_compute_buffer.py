@@ -94,13 +94,7 @@ def _backend_from_gguf_local(
     n_kv_heads = 8,
     head_dim = 128,
 ):
-    """Backend that can also estimate KV bytes, for the planner cells below.
-
-    A real ``__init__`` (not ``__new__`` like ``_backend`` above) so every
-    attribute the KV estimator reads exists at its default; only the handful of
-    dims these cells vary are overridden. These tests are about which cache type
-    is priced, not about GGUF parsing.
-    """
+    """Builds a real __init__ backend so every attribute the KV estimator reads has its default."""
     b = LlamaCppBackend()
     b._vocab_size = 248_320
     b._embedding_length = embd
@@ -444,11 +438,7 @@ class TestContextBufferKVQuant:
 
 
 class TestContextBufferDSV4:
-    """DeepSeek-V4 (deepseek4) reserves a large lightning-indexer / sparse-attention
-    compute buffer the KQ-mask and MLA rates miss (present even with an f16 cache).
-    Measured on UD-Q4_K_XL (ub=512): ~2 GiB at 16k ctx, ~65.5 GiB at 1M. The auto-fit
-    must see this so it does not commit the full 1M train context and OOM (spilling
-    to CPU at ~4 tok/s)."""
+    """DeepSeek-V4 reserves a lightning-indexer compute buffer that KQ-mask and MLA rates miss."""
 
     _MEASURED_1M_GIB = 65.5
     GIB = 1024**3
@@ -693,10 +683,7 @@ class TestLayerSplitWiring:
 
 
 class TestPipelineParallelPredicate:
-    """The 4x step is llama.cpp's pipeline parallelism (ggml n_copies == 4), which
-    llama-context.cpp declines unless the split mode is layer, KV offload is on and the
-    tensor-override list is empty; charging it then wastes context. Causal check: on 2
-    GPUs a -ot matching nothing changes no placement yet takes the rate 8.00 -> 2.00."""
+    """Pipeline parallelism's 4x rate applies only with layer split, KV offload and no -ot overrides."""
 
     def _off(
         self,
@@ -850,14 +837,7 @@ class TestPipelineParallelPredicate:
 
 
 class TestPerDeviceSplitReserve:
-    """The auto-context loop admits a GPU subset on the POOLED budget, but the per-device
-    reserve (flat layer overhead + this PR's enlarged context-compute copy) is replicated
-    on every card: in the sum a roomy card's spare VRAM covers a nearly full card's copy,
-    and the small card OOMs at launch. Exposed when the loop cannot start at one GPU
-    (``_auto_min_gpus >= 2``, set by every tensor -> layer downgrade); starting at one,
-    the pooled test charges n copies where the per-card test charges one, so size n is
-    reached only after n-1 failed, which bounds the smallest card below by the reserve -
-    the check is then provably redundant, homogeneous or not."""
+    """Per-device reserve is replicated on every GPU, so the auto-context check must gate each card."""
 
     _OH = LlamaCppBackend._PIPELINE_PER_DEVICE_OVERHEAD_MIB * MIB
     _UB = 2048
@@ -935,14 +915,7 @@ class TestPerDeviceSplitReserve:
         min_gpus = 2,
         enforce = True,
     ):
-        """Mirror of the Auto offload loop the native loop falls through to. Same
-        pooled admission, so it needs the same per-device gate.
-
-        Driven at the fit search floor rather than at ``_AUTO_OFFLOAD_CTX``: what
-        this exercises is the per-device reserve gate, and the floor is the lowest
-        context the loop above can still be admitted at, so it is the value that
-        makes the gate decide anything.
-        """
+        """Mirrors the Auto offload loop: same pooled admission, so it needs the same per-device gate."""
         frac = LlamaCppBackend._GPU_PIN_VRAM_FRACTION
         ctx = _FIT_MIN_CTX
 
@@ -966,15 +939,8 @@ class TestPerDeviceSplitReserve:
         return None, 0
 
     def _card_at_floor_reserve(self, b, total_mib, margin_mib):
-        """Free VRAM leaving card 1 exactly ``margin_mib`` from the reserve it
-        replicates AT THE FIT FLOOR, which is the context ``_drive_reduced`` runs.
-
-        Derived rather than written out: the whole point of these two cases is a
-        card sized one MiB either side of that reserve, so the number has to follow
-        the floor. Spelled 4096 it silently stopped straddling anything when the
-        floor moved to 8192 -- the card was built against reserve(4096) == 1120 MiB
-        while the driver charged reserve(8192) == 1216.
-        """
+        """Derives the reserve from the fit floor context, so a hardcoded context stops straddling
+        the gate."""
         reserve_mib = (
             self._OH + b._compute_buffer_ctx_bytes(_FIT_MIN_CTX, self._UB, "f16", layer_split = True)
         ) / MIB
@@ -1138,13 +1104,7 @@ class TestPerDeviceReserveCap:
 
 
 class TestSplitRateRecheckAfterSelection:
-    """``_select_gpus`` derives the device count FROM the footprint, so its callers can
-    only price the context-compute buffer at the single-device rate. A multi-GPU answer
-    then has to be re-priced at the split rate before it is pinned with
-    ``use_fit = False``, or a high-context explicit request OOMs at launch. Synthetic
-    VRAM maps over the production helper: 24 GB cards at 0.97 (usable 23838 MiB each),
-    ctx 1M at ub 512 f16 -> 1536 MiB of compute per device single-device, 6144 MiB split,
-    so each card in a split owes 4608 MiB more than the first pass charged it."""
+    """A multi-GPU answer must be re-priced at the split compute rate before use_fit is pinned False."""
 
     _OH = LlamaCppBackend._PIPELINE_PER_DEVICE_OVERHEAD_MIB * MIB
     _UB = 512

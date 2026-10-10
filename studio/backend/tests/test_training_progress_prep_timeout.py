@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The live progress SSE must not time out during the pre-first-step phase.
-
-A large model load / dataset tokenization can keep a run at step 0 for longer
-than the stall timeout. Treating that as a stall ends the live stream and makes a
-healthy run look frozen, so the timeout must apply only once the run is stepping.
-"""
+"""Stall timeout applies only once stepping; a long load at step 0 must not end the live stream."""
 
 import asyncio
 import sys

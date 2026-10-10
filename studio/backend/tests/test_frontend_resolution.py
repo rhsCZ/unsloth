@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the frontend-dist resolver in studio/backend/run.py.
-
-Loads only the relevant helpers via importlib to avoid pulling in
-uvicorn / FastAPI / unsloth's deps. Pairs with AST-style test_host_defaults.py.
-"""
+"""Frontend-dist resolver in run.py, loaded via importlib so uvicorn and FastAPI are not imported."""
 
 import ast
 import importlib.util
@@ -247,10 +243,7 @@ def test_systemexit_message_contains_actionable_fixes(tmp_path, monkeypatch):
 
 
 def _run_frontend_mount(*, tunnel_only, resolves):
-    """Drive run_server's frontend-mount decision without importing uvicorn.
-
-    Slices out the `if frontend_path and _serve_frontend:` statement, so the
-    branch that decides abort-vs-degrade is exercised where it actually lives."""
+    """Slices the frontend-mount if out of run.py, so the abort-or-degrade branch runs for real."""
     import logging
 
     tree = ast.parse(_RUN_PY.read_text(encoding = "utf-8"))

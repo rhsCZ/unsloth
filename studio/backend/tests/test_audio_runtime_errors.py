@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A request the audio runtime refuses reaches the client with the runtime's reason, sanitized.
-
-CosyVoice3 without a reference clip answered "CosyVoice3 requires reference audio", and the
-Audio page showed "An internal error occurred": the reason crossed the worker as a bare
-RuntimeError and ``safe_error_detail`` flattened it. Paths and credentials in that text must
-still never reach the client.
-"""
+"""Runtime refusal reasons reach the client, but paths and credentials in them are still stripped."""
 
 from __future__ import annotations
 

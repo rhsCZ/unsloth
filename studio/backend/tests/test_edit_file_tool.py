@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Tests for the edit_file tool in core/inference/tools.py.
-
-Pinned here: a miss or an ambiguous match fails loudly and writes nothing, and
-the file's encoding, line endings and mode survive an edit.
-"""
+"""A miss or ambiguous edit fails without writing; encoding, line endings and mode survive."""
 
 import json
 import os
@@ -39,13 +35,7 @@ def workdir(tmp_path, monkeypatch):
 
 
 def _edit(**arguments) -> str:
-    """Call edit_file, accepting the single-edit spelling these tests were written in.
-
-    The tool now takes an ``edits`` array so several changes to one file cost one call
-    instead of one call each. Every case below is about one edit, and what it asserts --
-    matching, uniqueness, encoding, containment, receipts -- is unchanged by the batching,
-    so the shape is adapted here rather than restating 50 call sites.
-    """
+    """Adapts the single-edit spelling into the edits array, which edit_file now takes."""
     if "edits" not in arguments:
         edit = {
             key: arguments.pop(key)
@@ -586,12 +576,7 @@ class TestCreationLeavesNothingBehindWhenTheWriteFails:
 
 
 class TestBatchedEdits:
-    """Several changes to one file in one call.
-
-    The point is token cost, not convenience: every extra call replays the whole
-    conversation and leaves an assistant turn plus a tool result in the window for good.
-    llama.cpp's own edit_file takes an `edits` array for the same reason.
-    """
+    """Batching saves tokens: each extra call replays the whole conversation and stays in the window."""
 
     def _edits(self, path, edits):
         return execute_tool("edit_file", {"path": path, "edits": edits}, session_id = "t")
@@ -710,10 +695,7 @@ class TestBatchedEdits:
 
 
 class TestBatchSize:
-    """Each entry costs a full scan of a file that may be 16 MiB, so entries x size is
-    the real work. Unbounded, a model-generated batch of a few thousand one-line edits
-    turns one call into gigabytes of repeated scanning and holds the worker for minutes.
-    """
+    """Each entry rescans the file, so _MAX_EDITS_PER_CALL bounds the work per call."""
 
     def test_a_batch_over_the_limit_is_refused_before_anything_is_written(self, workdir):
         from core.inference.tools import _MAX_EDITS_PER_CALL
@@ -752,12 +734,7 @@ class TestBatchSize:
         assert "line000=1" in target.read_text(encoding = "utf-8")
 
     def test_a_lone_replace_all_never_enumerates_its_matches(self, workdir):
-        """A single entry has nothing to overlap with, so it needs no spans.
-
-        Enumerating cost roughly 16 million tuples plus a sort on a 16 MiB file of a
-        one-character pattern. Bounding it instead would have broken the large
-        replace_all cases this tool is expected to do, so the enumeration itself goes.
-        """
+        """A lone replace_all needs no spans; capping them would break large valid replace_all runs."""
         from core.inference.tools import _MAX_MATCH_SPANS
 
         target = workdir / "a.txt"
@@ -802,13 +779,7 @@ class TestBatchSize:
 
 class TestEmptyPatternSafety:
     def test_a_batched_empty_old_string_is_refused_not_scanned(self, workdir):
-        """The refusal is the point, and so is the speed of it.
-
-        A zero-length pattern cannot advance `find(old, start + len(old))`, so reaching
-        the span scan with one would spin rather than answer. `_edit_file` rejects it
-        first; this pins that, and `_edit_file_apply_all` carries its own guard so a
-        future caller cannot reintroduce the hang.
-        """
+        """Empty old_string would spin the span scan, so _edit_file rejects it before scanning."""
         target = workdir / "f.py"
         target.write_text("hello world\n")
 

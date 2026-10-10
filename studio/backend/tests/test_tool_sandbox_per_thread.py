@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every conversation runs its tools in its own sandbox directory.
-
-Parallel chats lean on this: two conversations can be mid tool call at the same
-time, so a shared working directory would let one overwrite the other's files.
-The session id is the chat's thread id (or project-<id> for project chats), and
-the dir is derived from it here.
-
-UNSLOTH_STUDIO_HOME is redirected per test, so nothing touches the real install.
-"""
+"""Each conversation runs tools in its own sandbox directory, so parallel chats cannot collide."""
 
 import os
 import sys

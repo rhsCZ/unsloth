@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An unreadable tokenizer_config.json must not read as "not an audio model".
-
-`detect_audio_type` returns None for both "definitely not audio" and "could not tell", and
-the trainer used it to choose a preprocessing path. A TTS run whose repo could not be read
-therefore took the text path and failed much later with "Could not auto-detect format
-mapping", which names a column-mapping problem rather than the read that failed.
-"""
+"""An unreadable tokenizer_config.json must not count as not-audio; None also means could-not-tell."""
 
 from __future__ import annotations
 
@@ -25,16 +19,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Register a stub module for a dep the backend pytest job does not install.
-
-    Same helper and reason as test_trainer_stdout_quiet.py: core.training.trainer imports
-    unsloth (and through it unsloth_zoo) and trl at module scope, while the pytest matrix in
-    studio-backend-ci.yml installs studio.txt plus torch and transformers and deliberately
-    stops there, because the repo-cpu-tests job beside it is the one that installs
-    unsloth_zoo, for the REPO-ROOT tests/ tree. Unstubbed, this module fails COLLECTION and
-    takes the whole job down. A real install is left alone. __spec__ = None keeps the
-    trainer's own _ensure_real_packages namespace-shadow guard a no-op on the stub.
-    """
+    """Stub unsloth and trl, absent from the backend job; __spec__ None keeps the shadow guard inert."""
     if name in sys.modules:
         return
     try:
@@ -135,12 +120,7 @@ def _run(
 
 
 def test_the_stubs_do_not_outlive_this_module():
-    """A leaked stub silently disables coverage in modules collected after this one.
-
-    utils.hardware.hardware._shared_policy takes `"unsloth" in sys.modules` as proof the real
-    package is usable; against a stub it returns None and test_dataset_map_num_proc.py skips its
-    shared-policy cases rather than failing, so nothing else would report this.
-    """
+    """A leaked stub makes utils.hardware skip shared-policy cases silently in later modules."""
     from utils.hardware import hardware as hw
 
     for name in _STUBBED:

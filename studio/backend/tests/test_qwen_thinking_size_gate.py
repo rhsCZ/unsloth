@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Qwen3.5/3.6 thinking-default size gate in llama_cpp.py's launch path.
-
-The gate is inline in _build_command with no seam, so the whole block is sliced out of the
-source and exec'd here: that way a change to its control flow, not just its regex, is
-caught. Keep this in sync with the two frontend mirrors.
-"""
+"""Slices the inline Qwen thinking-size gate out of llama_cpp source, so control flow is tested too."""
 
 import re
 import textwrap

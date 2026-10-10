@@ -167,13 +167,7 @@ def test_cached_swap_target_keeps_the_swap(mapper, hub_cache, load_in_4bit):
 def test_a_differently_cased_swap_target_is_loaded_under_its_cached_spelling(
     mapper, hub_cache, load_in_4bit
 ):
-    """The mapper lowercases its targets; the Hub, and Studio's own downloads, do not.
-
-    Answering "cached, let the mapper have it" is not enough: the mapper hands the
-    loader its own lowercase spelling, huggingface_hub keys the cache directory on the
-    id verbatim (huggingface/huggingface_hub#3838), and the copy on disk is fetched a
-    second time. Measured at 1356 MiB on Qwen3-1.7B with Xet dedup off.
-    """
+    """Load the cached spelling: a lowercased mapper target re-downloads the copy already on disk."""
     target = (PREQUANT if load_in_4bit else UNSLOTH_16BIT).upper()
     _cache_repo(hub_cache, UPSTREAM)
     _cache_repo(hub_cache, target)
@@ -270,12 +264,7 @@ def test_local_and_adapter_loads_are_untouched(mapper, hub_cache, overrides):
 
 
 def test_load_model_hands_the_verdict_to_both_loaders():
-    """Dropping either keyword argument restores the download and leaves every other test
-    here passing, so the wiring needs its own assertion. ``model_name`` matters as much as
-    the flag: the verdict can name the swap target's cached spelling, and passing
-    ``config.path`` there would load the wrong repo. A real ``load_model`` call cannot run
-    here (no weights, no network, no unsloth), so read the call sites.
-    """
+    """Both loaders get the verdict; model_name must carry the cached spelling, never config.path."""
     import ast
 
     source = (_BACKEND / "core/inference/inference.py").read_text(encoding = "utf-8")

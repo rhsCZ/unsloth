@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The /video/generate shape gate: the API must enforce the rules the interface offers.
-
-The Desktop resolution select is populated from the loaded family's
-``resolution_presets`` and its duration select from that family's k*frame_step+1
-lattice, but the API accepted anything inside the coarse request bounds and then
-SNAPPED it silently. 256x256 is divisible by both 16 and 32, so it survived the
-snap untouched and denoised at a size no checkpoint was ever trained for. These
-tests pin the family-aware rejection (422) and, just as importantly, the
-fallbacks: nothing loaded, or a family declaring no presets, keeps snapping.
-
-The pure-function half needs no torch/GPU; the route half swaps in a fake
-backend that INHERITS the real begin_generate / job machinery, so the gate is
-exercised where it actually lives (the route, before the worker starts).
-"""
+"""The /video/generate gate rejects off-family shapes with 422 instead of silently snapping them."""
 
 from __future__ import annotations
 
@@ -150,13 +137,7 @@ def test_a_suggested_count_never_falls_outside_the_family_range():
 
 
 def test_the_frame_gate_enforces_the_range_it_names():
-    """A lattice point outside the family's trained window is refused, not snapped.
-
-    The gate already computed the floor and the ceiling to WORD its lattice error, then accepted
-    counts outside them: 5, 90 and 107 are all real 17k + 5 points below H3's floor of 124 and were
-    snapped up to 124, and 362 and 872 were snapped down to 345. On the native path that turns
-    num_frames=5 into a 25x compute surprise, silently.
-    """
+    """Frame counts outside the family's trained window must be refused, not snapped to its edges."""
     h3 = detect_video_family("MiniMaxAI/MiniMax-H3")
     assert (h3.min_num_frames, h3.max_num_frames) == (124, 345)
     for count in (5, 90, 107, 362, 872):
@@ -229,13 +210,7 @@ def test_reference_video_trim_schema_requires_one_bounded_interval():
 
 
 class _ShapeFakeBackend(video_module.VideoBackend):
-    """Real load state + real begin_generate/job machinery over a stub generate().
-
-    ``_state`` is a genuine ``_VideoLoadState`` so ``loaded_family()`` is exercised
-    against the object the loader really commits, and generate() mirrors the real
-    one's shape resolution (snap + family defaults) so a test can see whether a
-    request was snapped or rejected.
-    """
+    """Real _VideoLoadState and job machinery over a stub generate() that mirrors shape resolution."""
 
     def load_as(self, fam) -> None:
         self._state = video_module._VideoLoadState(
@@ -408,12 +383,7 @@ def test_the_coarse_pydantic_bounds_still_reject_out_of_range_sizes(client, back
 
 
 def test_the_shape_is_judged_under_the_lock_that_reserves_the_state(backend, monkeypatch):
-    """A load commits its new ``_state`` under the same lock ``begin_generate`` takes. Reading
-    the family separately, before that lock, leaves a window where a size is accepted for the
-    family being replaced and then denoised by the new one -- or a size the new family supports
-    is rejected. Proven directly: while the validator runs, the lock is unavailable to anyone
-    else, so no load can be committing.
-    """
+    """Judge the shape under the state lock, or a concurrent load can swap the family mid-check."""
     backend.load_as(LTX2)
     held: list[bool] = []
     real = video_families_module.validate_video_request_shape
@@ -464,12 +434,7 @@ def _tiny_png_b64() -> str:
 
 @pytest.mark.parametrize("axes", [{"width": 768}, {"height": 512}])
 def test_a_half_specified_canvas_stays_valid_without_a_keyframe(axes):
-    """The regression this pins: the paired-axes rule was written for the keyframe canvas but
-    ran as an unconditional request validator, so every existing LTX / Wan / Hunyuan /
-    prompt-only H3 client that sends one axis started getting a 422. The backend deliberately
-    resolves the missing axis from the family's default preset (validate_video_request_shape
-    documents it, and _resolve_keyframes implements it), so these calls must still be accepted.
-    """
+    """Paired-axes check must not run on requests without a keyframe, or one-axis clients get 422s."""
     from models.inference import VideoGenerateRequest
 
     req = VideoGenerateRequest(prompt = "a cat", **axes)
@@ -501,10 +466,7 @@ def test_both_axes_and_neither_stay_valid_with_a_keyframe():
 
 @pytest.mark.parametrize("count", [107, 362])
 def test_an_on_lattice_count_outside_the_family_range_is_refused(count):
-    """The hole this closes: the gate judged the LATTICE only, while snap_num_frames also CLAMPS
-    to min/max_num_frames. MiniMax-H3 is 17k + 5 over 124..345, so 107 and 362 both sit exactly
-    on the lattice, passed validation, and were then rendered as 124 and 345 -- the API
-    accepting one recipe and drawing another, which is the whole reason this check exists."""
+    """The frame gate must check the range too: snap_num_frames clamps on-lattice counts as well."""
     from core.inference.video_families import (
         VideoShapeError,
         detect_video_family,

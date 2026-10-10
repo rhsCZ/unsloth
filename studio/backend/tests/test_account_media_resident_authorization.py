@@ -383,13 +383,7 @@ def test_every_generation_access_check_names_its_modality():
 
 
 def test_a_failed_load_does_not_authorize_the_requester_against_the_previous_resident(monkeypatch):
-    """The records a load publishes are undone when that load fails with the old build resident.
-
-    Alice loads a shared base with a private adapter baked in. Bob asks for the same base with his
-    own adapter and the background load fails, so the engine keeps serving ALICE's pipeline. The
-    ownership record names one reference (the model path), which is unchanged, so the prior-owner
-    fallback never fires, and the component record was replaced with Bob's adapter set: without the
-    rollback Bob clears his own list and generates on Alice's private build."""
+    """A failed load must roll back its records, or the requester is authorized against the old resident."""
     monkeypatch.setattr(access, "_prior_resident_accounts", {})
     monkeypatch.setattr(access, "_uncommitted_resident", {}, raising = False)
     monkeypatch.setattr(access, "_uncommitted_components", {}, raising = False)

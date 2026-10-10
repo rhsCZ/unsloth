@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Integration tests for the external providers API.
-
-Requires a running Unsloth Studio server. Configure via env vars:
-
-    export STUDIO_TEST_URL="http://localhost:8888"   # default
-    export STUDIO_TEST_USER="unsloth"                # default
-    export STUDIO_TEST_PASSWORD="..."                # required — see .bootstrap_password
-
-    # Provider API keys — tests skip when their key is unset
-    export OPENAI_API_KEY="sk-..."
-    export MISTRAL_API_KEY="..."
-    export GOOGLE_API_KEY="..."
-    export TOGETHER_API_KEY="..."
-    export FIREWORKS_API_KEY="..."
-    export PERPLEXITY_API_KEY="..."
-
-Run:
-    cd studio/backend
-    pytest tests/test_providers_api.py -v -s
-"""
+"""Integration tests against a running Studio server; provider tests skip when their API key is unset."""
 
 import base64
 import json
@@ -66,10 +46,6 @@ def _url(path: str) -> str:
 
 
 def _parse_sse_stream(response: requests.Response) -> tuple[str, bool]:
-    """Read an SSE response, return (assembled_text, saw_done).
-
-    Each chunk is JSON with choices[0].delta.content; stream ends at `data: [DONE]`.
-    """
     reply_parts: list[str] = []
     saw_done = False
 
@@ -98,13 +74,7 @@ def _parse_sse_stream(response: requests.Response) -> tuple[str, bool]:
 
 @pytest.fixture(scope = "session")
 def auth_headers() -> dict[str, str]:
-    """Log in once per session and return auth headers.
-
-    On a fresh install the bootstrap password forces a change; this fixture
-    detects must_change_password, auto-completes the change (new password =
-    STUDIO_TEST_NEW_PASSWORD or PASSWORD + "-test"), and re-logs in. On the
-    second run, set STUDIO_TEST_PASSWORD to the new password.
-    """
+    """Fresh installs force a password change; the fixture completes it, so reruns need the new password."""
     assert PASSWORD, (
         "STUDIO_TEST_PASSWORD is not set.\n"
         "Run: export STUDIO_TEST_PASSWORD=$(cat studio/backend/.bootstrap_password)"
@@ -153,15 +123,7 @@ def public_key_pem(auth_headers: dict[str, str]) -> str:
 
 @pytest.fixture(scope = "session")
 def vision_image_data_url(allow_outbound_network) -> str:
-    """Download the sloth image once per session as a base64 data URI.
-
-    A data URI sends the image inline; Gemini's OpenAI-compatible layer doesn't
-    fetch external HTTP URLs, so raw image_url links give empty Gemini replies.
-
-    This one genuinely fetches, so it says so: the suite otherwise blocks outbound
-    traffic, and a session fixture is built before the per-test guard can be told to
-    make an exception for it.
-    """
+    """Sent inline as a data URI: Gemini's OpenAI-compatible layer does not fetch image URLs."""
     with allow_outbound_network():
         resp = requests.get(_VISION_IMAGE_URL, timeout = 30)
     resp.raise_for_status()
@@ -172,10 +134,7 @@ def vision_image_data_url(allow_outbound_network) -> str:
 
 @pytest.fixture(scope = "session")
 def encrypt_key(public_key_pem: str):
-    """Return encrypt_key(plaintext) -> base64 RSA-OAEP ciphertext.
-
-    Uses the backend's RSA public key; mirrors the frontend.
-    """
+    """Mirrors the frontend: base64 RSA-OAEP ciphertext under the backend's public key."""
     pem_bytes = public_key_pem.encode("utf-8")
     rsa_pub = serialization.load_pem_public_key(pem_bytes)
 
@@ -265,10 +224,7 @@ class TestRegistry:
 
 
 class TestProviderCRUD:
-    """
-    Run sequentially, sharing state via class variables. Create, read, update,
-    and delete a single test provider config.
-    """
+    """Tests run in order and share the created provider id through class variables."""
 
     _created_id: str = ""
 
@@ -346,10 +302,7 @@ _INFERENCE_PARAMS = [
 
 
 class TestProviderInference:
-    """
-    Live inference tests, one parametrized set per provider. Each is skipped
-    when the provider's API key env var is unset.
-    """
+    """Live inference per provider; each set is skipped when its API key env var is unset."""
 
     @pytest.mark.parametrize("provider_type,model,api_key", _INFERENCE_PARAMS)
     def test_connection(
@@ -455,10 +408,7 @@ _VISION_PARAMS = [
 
 
 class TestVisionInference:
-    """
-    Send a 1×1 white PNG plus a text question to each vision-capable provider.
-    Verifies image content parts survive the proxy and the provider replies.
-    """
+    """Sends a 1x1 PNG plus a question to vision providers, checking image parts survive the proxy."""
 
     @pytest.mark.parametrize("provider_type,model,api_key", _VISION_PARAMS)
     def test_vision_chat_inference(
@@ -513,11 +463,8 @@ class TestVisionInference:
 
 class TestLocalInferenceUnaffected:
     def test_chat_without_provider(self, auth_headers: dict[str, str]):
-        """POST /v1/chat/completions without provider fields must not 422/500.
-
-        200 = local model responded; 503 = no model loaded (fine in tests);
-        any other 4xx/5xx = request-handling regression.
-        """
+        """With no provider fields, 200 or 503 (no model loaded) is fine; other 4xx or 5xx is a
+        regression."""
         resp = requests.post(
             _url("/v1/chat/completions"),
             headers = {**auth_headers, "Content-Type": "application/json"},

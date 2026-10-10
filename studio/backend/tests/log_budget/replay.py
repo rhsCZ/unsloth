@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Replay an Unsloth session through the real middleware in virtual time.
-
-No sleeping and no wall clock. The middleware takes its timestamps from
-``time.perf_counter`` in its own module namespace, so swapping that namespace for a clock
-the test advances by hand makes a thirty-minute session run instantly and identically on a
-loaded CI runner. Real sleeps would put every assertion within scheduler noise of a window
-boundary, which is how a guard like this becomes flaky and then gets deleted.
-
-The middleware itself is real. So is the dedup state, the quiet-success suppressor and the
-shared liveness bucket. Only the clock and the terminal application are substituted.
-"""
+"""Replay a session through the real middleware on a fake clock; no sleep sits near a window edge."""
 
 from __future__ import annotations
 
@@ -21,12 +11,7 @@ from typing import Optional
 
 
 class FakeClock:
-    """Stands in for the ``time`` module inside ``loggers.handlers``.
-
-    Only ``perf_counter`` is used by the middleware; anything else raises rather than
-    silently falling through to the real module, so a future call site that starts reading
-    the wall clock shows up here instead of quietly reintroducing nondeterminism.
-    """
+    """Stands in for the time module in loggers.handlers; any call other than perf_counter raises."""
 
     def __init__(self, start: float = 1000.0) -> None:
         self.now = start
@@ -130,11 +115,7 @@ def replay(
     clock: Optional[FakeClock] = None,
     durations: Optional[dict] = None,
 ) -> ReplayResult:
-    """Drive one middleware instance through ``boot`` then ``duration_s`` of polling.
-
-    One instance for the whole run, because the de-duplication state lives on the instance
-    and a fresh one per request would suppress nothing and quietly pass every budget.
-    """
+    """One middleware instance per run: dedup state lives on it, and a fresh one suppresses nothing."""
     from loggers.handlers import LoggingMiddleware
 
     clock = install(handlers, monkeypatch, clock)

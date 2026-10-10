@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The GGUF variant preflight must accept a caller token that proves Hub access.
-
-A managed account picking a quantization for a private or gated repo it has never
-downloaded holds no grant yet -- the grant is only recorded once a download finishes --
-so the grant/public check alone turns the whole select-then-download flow into a 404.
-The cache-only direction (no token) still needs the grant.
-"""
+"""Accept a caller's Hub token in variant preflight, since the grant is recorded only after download."""
 
 from __future__ import annotations
 

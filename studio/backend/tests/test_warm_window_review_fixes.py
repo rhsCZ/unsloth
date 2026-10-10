@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The warm window's remaining sharp edges, one test per edge.
-
-Deferring the ML stack opens an interval between the socket binding and the stack being
-importable. Separate things went wrong in it: the generation counter advanced on the
-cached path, so ordinary get_device() traffic looked like a re-detection; a failed forced
-re-detect left half a verdict published; building the orchestrator on the warm thread made
-its ranking fetch an unprompted boot-time request; two sync helpers reached the inference
-singleton from the loop thread; the kill switch also disabled MLX self-heal; purging a
-half-imported package raced a request retrying the same import; the post-warm worker
-outlived its lifespan, then starved the next one; and /api/health published a verdict read
-mid-re-detect, treating a torn event-set/DEVICE-None state as settled.
-"""
+"""Warm-window edge cases: stale epochs, torn hardware verdicts, and shutdown/detection races."""
 
 from __future__ import annotations
 
@@ -111,11 +100,7 @@ def test_the_completion_event_is_published_on_the_cached_path_too(monkeypatch):
 
 
 def test_a_failed_redetect_restores_the_whole_published_verdict(monkeypatch):
-    """A raise must not leave a half-written verdict as what health serves.
-
-    The pass resets CHAT_ONLY / CHAT_ONLY_REASON / IS_ROCM on entry and the MLX autorepair
-    catches the exception, so without a restore the reason is gone and the sidebar poll
-    stops (it continues only while it reads "mlx_unavailable")."""
+    """A failed re-detect must restore the whole verdict, or health serves a torn chat_only_reason."""
     monkeypatch.setattr(hw, "DEVICE", hw.DeviceType.CPU, raising = False)
     monkeypatch.setattr(hw, "CHAT_ONLY", True, raising = False)
     monkeypatch.setattr(hw, "CHAT_ONLY_REASON", "mlx_unavailable", raising = False)
@@ -165,10 +150,7 @@ def test_a_successful_redetect_publishes_the_new_verdict(monkeypatch):
 
 
 def test_building_the_orchestrator_makes_no_outbound_request():
-    """Construction moved onto the warm thread, so it must not fetch anything.
-
-    Starting the ranking fetch from __init__ reached huggingface.co on every boot before
-    anyone signed in. Asserted on the source: importing here pulls the whole stack."""
+    """Orchestrator __init__ must not start the ranking fetch; it hit huggingface.co on every boot."""
     tree = ast.parse(
         (_BACKEND / "core" / "inference" / "orchestrator.py").read_text(encoding = "utf-8")
     )
@@ -222,10 +204,7 @@ def test_the_ranking_fetch_is_started_by_the_first_reader():
     ],
 )
 def test_the_ranking_fetch_starts_no_thread_when_offline(monkeypatch, env):
-    """It is a raw httpx.get, so the offline variables do not reach it by themselves.
-
-    Driven through the real method: every spelling the backend accepts as offline must
-    leave the first model list network-silent, not just the one the guard compares."""
+    """A raw httpx.get ignores offline env vars, so each accepted offline spelling must skip it."""
     from core.inference import orchestrator as orch
 
     monkeypatch.delenv("HF_HUB_OFFLINE", raising = False)
@@ -615,11 +594,7 @@ def test_the_lifespan_stops_the_post_warm_thread_on_shutdown():
 
 
 def test_health_will_not_publish_a_verdict_mid_redetect(monkeypatch):
-    """A forced re-detect must not be reported as a settled answer.
-
-    config/env.ts caches the first reply carrying device_type as authoritative and the
-    sidebar poll continues only while it reads chat_only_reason == "mlx_unavailable", so
-    one mid-pass chat-only reply with a null reason hides Train for the SPA session."""
+    """Health must not publish mid-redetect: the SPA caches the first device_type reply as final."""
     import main as main_mod
 
     hw_mod = main_mod._hw_module
@@ -981,11 +956,7 @@ def test_the_shared_offline_check_accepts_the_other_spellings(monkeypatch):
 
 
 def test_shutdown_resets_chat_only_with_the_detection_event():
-    """Clearing DEVICE without CHAT_ONLY leaves a stale capability published.
-
-    Health falls back to a bare CHAT_ONLY read while the event is clear, so a second
-    lifespan after a GPU run would answer chat_only: false before anything re-measured it.
-    config/env.ts stores that even with no device_type, showing Train and Export."""
+    """Shutdown must reset CHAT_ONLY with DEVICE, or a second lifespan reports a stale capability."""
     import asyncio as _asyncio
 
     from utils import lifespan_shutdown as shutdown_mod
@@ -1108,11 +1079,7 @@ def test_the_saved_gpu_override_check_runs_off_the_event_loop():
 
 
 def test_a_detection_retired_by_shutdown_does_not_publish(monkeypatch):
-    """A detector inside the torch import must not put back what shutdown cleared.
-
-    Shutdown cannot take _DETECT_LOCK to stop it -- that parks teardown behind the whole
-    import -- so it retires the epoch. Otherwise the detector republishes a settled-looking
-    verdict over the reset, and the next lifespan skips detection on a non-None DEVICE."""
+    """Shutdown retires the epoch instead of locking, so a late detector cannot republish DEVICE."""
     monkeypatch.setattr(hw, "DEVICE", None, raising = False)
     monkeypatch.setattr(hw, "CHAT_ONLY", True, raising = False)
 
@@ -1399,11 +1366,7 @@ class _DeferredThread:
 
 
 def test_a_warm_delayed_past_shutdown_is_already_retired(monkeypatch):
-    """The epoch must be bound at spawn, not by the thread itself.
-
-    The child may not run for a while after start() and a shutdown in that gap retires the
-    lifespan. A thread reading the epoch itself would read the post-shutdown value and warm
-    on, rebuilding DEVICE and the orchestrator after teardown cleared them."""
+    """Bind the epoch at spawn, not in the thread, so a warm started before shutdown stays retired."""
     import utils.torch_warmup as warm
     from utils.hardware import hardware as hw
 
@@ -1571,10 +1534,7 @@ def test_a_new_lifespan_warms_even_when_the_retired_one_is_still_running():
 
 
 def test_a_failed_forced_redetect_does_not_restore_a_retired_verdict():
-    """detect_hardware()'s except path must honour the epoch too. It saves the verdict, clears
-    DETECTION_COMPLETE, then re-detects; if shutdown retires the pass and the probe raises,
-    restoring puts back exactly what shutdown cleared and the next lifespan skips detection.
-    The success path checked, the failure path did not."""
+    """detect_hardware's failure path must check the epoch, or it restores a verdict shutdown cleared."""
     with _restores_hardware_verdict() as hw:
         hw.DEVICE = hw.DeviceType.MLX
         hw.CHAT_ONLY = True
@@ -1617,11 +1577,7 @@ def test_a_failed_redetect_inside_its_own_lifespan_still_restores():
 
 
 def test_a_broken_torch_install_is_not_reported_as_a_host_without_a_gpu():
-    """An installed torch whose import raises is a detection failure, not "no GPU".
-
-    Widening _has_torch() to swallow every exception keeps the warm thread from making each
-    later request retry the failing import. Reporting it as no_gpu, though, tells a GPU box
-    it has no GPU and sends export_capability down "install PyTorch" for an installed one."""
+    """A torch import that raises is a detection failure, not no_gpu; that misreports installed GPUs."""
     from utils.hardware import hardware as hw
 
     saved_error = hw.TORCH_IMPORT_ERROR
@@ -1842,12 +1798,7 @@ def test_the_unload_eviction_checks_are_offloaded():
 
 
 def test_a_stale_waiter_does_not_discard_the_new_lifespan_verdict():
-    """Only discard what this call produced.
-
-    A detection worker from the previous lifespan can still be blocked on _DETECT_LOCK when
-    shutdown retires its epoch. The new lifespan's warm takes the lock first and publishes;
-    the stale worker then enters, finds DEVICE set so runs no detection, and must not wipe a
-    verdict it did not produce -- that leaves the restarted app provisional."""
+    """A stale detection waiter must discard only the verdict it produced, never the new lifespan's."""
     with _restores_hardware_verdict() as hw:
         stale_epoch = hw.current_detection_epoch()
         hw.invalidate_detection()
@@ -2077,11 +2028,7 @@ def test_the_post_warm_worker_is_retired_before_any_shutdown_await():
 
 
 def test_a_finished_warm_still_holds_the_latch_inside_its_own_lifespan():
-    """Repeat calls stay no-ops however fast the warm ran.
-
-    Treating any finished thread as absent is timing-dependent: with a trivial stage the
-    warm can finish between two calls and the second starts a whole second warm (green on
-    Linux, red on macOS). Only a warm whose epoch shutdown has retired is stale."""
+    """A finished warm still latches repeat calls within its lifespan; only a retired epoch is stale."""
     import utils.torch_warmup as warm
 
     saved_thread, saved_epoch = warm._thread, warm._thread_epoch
@@ -2289,11 +2236,7 @@ def test_a_live_worker_still_probes():
 
 
 def test_a_measured_authed_reply_drops_both_provisional_markers():
-    """AST: publishing a measurement must clear the deferred marker too.
-
-    With the kill switch on, base carries both markers. When a detection finishing during
-    the bearer await makes the snapshot measured, a left-over hardware_detection_deferred
-    pairs an accelerator verdict with a stale reason: the client reads that marker first."""
+    """A measured health reply must clear both provisional markers, or clients read a stale one."""
     fn = _health_check_ast()
     branch = next(
         node
@@ -2325,12 +2268,7 @@ def test_a_measured_authed_reply_drops_both_provisional_markers():
 
 
 def test_a_shutdown_inside_a_stage_cannot_republish_the_torn_down_verdict():
-    """The stage-boundary checks miss a shutdown that lands mid-stage.
-
-    _warm_inference_backend builds the orchestrator, whose constructor reaches
-    get_default_models() -> get_device(), and get_device() takes no epoch. A shutdown after
-    the pre-stage check but before that nested read used to let it adopt the epoch it was
-    retiring into and publish DEVICE, so the next lifespan skipped detection altogether."""
+    """Stage checks miss a mid-stage shutdown: get_device() takes no epoch, so it can republish."""
     with _restores_hardware_verdict() as hw:
         hw.DEVICE = None
         hw.DETECTION_COMPLETE.clear()
@@ -2416,11 +2354,8 @@ def test_the_warm_runs_its_stages_inside_an_owning_scope():
 
 
 def test_the_mlx_self_heal_cannot_republish_into_a_stopped_lifespan():
-    """attempt_mlx_repair() is a pip install; shutdown can land anywhere inside it.
-
-    detect_hardware() guards a shutdown landing mid-pass but read current itself, so a
-    repair finishing after teardown adopted the epoch shutdown moved to and published for a
-    lifespan that had ended. The next lifespan then found DEVICE set and skipped detection."""
+    """A repair finishing after shutdown must not adopt the new epoch and publish into a stopped
+    lifespan."""
     with _restores_hardware_verdict() as hw:
         hw.DEVICE = None
         hw.DETECTION_COMPLETE.clear()
@@ -2529,11 +2464,7 @@ def test_an_interrupted_purge_reports_only_what_it_removed():
 
 
 def test_a_late_repair_cannot_erase_the_restarted_lifespans_verdict():
-    """A stale forced pass must bail before it touches anything.
-
-    detect_hardware() clears DETECTION_COMPLETE, probes, then discards when the epoch moved.
-    Reached with an already-stale owning epoch, that runs over a verdict the restarted
-    lifespan had settled: the discard wipes DEVICE and the event, so it goes provisional."""
+    """A stale forced pass must bail before touching state, or it wipes the restarted lifespan's verdict."""
     with _restores_hardware_verdict() as hw:
         stale_epoch = hw.current_detection_epoch()
         hw.invalidate_detection()
@@ -2558,10 +2489,7 @@ def test_a_late_repair_cannot_erase_the_restarted_lifespans_verdict():
 
 
 def test_a_repair_that_outlived_its_lifespan_still_reopens_train():
-    """Declining the stale pass must not leave a repaired Mac chat-only for good. The install
-    succeeded, so the running lifespan holds a verdict measured before mlx existed;
-    _attempted is process-wide so no later repair revisits it, and health only reads the
-    settled snapshot. Train and Export stay disabled until a restart."""
+    """Declining the stale pass must not strand a repaired Mac chat-only; _attempted is never revisited."""
     import utils.mlx_repair as repair
     with _restores_hardware_verdict() as hw:
         spawn_epoch = hw.current_detection_epoch()
@@ -2591,11 +2519,7 @@ def test_a_repair_that_outlived_its_lifespan_still_reopens_train():
 
 
 def test_a_cached_path_pass_does_not_publish_its_own_intermediate_state():
-    """ensure_hardware_detected must clear the event before it mutates the globals.
-
-    Shutdown clears DEVICE, a cached waiter then sets the event, and the next pass starts
-    with the event set and DEVICE None. Every accelerator branch assigns CHAT_ONLY = False
-    before a probe that can fall back to CPU, so health reads that candidate as settled."""
+    """Clear the event before mutating globals, or a cached waiter's set publishes intermediate state."""
     with _restores_hardware_verdict() as hw:
         hw.DEVICE = None
         hw.CHAT_ONLY = True

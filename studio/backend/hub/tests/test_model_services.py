@@ -353,12 +353,7 @@ def _not_partial_snapshot(_kind, _repo_id, _path, **_kw):
 
 
 def _download_body(**over) -> SimpleNamespace:
-    """A download request with every field the route reads.
-
-    Built by hand rather than through the schema so these tests stay cheap, so it lists
-    the newer scoping fields too: leaving one off reads as AttributeError inside the
-    route, not as a missing default.
-    """
+    """Hand-built download body must carry every field the route reads, including newer scoping fields."""
     body = {
         "repo_id": "Org/Model",
         "gguf_variant": None,
@@ -445,15 +440,8 @@ class TestExtractQuantToken:
     "repo", ["leejet/MiniMax-H3-GGUF", "unsloth/MiniMax-H3-GGUF", "UNSLOTH/minimax-h3-gguf"]
 )
 def test_minimax_h3_variant_filter_keeps_both_denoiser_partitions(repo):
-    """Both H3 bundle repos need the filter, and the match is case-insensitive.
-
-    The Unsloth mirror is the one the family and catalog now advertise, and it carries the
-    Qwen3-VL encoder quants beside the denoisers, so leaving it off the list would aggregate a
-    12 GB text encoder as if it were a selectable transformer quant.
-
-    Both denoiser partitions stay: which one is picked IS the task, the loader's
-    ``validate_h3_transformer_filename`` accepts either, and the community bundle repo publishes
-    Ref2VA quants today. Filtering them out hid the whole reference-video path from the picker."""
+    """Both H3 bundle repos get the case-insensitive filter, and both denoiser partitions stay
+    selectable."""
     selectable = gguf._is_selectable_repo_gguf
     assert selectable(repo, "minimax_h3_fl2va-Q4_K_M.gguf")
     assert selectable(repo, "minimax_h3_fl2va_pruned-Q4_K_M.gguf")
@@ -466,10 +454,7 @@ def test_minimax_h3_variant_filter_keeps_both_denoiser_partitions(repo):
 
 
 def test_the_h3_native_repo_is_a_recognised_bundle_repo():
-    """The repo the native loader downloads from must be one the filter knows about.
-
-    These are set in different files, so a future repo move that updates only the loader would
-    silently reintroduce the encoder-as-transformer aggregation this filter exists to prevent."""
+    """The native loader repo must stay a recognised bundle repo, as the two are set in different files."""
     import sys
     from pathlib import Path
 
@@ -564,12 +549,8 @@ def test_custom_inventory_filters_dspark_companions_at_registered_root(tmp_path)
 
 
 def test_custom_inventory_groups_nested_gguf_files_once(tmp_path):
-    """A model folder is one picker row whose GGUF files are its variants.
-
-    The generic custom-folder scan already publishes that directory.  The LM
-    Studio compatibility pass must not also publish every GGUF inside it as a
-    second top-level model.
-    """
+    """A model folder is one picker row; the LM Studio pass must not republish its nested GGUFs as
+    models."""
     root = tmp_path / "hub"
     model_dir = root / "qwen38-27b-qat"
     model_dir.mkdir(parents = True)
@@ -1417,11 +1398,7 @@ def test_cached_inventory_requests_share_scan(monkeypatch, inventory_request, sc
 def test_cached_inventory_discards_a_scan_that_raced_an_invalidation(
     monkeypatch, scanner_name, inventory_call
 ):
-    """A delete landing mid-scan must supersede the rows that scan produced.
-
-    The pre-scan epoch check only covers the source read; the walk itself takes
-    seconds, which is exactly when a download or deletion completes.
-    """
+    """A delete landing mid-scan must discard the scan's rows, which the pre-scan epoch check misses."""
     epoch, scans = [0], []
 
     def scan(**_kwargs):
@@ -2021,14 +1998,7 @@ def test_legacy_unscoped_download_state_falls_back_only_for_selected_cache(monke
 def test_index_finds_an_unreadable_marker_stored_under_a_hashed_filename(
     monkeypatch, tmp_path, variant
 ):
-    """The index must agree with has_cancel_marker about a corrupt marker.
-
-    A marker whose payload will not parse stays fail-closed but loses its declared
-    variant, so the only identity left is the filename. When the variant is stored
-    hashed, that identity is the digest, and looking it up by variant name missed
-    it -- so a cancelled variant came back advertised as complete, while the
-    per-variant lookup still found the file by rebuilding the same digest.
-    """
+    """Index must find a corrupt hashed-name cancel marker, or a cancelled variant shows as complete."""
     hub_cache = tmp_path / "cache-a"
     monkeypatch.setattr(state_dir, "cache_root", lambda: tmp_path / "studio-cache")
     monkeypatch.setattr(
@@ -2057,13 +2027,7 @@ def test_index_finds_an_unreadable_marker_stored_under_a_hashed_filename(
 
 
 def test_cached_gguf_scan_degrades_when_the_shared_index_cannot_be_built(monkeypatch, tmp_path):
-    """A malformed repo identity must not take every valid row down with it.
-
-    The index is built once per scan and outside the per-repository ``try``, so an
-    exception there reaches the endpoint as a 500 and hides the whole inventory.
-    ``_scan_cached_models`` already degraded to per-repo reads; the GGUF path did
-    not, which is the asymmetry this covers.
-    """
+    """Shared index build must degrade per repo on failure, not 500 the endpoint and hide every model."""
     hub_cache = tmp_path / "cache-a"
     monkeypatch.setattr(state_dir, "cache_root", lambda: tmp_path / "studio-cache")
     monkeypatch.setattr(
@@ -2102,15 +2066,7 @@ def test_cached_gguf_scan_degrades_when_the_shared_index_cannot_be_built(monkeyp
 
 
 def test_state_scan_survives_a_state_filename_with_an_undecodable_byte(monkeypatch, tmp_path):
-    """One corrupt filename must not take the whole inventory down with it.
-
-    A byte the filesystem encoding cannot decode comes back from iterdir() as a
-    lone surrogate, and hashing that for the canonical spelling raises
-    UnicodeEncodeError. Per-repo reads used to contain the damage to the repo
-    that owned the file. The index is built once per scan and outside the
-    per-repo try, so an escaping hash would 500 the endpoint and hide every
-    cached model, not just this one.
-    """
+    """An undecodable filename byte must not make the shared index raise and hide every cached model."""
     monkeypatch.setattr(state_dir, "cache_root", lambda: tmp_path)
     cache = tmp_path / "cache-a"
     monkeypatch.setattr(
@@ -2497,14 +2453,7 @@ def _diffusion_scan(
     config_manifest: dict | None = None,
     expect_task_classification: bool = True,
 ):
-    """One cached diffusion repo through _scan_cached_models, with the download-partial signal
-    forced off so only the pipeline-shape checks can flag the row.
-
-    The snapshot is materialised on disk, not just described: the pipeline-shape checks read the
-    directory the row resolves to, so a revision without a real ``snapshot_path`` would report no
-    manifest and no denoiser for every repo alike and the assertions below would all pass on
-    nothing.
-    """
+    """Materialise the snapshot on disk, or the shape checks pass vacuously on a missing snapshot_path."""
     repo_path = tmp_path / f"hub/models--{repo_id.replace('/', '--')}"
     snapshot = repo_path / "snapshots" / _SNAPSHOT_SHA
     snapshot.mkdir(parents = True)
@@ -2553,10 +2502,7 @@ def _diffusion_scan(
 
 
 def test_cached_models_scan_marks_a_companion_only_pipeline_partial(monkeypatch, tmp_path):
-    """A GGUF image load prefetches the base repo's manifest + VAE + text encoder and skips the
-    multi-GB transformer. Every file its manifest expected arrived, so the download-partial check
-    passes it, but from_pretrained cannot load it -- the picker must not advertise it as on-device
-    (same rule /api/models/cached applies)."""
+    """Companion-only pipeline must be partial: from_pretrained cannot load it without the transformer."""
     row = _diffusion_scan(
         monkeypatch,
         tmp_path,
@@ -2625,10 +2571,7 @@ def test_cached_models_scan_exposes_minimax_music3_modular_pipeline(monkeypatch,
 
 
 def test_cached_models_scan_flags_a_single_file_diffusion_checkpoint(monkeypatch, tmp_path):
-    """No root model_index.json: loadable only through from_single_file + a filename. The picker
-    gates on this flag, and before it was carried here every hub-sourced row read as a full
-    pipeline -- so a checkpoint-only repo was offered as a pipeline load and failed after the
-    handoff."""
+    """Checkpoint-only repos need the single_file flag on hub rows, or the picker offers a failing load."""
     row = _diffusion_scan(
         monkeypatch,
         tmp_path,
@@ -2642,13 +2585,7 @@ def test_cached_models_scan_flags_a_single_file_diffusion_checkpoint(monkeypatch
 
 
 def test_a_companion_mirror_carries_the_flag_on_the_hub_row(monkeypatch, tmp_path):
-    """The chat picker is backed by /api/hub/cached-models, NOT the legacy /api/models one, so a
-    flag set only on the legacy route arrives as undefined here -- the same trap single_file fell
-    into. A mirror that reaches this scan must carry it.
-
-    Given a config.json, because the real mirrors have none: see the test below for what that
-    means today.
-    """
+    """The chat picker reads /api/hub/cached-models, so the flag must be set on that hub row too."""
     row = _diffusion_scan(
         monkeypatch,
         tmp_path,
@@ -2702,15 +2639,7 @@ def test_native_audio_codec_repos_are_companion_infrastructure(
 
 
 def test_the_real_companion_shape_never_reaches_a_row_at_all(monkeypatch, tmp_path):
-    """Why the flag above is a latch, not a live fix.
-
-    The published mirrors are ComfyUI-style: weights under split_files/ and no config.json or
-    model_index.json. _repo_non_gguf_model_payload classifies that as ``unknown``, so
-    has_runnable_weights is False and _scan_cached_models drops the repo before any row exists.
-    Pinned because the flag's whole value is covering the day that classifier learns to admit
-    these -- if this test starts failing, the flag is what stops a denoiser-less repo becoming a
-    chat pick.
-    """
+    """ComfyUI split_files mirrors are dropped before any row, so the flag alone keeps them out of chat."""
     from types import SimpleNamespace
 
     snapshot = tmp_path / "snapshots" / _SNAPSHOT_SHA
@@ -3736,12 +3665,7 @@ def _unresolvable_variant_metadata(
     *,
     state = "running",
 ):
-    """A repo whose model_info is failing: no requirement, no blob hashes.
-
-    Reproduces the negatively-cached lookup -- a 401 on a gated repo whose token
-    was removed, or an offline poll -- that leaves the expected file set empty
-    for the whole TTL after a single failure.
-    """
+    """model_info failing, as on a 401 or offline poll, leaves the expected file set empty for the TTL."""
 
     async def _run_inline(fn, *args, **kwargs):
         return fn(*args, **kwargs)
@@ -3769,15 +3693,7 @@ def _unresolvable_variant_metadata(
 
 
 def test_gguf_progress_unknown_hashes_reports_the_variant_files_on_disk(monkeypatch, tmp_path):
-    """A finished variant must not read as "0 B of 33 GB" when metadata flakes.
-
-    model_info failing is negatively cached, so a 401 that lands after the last
-    byte keeps the expected hash set empty for the whole TTL. Every blob was
-    then filtered out of the count and the reading collapsed to zero against the
-    caller's catalog hint, which is the stale "downloaded 0 B" card. The
-    variant's own snapshot files are still attributable by name, so they are
-    what the reading falls back to -- the sibling quant beside them is not.
-    """
+    """With hashes unknown, count the variant's own snapshot files, not sibling quants."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (snap / "model-Q4_K_M.gguf").write_bytes(b"x" * 100)
     (snap / "mmproj-F16.gguf").write_bytes(b"y" * 30)
@@ -3795,14 +3711,7 @@ def test_gguf_progress_unknown_hashes_reports_the_variant_files_on_disk(monkeypa
 
 
 def test_gguf_progress_unknown_hashes_keeps_a_total_under_a_full_baseline(monkeypatch, tmp_path):
-    """A variant already on disk at claim time must not net out to "0 B of 0 B".
-
-    Its completed_baseline_bytes covers the whole variant, and the subtraction
-    was previously held off by complete_on_disk -- which is exactly what an
-    unresolvable file set takes away. Without the guard the fallback reading
-    cancels against the baseline and the response carries no total at all, so
-    the bar has nothing to draw and the frontend reads the job as evictable.
-    """
+    """With unknown hashes, a fully on-disk variant must still report a total, not net out to 0 B of 0 B."""
     entry, snap = _shared_setup_15(tmp_path)
     (snap / "model-Q4_K_M.gguf").write_bytes(b"x" * 130)
     monkeypatch.setattr(state_dir, "cache_root", lambda: tmp_path / "state")
@@ -3823,12 +3732,7 @@ def test_gguf_progress_unknown_hashes_keeps_a_total_under_a_full_baseline(monkey
 
 
 def test_gguf_progress_unknown_hashes_prefers_the_manifest_file_set(monkeypatch, tmp_path):
-    """With a manifest but no hashes in it, its declared paths scope the reading.
-
-    The metadata-fallback manifest the worker writes from the finished snapshot
-    carries paths and sizes but no sha256, so the hash filter still resolves to
-    nothing. Its file list is exact, so it is used ahead of matching by name.
-    """
+    """A manifest with declared paths but no sha256 still scopes the reading, ahead of matching by name."""
     entry, snap = _shared_setup_15(tmp_path)
     (snap / "model-Q4_K_M.gguf").write_bytes(b"x" * 100)
     (snap / "model-Q2_K.gguf").write_bytes(b"z" * 900)
@@ -3849,11 +3753,8 @@ def test_gguf_progress_unknown_hashes_prefers_the_manifest_file_set(monkeypatch,
 
 
 def test_gguf_progress_unknown_hashes_stays_zero_without_variant_files(monkeypatch, tmp_path):
-    """The fallback reads the variant's files, not the shared blobs/ dir.
-
-    Guards the "instant ~900 MB" regression from the other direction: a cached
-    sibling quant with no snapshot file of this variant's own still reads zero.
-    """
+    """The unknown-hash fallback reads only this variant's snapshot files, so a cached sibling reads
+    zero."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (snap / "model-Q2_K.gguf").write_bytes(b"z" * 900)
     (blobs / "siblinghash").write_bytes(b"z" * 900)
@@ -3873,15 +3774,8 @@ def test_gguf_progress_unknown_hashes_stays_zero_without_variant_files(monkeypat
 
 
 def test_gguf_progress_settles_complete_from_disk_without_a_manifest(monkeypatch, tmp_path):
-    """A materialized snapshot whose manifest is gone must not stay partial forever.
-
-    Metadata named every blob the revision expects and all of them are on disk
-    finalized at their declared sizes, which is the evidence a manifest verify
-    collects. Refusing it because no manifest file happens to exist -- it was
-    never written, was deleted, or was filed under a cache scope this reader can
-    no longer name -- left the job in an active state with Retry/Resume showing
-    on a download that had finished.
-    """
+    """A materialised snapshot whose manifest is missing must settle complete from disk, not stay
+    partial."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (snap / "model-Q4_K_M.gguf").write_bytes(b"x" * 100)
     (blobs / "mainhash").write_bytes(b"x" * 100)
@@ -3920,13 +3814,7 @@ def test_gguf_progress_settles_complete_from_disk_without_a_manifest(monkeypatch
 
 
 def test_a_refused_manifest_is_not_reread_through_the_blob_hash_fallback(monkeypatch, tmp_path):
-    """Refusing a manifest has to stick.
-
-    Two caches disagreeing about the variant means no manifest may be applied across the
-    scan. The generic blob-hash helper reads the DEFAULT cache's manifest with none of that
-    scoping, so falling through to it reinstated the rejected hashes -- and they then filter
-    out every blob of the cache that actually holds the finished variant.
-    """
+    """Refused manifests must not return via the blob-hash fallback, which reinstates rejected hashes."""
     active = tmp_path / "active" / "models--Org--Model-GGUF"
     remembered = tmp_path / "remembered" / "models--Org--Model-GGUF"
     active.mkdir(parents = True)
@@ -3987,12 +3875,7 @@ def test_a_refused_manifest_is_not_reread_through_the_blob_hash_fallback(monkeyp
 
 
 def test_gguf_progress_without_a_manifest_needs_every_expected_blob(monkeypatch, tmp_path):
-    """The no-manifest completion is evidence-gated, not size-gated.
-
-    One expected blob missing while an oversized sibling makes the byte total
-    look satisfied must stay partial: the caller's expected_bytes is a catalog
-    hint and can never be what completion is judged against.
-    """
+    """Without a manifest, a byte total must not mark completion; expected_bytes is only a catalog hint."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (snap / "model-Q4_K_M-00001-of-00002.gguf").write_bytes(b"x" * 400)
     (blobs / "shard1").write_bytes(b"x" * 400)
@@ -4038,17 +3921,7 @@ def test_gguf_progress_without_a_manifest_needs_every_expected_blob(monkeypatch,
 
 
 def test_gguf_progress_recovers_the_windows_shaped_stale_download_card(monkeypatch, tmp_path):
-    """The reported symptom end to end: finished download, "0 B of 33 GB", Retry showing.
-
-    Every Windows-shaped condition at once, none of which reproduce on Linux on
-    their own. The cache is reached through a redirect so its resolved and
-    unresolved spellings differ; the snapshot holds copies rather than symlinks,
-    as HF falls back to when the filesystem refuses them; the manifest sits
-    under the pre-resolve scope digest an earlier build wrote it to; and
-    model_info is failing, so the expected blob hashes come back empty and stay
-    that way for the negative-cache TTL. Each one alone was enough to zero the
-    reading and keep the job out of a terminal state.
-    """
+    """Redirect, copy layout, old digest, or failed model_info each alone zeroes a finished download."""
     resolved_root = tmp_path / "resolved"
     resolved_root.mkdir()
     link = tmp_path / "redirected"
@@ -4112,19 +3985,7 @@ def test_gguf_progress_recovers_the_windows_shaped_stale_download_card(monkeypat
 
 
 def test_gguf_progress_without_a_manifest_needs_the_snapshot_materialized(monkeypatch, tmp_path):
-    """A finalized blob no one linked to is not a finished download.
-
-    HF writes the blob and then links it into the snapshot dir, so a run killed
-    between the two leaves bytes that nothing points at. With a manifest,
-    verify_against_disk catches it; without one, blob-level evidence alone would
-    have called an unloadable snapshot complete.
-
-    The stray companion is the reason completion is judged against the metadata
-    file list rather than a byte total taken over the snapshot dir. Every mmproj
-    and drafter in a repo looks like it belongs to whichever variant is being
-    polled -- a plan fetches one of each -- so a leftover one, or an opt-in
-    ``dspark/`` drafter, would cover for the shard that never landed.
-    """
+    """Judge completion against the metadata file list, so a stray mmproj cannot cover a missing shard."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (blobs / "mainhash").write_bytes(b"x" * 100)
     (snap / "mmproj-F32.gguf").write_bytes(b"y" * 5_000)
@@ -4158,13 +4019,7 @@ def test_gguf_progress_without_a_manifest_needs_the_snapshot_materialized(monkey
 
 
 def test_running_job_never_reads_progress_from_a_remembered_cache(monkeypatch, tmp_path):
-    """force_active means the active root and nothing else, even before it exists.
-
-    The first download into a freshly configured cache creates the root, so
-    hf_cache_root declines it and the lookup used to fall through to every
-    remembered cache. A previous cache's completed copy then read as this run's
-    progress, finalizing a job that had not written a byte.
-    """
+    """force_active reads only the active root, never a remembered cache, even before that root exists."""
     previous = tmp_path / "previous"
     complete = previous / "models--Org--Model" / "blobs"
     complete.mkdir(parents = True)
@@ -6219,10 +6074,7 @@ def test_snapshot_progress_complete_with_manifest_synthesized_from_disk(monkeypa
 
 
 def test_a_shared_companion_alone_is_not_evidence_the_quant_is_here(tmp_path):
-    """mmproj and the MTP drafter are downloaded with every quant in a repo, so on their own
-    they say nothing about THIS one. Deleting a quant while a sibling kept its companion left
-    a positive byte reading for the deleted variant, and hydration reads any positive reading
-    as active: it re-adopts the stale job and blocks a fresh download of the same quant."""
+    """Shared companions prove nothing about this quant; hydration treats any positive bytes as active."""
     snap = tmp_path / "snapshots" / "rev0"
     snap.mkdir(parents = True)
     (snap / "mmproj-F16.gguf").write_bytes(b"m" * 64)
@@ -6241,11 +6093,8 @@ def test_a_shared_companion_alone_is_not_evidence_the_quant_is_here(tmp_path):
 
 
 def test_finder_metadata_left_by_a_deleted_quant_is_not_that_quant(tmp_path):
-    """macOS keeps a file's metadata in a "._" companion carrying the same name, so it matches
-    the quant matcher exactly as its file does. Deleting the quant on a filesystem without
-    native xattrs strands that companion, which both walks then read as the quant still being
-    here -- hydration re-adopts the stale job and blocks a fresh download. A real GGUF a user
-    named that way is still the quant."""
+    """A ._ Finder companion left by a deleted quant is not that quant, but a real GGUF so named
+    still is."""
     snap = tmp_path / "snapshots" / "rev0"
     snap.mkdir(parents = True)
     (snap / "._model-Q4_K_M.gguf").write_bytes(b"\x00\x05\x16\x07" + b"m" * 60)
@@ -6290,13 +6139,7 @@ def test_a_root_that_will_not_resolve_is_a_scan_error(monkeypatch, tmp_path):
 
 
 def test_a_partial_scan_cannot_report_the_target_as_gone(monkeypatch, tmp_path):
-    """One unreadable root plus one readable one is a LOWER bound, not an absence.
-
-    The active root raising EACCES while a remembered cache still holds the repo dir (with a
-    sibling quant in it and nothing of ours) produced a non-null reading carrying
-    target_present False -- and hydration retires the job on that, though every byte of the
-    variant may sit in the root that could not be listed.
-    """
+    """An unlistable cache root makes a scan a lower bound, so target_present must not read as absent."""
     entry = tmp_path / "models--Org--Model-GGUF"
     (entry / "blobs").mkdir(parents = True)
     (entry / "snapshots" / "rev0").mkdir(parents = True)
@@ -7174,10 +7017,7 @@ def test_a_directory_that_is_not_a_pipeline_is_still_rejected(tmp_path):
 
 
 def test_the_custom_folder_filter_still_drops_a_row_it_cannot_classify(tmp_path):
-    """The pipeline exemption widens the custom-folder format filter, so pin what it must NOT let
-    through. A folder holding a config.json and no weights (an aborted download) also reports
-    "unknown", and nothing can load it: it has to stay filtered out while the pipeline beside it
-    is offered."""
+    """An aborted folder with config.json and no weights must stay filtered out beside a valid pipeline."""
     root = tmp_path / "scan"
     _write_pipeline(root / "MiniMax-H3-local")
     aborted = root / "half-downloaded"
@@ -7193,10 +7033,7 @@ def test_the_custom_folder_filter_still_drops_a_row_it_cannot_classify(tmp_path)
 
 
 def test_the_pipeline_test_is_safe_on_a_path_that_is_not_a_readable_directory(tmp_path):
-    """``_scan_custom_folder`` applies this to every row it did not already accept, and a row's
-    path can be a GGUF FILE, not a directory. A missing path, a file, and a directory whose
-    ``model_index.json`` is itself a directory must all answer False rather than raise: an
-    exception here fails the whole scan and empties the picker."""
+    """Must answer False, not raise, for a missing path or file: an exception would empty the picker."""
     assert local_inventory._is_diffusers_pipeline_dir(tmp_path / "does-not-exist") is False
 
     loose = tmp_path / "model.gguf"
@@ -7210,10 +7047,7 @@ def test_the_pipeline_test_is_safe_on_a_path_that_is_not_a_readable_directory(tm
 
 
 def test_a_modular_pipeline_root_is_recognised(tmp_path):
-    """A Modular Diffusers pipeline carries ``modular_model_index.json`` and NO
-    ``model_index.json``, which is exactly the pair the video loader accepts. Recognising only
-    the conventional index hid such a root from the Images/Video picker and let the publisher
-    walk descend into it and offer ``transformer`` / ``vae`` as separate, unusable models."""
+    """A Modular pipeline has modular_model_index.json and no model_index.json, and must be recognised."""
     root = tmp_path / "modular"
     root.mkdir()
     (root / "modular_model_index.json").write_text("{}")
@@ -7231,14 +7065,7 @@ def test_a_modular_pipeline_root_is_recognised(tmp_path):
 
 
 def test_gguf_progress_unknown_hashes_calls_a_sibling_only_dir_absent(monkeypatch, tmp_path):
-    """A repo dir kept alive by a sibling quant is not evidence that THIS one is here.
-
-    With the hash set unresolvable, target_present used to stay null, and the frontend's idle
-    probe reads zero bytes with a non-null cache_path as an active job unless presence is
-    explicitly false -- so the deleted quant's stale card was re-adopted and blocked a fresh
-    download until the idle grace ran out. The snapshot dir is named per file, so absence is
-    answerable here even when the hashes are not.
-    """
+    """A sibling-kept repo dir is no evidence; snapshot dirs are per file, so absence is answerable."""
     entry, snap = _shared_setup_15(tmp_path)
     (snap / "model-Q2_K.gguf").write_bytes(b"z" * 900)
     (snap / "mmproj-F16.gguf").write_bytes(b"y" * 30)
@@ -7252,12 +7079,7 @@ def test_gguf_progress_unknown_hashes_calls_a_sibling_only_dir_absent(monkeypatc
 
 
 def test_gguf_progress_target_presence_is_aggregated_across_caches(monkeypatch, tmp_path):
-    """Presence is a property of the set of caches, not of the one with the most bytes.
-
-    A sibling-only repo dir and a remembered cache that still holds this variant both read as
-    zero bytes, so the byte ordering alone could select the sibling-only reading and report the
-    target gone -- retiring a job whose files another scanned cache proves are there.
-    """
+    """Presence is aggregated across caches, since byte order alone could pick a sibling-only zero."""
     sibling = tmp_path / "a" / "models--Org--Model-GGUF"
     (sibling / "snapshots" / "rev0").mkdir(parents = True)
     (sibling / "blobs").mkdir(parents = True)
@@ -7288,14 +7110,8 @@ def test_gguf_progress_target_presence_is_aggregated_across_caches(monkeypatch, 
 
 
 def test_a_running_job_does_not_borrow_another_caches_manifest(monkeypatch, tmp_path):
-    """A live download is read from the active root only, so its hashes must come from there.
-
-    An older cache holding a DIFFERENT revision's manifest for the same variant made the two
-    disagree, and a disagreement is refused -- so a live download whose own manifest is right
-    there lost its hash set and every blob it had written was filtered out by the name-based
-    fallback's clamp. Scoped to the roots the scan will actually read, the active manifest
-    stands on its own.
-    """
+    """A running job's hashes come from the active root's manifest only, so other caches must not
+    veto it."""
     active = tmp_path / "active" / "models--Org--Model-GGUF"
     (active / "blobs").mkdir(parents = True)
     remembered = tmp_path / "old" / "models--Org--Model-GGUF"
@@ -7400,10 +7216,7 @@ def test_a_manifest_alone_is_not_evidence_the_variant_is_on_disk(monkeypatch, tm
 
 
 def test_one_unknown_cache_keeps_absence_unknown(monkeypatch, tmp_path):
-    """Absence needs EVERY scanned cache to say so. A sibling-only dir reporting false could win
-    the zero-byte tie over a cache with no readable snapshot to identify the variant from --
-    whose shared blobs dir may still hold an unattributable partial -- and the job was retired
-    on the strength of the one reading that could not see it."""
+    """Absence needs every scanned cache to agree; one unknown cache keeps presence unknown."""
     sibling = tmp_path / "a" / "models--Org--Model-GGUF"
     (sibling / "snapshots" / "rev0").mkdir(parents = True)
     (sibling / "blobs").mkdir(parents = True)
@@ -7424,10 +7237,7 @@ def test_one_unknown_cache_keeps_absence_unknown(monkeypatch, tmp_path):
 
 
 def test_an_unattributable_partial_keeps_presence_unknown(monkeypatch, tmp_path):
-    """A restarted download whose hashes could not be resolved has its bytes in an .incomplete
-    blob that is not linked into any snapshot yet, so the by-name scan -- which is what answers
-    presence on that path -- reports a confident absence. Idle hydration retires a persisted job
-    on that verdict, throwing away a partial the user can still resume."""
+    """Unattributable .incomplete bytes keep presence unknown; hydration must not retire a partial."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (snap / "model-Q2_K.gguf").write_bytes(b"z" * 900)
     (blobs / "somehash.incomplete").write_bytes(b"x" * 40)
@@ -7440,12 +7250,7 @@ def test_an_unattributable_partial_keeps_presence_unknown(monkeypatch, tmp_path)
 
 
 def test_a_subtree_that_cannot_be_scanned_keeps_presence_unknown(monkeypatch, tmp_path):
-    """Enumeration succeeding does not mean it was complete. Path.rglob suppresses every OSError
-    raised while scanning -- documented behaviour since 3.13 -- so a Windows ACL denial or a
-    network-filesystem hiccup on one subdirectory came back as a short list that reads exactly
-    like an empty one, and the scan then reported the variant absent though the unreadable
-    subtree may hold its main shard. Idle hydration retires a persisted download on that
-    verdict."""
+    """Path.rglob hides OSError, so a partial scan must keep presence unknown rather than read as absent."""
     entry, snap = _shared_setup_15(tmp_path)
     (snap / "model-Q2_K.gguf").write_bytes(b"z" * 900)
     denied = snap / "split"
@@ -7528,10 +7333,7 @@ def test_an_older_snapshot_still_proves_the_variant_is_here(monkeypatch, tmp_pat
 
 
 def test_a_verified_completion_wins_a_byte_tie_between_caches(monkeypatch, tmp_path):
-    """Two remembered caches can clamp to the same byte total while only one has a manifest that
-    verifies against disk. The byte-ordered pick then carried whichever came first by root
-    order, so the response stayed capped below 100% and kept offering Retry for a variant that
-    is demonstrably complete in the other cache."""
+    """On a byte tie, prefer the remembered cache whose manifest verifies against disk over root order."""
     unverified = tmp_path / "a" / "models--Org--Model-GGUF"
     (unverified / "snapshots" / "rev0").mkdir(parents = True)
     (unverified / "blobs").mkdir(parents = True)
@@ -7562,11 +7364,7 @@ def test_a_verified_completion_wins_a_byte_tie_between_caches(monkeypatch, tmp_p
 
 
 def test_an_unstatable_blobs_dir_is_not_an_absent_one(monkeypatch, tmp_path):
-    """Path.is_dir() swallows a whole class of OSError and answers False, so a failure on the
-    blobs directory ITSELF read as "no blobs here" -- a measured absence, which idle hydration
-    retires a persisted download on. ELOOP is the case it hides (a symlink cycle, or a
-    network-filesystem path that stops resolving); EACCES it re-raises, which the same try
-    now contains rather than letting it escape the whole reading."""
+    """Path.is_dir() answers False on OSError, so an unstatable blobs dir must not read as absent."""
     entry = tmp_path / "models--Org--Model-GGUF"
     (entry / "snapshots" / "rev0").mkdir(parents = True)
     (entry / "blobs").mkdir(parents = True)
@@ -7614,10 +7412,8 @@ def test_a_variant_complete_in_an_older_snapshot_settles(monkeypatch, tmp_path):
 
 
 def test_a_deleted_snapshot_link_is_absent_even_with_its_blob_left_behind(monkeypatch, tmp_path):
-    """Deleting a GGUF's snapshot entry normally leaves its finalized blob in the shared blobs/
-    dir, and a companion blob shared with a sibling keeps the tally positive on its own. Reading
-    presence off those counters called a quant that is gone present, and idle hydration
-    re-adopted the phantom and blocked a fresh download of it."""
+    """Presence is judged from snapshot links, not blob counters, since a deleted quant's blob can
+    remain."""
     entry, snap, blobs = _gguf_cache_dirs(tmp_path)
     (blobs / "mainhash").write_bytes(b"x" * 100)
     (snap / "model-Q2_K.gguf").write_bytes(b"z" * 900)
@@ -7642,10 +7438,7 @@ def test_a_deleted_snapshot_link_is_absent_even_with_its_blob_left_behind(monkey
 
 
 def test_a_stale_revisions_filenames_do_not_settle_the_resolved_one(monkeypatch, tmp_path):
-    """verify_against_disk compares names and sizes, not sha256. An older retained revision can
-    carry the same filenames at the same sizes, so a blob finalized but never linked (a crash
-    between the two) let the stale snapshot satisfy the check -- the job settled on files the
-    app would not load."""
+    """verify_against_disk compares names and sizes, not sha256, so a stale revision can settle a job."""
     entry = tmp_path / "models--Org--Model-GGUF"
     stale = entry / "snapshots" / "rev0"
     blobs = entry / "blobs"
@@ -8087,10 +7880,7 @@ def _gguf_with_architecture(path: Path, architecture: str) -> None:
 
 
 def test_cached_gguf_task_describes_the_revision_the_load_id_resolves_to(tmp_path):
-    """A bare repo id loads through ``refs/main``, which is not always the newest payload
-    snapshot: a revision-pinned fetch adds a newer one without moving the ref. Classifying the
-    newest then advertised a task for a revision the load never reads, and the pickers filter
-    On Device rows on exactly that field."""
+    """Classify the task from refs/main, the revision a bare repo id loads, not the newest snapshot."""
     hub_cache = tmp_path / "hub"
     repo_path = hub_cache / "models--Org--Model-GGUF"
     older = repo_path / "snapshots" / "aaaaold"
@@ -8183,19 +7973,7 @@ def test_cached_community_orpheus_gguf_is_not_chat_loadable(tmp_path):
 
 
 def test_every_row_key_the_scanner_emits_survives_the_response_schema():
-    """``response_model`` silently DROPS any key the schema does not declare.
-
-    ``_scan_cached_models`` grew a ``diffusers`` flag, which is the only gate keeping an
-    untrusted or unrecognised pipeline out of a chat picker: such a repo carries no task, and
-    its pipeline root has no config for can_chat to read. Undeclared, the flag reached the CLI
-    (which reads the dict in-process) but never the browser, so the two disagreed about the
-    same row.
-
-    The watched set is an explicit list, not every key the scanner emits: the AST harvest
-    over-approximates, picking up internal bookkeeping from nested dict literals that was never
-    meant to leave the process. So a NEW picker-visible flag is not covered the day it lands --
-    add it here when you add it to the scanner.
-    """
+    """response_model silently drops undeclared keys, so each picker-visible row key must be declared."""
     import ast
     import pathlib
 

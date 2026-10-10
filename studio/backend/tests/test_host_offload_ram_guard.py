@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A GGUF that misses VRAM spills into host RAM under `--fit on`, unpriced. When that
-spill is larger than available RAM the weights page in from disk as the model runs, so
-generation is slow.
-
-This used to REFUSE the load. It no longer does: the spill is mmap'd, so an oversized
-model pages rather than failing, and running a quant larger than fast memory off an SSD
-is deliberate and supported, which this check cannot tell apart from a mistake. Same
-arithmetic, different consequence -- it warns, and the load proceeds."""
+"""A --fit on spill larger than RAM warns instead of refusing, since mapped weights page from disk."""
 
 from __future__ import annotations
 

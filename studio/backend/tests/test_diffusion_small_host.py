@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Small-host load route (``diffusion_small_host.py``): host-RAM pre-check, decision table, the memory-mapped
-conversions, and the plan the route pins.
-
-Sizes are the ones a Kaggle T4 (fp16 only, 15 GB, 31 GB host RAM) sees: FLUX.1-schnell stores a 22.7 GB bf16
-transformer and an 8.9 GB bf16 T5; Qwen-Image a 38.9 GB transformer and a 15.8 GB Qwen2.5-VL. CPU only.
-"""
+"""Small-host load route checks, sized to a Kaggle T4 (15 GB GPU, 31 GB host RAM); CPU only."""
 
 from __future__ import annotations
 

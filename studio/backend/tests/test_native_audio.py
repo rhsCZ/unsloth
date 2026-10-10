@@ -23,12 +23,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Stub a dep the backend pytest matrix does not install, as test_trainer_stdout_quiet.py does.
-
-    That matrix stops at studio.txt plus torch and transformers; repo-cpu-tests is the job that
-    installs unsloth_zoo. Unstubbed, this module fails COLLECTION and takes the job down. A real
-    install is left alone, and __spec__ = None keeps the namespace-shadow guard a no-op here.
-    """
+    """Stub a dep the backend test matrix does not install, or collection fails and takes the job down."""
     if name in sys.modules:
         return
     try:

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Backend contract for the per-load parallel-slots knob.
-
-An optional ``n_parallel`` (llama-server ``--parallel``) rides on LoadRequest;
-omitted, the server-wide launch default (``run.py --parallel``) applies. These
-tests pin the pydantic contract and the shared PARALLEL_MIN/MAX mirrors, the
-``requested_parallel_slots`` lifecycle, the ``_already_in_target_state``
-requested-vs-requested reload branch with its diffusion skip, and the route
-wiring behind the /load, /validate and /status echoes.
-"""
+"""Per-load n_parallel: omitted, it falls back to the server-wide --parallel launch default."""
 
 from __future__ import annotations
 
@@ -295,13 +287,7 @@ def _load_impl_source() -> str:
 
 
 def _first_load_dispatch(load_impl: str) -> int:
-    """Where the body first hands a load to a backend.
-
-    The GGUF call now goes through _run_gguf_load_attempt, a health-wait helper
-    defined above _load_model_impl, so no single backend method name marks the
-    load any more. Whichever spelling survives, the load is still what every
-    assertion here has to sit before.
-    """
+    """The GGUF load goes through a helper, so the first load dispatch is found by any of several names."""
     found = [pos for n in _LOAD_DISPATCH if (pos := load_impl.find(n)) != -1]
     assert found, f"no load dispatch in _load_model_impl; looked for {_LOAD_DISPATCH}"
     return min(found)

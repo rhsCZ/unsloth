@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Per-request I/O never depends on how many accounts exist, and the owner's routing is fixed.
-
-The counters below are read from a WARM request, because the interesting claim is about
-steady state: a first request legitimately builds caches and opens the databases it will
-reuse, and counting that would only ever measure start-up. Two unmeasured requests warm
-it, and the third is the one read.
-
-Two turned out not to be enough. Run 35530114495 read /api/chat/threads at 3 mkdir, 3
-connections and 86 statements where the same request in the same test had just measured
-2, 2 and 8, on a commit whose only shared-path change was error-message wording, and the
-identical job passed on re-run. Warm-up cannot bound lazy work that is triggered by a
-clock rather than by a request count: anything with a TTL can expire between the warm-up
-and the measurement and be rebuilt inside it.
-
-What that noise can do is add work, never remove it. So the measurement is repeated and
-each counter is taken at its MINIMUM, which is the steady-state cost; a rebuild that
-fires in one repeat is not in the others. A cost that is genuinely higher with more
-accounts is higher in every repeat and still fails, which is what _steady_cost_keeps_a_
-persistent_increase checks directly rather than by assertion.
-"""
+"""Per-request I/O must not grow with account count; read warm counters repeatedly and take minimums."""
 
 import os
 import secrets
@@ -50,12 +31,7 @@ _REPEATS = 3
 
 
 def _steady(readings: list) -> dict:
-    """The per-counter minimum across readings of the same request.
-
-    Lazily rebuilt state adds work to whichever reading it lands in and takes none away,
-    so the smallest reading of each counter is the cost with nothing rebuilding. A cost
-    that really did grow grew in all of them, and the minimum grows with it.
-    """
+    """Lazy rebuilds only add work, so each counter's minimum across repeats is the steady cost."""
     keys = set().union(*readings) if readings else set()
     steady = {key: min(reading.get(key, 0) for reading in readings) for key in keys}
     # Counter never records zero, so drop zeros or noise becomes a difference.
@@ -144,11 +120,7 @@ def test_owner_routing_facts_and_shared_queue(isolated_auth, account_client):
 
 
 def test_steady_cost_keeps_a_persistent_increase_and_drops_a_one_off():
-    """The minimum above must not be able to hide a cost that is really there.
-
-    Read directly rather than through a request, because the two cases it has to tell
-    apart are exactly the ones a live request cannot be made to produce on demand.
-    """
+    """The minimum must still expose a persistent increase while dropping a one-off rebuild spike."""
     baseline = [{"connections": 2, "statements": 8}] * _REPEATS
 
     one_off = [{"connections": 2, "statements": 8}] * _REPEATS

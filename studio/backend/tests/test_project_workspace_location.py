@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Where a project's workspace folder lands, and what happens when it cannot.
-
-Project workspaces are the only thing Unsloth writes into the user's Documents,
-so a Documents folder it guesses wrong about breaks project creation and
-nothing else. On Windows that guess is wrong by default whenever OneDrive's
-Known Folder Move has repointed Documents at the synced copy.
-"""
+"""Project workspaces are the only thing written to Documents, and OneDrive can repoint that folder."""
 
 import os
 import re
@@ -99,11 +93,7 @@ def _probe_payload():
 
 
 def test_the_workspace_error_carries_the_folder_it_could_not_make(tmp_path, monkeypatch):
-    """The failing path, not the root it was derived from.
-
-    An existing project keeps a recorded rootPath that can sit anywhere, so the
-    configured projects root is not always the folder that failed.
-    """
+    """Name the failing folder itself: an existing project's rootPath can sit outside the projects root."""
     from storage import studio_db
     from storage.studio_db import ProjectWorkspaceError, _ensure_project_workspace
 
@@ -120,11 +110,7 @@ def test_the_workspace_error_carries_the_folder_it_could_not_make(tmp_path, monk
 
 
 def test_creating_a_project_says_which_folder_failed(tmp_path, monkeypatch):
-    """A folder Unsloth cannot create is the one failure this route has.
-
-    It used to surface as a bare 500, which says nothing about which folder or
-    what to do, and the folder is one the user can move.
-    """
+    """A project folder that cannot be created must yield an error naming that folder, not a bare 500."""
     from fastapi import HTTPException
 
     from routes import chat_history
@@ -150,11 +136,7 @@ def test_creating_a_project_says_which_folder_failed(tmp_path, monkeypatch):
 
 
 def test_a_database_folder_failure_is_not_blamed_on_the_projects_folder(monkeypatch):
-    """The same upsert opens studio.db before it picks a workspace.
-
-    That folder is UNSLOTH_STUDIO_HOME's, so answering it with "set
-    UNSLOTH_STUDIO_PROJECTS_HOME" sends the user to fix the wrong path.
-    """
+    """A studio.db folder failure must not blame UNSLOTH_STUDIO_PROJECTS_HOME, which is not that folder."""
     from routes import chat_history
 
     monkeypatch.setattr(

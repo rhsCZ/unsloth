@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every spawned interpreter that talks HTTPS activates the OS trust store.
-
-Injection is process-local and does not survive a spawn, so a missing call is
-invisible until someone behind a TLS-inspecting proxy hits that one code path.
-No network: module-level calls are checked by AST, probe scripts by reading the
-assembled source off the module.
-"""
+"""Injection is process-local and lost on spawn, so every spawned HTTPS interpreter must activate it."""
 
 from __future__ import annotations
 
@@ -72,14 +66,7 @@ def test_probe_script_activates_before_it_downloads(module, attr):
 
 
 def test_prebuilt_core_gate_matches_the_generated_source():
-    """The one copy that cannot be generated at runtime, so assert it here.
-
-    prebuilt_core.py is vendored beside the backend and imports nothing from it,
-    so its gate is a paste. Drift here is silent: the installers would keep
-    downloading against certifi while everything else used the OS store.
-    Compare parsed statements, not text: ruff-format rewrites the paste (quote
-    style, line wrapping) without changing what it does.
-    """
+    """prebuilt_core.py's gate is a pasted copy, and drift is silent, so compare parsed AST, not text."""
     from utils.native_tls import inline_gate_source
 
     source = (_BACKEND.parent / "prebuilt_core.py").read_text(encoding = "utf-8")
@@ -92,11 +79,7 @@ def test_prebuilt_core_gate_matches_the_generated_source():
 
 
 def test_backend_serves_no_tls_in_process():
-    """truststore's injection is client-side: a context built after it cannot serve TLS.
-
-    Unsloth serves plain HTTP on loopback, but an in-process HTTPS listener added
-    later would fail at handshake wherever activation is default-on.
-    """
+    """Injection is client-side only: a later server context cannot serve TLS, so stay plain HTTP."""
     server_side = ("PROTOCOL_TLS_SERVER", "ssl_certfile", "ssl_keyfile")
     offenders = []
     for path in _BACKEND.rglob("*.py"):

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An API-initiated video load downloads NOTHING.
-
-``local_files_only=True`` is the contract the OpenAI-compatible routes load under: the model was
-already staged, and the request may only open what is on disk. Every network-capable helper the
-load reaches is replaced with a sentinel that RAISES when it is asked to fetch, so a load that
-regains the network is a failing test rather than a multi-GB surprise on a user's connection. The
-mirror test proves the user-initiated (UI) path still calls exactly those helpers, which is the
-pre-PR behaviour nothing here is allowed to change.
-"""
+"""API video loads use local_files_only=True; network helpers are sentinels that raise if called."""
 
 from __future__ import annotations
 
@@ -37,13 +29,7 @@ class _Calls:
 
 
 def _install_sentinels(monkeypatch, calls, tmp_path, *, offline):
-    """Replace every network helper the load can reach.
-
-    ``offline`` is the assertion: a metadata probe is refused outright (there is no offline form of
-    ``model_info``), and a download is refused unless it carries ``local_files_only=True``, which is
-    what makes it a cache lookup rather than a fetch. Online they only record, so the same fake
-    serves both directions and the two tests differ by one flag.
-    """
+    """Offline, probes and downloads lacking local_files_only=True raise; online they only record."""
     import huggingface_hub
 
     def _model_info(self, repo_id, **_kwargs):
@@ -275,12 +261,7 @@ def test_the_xet_wrapper_is_unchanged_for_every_existing_caller(monkeypatch, tmp
 
 
 def _keywords_of(module_path: str, function: str, callee: str) -> set[str]:
-    """The keyword names a call to *callee* inside *function* actually spells out.
-
-    Read from the source rather than driven, because the branch that reaches this call needs a
-    Modular Diffusers H3 pipeline and a card whose free memory has moved since the plan: the
-    condition is real but not one a unit test can stage, and the keyword either is there or is not.
-    """
+    """Reads call keywords from source, since the branch needs a live H3 pipeline to drive."""
     import ast
     import pathlib
 

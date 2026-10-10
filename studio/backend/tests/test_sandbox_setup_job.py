@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Settings sandbox setup job, run against fake sudo, pkexec and helper scripts on this host.
-
-The fakes record their argv and exit with a chosen code; nothing privileged ever runs.
-"""
+"""Sandbox setup job against fake sudo, pkexec and helper scripts; nothing privileged ever runs."""
 
 import json
 import os

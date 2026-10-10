@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GGUF export can also write a FastFlowLM Q4NX folder for the AMD Ryzen AI NPU.
-
-Reuses the harness in test_export_gguf_discovery.py; the converter itself is stubbed.
-"""
+"""FastFlowLM Q4NX export for the AMD NPU, with the converter stubbed."""
 
 from __future__ import annotations
 

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Data-center llama.cpp env tuning: datacenter NVIDIA parts only, never consumer
-GeForce, ROCm, CPU or macOS. User values win; UNSLOTH_DISABLE_DC_TUNING=1 disables.
-
-P2P has a second, stricter gate (#10613): a datacenter NAME is not evidence of an
-NVLink fabric, and on a non-NVLink box the peer copy is silently discarded while
-still reporting success, so every model emits garbage. It needs a confirmed NV#
-link across the selection and fails CLOSED on unknowns.
-"""
+"""A datacenter name is not NVLink evidence; P2P needs confirmed NVLink, failing closed."""
 
 from __future__ import annotations
 
@@ -94,13 +87,7 @@ def _no_nvidia_smi(*a, **k):
 
 @pytest.fixture(autouse = True)
 def _isolate_host_topology(monkeypatch):
-    """Keep the P2P gate off the real host: only nvidia-smi's output is stubbed (the
-    parser always runs), caches are dropped either side, and the platform probes are
-    pinned so a CI box with GPUs cannot colour the results.
-
-    NVML is stubbed absent by default so the topo tests still exercise the parser;
-    with a real driver the fast path would answer first and the canned `nvidia-smi`
-    output would never be read. The NVML tests install their own fake."""
+    """Only nvidia-smi output is stubbed; NVML is absent so the topo parser runs, not a real driver."""
     LlamaCppBackend._NVLINK_TOPO_CACHE = None
     LlamaCppBackend._NVLINK_TOPO_GENERATION = 0
     LlamaCppBackend._IOMMU_CACHE = None
@@ -681,10 +668,7 @@ def test_bridged_pair_keeps_p2p_on_a_partially_bridged_box(monkeypatch):
 
 
 def test_selection_is_not_remapped_out_of_the_nvidia_smi_index_space(monkeypatch):
-    """The selection indexes the topology matrix VERBATIM: both come from nvidia-smi,
-    one enumeration. Remapping them as CUDA ordinals would, under FASTEST_FIRST on a
-    bridged box, turn a PCIe-crossing selection into an NVLinked-looking one and
-    enable the flag this gate exists to withhold."""
+    """Indexes must stay in nvidia-smi space; FASTEST_FIRST remapping could enable P2P across PCIe."""
     monkeypatch.setitem(sys.modules, "torch", _fake_torch(["NVIDIA A100-SXM4-80GB"] * 4))
     _use_topo(monkeypatch, TOPO_BRIDGED_4X)
     for pair in ([0, 1], [2, 3]):
@@ -776,10 +760,7 @@ def test_pcie_warning_still_fires_on_an_unverified_fabric(monkeypatch):
 
 
 def test_masked_visible_devices_filter_needs_a_shared_index_space(monkeypatch):
-    """nvidia-smi ignores CUDA_VISIBLE_DEVICES, so the matrix covers cards the child
-    never touches and filtering it to the mask recovers a clean NVLinked pair. Sound
-    only under PCI_BUS_ID: numeric mask entries are CUDA ordinals, and under
-    FASTEST_FIRST "0,1" can mean physical 0,2."""
+    """Filtering nvidia-smi rows by CUDA_VISIBLE_DEVICES needs PCI_BUS_ID; FASTEST_FIRST can misnumber."""
     monkeypatch.setitem(sys.modules, "torch", _fake_torch(["NVIDIA A100-SXM4-80GB"] * 2))
     _use_topo(monkeypatch, TOPO_BRIDGED_4X)
     monkeypatch.setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
@@ -809,10 +790,7 @@ def test_explicit_p2p_opt_out_does_not_warn_about_corruption(monkeypatch):
 
 
 def test_auto_fit_selection_without_a_pinned_order_refuses_p2p(monkeypatch):
-    """The gate verifies nvidia-smi physical ids, and the child resolves the same
-    cards only under a pinned CUDA_DEVICE_ORDER. On a box that is NOT uniformly
-    NVLinked, [0,1] here can be [0,2] there, so refuse rather than confirm NVLink for
-    a pair that is not the one about to run."""
+    """Without a pinned CUDA_DEVICE_ORDER the child may use cards nvidia-smi never checked; refuse P2P."""
     monkeypatch.setitem(sys.modules, "torch", _fake_torch(["NVIDIA A100-SXM4-80GB"] * 4))
     _use_topo(monkeypatch, TOPO_BRIDGED_4X)
     monkeypatch.delenv("CUDA_DEVICE_ORDER")
@@ -1154,10 +1132,7 @@ def test_nvml_unlinked_pair_vetoes_p2p(monkeypatch):
 
 
 def test_nvml_matrix_needs_nvidia_smi_provenance(monkeypatch):
-    """`topo -m` answering proves nvidia-smi enumerated the selection; NVML does not,
-    so torch-ordinal ids must not be matched against an NVML matrix. Partially
-    bridged, since on a uniform fabric the mapping cannot change the verdict and
-    provenance is deliberately not required."""
+    """NVML alone does not prove torch ordinals were enumerated; the matrix needs nvidia-smi provenance."""
     _use_nvml(
         monkeypatch,
         _FakeNvml(count = 4, linked_pairs = {(0, 1), (1, 0), (2, 3), (3, 2)}),
@@ -1253,10 +1228,7 @@ def test_windows_nvml_candidates_include_the_nvsmi_directory(monkeypatch):
 
 
 def test_an_explicit_pick_keeps_its_pci_provenance(monkeypatch):
-    """The UI's picker hands back PCI-ordered ids. A torch fallback in the unrelated
-    memory query sets _GPU_IDS_ARE_PCI_INDICES False process-wide, and that must not
-    cost an explicitly selected NVLinked pair its P2P. Partially bridged, so the
-    mapping matters and provenance is load-bearing."""
+    """A torch fallback in the memory query must not clear PCI provenance for an explicit NVLinked pick."""
     _use_nvml(
         monkeypatch,
         _FakeNvml(count = 4, linked_pairs = {(0, 1), (1, 0), (2, 3), (3, 2)}),
@@ -1399,11 +1371,7 @@ def test_ids_outside_a_uniform_matrix_still_veto(monkeypatch):
 
 
 def test_explicitness_is_not_evidence_of_pci_indexing(monkeypatch):
-    """An explicit pick is PCI-indexed only because hardware.py setdefaults
-    CUDA_DEVICE_ORDER=PCI_BUS_ID. Under a user override to FASTEST_FIRST with
-    nvidia-smi unavailable, the picker lists torch's ordinals, and on a partially
-    bridged host the same numbers can name different cards. Trusting explicitness
-    there would approve the wrong pair and enable P2P on a PCIe path."""
+    """Explicitness is not PCI evidence: a FASTEST_FIRST override makes the picker's ids torch ordinals."""
     linked = {(0, 1), (1, 0), (2, 3), (3, 2)}
     _use_nvml(monkeypatch, _FakeNvml(count = 4, linked_pairs = linked))
     monkeypatch.setitem(sys.modules, "torch", _fake_torch(["NVIDIA B200"] * 4))
@@ -1418,10 +1386,7 @@ def test_explicitness_is_not_evidence_of_pci_indexing(monkeypatch):
 
 
 def test_the_prime_never_spawns_the_shell_out(monkeypatch):
-    """A prime may pay the cheap path and nothing else. A subprocess that can run for
-    its full timeout, on a background thread, perturbs whatever else shares the
-    process, and that is how an earlier version of this tipped unrelated
-    timing-sensitive tests over in CI."""
+    """The prime must not run the nvidia-smi shell-out, which can stall other timing-sensitive tests."""
     calls = []
     monkeypatch.setattr(
         subprocess,
@@ -1452,14 +1417,7 @@ def test_the_prime_publishes_an_nvml_success(monkeypatch):
 
 
 def test_the_prime_does_not_retire_the_cross_check(monkeypatch):
-    """UNSLOTH_P2P_TOPO_CROSSCHECK=1 asks for both tiers to run and disagreements to
-    be logged. The cross-check lives in _probe_interconnect_matrix, which only the
-    load path reaches, so a prime that published an NVML-only answer would satisfy
-    the cache first and silently retire the diagnostic -- and the warm stage always
-    primes before any load, so that is the shipping configuration, not a corner case.
-
-    The pair below is the result the variable exists to surface: NVML says NVLink,
-    topo -m says SYS."""
+    """UNSLOTH_P2P_TOPO_CROSSCHECK=1 must survive the prime, which otherwise answers from NVML alone."""
     monkeypatch.setenv("UNSLOTH_P2P_TOPO_CROSSCHECK", "1")
     nvml = {(0, 1): "NVLINK", (1, 0): "NVLINK"}
     topo = {(0, 1): "SYS", (1, 0): "SYS"}

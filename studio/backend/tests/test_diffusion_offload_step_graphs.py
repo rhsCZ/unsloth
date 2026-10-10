@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The whole-step graph of an offloaded denoiser on top of the per-block graphs (diffusion_block_graph).
-
-The step graph records a forward whose blocks compile below their offload hooks; the per-block graphs run their compute
-while it records, and arm as its fallback where they are the default. A streamed placement records its copies into the
-prefetcher's slot ring and keeps a key only when the replay pays, else hands the ring back."""
+"""Whole-step CUDA graph for offloaded denoisers, layered over per-block graphs and the slot ring."""
 
 from __future__ import annotations
 

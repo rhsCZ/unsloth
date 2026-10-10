@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""MiniMax-H3 native renders through a resident sd-server instead of one sd-cli per render.
-
-Hermetic: the server process and its HTTP client are faked; nothing spawns a binary or opens a
-socket. The real-binary check (pixels and audio identical to sd-cli for the same seed, keyframe
-and text-only) lives with the benchmark evidence, not here."""
+"""Hermetic: H3 renders reuse a resident sd-server; the server process and HTTP client are faked."""
 
 from __future__ import annotations
 

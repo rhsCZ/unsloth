@@ -328,13 +328,7 @@ def test_reasoning_effort_outranks_native_thinking(thinking_type, effort, expect
 
 @pytest.mark.parametrize("thinking_type, effort, expected", _THINKING_EFFORT_MATRIX)
 def test_thinking_effort_matrix_reaches_enable_thinking_templates(thinking_type, effort, expected):
-    """The matrix as the chat_template_kwargs a Qwen3-style template receives.
-
-    Plain ``enable_thinking`` templates have no effort dial, so
-    _request_reasoning_kwargs reads the boolean only -- if the effort loses to
-    `thinking` upstream it is dropped here with nothing downstream to recover
-    it, and a request that asked for no reasoning gets reasoning anyway.
-    """
+    """enable_thinking templates read only the boolean, so the effort dial cannot reach them."""
     from routes.inference import _anthropic_reasoning_args, _reasoning_template_kwargs
 
     class _QwenStyleBackend:
@@ -2927,11 +2921,7 @@ class TestAnthropicRequestedStudioTools:
 
 
 def _mock_backend(monkeypatch, **overrides):
-    """Install a minimal stub backend on routes.inference.
-
-    Generation methods record which path the route entered, then yield one
-    content event so the route can complete normally.
-    """
+    """Stubs the backend so generation methods record which path the route entered, then yield one event."""
     import routes.inference as inf_mod
 
     # Pinned off so prompt assertions do not depend on the host setting.
@@ -3404,12 +3394,7 @@ class TestAnthropicMessagesToolRouting:
         assert [t["function"]["name"] for t in seen["tools"]] == ["other"]
 
     def _v1_client(self, monkeypatch, backend):
-        """Mount the real router with the production error handlers installed.
-
-        Every other test here reads ``HTTPException.detail``, the dict BEFORE
-        install_api_error_handlers shapes it; an SDK parses the response body, and the two
-        agree only while the handler passes a fully-formed envelope through untouched.
-        """
+        """Mounts the real router with production error handlers, since the SDK parses the shaped body."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
@@ -4101,10 +4086,7 @@ class TestAnthropicMessagesToolRouting:
             assert backend.calls[0][0] == "tools"
 
     def test_the_process_tool_default_alone_is_not_a_server_tool_selection(self, monkeypatch):
-        """`unsloth studio run` resolves the policy to on unless --disable-tools. Reading that
-        as "this request selected server tools" rejected every plain Messages request on a
-        default server, and routing on it ran the local tool loop with terminal/python and no
-        way to confirm them. A default is not a selection, in either direction."""
+        """A process-wide tool default is not a per-request server tool selection, in either direction."""
         import routes.inference as inf_mod
         from fastapi.responses import JSONResponse
 
@@ -4447,10 +4429,7 @@ def test_resumed_null_assistant_between_users_coalesced_on_messages_route(monkey
 
 
 def test_disable_parallel_tool_use_forwards_heartbeats_while_dropping():
-    """Heartbeats from a parallel-disabled, dropped tool call must still reach
-    the client as SSE keepalives: the dropped call runs server-side and the
-    stall keepalive never fires while the generator keeps producing events, so
-    swallowing them recreates the silent window keepalives exist to prevent."""
+    """Heartbeats from a dropped tool call must be forwarded, or the client sees a silent window."""
     import threading as _threading
 
     from routes.inference import (
@@ -4500,10 +4479,7 @@ def test_disable_parallel_tool_use_forwards_heartbeats_while_dropping():
 
 
 def test_dropped_tool_output_events_emit_rate_limited_keepalives(monkeypatch):
-    """A chatty tool streaming tool_output/tool_args with no heartbeats keeps the
-    generator busy (stall keepalive never fires); the Anthropic path can't
-    translate those events and drops them. Dropping silently would let an idle
-    proxy kill the stream, so the drop branch emits a rate-limited keepalive."""
+    """Dropped tool output emits rate-limited keepalives, or an idle proxy may kill the stream."""
     import threading as _threading
 
     import routes.inference as inf_mod
@@ -4566,11 +4542,7 @@ def test_dropped_tool_output_events_emit_rate_limited_keepalives(monkeypatch):
 
 
 def test_parallel_disabled_dropped_call_output_emits_rate_limited_keepalives(monkeypatch):
-    """Under disable_parallel_tool_use a chatty second call is dropped whole
-    (drop_until_tool_end). Its tool_output/tool_args events must still emit
-    rate-limited keepalives: the drop window can last minutes with no heartbeats
-    and no stall keepalive, so swallowing them silently would let an idle proxy
-    kill the stream. The keepalive branch runs before the drop skip."""
+    """Keepalives run before the drop skip, since a dropped call's output window can last minutes."""
     import threading as _threading
 
     import routes.inference as inf_mod
@@ -4672,10 +4644,7 @@ def test_plain_stream_emits_keepalive_during_prompt_stall(monkeypatch):
 
 
 def test_plain_stream_closes_generator_on_disconnect():
-    """On disconnect the no-tool teardown must drain any pending worker and close
-    the generator (finding 6). The old finally only stopped the disconnect
-    watcher, leaking the generator. A fake generator records close() so the
-    teardown is asserted deterministically, not via GC."""
+    """A disconnect must drain the worker and close the generator, which the old finally leaked."""
     import threading as _threading
 
     from routes.inference import _anthropic_plain_stream
@@ -4810,14 +4779,8 @@ def _parse_anthropic_sse(lines):
 
 
 def assert_anthropic_stream_conformant(lines):
-    """Assert the Anthropic Messages streaming grammar and return the blocks.
-
-    A real SDK accumulates deltas into the block its index names, so an index that
-    skips, repeats or arrives with no open block corrupts the message (or raises).
-    This is the guard for that: message_start first, every block opened before it is
-    written to and closed exactly once, indices gapless from 0, message_delta with
-    stop_reason and usage before a final message_stop.
-    """
+    """Checks the Anthropic stream grammar: message_start first, gapless block indices, then
+    message_stop."""
     events = _parse_anthropic_sse(lines)
     assert events, "no events emitted"
     assert events[0][0] == "message_start", f"first event was {events[0][0]}"
@@ -4905,12 +4868,7 @@ def _drive_emitter(
 
 
 class TestAnthropicStreamGrammar:
-    """The index state machine an Anthropic SDK decodes against.
-
-    Blocks open lazily now, so every index comes from _alloc_block_index rather
-    than an eager bump in start(). A skipped or reused index is a user-visible
-    break: the official SDK accumulates deltas by index.
-    """
+    """Every block index comes from _alloc_block_index, since the SDK accumulates deltas by index."""
 
     @pytest.mark.parametrize(
         "text, provenance",
@@ -5045,10 +5003,7 @@ class TestThinkTagSplitAcrossDeltas:
 
 
 class TestWhitespaceOnlyThinkingIsNotABlock:
-    """Qwen3-style templates render "<think>\\n\\n</think>" on every reply when
-    thinking is off, and llama-server parses that into reasoning_content. Opening
-    a thinking block for it hangs an empty thought off ordinary answers, and the
-    non-streaming reducer already drops it -- so the two paths disagreed."""
+    """Whitespace-only reasoning opens no thinking block, as the non-streaming reducer does."""
 
     @pytest.mark.parametrize("trace", ["", " ", "\n\n", "  \n \t "])
     def test_streaming_drops_it(self, trace):
@@ -5091,11 +5046,7 @@ class TestWhitespaceOnlyThinkingIsNotABlock:
 
 
 class TestReasoningSurvivesTheWholeChain:
-    """End to end over a fake llama-server stream: the generator folds
-    reasoning_content into <think> markup and records provenance, and the
-    emitter splits it back into typed blocks. The two halves are only correct
-    together, so they are exercised together against the bytes llama-server
-    actually sends."""
+    """Generator and emitter are tested together, since each is only correct with the other."""
 
     @staticmethod
     def _backend(monkeypatch, chunks):
@@ -5213,16 +5164,7 @@ class TestReasoningSurvivesTheWholeChain:
 
 
 class TestReasoningProvenanceIsBoundToItsSynthesisTurn:
-    """A tool loop's non-streaming reducer runs only after generation finished,
-    so ``think_provenance`` is already at its FINAL aggregate. Attributing wraps
-    by block order there let an early turn's literal ``<think>`` (Qwen3 with
-    thinking off re-emits the closed empty block into `content`, llama.cpp
-    common/chat-peg-parser.cpp discards whitespace-only reasoning so no
-    reasoning_content is reported) consume a LATER turn's genuine wrap: the
-    literal block was rendered as thinking and the real trace was delivered as
-    raw tagged text. The streamed emitter reads the ledger live and never can,
-    so the two paths must agree turn for turn.
-    """
+    """Attribution is per turn: block order over the final aggregate let early literal tags steal wraps."""
 
     TOOLS = [
         {
@@ -5438,11 +5380,7 @@ class TestReasoningProvenanceIsBoundToItsSynthesisTurn:
 
 
 class TestALiteralTagAfterBlankSpaceIsNotDuplicated:
-    """A reply that opens with a blank line and then quotes ``<think>`` -- the
-    shape llama-server returns for a thinking model under
-    ``--reasoning-format none``, where nothing is split into reasoning_content.
-    The leading run was emitted, then emitted AGAIN as part of the literal-text
-    fallback, so the client saw it twice."""
+    """A blank lead before a literal think tag is emitted once, not again by the literal-text fallback."""
 
     @pytest.mark.parametrize("lead", ["\n", "\n\n", "  ", " \n\t"])
     @pytest.mark.parametrize("split", ["one", "chars"])
@@ -5465,16 +5403,7 @@ class TestALiteralTagAfterBlankSpaceIsNotDuplicated:
 
 
 class TestPreserveThinkingHonoursTheBackendDefault:
-    """An omitted `preserve_thinking` must follow the LOADED template's default.
-
-    llama-server merges chat_template_kwargs per key, so a request that omits
-    preserve_thinking leaves the launch-time --chat-template-kwargs value active
-    (llama.cpp common/chat.cpp `extra_context`). Coercing the omission to False
-    on the conversion side stripped the reasoning_content that same template was
-    still being told to render: on a preserve-by-default family the replayed
-    thinking silently vanished from the prompt. Counting shares the resolver so
-    the total keeps describing the prompt generation actually builds.
-    """
+    """An omitted preserve_thinking must keep the loaded template's default, not coerce to False."""
 
     TRACE = "The user prefers metric units."
 
@@ -5713,10 +5642,7 @@ def test_x_unsloth_effort_still_outranks_thinking_when_sent_explicitly():
 
 
 def test_the_anthropic_paths_promote_a_replayed_mcp_envelope():
-    """A client replaying an Anthropic history sends the envelope back inside the
-    tool_result. Without promotion the model reads megabytes of base64 as text and is
-    shown no picture -- the very defect this feature exists to remove, on the endpoint
-    Claude Code actually uses."""
+    """Replayed MCP image envelopes must be promoted, or the model reads base64 as text."""
     import inspect
 
     from routes import inference
@@ -5831,10 +5757,8 @@ def test_a_text_only_anthropic_model_is_not_shown_the_envelope_either():
 
 
 def test_the_anthropic_count_refuses_a_promoted_image_rather_than_undercount():
-    """count_chat_tokens renders /apply-template, which swaps each image for a short
-    media marker. Counting a promoted envelope there reports none of the projector
-    tokens /v1/messages really spends, and an undercount is what a client sizes its
-    context against -- so the OpenAI counter refuses this shape and so must this one."""
+    """The count refuses a promoted image, since the template render would undercount its projector
+    tokens."""
     import inspect
 
     from routes import inference
@@ -5860,10 +5784,7 @@ def test_the_anthropic_count_refuses_a_promoted_image_rather_than_undercount():
 
 
 def test_the_anthropic_envelope_is_promoted_before_tool_roles_are_folded_away():
-    """A template without tool-role support has the sanitizer fold every role="tool"
-    into a user message. _promote only looks at tool messages, so promoting after it
-    left the envelope as JSON in the prompt: megabytes of base64 read as text, and no
-    picture shown at all."""
+    """Promote the envelope before tool roles are folded into user messages, or promotion never sees it."""
     import inspect
 
     from routes import inference
@@ -5882,10 +5803,7 @@ def test_the_anthropic_envelope_is_promoted_before_tool_roles_are_folded_away():
 
 
 def test_an_anthropic_client_tool_is_not_trusted_as_an_mcp_image_source():
-    """anthropic_messages_to_openai renders a tool_result with tool_call_id and no
-    name, and _promote reads an absent name as legacy MCP history it may trust. An
-    ordinary client tool whose output merely ends in a valid suffix was therefore
-    promoted as image input on the strength of nothing."""
+    """A client tool_result carries no name, so an absent name must not be trusted as MCP history."""
     import base64
     import io
     import json

@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""OS x GPU-vendor matrix for the #7624 ROCm arch gate in ``_get_gpu_memory``.
-
-The gate drops a device whose gfx arch is missing from the prebuilt's
-``mapped_targets``, and runs on exactly one shape of host (ROCm torch build,
-``for_llama_server = True``). Every other cell asserts it is *inert*, which
-matching output alone cannot show (a gate that ran and kept everything looks
-identical), so the marker reader is spied and asserted un-called.
-
-Matrix: [Windows, Linux, WSL, macOS] x [NVIDIA, AMD, CPU-only]. macOS has no ROCm,
-so its "AMD" cell is the two real Apple shapes (Apple Silicon MPS, Intel Mac
-Radeon), neither enumerating a ``torch.cuda`` device. WSL is its own cell: ROCm
-reports through the same torch path yet ``sys.platform`` is "linux", so the
-Windows-only free-VRAM cap (#8403) must NOT engage.
-
-No AMD GPU or ROCm runtime exists here, so every AMD result is mock-based: torch
-and its arch attributes, ``sys.platform`` / ``platform.system``,
-``utils.hardware.IS_ROCM``, the marker and the HIP/ROCR/CUDA masks are faked in the
-shapes #7072 / #7624 / #8403 document (AMD SDK wheels leaving ``torch.version.hip``
-unset; the ``gcn_arch_name`` / ``arch_name`` / ``gfx_arch_name`` spellings;
-``gfx103X`` omitting the gfx1033/1035/1036 iGPUs; Windows over-reporting free VRAM).
-"""
+"""OS x GPU-vendor matrix for the arch gate; inert cells assert the marker reader is never called."""
 
 from __future__ import annotations
 
@@ -110,16 +90,7 @@ def _fake_torch(
     cuda_available = None,
     reserved_bytes = 0,
 ):
-    """A fake ``torch``.
-
-    vendor:
-      "amd"      -- ROCm wheel (``version.hip`` set).
-      "amd_sdk"  -- AMD SDK / Radeon wheel: ``version.hip`` unset, "rocm" only
-                    in ``__version__`` (the shape ``_torch_is_rocm`` exists for).
-      "nvidia"   -- CUDA wheel.
-      "cpu"      -- CPU-only wheel.
-      "mps"      -- Apple Silicon: a Metal backend, no ``torch.cuda`` devices.
-    """
+    """Fake torch module per vendor: amd, amd_sdk (no version.hip), nvidia, cpu, or mps."""
     devices = list(devices)
     torch = types.ModuleType("torch")
     if vendor == "amd":
@@ -700,12 +671,7 @@ def _run_auto_load(
     mmproj_bytes = 0,
     server_caps = None,
 ):
-    """Drive a real automatic (no explicit GPU pick) llama-server load with the real
-    ``_get_gpu_memory`` behind it, and return the spawned (cmd, env) list.
-
-    Everything below the placement decision is faked: header-only GGUF, Popen never
-    runs, health wait answers from ``returncode``. The point is what placement handed
-    the child, not that llama-server works."""
+    """Runs an automatic load and returns the spawned (cmd, env) list, so placement is what gets tested."""
     if marker_targets is not None:
         _binary_with_marker(tmp_path, {"mapped_targets": marker_targets})
     binary = str(tmp_path / "build" / "bin" / "llama-server")
@@ -811,11 +777,7 @@ class TestEveryDeviceUncoveredDownstream:
     under test is the same host with a marker covering neither."""
 
     def test_one_covered_device_is_pinned(self, tmp_path, monkeypatch, probe_env):
-        """The end-to-end #7624 fix. The iGPU's shared-RAM "free memory" outranks
-        the dGPU's VRAM even after the host reserve, so before the gate automatic
-        placement pinned the iGPU and llama-server died with "device kernel image is
-        invalid". Measured on origin/main with these inputs: ROCR_VISIBLE_DEVICES=1
-        (the gfx1036 iGPU); with the gate, 0."""
+        """Auto placement pins only the covered dGPU; the iGPU's shared RAM would otherwise outrank it."""
         _apply_os(monkeypatch, "linux", is_rocm = True)
         torch = _fake_torch(
             [
@@ -834,12 +796,7 @@ class TestEveryDeviceUncoveredDownstream:
         assert _visibility(env) == {"ROCR_VISIBLE_DEVICES": "0", "CUDA_VISIBLE_DEVICES": "0"}
 
     def test_all_uncovered_degrades_to_cpu(self, tmp_path, monkeypatch, probe_env):
-        """Every device gated out must mask the child onto the CPU (#7624).
-
-        Before this the empty pool left ``gpu_indices`` None, the launch took the
-        ``--fit on`` arm, the pin block never ran and no mask was written, so the
-        child enumerated both unsupported cards and died, with the reactive retry
-        unable to help (its guard needs a truthy ``gpu_indices``)."""
+        """All-uncovered must mask the child to CPU; leaving cards visible makes llama-server die."""
         _apply_os(monkeypatch, "linux", is_rocm = True)
         torch = _fake_torch(_gfx103x_pair(), vendor = "amd")
         launches = _run_auto_load(
@@ -856,11 +813,7 @@ class TestEveryDeviceUncoveredDownstream:
         assert _visibility(env) == {"HIP_VISIBLE_DEVICES": "-1", "CUDA_VISIBLE_DEVICES": "-1"}
 
     def test_all_uncovered_keeps_an_inherited_rocr_mask(self, tmp_path, monkeypatch, probe_env):
-        """The forced-CPU mask must not widen what the child can see. ROCr filters
-        at topology build, below HIP, so a parent that hid a segfaulting agent keeps
-        hiding it: HIP "-1" already means zero devices, and clearing ROCR would hand
-        the HSA enumeration the dropped agents. The embedding CPU launch states the
-        rule; the chat one went through the default HIP arm, which clears ROCR."""
+        """Forced-CPU must not clear an inherited ROCR mask; ROCr hides segfaulting agents below HIP."""
         _apply_os(monkeypatch, "linux", is_rocm = True)
         torch = _fake_torch(_gfx103x_pair(), vendor = "amd")
         launches = _run_auto_load(
@@ -880,10 +833,8 @@ class TestEveryDeviceUncoveredDownstream:
         }
 
     def test_the_forced_cpu_server_reports_zero_vram(self, tmp_path, monkeypatch, probe_env):
-        """A masked-off child holds no VRAM, so the flag training reads must be
-        exactly False: routes/training_vram.py spares a server only on
-        ``is not False``, so the counted classifier's None (the gated probe left the
-        detected list empty) would unload one whose death frees nothing."""
+        """A masked-off server must report VRAM flag exactly False, since training_vram checks is
+        not False."""
         _apply_os(monkeypatch, "linux", is_rocm = True)
         torch = _fake_torch(_gfx103x_pair(), vendor = "amd")
         capture: dict = {}
@@ -950,11 +901,8 @@ class TestEveryDeviceUncoveredDownstream:
     def test_a_model_too_large_to_pin_still_masks_the_uncovered_card(
         self, tmp_path, monkeypatch, probe_env
     ):
-        """One card short of the forced-CPU case: the gate drops the iGPU but keeps
-        the dGPU, so the pool is not empty -- and a model too large for the planner
-        makes `_select_gpus` answer (None, True) with `gpu_indices` still None.
-        Nothing else writes a mask on that arm, so the child would enumerate the
-        dropped card and die, the reactive retry needing `gpu_indices` to help."""
+        """A too-large model must still get the uncovered card masked, or the child enumerates it
+        and dies."""
         _apply_os(monkeypatch, "linux", is_rocm = True)
         torch = _fake_torch(_gfx103x_pair(), vendor = "amd")
         launches = _run_auto_load(
@@ -1016,10 +964,7 @@ class TestEveryDeviceUncoveredDownstream:
 
 
 class TestArchCrashRetryEnv:
-    """What the arch-crash respawn inherits from the crashed launch (#7624). The
-    canonical shape: the shared-pool APU outranks the dGPU, is pinned, and
-    llama-server dies with "device kernel image is invalid"; the retry moves to the
-    discrete card. Mock-based, no ROCm here."""
+    """Arch-crash respawn after an APU pin, which dies with invalid kernel image, must retry on the dGPU."""
 
     def _apu_then_dgpu(self, monkeypatch):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -1062,10 +1007,7 @@ class TestArchCrashRetryEnv:
     def test_the_no_binary_for_gpu_spelling_also_fires_the_retry(
         self, tmp_path, monkeypatch, probe_env
     ):
-        """Same mismatch, HIP's other error code: hipErrorNoBinaryForGpu, documented
-        as code compiled for a different arch. Neither field log showed it, so keying
-        recovery on the InvalidImage wording alone leaves those builds on the
-        misleading GGUF error."""
+        """The hipErrorNoBinaryForGpu wording must also fire the arch retry, not only InvalidImage."""
         torch = self._apu_then_dgpu(monkeypatch)
         launches = _run_auto_load(
             monkeypatch,
@@ -1115,11 +1057,7 @@ class TestArchCrashRetryEnv:
     def test_the_retry_reprices_the_spill_against_the_narrowed_pool(
         self, tmp_path, monkeypatch, probe_env
     ):
-        """The host guard ran against the aggregate pool, and the retry masks the child onto
-        the survivor. When the crashed card supplied most of that credit the narrowed launch
-        spills far more into RAM than the preflight allowed, which is the OOM this guard
-        exists to stop. A 30 GB model is held by the 40000 MiB card the launch pins; the
-        4000 MiB survivor leaves about 26 GB for a host with 20 GB."""
+        """Retry must reprice the spill against the survivor pool, or the host guard misses an OOM."""
         torch = self._big_then_small_discrete(monkeypatch)
         capture = {}
         launches = _run_auto_load(
@@ -1140,10 +1078,7 @@ class TestArchCrashRetryEnv:
         ), "the retry did not reprice the spill against the narrowed pool"
 
     def _arch_retry_launches(self, tmp_path, monkeypatch, capture, **kwargs):
-        """The narrowed-pool retry above, plus whatever the caller asks the load for.
-
-        Returns ``(first_argv, retry_argv)``: the crashed launch and the respawn, told
-        apart by the mask, since the unrelated --fit off retry spawns each twice."""
+        """Returns (first_argv, retry_argv) for the narrowed-pool retry, told apart by the mask."""
         torch = self._big_then_small_discrete(monkeypatch)
         launches = _run_auto_load(
             monkeypatch,
@@ -1169,12 +1104,7 @@ class TestArchCrashRetryEnv:
     def test_the_narrowed_retry_pages_an_unmapped_respawn(
         self, tmp_path, monkeypatch, probe_env, extra_args
     ):
-        """The shortfall the retry discovers is its FIRST one, so nothing upstream
-        remapped the load: the original placement held the model in VRAM and the
-        discrete guard abstained. "none" and "mlock" do not mmap, so respawning that
-        argv unchanged allocates the whole 30 GB in a 20 GB host and is OOM-killed
-        rather than paged. The override belongs to the condition, so it runs here too,
-        before the respawn."""
+        """A narrowed retry must page an unmapped respawn, or the whole model is allocated in host RAM."""
         capture = {}
         first, retry = self._arch_retry_launches(
             tmp_path,
@@ -1232,10 +1162,7 @@ class TestArchCrashRetryEnv:
 
 
 def _unmapped_tokens(cmd):
-    """The tokens in ``cmd`` that select a mode llama.cpp does not mmap.
-
-    Copied from test_llama_cpp_placement.py rather than imported: these two files are
-    separate harnesses and neither imports the other."""
+    """Lists the no-mmap and no-direct-io tokens in a cmd; copied from the placement test, not imported."""
     out = []
     for i, token in enumerate(cmd):
         if token in ("--no-mmap", "-no-mmap", "--no-direct-io", "-ndio"):
@@ -1250,10 +1177,7 @@ def _unmapped_tokens(cmd):
 
 
 class TestManualSplitLaunchesRespectTheGate:
-    """Manual memory mode is not an explicit GPU pick, so the probe still opts into
-    the gate (``for_llama_server = not gpu_ids``) -- but a manual per-GPU ratio took
-    its own env branch, re-emitting the WHOLE visible set and handing the child the
-    card the gate had just dropped."""
+    """Manual split env re-emits the whole visible set, handing the child a card the gate dropped."""
 
     def _manual_split(
         self,
@@ -1289,10 +1213,8 @@ class TestManualSplitLaunchesRespectTheGate:
     def test_the_dropped_ratio_is_recorded_for_the_duplicate_load_check(
         self, tmp_path, monkeypatch, probe_env
     ):
-        """Dropping the ratio from the argv is half the job: the UI re-sends the same
-        request on every Apply and the duplicate-load check compares the live
-        ``_tensor_split`` against it, so a launch that drops the ratio and records
-        nothing respawns the same already-normalized server every time."""
+        """Record a dropped split ratio, or the duplicate-load check respawns the same server on
+        every Apply."""
         capture: dict = {}
         self._manual_split(
             monkeypatch,
@@ -1330,10 +1252,7 @@ class TestManualSplitLaunchesRespectTheGate:
     def test_a_later_load_does_not_inherit_the_dropped_ratio(
         self, tmp_path, monkeypatch, probe_env
     ):
-        """The record excuses a mismatch, so it must not outlive the launch that
-        earned it: after a gated split load, a load carrying no ratio would leave the
-        stale entry excusing a split request against a server running none, and Apply
-        would silently do nothing."""
+        """The recorded split excuse must clear on the next load, or a later Apply silently does nothing."""
         capture: dict = {}
         self._manual_split(
             monkeypatch,
@@ -1363,10 +1282,7 @@ class TestManualSplitLaunchesRespectTheGate:
         assert backend._arch_gate_dropped_tensor_split is None
 
     def test_the_dropped_tensor_mode_is_recorded_too(self, tmp_path, monkeypatch, probe_env):
-        """The ratio is half the normalization: narrowing to one survivor also drops
-        --split-mode tensor, and ``_tensor_parallel_matches_loaded`` compares the
-        unchanged request against the layer-split server, so an unrecorded drop reloads
-        the same multi-GB model on every Apply."""
+        """The dropped tensor mode must be recorded too, or every Apply reloads the same multi-GB model."""
         capture: dict = {}
         self._manual_split(
             monkeypatch,
@@ -1460,11 +1376,7 @@ class TestManualSplitLaunchesRespectTheGate:
 
 
 class TestForcedCpuDropsTensorMode:
-    """``--split-mode tensor`` with no visible device aborts the server instead of
-    loading on CPU (the file says so twice: the manual gpu_layers=0 guard, and the
-    paravirtual pin's note on "LLAMA_SPLIT_MODE_TENSOR not implemented for
-    architecture"). Manual mode admits tensor parallelism on the FULL device count,
-    so the forced-CPU mask could be reached with the flag still in the argv."""
+    """Forced-CPU launch must carry no split flags; tensor mode with no visible device aborts the server."""
 
     def test_the_forced_cpu_launch_carries_no_split_flags(self, tmp_path, monkeypatch, probe_env):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -1517,10 +1429,8 @@ class TestForcedCpuDropsTensorMode:
 
 
 class TestGatedNarrowingDropsUnifiedMemory:
-    """The unified-memory decision is made against ``gpu_indices``, None on the
-    fit-owned and manual-split arms, so an uncovered APU anywhere on the host turns
-    it on -- and the survivor mask then hands the child only discrete cards, where
-    the same code calls it harmful."""
+    """Unified memory is decided on the whole host, so a discrete-only survivor mask still gets it
+    wrongly."""
 
     def _apu_and_dgpu(self, monkeypatch):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -1601,10 +1511,7 @@ class TestGatedNarrowingDropsUnifiedMemory:
 
 
 class TestGatedNarrowingDropsDeadTensorMode:
-    """The proactive twin of TestArchCrashRetryDropsDeadTensorMode. Manual mode
-    admits tensor parallelism on the FULL device count, so the survivor pin can leave
-    one device running ``--split-mode tensor`` -- a no-op /status still advertises
-    and that arms the MTP watchdog. ``_without_tensor_split`` takes only the ratio."""
+    """Narrowing to one survivor must drop --split-mode tensor too, or the MTP watchdog gets armed."""
 
     def _narrowed_tensor_load(
         self,
@@ -1671,11 +1578,7 @@ class TestGatedNarrowingDropsDeadTensorMode:
 
 
 class TestGatedNarrowingRechecksTheApuRamGuard:
-    """The proactive twin of TestArchCrashRetryRechecksTheApuRamGuard, other
-    direction. The preflight runs with ``gpu_indices`` None on an unpinned launch, so
-    an uncovered APU anywhere on the host prices the load -- while the gate hands the
-    child only the discrete survivor, whose VRAM the weights fit. Refusing there
-    rejects a load that would have run (#7624)."""
+    """Preflight must price the narrowed survivor, not an uncovered APU the gate removed from the launch."""
 
     def _apu_and_dgpu(
         self,
@@ -1769,11 +1672,7 @@ class TestGatedNarrowingRechecksTheApuRamGuard:
 
 
 class TestArchCrashRetryOntoAnApu:
-    """The mirror of TestArchCrashRetryEnv (#7624). A markerless mixed host can as
-    easily crash on the DISCRETE card and land on the APU, where the first launch
-    correctly left GGML_CUDA_ENABLE_UNIFIED_MEMORY unset -- so handling only the
-    withdrawal direction respawns onto a shared pool without the setting
-    _amd_apu_wants_unified_memory says it needs. Mock-based, no ROCm here."""
+    """A respawn onto an APU must set GGML_CUDA_ENABLE_UNIFIED_MEMORY, which the first launch skipped."""
 
     def _dgpu_then_apu(self, monkeypatch):
         # APU is device 1: the dGPU is pinned first, so the retry hands back exactly the APU.
@@ -1810,11 +1709,7 @@ class TestArchCrashRetryOntoAnApu:
 
 
 class TestUnifiedMemoryOptOut:
-    """Turning GGML_CUDA_ENABLE_UNIFIED_MEMORY off has to make it ABSENT (#8651).
-
-    ggml gates on ``getenv(...) != nullptr``, so "0" is still on and the reporter's
-    only route was patching the source. The host below is the reported one: a
-    gfx1151 Strix Halo APU whose pool ROCm reports in full. Mock-based, no ROCm."""
+    """Opting out must remove GGML_CUDA_ENABLE_UNIFIED_MEMORY; ggml checks presence, so "0" is still on."""
 
     def _strix_halo(self, monkeypatch):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -2278,11 +2173,7 @@ class TestArchCrashRetryDropsDeadTensorMode:
 
 
 class TestArchCrashRetryRechecksTheApuRamGuard:
-    """The APU RAM preflight runs once, against the FIRST spawn's selection. On the
-    mirror shape (crash on the dGPU, retry on the unified-memory sibling) the respawn
-    is the first launch onto system RAM and skipped the guard entirely, so an
-    oversized GGUF was OOM-killed mid-load instead of getting the refusal the same
-    host gives when the APU is picked first (#7624). Mock-based, no ROCm here."""
+    """The APU RAM guard must re-run on an arch-crash respawn, or an oversized load gets OOM-killed."""
 
     def _dgpu_then_apu(self, monkeypatch):
         # APU is device 1: the dGPU is pinned first, so the retry hands back exactly the APU.
@@ -2385,11 +2276,7 @@ class TestArchCrashRetryRechecksTheApuRamGuard:
     def test_the_opt_out_silences_the_retrys_apu_advisory_and_keeps_the_override(
         self, tmp_path, monkeypatch, probe_env
     ):
-        """UNSLOTH_ALLOW_HOST_OFFLOAD is documented as silencing the warning and
-        nothing else, but this site recorded the APU advisory without consulting it, so
-        a user who opted out still got a memory_warning back. The verdict stays: the
-        respawn is still remapped, or "none" would allocate the whole model in the RAM
-        that cannot hold it."""
+        """UNSLOTH_ALLOW_HOST_OFFLOAD silences the APU advisory only; the override still applies."""
         monkeypatch.setenv("UNSLOTH_ALLOW_HOST_OFFLOAD", "1")
         capture: dict = {}
         logged = self._override_log(monkeypatch)
@@ -2424,16 +2311,7 @@ class TestArchCrashRetryRechecksTheApuRamGuard:
 
 
 class TestArchCrashRetryReplacesTheCrashedSelectionsWarning:
-    """The canonical #7624 shape, priced. The APU's shared-pool "free memory"
-    outranks the dGPU, so auto pins it; the APU RAM guard warns that system RAM
-    cannot hold the weights; the child then dies with a kernel-image error and the
-    retry respawns on the discrete sibling, which holds the model in VRAM.
-
-    ``_record_load_warning`` keeps the FIRST notice, so the crashed selection's
-    verdict outlived the placement it described: the served response told the user
-    the OS might stop a load running entirely on a discrete card. The retry prices
-    the set it actually reaches, so that answer -- not the dead one -- is the load's.
-    """
+    """The retry's RAM warning replaces the crashed selection's, since the first notice would outlive it."""
 
     def _apu_then_dgpu(self, monkeypatch, *, dgpu_free_mib):
         # APU outranks the dGPU so auto pins it and the APU guard asks; RAM stub keeps it on top.
@@ -2514,13 +2392,8 @@ class TestArchCrashRetryReplacesTheCrashedSelectionsWarning:
 
 
 class TestHsaOverrideGfxVersion:
-    """``HSA_OVERRIDE_GFX_VERSION`` is the long-standing AMD workaround for an arch
-    the ROCm stack does not build for: the user sets it, ROCr reports the SPOOFED
-    arch, and code compiled for it really does run on the card. The gate reads the
-    arch through the same device properties HIP will act on, so it sees the override
-    too. Pinned because this is the shape most likely to read as "your fix broke my
-    working setup": raw silicon uncovered, presented arch covered, and the launch has
-    to follow the presented one."""
+    """HSA_OVERRIDE_GFX_VERSION: the gate follows the presented arch the runtime reports, not raw
+    silicon."""
 
     def test_a_spoofed_arch_is_gated_on_what_the_runtime_reports(
         self, tmp_path, monkeypatch, probe_env
@@ -2539,11 +2412,7 @@ class TestHsaOverrideGfxVersion:
 
 
 class TestAnInstallFromBeforeThisPr:
-    """An install written by an older Unsloth has no ``mapped_targets``, and the
-    fingerprint deliberately does not cover the field, so it is never refreshed for
-    that reason alone. Such a host must behave EXACTLY as it did before the PR: the
-    fix arrives with the next llama.cpp update, and until then nothing may change,
-    least of all a drop to CPU."""
+    """An install without mapped_targets must behave exactly as before the fix, never dropping to CPU."""
 
     OLD_MARKER = {
         "release_tag": "b10107",
@@ -2663,11 +2532,7 @@ class TestArchForcedCpuFlagLifecycle:
 
 
 class TestTheForcedCpuFlagIsNotSticky:
-    """``load_model`` phase 1 only kills the old process, so per-load state only ever
-    set TRUE outlives the launch that set it. The dangerous direction for this flag:
-    a host that gains coverage (a llama.cpp update, or just the next model) would
-    report a VRAM-holding server as holding none, and the arbiter leave it unclaimed
-    beside a competing workload."""
+    """The forced-CPU flag must reset per load, or a VRAM-holding server is reported as holding none."""
 
     def _load(self, monkeypatch, tmp_path, targets, capture):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -2745,10 +2610,7 @@ class TestTheForcedCpuFlagIsNotSticky:
 
 
 class TestInheritedSplitEnvGoesWithTheArgvStrip:
-    """LLAMA_ARG_SPLIT_MODE / LLAMA_ARG_TENSOR_SPLIT are the env spelling of
-    --split-mode / --tensor-split, so dropping the tokens alone leaves the inherited
-    value in force -- and the forced-CPU arm strips --split-mode precisely because a
-    tensor split aborts a child with no visible device."""
+    """Stripping argv split flags alone leaves inherited LLAMA_ARG_SPLIT_MODE env in force."""
 
     def _host(self):
         return [
@@ -2844,10 +2706,7 @@ class TestInheritedSplitEnvGoesWithTheArgvStrip:
 
 
 class TestTheForcedCpuLaunchAppliesThePageLock:
-    """The gate masks every device away, so the child runs from host RAM, but
-    ``_weights_in_host_memory`` answered for the ORIGINAL placement, where a manual full
-    offload onto discrete cards reads as not host-resident. Left alone the page-lock is
-    skipped AND recorded as deliberate, which no relaunch undoes."""
+    """Residency must be judged on the post-gate devices, or a forced-CPU load skips the page-lock."""
 
     def _run(self, tmp_path, monkeypatch, *, targets):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -2899,10 +2758,7 @@ class TestTheForcedCpuLaunchAppliesThePageLock:
 
 
 class TestForcedCpuNeedsRealArchEvidence:
-    """``_get_gpu_memory`` turns any probe error into [], so "gated empty, ungated not"
-    also describes a one-shot failure of the FIRST probe on a host the gate never
-    filters. Masking that onto the CPU is a silent, permanent cliff, so the branch
-    re-derives the gate's verdict instead of inferring it."""
+    """Empty probe results can be a one-shot error, so forced-CPU must re-derive the gate verdict."""
 
     def _run(self, tmp_path, monkeypatch, *, targets, flaky):
         _apply_os(monkeypatch, "linux", is_rocm = True)
@@ -2945,11 +2801,7 @@ class TestForcedCpuNeedsRealArchEvidence:
 
 
 class TestTheApuRetryRecomputesThePageLock:
-    """Residency is a property of the DEVICES, which the arch-crash retry changes:
-    crash on the discrete card, land on the unified-memory APU, and the weights are
-    host-backed after all, so the lock the first launch skipped is the one the user
-    asked for. Left alone the respawn runs unlocked and records the missing lock as
-    deliberate, deduping away the reload that would apply it."""
+    """The page-lock must be recomputed on the retry, since the devices, and so residency, changed."""
 
     def _dgpu_then_apu(self, monkeypatch):
         monkeypatch.setattr(
@@ -3002,10 +2854,7 @@ class TestTheApuRetryRecomputesThePageLock:
             assert "--mlock" not in cmd
 
     def test_the_users_own_extra_args_survive_the_recompute(self, tmp_path, monkeypatch, probe_env):
-        """The recompute may only ADD the lock: taking the crashed launch's memory
-        flags back off would mean scanning for --mlock / --no-mmap, valueless in
-        llama.cpp's parser, so the scan drops the argv entry after them -- here the
-        user's own -c 8192."""
+        """The recompute only adds the lock; removing it by scan would drop the user's next argv entry."""
         _apply_os(monkeypatch, "linux", is_rocm = True)
         monkeypatch.setattr(
             LlamaCppBackend, "_available_system_memory_mib", staticmethod(lambda: 200000)

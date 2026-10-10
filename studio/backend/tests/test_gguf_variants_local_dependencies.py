@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A downloaded GGUF must stay a one-click On Device row when the Hub cannot be read.
-
-The picker collapses a repo holding one complete quant only when the variants answer says its
-dependencies are resolved. Only a live Hub listing used to say so, so with the Hub offline,
-unreachable or refusing the saved token, every downloaded sole-quant repo fell back to the
-expander. A Hub-less answer now proves it from disk: the quant's shards, its snapshot's own
-partial state, the download's recorded plan and any companion a Hub answer named earlier.
-With the Hub up a local-first answer still never claims it, since a companion the current
-revision added is only visible in the listing (#10243).
-"""
+"""Sole-quant repos stay On Device offline: resolved dependencies are proven from disk, not the Hub."""
 
 from __future__ import annotations
 

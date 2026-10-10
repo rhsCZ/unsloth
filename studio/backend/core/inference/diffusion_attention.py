@@ -118,12 +118,7 @@ def _is_cuda_nvidia(target: Any) -> bool:
         return False
 
 
-# What the native SDPA dispatch can actually run (#8225). torch's ``flash_sdp_enabled()`` /
-# ``mem_efficient_sdp_enabled()`` report the USER TOGGLE, not whether a kernel exists for this device. On the ROCm
-# build in #8225 (gfx1200, torch 2.11+rocm7) both answer True while every dispatch to them raises "No available
-# kernel. Aborting execution.", so the dispatcher degrades silently to MATH -- the one backend that materialises the
-# whole B x heads x N x N score matrix, which is how a 3.4 GB Q4_K_M video model asked a 16 GB card for a single 66.54
-# GiB allocation. Probe actual execution first, then intersect that capability with the current process flags.
+# flash_sdp_enabled reports the user toggle, not a working kernel, so probe actual execution.
 SDPA_FLASH = "flash"
 SDPA_MEM_EFFICIENT = "mem_efficient"
 SDPA_CUDNN = "cudnn"
@@ -274,10 +269,7 @@ def _probe_sdpa_kernels(device: str, dtype: Any) -> tuple[str, ...]:
 
 
 def available_sdpa_kernels(target: Any) -> tuple[str, ...]:
-    """The SDPA backends that actually EXECUTE on ``target``, cheapest source of truth available.
-
-    Empty when the probe could not run at all (no torch, no device, an allocator failure) -- an
-    unanswerable probe must never be read as "only math", which is a claim about the hardware."""
+    """Empty when the probe cannot run, since an unanswerable probe must never read as math-only."""
     return _enabled_sdpa_kernels(_sdpa_capability(target))
 
 
@@ -435,12 +427,7 @@ def select_attention_backend(
     family: Any = None,
     speed_unset: bool = False,
 ) -> Optional[str]:
-    """The dispatcher backend name to apply, or None to leave the diffusers default.
-
-    An explicit alias is honored (apply falls back if its kernel is unavailable). ``auto``
-    upgrades to cuDNN on NVIDIA CUDA only when a speed profile is active (so ``off`` stays
-    bit-identical), and to verified ROCm flash for ``ROCM_AUTO_FLASH_FAMILIES`` on gfx11 unless speed is
-    explicitly ``off``; elsewhere returns None (native)."""
+    """Auto picks cuDNN on CUDA only under a speed profile, so off stays bit-identical; else native."""
     alias = normalize_attention_backend(requested)
     if alias != ATTN_AUTO:
         backend = _ALIASES[alias]
@@ -633,10 +620,8 @@ def _run_sage_probe(
     head_dim: int = 128,
     sageattn: Any = None,
 ) -> str:
-    """Empty when ``sageattn`` matches fp32 SDPA at ``head_dim``, else why not. Raises when unaskable (import, OOM).
-
-    ``sageattn`` defaults to the pip package's. Random inputs with a per-channel K offset like real keys: a zero tensor
-    proves the launch, not the numbers."""
+    """Probes with per-channel K offset inputs, since a zero tensor proves the launch but not the
+    numbers."""
     import torch
 
     if sageattn is None:
@@ -852,10 +837,7 @@ def _install_dispatch_guard(
     note: Any,
     make_op: Any = None,
 ) -> bool:
-    """Wrap diffusers' registered ``backend`` so calls its kernel cannot take run native. Idempotent.
-
-    False when the registry is not where expected: the caller then does not engage the backend. ``make_op(fn)``
-    optionally returns an opaque op for plain (no lse, no context-parallel) calls."""
+    """Wraps the registered backend so calls its kernel cannot take run native; False if registry moved."""
     try:
         from diffusers.models.attention_dispatch import (
             AttentionBackendName,
@@ -1495,11 +1477,7 @@ _URL_IN_TEXT = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s'\"<>]+")
 
 
 def _redacted_for_log(text: str) -> str:
-    """Every URL in ``text``, stripped of userinfo / query / fragment.
-
-    Takes free text, not just a URL, because pip echoes the URL it was handed back in its
-    stderr -- redacting only the name in the log line would leave the secret in the body.
-    """
+    """Takes free text, as pip echoes the URL in stderr; redacting just the name leaks the secret."""
     try:
         from utils.wheel_utils import redact_url_credentials
     except Exception:  # noqa: BLE001 -- redaction must never be the thing that breaks a log
@@ -1508,24 +1486,7 @@ def _redacted_for_log(text: str) -> str:
 
 
 def _xformers_wheel_target() -> tuple[Optional[str], Optional[str]]:
-    """Resolve the xFormers wheel built for the resident torch: (URL, refusal reason).
-
-    xformers' compiled extension is linked against ONE exact (torch, CUDA) pair, and next to any
-    other pair ``torch.ops.load_library`` raises -- which xformers/_cpp_lib.py then downgrades to a
-    log warning, so the import "succeeds" with memory-efficient attention, SwiGLU and the sparse ops
-    silently gone. That is invisible to ``find_spec`` and to pip, and PyPI publishes only the
-    CUDA-12.8 flavour, so a plain ``pip install xformers`` beside a cu130 torch installs the broken
-    combination every time.
-
-    So resolve the exact download.pytorch.org wheel instead, and when no wheel matches return a
-    reason rather than a URL: installing nothing leaves the caller on torch SDPA, which is strictly
-    better than an extension that cannot load.
-
-    The URL is not HEAD-checked here. This can run under ``_generate_lock`` (the video loader has no
-    out-of-lock pre-install hop), so it must not add network round trips to a path that already
-    blocks unload/cancel; a wrong row surfaces as a pip failure instead, and the matrix has a
-    live-URL test behind it.
-    """
+    """Exact xFormers wheel for this torch+CUDA pair from download.pytorch.org, or a refusal reason."""
     global _XFORMERS_WHEEL_TARGET
     with _XFORMERS_WHEEL_LOCK:
         if _XFORMERS_WHEEL_TARGET is not None:
@@ -1561,21 +1522,7 @@ _KERNELS_HUB_FLOOR = (1, 10)
 
 
 def _kernels_hub_compatible() -> bool:
-    """Whether installing the ``kernels`` package is SAFE next to the resident huggingface_hub.
-
-    Current ``kernels`` wheels declare ``huggingface_hub >= 1.10`` and build their dependency tables
-    against that API, and with an older hub the breakage is NOT contained to the requested backend:
-    ``import kernels`` raises at module scope, and diffusers imports ``kernels`` whenever it is
-    installed, so EVERY later pipeline import in every process fails until the package is
-    uninstalled. Measured with kernels 0.16.0: hub 1.0.0-1.2.4 raise
-    ``StrictDataclassFieldValidationError`` on ``import kernels``, and 1.3-1.9 merely happen to work
-    today, below the floor kernels supports. The whole 1.x range under 1.10 is therefore refused
-    rather than trusted, since the install is unpinned. An undeterminable hub version allows the
-    install, keeping the previous behaviour.
-
-    A ``--no-deps`` install cannot self-correct here: pip writes the wheel without ever reading its
-    ``Requires-Dist``, so this predicate is the only thing enforcing that floor.
-    """
+    """False for hub versions under 1.10, since import kernels then breaks every later pipeline import."""
     try:
         import re
         from importlib.metadata import version
@@ -1616,17 +1563,7 @@ def _ensure_attention_backend_installed(backend: str, logger: Any = None) -> Opt
 
 
 def _ensure_backend_package(backend: str, logger: Any = None) -> Optional[str]:
-    """Best-effort wheel-only install of the package ``backend`` needs, when allowed.
-
-    Called after arch gating, so only for a backend that could work here. Failure is swallowed: the
-    subsequent set_attention_backend raises on the missing package and falls back to native.
-
-    Returns the reason the install was REFUSED (a policy decision, e.g. no CUDA-matched xFormers
-    wheel exists for the resident torch), or None when nothing stood in the way -- the install ran,
-    was skipped as already present, or merely failed. Every refusal is also logged at warning level;
-    the return value is there so a caller that wants to surface the reason can, and both current
-    callers deliberately ignore it.
-    """
+    """Best-effort wheel-only install; returns the policy refusal reason, or None, and never raises."""
     import importlib.util
     import os
     import sys
@@ -1905,19 +1842,7 @@ def apply_attention_backend(
     logger: Any = None,
     target: Any = None,
 ) -> Optional[str]:
-    """Set ``backend`` on EVERY denoiser DiT via the diffusers dispatcher.
-
-    Returns the backend engaged, or None when left at native (``backend`` was None or the kernel
-    was unavailable -> graceful fallback, never a load failure).
-
-    ``target`` is the resolved device target. Given, and only when the result is native, the SDPA
-    backends are probed and a math-only device is reported here rather than discovered as a
-    six-figure-MiB allocation mid-generation (#8225). Optional so existing callers are unaffected.
-
-    diffusers keeps a process-wide active backend that ``set_attention_backend`` also updates, and
-    a fresh transformer's processors follow it (default None). So a load wanting native must
-    restore it explicitly, else it inherits a backend an earlier load pinned (e.g. cuDNN under a
-    speed profile), breaking the ``off`` guarantee. Best-effort."""
+    """Sets native explicitly, as diffusers keeps a process-wide backend an earlier load may have pinned."""
     if target is not None:
         try:
             guard_rocm_fused_sdpa(target, logger)
@@ -2088,10 +2013,7 @@ def _hunyuan_null_mask_state(module: Any) -> bool:
 
 
 def _null_mask_processor_cls():
-    """Build (once, lazily) a HunyuanVideo15AttnProcessor2_0 subclass whose ``__call__`` runs
-    attn_mask=None when the DiT is flagged (padding already removed by the pre-hook); otherwise it
-    delegates to the stock processor, so a mixed-padding batch and future diffusers changes stay
-    correct."""
+    """Skips attn_mask only when the DiT is flagged; otherwise delegates to the stock processor."""
     cached = _NULL_PROCESSOR_CACHE.get("cls")
     if cached is not None:
         return cached
@@ -2209,10 +2131,7 @@ _TRIM_MEMO_ATTR = "_unsloth_trim_memo"
 
 
 def _trim_plan(module: Any, kwargs: dict) -> dict:
-    """The trim decisions for this call's image / mask tensors: the host reads (``_trim_stream``'s) made once per
-    set of inputs. A pipeline hands the SAME prompt tensors to every step, so a step after the first reuses the plan
-    and makes no host wait (a CUDA-graph replay of the step then runs without one). Keyed on the tensors themselves,
-    held here, and their version counters, so new or edited inputs plan afresh."""
+    """Trim plan made once per input set, reused across steps so CUDA-graph replays make no host wait."""
     import torch
 
     names = ("image_embeds", "encoder_attention_mask", "encoder_attention_mask_2")
@@ -2258,28 +2177,7 @@ def _apply_trim(states: Any, mask: Any, decided: tuple) -> tuple:
 
 
 def _hunyuan_trim_pre_hook(module, args, kwargs):
-    """Eager forward pre-hook: strip padded text tokens so the joint attention runs fused.
-
-    - Drop the image stream when it is entirely zero (t2v): those ~729 tokens are pure padding. This
-    is upstream's own t2v sentinel (``is_t2v = torch.all(image_embeds == 0)``), and ``torch.all`` of
-    an empty tensor is vacuously True, so emptying the axis keeps it True.
-
-    - Trim the mllm/byt5 text streams to their globally-valid columns.
-
-    - Flag every block's attention so the null-mask processor skips the dense mask when nothing
-    partially-padded remains; otherwise leave the flag False and the stock dense-mask path handles
-    the residual padding.
-
-    This hook is the correctness choke point: the null-mask flag is valid only because the padding
-    was removed HERE, on the same call. It fires on ``module(...)`` (``__call__``), which the
-    pipeline/guider/cache_context/compile all use. Do NOT invoke a hooked DiT via
-    ``module.forward(...)`` directly: that skips pre-hooks, so a stale True flag would null the mask
-    over un-trimmed padding and corrupt the output.
-
-    The three ``.item()`` reads below are host syncs, but this hook runs eagerly outside the
-    compiled blocks (~3 syncs against a ~1.3 s forward), so they must stay here and not be folded
-    into the graph. Best-effort: any anomaly leaves the inputs untouched and the flag False.
-    """
+    """Strips padding so attention runs fused; call the module, never module.forward, which skips it."""
     import torch
 
     original = dict(kwargs)
@@ -2322,10 +2220,7 @@ def _hunyuan_trim_pre_hook(module, args, kwargs):
 
 
 def _hunyuan_trim_post_hook(module, _args, output):
-    """Clear the null-mask flag after each hooked forward, scoping the authorisation to exactly the
-    call whose pre-hook removed the padding. Registered with ``always_call=True`` so the flag is
-    also cleared when the forward raises -- otherwise a latched True would null the mask over
-    un-trimmed padding on any later direct ``module.forward(...)``. Returns the output unchanged."""
+    """Clears the null-mask flag after every forward, including ones that raise, so it cannot latch on."""
     _set_hunyuan_null_mask(module, False)
     return output
 
@@ -2367,16 +2262,7 @@ def install_hunyuan_attention_trim(
     *,
     logger: Any = None,
 ) -> bool:
-    """HunyuanVideo-1.5 only: make the joint attention skip padded text tokens (see module note).
-
-    Installs a null-mask processor on every denoiser DiT block plus an eager pre-hook that trims the
-    padded text/image streams each forward. Exact for the video output (the fused-vs-masked SDPA
-    swap is the only numeric change). Returns True when engaged; No-op (False) for any other family,
-    an unexpected class, or any failure -- the stock dense-mask path stays, so correctness never
-    depends on this. Call BEFORE apply_attention_backend so the kernel pins onto the new processor.
-
-    The caller must NOT install this when the denoiser blocks are compiled with static shapes: the
-    trimmed text length varies per prompt (see the SHAPE NOTE in the module header)."""
+    """HunyuanVideo-1.5 only; call before apply_attention_backend, and not under static-shape compile."""
     if getattr(family, "transformer_class", None) != _HUNYUAN15_TRANSFORMER_CLS:
         return False
     engaged = False

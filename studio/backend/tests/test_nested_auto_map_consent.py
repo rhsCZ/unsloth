@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An auto_map on a sub-config is remote code, and the gate has to see it.
-
-transformers reads auto_map off whichever config builds the thing being built, so a
-composite model declares it on `text_config` rather than at the top level.
-`unsloth/models/_utils.py` resolves `text_config.auto_map["AutoModelForCausalLM"]`
-through `get_class_from_dynamic_module`, which downloads and executes that module, and
-`unsloth/models/loader.py` walks every sub-config level for the compiler. A gate that
-read only `cfg["auto_map"]` therefore reported "ships no remote code" for a repo whose
-code the load runs, and allowed it with no scan, no findings and no fingerprint.
-
-The scanner runs for real here; only the local model directory is a fixture.
-"""
+"""An auto_map on a sub-config such as text_config is remote code, so the gate must scan it."""
 
 import json
 
@@ -46,11 +35,7 @@ NESTED_AUTO_MAP = {
 
 
 def test_a_nested_auto_map_is_scanned_rather_than_called_a_noop(tmp_path):
-    """The defect, end to end through the public gate.
-
-    Before the fix this returned has_remote_code False with "trust_remote_code is a
-    no-op" in the reason, for a repo whose modelling file the load executes.
-    """
+    """A nested auto_map must be scanned, not reported as a no-op, since the load executes that module."""
     model = _model(tmp_path, NESTED_AUTO_MAP)
 
     decision = evaluate_remote_code_consent(str(model), trust_remote_code = True)
@@ -80,12 +65,7 @@ def test_a_top_level_auto_map_is_unchanged(tmp_path):
 
 
 def test_a_model_with_no_auto_map_anywhere_is_still_a_noop(tmp_path):
-    """The fast path for every ordinary model: no scan, no dialog, no slowdown.
-
-    This is the regression that would hurt, because it is every user. A walk that
-    reported auto_map where there is none would put the consent dialog in front of
-    models that ship no Python at all.
-    """
+    """With no auto_map anywhere, the gate stays a no-op: no scan, no consent dialog."""
     model = tmp_path / "plain"
     model.mkdir()
     (model / "config.json").write_text(

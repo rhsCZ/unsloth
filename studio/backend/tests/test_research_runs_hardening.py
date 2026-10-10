@@ -419,11 +419,7 @@ def test_a_saved_cap_cannot_drop_a_connection_below_its_provider_floor(monkeypat
 
 
 def test_a_saved_cap_below_the_previous_default_does_not_shorten_the_report(monkeypatch):
-    """A cap set for chat cost may not shorten a report the user was already getting.
-
-    The override arrives ALREADY FOLDED into maxOutputTokens, so 8_192 here is what the client
-    really sends for a 65_536 model on a connection capped at 8_192, not a hypothetical.
-    """
+    """A saved cap must not shorten an existing report; maxOutputTokens already folds the override in."""
     monkeypatch.setattr(
         research_runs.providers_db, "get_provider", lambda _id: {"max_output_tokens": 8_192}
     )
@@ -482,11 +478,7 @@ def test_a_cap_between_the_floor_and_the_ceiling_still_binds(monkeypatch):
 
 
 def test_clearing_the_saved_cap_invalidates_a_ceiling_only_it_grounded(monkeypatch):
-    """Blanking the Max Tokens limit is what that field is FOR on an undocumented model.
-
-    It was the only thing holding the ceiling up, so once cleared this run must stop asking
-    for a number a run created now would not ask for either.
-    """
+    """Clearing the saved Max Tokens cap must drop a ceiling that only that cap grounded."""
     inference = {
         "providerType": "custom",
         "providerId": "p1",
@@ -526,10 +518,7 @@ def test_a_run_created_before_the_grounding_flag_is_unchanged(monkeypatch):
 
 
 def test_a_client_ceiling_below_the_default_still_lowers_the_budget(monkeypatch):
-    """A published limit is the model's own, not a preference: asking past it is refused.
-
-    It has to be the PUBLISHED one; maxOutputTokens alone cannot say which of the two it is.
-    """
+    """A client ceiling below the default still lowers the budget; the published limit is what counts."""
     monkeypatch.setattr(research_runs.providers_db, "get_provider", lambda _id: None)
     inference = {
         "providerType": "openai",
@@ -628,11 +617,7 @@ def test_a_legacy_ceiling_below_the_default_keeps_the_old_budget(monkeypatch):
 
 
 def test_the_provider_floor_table_matches_the_client_one_it_mirrors():
-    """A hand copy of the client's table, in another language, with nothing tying them together.
-
-    Drift is silent: the report would ask for a budget the provider truncates a thinking answer
-    below, which is what the floor exists to prevent.
-    """
+    """The provider floor table is a hand copy of the client's, so a test must catch drift between them."""
     import re
 
     source = (
@@ -667,10 +652,7 @@ def test_a_local_run_ignores_a_stray_ceiling():
 
 
 def test_a_budget_the_run_cannot_stream_in_time_is_bounded_by_its_wall_clock(monkeypatch):
-    """A wall-clock stop loses the report; running out of budget only truncates it.
-
-    _stream_completion re-raises without returning the text it already streamed.
-    """
+    """A wall-clock stop loses the report; running out of budget only truncates it."""
     monkeypatch.setattr(research_runs.providers_db, "get_provider", lambda _id: None)
     inference = {"providerType": "deepseek", "providerId": "p1", "maxOutputTokens": 384_000}
     assert _synthesis_max_tokens(inference, 900) == 900 * research_runs._SYNTHESIS_TOKENS_PER_SECOND
@@ -733,11 +715,7 @@ def test_a_cap_lowered_mid_run_bounds_the_request_that_actually_goes_out(monkeyp
 
 
 def test_the_flush_triggers_scale_from_the_same_written_length():
-    """Both arms must start scaling together, or the character one never binds.
-
-    A time arm whose knee sits at the END of the unlocked range leaves the row rewritten four
-    times a second through the shared writer for an entire 65_536-token report.
-    """
+    """Flush time and character triggers must scale from the same written length, or one arm never binds."""
     knee = int(
         research_runs._PROGRESS_FLUSH_SECONDS * research_runs._PROGRESS_FLUSH_CHARS_PER_SECOND
     )
@@ -1770,15 +1748,7 @@ def test_codex_research_hops_route_saved_provider_with_run_scoped_cache(monkeypa
 
 
 def _capture_backoff(monkeypatch) -> list:
-    """Record the delays the retry loop asks for and return control immediately.
-
-    `research_runs.asyncio` is the asyncio module itself, so this patches `asyncio.sleep` for
-    every event loop in the process. Another test can leave one running in a background thread,
-    such as a TestClient portal whose disconnect watcher polls with `asyncio.sleep(0.1)`; its
-    calls landed in `delays` by the thousand and the retry assertions failed depending on which
-    tests shared the xdist worker. Only this thread's sleeps are the retry loop's, since
-    `_run_stream` drives it with `asyncio.run` here; any other caller keeps its real delay.
-    """
+    """_capture_backoff patches asyncio.sleep process-wide, so it records only its own thread's sleeps."""
     delays: list[float] = []
     real_sleep = asyncio.sleep
     owner = threading.get_ident()
@@ -2032,12 +2002,7 @@ def test_stream_completion_times_out_when_output_never_starts(monkeypatch):
 
 
 def test_admission_keepalives_do_not_spend_the_first_output_budget(monkeypatch):
-    """A run queued behind another generation must still be served, not failed.
-
-    The admission queue has no default timeout and marks the wait with its own SSE
-    comment, so a queued Deep Research run outlives any fixed first-output budget
-    through no fault of the model.
-    """
+    """Queue waits send their own SSE comments and must not spend the first-output budget."""
     monkeypatch.setattr(research_runs, "_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", 0.05)
 
     class _QueuedThenServedStream:
@@ -2082,11 +2047,7 @@ def _comment_only_stream(comment: str):
 
 
 def test_plain_keepalives_mean_a_silent_backend_and_spend_the_budget(monkeypatch):
-    """A backend that only ever sends keepalives is stalled, whatever the phase.
-
-    routes/inference.py sends the plain comment while llama-server is silent, both
-    before its headers and mid-generation, so it must not defer the budget.
-    """
+    """Plain keepalive comments mean a silent backend, so they must spend the first-output budget."""
     monkeypatch.setattr(research_runs, "_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", 0.05)
     _install_fake_client(monkeypatch, [_comment_only_stream(": keep-alive")])
     started = _shared_setup_1()
@@ -2094,12 +2055,7 @@ def test_plain_keepalives_mean_a_silent_backend_and_spend_the_budget(monkeypatch
 
 
 def test_the_queue_wait_is_not_charged_to_the_model_budget(monkeypatch):
-    """The tail of a queue wait must not eat into the model's own budget.
-
-    Markers are interval-spaced, so anchoring the deadline to the last one charges up to
-    a full interval of queueing against the model. The wait is suspended instead, and the
-    budget starts when the queue says the slot is ours.
-    """
+    """Queue wait is not charged to the model budget; the budget starts when the slot is granted."""
     monkeypatch.setattr(research_runs, "_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", 0.3)
 
     class _QueuedThenAdmitted:
@@ -2236,12 +2192,7 @@ def test_a_configured_first_output_budget_reaches_the_stream(monkeypatch):
 
 
 def test_stall_keepalives_after_the_first_frame_do_not_renew_the_budget(monkeypatch):
-    """A wedged local GGUF model must still time out.
-
-    routes/inference.py sends the role frame once generation starts and then a
-    ": keep-alive" every 15 s while next(gen) stays silent. A role-only delta is not
-    semantic output, so those comments must not keep renewing the first-output budget.
-    """
+    """A wedged local GGUF model must still time out: keepalives after a role-only frame are not output."""
     monkeypatch.setattr(research_runs, "_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS", 0.2)
 
     class _RoleThenWedged:
@@ -2265,11 +2216,7 @@ def test_stall_keepalives_after_the_first_frame_do_not_renew_the_budget(monkeypa
 
 
 def test_outer_cancellation_still_hands_off_the_child_task(monkeypatch):
-    """Shutdown or the wall clock must not strand the child with nobody reading it.
-
-    _discard_task re-raises an outer cancellation, but the child outlives the frame
-    either way, so its outcome still has to be claimed before the caller leaves.
-    """
+    """Cancelled child tasks must still be claimed before the caller leaves, or the child is stranded."""
     monkeypatch.setattr(research_runs, "_STREAM_CLEANUP_TIMEOUT_SECONDS", 30.0)
     absorbed = []
     real_absorb = research_runs.ResearchSupervisor._absorb_late_task
@@ -2310,11 +2257,7 @@ def test_outer_cancellation_still_hands_off_the_child_task(monkeypatch):
 
 
 def test_a_cancelled_send_is_only_discarded_once(monkeypatch):
-    """The pre-header send needs the same single-cleanup guarantee as the iterator.
-
-    A send that declines cancellation past the bound would otherwise be waited on again
-    by the enclosing finally, doubling how long a user cancellation takes.
-    """
+    """A cancelled pre-header send is discarded once, so cleanup does not double the cancellation wait."""
     monkeypatch.setattr(research_runs, "_STREAM_CLEANUP_TIMEOUT_SECONDS", 0.2)
     discards = []
     real_discard = research_runs.ResearchSupervisor._discard_task
@@ -2369,11 +2312,7 @@ def test_a_cancelled_send_is_only_discarded_once(monkeypatch):
 
 
 def test_a_cancelled_stream_iterator_is_only_discarded_once(monkeypatch):
-    """Cancellation must stay inside one cleanup bound, not two.
-
-    An iterator that outlasts _STREAM_CLEANUP_TIMEOUT_SECONDS leaves the task pending,
-    and cleaning it up a second time in the finally would double the advertised wait.
-    """
+    """Cancellation stays inside one cleanup bound: a stream iterator is discarded once, not twice."""
     monkeypatch.setattr(research_runs, "_STREAM_CLEANUP_TIMEOUT_SECONDS", 0.2)
     discards = []
     real_discard = research_runs.ResearchSupervisor._discard_task
@@ -2906,10 +2845,7 @@ def _send_attempts(
     body = b"{}",
     errors = None,
 ):
-    """Drive the real send/retry loop against a canned response; return (attempts, waits).
-
-    ``waits`` totals the wait before each re-send, so it does not depend on how many slices
-    the wait is split into. The hooks see the virtual clock at each slice."""
+    """Waits are totalled before each re-send, so the result does not depend on how the wait is sliced."""
     run = {
         "id": "run-1",
         "ownerSubject": "owner",

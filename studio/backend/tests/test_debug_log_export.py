@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The "Download all logs" bundle. Two things have to hold whatever the host
-looks like: nothing in the archive names a path on this machine, and nothing in
-it is a credential. Everything else -- a log that rotates, is swapped for a
-link, or holds one record bigger than the budget -- is a warning, not a failed
-download."""
+"""The log export archive must name no host path and carry no credential; other faults only warn."""
 
 from __future__ import annotations
 
@@ -136,12 +132,7 @@ def test_a_source_swapped_for_a_symlink_after_enumeration_is_refused(monkeypatch
 
 
 def test_a_file_replaced_between_the_stat_and_the_open_is_refused(monkeypatch):
-    """The narrow window the fstat compare exists for.
-
-    lstat says regular file, the entry is replaced, and the open lands on
-    something else. Comparing the descriptor's device and inode against the
-    stat we just took is what catches it.
-    """
+    """Compare the descriptor's device and inode with the stat, to catch a swap between stat and open."""
     path = _seed_server_log("ordinary line\n")
     real_open = os.open
     swapped: list[bool] = []
@@ -166,11 +157,7 @@ def test_a_file_replaced_between_the_stat_and_the_open_is_refused(monkeypatch):
 
 
 def test_a_file_truncated_mid_export_warns_without_naming_a_directory(monkeypatch):
-    """A log that rotates under the read costs its own tail, not the bundle.
-
-    The warning names the member, never `str(exc)`: OSError.__str__ appends the
-    filename, which would put a host path in the archive.
-    """
+    """Warn by member name, never str(exc): OSError's text appends the filename and leaks a host path."""
     path = _seed_server_log("first line\nsecond line\n")
     real_redact = debug_log_export.redact_log_text
     truncated = []
@@ -247,10 +234,7 @@ def test_duplicate_labels_are_uniquified_by_a_loop():
 
 
 def test_two_labels_differing_only_in_case_do_not_extract_over_each_other():
-    """The volume the archive is EXTRACTED on decides what collides: Windows and
-    default APFS fold case, so two members that differ only in case land on top
-    of each other there. The member keeps its spelling; only the key is folded.
-    """
+    """Fold only the collision key: Windows and default APFS fold case, so names would clash on extract."""
     used: set[str] = set()
     assert debug_log_export._member_name("server", "s.log", used) == "server/s.log"
     assert debug_log_export._member_name("server", "S.log", used) == "server/S-2.log"
@@ -261,12 +245,7 @@ def test_two_labels_differing_only_in_case_do_not_extract_over_each_other():
 
 
 def _filesystem_folds_case(directory: Path) -> bool:
-    """Whether this filesystem treats two spellings as one file.
-
-    Windows and default APFS do, which is the whole reason `_member_name` folds
-    its collision key -- and also why the two-file scenario below cannot be
-    BUILT there: the second write lands on the first file.
-    """
+    """Probes case folding; on Windows and default APFS the two-spelling scenario cannot be built."""
     probe = directory / "CaseProbe.tmp"
     try:
         probe.write_text("x", encoding = "utf-8")
@@ -276,15 +255,7 @@ def _filesystem_folds_case(directory: Path) -> bool:
 
 
 def test_two_logs_differing_only_in_case_both_survive_the_round_trip(monkeypatch):
-    """The same property end to end, since that is where it would be lost.
-
-    `list_sources` is stubbed rather than driven off the real walk because the
-    enumeration is where the platforms differ: `Path.glob` is case-sensitive on
-    POSIX and case-INSENSITIVE on Windows, so the second spelling below is
-    invisible to the walk on this host and enumerated on the machine where the
-    collision actually bites. Stubbing is what lets a Linux runner exercise the
-    Windows shape; the files underneath are real, and so is the archive.
-    """
+    """Stub list_sources: Path.glob folds case only on Windows, where the collision actually bites."""
     directory = Path(os.environ["UNSLOTH_STUDIO_HOME"]) / "logs" / "server"
     directory.mkdir(parents = True, exist_ok = True)
     if _filesystem_folds_case(directory):
@@ -332,11 +303,7 @@ def test_the_route_streams_an_attachment(client):
 
 
 def test_the_archive_is_never_written_to_the_browser_cache(client):
-    """A stable authenticated GET returning an attachment is cacheable unless it
-    says otherwise: the archive could outlive the download on disk, and a second
-    export could be answered from cache rather than from the logs as they are
-    now. `no-store` because it must not be written down at all.
-    """
+    """The archive must be no-store: an attachment GET is otherwise cacheable and could serve stale logs."""
     _seed_server_log("cacheable?\n")
     response = client.get("/api/settings/debug/logs/export")
     assert response.status_code == 200
@@ -348,13 +315,8 @@ def test_the_archive_is_never_written_to_the_browser_cache(client):
 
 
 def test_the_export_is_owner_gated_exactly_like_the_routes_it_sits_beside():
-    """Per-account isolation put the two debug log routes behind
-    `_require_installation_owner`. The bundle has to sit behind the same guard,
-    or a non-owner account on a shared install can download EVERY log on the
-    host while being refused each one individually -- which is the wrong way
-    round. Asserted against the sibling routes rather than by naming the router,
-    so the three cannot drift apart again.
-    """
+    """Behind _require_installation_owner like its sibling routes, or non-owners could download
+    every log."""
     routers = {}
     for path in ("/debug/logs", "/debug/logs/sources", "/debug/logs/export"):
         for name in ("router", "_owner_settings_router"):
@@ -428,12 +390,7 @@ def test_a_log_inside_the_tail_is_not_truncated_or_warned_about():
 
 
 def test_a_record_cut_by_the_allowance_is_marked_not_presented_as_whole():
-    """A read that stops on the ALLOWANCE leaves the front of a record, which
-    would read as a complete line. It is also the one place a credential reaches
-    the archive: `redact_log_text` needs several characters of value, so a cut
-    just past `password=` ships the first few in the clear. At EOF the same
-    trailing bytes ARE a whole record, so the two must not be treated alike.
-    """
+    """Mark allowance-cut records: a cut just past password= leaks the first value characters."""
     directory = Path(os.environ["UNSLOTH_STUDIO_HOME"]) / "logs" / "server"
     directory.mkdir(parents = True, exist_ok = True)
     path = directory / "server-20260101-120000-pid1.log"
@@ -468,11 +425,7 @@ def test_a_record_cut_by_the_allowance_is_marked_not_presented_as_whole():
 
 
 def test_a_source_that_cannot_get_a_useful_tail_blames_the_budget_not_the_file(monkeypatch):
-    """With a handful of bytes left there is no room for a whole record, and
-    saying "no complete record in the last 4 bytes" reads as a fault in the log.
-    The budget is what ran out, so that is what the warning says -- and because
-    the no-boundary path deliberately does not spend `remaining`, the wrong
-    message would otherwise repeat for every source after it."""
+    """Blame the exhausted budget, not the file: a short tail with no record boundary is not a log fault."""
     monkeypatch.setattr(debug_log_export, "MAX_TOTAL_SOURCE_BYTES", 4)
     _seed_server_log("a line that does not fit\n")
     _seed_llama_log("another line that does not fit\n")
@@ -580,15 +533,7 @@ def test_a_failed_read_still_spends_its_budget(monkeypatch):
 
 
 def test_a_record_straddling_the_seek_never_leaks_its_credential(monkeypatch):
-    """The seek must resync FORWARD to a real newline however far that is.
-
-    Giving up after one probe starts the read at an arbitrary mid-record offset,
-    and `redact_log_text` is anchored on the key: a record holding an AWS secret
-    whose KEY falls before that offset and whose VALUE falls after it arrives
-    masked of nothing. An AWS secret has no prefix for a shape rule to catch, so
-    the anchor is the only defence. The offsets below are laid out so the cut
-    lands exactly between the key and its value.
-    """
+    """Resync the seek forward to a newline, or a credential split across the cut leaks unmasked."""
     record_cap = 4096
     monkeypatch.setattr(debug_log_export, "MAX_RECORD_BYTES", record_cap)
     monkeypatch.setattr(debug_log_export, "MAX_SOURCE_TAIL_BYTES", 2 * record_cap)

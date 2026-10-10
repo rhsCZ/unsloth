@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the flow-matching DiT LoRA trainer (FLUX.1 / FLUX.2 / Qwen-Image / Z-Image / LTX-2).
-
-CPU-only: cover family resolution, the per-family spec table, the QLoRA prequant
-heuristic, the bf16-only guard, and the gated-repo name check. The full training loop is
-exercised by the live GPU smokes, not here."""
+"""CPU tests for DiT LoRA family resolution, the QLoRA prequant heuristic and the gated-repo check."""
 
 from __future__ import annotations
 
@@ -41,11 +37,7 @@ from core.training.diffusion_train_common import (
 
 @pytest.fixture(autouse = True)
 def _not_rocm(monkeypatch):
-    """Pin the ROCm gate off: every case here describes an NVIDIA capability tier.
-
-    _patch_capability simulates a card, but the gate reads the INSTALLED torch, so on an AMD box
-    it short-circuits and the answers are about the real machine -- an environment leak.
-    test_dense_quant_rocm_gate_9396.py pins it the other way to exercise the gate."""
+    """Pin the ROCm gate off: it reads the installed torch, so an AMD host would leak into NVIDIA cases."""
     import core.training.diffusion_dit_trainer as _dit
     import core.training.diffusion_train_common as _dtc
 
@@ -216,12 +208,7 @@ def test_gated_access_requires_token():
 
 
 def test_the_gate_lets_a_local_clone_named_like_a_gated_repo_through(monkeypatch, tmp_path):
-    """A directory on disk carries no gate, whatever it is called.
-
-    A base can be a relative clone named exactly like the vendor repo, which the loaders and the
-    token-less mirror override both resolve on disk. Matching \`_GATED_TRAIN_REPOS\` by name alone
-    refused that layout without a token, for weights the run never fetches.
-    """
+    """A local clone named like a gated repo must pass the gate, since loaders resolve it on disk."""
     local = "black-forest-labs/FLUX.1-dev"
     assert local.lower() in _GATED_TRAIN_REPOS, "precondition: the name is gated"
     monkeypatch.chdir(tmp_path)
@@ -231,12 +218,7 @@ def test_the_gate_lets_a_local_clone_named_like_a_gated_repo_through(monkeypatch
 
 
 def test_the_gate_reads_the_repo_the_run_will_fetch(monkeypatch, tmp_path):
-    """A gated base redirected to its ungated mirror must not be refused by name.
-
-    The start route preflights the FETCH repo, so a child that checked the canonical id
-    would raise for a request the route had already answered 200 to, after freeing the
-    resident models: a dead job instead of a fast 400.
-    """
+    """The gate must read the repo the run will fetch, a mirror redirect included, not the canonical id."""
     from core.inference import diffusion_families
 
     seen: list[str] = []

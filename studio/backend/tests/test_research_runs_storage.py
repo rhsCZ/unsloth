@@ -3632,11 +3632,7 @@ def test_route_prune_cannot_delete_research_messages(research_home):
 
 
 def _thread_imports_cleanly(thread_id = "thread-1") -> bool:
-    """Whether every parent link resolves, which is what MessageRepository.import needs.
-
-    assistant-ui's addOrUpdateMessage raises "Parent message not found" on a dangling
-    parent, and the whole thread stops opening, not just the affected turn.
-    """
+    """A dangling parent link makes assistant-ui throw on import, so the whole thread stops opening."""
     rows = studio_db.list_chat_messages(thread_id)
     ids = {row["id"] for row in rows}
     return all(row["parentId"] is None or row["parentId"] in ids for row in rows)
@@ -4151,11 +4147,7 @@ def test_research_stays_spent_after_a_completed_run(research_home):
 
 
 def test_the_new_question_does_not_inherit_the_stopped_one_s_reasoning(research_home):
-    """get_reasoning_text joins every reasoning event at the run's current attempt.
-
-    The run row is reused, so without a new attempt the report written for the new question
-    opens with the thinking the user stopped.
-    """
+    """A reused run row needs a new attempt, or the new question inherits the stopped run's reasoning."""
     _create()
     research_db.append_event("run-1", "reasoning.updated", {"reasoningDelta": "about dog breeds"})
     _cancel_run()
@@ -4217,11 +4209,7 @@ def test_cancel_route_sync_cannot_cross_a_rebind(research_home):
 
 
 def test_a_stopped_worker_does_not_stamp_cancelled_on_the_next_question(research_home, monkeypatch):
-    """The worker finishes a stop, then writes its reply. The user can ask in between.
-
-    Both replies are resolved by the same reused run id, so without the attempt guard the new
-    question's placeholder is written "Research cancelled." and stays that way.
-    """
+    """A stopped worker's late reply must not stamp cancelled onto the next question on the same run id."""
     supervisor, worker = _shared_setup_1()
     research_db.request_cancel("run-1")
     claimed = research_db.claim_next(supervisor.worker_id)
@@ -4379,11 +4367,8 @@ def _create_via_route(user_message_id, question = None):
 
 
 def test_an_attachment_only_turn_researches_the_handed_off_question(research_home):
-    """A multimodal model reads the image and hands off a question; the message has no text.
-
-    The worker researches config.question, so refusing on the message's own text ends an
-    otherwise complete handoff in "Deep research could not start".
-    """
+    """An attachment-only turn still researches the handed-off question, not the message's own empty
+    text."""
     message_id = _attachment_only_message()
 
     run = _create_via_route(message_id, question = "What does this revenue chart show for Q3?")

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Component A tests: capability detection must never execute model repo code.
-
-Covers: load_model_config defaults trust_remote_code False; the _VISION_CHECK_SCRIPT
-subprocess literal keeps remote code off; registry-backed vision/audio detection from
-raw config.json (repo-code VLMs detected without execution; ForConditionalGeneration
-false positives fixed); and the model-details / GPU probes never enable remote code.
-"""
+"""Capability detection must never execute model repo code; it reads raw config.json instead."""
 
 import json
 from types import SimpleNamespace

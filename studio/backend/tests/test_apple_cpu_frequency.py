@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Apple Silicon CPU frequency correction (issue #8519).
-
-psutil <= 7.2.2 divides the pmgr voltage-state tables by 1e6 unconditionally, so
-on M4, where Apple switched them from Hz to kHz, it reports "4 MHz" for a 4.5 GHz
-part. cpu_frequency_mhz() re-reads the tables via ioreg, else rescales psutil.
-"""
+"""psutil <= 7.2.2 divides M4 kHz tables by 1e6, so cpu_frequency_mhz re-reads them via ioreg."""
 
 import platform
 import plistlib

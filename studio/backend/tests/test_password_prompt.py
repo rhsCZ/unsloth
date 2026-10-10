@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Masked terminal password prompt (auth/terminal_prompt.py): reader echo and
-editing, the change loop's validation/re-prompt behavior, and the pure
-should-prompt gate. Drives the reader through a scripted fake getch, so no
-tty (and no msvcrt on Linux) is needed."""
+"""Masked terminal password prompt: echo, editing, re-prompt validation and the should-prompt gate."""
 
 from __future__ import annotations
 
@@ -350,13 +347,7 @@ def test_a_raw_exposed_bind_prompts_when_a_terminal_is_attached():
 
 
 def test_a_raw_exposed_bind_stays_silent_without_a_terminal():
-    """Headless raw binds keep today's behaviour, deliberately.
-
-    Everything downstream of a True here is calibrated to publishing a public URL:
-    it refuses to launch when the deadline is disabled, and it deletes
-    .bootstrap_password, which long-running headless containers (the common use of
-    -H 0.0.0.0) are often logged into by reading. They keep the deadline instead.
-    """
+    """Headless raw binds stay silent and keep their deadline; downstream logic assumes a public URL."""
     from auth.terminal_prompt import should_prompt_password_change
     for stdin_tty, stderr_tty in ((False, False), (True, False), (False, True)):
         assert (
@@ -415,11 +406,7 @@ def test_the_default_keeps_old_callers_tunnel_only():
 
 
 def test_the_prompt_banner_does_not_claim_the_internet_for_a_lan_bind(monkeypatch):
-    """`-H 0.0.0.0` behind a NAT router is the LAN, not the public internet.
-
-    Saying "public internet" is false often enough to train people to ignore the
-    message, which is the one thing this prompt cannot afford.
-    """
+    """A LAN bind is not the public internet; saying so falsely trains people to ignore the banner."""
     import io
 
     from auth import terminal_prompt

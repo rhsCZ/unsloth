@@ -1,17 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The four first-class llama-server tuning fields.
-
-load_mode (--load-mode), spec_draft_cache_type (--spec-draft-type-k/-v),
-ctx_checkpoints (--ctx-checkpoints) and cache_ram (--cache-ram): pydantic bounds,
-the Model Memory precedence the Run settings panel promises, shadow stripping,
-reload dedupe and the stored-override mapping.
-
-Sibling of test_batch_sizes_per_load.py, which covers the same shape for the
-batch pair.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -242,12 +231,7 @@ def test_swa_checkpoints_is_the_same_setting():
 
 
 def test_the_effective_checkpoint_count_comes_from_the_extras():
-    """A typed --ctx-checkpoints wins at launch, so it has to win in the sizing.
-
-    The control emits its flag before the extras and llama.cpp is last-wins, so
-    ctx_checkpoints=0 with "--ctx-checkpoints 256" in the extras allocates 256
-    per-slot snapshots. Budgeting the field there under-reserves the fit.
-    """
+    """Extras override the typed flag (llama.cpp is last-wins), so the budget must read the extras."""
     assert parse_ctx_checkpoints_override(["--ctx-checkpoints", "256"]) == 256
     assert parse_ctx_checkpoints_override(["--swa-checkpoints=8"]) == 8
     assert parse_ctx_checkpoints_override(["-ctxcp", "4", "--ctx-checkpoints", "16"]) == 16
@@ -260,12 +244,7 @@ def test_the_effective_checkpoint_count_comes_from_the_extras():
 
 
 def test_the_checkpoint_flag_falls_back_to_the_legacy_spelling():
-    """A build carrying only --swa-checkpoints must still get the control's value.
-
-    Upstream renamed --swa-checkpoints to --ctx-checkpoints and kept the old name
-    as an alias, so a build older than the rename exposes only the old one.
-    Probing the modern name alone dropped the Checkpoints pick there in silence.
-    """
+    """Older builds expose only --swa-checkpoints, so the probe must fall back to the legacy spelling."""
     import inspect
 
     from core.inference import llama_cpp
@@ -371,12 +350,7 @@ def test_dedupe_ignores_the_tuning_for_diffusion():
 
 
 def test_the_coexistence_estimate_charges_the_requested_checkpoints():
-    """The training guard must size the SWA checkpoints the load will ask for.
-
-    Checkpoints are per-slot snapshots whose size scales with the slot's context
-    (ggml-org/llama.cpp#21690 is an OOM caused by exactly this), so an estimate
-    that assumes zero can admit a load beside training that then runs out of VRAM.
-    """
+    """Checkpoint size scales with slot context, so the training guard must charge the requested count."""
     import inspect
 
     from routes import inference as inference_routes

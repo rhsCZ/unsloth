@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: after the training worker runs its preflight and then activates the transformers
-sidecar, the in-process ``transformers`` must be the sidecar version the model requires -- not the
-default 4.57.x that the base environment ships.
-
-The CPU-only "does it choose the correct transformers version" guard, stronger than the pure
-import-order check in ``test_training_worker_import_discipline.py``: it runs the REAL tier detection
-(``get_transformers_tier``) and REAL activation (``activate_transformers_for_subprocess``) for a
-transformers-5.x model (Qwen3.5, tier 530) and asserts the version actually switched. It catches the
-whole failure family at once:
-
-  * a stale pre-activation ``transformers`` import (the #6951 / ``TokenizersBackend`` regression: an
-    already-cached 4.57.x defeats the sidecar's ``sys.path`` prepend),
-  * a wrong tier selected for a 5.x model, and
-  * activation not actually swapping the resident module.
-
-Why the CUDA spoof matters (verified): ``unsloth_zoo``'s eager ``import transformers`` only happens on
-its full, GPU-present init path. On a GPU-less runner it silently degrades and never preloads
-transformers -- which would MASK the stale-import bug (the check would falsely pass). Spoofing
-``torch.cuda`` so ``unsloth_zoo`` believes a GPU is present forces the real init path, exposing the
-regression on CPU CI. The spoof mirrors ``tests/_zoo_aggressive_cuda_spoof.py`` but is inlined so the
-test is self-contained in the ``studio-backend-ci`` matrix (whose conftest does not apply the shared
-spoof). No GPU/network/weights/real sidecar needed: a one-line stub sidecar stands in for the 5.x venv,
-so we only assert activation lands on it.
-
-Proven: passes on the fixed tree (active == 5.3.0) and fails on the buggy tree (active == 4.57.x) on
-a simulated GPU-less runner.
-"""
+"""Spoofs torch.cuda so unsloth_zoo eagerly imports transformers, exposing stale imports on CPU CI."""
 
 from __future__ import annotations
 

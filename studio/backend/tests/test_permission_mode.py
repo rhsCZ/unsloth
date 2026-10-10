@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for permission_mode ("Ask for approval" / "Approve for me" /
-"Off" / "Full access") permission levels.
-
-Covers the high-risk classifier in tools.py and the loop-level behavior of
-run_safetensors_tool_loop: in "auto" mode only calls detected as high risk
-pause for confirmation, in "full" mode nothing pauses and the sandbox is
-dropped, and an unset mode normalizes to the "auto" default for the loop gate
-(an unknown mode falls back to "ask").
-"""
+"""Permission modes in the tool loop: only high-risk calls pause in auto; full never pauses."""
 
 import os
 import uuid
@@ -28,18 +20,7 @@ _SESSION = "perm-mode-session"
 
 @pytest.fixture(autouse = True)
 def _isolate_permission_mode_globals():
-    """Keep the loop-driving tests hermetic against process-global state that
-    leaks across the full backend suite.
-
-    ``run_safetensors_tool_loop`` reads a process-global approval registry
-    (``state.tool_approvals._pending``) and honors ``os.environ``. Other test
-    modules mutate both (module-level ``os.environ[...] = ...`` runs at import
-    time; abandoned approvals can survive a test). A stale entry keyed by the
-    shared session id, or a leaked env var, can make the loop deny or skip a
-    call that these tests expect to run, which only surfaces in the full-suite
-    ordering on CI (not when the file runs alone). Snapshot and restore both,
-    and hand every ``_drive`` call a unique session, so each test starts clean.
-    """
+    """Snapshot and restore os.environ and the approval registry, which other test modules leak into."""
     env_snapshot = dict(os.environ)
     with tool_approvals._lock:
         pending_snapshot = dict(tool_approvals._pending)

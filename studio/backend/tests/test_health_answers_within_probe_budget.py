@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: /api/health answers inside the desktop launcher's probe timeout,
-detected hardware or not.
-
-studio/src-tauri/src/preflight/backend.rs probes with a 2s client timeout right after
-TAURI_PORT is emitted, and a timeout is not retried: it falls through to
-"desktop_owned_backend_starting", a dead end the user has to clear by hand. That was safe
-while the lifespan detected inline, since TAURI_PORT came after detection; detection runs on
-the warm thread now and TAURI_PORT precedes it, so an unbounded wait inside health puts a
-cold `import torch` in front of that deadline. Nothing the launcher reads from health
-depends on detection, only chat_only does.
-
-CPU-only, no network, no GPU, no weights: the subprocess tests stub detection.
-"""
+"""/api/health must answer inside the launcher's probe timeout, because a timeout is never retried."""
 
 from __future__ import annotations
 
@@ -46,13 +34,7 @@ def _run(snippet: str) -> subprocess.CompletedProcess:
 
 
 def _desktop_probe_timeout_s() -> float:
-    """The launcher's whole-client timeout, read out of the Rust it belongs to.
-
-    The builder's .timeout() and the shared loopback_http::client() constructor both take
-    it as a whole-seconds Duration, and the probe sets exactly one. Matching the Duration
-    rather than either call site keeps this working across that refactor while still
-    failing if the unit stops being seconds.
-    """
+    """Reads the probe's whole-client timeout from the Rust source as a seconds Duration."""
     assert _PROBE_RS.is_file(), f"{_PROBE_RS} moved; update this guard"
     rust = _PROBE_RS.read_text(encoding = "utf-8")
     probe = rust[rust.index("fn probe_ownerless_spawned_backend") :]
@@ -261,14 +243,7 @@ print("RESULT" + json.dumps({
 
 
 def test_an_unsettled_pass_is_never_published_as_training_capable():
-    """chat_only with no snapshot must be the literal True, not the live global.
-
-    Every accelerator branch of _detect_hardware_locked assigns CHAT_ONLY = False and then
-    keeps probing (torch.xpu.get_device_name, the MLX stack check), and a raise there
-    degrades the host to CPU. DETECTION_COMPLETE stays clear throughout, so the reply is
-    marked provisional; with the kill switch on it is also marked deferred, and
-    hardware-verdict.ts stores data.chat_only verbatim for those. Reading the global
-    therefore flashes Train and Export on a host that ends up chat-only."""
+    """An unsettled pass must publish chat_only True, not the live global, or Train and Export flash on."""
     proc = _run(_MID_PASS_SNIPPET)
     assert (
         proc.returncode == 0
@@ -368,17 +343,7 @@ print("RESULT" + json.dumps({"elapsed": time.perf_counter() - started}))
 
 
 def test_the_ceiling_still_catches_an_unbounded_wait():
-    """Calibration for _POST_WARM_OVERHEAD_ALLOWANCE_S, measured rather than argued.
-
-    Widening a timing assertion is only safe while it still fails the thing it exists to
-    catch. This builds the unbounded wait the sibling static guard forbids, times it, and
-    asserts it lands above the ceiling the budget test uses. If the allowance is ever
-    raised past the point of discriminating, this goes red and says so.
-
-    Deliberately a shorter detection than _SLOW_DETECT_S: the property is that an
-    unbounded wait tracks detection instead of the budget, and a shorter one shows that
-    while keeping the test cheap.
-    """
+    """The ceiling must still catch an unbounded wait, so the post-warm allowance stays discriminating."""
     detect_s = 6.0
     ceiling = _main_constant("_HEALTH_DETECT_BUDGET_S") + _POST_WARM_OVERHEAD_ALLOWANCE_S
     proc = _run(_UNBOUNDED_SNIPPET % {"detect_seconds": detect_s})
@@ -438,13 +403,7 @@ def test_health_does_not_await_detection_unbounded():
 
 
 def test_a_provisional_reply_is_not_cacheable_by_the_frontend():
-    """The provisional reply must not look authoritative to config/env.ts.
-
-    fetchDeviceType() sets ``fetched = data.device_type !== undefined`` and every later
-    non-forced call short-circuits on ``fetched``, so a provisional authed reply carrying
-    device_type pins chat_only=true for the rest of the SPA session on a GPU host: Train
-    hidden, /studio redirected to /chat. The sidebar's recovery poll runs only for
-    chat_only_reason === "mlx_unavailable", so it does not save it either."""
+    """A provisional reply must not carry device_type, or config/env.ts caches chat_only for the session."""
     result = _probe(_SLOW_DETECT_S)
 
     assert result["authed_hardware_detecting"] is True, "expected a provisional reply"
@@ -468,10 +427,7 @@ def test_a_measured_reply_still_carries_the_authoritative_fields():
 
 
 def test_a_mid_detection_assignment_is_not_treated_as_finished():
-    """DEVICE goes non-None before detection has settled. The XPU branch assigns DEVICE and
-    CHAT_ONLY=False, then calls torch.xpu.get_device_name(0); if that raises, the host
-    degrades to CPU/chat-only. A waiter keyed on "DEVICE is not None" would have published
-    the intermediate value, reporting training available on a chat-only host."""
+    """DEVICE is set before detection settles, so waiters must not key on it or report false training."""
     import importlib
     import threading
 
@@ -494,21 +450,7 @@ def test_a_mid_detection_assignment_is_not_treated_as_finished():
 
 
 def test_a_cold_health_call_answers_inside_the_launcher_deadline():
-    """The launcher never gets the warm path.
-
-    probe_ownerless_spawned_backend calls /api/health immediately after startup, with no
-    warm-up, and does not retry: a response that misses its client timeout falls through
-    to "desktop_owned_backend_starting", a dead end the user has to clear by hand. So the
-    first call this process serves is on that deadline's critical path, lazy imports and
-    threadpool startup included, and it is bounded here against the launcher's own
-    timeout rather than against a subsecond number, because that setup legitimately
-    counts against it.
-
-    The sibling test bounds the same request warm and tightly. Neither replaces the
-    other: warm catches the endpoint regressing, cold catches setup growing until the
-    launch dead-ends. Timing only the warm one is a hole, and timing only the cold one is
-    what made this file flaky.
-    """
+    """The first health call after startup has no warm-up and must answer inside the launcher's deadline."""
     probe_timeout = _desktop_probe_timeout_s()
     result = _probe(_SLOW_DETECT_S)
     if result["cold_elapsed"] >= probe_timeout:

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the small-M activation padding (``diffusion_quant_pad.py``).
-
-Real torch, CPU only: the padding is a shape transform plus a slice, so a dense Linear proves
-every structural property (shape, pad-row content, state-dict transparency, attribute
-passthrough). The granularity gate is exercised against FAKE torchao weight layouts, so the
-tests pin the ATTRIBUTES the probe reads rather than needing torchao installed. One CUDA-gated
-test closes the loop on a genuinely int8-quantized Linear.
-"""
+"""Small-M activation padding: real CPU torch; the granularity gate reads fake torchao attributes."""
 
 from __future__ import annotations
 
@@ -42,13 +35,7 @@ class _RecordingLinear(nn.Linear):
 
 
 def _fake_quant_tensor_type(**class_attrs):
-    """A stand-in for a torchao weight subclass.
-
-    The marker the probe looks for is ``__tensor_flatten__``, which every torchao tensor subclass
-    defines. The granularity attributes are set on the TYPE rather than on the instance because
-    ``nn.Parameter(subclass_tensor)`` returns ``tensor.detach()`` -- a fresh Python object of the
-    same type -- so an instance attribute would not survive the assignment the real quantiser
-    makes either."""
+    """Fake torchao weight type; granularity is set on the class, as nn.Parameter loses instance attrs."""
 
     def __tensor_flatten__(self):  # pragma: no cover - presence is the whole point
         return ["qdata"], None
@@ -88,14 +75,7 @@ def _fake_quantized_linear(
 @pytest.mark.parametrize("m", [1, 5, 10, 16, 17, 19, 64])
 @pytest.mark.parametrize("lead", [(), (2,), (2, 3)])
 def test_padding_returns_the_unpadded_result(m, lead):
-    """The rows the caller asked for come back unchanged, at the caller's leading dims.
-
-    The reference is the same module without the wrapper, so any difference is the padding's
-    fault and nothing else's. Note the tolerance: this is a DENSE float Linear, where a taller
-    GEMM can pick a different BLAS path and reassociate the accumulation (torch routes a single
-    row through addmv and 32 rows through addmm). The exactness claim belongs to the int8 path,
-    where the accumulation is integer and therefore order-independent -- see
-    ``test_int8_padding_is_bitwise_exact_on_a_real_quantized_linear``."""
+    """Padded output must match the unpadded result; dense float tolerates BLAS reordering."""
     torch.manual_seed(0)
     inner = nn.Linear(8, 6)
     wrapped = PadToMinM(inner, min_m = INT_MM_MIN_M, pad_to = DEFAULT_PAD_TO)
@@ -123,10 +103,7 @@ def test_pad_rows_replicate_row_zero_rather_than_being_zeros():
 
 
 def test_every_small_activation_normalises_to_one_row_count():
-    """Below ``pad_to`` every activation reaches the GEMM at exactly ``pad_to`` rows, so one
-    inductor graph covers every prompt length in the range rather than one graph per length.
-    H3's seven eval prompts run at M = 10, 13, 13, 13, 14, 17, 19 -- which straddles the floor,
-    so padding only up to ``min_m`` would leave three distinct shapes behind."""
+    """Small activations pad to one row count, so one inductor graph covers every prompt length."""
     inner = _RecordingLinear(8, 6)
     wrapped = PadToMinM(inner, min_m = 17, pad_to = 32)
     for m in (1, 10, 13, 14, 16, 17, 19, 31):

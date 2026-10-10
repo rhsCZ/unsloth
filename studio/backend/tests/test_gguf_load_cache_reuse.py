@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for cached GGUF reuse and load/download exclusion.
-
-No GPU, network, or subprocesses are required.
-"""
+"""Cached GGUF reuse and load/download exclusion; runs without GPU, network, or subprocesses."""
 
 from __future__ import annotations
 
@@ -1468,11 +1465,8 @@ class TestLoadHubDownloadExclusion:
         stored_extra_args,
         request_extra_args = None,
     ):
-        """Drive /load's GGUF path and return the hub guard's require_mmproj.
-
-        The guard reports a conflicting download, so the 409 is the observation
-        point and no llama-server ever starts.
-        """
+        """Drives /load's GGUF path; the hub guard's 409 is the observation point, so no llama-
+        server starts."""
         import core.inference.llama_cpp as llama_cpp_module
 
         from fastapi import HTTPException
@@ -1578,12 +1572,7 @@ class _CompanionMetadataReached(BaseException):
 
 
 def _companion_cache_repo(tmp_path, *, weights: str = "weights-revision"):
-    """An HF cache repo whose weights snapshot predates the one holding the companions.
-
-    The shape #10599 reports: the MTP head and the mmproj were published after the
-    quant, so ``refs/main`` names a revision that holds no weights at all and the
-    companions sit beside it, in a snapshot the weights' own directory does not reach.
-    """
+    """Weights snapshot predates the companion revision; MTP head and mmproj sit in a sibling snapshot."""
     repo = tmp_path / "models--org--Vision-GGUF"
     selected = repo / "snapshots" / weights
     companions = repo / "snapshots" / "companion-revision"
@@ -1636,10 +1625,7 @@ def _capture_load_config(
 
 
 class TestPathLoadCompanionRoots:
-    """#10599: a model picked in chat loads by PATH, so the auto-switch route's
-    repo-level widening never ran for it and an MTP head or mmproj published into a
-    later revision of the same repo dir stayed invisible until the user deleted and
-    refetched the whole repo."""
+    """Path loads skip repo-level widening, so an MTP head or mmproj published later stays invisible."""
 
     def _roots_for(self, tmp_path, name, **kwargs):
         from models.inference import LoadRequest
@@ -1723,12 +1709,7 @@ class TestPathLoadCompanionRoots:
         assert tuple(map(Path, roots or ())) == (selected,)
 
     def test_an_explicitly_empty_scope_is_left_alone(self, tmp_path):
-        """`()` from a caller that resolved an exact revision means do not widen.
-
-        The default is `()` too, so only the marker separates them. Without it the
-        route recomputes the scope from the path and the pinned request picks up a
-        projector or drafter from a revision it excluded.
-        """
+        """An explicit () scope from an exact revision is left alone, not recomputed from the path."""
         _repo, selected, _companions = _companion_cache_repo(tmp_path)
         assert not self._roots_for(
             tmp_path,
@@ -1761,13 +1742,7 @@ def _mtp_cache_repo(tmp_path):
 
 
 def test_the_apply_dedup_sees_the_drafter_the_launch_opened(tmp_path):
-    """A widened load must not read as drafterless, or every Apply reloads it.
-
-    _active_gguf_intent recomputes the drafter to compare against the running
-    server. Searching only the weights' snapshot answers None while the server
-    holds the sibling revision's head, so matches_load_source reports a model
-    change and a settings Apply restarts a healthy llama-server.
-    """
+    """Apply dedup must recompute the drafter from the sibling snapshot, or a healthy server restarts."""
     from core.inference.local_model_resolver import local_path_gguf_companion_roots
     from models.inference import LoadRequest
     from utils.models.model_config import ModelConfig
@@ -1817,12 +1792,7 @@ def test_the_apply_dedup_sees_the_drafter_the_launch_opened(tmp_path):
 
 
 def test_a_symlinked_sibling_snapshot_is_not_a_trusted_root(tmp_path):
-    """`is_dir()` follows symlinks, and `follow_symlinks=False` is 3.13+.
-
-    Access is validated for the snapshot the caller named. A directory symlink placed
-    under `snapshots/` would otherwise be handed back as a trusted disjoint search root,
-    so `ModelConfig.from_identifier` would read GGUF companions from wherever it points.
-    """
+    """A symlinked sibling snapshot must not be a trusted search root, since is_dir follows symlinks."""
     from core.inference.local_model_resolver import local_gguf_companion_roots
 
     repo = tmp_path / "cache" / "models--a--b"
@@ -1846,12 +1816,7 @@ def test_a_symlinked_sibling_snapshot_is_not_a_trusted_root(tmp_path):
 
 
 def test_a_repo_with_no_sibling_snapshot_widens_nothing(tmp_path):
-    """One root is the caller's own snapshot, so there is nothing to widen to.
-
-    Callers read a non-None roots tuple as `allow_disjoint_search_root`, which makes the
-    mmproj scan recursive, so returning a bare single root silently relaxes a guard
-    instead of being inert.
-    """
+    """No sibling snapshot gives no roots; a lone root would wrongly relax allow_disjoint_search_root."""
     from core.inference.local_model_resolver import local_path_gguf_companion_roots
 
     repo = tmp_path / "cache" / "models--a--b"
@@ -1864,14 +1829,7 @@ def test_a_repo_with_no_sibling_snapshot_widens_nothing(tmp_path):
 
 
 def test_a_sibling_symlinked_to_the_selected_snapshot_is_not_a_second_root(tmp_path):
-    """One physical snapshot plus an alias of it is still one snapshot.
-
-    The sibling scan excluded the selected snapshot by path equality while the gate above
-    it compared with `samefile`, so `snapshots/alias -> snapshots/only` came back as a
-    second root. That defeats the `len(roots) > 1` guard, which is what stops a lone root
-    from being handed to callers who read a non-None tuple as
-    `allow_disjoint_search_root`.
-    """
+    """Symlink aliases of the selected snapshot must be detected with samefile, not path equality."""
     from core.inference.local_model_resolver import local_path_gguf_companion_roots
 
     repo = tmp_path / "cache" / "models--a--b"
@@ -1903,13 +1861,7 @@ def test_an_aliased_sibling_does_not_displace_a_real_one(tmp_path):
 
 
 def test_an_explicitly_empty_companion_scope_is_not_recomputed():
-    """`()` means two different things and only one of them may be widened.
-
-    It is the default, meaning nobody has decided yet, and it is also what the
-    auto-switch route and the idle stash assign when they resolved an exact revision
-    and deliberately want no sibling widening. A truthiness test conflates them, and
-    the pinned request then picks up a projector or drafter from another revision.
-    """
+    """Explicit () companion scope means do not widen, and must be told apart from the unset default."""
     from models.inference import LoadRequest
 
     unset = LoadRequest(model_path = "/models/x")

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""engine_stats must not attribute work to the tick its counter moved on.
-
-Neither token counter moves while the work happens, so the poll interval prices a window
-the work did not run in. The sides are not symmetric: add_prompt(n, n, t) makes the prompt
-counters a pair, metrics_on_prediction() passes n_gen and n_gen - 1, so generation
-throughput comes from llama.cpp's gauge or from nowhere. The clock is faked because the
-shared _drive helper polls at 1 ms on the real one.
-"""
+"""Attribute throughput to the window the work ran in, not the tick a counter moved on."""
 
 from __future__ import annotations
 

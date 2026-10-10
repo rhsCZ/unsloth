@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A GGUF the owner already downloaded still runs when the Hub refuses its repo.
-
-A repo that was deleted, made private or gated after the download answers 401/403/404 to every
-listing, and #12117 made that a clear error instead of a Transformers misroute. The machine
-owner's own session may still run the complete copy on its disk, with a warning; anyone the
-cache rules would refuse (anonymous, an API key without a token, another account, a token the
-Hub says cannot reach the repo) is refused exactly as before.
-"""
+"""A cached GGUF still runs for its owner when the Hub refuses the repo; other callers stay refused."""
 
 from pathlib import Path
 from types import SimpleNamespace

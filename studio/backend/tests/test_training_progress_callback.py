@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Training progress callbacks must report an active status once training starts.
-
-Both training paths used to leave the parent on the pre-train "Starting ..." status
-for the whole run, so /api/train/status and the progress card read "Starting
-training..." while the loss was already moving: the callbacks report an empty status
-on every log and the parent only overwrites a non-empty one. These tests drive the
-real callbacks, worker emit rule and parent handler. Fakes only; no GPU, no model.
-"""
+"""Progress callbacks must report an active status: the parent only overwrites a non-empty one."""
 
 from __future__ import annotations
 

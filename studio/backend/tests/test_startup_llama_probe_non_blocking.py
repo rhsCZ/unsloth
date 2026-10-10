@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The llama.cpp startup probes must run OFF the FastAPI lifespan critical path.
-
-Regression guard for the macOS slow-startup bug: the capability + freshness probes
-(added in #5528/#5529) used to run inline in `lifespan`, so a cold/slow GitHub
-freshness check blocked `Application startup complete` for tens of seconds. They now
-run on a daemon thread, and are skipped entirely when update checks are disabled.
-"""
+"""llama.cpp startup probes run on a daemon thread, so a slow freshness check cannot block startup."""
 
 from __future__ import annotations
 

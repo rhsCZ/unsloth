@@ -34,11 +34,7 @@ _GEMMA4_EDGE_TEMPLATE_FILE = "gemma-4-edge.jinja"
 
 
 def _canonical_repo_id(model_identifier: str) -> str:
-    """Mirror ``ModelConfig.from_identifier``: a bare HF shorthand with no owner
-    (e.g. ``gemma-4-E2B-it-GGUF``) defaults to the ``unsloth/`` org. The resolver
-    runs on the raw ``request.model_path`` (before that canonicalization), so apply
-    the same rule here, otherwise shorthand loads would skip the override.
-    """
+    """Applies ModelConfig's unsloth/ default owner, so shorthand repo ids still match the override."""
     from core.inference.model_ids import hf_cache_repo_id
 
     mid = model_identifier.strip()
@@ -84,20 +80,7 @@ def resolve_effective_chat_template_override(
     model_identifier: Optional[str],
     user_override: Optional[str]
 ) -> Optional[str]:
-    """Resolve which chat-template text to launch llama-server with.
-
-    Precedence:
-      1. An explicit, non-empty user override always wins (advanced users).
-      2. For ``unsloth/gemma-4-*-GGUF``, return the bundled gemma-4 template
-         (adds ``preserve_thinking``, default off) so the embedded GGUF template
-         is overridden without re-downloading quants. E2B/E4B get the edge
-         variant; 12b/26B-A4B/31B get the standard one.
-      3. Otherwise ``None`` -> llama-server renders the GGUF's embedded template.
-
-    The result is fed to ``LlamaCppBackend.load_model(chat_template_override=...)``
-    and must be computed before the route-level reload-dedup check so the live
-    backend state and the incoming request compare consistently.
-    """
+    """A user override wins; gemma-4 GGUFs get a bundled template, and None uses the embedded one."""
     if user_override and user_override.strip():
         return user_override
     template_file = _gemma4_template_file(model_identifier)

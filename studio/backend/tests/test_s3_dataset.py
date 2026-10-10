@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the S3 dataset loader (core.training.s3_dataset).
-
-boto3 is optional and may be absent in CI, so the S3 client is mocked: a fake
-client provides a paginator over a synthetic bucket listing and writes files on
-download_file. No network or real AWS credentials are involved.
-"""
+"""S3 dataset loader tests mock the boto3 client, so no network or real AWS credentials are used."""
 
 import importlib.util
 import os

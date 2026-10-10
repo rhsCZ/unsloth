@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An unset generation limit (``None``) resolves to the context the prompt leaves free.
-
-unsloth_fast_generate raises once ``input_length + max_new_tokens`` passes the window, so no
-flat default fits every prompt. An explicit limit is never reduced.
-"""
+"""Unset generation limit resolves to the context left free; no flat default fits all prompts."""
 
 import sys
 import threading

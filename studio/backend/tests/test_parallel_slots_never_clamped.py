@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The launched --parallel must equal the requested slot count.
-
-#7717 clamped it to 1 whenever MTP resolved, costing batched API callers up to 4x
-throughput. These drive the real load path and read the slots off the launched argv.
-"""
+"""The launched --parallel must equal the requested slot count; MTP must not clamp it to 1."""
 
 from __future__ import annotations
 

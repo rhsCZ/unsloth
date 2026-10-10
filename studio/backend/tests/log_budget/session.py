@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What an idle Unsloth actually asks for, and how often.
-
-Every path the middleware classifies has to appear here with a poll period. That is the
-whole mechanism: you cannot quiet a path without saying how often it is polled, and you
-cannot start polling a path without classifying it. ``test_log_budget`` checks both
-directions, so this file and ``loggers/handlers.py`` cannot drift apart silently.
-
-Periods marked "measured" come from driving two real Unsloth instances for twelve minutes
-and reading the access log back. The rest are the interval the UI declares at its call
-site, and are marked "declared"; they are used identically by the replay and by the
-expectation, so an imprecise one costs realism in the global envelope, never correctness of
-a per-class check.
-"""
+"""Poll period for each path the middleware classifies; test_log_budget checks both directions."""
 
 from __future__ import annotations
 

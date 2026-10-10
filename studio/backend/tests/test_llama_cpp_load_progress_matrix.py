@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Extended test matrix for ``LlamaCppBackend.load_progress()``.
-
-Companion to ``test_llama_cpp_load_progress.py`` (basic contract). Covers
-cross-platform edge cases: platform matrix (/proc absence), VmRSS parsing,
-filesystem edges (HF-cache symlinks, broken/missing/relative paths), shard
-aggregation, lifecycle races, concurrent sampling, and fraction bounds.
-
-Linux-only in practice (``/proc`` stubbed where needed).
-"""
+"""Linux-only (/proc stubbed where needed); basic contract is in test_llama_cpp_load_progress.py."""
 
 from __future__ import annotations
 
@@ -362,11 +354,7 @@ class TestLifecycleRaces:
 
 class TestConcurrentSampling:
     def test_parallel_invocations_never_raise(self, tmp_path):
-        """Many concurrent samplers on one backend must not raise.
-
-        No ``builtins.open`` patch: ``mock.patch`` isn't thread-safe and could
-        leak a Mock into ``open``. Each thread hits the real ``/proc/self/status``.
-        """
+        """No builtins.open patch here: mock.patch is not thread-safe and could leak a Mock into open."""
         _sparse(tmp_path / "m.gguf", 1 * 1024**3)
         inst = _make()
         inst._process = _Proc(os.getpid())

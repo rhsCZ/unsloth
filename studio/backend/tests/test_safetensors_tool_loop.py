@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the safetensors agentic tool loop.
-
-Covers the ``tool_call_parser`` helpers and the cumulative-text state machine in
-``run_safetensors_tool_loop``, run against fake single-turn generators (no model
-load). Edge cases: plain answers, JSON and XML tool-call forms, truncated/unclosed
-calls, tool-result feedback, bad-JSON heal, duplicate-call short-circuit,
-``__IMAGES__`` sentinel stripping, executor errors, cancel, and the iteration cap.
-"""
+"""Safetensors tool-call parsing and loop state, run against fake generators with no model load."""
 
 import copy
 import json
@@ -1003,10 +996,7 @@ def _make_loop(
     exec_results = None,
     **kwargs,
 ):
-    """Build a configured loop with a multi-turn fake generator.
-
-    ``turns`` is a list of chunk-lists; iteration N yields chunks from ``turns[N]``.
-    """
+    """Builds a loop whose fake generator yields turns[N] chunks on iteration N."""
     turn_iter = iter(turns)
 
     def _gen(_messages):
@@ -1398,10 +1388,7 @@ def _kimi_section(*calls, closed = True):
 
 
 class TestParserKimi:
-    """Kimi K2 / Moonshot coverage. ASCII pipes only (NOT full-width).
-    Name arrives as ``functions.NAME:IDX``; the parser strips the
-    prefix and the index to recover the bare callable name while
-    preserving the full id for round-trip rendering."""
+    """Kimi K2 call names arrive as functions.NAME:IDX; the parser strips both to the bare name."""
 
     def test_kimi_simple_call(self):
         result = parse_tool_calls_from_text(
@@ -2209,10 +2196,7 @@ class TestLoopBasic:
         assert "<!doctype html>" in exec_fn.calls[0][1]["code"]
 
     def test_render_html_confirmation_gate_suppresses_early_provisional(self, monkeypatch):
-        """When a human confirmation gate is active, render_html must not surface
-        an early provisional tool_start: that card (keyed by tool_call_id, no
-        approval) would show the tool 'running' before the user approves. The
-        gated real tool_start is the first signal the UI receives instead."""
+        """With a confirmation gate on, render_html must not show an early provisional tool_start card."""
         monkeypatch.setattr(safetensors_agentic, "new_approval_id", lambda: "approval-rh")
         monkeypatch.setattr(safetensors_agentic, "begin_tool_decision", lambda *_a, **_k: object())
         monkeypatch.setattr(safetensors_agentic, "wait_tool_decision", lambda *_a, **_k: "allow")
@@ -2276,10 +2260,7 @@ class TestLoopBasic:
         assert "<!doctype html>" in tool_starts[1]["arguments"]["code"]
 
     def test_render_html_auto_mode_static_runs_without_prompt(self):
-        """permission_mode="auto" ships confirm_tool_calls=true. render_html is no
-        longer unconditionally safe (a networked canvas must ask), so its early
-        provisional card is suppressed under the confirm gate; a static canvas is
-        still classified safe and runs without an approval prompt."""
+        """Under auto mode, a static render_html canvas still runs without an approval prompt."""
         exec_fn, turn_iter = _shared_setup_1()
 
         def _gen(_messages):
@@ -4616,10 +4597,7 @@ def test_inactive_name_args_with_body_is_not_parsed_into_disabled_noop():
 
 
 class TestEnabledToolNameGate:
-    """The safetensors loop passes the active tool names into parse/strip so the
-    ambiguous bare-rehearsal ``NAME[ARGS]{json}`` is treated as a call only when NAME
-    is an active tool (#5704). Without the gate an inactive ``foo[ARGS]{...}`` in prose
-    was parsed into a disabled no-op call and stripped from the visible text."""
+    """Bare NAME[ARGS]{json} is a call only when NAME is an active tool; inactive names stay prose."""
 
     def _names(self, calls):
         return [c["function"]["name"] for c in calls]
@@ -4725,12 +4703,7 @@ class TestFalseAlarmMarkerProse:
 
 
 def test_both_tool_loops_say_they_are_waiting_for_approval():
-    """A gated call must not report "Running" in either loop.
-
-    The GGUF loop was fixed first and the safetensors one was missed, so the
-    badge counted up "Running ..." against a prompt nobody had answered yet.
-    Asserted on the source so the two paths cannot drift apart again.
-    """
+    """Both tool loops must report waiting for approval, not Running, while a call is gated."""
     import ast
     import os
 
@@ -4749,14 +4722,8 @@ def test_both_tool_loops_say_they_are_waiting_for_approval():
 
 
 class TestStreamingDisplayStripStillMatchesTheExportedHelper:
-    """The loop used to call ``strip_tool_markup_streaming`` directly; it now drives a
-    ``StreamingMarkupStripper`` instead, and the exported helper has no call site left in
-    this module. Everything else in this file asserts on the helper, so without this the
-    suite would look like it guards the loop while guarding a parallel implementation.
-
-    This pins the two together: for the inputs the rest of the file uses, the incremental
-    path the loop actually runs must agree with the helper at every prefix.
-    """
+    """The loop runs StreamingMarkupStripper, not the exported helper; the two must agree on every
+    prefix."""
 
     @staticmethod
     def _loop_strip(text, names = None):

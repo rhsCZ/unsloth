@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Memory auto runs a MiniMax-H3 sd-cli render resident when the card holds the whole bundle.
-
-The native runtime commits --offload-to-cpu for memory auto, so a 96 GB card still pinned the 17 GB text
-encoder in host RAM and paged every weight in on each render (Colab G4: peak 16.5 GiB used of 96). The
-per-render check below drops only the streaming flags, only for memory auto, and only when the live free
-VRAM covers a conservative resident estimate.
-"""
+"""Memory auto drops the streaming flags only when free VRAM covers a conservative resident estimate."""
 
 from __future__ import annotations
 

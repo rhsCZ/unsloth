@@ -531,12 +531,7 @@ def _trip_xet_worker(
     xet_attempt = 2,
     retries = None,
 ):
-    """Run a Xet worker whose watchdog trips with *message*; return the health failures recorded.
-
-    *xet_attempt* defaults to the LAST attempt of the default budget, since that is where the Xet
-    phase ends and a held-back verdict is finally reported. Pass 1 to exercise the deferral.
-    *retries* collects ``(retry_transport, xet_attempt, pending_xet_failure)`` for each respawn.
-    """
+    """Run a Xet worker whose watchdog trips with message and return the health failures recorded."""
     monkeypatch.setattr(state_dir, "cache_root", lambda: tmp_path / "state")
     monkeypatch.setattr(download_lifecycle.threading, "Thread", _ImmediateThread)
 

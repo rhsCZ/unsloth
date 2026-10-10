@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Security smoke for the public /p preview routes.
-
-Exercises the route layer with a real ``preview_router`` while stubbing the
-expensive model calls (``load_model_for_preview`` / ``openai_chat_completions``). Covers the
-public-surface guarantees: HMAC capability gating (a valid ``?k=`` token or
-Bearer credential is required; missing/invalid/wrong-ref tokens 404 before any
-model load), path-traversal rejection, request sanitization (tools / provider
-routing / use_adapter / generation clamp), asset-path containment, the page CSP
-+ no-referrer headers and HTML escaping, and that the preview lock is held until
-a streaming response is fully drained.
-"""
+"""Public /p routes need a valid HMAC token before any model load; the lock holds until streams drain."""
 
 import asyncio
 import json

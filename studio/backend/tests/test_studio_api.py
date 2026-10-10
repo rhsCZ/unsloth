@@ -1,54 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-End-to-end tests for Unsloth Studio's HTTP API surface.
-
-Covers the OpenAI- and Anthropic-compatible endpoints exposed by the
-server that ``unsloth studio run`` boots, plus API key authentication and
-the CLI's ``--help`` output:
-
-    1. curl -- basic chat completions (non-streaming)
-    2. curl -- streaming chat completions
-    3. Python OpenAI SDK -- streaming completions
-    4. curl -- Unsloth server-side tools (enable_tools=true)
-    5. curl -- Standard OpenAI function calling (non-streaming)
-    6. curl -- Standard OpenAI function calling (streaming)
-    7. curl -- Standard OpenAI function calling (multi-turn tool loop)
-    8. OpenAI Python SDK -- Standard function calling
-    9. Anthropic Messages API -- basic non-streaming
-    10. Anthropic Messages API -- streaming SSE
-    11. Anthropic Python SDK -- non-streaming
-    12. Anthropic Messages API -- streaming with tools
-    13. Anthropic Messages API -- tool_choice={"type":"any"} honored
-
-Training, export, fine-tuning, and chat-UI concerns are out of scope —
-see the unit suites elsewhere under ``studio/backend/tests/`` for those.
-
-Usage:
-
-    # Script mode — launches its own server via ``unsloth studio run``.
-    python tests/test_studio_api.py
-    python tests/test_studio_api.py --model unsloth/... --gguf-variant ...
-
-    # Pytest mode, external server — start an Unsloth server yourself,
-    # then point pytest at it. Fastest iteration loop.
-    unsloth studio run --model unsloth/Qwen3-1.7B-GGUF --gguf-variant UD-Q4_K_XL &
-    export UNSLOTH_E2E_BASE_URL=http://127.0.0.1:8080
-    export UNSLOTH_E2E_API_KEY=sk-unsloth-...   # from the server banner
-    pytest tests/test_studio_api.py -v
-
-    # Pytest mode, fixture-managed server — pytest launches and tears down
-    # the server itself. One-shot verification, CI-friendly.
-    pytest tests/test_studio_api.py -v \\
-        --unsloth-model unsloth/Qwen3-1.7B-GGUF \\
-        --unsloth-gguf-variant UD-Q4_K_XL
-
-The ``base_url`` / ``api_key`` parameters on the test functions resolve via
-the ``studio_server`` session fixture in ``conftest.py``.
-
-Requires a GPU and ~2 GB of disk for the GGUF download.
-"""
+"""Live-server API tests: need a GPU and a GGUF download, or set UNSLOTH_E2E_BASE_URL."""
 
 from __future__ import annotations
 
@@ -224,13 +177,7 @@ def test_openai_sdk(base_url: str, api_key: str):
 
 
 def test_curl_with_tools(base_url: str, api_key: str):
-    """Example 4: chat completion with tool calling enabled.
-
-    When ``enable_tools`` is set the server always returns SSE streaming
-    regardless of the ``stream`` flag, so we parse SSE chunks. The model may
-    not produce visible content (tool orchestration can intercept the
-    response), so we only assert the endpoint succeeds.
-    """
+    """enable_tools always returns SSE; the model may show no content, so only success is asserted."""
     status, chunks = _stream_http(
         f"{base_url}/v1/chat/completions",
         body = {
@@ -283,12 +230,7 @@ _WEATHER_TOOL = {
 
 
 def _collect_streamed_tool_calls(chunks: list[dict]) -> list[dict]:
-    """Reassemble OpenAI streaming delta.tool_calls into full tool calls.
-
-    OpenAI streams partial tool calls across chunks — the first chunk for a
-    given index carries ``id`` + ``function.name``, and later chunks append
-    fragments to ``function.arguments``.
-    """
+    """OpenAI sends each tool call's id and name once, then its arguments as fragments across chunks."""
     by_index: dict[int, dict] = {}
     for c in chunks:
         choices = c.get("choices") or []
@@ -328,14 +270,8 @@ def _final_finish_reason(chunks: list[dict]) -> str | None:
 
 
 def test_openai_tools_nonstream(base_url: str, api_key: str):
-    """Standard OpenAI function calling, non-streaming, tool_choice='required'.
-
-    Regression: before the fix, Unsloth stripped `tools` and the model
-    returned plain text with finish_reason='stop'. After the fix,
-    llama-server's response is forwarded verbatim so the client sees
-    finish_reason='tool_calls' with a structured tool_calls array and
-    non-zero usage.prompt_tokens.
-    """
+    """llama-server's tool_calls response must be forwarded verbatim, not stripped of tools to plain
+    text."""
     status, text = _http(
         "POST",
         f"{base_url}/v1/chat/completions",
@@ -406,14 +342,7 @@ def test_openai_tools_stream(base_url: str, api_key: str):
 
 
 def test_openai_tools_multiturn(base_url: str, api_key: str):
-    """Multi-turn client-side tool loop: validates that role='tool' result
-    messages and assistant messages carrying tool_calls are accepted.
-
-    Regression: before the fix, ChatMessage.role was restricted to
-    {system,user,assistant} and rejected role='tool' at Pydantic
-    validation. This test sends a full round trip so the model receives the
-    simulated tool result and responds with final text.
-    """
+    """The message model must accept role='tool' and assistant tool_calls, beyond system/user/assistant."""
     status, text = _http(
         "POST",
         f"{base_url}/v1/chat/completions",
@@ -520,10 +449,6 @@ def _stream_anthropic_http(
     headers: dict,
     timeout: int = 60,
 ) -> tuple[int, list[tuple[str, dict]]]:
-    """POST a streaming request and collect Anthropic SSE events.
-
-    Returns (status, [(event_type, data_dict), ...]).
-    """
     data = json.dumps(body).encode()
     req = urllib.request.Request(url, data = data, headers = headers, method = "POST")
     req.add_header("Content-Type", "application/json")
@@ -673,13 +598,7 @@ def test_anthropic_with_tools(base_url: str, api_key: str):
 
 
 def test_anthropic_tool_choice_any(base_url: str, api_key: str):
-    """Anthropic Messages API: ``tool_choice: {"type": "any"}`` must be
-    honored (forwarded as OpenAI ``tool_choice: "required"`` to
-    llama-server). Regression for the secondary fix bundled with #4999 —
-    previously this field was accepted on the request model but dropped with
-    a warning log, so the model could answer from memory instead of using
-    the tool.
-    """
+    """tool_choice {type: any} must be forwarded as tool_choice required, not dropped with a warning."""
     status, events = _stream_anthropic_http(
         f"{base_url}/v1/messages",
         body = {
@@ -735,10 +654,6 @@ def test_anthropic_tool_choice_any(base_url: str, api_key: str):
 
 
 def _start_server(model: str, variant: str | None) -> tuple[subprocess.Popen, str]:
-    """Launch ``unsloth studio run`` and parse the API key from its banner.
-
-    Returns (process, api_key).
-    """
     cmd = [
         "unsloth",
         "studio",

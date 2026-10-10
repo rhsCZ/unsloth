@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Export checkpoint loading must shard across every visible GPU (#7053): the
-``device_map="sequential"`` loader default stacks the whole model on GPU0 and OOMs
-while the other GPUs sit empty. The loader now passes whichever sharding map
-``get_device_map`` resolves (``"unsloth"`` on CUDA, ``"balanced"`` elsewhere), but only
-on a real multi-GPU host, so single-GPU, CPU and MLX are untouched."""
+"""Export loads must shard across GPUs; sequential device_map stacks everything on GPU0 and OOMs."""
 
 from __future__ import annotations
 
@@ -399,13 +395,7 @@ def test_an_unrelated_error_is_still_reported_rather_than_retried(monkeypatch, t
 
 
 def test_the_retry_names_sequential_rather_than_omitting_the_device_map(monkeypatch, tmp_path):
-    """An omitted device_map is not the loader default any more.
-
-    unsloth's signature default is `DEFAULT_DEVICE_MAP`, a marked "sequential" that
-    `requested_device_map` upgrades back to the planner unless UNSLOTH_AUTO_DEVICE_MAP=0.
-    So `_device_map_override = {}` would re-run the very placement that just failed and
-    report the same error, and the retry would look like a fallback while being none.
-    """
+    """Omitting device_map re-runs the planner, so the retry must name sequential explicitly."""
     mod = _export_mod(monkeypatch)
 
     class DeviceMapInfeasible(RuntimeError):

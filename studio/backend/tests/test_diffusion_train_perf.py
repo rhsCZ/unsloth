@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the diffusion training performance work.
-
-Covers the new pure helpers and small policy functions that the perf PR adds:
-the seed-deterministic latent-cache crop/flip plan, the per-family collate fns, the
-index-based sigma gather, the new config validation + request-model fields, the
-torch.compile policy, the stop save/cancel flag, and the ``preparing`` / ``warning``
-service events. No GPU / model load: the collates and gathers run on CPU tensors, the
-scheduler is default-initialised (no ``from_pretrained``), and the route/service tests
-inject in-thread fakes exactly like ``test_diffusion_training.py``.
-"""
+"""CPU-only tests for diffusion training perf helpers, policies and events; no model is loaded."""
 
 from __future__ import annotations
 
@@ -418,10 +409,7 @@ def test_sdxl_cache_force_bypasses_gate(monkeypatch):
 
 
 def test_a_no_save_stop_survives_a_child_that_dies_before_reporting_it():
-    """The trainer reports the discard on its completion event, but a child that OOMs or is
-    killed after the request never emits one. The unexpected-exit path then recorded a plain
-    error run with the last periodic checkpoint intact, so the history offered Resume from the
-    very bundle the user asked to throw away. The intent is remembered in the parent."""
+    """A no-save stop is remembered in the parent, since a child that dies never reports the discard."""
 
     class _DeadProc:
         def is_alive(self) -> bool:
@@ -556,10 +544,7 @@ def test_an_epoch_mode_target_does_not_fall_back_to_the_unused_step_count():
 
 
 def test_the_read_time_refresh_uses_the_same_epoch_rule():
-    """The persisted record may carry the right target, but every read recomputes it -- and the
-    read side was still falling back to the request model's unused train_steps in epoch mode,
-    so a 600-step checkpoint of a run resolved to 1000 read as 600/500 and Resume was
-    disabled again the moment the run was listed."""
+    """Read-time refresh must follow the epoch rule, not the unused train_steps, or Resume is disabled."""
     import inspect
 
     from core.training.diffusion_training_service import _refresh_resume_state
@@ -570,10 +555,7 @@ def test_the_read_time_refresh_uses_the_same_epoch_rule():
 
 
 def test_the_source_identity_is_seeded_before_the_child_starts():
-    """The route has already validated and pinned a source bundle, so a resume that dies during
-    the model load -- before the trainer can emit `resumed` -- still needs the timestamp its
-    fallback is checked against, or the pathname alone offers back whatever later occupies the
-    slot."""
+    """Seed the source identity before the child starts, so an early resume death is still checked."""
     import inspect
 
     from core.training.diffusion_training_service import DiffusionTrainingService
@@ -606,10 +588,7 @@ def test_seeding_reads_the_bundles_own_timestamp(tmp_path, monkeypatch):
 
 
 def test_a_child_that_cleaned_up_is_not_cleaned_up_again(tmp_path, monkeypatch):
-    """The trainer's own discard hands a displaced slot back to the bundle it replaced, so the
-    path this run wrote to now holds ANOTHER run's checkpoint. The parent cleanup knows only
-    pathnames, and repeating it deleted that restored original -- cancelling one branch
-    destroyed a different run's resume point."""
+    """Do not clean up twice: a path the child already restored may hold another run's checkpoint."""
     from core.training.diffusion_training_service import DiffusionTrainingService
 
     class _Proc:
@@ -690,10 +669,7 @@ def test_a_checkpoint_makes_the_run_recoverable_before_it_ends(tmp_path, monkeyp
 
 
 def test_a_failed_checkpoint_write_is_recorded_too(tmp_path, monkeypatch):
-    """The failure is sticky in memory, but only a successful write asked for a record. Unsloth
-    exiting after one left the last persisted record advertising the OLDER checkpoint as
-    resumable -- the one the service has just decided is stale -- and resuming it rolls the run
-    back past everything after it."""
+    """A failed checkpoint write must persist too, or the stale older checkpoint stays resumable."""
     import json as _json
 
     from core.training import diffusion_training_service as svc_mod
@@ -771,10 +747,7 @@ def test_one_bad_record_does_not_take_the_history_with_it(tmp_path, monkeypatch)
 
 
 def test_a_second_stop_does_not_change_what_the_child_was_told(tmp_path):
-    """The child consumes the FIRST signal and acts on it. A later stop-without-saving cannot
-    un-export an adapter it has already written, so honouring it set a parent discard the child
-    never carried out: the run was marked discarded and its checkpoints deleted while the
-    adapter and catalog entry it published stayed on disk."""
+    """Only the first stop signal counts: a later stop-without-saving cannot undo an exported adapter."""
     from core.training.diffusion_training_service import DiffusionTrainingService
 
     svc = DiffusionTrainingService()

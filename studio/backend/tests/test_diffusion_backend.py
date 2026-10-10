@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the diffusion backend.
-
-The family helpers are pure functions, tested directly. The backend lifecycle is
-exercised with ``torch`` / ``diffusers`` stubbed via ``sys.modules`` so no real
-GPU, weights, or network access is needed (sub-second, CI-friendly).
-"""
+"""CPU-only backend tests; the lifecycle runs with torch and diffusers stubbed in sys.modules."""
 
 from __future__ import annotations
 
@@ -238,12 +233,7 @@ def test_only_the_genuinely_gated_half_reads_as_gated():
 
 
 def test_no_mirror_is_a_companion_only_repo():
-    """A mirror substitutes for the WHOLE base, so it must never be a components-only repo.
-
-    ``prefer_ungated_mirror`` also fires on a plain bf16 pick, where the transformer is read from
-    the base, so a mirror pointing at a repo with no denoiser turns a working load into a
-    missing-weights error. The companion-only set is exactly that list of repos.
-    """
+    """A mirror replaces the whole base, so no mirror may be a components-only repo."""
     companions = sd_cpp_companion_only_repo_ids()
     for _upstream, mirror in _MIRROR_PAIRS:
         assert mirror.lower() not in companions, mirror
@@ -256,14 +246,7 @@ _MIRRORS_NOT_YET_PUBLISHED: frozenset[str] = frozenset({"qwen/qwen-image-2.1-tur
 
 
 def test_every_third_party_bf16_pipeline_the_catalog_offers_is_mirrored():
-    """Lookup is by exact id, so a variant the catalog offers is silently missed until listed.
-
-    Adding a family's flagship is not enough: HiDream ships Full, Dev and Fast, and FLUX.2 klein
-    ships 4B and base-4B. Each is its own repo id, so each needs its own row or the pick keeps
-    fetching tens of GB from the vendor while the change claims to have stopped that. Read the
-    catalog rather than restating the table, so a newly offered variant fails here instead of
-    quietly bypassing the mirrors.
-    """
+    """Lookup is by exact repo id, so every variant the catalog offers needs its own mirror row."""
     catalog = (
         Path(__file__).resolve().parents[2]
         / "frontend/src/features/model-picker/components/model-selector/model-catalog.ts"
@@ -293,12 +276,7 @@ def test_every_third_party_bf16_pipeline_the_catalog_offers_is_mirrored():
 
 
 def test_the_qwen_2512_mirror_covers_the_card_tag_route(monkeypatch):
-    """#8001: the 2512 companions come from a repo the family table never names.
-
-    ``unsloth/Qwen-Image-2512-GGUF`` carries ``base_model: Qwen/Qwen-Image-2512`` and
-    ``_resolve_base_repo`` trusts that tag, so the fetch lands on the vendor repo whatever the
-    family default says. The mirror is the only thing that redirects it.
-    """
+    """The card's base_model tag routes 2512 companions to the vendor repo; the mirror must cover it."""
     _no_cache(monkeypatch)
     assert mirror_repo("Qwen/Qwen-Image-2512") == "unsloth/Qwen-Image-2512"
     assert prefer_ungated_mirror("Qwen/Qwen-Image-2512") == "unsloth/Qwen-Image-2512"
@@ -341,12 +319,7 @@ def test_the_opt_out_maps_a_direct_mirror_pick_back_to_its_upstream(monkeypatch)
 
 
 def test_a_local_base_directory_is_never_mirrored(monkeypatch, tmp_path):
-    """A path that exists on disk is not a Hub id, so it must survive the swap untouched.
-
-    A user can clone a base into a relative dir named exactly like the vendor id. The loaders
-    resolve such a base locally (``Path(base).exists()``), but several take that branch after the
-    swap, so rewriting it would send the load to the Hub and ignore the on-disk files.
-    """
+    """A local directory named like a vendor id must never be mirrored, or the load ignores its files."""
     gated = "black-forest-labs/FLUX.1-dev"
     _no_cache(monkeypatch)
     assert mirror_repo(gated) == "unsloth/FLUX.1-dev"
@@ -362,11 +335,7 @@ def test_a_local_base_directory_is_never_mirrored(monkeypatch, tmp_path):
 
 
 def test_mirrored_base_still_trips_the_flux2_shape_guard():
-    """The regression the two-helper split exists for.
-
-    The guard fails OPEN on an unmapped base, so a mirror id reaching ``_FLUX2_BASE_INNER_DIM``
-    would silence it. Assert the RAISE: a disabled guard passes any weaker check.
-    """
+    """A mirrored base must still trip the FLUX.2 shape guard; the guard fails open on unmapped ids."""
     fam = detect_family("x", override = "flux.2-klein")
     assert fam is not None and fam.name.startswith("flux.2")
 
@@ -452,11 +421,7 @@ def test_a_superseded_cached_revision_does_not_disable_the_mirror(monkeypatch, t
 
 
 def test_a_stray_upstream_file_does_not_disable_the_mirror(monkeypatch, tmp_path):
-    """The decline is "the load is satisfiable from cache", not "some blob exists".
-
-    An interrupted (or previously tokened) pull leaves a config behind. Treating that as cached
-    pinned every later load to the gated upstream and re-raised the 401 the mirror removes.
-    """
+    """A stray upstream file is not a cache hit: only a fully satisfiable load may disable the mirror."""
     from core.inference.diffusion_families import _upstream_is_cached
 
     gated = "black-forest-labs/FLUX.1-dev"
@@ -480,14 +445,7 @@ def test_a_stray_upstream_file_does_not_disable_the_mirror(monkeypatch, tmp_path
 
 
 def test_a_repack_split_across_the_two_cache_roots_still_counts(monkeypatch, tmp_path):
-    """A pair split by a cache-folder change is held by neither root alone, but IS reusable.
-
-    The callers that pass ``other_root`` fetch with ``reuse_other_cache_root``, which resolves
-    each file through whichever root holds it. Asking each root for the whole set therefore calls
-    a split pair absent and re-pulls several GB the two roots already have between them (offline,
-    it fails outright). Reachable with an interrupted download either side of the change: the file
-    fetched before it stays in the old root, the one fetched after lands in the new one.
-    """
+    """A set split across two cache roots is reusable; checking each root alone would re-download it."""
     from huggingface_hub import constants
 
     from core.inference.diffusion_families import _upstream_is_cached, prefer_cached_legacy_source
@@ -523,12 +481,7 @@ def test_a_repack_split_across_the_two_cache_roots_still_counts(monkeypatch, tmp
 
 
 def test_the_two_root_union_does_not_relax_the_revision_rule(monkeypatch, tmp_path):
-    """Per-file across roots, whole-set within one: a superseded revision contributes nothing.
-
-    Only the revision refs/main names can satisfy a fetch, and that stays true per root. Without
-    the split the union would let an old complete revision in one root paper over the new
-    incomplete one in the other.
-    """
+    """Union across roots, never across revisions in one root: a superseded snapshot cannot help."""
     from huggingface_hub import constants
 
     from core.inference.diffusion_families import _upstream_is_cached
@@ -554,13 +507,7 @@ def test_the_two_root_union_does_not_relax_the_revision_rule(monkeypatch, tmp_pa
 
 
 def test_the_union_never_borrows_across_revisions_inside_one_root(monkeypatch, tmp_path):
-    """Split across ROOTS is reusable; split across SNAPSHOTS of one root is not.
-
-    A commit-pinned download leaves no refs/main, so every snapshot is a candidate. Answering the
-    set name by name would then let an old snapshot complete a newer one inside the same root,
-    which no fetch can do: a fetch that lands in a root lands in ONE revision of it. Studio never
-    pins a revision itself, but the cache is shared with anything else that does.
-    """
+    """Snapshots of one root never combine: a fetch lands in one revision, so only roots can be unioned."""
     from huggingface_hub import constants
 
     from core.inference.diffusion_families import _upstream_is_cached
@@ -899,10 +846,6 @@ def _load_into(backend, tmp_path, **overrides):
 
 
 def _loaded_backend(tmp_path, **overrides):
-    """A backend loaded off a stub checkpoint written into ``tmp_path``.
-
-    ``overrides`` replace the z-image defaults and are forwarded to ``load_pipeline``.
-    """
     filename = overrides.get("gguf_filename", _LOAD_DEFAULTS["gguf_filename"])
     (tmp_path / filename).write_bytes(b"weights")
     backend = DiffusionBackend()
@@ -930,12 +873,7 @@ def test_generate_refuses_when_the_model_was_replaced_since_the_snapshot(fake_ru
 
 
 def test_generate_refuses_a_replacement_that_committed_while_it_waited(fake_runtime, tmp_path):
-    """The reported interleaving end to end (#9448).
-
-    A load drops its teardown fence for the whole construction of the new model while still
-    holding the generation lock, so a generate arriving there used to block, then denoise on
-    the NEW model with the snapshot's steps/guidance.
-    """
+    """A generate queued behind a replacement load must refuse the new model, not run on it."""
     old_dir, new_dir = tmp_path / "old", tmp_path / "new"
     for d in (old_dir, new_dir):
         d.mkdir()
@@ -994,11 +932,7 @@ def test_generate_refuses_a_replacement_that_committed_while_it_waited(fake_runt
 
 
 def test_the_same_path_reloaded_under_a_different_base_is_a_replacement(fake_runtime, tmp_path):
-    """repo_id is not a load identity (#9448).
-
-    base_repo and family_override are settable per load, so one local checkpoint reloads as a
-    different model. Pinning the path alone let a FLUX.1-dev request reach a schnell pipeline.
-    """
+    """Load identity covers base_repo and family too; one local path can load as different models."""
     backend = _loaded_backend(tmp_path, base_repo = "black-forest-labs/FLUX.1-dev")
     st = backend.status()
     snapshot = load_identity(st["repo_id"], st["base_repo"], st["family"])
@@ -1522,14 +1456,7 @@ def test_no_recast_class_is_cached_and_keeps_identity():
 def test_from_pipe_no_recast_leaves_every_component_at_its_loaded_dtype(
     pipeline_cls, quantized_transformer
 ):
-    """The build succeeds and no component moves off bfloat16.
-
-    The two quantization cases fail differently against a recasting from_pipe: a quantized
-    denoiser makes the cast raise, and since components are cast in name order the text
-    encoder is float32 already by then, so catching the error is not a fix; unquantized
-    raises nothing at all and the whole pipeline is silently doubled in place. The two
-    pipeline classes cover a from_pipe that recasts and one that has stopped, so an upstream
-    fix landing under Unsloth cannot change the outcome."""
+    """A from_pipe that recasts or has stopped must still leave every component at its loaded dtype."""
     from core.inference.diffusion import DiffusionBackend
 
     resident = _Resident(quantized_transformer = quantized_transformer)
@@ -1838,10 +1765,7 @@ def test_generate_inpaint_uses_from_pipe(fake_runtime, tmp_path):
 
 
 def test_image_conditioned_passes_image_size_not_slider(fake_runtime, tmp_path):
-    """When the workflow pipe DOES accept width/height, an image-conditioned call must pass
-    the INPUT IMAGE's size, never the txt2img slider size -- otherwise a non-slider-sized
-    input (e.g. a 1536px outpaint canvas with a 1024 slider) mismatches the latents
-    ("tensor a (128) must match tensor b (192)"). Covers Transform + Extend with any size."""
+    """Image-conditioned calls pass the input image's size, not the slider, or latents mismatch."""
     import base64
     import io
 
@@ -1902,11 +1826,8 @@ def test_compile_shape_dims_follow_workflow():
 
 
 def test_register_shape_uses_actual_forward_dims(fake_runtime, tmp_path, monkeypatch):
-    """The static compile-cache manifest must record the dims the forward ACTUALLY ran
-    at: an image-conditioned generate derives its output size from the input image, so
-    registering the slider values would mark a never-compiled shape as covered while the
-    truly-used shape never re-dirties/saves the bundle (warm restarts keep paying its
-    compile)."""
+    """Register the forward's actual dims, not slider values, so the compile-cache manifest stays
+    correct."""
     from core.inference import diffusion as diff
 
     registered: list = []
@@ -4169,11 +4090,7 @@ def test_load_reports_memory_plan_fields_on_cpu(fake_runtime, tmp_path):
 
 @pytest.fixture
 def allow_precision_fallback(monkeypatch):
-    """Restore the pre-P1-2 behaviour where a DECLINED explicit precision silently loaded the GGUF.
-
-    The tests below are about which PLANNING path ran, not about the precision contract, and the
-    strict default now stops the load before their assertions can look at it. The refusal itself
-    is covered by test_explicit_transformer_quant_refuses_instead_of_loading_the_gguf."""
+    """Opt in to precision fallback, since the strict default refuses before planning tests can assert."""
     monkeypatch.setenv("UNSLOTH_DIFFUSION_ALLOW_PRECISION_FALLBACK", "1")
 
 
@@ -6122,19 +6039,13 @@ def _stub_hosted_prequant(monkeypatch, *, cached: bool):
 
 
 def _stub_dense_transformer_cached(monkeypatch, *, cached: bool):
-    """Answer "are the base repo's dense transformer/ shards already on disk?" without a cache.
-
-    Same rule as the hosted prequant above, applied to the base repo's own shards: uncached, an
-    auto quant must not buy a second denoiser for a GGUF pick."""
+    """Uncached dense shards must not trigger an auto quant: that buys a second denoiser for a GGUF."""
     from core.inference import diffusion as dmod
     monkeypatch.setattr(dmod, "_dense_transformer_cached", lambda *a, **k: cached)
 
 
 def _stub_dense_candidate(monkeypatch, *, prequant: bool):
-    """Pin what the fast path would open: a PRE-QUANT checkpoint, or the base repo's dense shards.
-
-    ``resolve_dense_quant_candidate`` is the resolver both the plan and the load re-plan against,
-    so pinning it here pins the same answer for both."""
+    """Pin resolve_dense_quant_candidate, since the plan and the load both re-plan against that resolver."""
     from core.inference import diffusion as dmod
     monkeypatch.setattr(
         dmod,
@@ -6149,10 +6060,7 @@ def _stub_dense_candidate(monkeypatch, *, prequant: bool):
 
 
 def _spy_dense_quant(monkeypatch):
-    """Record every dense/prequant fast-path build and keep it from running.
-
-    Keyed by backend INSTANCE: the patch is class-level and an earlier test's begin_load can leave
-    a daemon thread still loading, so a bare count is not this test's. Read via ``_dense_calls``."""
+    """Record dense/prequant builds per backend instance: an earlier test's loading thread may still run."""
     calls: list = []
 
     def _record(self, *a, **k):
@@ -6849,12 +6757,8 @@ def test_plan_memory_dense_replan_does_not_double_count_prefetched_transformer(m
 
 
 def test_plan_memory_pipeline_replan_prices_the_quantised_transformer(monkeypatch):
-    """A pipeline re-plan reads the quant-size overrides instead of the whole-repo cache.
-
-    The pipeline branch sizes the repo as one download, the bf16 footprint the re-plan exists to
-    replace; ignoring the overrides returned the bf16 plan unchanged, so an offloaded pipeline
-    could never reach the fast path.
-    """
+    """Pipeline re-plans must price the quantised transformer, or offloaded runs never take the fast
+    path."""
     from core.inference import diffusion as dmod
     from core.inference.diffusion_memory import OFFLOAD_NONE, DeviceMemory
 
@@ -6891,11 +6795,7 @@ def _split_cache_roots(
     *,
     register_root = False,
 ):
-    """Unsloth's live cache root and a second one holding what a mid-session cache-folder change
-    left behind, both empty. ``register_root`` makes the second dir huggingface_hub's import-time
-    constant, the root ``cache_dir = None`` resolves to; without it the constant points at a third
-    empty dir, so ``other`` is reachable only as an explicit staged snapshot. Either way the test
-    never sees the developer's real cache."""
+    """Empty live and moved cache roots stand in, so the developer's real cache is never read."""
     from huggingface_hub import constants as hf_constants
 
     from core.inference import diffusion as dmod
@@ -10232,10 +10132,7 @@ def test_files_already_cached_takes_the_whole_set_from_the_fallback_root(monkeyp
 
 
 def test_files_already_cached_refuses_a_set_split_over_two_roots(monkeypatch, tmp_path):
-    """Never a per-file union. Neither root holds a complete snapshot, so _prefetch_files returns
-    None instead of a snapshot dir and from_pretrained falls back to the hub id pinned to
-    hub_cache_dir(), which cannot see the fallback root: calling this repo cached would refetch
-    that root's share inline, outside the Downloads panel's progress and its disk preflight."""
+    """A set split across two roots is not cached: a union would refetch outside the Downloads panel."""
     live, other = _two_cache_roots(monkeypatch, tmp_path)
     sha = "c" * 40
     repo = "black-forest-labs/FLUX.1-dev"
@@ -10606,10 +10503,7 @@ def _plan_with_weights(mib):
 
 
 def test_the_resident_size_table_never_shrinks_a_local_checkpoint(fake_runtime, monkeypatch):
-    """The table is keyed on UPSTREAM ids, so a local directory can only reach the coarse family
-    entry -- and a family with more than one size under it (a local FLUX.2-klein 9B against
-    klein's 4B default) would be re-sized to less than half what it loads, walking straight past
-    the refusal into the OS killer. On disk is the measured truth for a local path."""
+    """Size local checkpoints from disk: the family entry would shrink a local 9B to the 4B size."""
     import torch
 
     from core.inference.diffusion_families import detect_family
@@ -10652,10 +10546,7 @@ def test_the_resident_size_table_trusts_only_a_configured_cache_snapshot(
 
 
 def test_speed_off_is_not_reported_as_a_staging_failure(fake_runtime, tmp_path, monkeypatch):
-    """An explicit Speed=off rewrites an auto request to "off" and the plan stages no
-    transformer/ on purpose. Reading that expected absence as a decline told the caller their
-    automatic quant had failed for want of shards, when what actually happened is the bit-exact
-    GGUF they asked for."""
+    """Speed=off stages no transformer/ on purpose, so its absence is not a staging decline to report."""
     _stub_hosted_prequant(monkeypatch, cached = True)
     calls = _spy_dense_quant(monkeypatch)
     backend = _cuda_backend(tmp_path, monkeypatch)
@@ -10668,10 +10559,7 @@ def test_speed_off_is_not_reported_as_a_staging_failure(fake_runtime, tmp_path, 
 
 
 def test_a_cached_lower_rung_survives_the_unstaged_decline(fake_runtime, tmp_path, monkeypatch):
-    """Auto's winner having no hosted prequant does not mean there is none to open. fp8 winning
-    while only an int8 checkpoint is published is what the retry below exists for, and declining
-    on the winner alone set dense_declined and skipped straight past it to the GGUF for a
-    checkpoint already on disk."""
+    """A cached lower-rung prequant must survive the decline; do not skip straight to the GGUF."""
     from core.inference import diffusion as dmod
 
     def _reason(retry):
@@ -10693,10 +10581,8 @@ def test_a_cached_lower_rung_survives_the_unstaged_decline(fake_runtime, tmp_pat
 
 
 def test_the_cache_probe_reads_the_root_the_dense_load_will_use():
-    """Tempting to count the import-time root, since _prefetch_files would not re-fetch from it.
-    But the consumer of this verdict is the dense fast path, and that calls from_pretrained
-    pinned to hub_cache_dir(), so a hit in the other root widens the plan and then downloads the
-    whole transformer again after eviction -- the exact outcome the check exists to prevent."""
+    """The cache probe must read the root the dense load uses; a hit in the other root re-downloads
+    later."""
     import inspect
 
     from core.inference.diffusion_families import cache_holds_files
@@ -11247,10 +11133,7 @@ def test_dense_quant_candidate_replan_prices_the_streamed_encoder_tier(
 
 
 def test_the_activation_guard_budgets_the_real_batch_on_windows(monkeypatch):
-    """The singleton floor rests on the OOM backoff halving a failed forward, and under WDDM
-    there is no OOM to catch: the driver serves the overflow from system RAM, the desktop stops
-    responding and nothing recovers it. So Windows budgets the largest chunk it will actually
-    run, while every other platform keeps the batch-32 fast path it measures today."""
+    """Windows budgets the largest real chunk: WDDM spills to system RAM instead of raising OOM."""
     from core.inference import diffusion as dmod
 
     chunks = [[object()] * 8, [object()] * 3]
@@ -11267,11 +11150,7 @@ def test_the_activation_guard_budgets_the_real_batch_on_windows(monkeypatch):
 
 
 def _stepping_call(record):
-    """A pipeline __call__ that actually steps, so a cancel can be observed mid-denoise.
-
-    The fake pipes return immediately, which cannot distinguish "the sampler stopped" from
-    "the sampler finished". This mirrors diffusers: invoke callback_on_step_end each step and
-    break out when the callback sets ``_interrupt``, exactly as the real denoise loop does."""
+    """Fake pipe that steps via callback_on_step_end and breaks on _interrupt, like diffusers."""
 
     def _call(
         self,
@@ -11435,11 +11314,7 @@ def test_cancel_generate_is_a_no_op_without_a_load(fake_runtime):
 def test_unified_memory_declines_a_prequant_that_outweighs_the_gguf(
     fake_runtime, monkeypatch, tmp_path
 ):
-    """A GGUF pick on unified memory can still be upsized by the dense fast path: the hosted
-    fp8/int8 artifact is roughly 0.55x bf16 against a Q4's ~0.3x, so it can be twice the file that
-    just passed the load-level refusal. The planner returns 'none' for any size on unified memory,
-    so the OFFLOAD_NONE gate cannot catch that, and the prequant path skips the dense-size check
-    (it never builds dense). Without an explicit size the load materialises it and is OS-killed."""
+    """On unified memory a prequant can outweigh its GGUF, and the OFFLOAD_NONE gate misses that."""
     from core.inference import diffusion as dmod
     from core.inference.diffusion_auto_policy import DenseQuantEstimate
 
@@ -11542,10 +11417,7 @@ def test_the_resident_size_table_prices_a_pre_cast_encoder_at_its_real_size(
 
 
 def test_the_resident_size_table_never_shrinks_an_unrecognised_remote_variant(fake_runtime):
-    """Same hole as the local-path one, reached from the Hub: a fine-tune or a renamed mirror that
-    the family detector still matches by name is NOT an exact key in the size table, so it falls
-    through to the family entry -- and for a family carrying two sizes that entry is the smaller
-    one. A 9B derivative lowered to the 4B number walks straight past the refusal."""
+    """Unmatched remote variants fall to the family entry, the smaller size for two-size families."""
     import torch
 
     from core.inference.diffusion_families import detect_family
@@ -11569,10 +11441,7 @@ def test_the_resident_size_table_never_shrinks_an_unrecognised_remote_variant(fa
 
 
 def test_a_whole_pipeline_single_file_is_not_charged_for_cached_companions(fake_runtime):
-    """An SDXL-style single file carries the U-Net, VAE and text encoders itself and the base repo
-    is read for config only, but the plan still adds the base's cached companion weights. As an
-    offload hint that is conservative; as a hard refusal it rejects a checkpoint that fits, and
-    only for users who happen to have loaded the full pipeline before."""
+    """Single-file checkpoints with their own encoders must not be charged for cached base companions."""
     import torch
 
     from core.inference.diffusion_families import detect_family
@@ -11600,11 +11469,7 @@ def test_a_whole_pipeline_single_file_is_not_charged_for_cached_companions(fake_
 
 
 def test_the_prequant_fit_check_prices_a_pre_cast_text_encoder(fake_runtime, monkeypatch):
-    """``DenseQuantEstimate.companions_mib`` is always the DENSE encoder plus the VAE, but the
-    assembly this check is sizing is handed ``text_encoder_quant`` and injects the pre-cast
-    encoder. Refusing on the dense figure declines a prequant that fits on bytes never
-    materialised -- for FLUX.2-dev's Mistral-24B that is tens of GB. The load-level resident plan
-    already applies te_prequant_budget_scale; this is the same scale on the same estimate."""
+    """The prequant fit check must scale a pre-cast text encoder, not use the dense companion size."""
     from core.inference.diffusion import DiffusionBackend
     from core.inference.diffusion_families import detect_family
 
@@ -11666,12 +11531,7 @@ def test_an_offload_memory_request_is_not_reported_as_unstaged_shards(
 def test_an_unsupported_host_is_not_told_its_shards_are_unstaged(
     fake_runtime, tmp_path, monkeypatch
 ):
-    """The unsupported-device checks above the decline run for an EXPLICIT scheme only, so on
-    CPU/MPS, non-bf16 CUDA or a stubbed torchao an AUTO request reached the unstaged-shards branch
-    and the badge told the user the base transformer/ shards were not staged. True and irrelevant:
-    caching them cannot enable a quant this host cannot run. The load itself is unchanged -- the
-    dense re-plan is already gated on dense_transformer_supported -- so what this pins is the
-    reason, on the commonest path there is (every Mac and CPU GGUF load)."""
+    """On CPU, MPS and other unsupported hosts, auto requests must not be told their shards are unstaged."""
     from core.inference import diffusion as dmod
 
     _stub_hosted_prequant(monkeypatch, cached = True)
@@ -12229,11 +12089,7 @@ def test_an_uncompilable_pipeline_refuses_an_explicit_scheme(fake_runtime, tmp_p
 
 @pytest.mark.parametrize("speed_mode", [None, "default", "max"])
 def test_a_compiling_speed_mode_still_quantises(fake_runtime, tmp_path, monkeypatch, speed_mode):
-    """The guard must not cost the default path: speed unset is upgraded to a compile.
-
-    "off" is absent on purpose: not uncompilable, but the bit-exact request that rewrites an auto
-    quant to off well before this guard, which the test below pins.
-    """
+    """The compile guard must not block the default speed path; 'off' is excluded upstream, not here."""
     backend = DiffusionBackend()
     calls = _stub_pipeline_dense_quant(backend, monkeypatch)
     status = backend.load_pipeline(
@@ -12396,12 +12252,7 @@ def test_a_clean_decline_keeps_the_dense_transformer(fake_runtime, tmp_path, mon
 
 
 def test_a_raw_fp8_pipeline_is_not_quantised_a_second_time(fake_runtime, tmp_path, monkeypatch):
-    """A local fp8 checkpoint is widened to bf16 on load; quantising it again compounds loss.
-
-    Non-GGUF loads are gated to unsloth/* or a LOCAL path, so the reachable shape is a user pointing
-    at their own fp8 conversion. test_diffusion_transformer_quant.py covers the header parse against
-    real safetensors; this is the loader wiring that stamps every denoiser for the blocker.
-    """
+    """A local fp8 checkpoint is widened to bf16 on load, so re-quantising it would compound the loss."""
     from core.inference import diffusion as dmod
 
     backend = DiffusionBackend()

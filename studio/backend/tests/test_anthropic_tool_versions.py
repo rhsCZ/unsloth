@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the per-model Anthropic tool-version dispatch helpers in
-``core.inference.external_provider``.
-
-Anthropic ships date-pinned tool versions per model family; sending the
-wrong-dated variant to a model 400s upstream. Pins the dispatch matrix for
-web_search/web_fetch/code_execution helpers, the ``_stream_anthropic`` body
-integration, and the unchanged code-execution beta header."""
+"""Anthropic tool versions are date-pinned per model family, and the wrong-dated one 400s upstream."""
 
 import asyncio
 import json

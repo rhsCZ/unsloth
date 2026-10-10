@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Parent-side training Xet->HTTP fallback: a model-load stall respawns the
-worker once with Xet disabled, preserving the DB run row. Driven via
-_handle_event with a fake spawn context; no GPU, no network, no real subprocess.
-"""
+"""A model-load stall respawns the worker once with Xet disabled, keeping the DB run row."""
 
 from __future__ import annotations
 

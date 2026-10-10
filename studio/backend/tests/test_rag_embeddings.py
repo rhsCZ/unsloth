@@ -292,10 +292,7 @@ def test_picker_plans_embeddinggemma_on_llama_server(monkeypatch):
 
 
 def test_a_resolution_that_never_asked_the_hardware_keeps_nothing(monkeypatch):
-    """``_get_backend`` clears the per-thread answer before resolving, and that clear is
-    load-bearing: the identity and active-backend probes also resolve ``auto`` outside the
-    lock, so without it a build that short-circuited the hardware would publish the answer
-    an earlier, unrelated call had left behind."""
+    """_get_backend clears the per-thread answer first; otherwise a stale earlier answer gets published."""
     asked = _resolve_auto_for(monkeypatch)
     _patch_llama_backend(monkeypatch, binary = "/fake/llama-server")
 
@@ -468,24 +465,16 @@ def test_sentence_transformer_load_uses_live_cache(monkeypatch, tmp_path):
 
 
 def test_device_defaults_to_cpu_on_an_accelerator_host(monkeypatch):
-    """A GPU must not be used just because it is there.
-
-    This embedder loads in the backend process, where the first CUDA allocation pins a
-    primary context nothing can hand back, so an idle Unsloth that indexed one document
-    would carry it for the rest of the session.
-    """
+    """Default embedding to CPU: a CUDA allocation in the backend pins a primary context nothing
+    releases."""
     monkeypatch.setattr(embeddings.config, "EMBED_DEVICE", "auto")
     _shared_setup_3(monkeypatch)
     assert embeddings._device() == "cpu"
 
 
 def test_device_opts_in_to_the_accelerator(monkeypatch):
-    """Every spelling of "use the accelerator" opts in, including the device's own name.
-
-    An Intel user reaches for ``xpu`` and a ROCm user for ``rocm`` before either reaches
-    for the generic ``gpu``; matching only ``gpu`` handed both of them CPU from a setting
-    that named their hardware.
-    """
+    """Every spelling that opts into the accelerator must match, including device names like xpu and
+    rocm."""
     _shared_setup_3(monkeypatch)
     for requested in ("gpu", "GPU", " cuda ", "rocm", "hip", "xpu", "mps", "metal"):
         monkeypatch.setattr(embeddings.config, "EMBED_DEVICE", requested)
@@ -514,14 +503,7 @@ def test_unrecognized_device_setting_falls_back_without_raising(monkeypatch):
 
 
 def test_cpu_never_loads_float16(monkeypatch, tmp_path):
-    """fp16 on CPU is not merely slow on older torch, it raises.
-
-    torch 2.2 has no CPU Half kernel for LayerNorm, which every BERT runs, so an
-    fp16 CPU load dies with ``"LayerNormKernelImpl" not implemented for 'Half'``.
-    _SentenceTransformersBackend.encode() answers that by swapping the process to
-    llama-server, so the failure would surface as a silent change of embedding space
-    against an index nobody reindexed rather than as an error.
-    """
+    """CPU must never load float16; torch 2.2 has no CPU Half LayerNorm kernel for BERT models."""
     observed = _shared_setup_1(monkeypatch)
     monkeypatch.setattr(
         "utils.hf_cache_settings.active_hf_hub_cache",
@@ -1221,13 +1203,7 @@ def test_the_security_gate_scans_the_snapshot_that_is_actually_loaded(monkeypatc
 
 
 def test_the_shared_load_setup_does_not_strand_module_weights(tmp_path):
-    """The three loads driven through _shared_setup_2 outlived the test that asked for
-    them, so the next test in the same xdist worker to call backend_is_loaded() was
-    answered from this file's fake model and told something was resident.
-
-    Driven through a nested monkeypatch context so the restore this asserts is
-    observable from inside the test rather than only at its teardown.
-    """
+    """The shared load setup must not strand module weights for later tests in the same xdist worker."""
     with pytest.MonkeyPatch.context() as mp:
         _shared_setup_1(mp)
         mp.setattr(embeddings, "_device", lambda: "cpu")
@@ -1241,13 +1217,7 @@ def test_the_shared_load_setup_does_not_strand_module_weights(tmp_path):
 
 @pytest.mark.parametrize("resident", [False, True])
 def test_the_residency_probe_does_not_wait_on_a_model_load(monkeypatch, resident):
-    """Both locks are held across a whole model load, so a probe taking either
-    made GET, PUT, reset and unload wait it out.
-
-    Run for a resident model as well as an empty one: what is being claimed is that the
-    probe ANSWERS under the load locks, and an answer of False is only evidence of that
-    if False is also the right answer.
-    """
+    """The residency probe must answer under the load locks, not wait on a model load."""
     import threading
 
     embeddings._reset_backend()
@@ -1294,10 +1264,7 @@ def test_a_dead_llama_process_is_not_reported_as_loaded(monkeypatch):
 
 
 def test_two_models_can_each_hold_their_own_llama_fallback_pin(monkeypatch):
-    """One (key, model) pair meant a second failing model erased the first one's
-    pin, so a job still running under A forgot it had swapped to llama-server and
-    retried ST. If the original failure was transient that ingestion splits its
-    own results across two vector spaces."""
+    """Each (key, model) keeps its own llama fallback pin; one model's failure must not erase another's."""
     monkeypatch.setattr(embeddings.config, "EMBED_BACKEND", "auto")
     monkeypatch.setattr(embeddings, "_forced_backends", {})
     monkeypatch.setattr(
@@ -1340,11 +1307,7 @@ def test_the_forced_backend_probe_does_not_wait_on_a_model_load(monkeypatch):
 
 
 def test_a_model_reloaded_behind_an_unload_is_still_reported_and_freed(monkeypatch):
-    """An ST wrapper descheduled between _get_backend() returning it and its encode
-    starting is retired by an unload landing in the gap, and then reloads the
-    module-level model with no backend to publish. Answering "nothing is loaded"
-    stranded those weights for the life of the process: the next unload saw no
-    backend and freed nothing."""
+    """A model reloaded behind an unload must still be reported and freed, not treated as nothing loaded."""
     monkeypatch.setattr(embeddings, "_backend", None, raising = False)
     monkeypatch.setattr(embeddings, "_backend_key", None, raising = False)
     monkeypatch.setattr(embeddings, "_model", object(), raising = False)

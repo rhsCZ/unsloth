@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Unloading the last model tears the inference subprocess down.
-
-empty_cache in the child cannot return the accelerator context, so an idle
-worker sat on its high-water mark, and gpu_arbiter never evicts between the
-transformers and GGUF backends (both are chat-owned): the memory stayed
-stranded for the rest of the session.
-"""
+"""Last unload must kill the subprocess, since empty_cache cannot return the accelerator context."""
 
 import multiprocessing as mp
 import threading

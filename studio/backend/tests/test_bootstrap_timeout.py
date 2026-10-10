@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Coverage for the exposed-first-run auto-shutdown deadline.
-
-Tests the env parsing, the pure arm/no-arm decision matrix, and the deadline
-handler (shut down iff the seeded admin password is still unchanged). The
-threading.Timer itself is not exercised; the handler is invoked directly.
-"""
+"""Deadline handler shuts down only while the seeded admin password is unchanged."""
 
 import time
 from types import SimpleNamespace

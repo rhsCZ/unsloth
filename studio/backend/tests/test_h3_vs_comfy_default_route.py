@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""MiniMax-H3 routing and canvas gaps found against ComfyUI's H3 int8 template.
-
-* ``/api/system.diffusers_offload_tiers`` publishes the Diffusers tiers this backend can run, so the
-  picker stops sending 24-48 GB cards to the 2.5-3.2x slower GGUF (sd-cli) row. Off with
-  ``UNSLOTH_H3_DIFFUSERS_WIDE_TIERS=0``.
-* 864x480 (ComfyUI's template default, ResolutionSelector 16:9 at 0.4 MP, multiple 32) used to be
-  refused with 422. Off with ``UNSLOTH_VIDEO_H3_480P=0``.
-"""
+"""Publish Diffusers offload tiers so 24-48 GB cards avoid the slower GGUF row; 864x480 must not 422."""
 
 import ast
 import importlib

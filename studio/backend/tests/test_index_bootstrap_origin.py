@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression coverage for the bootstrap-pw cross-origin leak (PR 5739).
-
-``_is_same_origin_request`` gates ``_inject_bootstrap`` so the seeded admin
-password only ships to same-origin callers.
-"""
+"""The seeded admin password ships only to same-origin callers, gated by _is_same_origin_request."""
 
 import os
 from types import SimpleNamespace

@@ -791,11 +791,7 @@ def test_record_epoch_accepts_old_and_new_sidecar_timestamps(created_at, expecte
 
 
 def test_an_unservable_duration_is_refused_before_the_model_switch(client, backend, monkeypatch):
-    """The preflight judged size but passed None for the frame count.
-
-    A duration no family can serve was therefore only refused inside begin_generate --
-    after the resident pipeline had been evicted and the target model fully loaded.
-    """
+    """An unservable duration must be refused before the auto switch evicts the resident pipeline."""
     switched = {"completed": False}
 
     async def _fake_switch(
@@ -938,12 +934,7 @@ def test_reference_conditioning_follows_the_state_reserved_by_begin_generate(
 
 
 def test_the_created_job_reports_the_canvas_the_backend_resolved(client, backend, monkeypatch):
-    """With a reference image and no size the canvas follows the source aspect.
-
-    The route used to record the family's first resolution preset regardless, so the
-    create response advertised one size while the clip rendered at another, and the
-    same job's size changed once it was read back from the gallery.
-    """
+    """A created job must report the canvas the backend resolved, not the family's first preset."""
     real = backend.begin_generate
 
     def _begin(**kwargs):
@@ -956,11 +947,7 @@ def test_the_created_job_reports_the_canvas_the_backend_resolved(client, backend
 
 
 def test_deleting_a_job_that_finishes_mid_cancel_removes_the_clip(client, backend, monkeypatch):
-    """Cancellation losing the race is not proof that nothing was written.
-
-    The handler used to cancel and return deleted:true without ever deleting the pair,
-    so a clip persisted in that window came straight back through retrieve and list.
-    """
+    """A delete that loses the race to a finishing job must still remove the clip it wrote."""
     backend.gate.clear()
     job = _create(client, {"prompt": "racy"}).json()
     assert client.get(f"/v1/videos/{job['id']}").json()["status"] in ("queued", "in_progress")
@@ -1151,11 +1138,7 @@ def test_concurrent_pollers_cannot_move_progress_backward(backend, monkeypatch):
 
 
 def test_an_undecodable_reference_is_refused_before_the_model_switch(client, backend, monkeypatch):
-    """A well-formed content type is not a readable image.
-
-    _resolve_keyframes only decodes inside begin_generate, which runs after the auto
-    switch, so bad bytes used to evict the resident pipeline and load the target first.
-    """
+    """Undecodable reference bytes must be refused before the model switch, not inside begin_generate."""
     switched = {"completed": False}
 
     async def _fake_switch(
@@ -1183,11 +1166,7 @@ def test_an_undecodable_reference_is_refused_before_the_model_switch(client, bac
 
 
 def test_a_delete_that_cannot_observe_the_settle_does_not_confirm(client, backend, monkeypatch):
-    """Returning deleted:true on a timed-out wait let the worker commit afterwards.
-
-    The clip then reappeared through retrieve/list, so the caller was told a deletion
-    happened that had not. Report 409 instead and let them retry.
-    """
+    """A delete whose settle wait times out returns 409, since a late worker commit would reappear."""
     monkeypatch.setattr(video_routes, "_DELETE_SETTLE_TIMEOUT_S", 0.05)
     backend.gate.clear()
     try:
@@ -1205,11 +1184,7 @@ def test_a_delete_that_cannot_observe_the_settle_does_not_confirm(client, backen
 
 
 def test_the_create_call_opens_an_api_monitor_row(client, backend, monkeypatch):
-    """The OpenAI image and audio routes open a row; videos never did.
-
-    Without it the newly supported API is invisible to the API Monitor and its usage
-    receipts, so per-subject history silently undercounts video generation.
-    """
+    """Video create must open an API Monitor row, or usage receipts silently undercount videos."""
     from core.inference.api_monitor import api_monitor
 
     started: list[dict] = []
@@ -1237,11 +1212,7 @@ def test_the_create_call_opens_an_api_monitor_row(client, backend, monkeypatch):
 
 
 def test_the_job_describes_the_run_the_backend_reserved(client, backend, monkeypatch):
-    """A load committing between status() and the reservation swaps the family.
-
-    The job used to be described from the earlier snapshot, so it advertised the model
-    that had just been replaced and a duration computed against that model's fps.
-    """
+    """The job must describe the reserved run, since a load committing mid-request can swap the family."""
     real = backend.begin_generate
 
     def _begin(**kwargs):

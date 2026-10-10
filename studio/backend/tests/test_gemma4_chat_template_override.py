@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Auto-override of the chat template for ``unsloth/gemma-4-*-GGUF``.
-
-Unsloth ships a bundled ``gemma-4.jinja`` (PR #118 based, ``preserve_thinking``
-defaulted off) and applies it to gemma-4 GGUF loads via the existing
-``chat_template_override`` -> ``--chat-template-file`` path, so users do not need
-to re-download quants. Pins the family matcher, the resolver precedence, the
-bundled asset's reasoning/tool capabilities (which drive the "Preserve thinking"
-UI toggle), the Jinja gate behaviour, and the reload-dedup interaction.
-"""
+"""Gemma-4 GGUF loads auto-apply the bundled gemma-4.jinja template, so quants need no re-download."""
 
 from __future__ import annotations
 
@@ -41,10 +33,7 @@ EDGE = load_bundled_chat_template("gemma-4-edge.jinja")  # E2B / E4B
 
 # Stubs let core.inference.llama_cpp import without the full studio venv.
 def _stub_modules_ctx():
-    """patch.dict context that stubs the heavy deps llama_cpp pulls in at import,
-    but only those NOT already importable (real httpx / structlog are kept when
-    present, e.g. in CI), and removes the stubs on exit so other tests are not
-    polluted."""
+    """Stubs only heavy deps that are not importable, and removes the stubs on exit."""
     from unittest.mock import patch
 
     _loggers_stub = _types.ModuleType("loggers")

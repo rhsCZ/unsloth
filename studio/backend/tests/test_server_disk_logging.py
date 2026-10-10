@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the server session log + native-crash capture in run.py.
-
-Field regression: Unsloth "terminates without a warning" -- a native crash in
-the GPU runtime kills the process with no Python traceback, and a desktop-
-shortcut console closes before anything can be read. The server must tee its
-console output to disk and aim faulthandler at the same file so even hard
-crashes leave evidence.
-"""
+"""Teed console and faulthandler share one log file, so native crashes leave evidence."""
 
 from __future__ import annotations
 
@@ -147,16 +140,7 @@ class TestSetupServerDiskLogging:
         )
 
     def test_structlog_is_configured_after_the_tee_and_before_the_first_line(self):
-        """Order, not presence, is the invariant.
-
-        ``LogConfig.setup_logging`` hands structlog a
-        ``PrintLoggerFactory(file = sys.stdout)``, which snapshots the stream it is given,
-        and ``cache_logger_on_first_use`` then freezes that snapshot into any logger that
-        has already emitted a line. Configure before the tee and this module's ``logger``
-        is pinned to the console for the rest of the process -- every later run.py line
-        goes missing from the session log. Configure after it and the whole session,
-        starting with the first line, renders one way into both.
-        """
+        """Configure structlog after the tee, or cache_logger_on_first_use freezes the console stream in."""
         src = (Path(_BACKEND_DIR) / "run.py").read_text(encoding = "utf-8")
         body = src.index("def run_server")
         tee_idx = src.index("_setup_server_disk_logging()", body)
@@ -171,13 +155,7 @@ class TestSetupServerDiskLogging:
         ), "configuring structlog at import time pins it to the pre-tee sys.stdout"
 
     def test_run_py_does_not_import_a_loggers_submodule_at_module_scope(self):
-        """`loggers` must be a real package for `loggers.config` to resolve.
-
-        run.py is loaded by tests that stand a bare ``types.ModuleType`` in for it
-        (tests/studio/install/test_selection_logic.py). A bare module has no ``__path__``,
-        so a module-scope submodule import fails during collection and takes every test in
-        that file with it. Import it where it is used instead.
-        """
+        """Import loggers.config where it is used: a bare ModuleType stand-in for run.py has no __path__."""
         import ast
 
         tree = ast.parse((Path(_BACKEND_DIR) / "run.py").read_text(encoding = "utf-8"))

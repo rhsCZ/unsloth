@@ -154,10 +154,7 @@ def test_an_unrelated_import_error_still_surfaces(monkeypatch, fake_peft):
 
 
 def test_a_torchao_without_the_dtypes_package_gets_a_plain_lora_layer(monkeypatch, fake_peft):
-    """torchao main (after 0.18) deleted the whole ``torchao.dtypes`` package, so peft <= 0.18's
-    first import inside ``dispatch_torchao`` is a ModuleNotFoundError naming the package, not the
-    class. That is the same removal, and every LoRA target must still fall through to peft's
-    ordinary layer instead of failing the load."""
+    """A removed torchao.dtypes package must fall back to peft's plain LoRA layer, not fail the load."""
     lora_torchao, lora_model = fake_peft
     monkeypatch.delitem(
         sys.modules, "torchao.dtypes"

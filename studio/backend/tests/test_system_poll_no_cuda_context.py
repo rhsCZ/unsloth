@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The /api/system poll must not pin a CUDA/HIP primary context.
-
-The frontend polls GET /api/system every 5s from the root-mounted floating
-monitor and every 3s from Settings -> Resources. Both land on
-get_backend_visible_gpu_info and get_visible_gpu_utilization. Where nvidia-smi is
-absent (ROCm, or any host without it on PATH) those used to reach
-torch.cuda.mem_get_info, which attaches a primary context worth ~612 MiB on this
-class of GPU and is never released while the process lives. An idle Unsloth would
-therefore lose that memory to telemetry alone.
-
-get_device_properties answers name and total capacity with no context, and it
-returns the same total mem_get_info does, so the inventory half of the poll is
-free. These tests pin that: the honest check is a FRESH process, because a
-context, once created, is never given back and any earlier test in the session
-would mask the regression.
-"""
+"""The /api/system poll must not pin a CUDA/HIP primary context, which holds ~612 MiB until exit."""
 
 from __future__ import annotations
 
@@ -795,13 +780,7 @@ def test_context_free_nvidia_smi_declines_whole_gpu_metrics_for_mig(monkeypatch)
 
 
 def test_context_free_never_spawns_amd_smi_on_windows_without_a_hip_sdk(monkeypatch):
-    """The probe must stay behind amd.py's elevation guard.
-
-    amd-smi elevates a child on Windows without a HIP runtime, and the resulting
-    UAC/DiskPart prompt cannot be suppressed. This path reaches amd-smi through a
-    helper, so a later refactor calling it directly would reintroduce the prompt
-    with nothing failing. Assert on the spawn itself, not on the return value.
-    """
+    """The probe must stay behind amd.py's elevation guard, or amd-smi raises a UAC prompt on Windows."""
     from utils.hardware import amd
 
     spawned = []
@@ -1782,13 +1761,7 @@ _MEASURED_STRIX_HALO_TOTAL_BYTES = 68719476736
 
 
 def test_the_measured_strix_halo_is_not_reported_as_having_no_vram(monkeypatch):
-    """unsloth#7449 defect 1, the Linux arm.
-
-    Settings > System renders an ABSENT `shared_memory_host_backed_gb` as "the whole
-    budget is host memory", so omitting the figure printed `0.00 GiB VRAM +
-    64.00 GiB shared` on a machine with a 64 GiB carve-out. The figure here is zero,
-    and zero has to be said out loud.
-    """
+    """An absent shared_memory_host_backed_gb renders as all-host memory, so report zero explicitly."""
     total = _MEASURED_STRIX_HALO_TOTAL_BYTES
     mod = _apu_mod(gtt_total = total, carve_out = total)
     for var in (
@@ -1860,14 +1833,7 @@ def test_a_discrete_rocm_card_is_never_given_a_host_backed_figure(monkeypatch):
 
 
 def test_a_partitioned_device_keeps_its_split_unknown(monkeypatch):
-    """sysfs reporting the whole card while torch reports one partition is a SCOPE
-    change, not a measurement of zero host-backed memory.
-
-    Publishing 0.0 there would call the whole partition dedicated and overstate
-    independent capacity, in the direction that admits a load.
-    `_rocm_system_wide_vram_by_index` already treats a mismatch over the same 10% as a
-    different scope in either direction.
-    """
+    """A partitioned device keeps its split unknown; sysfs showing the whole card is a scope change."""
     monkeypatch.setattr(hw.platform, "system", lambda: "Linux")
     devices = [{"index": 0, "total_gb": 24.0, "_rocm_known_unified": True}]
     monkeypatch.setattr(hw, "_rocm_kfd_gpu_pci_ids", lambda: {0: "0000:03:00.0"})

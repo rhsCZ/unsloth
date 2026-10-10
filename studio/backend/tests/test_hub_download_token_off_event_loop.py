@@ -209,11 +209,7 @@ def test_a_failed_token_resolution_downloads_anonymously(monkeypatch, download):
 
 @pytest.mark.parametrize("cancel_download", [False, True])
 def test_launch_failure_preserves_download_cancellation(monkeypatch, download, cancel_download):
-    """The launch still runs in a thread, so a failure there has to settle the claim either way.
-
-    The failure is injected at the spawn rather than at token resolution: resolution is the ambient
-    fallback and no longer raises, so a launch failure is what reaches this path now.
-    """
+    """A launch failure must still settle the download claim, so the failure is injected at the spawn."""
     from fastapi import HTTPException
     from hub.schemas.downloads import CancelDownloadRequest, CancelDatasetDownloadRequest
 

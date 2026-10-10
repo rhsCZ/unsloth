@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Kimi-K3 loads with thinking on, and with Moonshot's sampling.
-
-Kimi-K3's template branches ``reasoning_effort`` on ``'none'`` as its disable
-sentinel, so the literal scan used to surface ``none`` as the weakest level.
-The chat store ships ``medium``, which the ladder does not offer, so the clamp
-fell back to ``levels[0] == 'none'`` -- which ``_request_reasoning_kwargs``
-turns into ``enable_thinking=false``. A reasoning model therefore loaded with
-reasoning off, via a level the Think menu hides and no one can pick. Dropping
-the sentinel leaves ``low`` as the floor, so the same fallback now lands on a
-real level; the Think menu still offers high and max, and the pick persists.
-
-The sampling defaults live in ``inference_defaults.json`` rather than a
-``model_defaults`` YAML: those are matched by family substring, so every id
-shape resolves (bare repo, ``repo:variant``, cache snapshot path, ``.gguf``
-path), and the training form still resets from ``default.yaml``.
-"""
+"""none is the Kimi-K3 template thinking-off sentinel, so it must not be the effort floor."""
 
 from __future__ import annotations
 

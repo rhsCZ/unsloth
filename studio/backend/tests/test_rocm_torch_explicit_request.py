@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A mixed NVIDIA+AMD host must have SOME route to its AMD card.
-
-Every installer stops probing AMD the moment nvidia-smi lists a GPU. That is the
-right default -- CUDA is the better-supported stack and a false AMD positive would
-swap a working install -- but it left a mixed host with no route at all: chat can be
-pointed at Vulkan in Settings, and training reads whatever torch was installed, so
-the AMD card is invisible to it. The only bypass was an index pin, which is
-undocumented and names a wheel family rather than a preference (#10450).
-
-``UNSLOTH_FORCE_ROCM_TORCH=1`` is the request, mirroring ``UNSLOTH_FORCE_VULKAN``
-for the llama.cpp bundle and the ``backend == "rocm"`` re-probe in
-``install_llama_prebuilt._route_to_vulkan_prebuilt``.
-
-One torch install serves one vendor, so the request SWAPS the stack: these tests
-assert it is honoured, and that it changes nothing at all unless it is set.
-"""
+"""UNSLOTH_FORCE_ROCM_TORCH=1 swaps the torch stack to ROCm on a mixed host; unset, nothing changes."""
 
 from __future__ import annotations
 
@@ -314,11 +299,7 @@ def test_the_request_does_not_select_rocm_without_an_amd_card(stack):
     ids = ["runtime-visible", "runtime-less-but-inferable"],
 )
 def test_the_cuda_repair_stands_down_under_the_request(stack, monkeypatch, rocm_gpu, archs):
-    """A standalone `studio update` leaves _TORCH_BACKEND empty, so the CUDA repair runs
-    first, sees an NVIDIA GPU beside the requested HIP build, reads it as poisoning and
-    reinstalls the CUDA trio. The second row is the control: a runtime-less host whose arch
-    is inferable is one _ensure_rocm_torch will serve, so repairing CUDA here only to have
-    ROCm forced back is a reinstall cycle on every update."""
+    """Under the request the CUDA repair stands down, or a standalone update reinstalls the CUDA trio."""
     _mixed_host(stack, monkeypatch, rocm_gpu = rocm_gpu, archs = archs, display = True)
     probed = {"ran": False}
     monkeypatch.setattr(
@@ -461,11 +442,7 @@ def test_the_reroutes_ask_the_request_aware_predicate():
 
 
 def test_the_cuda_repair_still_runs_when_the_request_finds_no_amd_card(stack, monkeypatch):
-    """Standing down needs a card to stand down FOR, which is the shell selector's rule too: a
-    request on a box with no AMD GPU selects nothing and falls through to CUDA. Leaving the
-    variable set on a host whose AMD card has since been removed must not silence this repair,
-    because _ensure_rocm_torch then finds no target either and a stale HIP build would be left
-    on a working NVIDIA GPU with nothing to fix it."""
+    """A request with no AMD card must not silence the CUDA repair, or a stale HIP build stays."""
     monkeypatch.setenv("UNSLOTH_FORCE_ROCM_TORCH", "1")
     monkeypatch.setattr(stack, "_TORCH_BACKEND", "")
     monkeypatch.setattr(stack, "IS_MACOS", False)
@@ -926,10 +903,7 @@ def test_the_python_route_test_matches_the_shell_one(stack, monkeypatch):
 
 
 def test_an_unroutable_card_keeps_the_cuda_repair(stack, monkeypatch):
-    """The repair had stood down for any host with a visible AMD GPU. With an unusable HIP build
-    and a gfx1010 beside a working NVIDIA card, nothing then classified the stale build,
-    _ensure_rocm_torch found no wheel tag, and the NVIDIA GPU was left with no working torch at
-    all."""
+    """An unroutable AMD card must not silence the CUDA repair, or the NVIDIA GPU keeps a broken torch."""
     monkeypatch.setenv("UNSLOTH_FORCE_ROCM_TORCH", "1")
     monkeypatch.setattr(stack, "_TORCH_BACKEND", "")
     monkeypatch.setattr(stack, "IS_MACOS", False)
@@ -1198,10 +1172,7 @@ def test_one_arch_is_still_answerable_without_a_per_device_list():
 
 
 def test_discovery_order_does_not_answer_for_runtime_device_zero():
-    """With no rocminfo the flat inventory came from amd-smi, which enumerates in KFD DISCOVERY
-    order -- the whole reason _amd_smi_hip_order exists -- so its first row can describe a
-    different GPU from the one HIP hands torch at ordinal 0. Reading it approved the swap off a
-    routable first row while the gfx1010 that actually runs has kernels in no wheel."""
+    """amd-smi lists in KFD discovery order, so its first row can be a different GPU than HIP device 0."""
     assert _route_shell_masked(["gfx1100", "gfx1010"], devices = [], HIP_VISIBLE_DEVICES = "0") is False
 
 
@@ -1238,10 +1209,7 @@ def test_the_same_kernel_topology_still_yields_for_the_routable_card():
     ids = ["mask-resolves-nothing", "mask-names-a-device"],
 )
 def test_a_declared_arch_does_not_answer_over_the_mask(mask, routes):
-    """UNSLOTH_ROCM_GFX_ARCH takes an early return above the mask resolution, so a declared
-    arch beside HIP_VISIBLE_DEVICES=7 approved the swap where HIP exposes no device at all.
-    The control keeps the escape hatch: the same declaration over a mask naming a device this
-    host has must still depose CUDA."""
+    """A declared UNSLOTH_ROCM_GFX_ARCH must not answer where the mask names no device this host has."""
     assert (
         _route_shell_masked(
             ["gfx1100", "gfx1010"],
@@ -1608,10 +1576,7 @@ def test_an_unresolvable_mask_does_not_answer_for_the_next_host(stack, monkeypat
 
 
 def test_a_rocr_ordinal_past_the_last_device_is_not_a_viable_route(stack, monkeypatch):
-    """ROCr's own filter (ROCR-Runtime, core/inc/amd_filter_device.h) surfaces the tokens that are
-    "Legal and NOT Terminating", and an index terminates when it "lies outside the interval [0 -
-    (numGpuDevices - 1)]" -- so ROCR_VISIBLE_DEVICES=7 on a two-GPU box surfaces nothing and the
-    HIP layer above it indexes an empty list."""
+    """An out-of-range ROCR ordinal leaves HIP an empty device list, so it is not a viable route."""
     assert (
         _viable_masked(stack, monkeypatch, devices = ["gfx1100", "gfx1010"], ROCR_VISIBLE_DEVICES = "7")
         is False
@@ -1630,10 +1595,7 @@ def test_a_rocr_prefix_that_survives_is_still_a_viable_route(stack, monkeypatch)
 
 
 def test_a_rocm_version_no_wheel_family_serves_is_not_a_viable_route(stack, monkeypatch):
-    """gfx908 is in the arch tables, so the route test said yes -- but on ROCm 5.7 no generic
-    rocmX.Y tag resolves, the missing-kernel reroute does not fire for an arch the generic wheel
-    does carry, and _ensure_rocm_torch prints "No PyTorch wheel for ROCm 5.7" and installs
-    nothing."""
+    """gfx908 on ROCm 5.7 has no generic rocmX.Y tag, so the route is not viable and nothing installs."""
     assert _viable_masked(stack, monkeypatch, devices = ["gfx908"], rocm = (5, 7)) is False
 
 
@@ -1881,10 +1843,7 @@ def test_the_same_inferred_host_selecting_its_only_card_is_still_a_route(stack, 
 
 
 def test_the_installer_already_declines_that_mask():
-    """The installer twin of the case above, and the reason it is a Python-only fix: with one arch
-    and no per-device list, _amd_request_has_a_wheel_route resolves the mask against the single
-    row and takes `[ -n "$_arwr_sel" ] || return 1`, so it has always failed closed where the
-    Python half fell through to its inventory fallback."""
+    """The installer fails closed on a single arch with no device list, which the Python half must match."""
     assert _route_shell_masked(["gfx1100"], devices = [], HIP_VISIBLE_DEVICES = "1") is False
 
 
@@ -2075,10 +2034,7 @@ def test_the_presence_rule_still_holds_for_a_host_that_did_not_ask():
 def test_a_feature_suffix_changes_the_spelling_and_not_the_answer(
     stack, monkeypatch, arch, declared, viable
 ):
-    """rocminfo prints gcnArchName with its feature flags, and that is the spelling users copy
-    into UNSLOTH_ROCM_GFX_ARCH. _amd_arch_index_url keys on the bare arch, so the suffixed
-    form answered None and declined a route the plain spelling gets on the same silicon. The
-    third row is the control: normalising the SPELLING must not normalise the ANSWER."""
+    """A feature-suffixed gfx arch must resolve to the same route as the bare spelling, not decline it."""
     assert (
         _viable_masked(
             stack,
@@ -2251,10 +2207,8 @@ def _reroute_family_for_target(
 def test_the_versionless_reroute_family_comes_from_the_selected_card(
     inventory, target, source, family
 ):
-    """_amd_agreed_index_family needs EVERY physical AMD GPU to share a family, so a
-    cross-family pair answered empty, the reroute never fired and the downgrade guard
-    restored CUDA -- the request ignored on exactly the host that resolved a routable
-    target. Probe-resolved only: a declared arch cannot name the card the runtime selected."""
+    """The reroute family must come from the probe-selected card; a cross-family pair must not
+    disable it."""
     assert _reroute_family_for_target(inventory = inventory, target = target, source = source) == family
 
 
@@ -2457,11 +2411,7 @@ def _inferred_install_args(stack, monkeypatch, arch):
     [("gfx1151", "gfx1151:xnack-"), ("gfx1200", "gfx1200:sramecc+:xnack-")],
 )
 def test_a_suffixed_arch_installs_the_same_pins_as_the_bare_one(stack, monkeypatch, bare, suffixed):
-    """gcnArchName is what rocminfo prints and what users copy into UNSLOTH_ROCM_GFX_ARCH.
-    Stripping the suffix in _amd_arch_index_url is what opens the inferred-arch branch for that
-    spelling; the package table two lines down was still keyed on the raw string, so it missed
-    and installed unpinned torch/torchvision/torchaudio -- losing the ABI bound the table exists
-    to hold, on a host the bare spelling pins correctly."""
+    """A suffixed arch must install the same torch pins as the bare spelling, or the ABI bound is lost."""
     assert _inferred_install_args(stack, monkeypatch, suffixed) == _inferred_install_args(
         stack, monkeypatch, bare
     )
@@ -2475,10 +2425,7 @@ def test_the_suffixed_arch_reaches_that_branch_at_all(stack, monkeypatch):
 
 @pytest.mark.parametrize("arch", ["gfx90a:sramecc+:xnack-", "gfx908:xnack-"])
 def test_an_arch_outside_the_pin_table_is_still_bounded(stack, monkeypatch, arch):
-    """The suffix strip opens this branch for archs the pin table does not name, and the fallback
-    was three bare package names: those hosts reached an arch-index install with no companion
-    bound at all, where every other arch-index install carries one. gfx103X / gfx110X joined the
-    pin table with unslothai/unsloth#11814, so CDNA is what is left outside it."""
+    """An arch outside the pin table still gets the bounded companion pins, not three bare package names."""
     assert _inferred_install_args(stack, monkeypatch, arch) == list(
         stack._ROCM_ARCH_INDEX_TORCH_PKG_SPEC
     )

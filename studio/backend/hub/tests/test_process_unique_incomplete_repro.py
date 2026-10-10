@@ -204,11 +204,7 @@ def test_progress_groups_duplicate_process_unique_writers(monkeypatch, tmp_path)
 
 
 def test_progress_ignores_stale_revision_in_copy_layout(monkeypatch, tmp_path):
-    """A copy-layout snapshot from another commit is not this download's bytes.
-
-    Written the way production writes it: model, GGUF and scoped manifests all go through
-    ``write_manifest`` without a commit, so ``refs/main`` is the only marker available.
-    """
+    """A copy-layout snapshot from another commit is not this download; refs/main is the only marker."""
     commit, entry = _shared_setup_4(tmp_path)
     stale = entry / "snapshots" / ("c" * 40)
     stale.mkdir(parents = True)

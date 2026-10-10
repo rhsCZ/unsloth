@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Per-block CUDA graphs for offloaded denoisers (``diffusion_block_graph.py``) and the prefetcher's slot ring.
-
-CPU cases cover the call-tree / key / refusal logic, the weight-placement read-back, installation below the
-offload hooks, the arming decision per placement and the slot assignment. CUDA cases record real blocks under
-Studio's ``_apply_group_offload`` (streamed through the event-fenced prefetcher, partially resident, released and
-restored) and check every replay against the ungraphed forward bit for bit.
-"""
+"""Per-block CUDA graphs for offloaded denoisers; replays must match the eager forward bit for bit."""
 
 from __future__ import annotations
 

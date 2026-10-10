@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The slot/context fit predicate has to charge the --ctx-checkpoints reserve.
-
-``--ctx-checkpoints N`` allocates N SWA/recurrent snapshots PER SLOT.
-``_slots_that_fit_on_gpu`` priced its candidates without it: survivable while the
-only consumer was the slot count, but the post-reduction re-fit uses the same
-predicate to pick the launched ``-c``, so it spent bytes already promised.
-
-The target is Gemma-3 shaped, since the reserve is charged only on SWA layers.
-"""
+"""The slot/context fit must charge the --ctx-checkpoints reserve, which the child allocates per slot."""
 
 from __future__ import annotations
 
@@ -175,20 +167,7 @@ class TestTheRefitDoesNotSpendTheReserve:
     def test_a_checkpointed_launch_gets_less_context_than_an_uncheckpointed_one(
         self, tmp_path, checkpoints
     ):
-        """Unpriced, the two stay identical however large --ctx-checkpoints gets,
-        while the child allocates it anyway.
-
-        The claim is that the reserve is CHARGED, not that context specifically is
-        what pays. There are three ways to pay, and which one applies depends on how
-        big the reserve is relative to the budget: give up context at the same slot
-        count, give up a slot, or give up residency and offload. At 16 and 32
-        checkpoints this fixture already takes the third -- `--fit on` at the offload
-        fallback -- and `charged["ctx"] < free["ctx"]` only held there by arithmetic
-        coincidence, because the fallback happens to be shorter than the resident
-        plan's context. Naming the three keeps a real regression (nothing was
-        charged: same slots, same context, same residency) distinguishable from the
-        planner picking a different axis, which a raised fit floor can do on its own.
-        """
+        """The reserve is charged, but it may be paid in slots, context or residency rather than context."""
         free = _plan(tmp_path, weights_mib = 9_200, n_parallel = 4, ctx_checkpoints = 0)
         charged = _plan(tmp_path, weights_mib = 9_200, n_parallel = 4, ctx_checkpoints = checkpoints)
         assert charged["reserve_bytes"] > 0

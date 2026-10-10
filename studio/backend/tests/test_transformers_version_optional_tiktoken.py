@@ -14,12 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""The runtime's idea of a complete sidecar matches setup's.
-
-setup.sh and setup.ps1 install tiktoken best-effort and record a sidecar without it as
-complete; the runtime validator used to require it, delete the sidecar and retry the
-install that had just failed.
-"""
+"""Runtime validation must match setup: tiktoken is best-effort, so its absence is still complete."""
 
 import contextlib
 import pathlib
@@ -195,10 +190,7 @@ def test_a_rebuild_records_the_optional_install_it_could_not_do(tmp_path, monkey
 
 
 def test_a_remnant_that_will_not_go_fails_the_build_instead_of_shadowing(tmp_path, monkeypatch):
-    """The optional install failed part-way and left tiktoken/ behind, and the cleanup
-    cannot remove it (a file another process holds open on Windows, a permission). That
-    directory sits ahead of site-packages, so the build is a failure to be redone, not a
-    sidecar without the package."""
+    """An unremovable tiktoken remnant must fail the build, since it would shadow site-packages."""
     root = tmp_path / ".venv_t5_550"
 
     def fake_install(pkg, target_dir):
@@ -261,10 +253,7 @@ def test_a_present_tiktoken_is_held_to_its_record_like_any_other(tmp_path, monke
 
 
 def test_a_valid_sidecar_missing_tiktoken_is_topped_up_once(tmp_path, monkeypatch):
-    """A transient failure while a sidecar was built (the latest sidecar in particular,
-    which no setup top-up visits) left tiktoken out for good: every later check accepted
-    the sidecar and returned before another install. The top-up adds it without touching
-    the rest, and asks once per process when the wheel is unavailable."""
+    """A sidecar missing tiktoken gets a one-time top-up, so a transient failure is not permanent."""
     root = tmp_path / ".venv_t5_550"
     root.mkdir()
     monkeypatch.setattr(tv, "_venv_dir_is_valid_and_undamaged", lambda *a, **k: True)
@@ -544,10 +533,7 @@ def test_the_top_up_is_staged_and_lands_dist_info_last(tmp_path, monkeypatch):
 def test_the_top_up_removes_the_recordless_dist_info_an_interrupted_install_left(
     tmp_path, monkeypatch
 ):
-    """uv cannot uninstall a dist-info with no RECORD and lands the new version beside
-    it; both validators skip the recordless one, but importlib.metadata would keep
-    answering its version. Every other dist-info of the project goes before the new
-    metadata lands, and a dist-info of another project stays."""
+    """A recordless dist-info is removed before new metadata lands, or the old version still reports."""
     root = tmp_path / ".venv_t5_550"
     root.mkdir()
     stale = root / "tiktoken-0.7.0.dist-info"
@@ -596,10 +582,7 @@ def test_a_recordless_record_beside_a_complete_install_is_removed_without_a_top_
 
 
 def test_an_offline_session_does_not_wipe_a_sidecar_it_cannot_rebuild(tmp_path, monkeypatch):
-    """`studio update` under UV_OFFLINE leaves a stale tier for the next online update;
-    the runtime repair used to delete that tier and then reach for the network. With a
-    cold cache the tree stays exactly as it was; with a warm one the replacement is
-    built beside it and swapped in whole."""
+    """An offline update must not wipe a sidecar it cannot rebuild; a warm cache allows a swap."""
     root = tmp_path / ".venv_t5_550"
     root.mkdir()
     (root / "keep.txt").write_text("", encoding = "utf-8")

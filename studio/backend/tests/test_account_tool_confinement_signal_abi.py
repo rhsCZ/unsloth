@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression: a Landlock confinement offered to a managed account must scope signals.
-
-Drop in as studio/backend/tests/test_account_tool_confinement_signal_abi.py.
-"""
+"""Regression: a Landlock confinement offered to a managed account must scope signals."""
 
 import subprocess
 import sys

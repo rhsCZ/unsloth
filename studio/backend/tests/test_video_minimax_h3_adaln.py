@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic CPU tests for MiniMax-H3's pruned (curve-form) adaLN conversion.
-
-No diffusers, no CUDA, no checkpoint: a tiny stand-in with the same module layout as
-``MiniMaxH3Transformer3DModel`` (``transformer_blocks[i].adaln_proj.linear``, ``norm_out.linear``,
-``time_embedder``, ``time_proj``) exercises every branch of the conversion, and the numerics are
-checked against the reference formula written out longhand rather than against the implementation.
-"""
+"""CPU-only H3 adaLN conversion tests; numerics checked against the formula written longhand."""
 
 from __future__ import annotations
 
@@ -76,10 +70,7 @@ class _Block(nn.Module):
 
 
 class _FourierTimeProj(nn.Module):
-    """Stands in for ``Timesteps``: expands a scalar timestep into features.
-
-    Deliberately NOT an identity, so a test asserting `time_proj` became a passthrough actually
-    fails when the conversion forgets to replace it."""
+    """Stand-in for Timesteps, not an identity, so a forgotten time_proj replacement fails."""
 
     def forward(self, timestep):
         return torch.stack([timestep.sin(), timestep.cos()], dim = -1)

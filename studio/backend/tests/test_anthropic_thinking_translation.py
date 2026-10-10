@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for Anthropic extended-thinking translation in external_provider.
-
-Covers:
-- Adaptive-mode body nests effort under ``output_config: {effort}`` (a
-  top-level ``effort`` field 400s).
-- Streaming ``thinking_delta`` is translated into inline ``<think>...</think>``
-  chunks for the frontend reasoning panel.
-- The ``<think>`` tag closes on the first ``text_delta``, ``content_block_stop``,
-  ``message_delta``, or ``message_stop``.
-- Thinking forces ``temperature=1`` with no ``top_p`` / ``top_k`` (contract).
-"""
+"""Adaptive effort nests under output_config, since a top-level effort field 400s upstream."""
 
 import asyncio
 import itertools
@@ -386,11 +376,7 @@ def test_thinking_delta_wrapped_in_think_tags(monkeypatch):
 
 
 def test_thinking_only_turn_closes_tag_without_text_delta(monkeypatch):
-    """display=omitted on Claude 4.7 emits a signature_delta and no text.
-
-    The <think> open is still triggered by the (synthetic) thinking_delta; we
-    want content_block_stop to close it cleanly so the tag never leaks into the
-    next chunk."""
+    """A thinking-only turn with no text_delta must still close the think tag at content_block_stop."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         events = [

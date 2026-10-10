@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Tests for 5-path architecture-aware KV cache VRAM estimation.
-
-Covers the GGUF metadata parser, _can_estimate_kv gate, all 5 estimation
-paths (MLA, Hybrid Mamba, Sliding Window, Standard GQA, Legacy), KV cache
-quantization, edge cases, and lifecycle (init/unload/reparse).
-
-No GPU, network, or libraries beyond pytest. Cross-platform.
-"""
+"""Estimator and GGUF parser tests; no GPU, network or libraries beyond pytest, so cross-platform."""
 
 import io
 import json
@@ -106,10 +99,7 @@ def _runtime_swa_cells(
 
 
 def _make_gguf_bytes(arch: str, kv_pairs: dict) -> bytes:
-    """Build a minimal GGUF v3 blob with the given KV metadata.
-
-    Supports the scalar and simple array metadata the parser uses.
-    """
+    """Supports only the scalar and simple array metadata that the parser reads."""
     buf = io.BytesIO()
     buf.write(struct.pack("<I", 0x46554747))  # GGUF magic
     buf.write(struct.pack("<I", 3))
@@ -153,11 +143,7 @@ def _backend_from_gguf(
     fields: dict,
     general: dict | None = None,
 ) -> LlamaCppBackend:
-    """Create a LlamaCppBackend with parsed GGUF metadata from given fields.
-
-    `general` injects extra `general.*` metadata, to verify the dynamic
-    SWA resolver picks up source-repo hints from GGUFs that ship them.
-    """
+    """general adds general.* keys to exercise the dynamic SWA source-repo hint lookup."""
     kv = {"general.architecture": arch}
     for k, v in (general or {}).items():
         kv[k] = v
@@ -1856,14 +1842,7 @@ class TestServerFlags:
 
 
 class TestParallelSWAScaling:
-    """Per-layer-type scaling rule measured from llama-server.
-
-    Rule (verified vs ``llama-server`` log on real GGUFs):
-      * non-SWA layers use the padded per-stream context.
-      * compact SWA adds ubatch headroom and pads to 256 cells.
-      * unified mode uses one stream with all slot windows.
-      * non-unified mode allocates one stream per slot.
-    """
+    """Per-layer scaling: non-SWA layers use padded per-stream context; unified mode uses one stream."""
 
     def _gqa_backend(self, **overrides):
         defaults = {
@@ -2043,12 +2022,7 @@ class TestParallelSWAScaling:
             assert (swa_unified == swa_separate) is (slots == 1)
 
     def test_matches_empirical_gemma3_270m_formula(self):
-        """Exact match against the non-unified formula measured from llama-server:
-        total_kv = 24 + parallel * 15 (MiB) at ctx=8192.
-
-        Geometry: 18 layers (3 global + 15 SWA), n_kv=1, head_dim=256,
-        sliding=512, f16.
-        """
+        """Exact match to the measured non-unified formula: 24 + parallel * 15 MiB at ctx 8192."""
         b = LlamaCppBackend()
         b._n_layers = 18
         b._n_kv_heads = 1
@@ -2074,10 +2048,7 @@ class TestParallelSWAScaling:
 
 
 class TestSharedKVLayers:
-    """``<arch>.attention.shared_kv_layers`` reduces the layer count that
-    allocates KV. The trailing ``shared_kv_layers`` blocks reuse earlier
-    caches (Gemma 3n: 35 layers, 15 shared -> 20 allocate; Gemma 4 same
-    field). Unset on every other arch -> no behavioural change."""
+    """Trailing shared_kv_layers blocks reuse earlier caches and allocate none; unset means no change."""
 
     def _gemma3n_backend(self, **overrides):
         # Mirrors google/gemma-3n-E4B-it: 35 layers, 15 shared, SWA window

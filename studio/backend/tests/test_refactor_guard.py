@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Runs the refactor guard in CI.
-
-``tests/tools/refactor_guard.py`` pins the tool-call parsing / stripping stack three ways:
-module AST and runtime surface, a digest of every guarded function's output over a
-1,833-input corpus, and the test suite's string patch targets. Re-baseline with
-``python tests/tools/refactor_guard.py snapshot`` and review the diff.
-"""
+"""CI runs tests/tools/refactor_guard.py, which pins tool-call parsing; re-baseline with snapshot."""
 
 import sys
 from pathlib import Path
@@ -56,12 +50,7 @@ def test_guarded_functions_produce_the_same_bytes(corpus):
 
 
 def test_no_new_non_idempotent_strip(corpus):
-    """``strip(strip(x)) == strip(x)``, or display text depends on stream chunking.
-
-    Known failures are recorded in the baseline, one entry per boolean variant; the check
-    is that the set does not grow. Keyed by variant, so a ``final = True`` failure is no
-    licence for the ``final = False`` streaming path to start.
-    """
+    """Non-idempotent strip failures may only shrink against the baseline, keyed per boolean variant."""
     baseline = {
         (entry["module"], entry["function"], entry.get("variant", ""))
         for entry in refactor_guard._read("idempotence_baseline.json")
@@ -89,11 +78,7 @@ def test_every_string_patch_target_still_resolves():
 
 
 def test_the_recorded_patch_target_inventory_still_matches():
-    """Resolving is not enough: the recorded routing has to be the live routing.
-
-    A patch repointed at another resolvable namespace, or dropped, resolves fine. CI runs
-    pytest and never the ``verify`` CLI, so the comparison has to live here.
-    """
+    """Recorded patch targets must match live routing, since a repointed patch still resolves."""
     recorded = {
         target: sorted(tests)
         for target, tests in refactor_guard._read("patch_targets.json").items()
@@ -106,12 +91,7 @@ def test_the_recorded_patch_target_inventory_still_matches():
 
 
 def test_a_deleted_patch_target_is_not_written_off_as_environmental():
-    """The ``environment`` escape hatch must not swallow a genuinely dead target.
-
-    ``importlib.import_module("mod.attr")`` raises ``ModuleNotFoundError`` for a deleted
-    attribute just as it does for a missing optional dependency, and the check above
-    filters environmental entries out, so conflating the two would make it vacuous.
-    """
+    """A deleted patch attribute must not be excused as environmental; it raises like a missing dep."""
     broken = refactor_guard.unresolvable_patch_targets(
         {
             "core.tool_healing.deleted_name": ["fake_test.py"],
@@ -163,11 +143,7 @@ def test_a_dropped_lazy_export_is_not_written_off_as_environmental():
 
 
 def test_the_scan_order_inside_strip_segment_is_pinned():
-    """The arm order in ``strip_segment`` is what this branch unified.
-
-    Swapping the function-XML and GLM arms passed the guard: the corpus only concatenated
-    whole calls, and the order shows up only when an arm can eat a later arm's opener.
-    """
+    """Pin strip_segment's arm order: the corpus alone missed a swapped function-XML and GLM arm."""
     from core.inference.tool_call_parser import strip_segment
 
     text = "<function=x><tool_call> txt <arg_key>c</arg_key></function><parameter=p>"

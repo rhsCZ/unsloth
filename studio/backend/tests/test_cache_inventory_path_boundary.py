@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An API key gets the local inventory listing but not the host paths; a browser session still
-gets them. Assertions are on the SERIALISED body: a unit test on the helper alone would pass
-with the helper wired to nothing.
-"""
+"""API keys get no host paths; assertions run on the serialised body, not the helper alone."""
 
 import ast
 import inspect
@@ -897,10 +894,7 @@ def test_a_cache_reference_can_delete_the_copy_it_names(monkeypatch, client, rou
     ids = ("hub", "compat"),
 )
 def test_a_cache_reference_lists_the_quants_of_the_copy_it_names(monkeypatch, client, route):
-    """The inventory hands an API-key caller a handle in place of every host path, so a handle
-    is the only name it HAS for a custom local GGUF or for a copy in a secondary root. Passed
-    back unresolved, the lookup either misses or is answered out of the ACTIVE cache, which is
-    a different file."""
+    """A handle stands in for host paths, so it must resolve to its own copy, not the active cache."""
     seen = {}
 
     from hub.schemas.inventory import GgufVariantsResponse

@@ -376,27 +376,14 @@ _RAW_BIND_KWARGS = dict(
 
 
 def test_a_headless_raw_bind_is_byte_for_byte_unchanged(monkeypatch):
-    """The compatibility promise of this change.
-
-    Headless `-H 0.0.0.0` is the long-running container case: it must still
-    proceed, keep serving the bootstrap credential, and above all not reach the
-    strip-and-refuse handling a public tunnel launch uses, which would delete the
-    .bootstrap_password such deployments are logged into with.
-    """
+    """A headless raw bind must stay unchanged: proceed, serve the bootstrap password, never strip it."""
     _patch_streams(monkeypatch, tty = False)
     _patch_seeded_admin(monkeypatch, requires_change = True)
     assert run._terminal_password_gate(tunnel_will_start = False, **_RAW_BIND_KWARGS) == (True, False)
 
 
 def test_a_headless_raw_bind_does_not_open_auth_storage(monkeypatch):
-    """ "Unchanged" has to mean it does not touch the database either.
-
-    A headless raw bind used to return at `if not tunnel_will_start` without
-    importing auth storage. Calling ensure_default_admin() first would move
-    seeding earlier and open the SQLite file sooner, giving a read-only or locked
-    STUDIO_HOME a new place to fail on a launch that used to work, so
-    promptability must be decided before storage is consulted.
-    """
+    """Decide promptability before auth storage opens, so a locked STUDIO_HOME gets no new failure point."""
     _patch_streams(monkeypatch, tty = False)
 
     def _boom(*_a, **_k):
@@ -433,15 +420,7 @@ def test_refusing_the_prompt_on_a_raw_bind_aborts(monkeypatch):
 
 
 def test_a_false_from_any_prompt_version_fails_closed(monkeypatch):
-    """A torn tree cannot say whether False was Ctrl+C or the deadline.
-
-    An OLDER terminal_prompt.py returns False for both, and elapsed time does not
-    separate them: the deadline bounds the FIRST key, so an operator who types,
-    retries validation and refuses after 30s looks exactly like a walk-away. So
-    False fails closed on every version, and a detached pty on a half-updated
-    tree stops starting rather than exposing the bootstrap password after a
-    refusal. The abort message names --password / UNSLOTH_STUDIO_PASSWORD for it.
-    """
+    """A False from any prompt version fails closed, since timeout and refusal return the same value."""
     for tunnel, kwargs in ((False, _RAW_BIND_KWARGS), (True, _GATE_KWARGS)):
         _patch_streams(monkeypatch, tty = True)
         _patch_seeded_admin(monkeypatch, requires_change = True)
@@ -454,13 +433,7 @@ def test_a_false_from_any_prompt_version_fails_closed(monkeypatch):
 
 
 def test_the_banner_never_promises_an_abort_the_caller_will_not_perform(monkeypatch):
-    """An OLD run.py passes refusal_aborts=False for a raw bind and then CONTINUES.
-
-    Telling that caller's operator "Ctrl+C to abort" would talk them into walking
-    away from a server that is about to bind with the bootstrap password live, so
-    the flag still picks the wording even though this file's own run.py aborts
-    either way.
-    """
+    """The banner must not promise Ctrl+C abort when refusal_aborts is False, as an old run.py continues."""
 
     def _refuse(*_a, **_kw):
         raise KeyboardInterrupt
@@ -490,11 +463,7 @@ def test_the_banner_never_promises_an_abort_the_caller_will_not_perform(monkeypa
 
 
 def test_an_older_run_py_can_still_call_this_prompt(monkeypatch):
-    """The other half of a torn tree: an OLD run.py passes refusal_aborts.
-
-    The gate is deliberately not wrapped in a broad try/except, so an unexpected
-    keyword would kill the launch. The read is faked; the binding is the subject.
-    """
+    """An older run.py must still be able to call this prompt, so the gate takes no unexpected keywords."""
 
     def _refuse(*_a, **_kw):
         raise KeyboardInterrupt
@@ -767,11 +736,7 @@ def test_a_pty_someone_types_into_is_not_treated_as_unattended(monkeypatch):
 
 
 def test_the_gate_deadlines_a_raw_bind_prompt_and_never_the_tunnel(monkeypatch):
-    """Scope: only the launch that must not be blocked gets a deadline.
-
-    A tunnel publishes a public URL, so it keeps waiting indefinitely and fails
-    closed; a raw bind falls back to the protection it already had.
-    """
+    """Only raw binds get a prompt deadline; a tunnel waits indefinitely and fails closed."""
     seen = {}
 
     def _fake_prompt(**kwargs):
@@ -793,13 +758,7 @@ def test_the_gate_deadlines_a_raw_bind_prompt_and_never_the_tunnel(monkeypatch):
 
 
 def test_an_unattended_fallback_does_not_promise_a_disabled_deadline(monkeypatch):
-    """With TIMEOUT=0 nothing will shut this instance down; do not say otherwise.
-
-    The unattended path proceeds on purpose (the launch worked before the prompt
-    existed), but must not tell the operator a deadline will rescue them when
-    `should_arm_bootstrap_timeout` will not arm one: that is the single sentence
-    they would act on.
-    """
+    """With UNSLOTH_STUDIO_BOOTSTRAP_TIMEOUT=0 nothing arms a deadline, so do not promise one."""
     monkeypatch.setenv("UNSLOTH_STUDIO_BOOTSTRAP_TIMEOUT", "0")
     stderr = _patch_streams(monkeypatch, tty = True)
     _patch_seeded_admin(monkeypatch, requires_change = True)
@@ -830,13 +789,7 @@ def test_an_unattended_fallback_names_the_deadline_when_one_will_arm(monkeypatch
 
 
 def test_the_child_does_not_repeat_a_prompt_the_parent_already_gave_up_on(monkeypatch):
-    """A 30s fallback must not become 60s across the re-exec.
-
-    The CLI parent holds the terminal for its deadline, gets nothing, warns and
-    launches. The child gate then sees the SAME unattended pty; without a handoff
-    it waits the whole deadline again, and a third time on the `studio run` path,
-    which is the startup stall the 30s value was chosen to stay under.
-    """
+    """A 30s fallback must not stack across re-exec; the child skips the prompt the parent gave up on."""
     monkeypatch.setenv("UNSLOTH_STUDIO_UNATTENDED_PROMPT_DONE", "1")
     _patch_streams(monkeypatch, tty = True)
 
@@ -868,14 +821,6 @@ def test_the_marker_never_silences_a_tunnel_launch(monkeypatch):
 
 
 def test_windows_has_no_terminal_ownership_to_lose(monkeypatch):
-    """The Windows half of the tests skipped above, and it runs everywhere.
-
-    `_prompt_owns_the_terminal` exists to catch a backgrounded POSIX job, where
-    driving the terminal raises SIGTTOU and stops the process. Windows has no
-    process groups and no `os.tcgetpgrp`, so the call raises AttributeError and
-    the answer must be True: there is nothing there that can stop us, so the
-    isatty verdict stands and an interactive Windows launch still prompts. A
-    False would silently drop the prompt on every Windows terminal.
-    """
+    """Windows has no tcgetpgrp, so ownership is True and the isatty verdict stands; False drops prompts."""
     monkeypatch.delattr(run.os, "tcgetpgrp", raising = False)
     assert run._prompt_owns_the_terminal() is True

@@ -30,11 +30,7 @@ def _reset_studio_db(
 
 @pytest.fixture
 def workspace_projects_home(tmp_path):
-    """Projects root outside the platform delete denylist.
-
-    macOS tmp_path resolves under /private/tmp, which the delete guard refuses;
-    only the denied case falls back to a home subdir.
-    """
+    """Avoid the delete denylist: macOS tmp_path resolves under /private/tmp, which the guard refuses."""
     candidate = tmp_path / "Projects"
     resolved = str(candidate.resolve())
     check = os.path.normcase(resolved) if platform.system() == "Windows" else resolved
@@ -1075,10 +1071,7 @@ def _research_thread(
     *,
     extra_ancestors: int = 1,
 ):
-    """A thread shaped `a0 -> ... -> prompt -> report`, with the pair claimed by a research run.
-
-    Returns the ancestor ids in order. `prompt` and `report` are the server-managed pair.
-    """
+    """Returns ancestor ids; the prompt and report pair is server-managed and claimed by a research run."""
     from storage import research_runs_db
 
     _reset_studio_db(tmp_path, monkeypatch)

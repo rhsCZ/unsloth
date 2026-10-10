@@ -1,25 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Load cancellation across [Windows, Linux, WSL, macOS] x [NVIDIA, AMD, Intel XPU, Apple MPS, CPU].
-
-Simulation notice. This host is Linux with an NVIDIA card. The OS axis is `sys.platform` /
-`platform.system` / `platform.release` (the WSL marker), the way
-`test_gpu_arch_gate_os_matrix_7624.py` and `test_llama_extra_args_platforms.py` do it, and the device
-axis is the documented per-instance seam `DiffusionBackend._pick_device_and_dtype`, the way
-`_force_cuda_target` in `test_diffusion_backend.py` does it. So these cells prove that the
-cancellation LOGIC is device- and platform-independent -- which is the claim under test, since none
-of it branches on either -- and they do NOT prove ROCm kernels, Metal placement, oneAPI or real VRAM
-reclamation. Only hardware can do that.
-
-What each cell asserts, from the three defects this file was added with:
-  * an eject cancels a load that was already in flight (the epoch, not a counter, decides);
-  * a load that arrives AFTER the eject started waits for teardown and then runs -- it is not
-    refused with "Diffusion load was cancelled.", which is a cancellation that never happened and,
-    through the route's 409, surfaced to the user as a failed model switch;
-  * both fences drain: `_unload_waiters` and `_teardown_waiters` return to zero, so no later load or
-    generation inherits a raised fence.
-"""
+"""Load cancel across OS and device axes, simulated on one host; proves logic, not real hardware."""
 
 import importlib.util
 import sys

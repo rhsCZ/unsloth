@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""training_progress must carry trainer speed, not just step and loss.
-
-Dropping HF's tqdm bar and per-step print removes the only place training
-throughput appeared ("1.84s/it" on the bar, "train_tokens_per_second" in the raw
-dict). Both were raw stdout rather than structured, so the replacement is to put
-the number on the structured line: throughput measured over the interval between
-two logged lines, and the run average on the first one.
-"""
+"""training_progress must carry throughput, since dropping tqdm removed the only speed figure."""
 
 from __future__ import annotations
 

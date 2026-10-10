@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: /api/liveness says whether the backend is generating, and stays cheap.
-
-The desktop health watchdog probes this route every 15s with a 10s budget and declares the
-backend dead after 3 consecutive misses. Startup is not the only window where a healthy
-backend misses three in a row: a host serving a model far larger than it can hold runs at
-fractions of a token per second, and the loop feeding those streams goes quiet the same way
-the warm thread's `import torch` makes it go quiet. Killing there ends a response the user
-is still waiting on, and the window reports it as "Server stopped unexpectedly" (#8945).
-
-So liveness carries an `inference_active` marker and the watchdog widens its failure budget
-while the last answered probe was generating. Only for probes that time out: a refused
-connection means the port is gone, and that is still reported at three strikes.
-
-Media jobs do not enter `active_generations`, so the marker also checks video and both
-image engines.
-
-The marker must not cost what health costs: it is a len() under a lock already held for
-microseconds plus a bool off each resident media backend, never a wait on the work itself
-and never an import of the ML stack.
-
-CPU-only, no network, no GPU, no weights.
-"""
+"""Liveness reports inference_active, so a generating backend gets a wider budget on timeouts only."""
 
 from __future__ import annotations
 
@@ -192,13 +171,7 @@ def test_the_marker_disappears_once_nothing_is_generating():
 
 
 def _watchdog_probe_budget_s() -> float:
-    """The launcher's per-probe HTTP budget, read out of the Rust that owns it.
-
-    A ceiling on this route has to sit under the number the watchdog actually allows, or a
-    regression that makes /api/liveness block for most of a probe passes here while every
-    real probe times out. Derived rather than written down so the two cannot drift apart,
-    the way test_health_answers_within_probe_budget.py derives its own budget.
-    """
+    """Reads HEALTH_PROBE_TIMEOUT from the Rust launcher so the liveness ceiling cannot drift past it."""
     assert _COMMANDS_RS.is_file(), f"{_COMMANDS_RS} moved; update this guard"
     match = re.search(
         r"const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs\((\d+)\)",
@@ -294,11 +267,7 @@ def test_every_media_backend_is_scanned():
 
 
 def test_liveness_covers_the_image_persist_tail():
-    """An image job is not over when the engine's marker clears: the route is still writing
-    the gallery records the response is built from, and on a saturated host that write is
-    exactly when probes start missing. generate-progress already calls that window active
-    (routes/inference.py diffusion_generate_progress); liveness disagreeing with it is how a
-    request that is still running gets the idle three-strike budget."""
+    """Liveness must stay active through the image persist tail, as generate-progress already does."""
     import importlib
 
     routes_inference = importlib.import_module("routes.inference")

@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic tests for the pre-download unified-memory guard from issue #9130.
-
-Hub sizes recorded on 2026-08-24 are aggregated by component directory.
-"""
+"""Hermetic tests for the pre-download unified-memory guard, using per-component Hub size totals."""
 
 from __future__ import annotations
 

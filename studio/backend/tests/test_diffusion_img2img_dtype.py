@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the image-conditioned VAE encode dtype guard.
-
-Image Transform on a bf16 denoiser whose text encoder settled on fp32 died with ``Input type
-(float) and bias type (c10::BFloat16) should be the same``: ``prepare_latents`` casts the upload
-to ``prompt_embeds[0].dtype`` and feeds it straight to ``vae.encode``, so neither the denoiser
-dtype nor the VAE's own gets a say. ``_make_vae_encode_dtype_safe`` closes that gap at the
-encoder boundary. No GPU, no diffusers.
-"""
+"""VAE encode casts image uploads to the VAE's dtype, not the prompt dtype, or bf16 fails."""
 
 from __future__ import annotations
 

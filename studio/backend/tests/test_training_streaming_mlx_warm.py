@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: /training/start's MLX streaming rejection must survive the warm window.
-
-``hardware.DEVICE`` used to be set before uvicorn bound the socket. The warm thread
-fills it in now, so for the first moment of serving it still holds ``None``.
-
-``start_training`` rejects ``dataset_streaming`` on Apple Silicon by comparing ``DEVICE ==
-DeviceType.MLX``. Against the default that is False, the rejection is skipped, and the
-request runs on to ``_build_training_worker_config``, which detects MLX only after
-validation and hands a streaming dataset to a loader that materializes the whole thing. The
-guard must force detection first, and off the event loop, since detection imports torch.
-
-The lexical half is in ``test_startup_defers_torch.py``; this file covers the behaviour.
-CPU-only, no network, no GPU, no weights.
-"""
+"""The MLX streaming guard must force detection first, since DEVICE is None during warm-up."""
 
 from __future__ import annotations
 
@@ -63,13 +50,7 @@ def hardware_globals():
 
 @pytest.fixture(autouse = True)
 def _hub_preflight_passes(monkeypatch):
-    """Let the Hub preflights succeed without asking the Hub.
-
-    This file is about the MLX guard, and its docstring already promises no network,
-    but ``start_training`` verifies the model and dataset against huggingface.co on
-    the way past validation. That call used to reach the real Hub, so the tests were
-    quietly online and would 503 whenever it was slow or unreachable.
-    """
+    """Stubs the Hub preflights, since start_training would otherwise reach huggingface.co."""
     monkeypatch.setattr(training_routes, "_preflight_hf_dataset_request", lambda request: None)
     monkeypatch.setattr(
         training_routes,

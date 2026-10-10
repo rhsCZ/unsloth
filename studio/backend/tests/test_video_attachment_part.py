@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Video attachments ride the message list as llama-server's `input_video` part.
-
-llama.cpp takes video through its OpenAI-compatible chat endpoint as
-``{"type": "input_video", "input_video": {"data": ...}}`` (tools/server/
-server-common.cpp), refusing it unless the projector, the build and ffmpeg all
-line up -- which it reports at ``/props`` under ``modalities.video``. These tests
-pin the wire shape and that capability read, since neither is visible from the
-GGUF alone.
-"""
+"""Video clips are sent as input_video parts, gated by modalities.video reported at /props."""
 
 from __future__ import annotations
 
@@ -330,12 +322,7 @@ def test_an_uppercase_scheme_is_refused_as_a_remote_url_too():
 
 
 def test_message_parts_are_translated_where_the_legacy_clip_is_injected():
-    """Both spellings reach llama-server from one place, after the capability gate.
-
-    The legacy clip is injected first and the translation is the last thing before dispatch, so
-    one call covers both. Asserted as order rather than adjacency: the destination guard runs
-    between them, and pinning the exact neighbouring line only broke on that.
-    """
+    """Both spellings translate once, just before dispatch; order is asserted, not adjacency."""
     source = _inference_source()
     inject = source.index("_inject_video_part(gguf_messages, video_b64)")
     translate = source.index("_translate_video_parts(gguf_messages)")

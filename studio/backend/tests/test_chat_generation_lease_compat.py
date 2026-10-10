@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Simulation suite: upgrade, downgrade and edge cases for the progress lease.
-
-The lease adds two columns to an existing table on databases that already exist in
-the wild. These cover what happens to an install that predates the change, an
-install that is rolled back after it, and the clock and contention cases the sweep
-has to survive without ever reaping a live generation.
-"""
+"""Upgrade, rollback and contention cases for the progress lease, which must never reap a live run."""
 
 from __future__ import annotations
 
@@ -308,11 +302,7 @@ def test_zero_timeout_disables_the_sweep(clock):
 
 
 def test_a_second_lifespan_restarts_the_sweeper(clock):
-    """stop() sets the event; the instance parked on app.state is reused next lifespan.
-
-    Without clearing it, the new task's first wait returns immediately and the sweeper is
-    silently dead for that whole lifespan, taking the fix with it.
-    """
+    """Clear the stop event on restart, or a reused sweeper's first wait returns and reaping stays off."""
     import asyncio
     from types import SimpleNamespace
 
@@ -340,12 +330,7 @@ def test_a_second_lifespan_restarts_the_sweeper(clock):
 
 @contextlib.contextmanager
 def _migration_blocked(monkeypatch):
-    """A pre-upgrade database whose ALTER always loses to a writer holding the lock.
-
-    _connect deliberately lets the call through so a history read cannot fail on
-    contention, which means every lease statement afterwards meets a table without the
-    columns. This is the window the degradations below have to survive.
-    """
+    """A pre-upgrade database whose ALTER always loses to a writer, so lease columns stay missing."""
     _drop_lease_columns()
     runs_db._schema_ready = set()
     real_get = runs_db.get_connection
@@ -391,14 +376,7 @@ def test_get_progress_falls_back_when_the_columns_are_missing(clock, monkeypatch
 
 
 def test_live_reaping_is_deferred_until_the_migration_lands(clock, monkeypatch):
-    """The fallback is NOT more conservative than the lease, it is the opposite.
-
-    started_at and created_at are older than progress_at by the whole life of the run, so
-    sweeping on them reaps a run whose total AGE passes the timeout even though it
-    appended a chunk moments ago. With no column to persist progress into there is no
-    honest way to tell those apart, so a live sweep does nothing until the migration
-    lands. Contention is transient; a wrongly killed generation is not.
-    """
+    """Sweeping on started_at reaps runs by total age, so live sweeps wait for the migration."""
     _seed()
     with _migration_blocked(monkeypatch):
         clock.advance_ms(100 * _LEASE_MS)
@@ -417,14 +395,7 @@ def test_boot_reconcile_still_works_without_the_lease_columns(clock, monkeypatch
 
 
 def test_a_real_no_such_column_error_is_not_swallowed(clock, monkeypatch):
-    """The degradations key on the lease columns by name, not on the error class.
-
-    A `no such column` naming anything else is a genuine schema fault and must surface.
-
-    The fault goes in at _connect, the handle get_progress actually uses. Since #11525 a warm
-    thread reuses its pooled connection without calling get_connection, and _seed() has just
-    pooled one, so a fault injected there was never reached when this test ran on its own.
-    """
+    """Only lease-column no-such-column errors degrade; other schema faults must surface."""
     _seed()
     real_connect = runs_db._connect
 
@@ -632,15 +603,7 @@ def test_every_non_output_renewal_goes_through_the_tolerant_path():
 
 
 def test_the_sweeper_survives_a_second_lifespan_on_a_new_event_loop(clock):
-    """A repeated TestClient context or an embedded server restart enters the same app on
-    a different loop, and asyncio.Event binds to the loop that first awaits it.
-
-    The failure is silent, which is why it is asserted on liveness rather than on an
-    exception: _run wraps the wait in ensure_future, so the "bound to a different event
-    loop" RuntimeError lands on that inner waiter, asyncio.wait reports it merely as done,
-    and _run returns as if it had been asked to stop. Reaping is then off for the whole
-    lifespan with nothing logged.
-    """
+    """Assert liveness: an asyncio.Event bound to another loop fails silently and disables reaping."""
     app = SimpleNamespace(state = SimpleNamespace())
     sweeper = runs_mod.ChatGenerationLeaseSweeper(app, interval_s = 30.0, timeout_s = 60.0)
     alive = {}
@@ -685,10 +648,7 @@ def test_the_admission_marker_matches_the_route_that_emits_it():
 
 
 def test_only_admission_comments_renew_the_lease_from_the_stream():
-    """routes/inference.py emits `: keep-alive` when the generator has produced NOTHING
-    for a stall interval, which is the wedge this file exists to reap. Renewing on any
-    byte would keep such a run alive forever. Both admission comments are the opposite
-    signal, so both renew, and nothing else may."""
+    """Only admission comments renew the lease; a keep-alive during a stall would keep a wedge alive."""
     import inspect
 
     source = inspect.getsource(runs_mod.ChatGenerationSupervisor._produce)
@@ -714,13 +674,7 @@ def test_leaving_the_queue_renews_without_waiting_for_the_rate_limit():
 
 
 def test_the_renewal_interval_stays_under_the_lease_actually_in_force(monkeypatch):
-    """Under the APPLIED lease, not the configured one.
-
-    A lease below the admission cadence is raised to the floor before the sweeper uses
-    it, so pacing renewals against the raw value buys nothing: the run cannot be reaped
-    before the floor either way, and at one second it means four SQLite writes per second
-    for as long as a model takes to prepare.
-    """
+    """Pace renewals against the applied lease, which is raised to the cadence floor, not the raw config."""
     for configured in ("1", "4", "1200"):
         monkeypatch.setenv("UNSLOTH_STUDIO_CHAT_RUN_LEASE_TIMEOUT_S", configured)
         applied = runs_mod._applied_lease_timeout(float(configured))
@@ -749,14 +703,7 @@ def test_a_lease_shorter_than_the_admission_cadence_is_clamped_and_logged(clock)
 
 
 def test_a_producer_that_ignores_the_cooperative_cancel_is_force_cancelled(clock):
-    """supervisor.cancel() only sets a threading.Event, and every production run has one,
-    so the task is never cancelled by that path. A producer blocked inside next(gen) never
-    reads the event, and would keep its activity reservation after the row was settled.
-
-    Asserted INSIDE the loop: asyncio.run cancels whatever is still pending when it tears
-    the loop down, so checking the task afterwards passes whether or not this code did
-    anything. The first version of this test did exactly that and survived the mutation.
-    """
+    """A producer blocked in next(gen) never reads the cancel event, so it must be force-cancelled."""
     started = asyncio.Event()
     outcome = {}
 
@@ -807,13 +754,7 @@ def test_force_cancel_leaves_a_producer_that_already_finished_alone(clock):
 
 @pytest.mark.parametrize("raw", ["inf", "1e12", "1e308"])
 def test_an_unusable_admission_cadence_does_not_poison_the_lease(monkeypatch, raw):
-    """The admission parser is not ours and only checks the value is positive.
-
-    An infinite cadence made the applied lease infinite, and the sweeper cannot convert
-    that to milliseconds: every pass raised and nothing was ever reaped. An oversized
-    finite one stretched the lease past any horizon instead, which is quieter and just as
-    total.
-    """
+    """The admission parser only checks positivity; infinite or huge cadences poison the applied lease."""
     from core.inference.llama_admission import DEFAULT_ADMISSION_KEEPALIVE_INTERVAL_S
 
     monkeypatch.setenv("UNSLOTH_LLAMA_ADMISSION_KEEPALIVE_INTERVAL", raw)
@@ -834,12 +775,7 @@ def test_a_reasonable_admission_cadence_still_raises_the_floor(monkeypatch):
 
 
 def test_the_events_keepalive_carries_the_progress_stamp():
-    """The follower rearms its no-progress deadline only when this value MOVES.
-
-    A bare keep-alive proves the connection is healthy and nothing more, and the route
-    emits one every wait timeout for as long as the socket holds, so a follower rearming
-    on arrival could never settle a wedged run: exactly the case that fallback exists for.
-    """
+    """Followers rearm only when the progress stamp moves; a bare keep-alive proves nothing."""
     import inspect
 
     from routes import chat_generation_runs as route

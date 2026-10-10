@@ -18,11 +18,7 @@ _VISIBLE_DEVICE_MASKS = ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VI
 
 @pytest.fixture(autouse = True)
 def _no_inherited_gpu_mask(monkeypatch):
-    """These tests fake a torch host and then ask about GPU ordinal 0. A mask
-    inherited from the shell remaps that ordinal onto a physical id the fake
-    host does not have, so the answer flips to False and nine tests fail. CI
-    runners carry no mask, so it only ever bites locally. The tests that are
-    about a mask still set their own, after this."""
+    """Clear inherited GPU masks per test: a shell mask remaps ordinal 0 off the fake host."""
     for _m in _VISIBLE_DEVICE_MASKS:
         monkeypatch.delenv(_m, raising = False)
 
@@ -101,10 +97,7 @@ _shortfall = LlamaCppBackend._apu_ram_shortfall_message
 
 
 class TestApuRamShortfall:
-    """On a unified-memory APU the weights load into system RAM, so a model
-    larger than available RAM (the field case: a 64.6 GB GGUF on a WSL VM capped
-    well below the ROCm-reported APU budget) must be refused before spawning,
-    not left to OOM-kill the Unsloth process."""
+    """On a unified-memory APU, weights load into RAM, so an oversized model must be refused early."""
 
     def test_field_case_wsl_cap_refuses(self):
         msg = _shortfall(int(64.6 * _GB), 46 * _MIB_PER_GB)
@@ -293,10 +286,7 @@ class TestTheApuBudgetIsCappedByHostRam:
 
 
 class TestRadeonWheelsWithoutAnArchName:
-    """AMD SDK / Radeon wheels may populate none of the arch attributes. The
-    training worker's classifier already handles that (is_integrated, then the
-    arch spellings, then the Radeon name table); this path shares it so the two
-    cannot disagree about a device."""
+    """Radeon wheels may expose no arch attribute, so this path shares the training worker's classifier."""
 
     @staticmethod
     def _torch(**props):
@@ -593,11 +583,7 @@ class TestTheEnableSwitch:
 
 
 class TestTheDirectIoGateNeedsEveryDeviceRead:
-    """`_rocm_classification_answered` guards a loader choice, so it must mean "the
-    devices were classified", not "a classifier was importable and something
-    enumerated". `_rocm_unified_memory_gpu_ids` drops any device it cannot read with
-    `except: continue`, and an absent device reads as discrete, which is how an
-    unclassified APU would be handed DirectIO over its own system RAM."""
+    """Every device must be read before DirectIO is chosen, or an unreadable APU reads as discrete."""
 
     @staticmethod
     def _torch(archs, *, raises_on = None):

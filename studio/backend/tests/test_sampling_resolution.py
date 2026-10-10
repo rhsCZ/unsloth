@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Effective sampling resolution: per-model recommendation + operator pins.
-
-Precedence per field: operator UNSLOTH_SAMPLING_* pin -> client explicit value ->
-per-model recommendation (load_inference_config) -> static schema default.
-"""
+"""Precedence: UNSLOTH_SAMPLING_* pin, client value, model recommendation, then schema default."""
 
 from pathlib import Path
 
@@ -246,11 +242,7 @@ def test_fill_recommended_sampling_openai_operator_pin_overrides_client(monkeypa
 
 @pytest.mark.parametrize("thinking_mode", [True, False])
 def test_chat_route_lifts_harness_template_kwargs_before_sampling(monkeypatch, thinking_mode):
-    """Exercise the DeepSeek Harness request shape through the real chat route.
-
-    The route must lift the extra-body ``chat_template_kwargs`` onto the typed field
-    before sampling is filled; testing the two helpers apart would not pin that order.
-    """
+    """The chat route must lift chat_template_kwargs onto the typed field before sampling is filled."""
     import asyncio
     from types import SimpleNamespace
 
@@ -721,11 +713,7 @@ def test_count_tokens_rejects_an_effort_the_chat_endpoint_would_reject(effort):
 def test_contradictory_controls_are_resolved_for_every_family(
     reasoning_style, request_kwargs, expected_kwargs
 ):
-    """The conflict rule changes generation for every model, not one family.
-
-    `_resolve_reasoning_controls` runs before the model-specific translation, so an
-    effort-dial family (gpt-oss and friends) is affected too.
-    """
+    """Conflict rule runs before family translation, so effort-dial models like gpt-oss change too."""
     from types import SimpleNamespace
 
     from core.inference.llama_cpp import LlamaCppBackend
@@ -767,13 +755,7 @@ def test_contradictory_controls_are_resolved_for_every_family(
     ],
 )
 def test_normalizing_twice_cannot_change_the_answer(typed, nested):
-    """/v1/responses normalizes the request it builds, then the chat route normalizes it again.
-
-    The first pass writes its result onto the typed fields, so a second pass reads a typed
-    effort of None where the first read the client's, and without consuming what it lifted
-    it took the nested-effort rescue the first deliberately skipped -- handing generation a
-    level the request had already lost the right to.
-    """
+    """Normalizing twice must not change the result, since the first pass writes onto the typed fields."""
     from models.inference import ChatCompletionRequest
     from routes import inference as inference_route
 
@@ -828,14 +810,7 @@ def test_normalizing_does_not_mutate_the_clients_nested_dict():
     ],
 )
 def test_a_nested_enable_thinking_that_is_not_a_json_boolean_is_ignored(nested_enable_thinking):
-    """Only a real JSON boolean controls thinking, whichever way the wrong type would have read.
-
-    ``bool()`` on the old lift made ``"false"`` mean ON, which is the bug this fixes. It also
-    made ``0`` mean OFF, which happened to be what such a client wanted, so requiring the
-    boolean changes that request too: the value is ignored and the template renders in
-    whatever mode the model was launched in. Both directions are the same rule, and a client
-    is only carried by sending a real boolean.
-    """
+    """Only a real JSON boolean controls thinking; a string like "false" must not read as ON via bool()."""
     from models.inference import ChatCompletionRequest
     from routes import inference as inference_route
 
@@ -872,12 +847,7 @@ def test_a_nested_preserve_thinking_that_is_not_a_json_boolean_is_ignored(nested
 
 
 def test_an_ignored_nested_control_resolves_exactly_like_omitting_it():
-    """The rule stated as a property: an invalid value is not a third outcome.
-
-    Whatever an invalid nested control does, it has to be indistinguishable from never
-    having sent the key, on every surface that renders a template. Otherwise "ignored"
-    would still be steering generation.
-    """
+    """An invalid nested control must resolve exactly like omitting the key, on every template surface."""
     from models.inference import ChatCompletionRequest
     from routes import inference as inference_route
 
@@ -912,12 +882,7 @@ def test_an_ignored_nested_control_resolves_exactly_like_omitting_it():
 
 
 def test_an_anthropic_derived_boolean_stays_out_of_the_explicit_field_set():
-    """resolve_thinking_onto_enable_thinking's discard has to actually remove the name.
-
-    It relies on model_fields_set returning the live __pydantic_fields_set__. If a future
-    pydantic returns a copy, the discard becomes a no-op and the derived boolean would
-    outrank the nested controls it is meant to sit below, silently.
-    """
+    """The discard needs the live model_fields_set, else the derived boolean outranks nested controls."""
     from models.inference import ChatCompletionRequest
 
     payload = ChatCompletionRequest.model_validate(

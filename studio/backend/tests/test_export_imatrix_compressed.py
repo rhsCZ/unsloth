@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the GGUF imatrix option and compressed-tensors merged export wiring.
-
-Schema checks use the real Pydantic models; the cross-layer threading is verified with ast so it
-runs on CPU with no GPU, no model, and no llama.cpp.
-"""
+"""GGUF imatrix and compressed-tensors export wiring; threading checked by ast, no GPU needed."""
 
 import ast
 from pathlib import Path

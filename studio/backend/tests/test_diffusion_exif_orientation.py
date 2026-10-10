@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for EXIF orientation on the image-conditioned decode path.
-
-The dropzone posts the picked file's raw bytes, so a phone photo arrives tagged and un-rotated,
-and the inpaint mask is sized from the preview, which is oriented. The two must agree.
-"""
+"""EXIF orientation on the image-conditioned decode path, so the mask and the upload agree."""
 
 from __future__ import annotations
 

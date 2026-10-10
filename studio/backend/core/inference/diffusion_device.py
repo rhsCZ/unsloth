@@ -61,16 +61,7 @@ def force_float32_rope(
     *,
     logger: Any = None,
 ) -> int:
-    """Drop the float64 intermediate in RoPE frequency tables on a device without float64.
-
-    LTX-2 builds ``theta ** linspace(0, 1, n)`` in float64 and casts straight back to float32;
-    Metal has no float64, so torch raises before the first step. The modules gate that
-    intermediate on a ``double_precision`` attribute, and clearing it costs at most 6 float32 ULP
-    against a value the next line truncates anyway.
-
-    Returns the number of modules changed; a no-op wherever float64 works, so CUDA/XPU/CPU stay
-    bit-for-bit.
-    """
+    """Metal has no float64, so RoPE tables drop their float64 intermediate; a no-op where float64 works."""
     if target.supports_float64:
         return 0
     changed = 0
@@ -108,13 +99,7 @@ def install_frame_pad_fix(
     *,
     logger: Any = None,
 ) -> int:
-    """Pad the VAE downsample shortcuts' frame axis by concatenation on Metal; returns the modules patched.
-
-    ``F.pad`` on MPS silently returns wrong data (all zeros for a front pad) for a 5-D tensor padded
-    on the frame axis alone once a frame holds 65536 values, i.e. from a 256x256 feature map up
-    (torch 2.10 through 2.14). The shortcuts pad a single frame exactly that way; prepending the zero
-    frames leaves their own pad empty.
-    """
+    """MPS F.pad returns wrong data for large 5-D frame-axis pads, so shortcuts concatenate zero frames."""
     if target.device != "mps":
         return 0
     patched = 0
@@ -147,21 +132,7 @@ def install_decoder_sync(
     *,
     logger: Any = None,
 ) -> bool:
-    """Cap the memory a video VAE decode holds on Metal, by synchronising once it is running out.
-
-    Wan's VAE decodes one latent frame per call in a loop that never forces a commit, and Metal
-    cannot reuse a buffer until the work holding it completes, so intermediates accumulate until
-    the OS kills the process. Neither tiling (the growth is within one tile) nor torch's adaptive
-    commit bounds it.
-
-    Fires per decoder call and only above the threshold, so a decode with room to spare pays only
-    the memory read; synchronising costs the pipelining, not the decode.
-
-    ``torch.mps.recommended_max_memory()`` arrived in torch 2.5 while install.sh keeps an existing
-    venv's torch as far back as 2.4, so an unreadable budget falls back to synchronising every
-    call (measured to hold the same decode at 4.90 GiB for no wall-clock cost) rather than
-    failing the load or dropping the bound. Every probe is best-effort for the same reason.
-    """
+    """Syncs a Metal video VAE decode when memory runs low; buffers are held until their work completes."""
     if target.device != "mps":
         return False
     decoder = getattr(getattr(pipe, "vae", None), "decoder", None)
@@ -253,12 +224,7 @@ def install_rocm_vae_bf16_decode(
     *,
     logger: Any = None,
 ) -> Optional[str]:
-    """Decode an fp32-pinned video VAE (Wan) in bf16 on ROCm gfx11 / gfx12; returns the mode engaged, else None.
-
-    fp32 runs Wan's 3D convs as im2col plus a small-tile fp32 GEMM without matrix cores (~385 s of a 1280x704x21 clip on
-    gfx1151); ComfyUI decodes this VAE in bf16 on these cards. "weights" (default) casts only ``post_quant_conv`` +
-    ``decoder``, so ``vae.dtype`` and image-to-video encodes stay fp32; "autocast" keeps fp32 weights. Both return fp32.
-    UNSLOTH_VIDEO_VAE_BF16_DECODE: 0 off, auto / weights / autocast pick the mode, 1 also allows any bf16 CUDA device."""
+    """fp32 Wan VAE decode is very slow on ROCm gfx11/12; UNSLOTH_VIDEO_VAE_BF16_DECODE selects bf16."""
     gate = os.environ.get(VAE_BF16_DECODE_ENV, "auto").strip().lower()
     if gate in _VAE_BF16_OFF or target.device != "cuda":
         return None
@@ -327,27 +293,7 @@ def _studio_device_is(studio_device: Any, device_type: Any, name: str) -> bool:
 def resolve_selected_cuda_ordinal(
     gpu_ids: Optional[list[int]], *, allow_ranking: bool = True
 ) -> Optional[int]:
-    """The torch ordinal one diffusion load should run on, or None for automatic.
-
-    ``gpu_ids`` carries PHYSICAL ids, as chat, training and the UI use. Torch indexes only the
-    parent-visible subset, so under a ``CUDA_VISIBLE_DEVICES`` mask the two differ in value and
-    order (``4,5`` -> torch 0,1; ``1,0`` reverses them), hence going through the hardware layer
-    that owns the mask.
-
-    Neither engine shards a checkpoint, so several cards still resolve to one: most free VRAM
-    wins, as ``auto_select_gpu_ids`` already does for training, ties to the lowest ordinal. Taking
-    the FIRST id instead would land on ordinal 0 whenever everything is selected, i.e. the small
-    card on the mixed boxes this exists for. Resolved ONCE per load and carried, never re-derived:
-    free VRAM moves the moment the checkpoint lands.
-
-    Raises ValueError for a selection this host cannot honour, so the load is refused with a
-    reason rather than quietly running somewhere the user did not choose.
-
-    ``allow_ranking = False`` drops only the free-VRAM probe, for a caller that must not open a
-    CUDA context (the plan routes while a trainer holds the cards). Validation and translation
-    still run -- they read the mask and nvidia-smi -- so the single card the UI sends resolves and
-    only a multi-card pick comes back None.
-    """
+    """gpu_ids are physical; a CUDA_VISIBLE_DEVICES mask changes torch ordinals, so translate them."""
     wanted = sorted({int(gpu_id) for gpu_id in gpu_ids or ()})
     if not wanted:
         return None
@@ -383,13 +329,7 @@ def resolve_selected_cuda_ordinal(
 
 @contextmanager
 def diffusion_device_scope(ordinal: Optional[int]):
-    """Make ``ordinal`` the current CUDA device for the block, then restore the previous one.
-
-    For probes on a POOLED thread. ``torch.cuda.set_device`` is thread-local but not scoped, so a
-    permanent pin on an asyncio.to_thread executor thread outlives the request and leaves the next
-    one -- perhaps an automatic load -- resolving bare "cuda" against the previous request's card.
-    Worker threads are dedicated and keep the permanent pin.
-    """
+    """Restores the prior CUDA device so a pooled worker's pin does not leak into the next request."""
     if ordinal is None:
         yield
         return
@@ -411,14 +351,7 @@ def diffusion_device_scope(ordinal: Optional[int]):
 
 
 def apply_diffusion_device_ordinal(target: DiffusionDeviceTarget) -> None:
-    """Point this thread's CUDA context at ``target.ordinal``.
-
-    Thread-local, so every worker that loads or runs a pipeline has to call it; the load thread
-    setting it does nothing for the generate thread. The right lever rather than an indexed device
-    string because the offload policy reads ``torch.cuda.mem_get_info()`` with no argument, i.e.
-    the CURRENT device, so this steers the weights and their budget to the same card. A no-op for
-    an automatic pick.
-    """
+    """Thread-local, so each loading or running thread must call it; offload reads the current device."""
     if not target.is_cuda_torch_device:
         return
     pin_cuda_ordinal(target.ordinal)
@@ -436,15 +369,8 @@ def pin_cuda_ordinal(ordinal: Optional[int]) -> None:
 
 
 def placed_cuda_ordinal(target: DiffusionDeviceTarget) -> Optional[int]:
-    """The card the weights are actually on: the selection when there was one, else the card the
-    loading thread was pointing at.
-
-    Recorded WITH the pipeline because ``/images/generate`` runs on a pooled ``asyncio.to_thread``
-    worker: a pinned load leaves that worker on its card permanently, and a later automatic load
-    has no ordinal to re-pin with, so its bare "cuda" Generators and allocations would land on the
-    previous model's GPU while the weights sat on the default one. Kept apart from ``ordinal`` so
-    the automatic path still reports a bare device and an un-indexed target, as it always did.
-    """
+    """Records the card the weights actually sit on, since a pooled worker's pin would otherwise go
+    stale."""
     if not target.is_cuda_torch_device:
         return None
     if target.ordinal is not None:
@@ -457,17 +383,7 @@ def placed_cuda_ordinal(target: DiffusionDeviceTarget) -> Optional[int]:
 
 
 def resolve_diffusion_device_target(*, ordinal: Optional[int] = None) -> DiffusionDeviceTarget:
-    """Resolve the torch device + dtype + capability flags for diffusion.
-
-    Prefers Unsloth's hardware layer, else probes torch (CUDA -> XPU -> MPS -> CPU). On Apple
-    Silicon Unsloth may report MLX/CPU, but diffusers uses MPS, so those fall through to the MPS
-    probe. Torch is optional: without it the native sd.cpp engine still runs, so a missing torch
-    reports a torch-free CPU target instead of crashing ``/images/load`` before engine selection.
-
-    ``ordinal`` is an ALREADY-RESOLVED torch index from ``resolve_selected_cuda_ordinal``, carried
-    for one load rather than re-derived. Honoured only on CUDA / ROCm, where an index is what the
-    runners speak; XPU has no applicator and MPS / CPU nothing to choose between.
-    """
+    """Honours ordinal only on CUDA/ROCm; a missing torch yields a torch-free CPU target, not a crash."""
     try:
         import torch
     except Exception:

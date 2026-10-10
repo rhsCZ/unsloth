@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for is_vision_model() caching behaviour.
-
-``_vision_detection_cache`` mirrors the ``_audio_detection_cache``
-pattern used by ``detect_audio_type()``. These tests verify:
-
-* Repeated calls for the same model hit the cache.
-* Different models each trigger their own detection.
-* Both True and False results are cached.
-* The subprocess path (transformers 5.x models) is cached.
-* Exceptions that fall back to False are cached.
-"""
+"""is_vision_model() caches True, False, subprocess and exception-fallback results per model."""
 
 import struct
 import sys
@@ -52,18 +42,7 @@ from utils.models.model_config import (
 
 @pytest.fixture(autouse = True)
 def _clear_vision_cache(tmp_path, monkeypatch):
-    """Ensure every test starts with a fresh cache, from an empty working dir.
-
-    ``is_vision_model`` calls ``is_local_path`` first: any relative model id that
-    happens to exist on disk (``Path(name).exists()``) is treated as a local
-    model, short-circuiting before the mocked detection internals run. The CI cwd
-    (``studio/backend``) and the HF cache can contain dirs whose names collide
-    with the synthetic remote ids used here (``org/my-vlm``, ``model-a``,
-    ``broken/model`` ...), which made these tests fail with "called 0 times".
-    Running each test from a fresh empty ``tmp_path`` removes that collision
-    while leaving the real ``is_local_path`` logic intact (the local-GGUF tests
-    pass absolute ``tmp_path`` paths, unaffected by cwd).
-    """
+    """Run each test from an empty cwd: a relative model id that exists on disk counts as local."""
     monkeypatch.chdir(tmp_path)
     _vision_detection_cache.clear()
     yield
@@ -1044,10 +1023,7 @@ def _probe_against_cache(
     remote_config = None,
     **kwargs,
 ):
-    """Drive the vision probe against a cached snapshot, recording any Hub read it makes.
-
-    ``listed`` is what the repo document says the repo holds; None stands for no document.
-    """
+    """Runs the vision probe on a cached snapshot and logs Hub reads; listed=None means no document."""
     import huggingface_hub
     import utils.hf_probe as hf_probe
     import utils.models.model_config as mc
@@ -1093,11 +1069,7 @@ def _probe_against_cache(
 def test_the_current_snapshot_answers_without_fetching_the_file(
     tmp_path, monkeypatch, cached, expected
 ):
-    """The snapshot decides the answer -- it is read, not merely counted.
-
-    The repo document is still read, since it names the current commit. What the snapshot
-    saves is fetching config.json itself.
-    """
+    """The cached snapshot answers without fetching config.json; the repo document is still read."""
     repo_dir, _ = _hub_cached_repo(tmp_path, "acme/vlm", {"config.json": _json.dumps(cached)})
 
     answer, reads = _probe_against_cache(monkeypatch, repo_dir)

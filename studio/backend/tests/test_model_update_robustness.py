@@ -1,18 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Tests for model-update detection and the GGUF force-download helper.
-
-Covers:
-  * GGUF variant listing computes update_available from the already-fetched
-    sibling metadata instead of a second Hub call.
-  * hf_hub_download_with_xet_fallback forwards force_download through the shim to the
-    shared unsloth_zoo helper (which owns the cache-first early-return and its bypass).
-
-The cache "Update" action now runs through the download manager as a normal
-managed download (so it shows in the Downloads panel with progress + cancel),
-so the old POST /api/models/update endpoint and its tests are gone. Update
-*detection* — the "Update available" cue — is still exercised here.
-"""
+"""Update-available cue reads already-fetched sibling metadata, with no second Hub call."""
 
 import asyncio
 import sys
@@ -556,10 +544,7 @@ def test_repo_gguf_blob_map_skips_snapshot_file_with_unknown_size():
 
 
 def test_repo_gguf_blob_map_ignores_repo_blobs_subdir_on_no_symlink():
-    """A repo that ships a GGUF under its own blobs/ subdir lands at
-    snapshots/<rev>/blobs/model.gguf on a no-symlink cache. Its parent is named
-    'blobs' but it is NOT the cache blob store, so it gets a size identity rather
-    than having its filename recorded as a hash (which would show a phantom update)."""
+    """A repo's own blobs/ folder is not the cache blob store, so its GGUF gets a size identity."""
     repo_path = "/hf/models--org--repo"
     repo_info = SimpleNamespace(
         repo_path = repo_path,
@@ -700,11 +685,7 @@ def test_reclaim_replaced_gguf_variant_prunes_old_revision_only(monkeypatch, tmp
 
 
 def test_reclaim_replaced_gguf_variant_keeps_no_symlink_current_file(monkeypatch, tmp_path):
-    """No-symlink cache (Windows without Developer Mode): the moved GGUF lives
-    directly in snapshots/ and blobs/ is empty, so scan_cache_dir reports
-    blob_path == the snapshot file and its name is the FILENAME, not an etag.
-    Reclaim must NOT mistake that filename for a stale hash and delete the
-    freshly-downloaded current file."""
+    """On a no-symlink cache the blob path is the snapshot file itself, so its name is not a stale hash."""
     repo_id = "org/repo-GGUF"
     repo_path = tmp_path / "models--org--repo-GGUF"
     snap = repo_path / "snapshots" / ("a" * 40) / "model-Q4_K_M.gguf"

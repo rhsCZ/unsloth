@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GGUF picker rows describe one checkpoint each.
-
-A repo can publish several checkpoints under one set of quant labels
-(``unsloth/LTX-2.3-GGUF`` ships 63 GGUFs as ``ltx-2.3-22b-dev-*`` at the root,
-``distilled/ltx-2.3-22b-distilled-*`` and ``distilled-1.1/...``). Keying a row on
-the quant token alone folded those into one row per quant, hid two of the three
-checkpoints and advertised the sum of all three as the row's size.
-
-Splitting a genuinely split GGUF is the opposite mistake, so both are pinned here.
-"""
+"""Rows key on the checkpoint, not the quant token alone, so same-quant checkpoints stay separate."""
 
 from __future__ import annotations
 
@@ -374,10 +365,7 @@ def test_row_filenames_are_real_paths_under_the_snapshot(tmp_path):
 
 
 def test_the_route_model_carries_display_label_to_the_picker():
-    """The route builds ``models.models.GgufVariantDetail``, not the hub twin. When only the
-    twin declared ``display_label`` pydantic dropped the kwarg without a word, so every
-    qualified row reached the picker labelled with its whole relative path. Both models
-    have to declare it or the qualified label silently never ships."""
+    """The route's GgufVariantDetail must declare display_label, or pydantic silently drops it."""
     from hub.schemas.inventory import GgufVariantDetail as HubDetail
     from models.models import GgufVariantDetail as RouteDetail
 
@@ -406,11 +394,7 @@ def test_an_unqualified_row_still_reports_no_display_label():
 
 
 def test_a_discarded_shard_family_leaves_the_download_targets_too():
-    """Narrowing only ``main_files`` left the copy in ``target_filenames`` /
-    ``required_hashes`` / ``download_size_bytes``. The worker fetched both copies, reclaim
-    then deleted the unchosen one (it is absent from the narrowed ``main_hashes``), and the
-    manifest still required it -- so the finished job reported partial and re-downloaded a
-    multi-gigabyte checkpoint on every retry."""
+    """Discarding a shard family must also drop its target_filenames, required_hashes and download size."""
     from hub.utils.download_manifest import ExpectedFile
     from hub.utils.gguf_plan import plan_from_expected_files
 
@@ -474,10 +458,7 @@ def test_a_quant_shipped_whole_and_split_plans_only_the_set_the_loader_opens():
 
 
 def test_a_qualified_key_is_an_explicit_checkpoint_request():
-    """``resolve_local_gguf`` falls back to the first local variant for a ``:tag`` that
-    names no quant, which is right for ``:latest`` and wrong for one of our own rows. The
-    full-match rejected every slash-qualified key, so asking for an absent checkpoint was
-    answered by whichever one happened to be downloaded, under the requested model id."""
+    """A qualified key is an explicit checkpoint request, so a missing one must not fall back to another."""
     from core.inference.openai_auto_download import looks_like_quant
 
     assert looks_like_quant("distilled/ltx-2.3-22b-distilled-Q6_K") is True
@@ -525,12 +506,7 @@ def test_two_checkpoints_in_one_directory_get_distinguishable_labels():
 
 
 def test_the_model_config_listers_advertise_the_qualified_keys(tmp_path):
-    """Three consumers read their variant identities from these two listers rather than from the
-    hub copy: the /v1 local index (``local_model_resolver`` builds ``entry.variants`` here), the
-    remote VRAM preflight (which looks for a matching ``v.quant`` to get ``main_bytes``), and the
-    picker's own remote sizing. While they grouped on the bare label the qualified rows were
-    invisible to all three, and a slash-qualified suffix is now an explicit variant, so the miss
-    is a 404 rather than a fallback onto some other checkpoint."""
+    """Listers must advertise qualified keys; otherwise /v1, VRAM preflight and picker sizing miss them."""
     from utils.models.model_config import list_local_gguf_variants
 
     snapshot = tmp_path / "snap"
@@ -639,10 +615,7 @@ def test_the_auto_download_map_is_keyed_like_the_plan():
 
 
 def test_an_unknown_layout_row_keeps_the_label_it_always_had(tmp_path):
-    """The qualified key is for several checkpoints sharing one quant, nothing else. A file with
-    no recognised quant token has always been listed here under this module's label (the last
-    hyphenated segment) rather than the whole stem, and renaming those rows would break every pin
-    that holds one -- for no benefit, since there is no ambiguity to resolve."""
+    """Files without a recognised quant keep their old label; renaming them would break stored pins."""
     from utils.models.model_config import list_local_gguf_variants
 
     snapshot = tmp_path / "snap"
@@ -656,10 +629,7 @@ def test_an_unknown_layout_row_keeps_the_label_it_always_had(tmp_path):
 
 
 def test_a_shared_container_directory_still_answers_its_bare_quant():
-    """A repo that files every variant under one container (``weights/model-Q4_K_M.gguf``)
-    qualifies every key, because the key is a pure function of the path and cannot know the
-    directory disambiguates nothing. Every stored pin and every explicit repo:Q4_K_M then missed
-    the plan map, and the worker exited with 'No GGUF shards matching variant'."""
+    """A shared container directory must still answer the bare quant, or stored pins miss the plan map."""
     from types import SimpleNamespace
 
     from hub.utils.gguf_plan import build_gguf_variant_plans, plan_for_variant
@@ -713,10 +683,7 @@ def test_a_bare_local_id_keeps_the_checkpoint_a_plain_load_takes():
 
 
 def test_bpw_precisions_stay_separately_selectable(tmp_path):
-    """_extract_quant_label deliberately keeps the bpw modifier so byteshape's IQ4_XS at 3.53,
-    3.97 and 4.19 stay three rows. The token extractor drops it, so routing these listers through
-    the key merged all three under IQ4_XS and an explicit request for the formerly advertised
-    spelling missed."""
+    """bpw variants stay separate rows; keying by the token extractor would merge them under one quant."""
     from utils.models.model_config import list_local_gguf_variants
 
     snapshot = tmp_path / "snap"
@@ -775,10 +742,7 @@ def test_a_parent_only_quant_survives_the_main_file_predicate():
 
 
 def test_a_local_load_keeps_the_qualified_identity_it_was_asked_for(tmp_path):
-    """_find_local_gguf_by_variant picks the right file, but the returned config dropped the
-    variant, so the load intent carried none and llama.cpp recorded the bare label off the
-    filename. /status then named the root row for a qualified checkpoint, and the deletion guard
-    compared that bare label against the selected key and let the delete through."""
+    """A local load keeps the qualified variant identity, so /status and the delete guard match the key."""
     from utils.models.model_config import ModelConfig
 
     snapshot = tmp_path / "snap"
@@ -830,10 +794,8 @@ def _cache_repo(tmp_path: Path, repo_id: str, names: list[str]):
 
 
 def test_deleting_a_container_variant_accepts_the_bare_quant_the_download_admits(tmp_path):
-    """A repo filing its sole Q4_K_M under a shared container qualifies that key, so every stored
-    pin and every explicit ``repo:Q4_K_M`` names it by quant alone -- which ``plan_for_variant``
-    admits for the download. Matching only the qualified key on delete answered "not found" and
-    left the weights on disk."""
+    """Deleting a container variant must accept the bare quant the download admits, or weights stay
+    on disk."""
     from hub.services.models.deletion import _delete_gguf_variant_from_repos
     from hub.utils.gguf_plan import build_gguf_variant_plans, plan_for_variant
 
@@ -907,10 +869,7 @@ def test_a_bare_quant_that_is_its_own_key_still_deletes_only_itself(tmp_path):
 
 
 def test_a_qualified_key_whose_basename_ends_in_be_still_resolves_for_loading():
-    """The endian predicate reads a quant TOKEN -- whether the quant came from the parent
-    directory only. Handed the path-qualified key instead, it cannot find that string in the
-    basename or the parent and reads distilled/Q4_K_M/foo-be.gguf as a big-endian build, dropping
-    the one file the key owns: the row is advertised and downloadable but never loadable."""
+    """Endian check reads only the quant token, so a qualified key whose basename ends in be still loads."""
     files = [
         "distilled/Q4_K_M/foo-be.gguf",
         "other/Q4_K_M/bar.gguf",
@@ -928,10 +887,7 @@ def test_a_qualified_key_whose_basename_ends_in_be_still_resolves_for_loading():
 
 
 def test_a_bpw_build_keeps_its_own_identity_everywhere():
-    """Two builds of one base quant at different bits-per-weight are two checkpoints. The loader's
-    label always kept the modifier; the variant key dropped it, so the local export lister
-    advertised IQ4_XS-3.53bpw while the plan, the auto-download map and the delete predicate all
-    said IQ4_XS -- the advertised name 404s and the collapsed one unlinks BOTH builds."""
+    """A bpw build keeps its own identity in the lister, plan, auto-download map and delete predicate."""
     from utils.models.model_config import _extract_quant_label as loader_label
 
     a = "model-IQ4_XS-3.53bpw.gguf"
@@ -978,10 +934,7 @@ def test_a_bare_auto_download_stays_on_the_root_checkpoint():
 
 
 def test_the_bare_alias_keeps_the_bpw_and_survives_a_dotted_stem():
-    """The three compatibility fallbacks that accept a bare name for a path-qualified key -- the
-    plan lookup, auto-download admission and deletion -- share this. Two traps: the bpw modifier
-    is part of the identity now, and a key is already extension-stripped, so re-stemming it cuts
-    at the dot in "3.53bpw" (and at the one in "ltx-2.3")."""
+    """Bare-alias fallbacks must keep the bpw modifier and not re-stem a key at the dot in 3.53bpw."""
     from hub.utils.gguf import bare_quant_alias
 
     assert bare_quant_alias("weights/model-IQ4_XS-3.53bpw") == "IQ4_XS-3.53bpw"
@@ -1006,10 +959,8 @@ def test_a_bpw_container_build_resolves_by_its_bare_spelling(tmp_path):
 
 
 def test_the_inference_lister_sizes_one_shard_family_not_both_copies():
-    """A repo shipping the same quant twice (QwQ-32B's BF16 as QwQ-32B-BF16-* beside
-    QwQ-32B.BF16-*) has one row; charging both copies to it doubles the weight figure that
-    routes/inference.py bills to the VRAM guard, which then refuses a load that fits. The hub
-    lister already keeps one family; this is the mirror that feeds the guard."""
+    """Duplicate shard copies of one quant must be sized once, or the VRAM guard refuses a load that
+    fits."""
     from utils.models.model_config import _group_gguf_variant_files
 
     entries = [
@@ -1030,10 +981,7 @@ def test_the_inference_lister_sizes_one_shard_family_not_both_copies():
 
 
 def test_a_bpw_modifier_in_the_quant_directory_still_makes_two_keys():
-    """The quant-directory layout carries the modifier upstairs (IQ4_XS-3.53bpw/model.gguf),
-    which is exactly where extract_quant_token looks next. Reading only the basename gave both
-    builds the bare IQ4_XS key, so grouping and the plan kept one family and deleting that
-    advertised key unlinked BOTH -- the same data loss as the root-filename case."""
+    """A bpw modifier in a quant directory still yields two keys, not a shared bare IQ4_XS key."""
     a = "IQ4_XS-3.53bpw/model.gguf"
     b = "IQ4_XS-3.97bpw/model.gguf"
     assert gguf_variant_key(a) == "IQ4_XS-3.53bpw"
@@ -1049,10 +997,7 @@ def test_a_bpw_modifier_in_the_quant_directory_still_makes_two_keys():
 
 
 def test_the_remote_default_variant_prefers_the_root_checkpoint():
-    """pick_best_gguf keeps whichever filename it met first among equals, so a repo with
-    model-Q6_K.gguf beside distilled/model-Q6_K.gguf could hand the picker the distilled
-    checkpoint as its automatic default -- while a bare repo id means the ROOT checkpoint to
-    _match_variant(None, ...) and to local_model_resolver."""
+    """pick_best_gguf must default to the root checkpoint, not an equal-named file in a subdirectory."""
     import inspect
 
     from hub.services.models import gguf_variants as service
@@ -1063,10 +1008,7 @@ def test_the_remote_default_variant_prefers_the_root_checkpoint():
 
 
 def test_the_load_guard_sees_the_alias_the_delete_accepts():
-    """Deletion accepts an unambiguous bare quant for a path-qualified key (the shared-container
-    layout), so a guard comparing spellings literally lets a model loaded through a legacy bare
-    pin be deleted through its advertised qualified row -- unlinking the resident model's own
-    snapshot and blob. Loose on purpose: a false match only refuses a delete."""
+    """Load guard must treat a bare quant and its qualified row as one checkpoint, as delete does."""
     from routes.models import _variant_names_same_checkpoint as same
 
     assert same("Q4_K_M", "weights/model-Q4_K_M")
@@ -1081,10 +1023,7 @@ def test_the_load_guard_sees_the_alias_the_delete_accepts():
 
 
 def test_every_branch_derives_the_default_from_the_root_rows():
-    """Remote, cached and partial-local all answer /gguf-variants, so all three have to define a
-    bare repo id the way _match_variant(None, ...) and local_model_resolver do -- the ROOT
-    checkpoint -- or the automatic default depends on which branch served the request. Cached
-    rows derive it once more after download-state reconciliation can demote the original default."""
+    """Every /gguf-variants branch must derive the default from the root rows, not its own branch."""
     import inspect
     import types
 
@@ -1102,10 +1041,8 @@ def test_every_branch_derives_the_default_from_the_root_rows():
 
 
 def test_the_kv_cache_estimate_sizes_one_shard_family():
-    """A snapshot holding the same quant twice (QwQ-32B's two BF16 shard sets) would report double
-    the weights the loader opens, which /kv-cache-estimate turns into a false exceeds-memory
-    warning -- and which can make a snapshot look "more complete" purely for holding a redundant
-    copy. Same rule group_gguf_variant_files applies."""
+    """KV-cache estimate must size one shard family, or duplicates trigger a false exceeds-memory
+    warning."""
     from routes.models import _one_shard_family_of
 
     duplicated = [
@@ -1125,10 +1062,7 @@ def test_the_kv_cache_estimate_sizes_one_shard_family():
 
 
 def test_the_remote_load_path_auto_selects_the_root_checkpoint():
-    """ModelConfig.from_identifier is the LOAD path, so it has to define a bare repo id the way
-    local_model_resolver, the auto-download map and /gguf-variants do -- the ROOT checkpoint.
-    _pick_best_gguf keeps whichever filename it met first among equals, and an LTX-style listing
-    puts distilled/... before the root file."""
+    """ModelConfig.from_identifier must select the root checkpoint for a bare repo id, like other paths."""
     import inspect
 
     from utils.models import model_config as mc

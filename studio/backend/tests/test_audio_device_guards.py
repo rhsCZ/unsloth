@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Guards that must not charge a CPU-placed audio load for VRAM it never takes.
-
-A load held in system RAM still passed the training coexistence check, the GPU
-arbiter and the memory preflight, so it could be refused on a full card, evict an
-image or video pipeline, or be reported already-loaded while sitting on the GPU.
-"""
+"""A CPU-placed audio load must not be charged VRAM it never takes, or the GPU checks refuse it."""
 
 import asyncio
 import sys
@@ -25,12 +20,7 @@ from routes.training_vram import _stt_sidecar_holds_no_vram  # noqa: E402
 
 @pytest.fixture(autouse = True)
 def _neutral_audio_device_env(monkeypatch):
-    """A server-wide default must not decide the outcome of these tests.
-
-    Placement here is asserted against no opinion, so a host that sets
-    UNSLOTH_AUDIO_DEVICE would fail these on correct behaviour, and that host is
-    exactly the one most likely to run them.
-    """
+    """Clears UNSLOTH_AUDIO_DEVICE so a host-wide placement default cannot change these outcomes."""
     monkeypatch.delenv("UNSLOTH_AUDIO_DEVICE", raising = False)
 
 
@@ -338,14 +328,7 @@ def test_the_mask_runs_before_hardware_detection():
 
 
 def test_a_zero_gpu_standard_load_drops_the_stale_chat_claim():
-    """The load replaced whatever held CHAT. Leaving the claim makes the next
-    Images/Video acquire run the CHAT evictor and unload a CPU audio model that
-    was never on the GPU. The GGUF branch already releases; both do now.
-
-    Two awaited sites: the GGUF branch, and the standard branch after its load
-    (which cannot cover a claim re-taken while it ran). The standard branch's
-    during-load release is the third, handed to load_model as a callback so it
-    fires once the previous worker is gone rather than before it."""
+    """Leaving the CHAT claim after a load makes the next Images/Video acquire evict a CPU audio model."""
     src = _inference_source()
     assert src.count("await asyncio.to_thread(_release_chat_for_zero_vram_primary)") == 2
     assert (
@@ -389,12 +372,7 @@ def test_every_http_device_field_pins_the_three_canonical_values():
 
 
 def test_a_gpu_resident_mtmd_server_is_never_reported_as_holding_no_vram():
-    """mtmd records the user's wish on the branch that does not restart the server.
-
-    _load_locked writes _forced_cpu even when an in-flight request keeps the running
-    server, so a llama-server still at -ngl 99 carries a CPU wish. Trusting it would
-    let training start beside a model that holds the whole checkpoint in VRAM.
-    """
+    """_forced_cpu may read CPU while a kept llama-server still holds the model in VRAM."""
     resident_on_gpu = types.SimpleNamespace(
         device = "llama.cpp",
         _gpu_disabled = False,
@@ -447,10 +425,7 @@ def test_the_stale_chat_claim_is_dropped_before_the_load_not_only_after():
 
 
 def test_the_gguf_audio_codec_follows_the_servers_own_placement():
-    """The codec is a second allocation. A server launched at zero offload is
-    classified holds_no_vram, which lets the route skip GPU arbitration and leaves
-    it resident when training reclaims memory; a codec on CUDA would hold VRAM
-    under both of those promises."""
+    """The codec follows the server's placement, so a CPU server's codec never takes VRAM."""
     import inspect
 
     from core.inference.llama_cpp import LlamaCppBackend
@@ -461,13 +436,7 @@ def test_the_gguf_audio_codec_follows_the_servers_own_placement():
 
 
 def test_decoding_happens_where_the_codec_actually_is():
-    """Loading the codec on CPU is only half of it.
-
-    The decoders build their input tensors on the device they are handed. Handed
-    CUDA for a CPU-resident codec, SNAC and DAC fail outright on a device mismatch
-    and BiCodec moves the codec onto the card, taking the VRAM a CPU RAM load
-    promised not to take. The recorded placement wins over the caller's request.
-    """
+    """Decode on the codec's recorded device, not the requested one, or SNAC and DAC fail on mismatch."""
     import torch
 
     from core.inference.audio_codecs import AudioCodecManager
@@ -512,11 +481,7 @@ def test_a_cpu_load_leaves_a_running_export_alone():
 
 
 def test_the_chat_claim_outlives_the_worker_that_earned_it():
-    """Released before the load, the claim leaves a still-resident GPU model
-    unowned, and acquire_for evicts nobody when the arbiter has no owner: an
-    Images or Video load then allocates straight over it. The release is handed to
-    load_model, which runs it once the previous worker is gone and its memory is
-    back, still ahead of the download."""
+    """Release the chat claim after the old worker exits, or an Images/Video load allocates over it."""
     import inspect
 
     from core.inference.orchestrator import InferenceOrchestrator
@@ -534,10 +499,7 @@ def test_the_chat_claim_outlives_the_worker_that_earned_it():
 
 
 def test_whisper_cpp_publishes_the_load_before_choosing_its_placement():
-    """The training hook reads is_loading() without this method's lock. A placement
-    decided ahead of that flag is invisible to training: it sees no load in flight,
-    reads the outgoing model's CPU placement, preserves it as holding no VRAM, and
-    the command already built then starts a GPU-backed server beside the run."""
+    """Publish the load before choosing placement, since training reads is_loading() without the lock."""
     import inspect
 
     from core.inference.stt_ggml_sidecar import GgmlSttSidecar

@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Exercise NPU lifecycle and API calls against a fake lemond child process.
-
-POSIX only: the stub executable is a shell script.
-"""
+"""Fake lemond child is a shell script, so these NPU lifecycle tests run on POSIX only."""
 
 from __future__ import annotations
 

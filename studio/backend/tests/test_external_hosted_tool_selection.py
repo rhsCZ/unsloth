@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hosted tools that survive a turn the Unsloth loop runs.
-
-Images and Fetch have their own pills, no local implementation, and no
-relationship to Search / Code / RAG. So a request can legitimately mix them with
-an Unsloth tool, and the loop has to forward those names to the provider instead
-of withholding the whole hosted surface: the alternative is a lit toggle for a
-tool the model is never offered.
-
-Search and code execution are the opposite case. Unsloth runs those itself once
-the loop is up, so forwarding them too would run both sides of one tool and bill
-the provider for its half.
-"""
+"""Images and Fetch go to the provider; Search and code run locally, never on both sides."""
 
 from __future__ import annotations
 

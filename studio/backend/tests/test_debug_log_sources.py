@@ -165,10 +165,8 @@ def test_the_default_source_prefers_the_running_session():
 
 
 def test_containment_survives_a_windows_extended_length_prefix(monkeypatch):
-    """ntpath.realpath decides per call whether to keep the \\\\?\\ prefix, so
-    the directory and the file in it can come back spelled differently. pathlib
-    reads that as two different drives, and the whole family disappears with no
-    error anywhere."""
+    """Windows extended-length prefixes can differ between directory and file, so pathlib sees two
+    drives."""
     import ntpath
 
     monkeypatch.setattr(os.path, "normcase", ntpath.normcase)
@@ -277,13 +275,8 @@ def test_a_huge_directory_does_not_stat_every_file(monkeypatch):
 
 
 def test_a_literal_tilde_home_is_scanned_both_ways(tmp_path, monkeypatch):
-    """The writer and the reader disagreed about the tilde.
-
-    _swa_cache_path builds Path(home) raw, so a value passed literally (systemd
-    EnvironmentFile, dotenv) makes the runners write into a directory NAMED
-    "~", while expanduser sent discovery to the real home. Scanning one of the
-    two lost the llama logs the viewer exists to reach.
-    """
+    """A literal ~ home makes runners write to a dir named ~, so scan both spellings or llama logs
+    vanish."""
     monkeypatch.chdir(tmp_path)
     literal = tmp_path / "~" / "studio"
     (literal / "logs" / "llama-server").mkdir(parents = True)

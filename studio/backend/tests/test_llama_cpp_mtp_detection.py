@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the MTP auto-detection path (llama.cpp #22673).
-
-Pins three contracts: name-based detector, user-override detector, and
-the _already_in_target_state mirror that prevents needless reloads.
-"""
+"""Pins MTP name detection and user override; _already_in_target_state prevents needless reloads."""
 
 from __future__ import annotations
 
@@ -1122,11 +1118,7 @@ def test_reasoning_budget_capability_gate_rejects_explicit_old_binary(
 
 
 def test_reasoning_budget_capability_gate_ignores_env_on_unprobeable_binary(monkeypatch):
-    """An env default must not fail closed on a binary whose --help cannot be read.
-
-    Nothing was configured, so the rejection named a setting the UI shows as default.
-    Effective state still reports the inherited value; only the gate ignores it.
-    """
+    """An unprobeable binary must not reject an env default the user never configured."""
     monkeypatch.setattr(
         LlamaCppBackend,
         "probe_server_capabilities",
@@ -1962,10 +1954,7 @@ def test_build_speculative_flags_dspark_missing_sidecar_falls_back(monkeypatch):
 
 
 def test_build_speculative_flags_dspark_blames_the_binary_not_the_missing_sidecar(monkeypatch):
-    """The sidecar fetch is gated on the same supports_dspark answer, so on a
-    binary that cannot run DSpark the sidecar is legitimately absent. Reporting
-    drafter_not_found would tell the user to place a file that is not the problem,
-    and would reload the server on every Apply via the drafter_not_found dedup."""
+    """A DSpark-incapable binary explains the missing sidecar; blame the binary, not drafter_not_found."""
     backend = _resolver_backend(monkeypatch)
     caps = LlamaCppBackend.probe_server_capabilities()
     caps["supports_dspark"] = False
@@ -3006,11 +2995,7 @@ def test_already_in_target_state_reloads_when_the_crashed_binary_was_replaced(
 
 
 def test_diffusion_load_clears_the_previous_models_spec_fallback():
-    """The diffusion early-return skips _build_speculative_flags, which is what clears
-    the stand-down on every other load, and only /unload clears it otherwise. Both
-    retry rules in the dedupe read it, so an MTP model's verdict left behind by a
-    switch to DiffusionGemma relaunches the diffusion server on every Apply -- forever,
-    since the relaunch takes this same path and leaves the verdict exactly as it was."""
+    """Diffusion returns early past _build_speculative_flags, which alone clears a stale stand-down."""
     src = inspect.getsource(LlamaCppBackend.load_model)
     diffusion = src.find("if self._is_diffusion:")
     assert diffusion != -1
@@ -3023,10 +3008,7 @@ def test_diffusion_load_clears_the_previous_models_spec_fallback():
 
 
 def test_already_in_target_state_settles_a_dflash_listing_that_never_answered():
-    """A permanent listing error (gated repo, offline) records no answer, so
-    _dflash_sidecar_absent stays False. The drafter_not_found arm read that as "worth
-    another go" and relaunched a healthy drafter-free server on every Apply. DFlash
-    asks through _dflash_retry_needed instead, which a permanent error never sets."""
+    """A permanent listing error never sets _dflash_retry_needed, so it must not trigger a relaunch."""
     backend = _mtp_backend_default(
         _model_identifier = "unsloth/Muse-Glimmer-30B-GGUF",
         _gguf_path = None,
@@ -3392,16 +3374,7 @@ def test_a_slot_clamp_from_an_inconclusive_probe_is_also_retried(monkeypatch):
 
 
 def test_the_probe_marker_is_committed_only_once_the_runtime_is_replaced():
-    """The marker describes the RUNNING runtime, so load_model must not write it before
-    the launch is committed.
-
-    Two early exits sit between the probe and the commit and both leave the old server
-    up: the Vulkan-ordinal preflight rejects an invalid GPU selection, and a diffusion
-    load returns through _start_diffusion_server without using any llama-server
-    capability. Writing the marker early would clear it for a runtime that is still
-    degraded, or set it on a diffusion runner that would then be torn down and reloaded
-    for no reason. Checked structurally because load_model is not unit-callable.
-    """
+    """The probe marker is written only at launch commit; early exits leave the old server running."""
     source = inspect.getsource(mod)
     tree = ast.parse(source)
     load_model = next(
@@ -3508,16 +3481,7 @@ def test_a_diffusion_load_never_pays_for_the_capability_probe():
 
 
 def test_the_marker_comes_from_the_launch_snapshot_not_a_probe_after_startup():
-    """The marker must describe the probe that BUILT the command, not one taken after the
-    server is up.
-
-    _wait_for_health allows up to 600s, and the retry window is 30s, so a large model's
-    startup expires the inconclusive entry many times over. Re-probing at the commit point
-    would then record False for a server that was launched without speculative decoding or
-    unified KV slots, and every identical Apply would dedupe against that degraded runtime
-    for good -- the original bug, reintroduced. Checked structurally because load_model is
-    not unit-callable.
-    """
+    """Marker comes from the launch snapshot; a later probe would let a degraded server dedupe forever."""
     load_model = next(
         node
         for node in ast.walk(ast.parse(inspect.getsource(mod)))
@@ -3560,13 +3524,7 @@ def test_the_marker_comes_from_the_launch_snapshot_not_a_probe_after_startup():
 
 
 def test_a_later_successful_probe_cannot_erase_an_earlier_degrading_one():
-    """The launch's capability decisions are spread across the whole load, and the retry
-    window is 30s. The slot clamp runs before an HF download; the command is built after
-    it. Sampling one probe lets a later success erase the fact that an earlier one already
-    clamped the slots, so the marker has to accumulate.
-
-    Exercised on the accumulator itself: driving load_model would need a real download.
-    """
+    """The marker must accumulate: a later successful probe must not erase an earlier slot clamp."""
     load_model = next(
         node
         for node in ast.walk(ast.parse(inspect.getsource(mod)))
@@ -3626,12 +3584,7 @@ def test_the_accumulator_latches_across_probes():
 
 
 def test_the_dspark_pre_download_gate_latches_into_the_launch_accumulator():
-    """The sidecar gate shapes the launch as much as the slot clamp does: an inconclusive
-    probe there skips an ~11 GB drafter, so that load ran degraded. It sits before a
-    download that can outlast the 30s retry window, so if it probes on its own the later
-    launch probe can come back conclusive and the load is remembered as a good one --
-    every identical Apply after it then dedupes against a server with no drafter.
-    """
+    """The DSpark pre-download gate's inconclusive probe must latch into the launch accumulator."""
     tree = ast.parse(inspect.getsource(mod))
     download = next(
         node
@@ -3673,10 +3626,7 @@ def test_the_dspark_pre_download_gate_latches_into_the_launch_accumulator():
 
 
 def test_the_dspark_gate_uses_the_probe_it_is_given():
-    """Behavioural half: the injected probe is the one consulted, and its verdict still
-    drives the skip. A default is kept so the direct callers in the tests and the CLI
-    keep working unchanged.
-    """
+    """_download_dspark skips on the injected caps_probe verdict; the default serves direct callers."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     signature = inspect.signature(LlamaCppBackend._download_dspark)
@@ -3720,13 +3670,7 @@ def _write_head_only_drafter(path, *, with_token_embd: bool):
 
 
 def test_repairing_an_unloadable_drafter_in_place_reloads(tmp_path):
-    """Apply after a repair must reload, or speculative decoding stays off for good.
-
-    The dedupe counts a deliberately dropped drafter as launched, comparing resolved
-    PATHS. Replace the rejected sidecar with a self-contained head at the same path and
-    a path-only comparison still says "already loaded", so the drafter-free server is
-    kept and nothing re-runs the header check.
-    """
+    """Repairing a drafter in place must reload, since a path-only dedupe keeps the drafter-free server."""
     sidecar = _write_head_only_drafter(tmp_path / "mtp-model.gguf", with_token_embd = False)
     backend = _mtp_backend(
         _speculative_type = "ngram-mod",
@@ -3745,12 +3689,7 @@ def test_repairing_an_unloadable_drafter_in_place_reloads(tmp_path):
 
 
 def test_repairing_a_paravirtually_suppressed_drafter_does_not_reload(tmp_path):
-    """The negative: that drop is a property of the BUILD, not of the file's contents.
-
-    A drafter suppressed because the probe offered no draft-layer flag would be
-    suppressed again byte-for-byte, so re-asking the header question there would tear
-    down a healthy server for nothing.
-    """
+    """A drafter dropped by the build itself must not reload; the same bytes would be dropped again."""
     sidecar = _write_head_only_drafter(tmp_path / "mtp-model.gguf", with_token_embd = True)
     backend = _mtp_backend(
         _speculative_type = "ngram-mod",

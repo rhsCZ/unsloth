@@ -2,16 +2,7 @@
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Regression test for the macOS half of the managed-account temp invariant.
-
-Linux grants a confined tool no read on the system temp tree at all
-(``_SYSTEM_READ_ROOTS`` names no /tmp), only the account's own ``tmp_root()``
-among the writable roots. The macOS profile granted ``file-read*`` on the whole
-shared ``/private/tmp``, so a managed tool could read every same-UID temp file
-the owner or any other application on the host had left there; the hidden-root
-deny only covers ``<tempdir>/unsloth-studio``. The child's TMPDIR already points
-inside its own sandbox dir, so the shared tree is not needed for startup.
-"""
+"""macOS profile must not grant file-read* on shared /private/tmp; Linux grants no system temp."""
 
 import re
 import sys

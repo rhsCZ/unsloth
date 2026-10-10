@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Guards for the two cache-path regressions this rework introduced.
-
-Both only exist because the rework pins a local snapshot and reaches the Hub from the
-start route; neither mechanism is present on main.
-"""
+"""Guards two cache-path regressions from pinning a local snapshot and reaching the Hub from start."""
 
 import time
 

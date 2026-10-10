@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The scoped download worker must never report success without the files.
-
-``snapshot_download`` returns an existing snapshot folder -- having fetched nothing -- when
-its own ``repo_info`` call fails, and with HF metadata unavailable no manifest is written,
-so the usual verification is a no-op. A repo already on disk from a full snapshot job (which
-ignores ``*.gguf``) would otherwise flip a scoped job to complete with no weights, and the
-Images page auto-loads as soon as the job completes.
-"""
+"""A scoped job must not complete with no weights when snapshot_download returns an existing folder."""
 
 from __future__ import annotations
 

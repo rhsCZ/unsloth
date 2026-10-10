@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the pre-launch non-chat GGUF refusal.
-
-Reported: a text-to-video model opened from the Model Hub landed in a chat, ran the whole
-download-and-launch path, and died as "llama-server failed to start". ``_non_chat_gguf_refusal``
-decides that from the GGUF header instead, and names the page that does run it.
-
-Unsloth's video GGUFs (MiniMax-H3) carry a bare tensor header with ZERO KV pairs, so there is no
-``general.architecture`` to match -- which is why "declares no architecture" is a verdict here,
-and why it has to be told apart from "the header could not be read".
-"""
+"""Zero-KV video GGUFs declare no architecture, which must be told apart from an unreadable header."""
 
 from __future__ import annotations
 
@@ -254,11 +245,8 @@ def test_a_placeholder_architecture_matches_the_picker_verdict(tmp_path):
 
 
 def test_an_unassemblable_video_arch_promises_no_page(tmp_path):
-    # Wan 2.2 A14B is a two-expert MoE the Video backend assembles only from a file naming one
-    # expert of a high/low noise pair, and Wan 2.1's repo ids resolve to no family, so
-    # _arch_to_task tags an unpaired A14B file and Wan 2.1 image-diffusion-unsupported and the
-    # Video picker never lists them. The header says "wan" for all of them, so the refusal has
-    # to consult the same family resolution rather than trusting the arch.
+    # The header says 'wan' for every Wan file, so the refusal must consult _arch_to_task, not the
+    # arch.
     from routes.models import _arch_to_task
     for identifier, name, page_named in (
         ("QuantStack/Wan2.2-TI2V-5B-GGUF", "Wan2.2-TI2V-5B-Q4_K_M.gguf", True),
@@ -369,14 +357,7 @@ def test_speech_arch_names_the_audio_page(tmp_path):
 
 
 def test_every_name_the_video_preflight_imports_from_routes_still_resolves():
-    """The preflight reaches into routes.models for the Video page's own buildability rule.
-
-    That import sits inside ``except Exception: return True``, so when a helper moves out of
-    routes.models without a compatibility alias the ImportError is swallowed and the probe
-    answers "yes, the page can build it" for a GGUF the loader cannot assemble. Nothing else
-    fails, which is why this is asserted rather than left to the arch tests: the names are
-    read out of the source so a newly added import is covered the day it lands.
-    """
+    """Names the preflight imports from routes.models must resolve, or its broad except hides it."""
     import ast
     import pathlib
 

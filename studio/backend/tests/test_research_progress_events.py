@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every Deep Research model call must bracket itself with timeline events.
-
-Planning, per-step decisions, and the synthesis audit run with thinking disabled and report
-progress off. Without these brackets they emit nothing at all, and the UI showed a static
-"0 sources, 0 actions" card for the whole call.
-"""
+"""Each Deep Research model call must emit timeline events, or the UI shows a static 0 sources card."""
 
 import asyncio
 import json

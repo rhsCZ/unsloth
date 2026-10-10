@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Runtime contract of routes.inference._offline_guarded.
-
-Driven in a clean interpreter rather than in-process: the backend test suite installs
-stubs for structlog, fastapi and others into sys.modules at collection time, so loading
-the route module in-process passes or fails depending on collection order. One subprocess
-keeps the check honest and order-independent. All three assertions share it so the
-interpreter and torch import are paid once.
-"""
+"""Runs _offline_guarded in a subprocess, since in-process stubs make the import order-dependent."""
 
 import os
 import subprocess

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A failed NATIVE (sd.cpp) replacement load must hand GPU residency back to the displaced account.
-
-sd.cpp can be selected on a GPU host (UNSLOTH_DIFFUSION_ENGINE=sd_cpp), where /images/load takes
-the arbiter with ``acquire_for_request(DIFFUSION, _begin_load)`` before the background load runs.
-That claim moves ``gpu_arbiter._owner_account`` to the requester, so when the load then fails with
-the previous account's pipeline still resident, the failure path has to undo it -- the diffusers
-and video backends both call ``restore_owner_account`` there.
-"""
+"""A failed sd.cpp load must call restore_owner_account, returning GPU ownership to the prior account."""
 
 from __future__ import annotations
 

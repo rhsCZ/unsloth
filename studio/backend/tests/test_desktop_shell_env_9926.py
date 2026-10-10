@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""unsloth#9926: a desktop launch must end with the ROCm environment a terminal has.
-
-An RX 7600 SIGSEGVs from the desktop app and trains from ``unsloth studio``,
-because ``shell_path::fix_path()`` in src-tauri keeps only PATH out of the
-login shell. These pin the shape of the fix, not the crash, which
-needs the card.
-"""
+"""Desktop launches need the ROCm env: shell_path::fix_path keeps only PATH from the login shell."""
 
 from __future__ import annotations
 
@@ -23,11 +17,7 @@ from utils import desktop_shell_env as dse
 
 @pytest.fixture
 def linux(monkeypatch):
-    """The module returns before anything else off Linux, so pin the platform.
-
-    Without this the import tests pass on a Windows or macOS runner by asserting
-    the early return, which is how staging CI caught them asserting nothing.
-    """
+    """Pin sys.platform to linux: off Linux the module returns early, so tests would assert nothing."""
     monkeypatch.setattr(dse.sys, "platform", "linux")
 
 

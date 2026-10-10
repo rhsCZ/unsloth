@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the diffusion auto-policy decision layer.
-
-Covers the per-family footprint estimator (bf16-resident component sizes x per-scheme
-factors, transient vs steady, base-repo overrides), the dense-quant candidate resolution
-(with the quant selector / prequant probe monkeypatched, no torch), and the resolved
-provenance record. The loader-side ordering fix is exercised through the planner: the
-regression case is a GGUF whose file-size plan forces offload while the candidate's
-estimate fits resident."""
+"""CPU-only auto-policy tests for footprint estimates, quant candidates and provenance records."""
 
 from __future__ import annotations
 
@@ -21,10 +14,7 @@ import core.inference.diffusion_auto_policy as ap
 
 @pytest.fixture(autouse = True)
 def _assume_the_restricted_load_is_available(monkeypatch):
-    """Policy/planning tests, not a check on whether this host's torchao imports.
-
-    Without this, a machine with no (or a skewed) torchao turns every hosted-prequant decision
-    below into "keep the dense weights". The capability is covered in test_diffusion_prequant.py."""
+    """Policy tests, not a torchao check: unpatched, a broken torchao keeps dense weights for prequants."""
     import core.inference.diffusion_prequant as _pq
     monkeypatch.setattr(
         _pq, "restricted_prequant_load_supported", lambda scheme = None, filename = None: True
@@ -241,13 +231,7 @@ def test_candidate_disk_gate_skips_when_cache_disk_low(monkeypatch):
 
 
 def test_candidate_disk_gate_spares_an_already_cached_prequant(monkeypatch):
-    """A cached checkpoint downloads nothing, so the space gate has no claim on it.
-
-    The gate's own comment said a cached re-download is a no-op, but it ran regardless. That
-    discarded exactly the candidate the auto retry exists to find: the retry only ever proposes a
-    rung whose checkpoint is already cached, so on a low-disk or moved-cache install every retry
-    fell back to the GGUF despite a resident-fit local artifact.
-    """
+    """Cached prequants cost no download, so the disk-space gate must spare them, or auto retries fail."""
     import core.inference.diffusion_auto_policy as ap
     import core.inference.diffusion_prequant as pq
 
@@ -269,13 +253,7 @@ def test_candidate_disk_gate_spares_an_already_cached_prequant(monkeypatch):
 
 
 def test_a_local_override_is_never_gated_on_disk_space(monkeypatch):
-    """A local path override downloads nothing, so the space gate has no claim on it.
-
-    prequant_checkpoint_cached only answers for hosted repos (_cached_in_root returns None for any
-    other kind), so probing a path source there reports False and re-applies the gate to a file
-    already on disk. The retry treats a local override as costing no bytes; this has to agree, or a
-    low-disk host drops the local rung to GGUF.
-    """
+    """A local path override costs no download; the disk-space gate must skip it, not re-check the cache."""
     import core.inference.diffusion_auto_policy as ap
     import core.inference.diffusion_prequant as pq
 
@@ -290,13 +268,7 @@ def test_a_local_override_is_never_gated_on_disk_space(monkeypatch):
 
 
 def test_the_cached_probe_is_pinned_to_the_active_cache_root(monkeypatch):
-    """Unpinned, cached_checkpoint_path reads only huggingface_hub's import-time constant.
-
-    Unsloth's cache folder is a setting, so after it changes the retry proves the checkpoint cached
-    in the LIVE root while an unpinned probe here still calls it uncached and re-applies the gate,
-    defeating the moved-cache retry this excuse exists for. The retry and the loader both pin the
-    active root; so must this.
-    """
+    """Pin the cache probe to the live cache root; huggingface_hub's import-time constant goes stale."""
     import core.inference.diffusion_auto_policy as ap
     import core.inference.diffusion_prequant as pq
     import utils.hf_cache_settings as cache_settings
@@ -521,13 +493,7 @@ def test_the_refusal_only_offers_auto_where_auto_exists():
 
 
 def test_every_family_with_a_hosted_prequant_can_be_sized():
-    """A family the size table does not know cannot use its own hosted checkpoints.
-
-    ``resolve_dense_quant_candidate`` returns None without a size entry, so
-    ``_pipeline_planned_denoiser_scheme`` has nothing to seed from and the loader keeps the dense
-    transformer, which is precisely the download the prequant rows exist to avoid. The family
-    looks complete from its own entry, so the miss is only visible from here.
-    """
+    """Every family with a hosted prequant needs a size entry, or the loader downloads dense weights."""
     from core.inference.diffusion_auto_policy import _FAMILY_BF16_GB
     from core.inference.diffusion_families import _FAMILIES
 

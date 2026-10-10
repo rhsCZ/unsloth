@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the persistent per-user trust_remote_code approval cache.
-
-The cache skips only the DIALOG, never the scan: every load re-scans (CRITICAL always
-blocked), and a stored approval just seeds the authoritative fingerprint check. The scanner
-and fingerprint run for real; only the config/file fetch and commit-SHA lookup are stubbed.
-"""
+"""The cache skips only the dialog: every load still re-scans, and CRITICAL is always blocked."""
 
 import pytest
 

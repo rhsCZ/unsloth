@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Backend contract for serving embedding GGUFs.
-
-llama-server answers ``/v1/embeddings`` with a 501 ("This server does not
-support embeddings. Start it with `--embeddings`") unless it was launched with
-``--embedding``; nothing in llama.cpp turns that on from the model itself. These
-tests pin the header probe that detects an embedding GGUF (``<arch>.pooling_type``,
-the only place the flag can be decided before launch) and the ``load_model``
-emission it gates.
-"""
+"""Embedding GGUFs need --embedding at launch, which the pooling_type header probe decides."""
 
 from __future__ import annotations
 

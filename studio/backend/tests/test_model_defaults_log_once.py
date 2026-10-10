@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""load_model_defaults announces a resolution once, then drops to debug.
-
-GET /api/inference/status resolves the defaults on every poll and the UI polls it
-every 5s for as long as a tab is open, so the unconditional info line repeated
-forever. The first resolution still logs at info; repeats stay visible at debug.
-"""
+"""Status polls resolve defaults every 5s: the first resolution logs at info, repeats at debug."""
 
 from __future__ import annotations
 

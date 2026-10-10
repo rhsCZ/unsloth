@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""FastAPI round-trip tests for the diffusion image routes.
-
-The diffusion backend is replaced with a lightweight fake, so these exercise the
-route wiring, validation (422), error mapping, and response shapes without torch,
-diffusers, weights, or a GPU.
-"""
+"""Diffusion image routes: wiring, 422 validation and error mapping, against a fake backend."""
 
 from __future__ import annotations
 
@@ -14,12 +9,7 @@ import types
 
 
 def _cuda_target():
-    """A compilable bf16 CUDA target, as ``_resolve_device_target`` returns on a real card.
-
-    The dtype is the real ``torch.bfloat16`` and ``supports_default_torch_compile`` is set, since the
-    precision preflight asks ``compile_eligible`` whether a quantised pipeline could compile at all:
-    a stub missing either reads as a card that cannot, and refuses loads a real one accepts.
-    """
+    """Set the real bf16 dtype and supports_default_torch_compile, or the stub looks uncompilable."""
     import torch
     return types.SimpleNamespace(
         device = "cuda",
@@ -850,10 +840,7 @@ def test_cpu_load_skips_the_gated_preflight(client, monkeypatch):
 
 
 def test_a_cpu_mispredicted_engine_is_still_preflighted(monkeypatch):
-    """predict_engine never installs, so a host where the sd-cli install then fails lands on the
-    OTHER engine and the preflight ran against one never activated. The GPU path always re-asked the
-    engine it got; the CPU path did not, so a mispredict there started the load with the diffusers
-    companions unread -- the bare mid-download token error this preflight exists to replace."""
+    """The CPU path must re-ask the activated engine; a mispredict otherwise skips the preflight."""
     from types import SimpleNamespace
 
     import core.inference.diffusion_device as devmod
@@ -912,10 +899,7 @@ def test_a_cpu_mispredicted_engine_is_still_preflighted(monkeypatch):
     [("cuda", {}), ("cpu", {"UNSLOTH_DIFFUSION_SD_CPP": "0"})],
 )
 def test_gated_pick_on_an_engine_switch_keeps_the_previous_model(monkeypatch, device, env):
-    """The refusal must precede the engine switch, not follow it: activating the other engine
-    unloads the deactivated one, so a preflight running after the selection destroyed the resident
-    image model and only then reported the gated repo. The CPU case has no GPU handoff at all, so
-    there the switch is the only thing at stake."""
+    """Refusal must run before the engine switch, since switching unloads the resident image model."""
     from types import SimpleNamespace
 
     import core.inference.diffusion_device as devmod
@@ -1530,11 +1514,7 @@ def test_precision_refusal_precedes_eviction_and_engine_selection(client, monkey
 
 
 def test_the_native_engine_refuses_an_explicit_precision_it_cannot_honour(client, monkeypatch):
-    """sd.cpp accepts transformer_quant / text_encoder_quant for interface parity and IGNORES
-    them, so an explicit fp8 used to load happily, quantise nothing and report null -- the exact
-    silent mismatch this change exists to remove, on the one engine that was exempt from it. The
-    diffusers path already refuses on the same CPU-only host, so exempting this one also left the
-    two engines disagreeing about the same request."""
+    """sd.cpp ignores transformer_quant and text_encoder_quant, so explicit fp8 must be refused."""
     import core.inference.diffusion_engine_router as engine_router
     from core.inference.sd_cpp_engine import ENGINE_SD_CPP
 
@@ -1550,11 +1530,7 @@ def test_the_native_engine_refuses_an_explicit_precision_it_cannot_honour(client
 
 
 def test_a_failed_engine_prediction_still_gates_the_precision_after_selection(client, monkeypatch):
-    """predict_engine is a probe, and a probe can raise -- an sd-cli query against a broken
-    install, a filesystem error reading the cache. That left pending_name None, so BOTH gate arms
-    above were skipped, and selection then landed on sd.cpp anyway: the explicit fp8 was accepted,
-    nothing was quantised and the status reported null. The gate is re-asked of the engine that
-    was actually activated, so an inconclusive prediction cannot buy a silent mismatch."""
+    """Precision gate re-asked of the activated engine, since a failed prediction skipped both arms."""
     import core.inference.diffusion_engine_router as engine_router
     from core.inference.sd_cpp_engine import ENGINE_SD_CPP
 
@@ -1604,10 +1580,7 @@ def test_the_native_engine_still_loads_when_nothing_was_promised(client, monkeyp
 
 
 def test_the_plan_refuses_an_impossible_precision_before_anything_is_staged(client, monkeypatch):
-    """The UI plans first and stages every entry it gets back, so a refusal that only lives in
-    /images/load arrives AFTER the download it should have prevented -- the GGUF and its
-    companions on the image side, tens of GB on the video one. Both checks are network-free, so
-    doing them here costs nothing."""
+    """Plan refuses impossible precision up front; /images/load would refuse only after the download."""
     from core.inference.diffusion_auto_policy import precision_refusal_message
 
     backend = diffusion_module.get_diffusion_backend()
@@ -1638,11 +1611,7 @@ def test_the_plan_refuses_an_impossible_precision_before_anything_is_staged(clie
 
 
 def test_the_plan_does_not_probe_the_gpu_while_training_holds_it(client, monkeypatch):
-    """An UNCACHED scheme sends assert_precision_available into a quantise-and-matmul smoke
-    probe, which initialises CUDA and allocates in the Unsloth process. /images/load refuses
-    outright while a trainer is running, for exactly that reason -- but the UI asks for the
-    plan first, so the probe ran before that guard had a say. Staging files needs no GPU, so
-    the plan is answered; the load still refuses the same pick afterwards."""
+    """The plan must not run the GPU smoke probe while training holds the GPU; staging needs no GPU."""
     import routes.inference as inference_routes
 
     backend = diffusion_module.get_diffusion_backend()
@@ -2237,10 +2206,7 @@ def test_fast_and_auto_memory_do_not_refuse_a_precision(client, monkeypatch):
 
 @pytest.mark.parametrize("mode", ["int8", "fp8_dynamic", "nvfp4"])
 def test_an_offloading_memory_request_refuses_a_torchao_text_encoder(monkeypatch, mode):
-    """The encoder side of the same fence. quantize_text_encoders reports the torchao modes
-    unsupported once offload is active -- the hooks move modules with Module.to(), which those
-    tensor subclasses do not survive -- so the strict refusal landed after the resident image
-    pipeline had already been unloaded."""
+    """Offload hooks use Module.to(), which torchao subclasses do not survive, so refuse up front."""
     from core.inference.diffusion import DiffusionBackend
 
     backend = DiffusionBackend.__new__(DiffusionBackend)
@@ -2286,10 +2252,7 @@ def test_layerwise_fp8_survives_an_offloading_memory_request(monkeypatch):
 
 @pytest.mark.parametrize("mode", ["int8", "fp8_dynamic", "nvfp4"])
 def test_a_broken_torchao_refuses_a_torchao_text_encoder_before_the_download(monkeypatch, mode):
-    """The casters import torchao only after the pipeline has been downloaded and built, so an
-    absent or broken install failed through load-progress instead of the pre-load 409 the strict
-    contract promises. The device check cannot see it: a CUDA bf16 host with no torchao passes
-    every capability test."""
+    """torchao is imported only after the download, so a broken install must be refused pre-load."""
     from core.inference.diffusion import DiffusionBackend
 
     backend = DiffusionBackend.__new__(DiffusionBackend)

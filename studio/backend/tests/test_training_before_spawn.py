@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-start_training()'s before_spawn hook must run iff a training subprocess is
-actually spawned -- i.e. only after ALL synchronous validation (start guards,
-config build, GPU-selection) passes. This protects the chat-VRAM unload from
-firing for a start that is then refused (e.g. invalid gpu_ids -> 400).
-"""
+"""before_spawn runs only after all validation, so a refused start does not unload chat VRAM."""
 
 import unittest
 from unittest.mock import MagicMock, patch

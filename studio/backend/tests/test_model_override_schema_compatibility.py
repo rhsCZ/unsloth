@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What an install running two different builds against one override map loses.
-
-The override map is a single unversioned JSON blob in ``app_settings``, and
-``set_model_override`` REPLACES the entry it writes rather than merging into it. That
-was harmless while every field the row could hold also had a control in every build
-that wrote it. The llama-server tuning group broke the symmetry: four fields the
-loader has always applied are now written by the settings route, so a client that
-predates the route change sends a payload that simply lacks them, and the replace
-takes them out.
-
-The rule the suite encodes: a field a build does not KNOW ABOUT is dropped harmlessly
-on read (a row is a whitelist rebuild, never a schema contract), but a field a build
-does not SEND is deleted on write, and nothing on the server puts it back. The first
-is forward compatibility working. The second is the exposure this schema shape
-creates, and it is pinned here so that a later fix has something to change.
-
-The identity rules a hydrating panel depends on are pinned too: the panel now asks
-this module which row its model resolves to, so the browser's own fold and this one
-have to agree on every path shape or the panel hydrates from another model's row.
-"""
+"""Override map is replaced, not merged, on write: a field an older build does not send is deleted."""
 
 from __future__ import annotations
 
@@ -97,17 +78,7 @@ def test_a_field_from_a_newer_build_is_ignored_rather_than_fatal(override_store)
 
 
 def test_a_client_that_does_not_know_the_tuning_group_cannot_erase_it(override_store):
-    """P3 and P4: the cell this whole file exists for.
-
-    A frontend from before the settings route forwarded the four sends a payload that
-    omits them, and ``set_model_override`` replaces the entry rather than merging. The
-    row carries no version stamp, so the route cannot tell that omission apart from a
-    user clearing the fields -- except that a build which knows them says so.
-
-    Reachable two ways, and neither needs a deliberate downgrade: a second machine on
-    the LAN still running the old build, and a browser holding a cached bundle against
-    a server that has been upgraded under it.
-    """
+    """Rows have no version stamp, so an old client that omits the tuning group erases it."""
     _put(MODEL, **PRE_TUNING_PAYLOAD, **TUNING_PAYLOAD, mirrors_server_tuning = True)
     before = settings.get_model_override(MODEL)
     for field, value in TUNING_PAYLOAD.items():
@@ -221,14 +192,7 @@ def test_a_fill_pass_adds_the_tuning_group_without_disturbing_the_row(override_s
 def test_the_draft_cache_dtype_is_dropped_under_a_mode_with_no_drafter(
     override_store, speculative_type
 ):
-    """P10: the dtype needs a mode that loads a separate drafter, or it goes.
-
-    Pre-existing in the normalizer, but this PR is what carries the field to the
-    server at all, so the drop is now visible as a server row that silently lacks a
-    value the panel showed. Storing it anyway would show an edit for a draft context
-    that never exists, so the drop is right; the point of pinning it is that it is
-    SILENT, and a user who sets the dtype and then changes the mode is not told.
-    """
+    """Draft cache dtype is dropped under a drafter-less mode: correct, but the drop is silent."""
     _put(MODEL, spec_draft_cache_type = "q8_0", speculative_type = speculative_type)
 
     assert "spec_draft_cache_type" not in settings.get_model_override(MODEL)
@@ -279,12 +243,7 @@ def test_two_keys_that_fold_together_resolve_to_nothing(override_store):
 
 
 def test_the_disable_aliases_survive_override_normalization():
-    """llama.cpp's own "none", plus "disable" / "disabled", reach /load as off.
-
-    ``_clean_str`` drops anything outside the whitelist, so leaving them out filed an
-    explicit disable as no override at all and the model followed the global
-    preference, which enables a drafter whenever that preference is Auto.
-    """
+    """The spellings none, disable and disabled must survive normalization, or an explicit off is lost."""
     for spelling in ("none", "None", "  DISABLE  ", "disabled"):
         normalized = settings.normalize_model_override({"speculative_type": spelling})
         assert normalized.get("speculative_type") == spelling.strip().lower(), spelling

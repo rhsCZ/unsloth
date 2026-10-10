@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""W8A8 for the small-host int8 denoiser on Turing (``Int8WeightLinear`` with ``act_int8``).
-
-Qwen-Image on a T4 is promoted to float32 and stored as int8 weights; the float32 dequantised GEMM runs on SIMT
-cores. With ``act_int8`` the Linear quantises its activation per row and runs ``torch._int_mm`` instead. CPU only:
-the int8 GEMM is replaced by an exact integer reference where a CUDA kernel would run.
-"""
+"""act_int8 runs torch._int_mm on per-row int8 activations; CPU uses an exact integer reference."""
 
 from __future__ import annotations
 

@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Live tool-output streaming and heartbeats for server-side tool execution.
-
-Covers three invariants:
-
-* ``stream_tool_execution`` yields incremental ``tool_output`` events and
-  ``heartbeat`` events while a tool blocks, and returns the tool's result
-  byte-identical to a direct call;
-* ``_python_exec`` / ``_bash_exec`` produce the same result string with and
-  without an ``output_callback`` (the final tool message the model sees is
-  untouched by streaming);
-* the GGUF agentic loop emits ``tool_output`` between ``tool_start`` and
-  ``tool_end`` and feeds the model the same ``role=tool`` message as before.
-"""
+"""Streamed tool output and heartbeats must leave the final tool result byte-identical."""
 
 from __future__ import annotations
 

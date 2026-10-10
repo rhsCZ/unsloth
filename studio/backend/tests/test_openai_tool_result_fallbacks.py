@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for OpenAI Responses tool-result rendering.
-
-Two bug classes: empty web_search cards (per-card result seeded with
-"Searching: <query>") and orphan shell_call cards (bundled-output
-fallback + final flush at response.completed / response.incomplete).
-"""
+"""Regression tests for empty web_search cards and orphan shell_call cards in Responses tool results."""
 
 import asyncio
 import json

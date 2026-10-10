@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Edge-case tests for Anthropic ``citations_delta`` handling.
-
-Complements ``test_anthropic_citations.py``. Covers malformed payloads,
-unusual orderings, mixed citation types, and the ``citations:
-{enabled: true}`` opt-in attached to translated ``input_document``
-blocks. See
-https://platform.claude.com/docs/en/build-with-claude/citations and
-https://platform.claude.com/docs/en/build-with-claude/search-results.
-"""
+"""Edge cases for citations_delta: malformed payloads, odd orderings, mixed types, citations opt-in."""
 
 import asyncio
 import json
@@ -47,10 +39,7 @@ def _capture(
     messages: list[dict] | None = None,
     captured_body: dict | None = None,
 ) -> list[str]:
-    """Drive ``stream_chat_completion`` against a mocked Anthropic response
-    and return the SSE lines. Pass ``captured_body`` to also capture the
-    outgoing request body for assertions on the translated Anthropic shape.
-    """
+    """Returns the SSE lines from stream_chat_completion; captured_body records the outgoing request."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if captured_body is not None:

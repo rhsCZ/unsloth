@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Full [training type] x [model branch] x [worker] x [selector combination] sweep.
-
-The four finetune_* selectors are read by exactly two branches on CUDA (vision VLM and audio
-VLM) and by every LoRA branch on MLX, and every other branch builds its adapter from
-target_modules alone. This file pins that map so a guard cannot start firing on a branch that
-never read the selectors, which would turn a previously working run into a hard error.
-"""
+"""Maps which branches read the finetune_* selectors, so no guard fires where they are ignored."""
 
 import ast
 import inspect
@@ -409,10 +403,7 @@ def test_mlx_worker_calls_the_guard_in_its_lora_branch():
 
 
 def test_all_linear_vlm_run_with_the_selectors_off_is_not_rejected():
-    """prepare_model_for_training collapses ["all-linear"] to the bare keyword, and
-    get_peft_model forces all five selectors True for it, so this trains every linear layer.
-    Rejecting it would break a working request, and a resumed run can carry it: target_modules
-    is one of the resume structure fields restored from the stored config."""
+    """An all-linear VLM run with the selectors off is valid, since it trains every linear layer."""
     for branch in _CUDA_BRANCHES_READING_SELECTORS:
         config = _request_config("LoRA/QLoRA", branch, SELECTOR_CASES["all_false"], ["all-linear"])
 
@@ -499,13 +490,7 @@ def test_the_error_names_every_field_the_caller_has_to_set():
 
 
 def test_mlx_reads_the_vision_selector_with_the_mlx_default_not_the_cuda_one():
-    """A config that never carried the selectors at all must not be waved through.
-
-    `_finetune_selectors` answers an omitted key with the CUDA consumer's default, and for
-    vision that is True. The MLX call site defaults it False and forces it False for a text
-    model, so taking True from a missing key would let every config written before these
-    fields existed past the guard with nothing to train.
-    """
+    """MLX reads a missing vision selector as False, not the CUDA default True, or old configs pass."""
     config = {
         "training_type": "LoRA/QLoRA",
         "target_modules": ["Wqkv"],

@@ -557,14 +557,7 @@ def test_create_causal_mask_patch_is_self_disabling_and_idempotent():
 
 
 def test_flux2_klein_9b_resolves_its_own_base_and_text_encoder():
-    """A klein-9B GGUF must not inherit the family's 4B default.
-
-    One family covers both klein sizes and defaults to 4B, relying on the base_model card tag for
-    the real base. That tag is only honoured for repos on the trust allowlist, so omitting the 9B
-    entries silently loaded a 9B checkpoint against a 4B config (inner_dim 4096 vs 3072), which
-    surfaces as a bare shape mismatch inside the GGUF quantizer. klein-BASE-9B is 9B too, and the
-    text-encoder rule matched the literal "klein-9b", so it was handed the 4B encoder.
-    """
+    """A klein-9B GGUF must resolve its own 9B base and text encoder, not inherit the 4B default."""
     for repo in (
         "black-forest-labs/FLUX.2-klein-9B",
         "black-forest-labs/FLUX.2-klein-base-9B",
@@ -596,13 +589,7 @@ def test_flux2_gguf_base_mismatch_check_fails_open(tmp_path):
 
 
 def test_qwen_image_21_is_reachable_end_to_end_not_just_detectable():
-    """A family whose base repo is not trusted is not a family at all.
-
-    Detection resolving is the easy half and was never the problem: the load is refused several
-    layers later, by a check that reads a different list, so the entry shipped looking complete and
-    every non-GGUF pick of it died with "restricted to unsloth/* repos". This asserts the whole
-    chain the picker actually walks, which is why it is one test rather than four.
-    """
+    """A family with an untrusted base repo is not usable: the load is refused several layers later."""
     from core.inference.diffusion_families import (
         _PIPELINE_MIN_DIFFUSERS,
         detect_family,
@@ -730,13 +717,7 @@ def test_every_image_family_base_repo_is_loadable():
 
 
 def test_qwen_image_21_gguf_reaches_sd_cpp_with_its_own_vae_and_a_qwen3vl_encoder():
-    """The no-GPU route for unsloth/Qwen-Image-2.1-GGUF.
-
-    Every assertion here is a way the route was observed to fail quietly rather than loudly:
-    a family without both sd.cpp assets silently falls back to diffusers, the qwen-image VAE
-    decodes 2.1 latents to noise instead of erroring, and a fixed flow shift overrides the
-    resolution-dependent schedule upstream picks for this architecture.
-    """
+    """Qwen-Image-2.1 GGUF must reach sd.cpp with its own VAE and encoder; each gap fails quietly."""
     fam = detect_family("unsloth/Qwen-Image-2.1-GGUF")
     assert fam is not None and fam.name == "qwen-image-2.1"
     assert family_sd_cpp_supported(fam)
@@ -772,13 +753,7 @@ def test_qwen_image_21_gguf_reaches_sd_cpp_with_its_own_vae_and_a_qwen3vl_encode
 
 
 def test_the_pinned_prebuilt_is_one_that_can_load_qwen_image_21():
-    """The route is only real if the binary the installer pins understands the architecture.
-
-    The tag STRING cannot answer this: every mirror build resolves to the same master-813 base, so
-    the August build and the current one are indistinguishable by name. What is asserted here is the
-    pin itself, against the release verified to render this family (26.9s at 1024 on one B200,
-    Q4_K_M denoiser, bf16 VAE, Q4_K_M Qwen3-VL encoder). Bump both together or not at all.
-    """
+    """The pinned sd.cpp prebuilt must support Qwen-Image-2.1; the tag name cannot show that."""
     import importlib.util
     from pathlib import Path
 
@@ -796,17 +771,7 @@ def test_the_pinned_prebuilt_is_one_that_can_load_qwen_image_21():
 def test_a_minimum_that_has_not_shipped_does_not_prescribe_an_impossible_upgrade(
     monkeypatch, tmp_path
 ):
-    """``pip install -U 'diffusers>=0.41.0'`` has no candidate while 0.41.0 is unreleased, so the
-    refusal has to name the pinned main build Studio actually installs for this class.
-
-    And it has to name a remedy that WORKS for the cause that produces this refusal. Measured on a
-    host whose git exits non-zero: the install keeps diffusers 0.40.0, and the old text sent the
-    reader to `pip install -r diffusers-main.txt`, which resolves the same git+https requirement
-    and fails identically. The quoted zip URL needs no git, so it is the one line here that has to
-    stay true, hence the check that it names the commit the pin file actually carries.
-
-    0.41.0 has since shipped, so this runs as the next unreleased pin would: the minimum marked
-    unreleased and diffusers-main.txt with its commit line uncommented."""
+    """A diffusers minimum that has not shipped must not prescribe an upgrade that cannot be installed."""
     import pathlib
     import re as _re
 
@@ -855,15 +820,7 @@ def test_qwen_image_21_on_0_40_points_at_the_released_0_41():
 
 
 def test_qwen_image_21_takes_reference_images_but_is_not_an_edit_only_family():
-    """2.1 is unified, so it is the FLUX.2 shape and not the Qwen-Image-Edit one.
-
-    ``QwenImage21Pipeline.__call__`` takes ``image`` as optional condition images beside the prompt,
-    with no ``strength`` and the size from width/height, which is what the reference workflow passes.
-    ``edit`` would mean the pipeline IS the edit pipeline with no plain text-to-image, which is
-    Qwen-Image-Edit, a different model with a different pipeline class. Getting this wrong in either
-    direction is silent: False refuses reference images outright, True would demand an input image
-    for every generation.
-    """
+    """Qwen-Image-2.1 is unified, not edit-only: it takes reference images but is not Qwen-Image-Edit."""
     from core.inference.diffusion_families import detect_family
 
     fam = detect_family("Qwen/Qwen-Image-2.1")

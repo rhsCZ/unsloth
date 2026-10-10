@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CUDA graphs over an offloaded denoiser (``diffusion_cuda_graph.arm_after_placement``).
-
-Block streaming: Studio's ``_apply_group_offload`` with the event-fenced prefetch; one graph records the whole forward
-with the copy-stream copies inside it. Partial residency: some groups pinned, the rest streamed; a release / restore
-moves the resident weights and the graph records again. Model offload: accelerate's CPU-offload hook moves the module
-eagerly, the replay sits under it and records again when the weights land elsewhere. Every case checks the replay is
-bit-identical to the eager forward of the same placement and that a replay makes no host synchronization."""
+"""Offloaded-denoiser CUDA graphs: each replay matches eager bit for bit and does no host sync."""
 
 from __future__ import annotations
 
@@ -461,10 +455,7 @@ def test_a_failed_capture_leaves_the_cuda_rng_usable_and_on_its_sequence():
 
 
 def test_a_failed_capture_takes_the_allocator_off_its_pool(monkeypatch):
-    """capture_end raises in cudaStreamEndCapture before endAllocateToPool, so an invalidated capture left its pool in
-    the allocator's captures_underway: on torch 2.6 the next empty_cache tripped INTERNAL ASSERT captures_underway.empty()
-    and no later capture recorded (seen on an A100); later torch skips the global release instead, so empty_cache freed
-    nothing. Reproduced here on any torch by putting the pool back under capture before the raise."""
+    """A failed capture must take the allocator off its pool, or empty_cache trips captures_underway."""
     _cuda()
     real_end = torch.cuda.CUDAGraph.capture_end
     begin = torch._C._cuda_beginAllocateCurrentStreamToPool

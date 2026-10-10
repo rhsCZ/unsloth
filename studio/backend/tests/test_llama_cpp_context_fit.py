@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the GGUF load-time context auto-fit decision.
-
-Guards two regressions in ``LlamaCppBackend.load_model``:
-
-1. Auto mode (``n_ctx == 0``) when weights exceed every GPU subset's free
-   memory: auto-pick should fall back to 8192 (a useful chat context) rather
-   than leaving native ctx. User can still drag higher onto ``--fit on``.
-2. Explicit ctx must never be silently shrunk: when KV overflows fittable
-   weights, honor the explicit ctx with ``--fit on`` flexing ``-ngl``.
-
-Drives the post-metadata decision block against a stubbed instance: no GPU,
-network, subprocess, or GGUF I/O. Cross-platform.
-"""
+"""Auto ctx falls back to 8192 when no GPU subset fits the weights; explicit ctx is never shrunk."""
 
 from __future__ import annotations
 
@@ -123,11 +111,7 @@ def _drive(
     apple_budget_mib = 0,
     flat_mtp_reserve = 0.0,
 ):
-    """Drive the post-metadata portion of load_model with stubbed inputs.
-
-    Mirrors llama_cpp.py:1137-1296 to assert the built command, without
-    subprocesses or GPU probes.
-    """
+    """Mirrors load_model's post-metadata fit with stubs, so the built command can be asserted."""
     inst = _make_backend(native_ctx = native_ctx)
     model_size = int(model_gib * GIB)
     cache_type_kv = None
@@ -693,12 +677,8 @@ class TestAppleUnifiedMemoryBudget:
         )
 
     def test_a_busy_machine_budgets_from_what_is_free(self, monkeypatch):
-        """The reporter's shape: 16 GB Mac already holding several GB.
-
-        The working set is a static device property, so before this it answered
-        the same on an idle and a loaded machine, and the fit sized a context
-        against headroom that was not there.
-        """
+        """The Metal budget uses free memory, since the static working set answers the same loaded
+        or idle."""
         _force_apple(monkeypatch)
         _install_fake_mlx(monkeypatch, 10 * GIB)
         _install_fake_psutil(monkeypatch, total = 16 * GIB, available = 6 * GIB)

@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Randomised stress against the admission queue's invariants.
-
-Two properties that have to hold under ANY interleaving, because the failure they guard is
-a wedged Unsloth, not a wrong number:
-
-  1. ``committed`` never exceeds ``budget``, except the single holder the escape lets past.
-     Breaking this is the ``Context size has been exceeded`` that clears every decoding
-     slot at once.
-  2. The queue always drains. A leaked repark counter holds the wait line shut for every
-     caller, freezing the pool for the life of the process.
-
-Seeded, so a failure is reproducible from the seed in the assertion message.
-"""
+"""Under any interleaving, committed never exceeds budget and the queue always drains."""
 
 from __future__ import annotations
 

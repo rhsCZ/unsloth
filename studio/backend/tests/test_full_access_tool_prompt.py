@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What the model is TOLD about its environment under Full access.
-
-permission_mode='full' folds to bypass_permissions=True, which the tool loops
-pass on as disable_sandbox=True: the static analysis, the command blocklist and
-the rlimit pre-exec are all skipped and absolute host paths resolve. The
-python/terminal schemas used to be module constants describing the sandboxed
-run regardless, and the tool nudge never mentioned the mode at all, so the model
-was told it was isolated from a machine it could in fact read. Asked "are you
-able to see the files on my laptop", it answered "no, I operate in a sandboxed
-environment" without ever calling a tool.
-
-These tests pin the two halves of the fix: the schemas swap under Full access,
-and the nudge states the mode so the model checks instead of guessing. Every
-other mode keeps the sandboxed wording verbatim.
-"""
+"""Full access swaps the tool schemas and nudge to host wording; other modes keep the sandbox text."""
 
 import asyncio
 import json
@@ -93,11 +79,7 @@ def test_full_access_schemas_keep_name_and_parameters():
 @pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
 @pytest.mark.parametrize("tool_name", ["python", "terminal"])
 def test_the_substitutions_land_on_every_platform(monkeypatch, platform, tool_name):
-    """The module constants are built once for the host platform, so a Linux
-    runner would never exercise the Windows branch. Rebuild the note per
-    platform and re-derive, which is also the guard against a rewording of
-    _build_sandbox_paths_note silently turning the substitutions into no-ops:
-    the sandboxed markers would survive into the result below."""
+    """Rebuild the sandbox note per platform: module constants are built once for the host platform."""
     monkeypatch.setattr(sys, "platform", platform)
     sandboxed = "Execute Python code in a sandbox and return stdout/stderr." + (
         tools._build_sandbox_paths_note()
@@ -153,10 +135,7 @@ def test_python_full_access_description_still_omits_the_shell():
 
 
 def test_full_access_drops_the_local_desktop_promise(monkeypatch):
-    """The Git Bash branch of the shell note says a detached program opens a
-    window on the user's desktop, which only holds while Unsloth is local. The
-    Full access text now says it may be remote or containerized, so the two
-    would contradict each other."""
+    """Full access must not promise a desktop window for Git Bash: Unsloth may be remote."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(tools, "_windows_bash", lambda: r"C:\bash.exe")
     note = tools._build_terminal_shell_note()
@@ -323,10 +302,7 @@ def _count_request(**kwargs) -> ChatCountTokensRequest:
 
 
 def test_codex_instructions_skip_a_developer_message():
-    """_responses_input folds only `system` turns into the Responses
-    instructions and drops every other role bar user/assistant/tool, so a nudge
-    appended to a `developer` turn would never reach the model. `developer` is an
-    accepted ChatMessage role, so this shape is reachable."""
+    """Only system turns fold into Responses instructions; a developer turn would drop the nudge."""
     messages = [
         {"role": "developer", "content": "house style"},
         {"role": "user", "content": "hi"},

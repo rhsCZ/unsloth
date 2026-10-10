@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the Transform output-size bound and the refusal it produces.
-
-Reported: Image Transform refused at 2048x2048 no matter how small the Resolution controls were
-set, because img2img sized from the upload (clamped to a fixed 2048) and the refusal then advised
-changing a control that could not move that number. ``_fit_within`` makes the control bound the
-source; ``source_driven`` fixes the remedy sentence where it still cannot.
-"""
+"""Transform output size must be bounded by the Resolution controls, not clamped from the upload."""
 
 from __future__ import annotations
 

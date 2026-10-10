@@ -61,7 +61,7 @@ def test_auto_is_inert_off_rocm(fake_kernels, monkeypatch):
 
 
 def test_auto_engages_rope_only_on_rocm(fake_kernels, monkeypatch):
-    # ROCm auto = bit-identical RoPE kernel; fused AdaLN gave no speed on gfx1151, so opt-in
+    # ROCm auto = bit-identical RoPE kernel; fused AdaLN gave no speed on gfx1151, so it is opt-in
     monkeypatch.setattr(torch.version, "hip", "7.2.0", raising = False)
     got = rf.install_for_pipe(_PipeLike(), torch.bfloat16, "cuda")
     assert got == {"rope": True, "adaln": 0}

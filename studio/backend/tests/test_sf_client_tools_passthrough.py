@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Client-tools passthrough healing for the safetensors/MLX backend.
-
-Parity for #6801: when a NON-GGUF model is loaded and the request declares its
-own ``tools`` with server-side tools OFF, text-form tool calls are promoted back
-into structured ``tool_calls`` (declared tools only) via the shared healer. MLX
-rides the same orchestrator path, so a single scripted backend covers both.
-"""
+"""Non-GGUF models promote text-form tool calls to structured tool_calls, declared tools only."""
 
 import asyncio
 import json
@@ -631,10 +625,7 @@ def test_streaming_heals_split_call_into_one_delta(monkeypatch):
 
 
 def test_what_this_backend_can_serve_reaches_it_rather_than_being_refused(monkeypatch):
-    """An empty stop sequence is dropped rather than forwarded: it would match at
-    position 0 and end every turn before its first token. ``{"type": "text"}``
-    constrains nothing, so refusing it for want of a grammar engine would turn a
-    request this backend serves into a 400."""
+    """An empty stop sequence is dropped, since it would match at position 0 and end every turn."""
     backend = _ScriptedBackend(_fixed("hi"), stats = {"usage": {"prompt_tokens": 7}})
     payload = _request(stop = ["END", ""], response_format = {"type": "text"})
     body = _json_body(_call(payload, monkeypatch, backend, supports_tools = False))
@@ -1849,10 +1840,7 @@ def test_a_client_catalog_keeps_an_image_out_of_the_server_loop(monkeypatch):
 
 
 def test_a_replayed_picture_sits_beside_the_result_that_produced_it(monkeypatch):
-    """The passthrough flatten costs the markers their positions. Promoting after it
-    puts each batch's turn straight after its result, so "the tool call above" names
-    the right call -- one detached block of every payload, placed wherever the
-    attachment's turn happened to be, did not."""
+    """Promote replayed pictures after the passthrough flatten so each picture sits beside its result."""
     import base64
     import io
     import json
@@ -1969,10 +1957,7 @@ def test_a_replay_only_image_turn_also_keeps_the_client_catalog(monkeypatch):
 
 
 def test_the_plain_route_leaves_the_attachment_marker_to_the_backend(monkeypatch):
-    """The backends snapshot the conversation's existing markers as history's before
-    topping up, so a marker the ROUTE pre-added is counted as a replayed picture's.
-    With the attachment on an earlier turn than a tool's picture the two pixels then
-    bind to each other's turns, and the model reads the screenshot as the diagram."""
+    """The route must not pre-add an attachment marker: backends would count it as a replayed picture."""
     import base64
     import io
     import json

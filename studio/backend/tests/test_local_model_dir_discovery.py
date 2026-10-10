@@ -45,12 +45,7 @@ def fake_home(monkeypatch, tmp_path):
 
 
 class _RecordingLogger:
-    """Stands in for the module logger.
-
-    Asserted through this rather than capsys: logging is structlog, hub/tests stubs it,
-    and whether a debug record reaches stdout is config this test should not pin. What
-    matters is that the code calls debug once, with the cause attached.
-    """
+    """Stands in for the module logger; logging is structlog and stdout config is not pinned here."""
 
     def __init__(self):
         self.debug_calls: list[tuple] = []

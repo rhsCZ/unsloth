@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the DiT trainer's timestep-shift / CFG-dropout / loss-weighting levers.
-
-CPU-only: cover the flow_shift config resolution (qwen-image defaults to "auto", every
-other family stays on the identity 1.0), the exact sigma transform for the auto and
-numeric modes, the shifted sampling distribution, and the bell weight table. The full
-training loop is exercised by the live GPU smokes, not here."""
+"""CPU tests for flow_shift resolution, sigma transforms, shifted sampling and bell loss weights."""
 
 from __future__ import annotations
 

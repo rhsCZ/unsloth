@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""diffusion_vae_attn_chunked: query-chunked VAE attention where no fused SDPA kernel takes the head dim (ROCm).
-
-CPU only: the math SDPA backend stands in for ROCm's fallback, and a dispatch-mode probe records the largest
-tensor any op produces, so the bound on the score tile is checked without a GPU."""
+"""Query-chunked VAE attention where no fused SDPA takes the head dim; the score tile is bounded."""
 
 import types
 

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hosted QUANTIZED conditioner route for MiniMax-H3's Diffusers path.
-
-Mirrors tests/test_video_prequant.py, which covers the denoiser half of the same idea: the
-resolver, the download-plan hooks that decide whether the base repo's dense ``text_encoder/``
-shards are staged, the ConvRot INT8 arithmetic, and the memory floor recomputed from what the
-load actually holds.
-
-Network-free and (except for the two arithmetic tests) torch-free. The 27 GB artifact itself is
-exercised end to end on a GPU, not here."""
+"""Hosted int8 conditioner route for H3's Diffusers path; the 27 GB artifact is GPU-tested only."""
 
 from __future__ import annotations
 
@@ -127,10 +119,7 @@ def test_the_convrot_hadamard_is_symmetric_and_its_own_inverse():
 
 
 def test_rotating_the_activation_undoes_the_rotation_baked_into_the_weight():
-    """The load-bearing identity: x_rot @ W_rot.T == x @ W.T.
-
-    If this were false the INT8 conditioner would decode to noise, and a load that only checked
-    file sizes would never notice. Dequantizing WITHOUT the rotation is the control."""
+    """The ConvRot identity x_rot @ W_rot.T == x @ W.T must hold, or the INT8 conditioner is noise."""
     from core.inference.video_minimax_h3_te import (
         _int8_convrot_linear_class,
         build_convrot_hadamard,
@@ -272,10 +261,7 @@ def test_none_still_pins_the_released_encoder():
 
 
 def test_the_auto_default_is_cuda_only():
-    """MPS and CPU keep the components they load today. The ConvRot forward is plain torch and
-    would likely run there, but nobody has measured it, and the modular loader does not reach a Mac
-    at all (ComponentsManager.enable_auto_cpu_offload needs mem_get_info, which torch.mps lacks).
-    An EXPLICIT request is unaffected by this gate."""
+    """Auto ConvRot is CUDA-only: MPS and CPU are unmeasured; explicit requests are unaffected."""
     for target in (_cpu_target(), _mps_target()):
         assert VideoBackend._h3_te_quant_scheme(_fam(), None, H3_BASE, target) is None
         assert VideoBackend._h3_te_quant_scheme(_fam(), "int8", H3_BASE, target) == "int8"
@@ -351,14 +337,7 @@ def test_a_resolvable_artifact_is_staged_in_place_of_the_dense_shards():
 
 
 def test_the_conditioner_entry_survives_a_repack_that_is_gone(monkeypatch):
-    """A cached artifact must keep its entry even when the repo it is cached under is unreachable.
-
-    Once the repack is renamed or taken down, a `model_info` against it raises and this reports no
-    hosted artifact. The plan then stages the 62 GB dense `text_encoder/` shards, while the load,
-    reading the artifact straight out of that same cache, never opens them: a whole download
-    wasted, or a disk preflight refusing a load that fits. So the SIZE comes from the mirror and
-    only the entry id follows the cache.
-    """
+    """A taken-down cached repack keeps its entry: size from the mirror, the id from the cache."""
     from core.inference import diffusion_families
     from core.inference.video_minimax_h3_te import H3_LEGACY_TE_QUANT_REPO
 
@@ -683,10 +662,7 @@ def test_the_staging_skip_reads_the_same_index_the_seed_will(tmp_path):
 
 
 def test_a_projection_left_dense_is_refused_not_budgeted():
-    """strict=True proves the artifact and the skeleton name the same tensors, not that they are
-    quantized. A projection re-uploaded as a plain dense weight drops out of the swap, loads
-    cleanly, and would be recorded as engaged int8 while the resident encoder crept back toward
-    51 GB -- and the VRAM preflight sizes the floor from the ENGAGED scheme."""
+    """A projection left dense must be refused, not budgeted as engaged int8."""
     from torch import nn
 
     from core.inference.video_minimax_h3_te import _int8_convrot_linear_class

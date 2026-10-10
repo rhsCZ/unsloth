@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The per-thread settings snapshot that makes a chat keep its own modes.
-
-Covers the contract PATCH /api/chat/threads/{id} accepts and the storage rules the
-snapshot depends on: writers that rebuild a thread record must not clear it, the thread
-listing must not carry it, and a fork must inherit it.
-"""
+"""Thread settings snapshot: rebuilt writers must keep it, listings omit it, forks inherit it."""
 
 import sqlite3
 import sys

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for ``diffusion_capture_safe.py`` (HunyuanImage-2.1's capture-safe forward).
-
-CPU only. The rewrite is checked against synthetic modules carrying the stock merge block in both
-LoRA styles diffusers has shipped (inline in 0.36, a decorator from 0.37), against a drifted block,
-and, when the installed diffusers has the class, against a tiny random HunyuanImage transformer.
-"""
+"""CPU checks of the capture-safe rewrite against stock and drifted merge blocks, both LoRA styles."""
 
 from __future__ import annotations
 

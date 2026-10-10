@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""job_events keeps the per-job queue registered only while the worker runs.
-
-``_emit()`` writes to ``_jobs[job_id]`` while the worker runs; if an early SSE
-disconnect removed that queue, later events would be dropped and a reconnect
-would see only ``[DONE]`` and mark a running job complete. So keep it on an early
-disconnect of a running job, but drop it on a terminal exit or a disconnect after
-the job already finished; ``_reap_finished_jobs`` sweeps any leftovers.
-"""
+"""Keep a running job's event queue on early SSE disconnect; dropping it marks a live job complete."""
 
 import queue
 import sqlite3

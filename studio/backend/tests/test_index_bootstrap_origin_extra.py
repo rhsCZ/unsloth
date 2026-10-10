@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Extra edge-case coverage for the bootstrap-pw cross-origin gate.
-Companion to ``test_index_bootstrap_origin.py``: IPv6 netlocs, opaque origins
-(``data:``, ``blob:``), comma-joined multi-Origin headers, and the
-``localhost`` vs ``127.0.0.1`` distinct-origin rule.
-"""
+"""Bootstrap origin gate edge cases: IPv6 netlocs, opaque origins; localhost and 127.0.0.1 differ."""
 
 from unittest.mock import MagicMock
 
@@ -23,10 +19,7 @@ def _build_request(
 
 
 def test_is_same_origin_request_ipv6_loopback_same_origin():
-    """Unsloth supports ``-H ::1`` binds; netloc is ``[::1]:8902``. Bare
-    ``partition(":")`` mis-parses the bracketed form and would refuse the
-    bootstrap on legitimate same-origin navigation.
-    """
+    """Bracketed IPv6 netlocs like [::1]:8902 must parse, or same-origin navigation is refused."""
     from main import _is_same_origin_request
 
     req = _build_request("[::1]:8902", origin = "http://[::1]:8902")
@@ -137,10 +130,7 @@ def test_is_same_origin_request_127_vs_localhost_is_cross_origin():
 
 
 def test_is_same_origin_request_malformed_ipv6_bracket_is_cross_origin():
-    """``urlparse`` raises ``ValueError('Invalid IPv6 URL')`` on unclosed
-    brackets (CVE-2024-11168 hardening). The gate must swallow it and fall to
-    cross-origin rather than 500 the SPA handler.
-    """
+    """An unclosed IPv6 bracket makes urlparse raise, and the gate must treat that as cross-origin."""
     from main import _is_same_origin_request
 
     req = _build_request("127.0.0.1:8902", origin = "http://[malformed")

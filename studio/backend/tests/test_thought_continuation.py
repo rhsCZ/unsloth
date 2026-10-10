@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GGUF continuations preserve and extend the trailing assistant's reasoning.
-
-Fake streams match b11160 with Qwen3.5-4B: deltas exclude the supplied prefill.
-"""
+"""Fake GGUF streams match b11160 by excluding the supplied prefill from their deltas."""
 
 from __future__ import annotations
 

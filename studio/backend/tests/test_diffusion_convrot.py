@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the ConvRot activation rotation (``diffusion_convrot.py``).
-
-Real torch, CPU only, small dense Linears: the rotation is an orthogonal change of basis, so a
-float32 Linear proves every property that matters here -- that the offline and online halves
-cancel exactly, that the loader rotates the RECORDED set and nothing else, and that every way the
-two halves could disagree is refused rather than run.
-
-That last group is the point of the file. A rotated weight met by an unrotated activation is
-finite, raises nothing, and renders quietly wrong, so there is no failure to observe downstream:
-the only place it can be caught is here, at the contract.
-"""
+"""ConvRot: offline and online halves must cancel exactly, and every mismatch must be refused."""
 
 from __future__ import annotations
 
@@ -437,14 +427,7 @@ def test_loader_refuses_a_rotation_it_cannot_apply(monkeypatch, tmp_path, fmt, m
 
 
 def test_every_rotated_projection_shares_one_class():
-    """The rotation is a class SWAP, so the class has to be a singleton.
-
-    ``torch.compile`` guards each frame on ``___check_type_id`` of the modules it closes over. A
-    class defined inside a function is a new class object per call, so giving each of the 350
-    rotated projections its own ConvRotLinear made every one of them look like a different type
-    and retraced the block it lives in: 23 recompiles against bfloat16's 1, and 178 s of
-    first-call compile against 14 s. Identity, not equality: two classes with identical bodies
-    still fail the guard."""
+    """Rotated projections must share one class, or torch.compile retraces the block per projection."""
     import torch
     from torch import nn
 

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The -ot spill planner: the ladder, the patterns, and everything it must never do.
-
-The negative half matters most. The planner exists because llama.cpp's own
-fitter spills whole layers and drags the KV cache to host RAM with them, so a
-plan that emits -ngl or --no-kv-offload, or that charges token_embd to VRAM, is
-worse than no plan at all.
-"""
+"""The -ot planner must never emit -ngl or --no-kv-offload or charge token_embd to VRAM."""
 
 from __future__ import annotations
 
@@ -184,13 +178,7 @@ def test_no_plan_ever_moves_the_kv_cache(vram, ctx):
 
 
 def test_token_embd_is_never_charged_to_vram():
-    """llama-model.cpp pins dev_input to the CPU unconditionally, so the
-    embedding is host RAM the plan must pay for, never VRAM it may spend.
-
-    Proved by varying ONLY token_embd: a 4 GiB embedding must not change the
-    VRAM figure or the spill decision by a single byte, and must show up in the
-    host figure in full.
-    """
+    """llama.cpp pins dev_input to the CPU, so the embedding is charged to host RAM, never VRAM."""
     small = q4_layout()
     big = ModelLayout(**{**small.__dict__, "token_embd_bytes": 4 * GIB})
 
@@ -341,10 +329,7 @@ def test_a_device_smaller_than_its_own_overhead_abstains():
 
 
 def test_every_device_pays_the_fixed_overhead():
-    """A layer split puts a CUDA context and scratch on each card, so two 8 GiB
-    cards are not one 16 GiB card. Read through max_context_for, which is the
-    budget arithmetic without the ladder: the same 16 GiB split in two credits
-    one overhead less, so it holds strictly less cache."""
+    """Every split device pays a CUDA context and scratch, so two 8 GiB cards hold less than one 16 GiB."""
     layout = q4_layout()
     one_big = max_context_for(layout, [16 * GIB], spill_all_ffn = True)
     two_small = max_context_for(layout, [8 * GIB, 8 * GIB], spill_all_ffn = True)
@@ -353,19 +338,7 @@ def test_every_device_pays_the_fixed_overhead():
 
 
 def test_a_partial_spill_across_two_gpus_abstains():
-    """A pooled budget is not a per-device fit test for a partial spill.
-
-    llama.cpp fixes the layer split from free memory BEFORE any override exists
-    (llama-model.cpp:1416-1447) and hands each device a contiguous layer-index
-    range (:1457), while -ot only swaps one tensor's buffer type inside
-    create_tensor (llama-model-loader.cpp:1177-1203) and never touches
-    dev_layer(il) (:1467-1474). So a subset of block indices can relieve one
-    card while another keeps its whole share: the aggregate deficit reads
-    covered, one device is still over, and --fit off means nothing rebalances
-    (a per-device shortfall throws, llama-model.cpp:1731-1733). The same layout
-    on ONE card of the same pooled size still plans, which is what makes this
-    about device COUNT and not about the budget.
-    """
+    """A partial spill across two GPUs must abstain: -ot can relieve one card and leave the other over."""
     layout = q4_layout()
     one_card = plan_placement(layout, [16 * GIB], 64 * GIB, 8192)
     assert one_card.spilled_blocks
@@ -509,17 +482,7 @@ def test_output_device_shortfall_can_reach_the_lm_head_rung():
 
 
 def test_a_full_spill_is_checked_per_device_not_assumed():
-    """A full spill used to be waved through on the theory that "every device
-    keeps its layer share". It does keep its ROW share -- llama.cpp splits rows
-    in proportion to free VRAM (llama-model.cpp:1439-1457) -- but rows are
-    integers and bytes are not: 65 rows over two equal cards is 33/32, so at a
-    budget sized to the pooled total device 0 is over by half a row's worth. The
-    pooled arithmetic says it fits, the per-device check says it does not, and
-    abstaining hands the load to --fit on, which is per-device aware.
-
-    The identical pooled budget on ONE card has no split to be uneven about and
-    still plans, which is what makes this about the SPLIT and not the budget.
-    """
+    """A full spill is checked per device: 65 rows over two equal cards is 33/32, not a pooled fit."""
     layout = _layout_from_reader(_StubReader(_shard_fields(), _shard_tensors(range(64))))
     half = _ALL_SPILL_VRAM // 2
     plan = plan_placement(layout, [half, half], 256 * GIB, 4096, opts = _NO_OVERHEAD)
@@ -532,10 +495,7 @@ def test_a_full_spill_is_checked_per_device_not_assumed():
 
 
 def test_a_full_spill_abstains_when_the_cache_layout_is_unknown():
-    """A hybrid keeps a recurrent state on some layers only, and the layout does
-    not record WHICH -- so there is no per-row byte model to validate against.
-    Abstain rather than guess uniform. Again scoped to the multi-device split:
-    the same layout on one card is unaffected."""
+    """A hybrid's recurrent layers are not recorded per layer, so a multi-card full spill must abstain."""
     layout = _layout_from_reader(_StubReader(_shard_fields(), _shard_tensors(range(64))))
     hybrid = replace(layout, recurrent_bytes = 8 * MIB)
     half = _ALL_SPILL_VRAM // 2
@@ -983,13 +943,7 @@ def test_token_embd_norm_is_not_an_input_embedding():
 
 
 def test_a_split_gguf_abstains_instead_of_planning_on_one_shard():
-    """GGUFReader memmaps the ONE path it is given, but llama.cpp reads
-    split.count off the first shard and loads every sibling
-    (llama-model-loader.cpp:590-618). Shard 1 carries the model metadata, so
-    without the guard the layout looks complete while holding a fraction of the
-    tensors. Undercounting the model is the OPTIMISTIC direction: the plan claims
-    a fit that is not there, emits too few -ot patterns, and the launch path
-    follows it with --fit off."""
+    """A split GGUF must abstain on one shard: undercounting the model is the optimistic direction."""
     partial = _StubReader(_shard_fields(**{"split.count": 4}), _shard_tensors(range(16)))
     assert _layout_from_reader(partial).complete is False
 
@@ -1056,10 +1010,7 @@ def test_a_small_host_is_predicted_to_suffer_more_for_the_same_spill():
 
 
 def test_routed_experts_are_charged_less_than_a_dense_ffn_of_equal_size():
-    """Only n_expert_used of n_expert are read per token, so an offloaded MoE
-    moves a fraction of its bytes while a dense FFN moves all of them. This is
-    the real reason MoE tolerates spilling (2.5x) and dense does not (5.5x) --
-    NOT the mmap penalty ratio, which points the other way."""
+    """Only n_expert_used of n_expert experts are read per token, so MoE spills move fewer bytes."""
     dense = _dense_q4()
     moe = _uniform_layout(
         spillable_total = int(10.092 * GIB),
@@ -1093,20 +1044,7 @@ def test_the_mtp_block_is_not_counted_as_spillable():
 
 
 def test_the_overhead_reserve_covers_the_measured_prefill_buffer():
-    """The reserve is what the planner leaves free on every device, and it has
-    to cover the child's prefill compute buffer plus its CUDA primary context.
-
-    1 GiB did not, and failed CONSISTENTLY rather than randomly, which is what
-    made it easy to miss: the planner fills to budget minus this reserve, so
-    whatever the budget it leaves exactly this much, and the dense 27B at depth
-    32768 died with the identical shortfall at 6, 7, 8 and 10 GiB budgets:
-
-        allocating 594.16 MiB on device 0: cudaMalloc failed: out of memory
-        llama_init_from_model: failed to allocate compute pp buffers
-
-    Not fragmentation from the benchmark's VRAM pinning: the same case at 16, 64
-    and 1024 MiB hog blocks reproduced the identical 594.16 MiB failure.
-    """
+    """The per-device reserve must cover the prefill compute buffer plus the CUDA primary context."""
     reserve = PlanOptions().overhead_bytes_per_device
     measured_prefill_buffer = int(594.16 * 1024 * 1024)
     inferred_cuda_context = GIB - measured_prefill_buffer
@@ -1121,14 +1059,7 @@ _ALL_SPILL_VRAM = 3 * GIB + 64 * MIB
 
 
 def _nextn_reader(nextn: int, total_blocks: int = 66):
-    """A GGUF whose block_count includes trailing nextn/MTP blocks.
-
-    llama.cpp reads block_count straight into n_layer_all
-    (llama-model.cpp:1206) and n_layer() subtracts n_layer_nextn
-    (llama-hparams.cpp:301-303), so the last `nextn` blk.<N> are the MTP head.
-    They carry real ffn_* weights, loaded when a draft is engaged
-    (models/qwen35moe.cpp, load_block_mtp).
-    """
+    """block_count includes trailing nextn/MTP blocks: they are the MTP head, carrying real ffn weights."""
     fields = _shard_fields(
         **{"llama.block_count": total_blocks, "llama.nextn_predict_layers": nextn}
     )
@@ -1145,19 +1076,7 @@ def _tied_reader(*, with_output: bool):
 
 
 def test_a_tied_embedding_gguf_still_charges_a_vocabulary_matrix_to_vram():
-    """Omitting output.weight does not save the matrix, it duplicates it.
-
-    Every tying architecture re-creates the output tensor from token_embd with
-    TENSOR_DUPLICATED (models/llama.cpp:41-45, models/qwen3.cpp:22-25,
-    models/gemma3.cpp:43-47), and the loader routes a duplicated TOKEN_EMBD
-    through the OUTPUT buffer list (llama-model-loader.cpp:1113-1114). dev_input
-    is pinned to the CPU while dev_output follows the layer split
-    (llama-model.cpp:1465, 1474), so the same-context reuse check misses
-    (llama-model-loader.cpp:1309-1314), ggml_dup_tensor allocates a second full
-    matrix (:1318) and load_all_data fills it by name over PCIe (:1542, :1583).
-    Charging it to host RAM only understated VRAM by a whole vocabulary, which
-    is the optimistic direction: too few blocks spill, and --fit off pins that.
-    """
+    """A tied output matrix is duplicated from token_embd on the output device, so it costs VRAM."""
     tied = _layout_from_reader(_tied_reader(with_output = False))
     untied = _layout_from_reader(_tied_reader(with_output = True))
     assert tied.complete and untied.complete
@@ -1180,14 +1099,7 @@ def test_a_tied_embedding_gguf_still_charges_a_vocabulary_matrix_to_vram():
 
 
 def test_excluded_mtp_block_bytes_are_kept_so_a_draft_can_be_charged():
-    """Dropping the trailing blocks is right for an ordinary load -- llama.cpp
-    gives them TENSOR_SKIP unless load_mtp is set (models/glm4-moe.cpp:42-44)
-    and TENSOR_SKIP returns before a tensor exists
-    (llama-model-loader.cpp:1123-1131). But --spec-type draft-mtp sets load_mtp
-    on the TARGET's model params (common/common.cpp:1713), so the whole trailing
-    block becomes resident, and i_gpu_start counting backwards from n_layer_all
-    (llama-model.cpp:1449) puts it on a GPU first. The seam charges it through
-    extra_resident_bytes, so the total has to survive the drop."""
+    """Keep trailing MTP block bytes: --spec-type draft-mtp makes those blocks resident for the draft."""
     layout = _layout_from_reader(_nextn_reader(2))
     assert layout.has_excluded_blocks is True
 
@@ -1217,13 +1129,7 @@ def test_a_nextn_gguf_is_marked_as_having_excluded_blocks():
 
 
 def test_the_spill_pattern_never_reaches_an_excluded_mtp_block():
-    """Spilling every block used to emit the unbounded ^blk\\.\\d+\\. form, which
-    llama.cpp applies with std::regex_search (llama-model-loader.cpp:1182) --
-    so it also matched the trailing nextn blocks the layout deliberately
-    dropped. Those are real weights once a draft is loaded, and moving them
-    spills bytes that neither host_bytes nor the deficit ever counted, then
-    runs the draft FFN on the CPU backend.
-    """
+    """Spill patterns must not reach excluded MTP blocks; the unbounded ^blk form matched them."""
     layout = _layout_from_reader(_nextn_reader(2))
     plan = plan_placement(layout, [_ALL_SPILL_VRAM], 256 * GIB, 4096, opts = _NO_OVERHEAD)
     assert len(plan.spilled_blocks) == len(layout.blocks), "every block goes"
@@ -1264,10 +1170,7 @@ def test_extra_resident_bytes_are_charged_against_the_pooled_budget():
 
 
 def test_row_ownership_is_modelled_on_raw_free_not_on_the_budget():
-    """llama.cpp reads free VRAM straight from the driver for its split
-    (llama-model.cpp:1433); the budget is that minus a reserve sized on each
-    card's TOTAL, so the two agree only when every card has the same free/total.
-    Feeding the budget in as the split weight silently moves the boundary."""
+    """Row ownership must use raw free VRAM, as llama.cpp does, not the budget, or the split shifts."""
     layout = _layout_from_reader(_StubReader(_shard_fields(), _shard_tensors(range(64))))
     spilled = {b.index for b in layout.blocks}
     budgets = [2 * GIB, 2 * GIB]
@@ -1299,10 +1202,7 @@ def test_row_ownership_is_modelled_on_raw_free_not_on_the_budget():
 
 
 def test_a_sliding_window_model_abstains_on_a_multi_gpu_split():
-    """Gemma3 and friends interleave window and full-context layers, and EVERY
-    layer is an attention layer, so the n_attention_layers guard passes. Spreading
-    the cache evenly then under-books whichever card drew the full-context rows,
-    which is the optimistic direction."""
+    """Sliding-window models abstain on multi-GPU: an even spread under-books the full-context cards."""
     layout = _layout_from_reader(_StubReader(_shard_fields(), _shard_tensors(range(64))))
     swa = replace(layout, has_swa = True)
     assert swa.n_attention_layers == swa.n_layers, "the earlier guard does NOT cover this"
@@ -1341,10 +1241,7 @@ def _moe_reader(names):
     ],
 )
 def test_every_expert_spelling_is_spillable(label, names, expect_mib):
-    """ffn_gate_up_exps and ffn_*_chexps are experts under another name: created
-    per expert and dispatched with GGML_OP_MUL_MAT_ID, so just as cheap to spill.
-    Matching only the split form left every fused-expert GGUF with nothing the
-    planner was allowed to move."""
+    """Fused expert tensors like ffn_gate_up_exps are spillable experts, not only the split spelling."""
     layout = _layout_from_reader(_moe_reader(names))
     assert layout.is_moe
     assert layout.blocks[0].spillable_bytes == expect_mib * MIB

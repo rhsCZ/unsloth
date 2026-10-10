@@ -462,13 +462,7 @@ def test_plugin_resolution_survives_a_reload_and_normalizes(monkeypatch, tmp_pat
 
 
 def test_a_backend_executed_seed_resolves_the_endpoint_on_the_backend(monkeypatch):
-    """The seed is fetched in THIS process, so the endpoint must be ours.
-
-    A remote browser is told the public default for a loopback mirror (it cannot
-    reach the backend's localhost), so letting the client's value through would
-    bypass the mirror on exactly the deployments that need it. A value the user
-    typed into the seed node is still honoured.
-    """
+    """The seed runs here, so it must resolve the local mirror endpoint, not the browser's default."""
     pytest.importorskip("fastapi")
     backend_root = Path(__file__).resolve().parent.parent
     monkeypatch.syspath_prepend(str(backend_root))

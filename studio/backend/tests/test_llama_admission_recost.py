@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Re-costing a live lease as its tool loop grows.
-
-#9392 admitted generations against the KV cache instead of the slot count, after two chats
-killed each other on a 2048-token cache (565 + 1485, neither too long alone). It could not
-know a tool loop's final size, since each round appends its results and re-sends the
-conversation, so it reserved the WHOLE cache: airtight, and it made every tool chat run
-alone (any lit pill sets ``enable_tools``). Measured on a 262144 cache, four tool chats
-reached first token at 0.1s, 2.8s, 4.6s and 8.8s, one after another.
-
-Re-costing is the alternative that PR named and skipped. These pin the properties that
-make it safe to call from inside a running generator.
-"""
+"""Re-costing a live lease as the loop grows instead of reserving the whole KV cache up front."""
 
 from __future__ import annotations
 
@@ -173,14 +162,7 @@ class TestFourToolChatsTogether:
 
 
 class TestWaitingForRoomInsteadOfRunningOverIt:
-    """``recost`` alone accounts for growth without enforcing it.
-
-    A refused recost leaves the run at its old figure and it sends the bigger prompt
-    anyway. Four loops opening at a share each and growing together is then the measured
-    failure: llama.cpp halves the batch to 1, gives up, and ``Context size has been
-    exceeded`` clears EVERY decoding slot, not just the one that overflowed.
-    ``recost_waiting`` is what makes the accounting binding.
-    """
+    """``recost`` alone only accounts for growth; ``recost_waiting`` is what makes it binding."""
 
     @pytest.mark.asyncio
     async def test_growth_that_fits_never_touches_the_wait_line(self):
@@ -333,13 +315,7 @@ class TestWaitingForRoomInsteadOfRunningOverIt:
 
 
 class TestGivingUpTheWait:
-    """What a reparker owes the pool when its wait ends without the bigger commitment.
-
-    ``yield_commitment`` has already taken the old figure off ``_committed``, but the
-    lease still occupies that KV at llama-server. Handing it back is a CORRECTION, not a
-    request, and a full cache must not be able to refuse it: a lease that records a
-    commitment it never restored subtracts it again on release, leaving phantom room.
-    """
+    """Giving up a wait restores the old commitment as a correction a full cache must never refuse."""
 
     @pytest.mark.asyncio
     async def test_a_full_cache_cannot_refuse_the_restore(self):
@@ -407,13 +383,7 @@ class TestGivingUpTheWait:
 
 
 class TestYieldingIsGatedOnTheServerActuallyClearing:
-    """A slot being idle is not the same as its KV cells being reclaimed.
-
-    Under ``--kv-unified`` a finished round's cells stay resident until ``prompt_clear()``,
-    which llama-server runs only under ``--cache-idle-slots``. ``--cache-ram 0``
-    force-disables that, and Studio emits it on Windows under full GPU offload (#5692)
-    next to ``--kv-unified``. Yielding there hands a second caller occupied room.
-    """
+    """Idle slots keep KV cells under --kv-unified until prompt_clear(), which --cache-ram 0 disables."""
 
     @pytest.mark.asyncio
     async def test_growth_that_fits_does_not_care(self):

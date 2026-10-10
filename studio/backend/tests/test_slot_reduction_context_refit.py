@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for context fitting after serving-slot reduction.
-
-The synthetic plans use Qwen3.8-27B metadata and capture the generated command.
-Cases specify speculation explicitly and use synthetic slot costs unless testing
-the real estimator.
-"""
+"""Context refit after slot reduction, checked on synthetic plans and slot costs."""
 
 from __future__ import annotations
 
@@ -165,13 +160,7 @@ class TestTheLaunchedCountOwnsTheContext:
         assert (reduced["ctx"], reduced["ceiling"]) == (direct["ctx"], direct["ceiling"])
 
     def test_the_published_ceiling_is_not_the_fit_floor_anchor(self, tmp_path):
-        """The published ceiling follows the final slot count.
-
-        Named for the floor rather than 4096 because the anchor it must not be is
-        whatever _FIT_MIN_CTX currently is: the reduction prices its search there,
-        so a ceiling that came back equal to the floor would mean the search result
-        was published instead of the context the final slot count actually affords.
-        """
+        """The published ceiling must follow the final slot count, not equal the _FIT_MIN_CTX anchor."""
         got = _plan(tmp_path, weights_mib = _KEEPS_TWO_MIB, n_parallel = 4, spec = "off")
         assert got["ceiling"] == 14_080
         assert got["ceiling"] != llama_cpp._FIT_MIN_CTX
@@ -314,13 +303,8 @@ class TestWhatMustNotMove:
         assert (got["slots"], got["fit"], got["ctx"]) == (4, "off", 51_456)
 
     def test_weights_that_fit_nowhere_still_offload(self, tmp_path):
-        """Oversized weights still fall back to offload, at the Auto offload context.
-
-        The one case in this file that reads the constant rather than the reduction:
-        no slot count places these weights, so the block below never fires and the
-        context is the fallback itself. Tracked rather than hardcoded, since #9492
-        moved it from 4096 to 8192 and a literal here is a re-edit every time.
-        """
+        """Oversized weights fall back to offload at the Auto offload context, read rather than
+        hardcoded."""
         got = _plan(tmp_path, weights_mib = 11_400, n_parallel = 4, spec = "off")
         offload_ctx = min(llama_cpp._AUTO_OFFLOAD_CTX, NATIVE_CTX)
         assert (got["fit"], got["ctx"], got["ceiling"]) == ("on", offload_ctx, offload_ctx)
@@ -345,24 +329,7 @@ _OFFLOAD_SWEEP = [llama_cpp._FIT_MIN_CTX * step for step in (1, 2, 4, 8)]
 
 
 class TestTheReductionIsPricedAtTheFitFloor:
-    """The search that picks the slot count must not be priced at _AUTO_OFFLOAD_CTX.
-
-    That constant is what Auto settles for once offload is unavoidable. This block
-    exists to overturn that verdict by re-asking at fewer slots, so a higher probe
-    context can only make the search fail -- and its failure is all-or-nothing: no
-    reduction, `--fit on`, and the slot count kept at the ask it could not afford.
-
-    #9492 raised the constant 4096 -> 8192 and, through this one shared read, moved
-    placement. The arithmetic, on the 12 GiB card these tests use (budget
-    12288 x 0.97 = 11,919.36 MiB) at the 10,200 MiB of weights this block was first
-    written against: the candidates are 707 MiB apart (557.75 MiB of per-slot
-    compute buffer plus 149.625 MiB of per-slot Mamba state), while probing 256
-    tokens higher costs a uniform 64 KiB/token. The 2-slot candidate was 11,685.0
-    MiB at a 4096 probe and 11,947.0 MiB at 8192, so a display constant moved it
-    across the budget by 27.6 MiB. The weights above are lighter now only because
-    _FIT_MIN_CTX itself moved to 8192 and carried the reducible band down with it;
-    the margins being this thin is the reason the sweep below exists.
-    """
+    """Price the slot search at _FIT_MIN_CTX, not _AUTO_OFFLOAD_CTX: a higher probe fails all-or-nothing."""
 
     # Rows a reduction rescues from offload (--fit on there means a ~3x decode collapse).
     RESCUED = [
@@ -378,11 +345,7 @@ class TestTheReductionIsPricedAtTheFitFloor:
     def test_moving_the_offload_fallback_does_not_move_the_placement(
         self, tmp_path, monkeypatch, offload_ctx
     ):
-        """Sweeping the constant leaves slots, residency, context and cards alone.
-
-        Pinned against the sweep rather than against one value, so this cannot be
-        satisfied by re-baselining the constant into the expectation.
-        """
+        """Across a sweep of the offload constant, slots, residency, context and devices must not move."""
         monkeypatch.setattr(llama_cpp, "_AUTO_OFFLOAD_CTX", offload_ctx)
         got = _plan(tmp_path, weights_mib = _KEEPS_TWO_MIB, n_parallel = 4, spec = "off")
         assert (got["slots"], got["fit"], got["ctx"], got["devices"]) == (2, "off", 14_080, "0")
@@ -398,11 +361,8 @@ class TestTheReductionIsPricedAtTheFitFloor:
         assert got["slots"] < 4
 
     def test_weights_past_the_band_still_offload(self, tmp_path):
-        """The counterweight: the rows above are not green because everything is.
-
-        Without this, RESCUED could drift into sizes that place at the full ask and
-        the assertions there would hold for the wrong reason.
-        """
+        """Weights past the band must still offload, so the RESCUED rows cannot pass for the wrong
+        reason."""
         got = _plan(tmp_path, weights_mib = 11_400, n_parallel = 4, spec = "off")
         assert (got["fit"], got["slots"]) == ("on", 4)
 
@@ -495,17 +455,8 @@ class TestAGgufWithNoNativeContext:
     def test_the_reduction_still_pins_without_a_native_context(
         self, tmp_path, vram_mib, weights_mib, asked
     ):
-        """Without native-context metadata the search has no length to expand to,
-        so the reduction pins at the fit floor itself.
-
-        The floor is read, not spelled 4096, for the reason
-        test_weights_that_fit_nowhere_still_offload gives about _AUTO_OFFLOAD_CTX:
-        a literal here is a re-edit every time the constant moves, and the re-edit
-        is indistinguishable from noticing that placement changed. The exact
-        surviving slot count is left unpinned for the same reason -- it is
-        arithmetic against the floor, not the claim in this test's name. What must
-        hold is that a reduction happened at all and that it stayed resident.
-        """
+        """Without native-context metadata the reduction pins at _FIT_MIN_CTX; the exact slot count
+        is free."""
         got = _plan(
             tmp_path,
             weights_mib = weights_mib,

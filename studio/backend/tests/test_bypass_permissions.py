@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for Bypass Permissions (skip confirmation + disable sandbox).
-
-Covers the secret-name classifier, the two env builders, the
-``disable_sandbox`` branch of ``_python_exec`` / ``_bash_exec`` (which env is
-used, which pre-exec is used, and that safety checks / the blocklist are
-skipped), the request-model default, the confirm-vs-bypass precedence rule the
-route enforces, and that the agentic loop forwards ``disable_sandbox`` while
-never gating under bypass.
-
-Run with: ``PYTHONPATH=studio/backend python -m pytest studio/backend/tests/test_bypass_permissions.py -q``
-"""
+"""disable_sandbox skips safety checks and the blocklist; run with PYTHONPATH=studio/backend."""
 
 import io
 import os
@@ -87,12 +77,7 @@ def test_safe_env_excludes_host_and_secret(monkeypatch, tmp_path):
 
 
 class _FakeProc:
-    """A subprocess.Popen double for the drain path (``tools._drain_process_output``):
-    a readable ``stdout`` pipe yielding the fake output then EOF, plus
-    ``wait()`` / ``poll()`` / ``pid``. The pid is non-existent so
-    ``_capture_process_group``'s ``os.getpgid`` returns None; ``wait`` returns
-    immediately so the drain never kills.
-    """
+    """Popen double with a missing pid, so process-group capture finds nothing and drain never kills."""
 
     returncode = 0
     pid = 2**22

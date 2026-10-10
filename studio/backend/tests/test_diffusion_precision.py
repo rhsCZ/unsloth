@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for text-encoder quantisation (``diffusion_precision.py``).
-
-Hermetic: torch + the diffusers / torchao casters are stubbed via ``sys.modules`` so
-gating and the apply path run without a GPU, real diffusers, or real torchao.
-"""
+"""Text-encoder quantisation tests, hermetic: torch and the casters are stubbed in sys.modules."""
 
 from __future__ import annotations
 
@@ -595,10 +591,7 @@ def test_no_torchao_config_is_constructed_outside_quiet_config():
 
 
 def test_unset_and_auto_are_the_only_spellings_that_invite_a_family_default():
-    """The tri-state hinges on telling "choose for me" from "leave it alone", and
-    ``normalize_te_quant`` deliberately folds both into None. ``te_quant_is_auto`` is what
-    recovers the distinction, so an opt-out must NOT read as auto or every "off" request
-    silently gets the family's scheme."""
+    """Only unset and auto invite a family default; an explicit off must never read as auto."""
     for auto in (None, "", "   ", "auto", "AUTO", " Auto "):
         assert te_quant_is_auto(auto) is True
     for pinned in ("none", "off", "OFF", " None ", "fp8", "int8", "nvfp4", "fp8_dynamic"):
@@ -643,11 +636,7 @@ def test_a_typo_in_a_familys_own_default_is_refused_rather_than_passed_through()
 
 
 def test_the_dense_opt_out_survives_the_image_request_schema_too():
-    """The normaliser accepting "none" is not enough: ``DiffusionLoadRequest`` is the API
-    boundary, and while its scheme list was fp8/fp8_dynamic/int8/nvfp4 only, omitting the field
-    was the ONLY way to ask for the released encoder. Once an omitted request can resolve to a
-    family scheme, that spelling stops meaning dense and the opt-out has to be sendable, or the
-    bf16 reference configuration is unreachable through the API."""
+    """The API request must accept the dense opt-out none, or the bf16 reference is unreachable."""
     from pydantic import ValidationError
 
     from models.inference import DiffusionLoadRequest

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""One log record must not be able to grow without bound.
-
-request_failed renders the whole traceback into an "exception" field. That is a
-few KB for a normal failure, but an exception whose message embeds a request body
-is not: a rejected binary upload produced a single 2.2 MB line. The head (raising
-frame) and the tail (exception type and message) are what a reader needs, so the
-middle is dropped with a count of what went missing.
-"""
+"""Cap one log record: keep the traceback head and tail, and drop the middle with a count."""
 
 from __future__ import annotations
 

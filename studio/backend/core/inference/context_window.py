@@ -720,17 +720,7 @@ def turn_diagnosis(
     irreducible_tokens: int,
     fitted: Optional[list[dict]] = None,
 ) -> dict[str, Any]:
-    """Which part of a refused prompt is which.
-
-    `shared_prompt_tokens` is the floor both other counts carry; zero when the turn was estimated,
-    since that estimate has no catalogue.
-
-    `latest_turn_exact` False means the two do not share units and must not be compared: 16,400
-    characters of newlines estimate 8,207 tokens against 557 rendered.
-
-    `fitted` is the list `irreducible_tokens` was counted over, so an unrenderable turn is priced by
-    difference.
-    """
+    """latest_turn_exact False means the two counts use different units and must not be compared."""
     if not messages:
         return {
             "latest_turn_tokens": 0,
@@ -787,14 +777,7 @@ def fit_rolling_context(
     headroom_ratio: Optional[float] = None,
     estimate_message: Callable[[dict], int] = estimate_message_tokens,
 ) -> tuple[list[dict], Optional[dict[str, Any]]]:
-    """Fit a chat into its context by dropping oldest complete turns; the current turn is never
-    clipped.
-
-    ``reserve_tokens`` leaves room for what the caller adds back and deliberately does not affect
-    whether to trim at all. ``sticky_dropped`` re-applies the boundary this thread last compacted
-    to, without which the stateless fit slides it every reply. Acceptance uses the untightened
-    ``prompt_target``.
-    """
+    """sticky_dropped re-applies the last compacted boundary, else the stateless fit slides each reply."""
     if context_length <= 1:
         return messages, None
 

@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for PDF / document attachment translation on external providers.
-
-Unsloth adds a normalised `input_document` content part on
-ChatCompletionRequest so the frontend needn't know the per-provider
-attachment shape:
-
-- Anthropic: `{type:"document", source:{type:"base64"|"url", ...}}`
-- OpenAI Responses: `{type:"input_file", file_data|file_url, filename?}`
-
-Pins the translation shape on both paths for base64 data URIs and remote
-URLs (with optional filename), and confirms unknown / empty document
-parts are dropped without breaking the request.
-"""
+"""Document parts map to Anthropic document blocks and OpenAI input_file; unknown ones are dropped."""
 
 import asyncio
 import json

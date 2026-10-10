@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""macOS Finder metadata companions, against the predicates and the shared walks.
-
-A ``._<name>`` companion carries the described file's extension, so it answers every name-shaped
-question the way the real file does, and ``Path.glob`` matches it. Consumers are covered through
-what they share -- the predicates, the cache walk, the dataset walk -- rather than one case each.
-Every fixture also holds a real file a user named ``._something``, which must survive: nothing
-may be refused for its name alone.
-"""
+"""Real files named ._something must survive, since nothing may be refused for its name alone."""
 
 from __future__ import annotations
 
@@ -228,10 +221,7 @@ def test_a_sidecar_never_wins_the_dspark_preference():
 
 
 def test_pick_dspark_stays_reachable_from_module_scope():
-    """It is handed a live repo listing as well as a snapshot, the same as _pick_mmproj.
-
-    Nesting it back inside the method is how #9074 reverted it, and nothing noticed.
-    """
+    """_pick_dspark must stay at module scope; nesting it inside the method once went unnoticed."""
     import core.inference.llama_cpp as llama_cpp
     assert callable(getattr(llama_cpp, "_pick_dspark", None))
 

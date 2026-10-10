@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The atexit teardown must not print tracebacks after the program has ended.
-
-_cleanup runs from atexit, by which point the streams the log handlers write to
-can already be closed. Logging then prints its own traceback about the closed
-stream on top of whatever it was trying to report, so one warning about a kill
-that did not work became several unrelated tracebacks after the pytest summary --
-which is how this was found, by them burying the summary line.
-"""
+"""Teardown from atexit must not log to closed streams; the tracebacks bury the pytest summary."""
 
 import io
 import logging
@@ -33,11 +26,7 @@ def _stub() -> LlamaCppBackend:
 
 
 class _Unterminable:
-    """What a backend can be holding: something that is not a Popen.
-
-    Tests stand one in to mean "a server is loaded" without spawning anything, and
-    a backend torn down mid-start holds whatever __init__ got as far as.
-    """
+    """Stands in for a loaded server without a Popen; a backend torn down mid-start holds partial state."""
 
 
 class _RecordingLogger:
@@ -93,14 +82,7 @@ def test_a_process_that_cannot_be_terminated_is_not_an_error(monkeypatch, tmp_pa
 
 
 class _RaisingLogger:
-    """A logger whose writes fail, like the real one once stdout is closed.
-
-    The module logger is a structlog PrintLogger writing straight to stdout, so a
-    closed stream raises ValueError out of the call. Deliberately not a stdlib
-    logger: that reports a broken handler by printing its own traceback rather
-    than raising, so a stdlib stand-in exercises raiseExceptions and proves
-    nothing about the path this module actually takes.
-    """
+    """Must raise on write like structlog's PrintLogger, since stdlib logging prints a traceback instead."""
 
     def __getattr__(self, name):
         def boom(*a, **k):
@@ -164,11 +146,7 @@ class _StubbornProcess:
 
 
 def test_sigkill_still_happens_when_the_log_write_fails(monkeypatch):
-    """The escalation must not depend on a log write succeeding. logger here is a
-    structlog PrintLogger straight to stdout, so a closed stream raises out of the
-    warning, and reporting first meant the kill was skipped while the finally
-    dropped the last reference to the process -- leaving the server running with
-    nothing left to kill it."""
+    """SIGKILL must still be sent when the warning's log write raises, or the process is left running."""
     monkeypatch.setattr(mod, "logger", _RaisingLogger())
     backend = _stub()
     proc = _StubbornProcess()

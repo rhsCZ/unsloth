@@ -115,13 +115,7 @@ def arm_the_idle_loop(monkeypatch):
 
 
 def test_only_the_yours_key_separates_the_two_answers(chat_resident, accounts):
-    """Why both assertions above are needed, and why "loaded" alone would not do.
-
-    With alice's claim still held, bob is supposed to see the mask, and the mask for this
-    route reports an EMPTY "loaded" - the same value a genuinely free GPU reports. So a test
-    written against "loaded" alone passes just as happily on a phantom resident. Pinning the
-    masked body here is what lets the two teardown tests above assert on "yours".
-    """
+    """Pin the masked body, since an empty loaded list also reads as a free GPU and hides a phantom."""
     assert gpu_arbiter.current_owner() == gpu_arbiter.CHAT
     assert bob_status(accounts).json() == {"loaded": [], "loading": [], "yours": False}
 
@@ -129,18 +123,7 @@ def test_only_the_yours_key_separates_the_two_answers(chat_resident, accounts):
 def test_a_torn_down_backend_does_not_yet_mean_a_released_claim(
     chat_resident, accounts, monkeypatch
 ):
-    """Between the unload and the release, the claim is still alice's and bob sees the mask.
-
-    That interval is the reason the test below waits on the release rather than on the
-    teardown: a status read landing inside it gets the masked body, correctly, and a test that
-    called that a phantom would be blaming the product for its own timing.
-
-    The window is held open with a hook on the release itself, not by winning a scheduler
-    race. Racing would make this depend on undocumented asyncio wakeup order, and worse, it
-    would fail against an implementation that made teardown and release atomic - punishing a
-    genuine improvement. A hook on release still fires in that implementation, so this test
-    keeps asking its question rather than becoming a tripwire.
-    """
+    """Between unload and release the claim is still held, so a status read there sees the mask."""
     arm_the_idle_loop(monkeypatch)
 
     reached_release = threading.Event()

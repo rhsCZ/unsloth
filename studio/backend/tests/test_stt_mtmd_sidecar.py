@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The mtmd STT sidecar (Qwen3-ASR): load, unload, cancellation and residency.
-
-Was split across two files named after the review rounds that produced them, which said
-when the tests were written rather than what they cover. Same tests, one subject.
-"""
-
 import subprocess
 import threading
 import time
@@ -858,11 +852,8 @@ def _resident(sidecar: MtmdSttSidecar, process) -> None:
 
 
 def test_status_reads_do_not_block_behind_a_reap(monkeypatch):
-    """loaded_model/device/is_loading answer while unload() reaps under _lock.
-
-    The event loop and training admission both read these, so neither can wait
-    on a dying server.
-    """
+    """Status reads must not wait for a reap under _lock: the event loop and training admission read
+    them."""
     monkeypatch.setattr(mtmd_mod, "forget_pid", lambda pid: None)
     sidecar = MtmdSttSidecar(keep_alive_seconds = 0)
     release = threading.Event()
@@ -890,11 +881,7 @@ def test_status_reads_do_not_block_behind_a_reap(monkeypatch):
 
 
 def test_a_reaping_server_stays_visible_to_training_admission(monkeypatch):
-    """A dying llama-server still holds VRAM, so it must still read as resident.
-
-    Clearing the fields before the reap would let summarize_resident_stt() report
-    nothing while the process is alive, and training would start into its memory.
-    """
+    """A reaping server still holds VRAM; clearing its fields early would hide it from training."""
     monkeypatch.setattr(mtmd_mod, "forget_pid", lambda pid: None)
     sidecar = MtmdSttSidecar(keep_alive_seconds = 0)
     release = threading.Event()
@@ -924,11 +911,7 @@ def test_a_reaping_server_stays_visible_to_training_admission(monkeypatch):
 
 
 def test_a_starting_load_is_announced_before_the_probe_and_the_reap():
-    """is_loading() has to be true across the cache probe and the old reap.
-
-    Training admission reads it lock-free, so a False there sends it to unload(),
-    which waits out the whole startup instead of cancelling the load.
-    """
+    """is_loading() must stay True across the probe and reap, or training waits instead of cancelling."""
     sidecar = MtmdSttSidecar(keep_alive_seconds = 0)
     probing = threading.Event()
     release = threading.Event()
@@ -1007,11 +990,8 @@ def test_ggml_download_drops_its_adopted_pid(monkeypatch, tmp_path):
     import huggingface_hub
 
     class _Metadata:
-        """Stands in for HfFileMetadata; unset fields read as None, as they may on the Hub.
-
-        ``commit_hash`` has to be a real-looking sha: _run() pins the download to an
-        immutable revision and refuses anything that is not one.
-        """
+        """The stub's commit_hash must be a real 40-character sha, since _run() refuses any other
+        revision."""
 
         size = 1
         etag = "stub"
@@ -1100,11 +1080,7 @@ def test_download_probe_expires(monkeypatch):
 
 
 def test_an_invalidation_mid_probe_discards_the_stale_answer(monkeypatch):
-    """A download finishing under a probe must not be undone by that probe.
-
-    The probe runs outside the lock, so it can write a stale False back over the
-    download's invalidation, and the model then reads as missing for a whole TTL.
-    """
+    """A probe runs outside the lock, so its stale answer must not overwrite a download's invalidation."""
     mtmd_mod._forget_downloaded_probe()
 
     def probe_then_invalidate(model_id):

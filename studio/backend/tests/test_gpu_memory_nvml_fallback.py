@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The runtime GPU memory probe reads NVML when nvidia-smi cannot answer.
-
-An absent, stale or hung nvidia-smi left _get_gpu_memory empty, and the embedding server
-read that as "no GPU": -ngl 0 and a blanked CUDA_VISIBLE_DEVICES around a working CUDA
-build. The installers stopped trusting that misread in #10985; this is the runtime half.
-"""
+"""_get_gpu_memory falls back to NVML when nvidia-smi is absent or hangs, instead of reading no GPU."""
 
 from __future__ import annotations
 

@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Bare rehearsal ``name[ARGS]{json}`` quoted in markdown code stays prose.
-
-The rehearsal form has no sentinel of its own (unlike ``[TOOL_CALLS]`` or the
-XML markup), so an answer that *documents* the syntax used to parse as a real
-call and then vanish from the rendered message. A fenced block or an inline
-span marks the text as an example, so it is neither promoted nor stripped --
-the same contract an inactive tool name already gets.
-
-Explicit markers keep their unconditional behaviour inside code: a ```json
-block is still a real call for the templates that emit one.
-"""
+"""Bare rehearsal name[ARGS]{json} inside a code fence or inline span stays prose, not a real call."""
 
 import os
 import sys

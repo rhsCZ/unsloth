@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for GET /api/models/export-size (the Export page size estimate).
-
-The endpoint must never raise and must degrade to nulls when size is unknown, and the local
-folder sizer behind it must charge one copy of the weights and no trainer bookkeeping.
-"""
+"""/api/models/export-size must never raise, return nulls when unknown, and count weights once."""
 
 import asyncio
 import importlib.util

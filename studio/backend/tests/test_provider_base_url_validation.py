@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""External-provider base URL validation (SSRF hardening).
-
-The backend fetches the provider base URL on the caller's behalf with their
-decrypted API key attached, so the URL is server-side egress under caller
-control. These tests pin both halves of the policy: every endpoint a user can
-configure today keeps working (plain http, loopback, LAN, odd ports, query
-strings), while shapes that can never be a provider -- non-http(s) schemes,
-embedded credentials, cloud metadata services -- are refused.
-"""
+"""Refuse non-http schemes, embedded credentials and cloud metadata hosts; keep LAN and loopback."""
 
 import importlib.util
 import socket
@@ -121,15 +113,7 @@ _REAL_GETADDRINFO = socket.getaddrinfo
 
 
 def _for_test_hosts(fake):
-    """Answer this file's `.example` hosts with `fake`, and every other lookup for real.
-
-    socket.getaddrinfo is patched process-wide, so a lookup from any other thread in the worker (a
-    client another test left running, a background refresh) also lands in the fake. The tests that
-    count calls then read one too many: `assert 33 == 32` in test_stalled_lookups_do_not_pile_up
-    and `assert 3 == 2` in test_a_timed_out_lookup_is_not_remembered, both seen in CI. Routing by
-    host keeps the count to the lookups the code under test made, and stops the fakes from making
-    an unrelated caller sleep 30 s.
-    """
+    """Route .example hosts to the fake; other lookups stay real so unrelated threads are not affected."""
 
     def route(host, port, *args, **kwargs):
         if isinstance(host, str) and host.endswith(".example"):
@@ -187,11 +171,7 @@ def test_the_opt_in_path_shares_the_one_lookup(monkeypatch):
 
 
 def test_unresolvable_names_are_refused_only_under_the_opt_in(monkeypatch):
-    """The same "no answer" reads as allow by default and refuse when opted in.
-
-    docker-compose and service-discovery names resolve in the client's network
-    namespace, not this one, so the default path cannot read silence as guilt.
-    """
+    """Unresolvable names pass by default, since docker-compose names resolve in the client's namespace."""
 
     def _unresolvable(*args, **kwargs):
         raise socket.gaierror("not resolvable here")
@@ -358,11 +338,7 @@ def test_a_transient_failure_is_not_remembered(monkeypatch):
 
 
 def test_stalled_lookups_do_not_pile_up(monkeypatch):
-    """Past the in-flight cap the check reports no answer instead of a thread.
-
-    The workers this leaves behind wake up long after the fixture has replaced
-    the semaphore, which is why each releases the instance it took.
-    """
+    """Past the in-flight DNS cap the lookup reports no answer rather than spawning another thread."""
     import time as _time
 
     monkeypatch.setattr(_providers, "_DNS_TIMEOUT_SECONDS", 0.05)

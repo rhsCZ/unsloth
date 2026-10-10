@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Separate-file drafter contracts: MTP (Gemma 4), DSpark, DFlash and EAGLE3.
-
-Pins: the drafter-path predicate and its two layering mirrors, Gemma
-effective-size extraction, companion classification in variant plans
-(including resume from pre-fix manifests where the drafter leaked into a
-quant's main files), and local drafter detection / self-pairing rejection.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -1240,10 +1232,7 @@ def test_an_unreachable_hub_is_not_recorded_as_a_missing_sidecar(monkeypatch, tm
 
 
 def test_download_dspark_still_reports_a_cached_sidecar_it_cannot_run(monkeypatch):
-    """Skipping the fetch must not hide a sidecar already on disk: the route
-    rediscovers it on every Apply, so answering None would leave the reuse check
-    comparing it against the launched None and reloading the same drafter-free
-    server each time. _build_speculative_flags re-checks and still falls back."""
+    """Skipping the fetch must still report a cached sidecar, or Apply reloads the drafter-free server."""
     cached = "/cache/snap/dspark/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf"
     got, reached = _dspark_download_probe(monkeypatch, supports_dspark = False, cached = cached)
     assert got == cached
@@ -1252,10 +1241,7 @@ def test_download_dspark_still_reports_a_cached_sidecar_it_cannot_run(monkeypatc
 
 @pytest.mark.parametrize("shape", ["dangling", "directory"])
 def test_detect_dspark_file_skips_a_sidecar_it_cannot_open(tmp_path, shape):
-    """A dangling snapshot symlink or a directory named like a sidecar must read
-    as "no sidecar", not as a drafter: handing llama-server a --model-draft it
-    cannot open fails the whole load instead of falling back to no speculation.
-    detect_mtp_file has always guarded this."""
+    """A dangling symlink or directory named like a sidecar means no sidecar: the load would fail."""
     import os
 
     weight = tmp_path / "model-Q4_K_M.gguf"
@@ -1371,10 +1357,7 @@ def test_an_unusable_candidate_does_not_win_the_tier_comparison(tmp_path):
 
 
 def test_a_rejected_candidate_does_not_win_the_tier_comparison(tmp_path):
-    """Same shape as the unusable case, via accept: a native grant can reject the
-    most specific root file, which is then skipped at emission. It must not have
-    spoken for its tier, or a base-family sibling goes out ahead of the more
-    specific accepted copy under MTP/."""
+    """A grant-rejected candidate must not claim its tier, or a base-family sibling goes out first."""
     weight = tmp_path / "model_v2_release-Q4_K_M.gguf"
     weight.write_bytes(b"target")
     rejected = tmp_path / "mtp-model_v2_release.gguf"
@@ -1673,12 +1656,7 @@ def test_a_cached_dspark_drafter_is_never_launched_as_an_mtp_drafter(tmp_path, m
 
 
 def test_cached_mtp_lookup_ranks_nested_copies_like_the_download(tmp_path, monkeypatch):
-    """Offline reuse must name the file the online picker names.
-
-    Lexical order put mtp-Qwen3.8-Flash-Next-BF16.gguf first, so a cached user got
-    the 7.77 GB slowest head while a fresh install downloaded the Q8_0 one. Both
-    pickers now take the self-contained head over the borrowing one (unsloth#10322).
-    """
+    """Offline reuse must pick the same head as the online picker, preferring the self-contained one."""
     import core.inference.llama_cpp as llama_cpp_module
 
     published = [
@@ -1748,13 +1726,7 @@ def test_local_scan_keeps_precision_above_the_borrow_tiebreak(tmp_path):
 
 
 def test_a_shared_head_pairs_with_its_target_in_the_local_scan(tmp_path):
-    """-shared marks the head's FORM, not its family.
-
-    mtp-<model>-shared-<quant>.gguf left a pairing stem of <model>-shared, which
-    never prefixes <model>-<quant>, so detect_mtp_file could not pair the head the
-    hub picker prefers: a local checkout of the files Studio had just downloaded
-    resolved differently from the download.
-    """
+    """The -shared tag marks the head's form, not its family, so it must still pair with its target."""
     from utils.models.drafters.common import _drafter_matches_weight, _drafter_pairing_stem
     from utils.models.model_config import detect_mtp_file
 
@@ -1875,11 +1847,7 @@ def test_deleting_the_last_variant_reclaims_an_opt_in_dspark_drafter(tmp_path):
 
 
 def test_a_suffix_scheme_sidecar_is_not_mistaken_for_a_quant(tmp_path):
-    """The second published naming scheme, <model>-dspark.gguf. Its basename
-    carries no drafter marker, only its dspark/ parent does, so a predicate fed
-    the bare file_name read it as a real Q8_0 variant: deleting the genuine Q8_0
-    would take the sidecar the Q4_K_M still needs, and no companion could ever be
-    reclaimed because a main GGUF always appeared to remain."""
+    """A -dspark suffix sidecar has no drafter marker in its basename, so it reads as a real quant."""
     from hub.services.models.deletion import _delete_gguf_variant_from_repos
 
     repo, snap = _cache_repo(
@@ -2133,13 +2101,7 @@ def test_forced_dflash_without_a_sidecar_falls_back(monkeypatch):
 
 
 def test_a_dropped_unloadable_drafter_reports_its_own_reason(monkeypatch):
-    """ "Present but unopenable" is not "not found", and the remedies differ.
-
-    drafter_not_found tells a local load to place an mtp-*.gguf that is already on disk,
-    and offers a remote load a refetch that returns the same file -- which this branch
-    deliberately stands down. It is also in the frontend's RETRYABLE_SPEC_FALLBACKS, so
-    Apply kept sending a reload the backend then deduped.
-    """
+    """A present but unopenable drafter must not say drafter_not_found; local loads would re-place it."""
     backend = _spec_backend(monkeypatch)
     flags = _spec_flags(
         backend,
@@ -2155,15 +2117,7 @@ def test_a_dropped_unloadable_drafter_reports_its_own_reason(monkeypatch):
 
 @pytest.mark.parametrize("mode", ["auto", "mtp"])
 def test_a_dropped_sidecar_is_explained_on_a_non_gemma_quant(monkeypatch, mode):
-    """The PR's own motivating case, which the Gemma-only fallback used to miss.
-
-    RVN-Q6_K.gguf reports no nextn_predict_layers and carries no -mtp in its name, so
-    the sidecar beside it was its ONLY MTP signal. Clearing mtp_draft_path made
-    is_mtp_model read false, _mtp_drafter_missing recognised Gemma alone, and neither
-    Auto nor forced MTP reached the fallback: MTP went off with spec_fallback_reason
-    null, so the panel had nothing to show. No --model-draft either way; emitting MTP
-    without a drafter is what aborts llama-server.
-    """
+    """A non-Gemma quant's sidecar is its only MTP signal; dropping it turned MTP off with no reason."""
     backend = _spec_backend(monkeypatch)
     flags = _spec_flags(
         backend,
@@ -2416,11 +2370,7 @@ def test_download_dflash_skips_the_fetch_when_the_binary_cannot_run_it(tmp_path,
 
 
 def test_download_dflash_still_reports_a_cached_sidecar_it_cannot_run(tmp_path, monkeypatch):
-    """The route rediscovers it on every Apply, so answering None would compare
-    it against a launched None and reload the same server each time.
-
-    A real file on disk, since the reuse now confirms the header says dflash
-    before handing the path back."""
+    """Skipping the fetch must still report a cached DFlash sidecar, or Apply reloads the same server."""
     cached = str(_write_gguf(tmp_path / "dflash-kquant.gguf", "dflash"))
     got, reached = _dflash_download_probe(
         tmp_path, monkeypatch, supports_dflash = False, cached = cached
@@ -2645,11 +2595,7 @@ def test_local_and_remote_dflash_pairing_agree(tmp_path):
 
 
 def test_dflash_stays_unreclaimable_even_though_auto_now_launches_it(tmp_path):
-    """Auto downloading a sidecar does not make the name safe to delete by.
-    Reclaiming wrongly destroys weights a user chose (whole repos publish
-    nothing but root-level dflash-*.gguf), while not reclaiming leaves ~1.5 GiB,
-    an order of magnitude under the ~11 GB DSpark case the rule was written for.
-    The positive control below shows the reclaim itself still works."""
+    """dflash-*.gguf stays unreclaimable: some repos hold only that file, which may be a chosen model."""
     from hub.services.models.deletion import _delete_gguf_variant_from_repos
 
     from hub.utils.gguf import is_reclaimable_drafter_path
@@ -2670,15 +2616,7 @@ def test_dflash_stays_unreclaimable_even_though_auto_now_launches_it(tmp_path):
 
 
 def test_detect_dflash_file_skips_a_sidecar_named_for_another_weight(tmp_path):
-    """A multi-model folder must not attach a foreign drafter.
-
-    _drafter_matches_weight is False both for a sidecar naming no family and for
-    one naming a DIFFERENT family, so ranking alone bucketed them together and
-    precision could float the foreign one to the top: loading model B beside
-    dflash-model-A-Q8_0.gguf and the generic dflash-kquant.gguf launched model
-    A's drafter for model B. Both files carry a real dflash header, so the
-    architecture check behind the ranking cannot catch this one.
-    """
+    """A sidecar named for another model must not attach: its real dflash header passes the arch check."""
     weight = _write_gguf(tmp_path / "Muse-Glimmer-30B-UD-Q4_K_XL.gguf", "muse-glimmer")
     _write_gguf(tmp_path / "Qwen3.6-27B-Q4_K_M.gguf", "qwen3")
     foreign = _write_gguf(tmp_path / "dflash-Qwen3.6-27B-Q8_0.gguf", "dflash")
@@ -2699,15 +2637,7 @@ def test_detect_dflash_file_still_prefers_a_sidecar_that_names_this_weight(tmp_p
 
 
 def test_detect_dflash_file_ignores_the_suffix_form_the_picker_cannot_hide(tmp_path):
-    """Discovery and the quant picker have to agree on what a sidecar is.
-
-    The shared companion predicates know DFlash by the dflash- prefix only, so a
-    <model>-dflash.gguf accepted here would be a drafter for discovery and at the
-    same time a selectable Q8_0 main model in the picker, and choosing that
-    variant would hand llama-server the drafter as the target. Detection gives
-    the form up rather than teaching the predicate a suffix that would hide a
-    real model merely named DFlash.
-    """
+    """Detection ignores the -dflash suffix form, which the quant picker cannot hide as a drafter."""
     from core.inference.llama_cpp import _is_companion_gguf_path
 
     weight = _write_gguf(tmp_path / "Muse-Glimmer-30B-UD-Q4_K_XL.gguf", "muse-glimmer")
@@ -2728,13 +2658,7 @@ def test_dflash_prefix_form_is_still_found_beside_the_weight(tmp_path):
 
 
 def test_detect_dflash_file_validates_a_candidate_before_reading_its_header(tmp_path, monkeypatch):
-    """A native grant answers through ``accept``, and its answer has to arrive
-    before the file is opened.
-
-    A dflash-*.gguf inside a leased directory can be a symlink whose target sits
-    outside the lease. Parsing the header first opened that target, and no later
-    rejection takes a read back, so the order is: resolve, ask accept, then read.
-    """
+    """Ask accept before reading any header: a symlink may escape the lease, and a read is irreversible."""
     import os
     import utils.models.model_config as mc
 
@@ -2828,10 +2752,7 @@ def _dflash_repo_download(
 def test_download_dflash_falls_through_a_candidate_that_is_not_a_dflash_model(
     tmp_path, monkeypatch
 ):
-    """The impostor outranks the real sidecar on both name rules (it pairs with
-    this weight, and Q8_0 beats an unmarked precision), so the fetch reaches it
-    first. Its header is what disqualifies it, and only after the fetch, so the
-    search has to move on to the next candidate instead of returning None."""
+    """A candidate whose header is not dflash must fall through to the next, not return None."""
     _write_gguf(tmp_path / "model-Q4_K_M.gguf", "llama")
     _write_gguf(tmp_path / "dflash-model-Q8_0.gguf", "llama")
     sidecar = _write_gguf(tmp_path / "dflash-kquant.gguf", "dflash")
@@ -2949,11 +2870,7 @@ def _dflash_fetch_during_auto_load(
     mtp_loads = True,
     mtp_token = "draft-mtp",
 ):
-    """Whether an Auto load fetches the DFlash sidecar, and what it resolves to.
-
-    Drives the real load path: the suppression lives inline in load_model's
-    download phase, so nothing short of running it can pin the interaction.
-    """
+    """Suppression sits inline in load_model's download phase, so only the real load path can pin it."""
     from core.inference.llama_cpp import LlamaCppBackend
     import core.inference.llama_cpp as llama_cpp_module
 
@@ -3223,13 +3140,7 @@ def test_explicit_dflash_still_fetches_under_tensor_split(monkeypatch):
     assert seen["dflash_fetched"] is True
 
 
-# ── The caller's boundary reaches discovery, not just the rescan ──────
-#
-# ModelConfig.from_identifier runs the local companion scan, and the DFlash scan
-# opens a candidate's header to confirm the architecture. A native grant covers
-# one directory, so a dflash-*.gguf inside it can be a symlink whose target sits
-# outside the lease. The load route rejects that afterwards, which cannot undo a
-# read, so the boundary has to travel INTO the scan.
+# The grant boundary must reach discovery, since the DFlash scan opens headers before rejection.
 
 
 def test_from_identifier_hands_the_boundary_to_every_drafter_kind(tmp_path, monkeypatch):
@@ -3543,11 +3454,7 @@ def test_offline_companion_cache_hit_skips_an_incomplete_split(tmp_path, monkeyp
 
 
 def test_cached_dflash_lookup_skips_an_incomplete_split_set(tmp_path, monkeypatch):
-    """The fourth way a shard can reach --model-draft: _download_dflash's offline
-    fallback hands this lookup's answer back as the drafter with no fetch left to
-    complete the set, so a lone shard reads as a valid header and llama-server
-    then cannot open the siblings it resolves from that directory. The load drops
-    speculation silently."""
+    """A lone shard as --model-draft cannot open its siblings, so an incomplete split set is skipped."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     snap = tmp_path / "snapshots" / "abc"
@@ -3698,10 +3605,7 @@ def test_download_dflash_does_not_ask_again_when_this_machine_is_the_problem(tmp
 
 
 def test_download_dflash_treats_a_header_rejection_as_settled(tmp_path, monkeypatch):
-    """A candidate whose header does not say dflash is permanently not a sidecar: the
-    search falls through to the next one, and if that was the last one the repo
-    publishes none. Reading it as a dropped fetch would reload on every Apply for a
-    file that can never be launched."""
+    """A header rejection is settled, not a dropped fetch: treating it as one reloads on every Apply."""
 
     def _fetch(
         repo,
@@ -3996,10 +3900,7 @@ def test_download_dflash_reaches_the_complete_family_behind_an_incomplete_one(
 
 
 def test_split_completeness_reads_shard_indices_not_a_shard_count():
-    """A listing caught mid-publication can hold 00001-of-00002 beside a stray
-    00003-of-00002. Two files, so a count calls the set whole, while shard 2 is
-    still missing and llama-server cannot open it: the picker then ranks a family
-    it cannot load and the guard bills the training job for it."""
+    """Completeness uses shard indices: a stray 00003-of-00002 beside shard 1 hides missing shard 2."""
     from utils.models.drafters import split_listing_is_complete
 
     names = ["model-00001-of-00002.gguf", "model-00003-of-00002.gguf"]
@@ -4066,13 +3967,7 @@ def test_mtp_drafter_loads_standalone(tmp_path, tensors, shared, expected):
 
 
 def test_a_lone_file_claiming_to_be_a_split_set_is_still_judged(tmp_path):
-    """``split.count`` alone is not an excuse: llama-server opens shards by FILENAME.
-
-    Exempting anything whose header said ``split.count > 1`` let a head-only file
-    through untested, and llama-server then ended the launch on it anyway (measured).
-    The exemption belongs to a set whose shards cannot all be inspected, not to a
-    single file that merely declares one.
-    """
+    """split.count alone is no exemption: llama-server opens shards by filename, so judge the lone file."""
     from core.inference.llama_cpp import _mtp_drafter_loads_standalone
 
     drafter = _write_drafter_gguf(tmp_path / "mtp-model.gguf", tensors = _HEAD_EXTRACT, split_count = 2)

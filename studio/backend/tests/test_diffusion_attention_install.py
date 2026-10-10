@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What Studio installs for the on-demand attention kernels, and what it engages.
-
-SageAttention 2 is not on PyPI (only SageAttention 1.0.6), so ``sage`` without a local SageAttention 2 runs the
-kernels-community build through diffusers' ``sage_hub``, self-checked first, or keeps the default backend with a reason.
-FlashAttention 4 from the kernels hub imports nvidia-cutlass-dsl, which loads only at 4.4.x / 4.5.x."""
+"""SageAttention 2 is not on PyPI; FA4's nvidia-cutlass-dsl import works only at 4.4.x and 4.5.x."""
 
 from __future__ import annotations
 

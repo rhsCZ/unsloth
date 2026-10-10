@@ -46,11 +46,7 @@ def save(
     meta: dict[str, Any],
     source_wav: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Persist WAV bytes plus their recipe sidecar; return the record.
-
-    Staged then renamed in, wav first: the sidecar is the pair's commit marker. On any
-    failure every artifact is removed, so no invisible orphan wav is left behind.
-    """
+    """Stages the WAV and sidecar, renaming the WAV first, since the sidecar is the commit marker."""
     audio_id = uuid.uuid4().hex
     directory = gallery_dir()
     wav_path = directory / f"{audio_id}.wav"
@@ -87,10 +83,7 @@ def save_file(
     *,
     prune: bool = True,
 ) -> dict[str, Any]:
-    """Move a WAV on disk into the gallery with its sidecar; all or nothing.
-
-    Multi-file runs pass ``prune=False`` and prune once at the end, so a cap never splits a run.
-    """
+    """Multi-file runs pass prune=False and prune once at the end, so a cap never splits a run."""
     audio_id = uuid.uuid4().hex
     directory = gallery_dir()
     wav_path = directory / f"{audio_id}.wav"
@@ -128,11 +121,7 @@ _DEFAULT_MAX_BYTES = 5 * 1024 * 1024 * 1024
 
 
 def _max_clips() -> int:
-    """0, or any non-numeric value such as "off", disables pruning.
-
-    An unset variable is the only case that takes the default: restoring it for a value the
-    operator did set would delete recordings they had asked to keep.
-    """
+    """Unset takes the default; 0 or a non-numeric value such as off disables pruning."""
     return _env_limit(_MAX_CLIPS_ENV, _DEFAULT_MAX_CLIPS)
 
 
@@ -161,11 +150,7 @@ def _clip_bytes(audio_id: str) -> int:
 
 
 def _prune_to_cap() -> int:
-    """Drop the oldest owned pairs beyond the count or byte cap; return the count removed.
-
-    Best-effort, so a save never fails on housekeeping. Only Unsloth-owned pairs are eligible,
-    archived and pinned clips are exempt, and an unreadable flag store skips the prune rather than guess.
-    """
+    """Best-effort; archived and pinned clips are exempt, and an unreadable flag store skips the prune."""
     cap = _max_clips()
     byte_cap = _max_bytes()
     if cap <= 0 and byte_cap <= 0:
@@ -338,10 +323,7 @@ def _read_meta(sidecar: Path) -> Optional[dict[str, Any]]:
 
 
 def owned_audio_path(audio_id: str) -> Optional[Path]:
-    """Resolve an id to its WAV only for an Unsloth-owned clip (readable sidecar).
-
-    The serve route uses this rather than audio_path() so a guessed stem for a
-    hand-dropped or orphan WAV cannot be streamed out."""
+    """Serve routes use this, not audio_path(), so a guessed stem for an orphan WAV cannot stream out."""
     path = audio_path(audio_id)
     if path is None or _read_meta(_sidecar_path(audio_id)) is None:
         return None
@@ -423,12 +405,7 @@ def list_audio(
     valid: Optional[Callable[[dict[str, Any]], bool]] = None,
     archived: bool = False,
 ) -> list[dict[str, Any]]:
-    """A window of clips for infinite scroll: pinned first, then newest first.
-
-    Ordered by pin, then the drag key or WAV mtime; a file without its pair is skipped. ``valid`` filters BEFORE pagination,
-    so offset, limit and has_more count over the accepted records. ``before`` is an exclusive,
-    stable cursor for callers that must tolerate deletions between pages, and ``archived`` picks
-    the shelf."""
+    """valid filters before pagination, so offset, limit and has_more count accepted records only."""
     return [
         record
         for record, _ in _list_audio_entries(
@@ -492,10 +469,7 @@ def move(audio_id: str, after_id: Optional[str]) -> Optional[dict[str, Any]]:
 
 
 def delete(audio_id: str) -> bool:
-    """Remove both files of an owned pair; True if the WAV existed and was ours.
-
-    WAV first: sidecar-first then failing would lose a clip with no retry, while this
-    leaves at worst an orphan sidecar list_audio ignores."""
+    """Removes the WAV first: if the sidecar went first, a failure would lose the clip with no retry."""
     path = audio_path(audio_id)
     if path is None:
         return False
@@ -559,12 +533,8 @@ def delete_group(group_id: str) -> int:
 
 
 def clear(include_archived: bool = False, workflow: Optional[str] = None) -> int:
-    """Delete every Unsloth-owned pair (readable sidecar); return the count removed. Foreign and
-    orphan WAVs are preserved, since list_audio already hides them.
-
-    Archived clips are spared unless ``include_archived``, and sparing them raises
-    FlagsUnavailable when the flag store cannot be read. A ``workflow`` (speak, clone, edit,
-    convert, music or separate) spares the other workflows' clips."""
+    """Archived clips are spared unless include_archived; an unreadable flag store raises
+    FlagsUnavailable."""
     removed = 0
     directory = gallery_dir()
     with gallery_flags.exclusive(directory, require_file_lock = not include_archived):

@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Windows full-offload tuning (#5692) drops the llama-server prompt cache to avoid
-WDDM/PCI-E traffic. An iGPU or APU has one memory pool and no bus, so the same flags
-save nothing and remove prefix reuse instead.
-
-Measured on a Strix Halo running the Vulkan build with -ngl -1: one 48.8 h session
-spent 44.3 h re-ingesting prompts, 3.38 M prompt tokens against 72 k generated, with
-`--cache-ram 0 --ctx-checkpoints 0` in its own argv and
-`--cache-idle-slots requires --cache-ram, disabling` in llama-server's first lines.
-
-The predicate fails closed everywhere it cannot prove the whole target is shared, so
-a discrete card keeps the tuning it was written for.
-"""
+"""Prompt-cache-dropping offload tuning is skipped on iGPU/APU, which have one memory pool and no bus."""
 
 from __future__ import annotations
 
@@ -159,14 +148,7 @@ def test_the_vulkan_shared_set_is_not_read_as_physical_ids(monkeypatch):
 
 
 def test_a_cuda_host_is_answered_without_touching_the_device(monkeypatch):
-    """The predicate must not create a CUDA primary context to answer.
-
-    ``torch.cuda.get_device_properties`` initialises CUDA in the backend process
-    and never gives the memory back (~700 MiB), which is VRAM the child
-    llama-server then cannot use. On a CUDA host the answer is False either way,
-    so it has to come from ``torch.version.hip`` alone. The fake raises on any
-    device probe, so a reintroduced ``_integrated_cuda_gpu_ids()`` call fails
-    this test rather than merely costing memory in production."""
+    """Answer from torch.version.hip alone: a device probe initialises CUDA and holds ~700 MiB of VRAM."""
 
     class _DeviceProbed(BaseException):
         """BaseException on purpose: every helper in this family swallows
@@ -196,10 +178,7 @@ def test_a_cuda_host_is_answered_without_touching_the_device(monkeypatch):
 
 
 def test_only_the_pairs_this_policy_emitted_are_stripped():
-    """The respawn reuses the argv it already built, so taking the tuning back off has
-    to be an exact-token removal. Every pair is a flag with its value, which is what
-    makes the two-token step safe: a valueless flag would swallow the user extra that
-    follows it, which is why the mlock path refuses to strip at all."""
+    """Strip only exact flag-value pairs, since a valueless flag would swallow the next user argument."""
     cmd = [
         "llama-server",
         "--cache-ram",

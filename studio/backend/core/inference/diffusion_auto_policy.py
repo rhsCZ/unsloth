@@ -111,13 +111,7 @@ def resident_bytes_from_declared(
     extra_bf16_bytes: int = 0,
     dtype_scale: float = 1.0,
 ) -> Optional[int]:
-    """Estimate resident bytes from Hub file sizes and component storage precision.
-
-    ``prequant_bytes`` is added unchanged because hosted pre-cast encoders are already stored at
-    their load precision. ``extra_bf16_bytes`` covers separately hosted dense components, and is
-    widened with the pipeline when the resolved target is float32. Unknown families are treated
-    as 1:1 with their download size.
-    """
+    """Prequant bytes add unchanged; unknown families are priced 1:1 with their download size."""
     denoiser_factor, companion_factor = _BASE_RESIDENT_FACTORS.get(
         _base_key(base_repo) if base_repo else "", (1.0, 1.0)
     )
@@ -166,11 +160,7 @@ _BASE_REPO_BF16_GB: dict[str, tuple[float, float, float]] = {
 
 
 def base_repo_bf16_components_gb(base_repo: Optional[str]) -> Optional[tuple[float, float, float]]:
-    """The per-base override for ``base_repo``, or None when it has none.
-
-    No family fallback, unlike ``family_bf16_components_gb``: a caller that already holds a
-    better number for the family default needs to know whether this particular base was
-    actually named in the table, not receive the family figure back."""
+    """Per-base override only, with no family fallback, so callers can tell whether this base was named."""
     if not base_repo:
         return None
     return _BASE_REPO_BF16_GB.get(_base_key(base_repo))
@@ -295,10 +285,7 @@ def resolve_dense_quant_candidate(
     force_dense: bool = False,
     logger: Optional[logging.Logger] = None,
 ) -> Optional[DenseQuantEstimate]:
-    """The dense-quant candidate the loader should re-plan memory against, or None.
-
-    None means "no basis to re-plan" (request off, device can't run dense, no scheme resolves, or
-    no size entry); the loader keeps today's behaviour, so unlisted families see no change."""
+    """None means no basis to re-plan, so the loader keeps today's behaviour for unlisted families."""
     from .diffusion_transformer_quant import (
         dense_transformer_supported,
         normalize_transformer_quant,
@@ -393,13 +380,7 @@ def precision_refusal_message(
     off_label: str,
     auto_available: bool = True,
 ) -> str:
-    """The client-facing refusal for a declined explicit precision: what was asked, why it could
-    not run, and the settings that always work. ``off_label`` names this backend's "run the
-    checkpoint as-is" option, which differs between the image and video loaders.
-
-    ``auto_available`` is False for controls with no auto mode. ``text_encoder_quant`` is one:
-    both request models restrict it to fp8 / fp8_dynamic / int8 / nvfp4, so a user who followed a
-    "Choose Auto" instruction there got a 422 from request validation instead of a working load."""
+    """Refusal for a declined precision; text_encoder_quant has no auto mode, so Auto is never suggested."""
     remedy = (
         "Choose Auto to let the backend pick the fastest precision this host can run, "
         f"or {off_label}."
@@ -437,18 +418,7 @@ def _resolved_values_match(explicit: Any, engaged: Any) -> bool:
 
 
 def build_resolved_record(controls: dict[str, tuple]) -> dict[str, dict[str, Any]]:
-    """The per-control ``resolved`` record for status: engaged value + provenance.
-
-    ``controls`` maps a control name to ``(explicit, engaged, reason)`` or
-    ``(explicit, engaged, reason, status)``, where ``explicit`` is the raw request
-    (None / "" / "auto" = left to the backend) and ``status`` is one of the ``RESOLVED_*``
-    constants (omit it to let this derive one).
-
-    Each entry carries BOTH sides of the story: ``requested`` (what the caller asked for, verbatim,
-    ``null`` when they left it to us) and ``value`` (what actually engaged), plus the ``status``
-    saying whether those agree. A successful load whose requested precision was declined therefore
-    stays visible instead of being erased into a bare ``source: "explicit"``, which rendered no
-    badge at all while the dropdown kept advertising the request."""
+    """Keeps requested and engaged values side by side, so a declined request stays visible in status."""
     record: dict[str, dict[str, Any]] = {}
     for name, entry in controls.items():
         explicit, engaged, reason = entry[0], entry[1], entry[2]

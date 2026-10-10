@@ -257,10 +257,7 @@ def _marker_pattern_source(marker: str) -> str:
 
 
 def _template_strings(chat_template) -> list:
-    """Every template body a tokenizer exposes, whatever shape it uses. A tokenizer may carry one
-    string, a dict of named templates, or a list of ``{"name", "template"}`` entries (Hermes-3
-    ships the list form). Profiling only the string case would silently drop every literal a
-    named template emits."""
+    """Every template body in any shape (string, dict or list), since named templates hold literals too."""
     out: list = []
     if isinstance(chat_template, str):
         out.append(chat_template)
@@ -409,12 +406,7 @@ def _spaced_out_markers(pattern, text: str) -> str:
 
 
 def neutralize_control_markup(text: str, markup: "ModelMarkup" = None) -> str:
-    """Break control markup in free text by spacing out the opener (#7066). "</think>" -> "<
-    /think>", "[/INST]" -> "[ /INST]": readable, but no longer a delimiter to the template, the
-    think extractor or the stop-sequence matcher. A plain space, because every tokenizer
-    vocabulary has one; U+2060 can fall back to byte junk. With a *markup* profile only that
-    model's own markers are broken, so text naming some other family's sentinel is left exactly
-    as the caller wrote it."""
+    """Spaces out the opener so it stops being a delimiter; a model profile breaks only its own markers."""
     if markup is not None:
         return _spaced_out_markers(markup.control, text) if markup.control else text
     return _spaced_out(_CONTROL_MARKUP, text)
@@ -443,18 +435,7 @@ def _neutralize_leaves(
     rewrite,
     warn_on_key_collision: bool = False,
 ):
-    """Apply *rewrite* to every string leaf, keys included, of a nested structure.
-
-    Iterative, not recursive: the client picks the depth, and a schema ``json.loads`` accepts must
-    not exhaust the interpreter stack and turn the request into a 500. Containers are rebuilt in
-    reverse breadth-first order, so a child is finished before its parent and a repeated or
-    self-referencing node is visited once.
-
-    Rewriting keys is not injective ("a<think>" and "a< think>" both land on "a< think>"), so a
-    colliding dict keeps only the last value; *warn_on_key_collision* logs it. The merge stands
-    because the alternative, keeping one key raw so both survive, would put the markup back in the
-    prompt.
-    """
+    """Iterative, not recursive, so a deep client schema cannot exhaust the stack and fail with a 500."""
     if isinstance(value, str):
         return rewrite(value)
     if not isinstance(value, (dict, list)):
@@ -521,13 +502,7 @@ def _redistribute_swept(
     rewrite,
     contiguous = None,
 ):
-    """Sweep the joined *texts* and hand each carrier back its own share, or None. Every carrier
-    keeps its own text in its own position: nothing is moved past a neighbour, so a caption still
-    sits on the side of the item it describes. *contiguous*[i] says whether carrier i+1 directly
-    follows carrier i in the parts list; where it does not -- an image or a JSON part sits
-    between them -- the opener is NOT migrated, because moving a character across a media item
-    reorders the text around it and a renderer that keeps the media would bind the caption to the
-    wrong side (#7066)."""
+    """A marker is not moved across a media part, or the caption would bind to the wrong item."""
     swept = rewrite("".join(texts))
     pieces: list = []
     inserted: list = []
@@ -565,15 +540,7 @@ def _neutralize_content_parts(
     rewrite,
     media_opaque: bool = True,
 ):
-    """Neutralize an OpenAI-style content parts list (#7066).
-
-    Two gaps a per-part rewrite misses. A mapping part without a string "text" was passed through
-    whole, yet /generate/stream accepts one and Llama-3.1 serializes the entire iterable with
-    tojson. And a marker split across two adjacent text parts survived both sweeps, because Gemma-4
-    concatenates them with no separator and reassembles the opener. Whitespace between them is no
-    fix, since the sibling paths trim each part, so a run that only becomes a marker once joined is
-    swept as one string and collapses into one part. A clean run keeps its parts.
-    """
+    """Adjacent text parts are joined before sweeping, since a marker split across two survives per part."""
     parts: list = []
     for part in content:
         if isinstance(part, str):
@@ -689,12 +656,7 @@ def _replayed_ids(msg: dict):
 
 
 def _injective_id_map(messages: list, markup = None) -> dict:
-    """Map each replayed tool-call id to a swept id that is still unique. The sweep is not
-    injective: "call<|end|>" and "call< |end|>" both break to "call< |end|>". Gemma resolves a
-    result by comparing ids and lets the last match win, so two calls sharing one id would
-    attribute both observations to the same call. A collision is therefore given a numeric
-    suffix, which is checked against the ids that stay as they are so it cannot land on one of
-    those either."""
+    """Gives colliding tool-call ids a numeric suffix, since Gemma matches results to calls by id."""
     originals: list = []
     seen: set = set()
     for msg in messages:
@@ -732,20 +694,7 @@ def _neutralize_replayed_tool_call(
     id_map: dict = None,
     markup = None,
 ) -> list:
-    """Neutralize a replayed tool call's name, arguments and id, in every shape it carries.
-
-    Gemma-4 renders "<|tool_call>call:NAME{key:<|\"|>value<|\"|>}<tool_call|>", so a name or
-    argument echoing pasted text can close the call block and open a "<|tool_response>" or
-    "<|turn>model" of its own (#7066). The rewrite is the identity on every dispatchable name
-    (Unsloth composes ^[a-zA-Z0-9_-]{1,64}$), and a tool result's "name" takes the same rewrite, so
-    the two still agree when Gemma-4 pairs them by name.
-
-    Both replay shapes are swept, the OpenAI nested one and the flat {"id", "name", "arguments"}
-    one, rather than only whichever a particular guard would pick. Harmony / gpt-oss, Qwen 2.5 / 3,
-    Granite-4 and Llama-4 select with "{%- if tool_call.function %}", a truthiness test, so an empty
-    nested object sends them to the flat fields; and a flat-shaped template reads "name" off the
-    call whatever the nested object holds.
-    """
+    """Sweeps both nested and flat call shapes, because templates select between them by truthiness."""
 
     def _field_updates(source: dict) -> dict:
         updates: dict = {}
@@ -793,18 +742,7 @@ def _neutralize_replayed_tool_call(
 
 
 def sweep_cache() -> dict:
-    """A cache for a caller that sweeps the same history more than once.
-
-    The agentic tool loop re-sweeps the whole conversation on every iteration, because a tool result
-    lands in it as the loop goes and a forged turn in one would render for real. Every earlier turn
-    is then swept again with identical text, which is pure repeated work: the rewrite is a function
-    of the string alone.
-
-    The cache is handed in by the caller rather than kept here on purpose. It lives as long as the
-    request that owns it and is dropped with it, so message text is never retained past the call in
-    module state, and it needs no size bound because it can only ever hold text the caller is
-    already holding.
-    """
+    """Caller-owned cache, kept out of module state so message text is never retained past the request."""
     return {}
 
 
@@ -829,12 +767,7 @@ def neutralize_control_markup_in_messages(
     cache: dict = None,
     markup = None,
 ) -> list:
-    """Neutralize control markup in message content and names (#7066). User / system /
-    tool turns lose every marker; assistant turns lose only turn boundaries and keep the think /
-    channel / tool markup replayed history legitimately holds. Returns the same list object when
-    nothing changed, so the prompt stays byte-for-byte what it was. Pass a ``sweep_cache()`` when
-    sweeping the same growing history repeatedly; results are identical either way, since it only
-    memoizes a pure rewrite."""
+    """User, system and tool turns lose every marker; assistant turns keep think and tool markup."""
     if not messages:
         return messages
     changed = False
@@ -958,21 +891,7 @@ def neutralize_tool_descriptions(
     cache: dict = None,
     markup = None,
 ):
-    """Neutralize a rendered tool catalog, dropping any tool with an unsafe name.
-
-    Every string in a declaration is prompt text: Gemma-4 interpolates the description into its
-    system turn and emits property keys / ``enum`` / ``required`` entries inline, while Granite and
-    Mistral-Small-3 render the whole entry with ``tojson``, and ``mcp_client`` copies a remote
-    ``description`` / ``inputSchema`` verbatim. So markup anywhere in the schema closes the system
-    turn and forges a model one (#7066). The rewrite covers the whole entry, not just the nested
-    ``function``, because ``ChatCompletionRequest.tools`` is a bare ``list[dict]``.
-
-    ``function.name`` is the dispatch identity: rewriting it silently breaks dispatch, leaving it
-    exact forges a turn (Gemma-4 emits ``call:NAME`` unquoted), so a name carrying markup drops the
-    tool with a warning instead. The predicate is the rewrite itself, not OpenAI's name grammar, so
-    a passthrough client's ``ns.tool`` or ``functions.NAME:IDX`` still ships; it is the identity on
-    markup-free strings, so a live catalog is returned unchanged.
-    """
+    """Drops a tool whose function.name carries markup, since rewriting that name would break dispatch."""
     # Keyed on the serialized catalog so in-place mutation cannot make the cache stale.
     key = None
     if cache is not None:
@@ -1195,11 +1114,7 @@ def catalog_tool_names(tools) -> set:
 
 
 def _tokenizer_strings(inner) -> Optional[list]:
-    """Every string a tokenizer exposes: added tokens AND the base vocabulary. Neither source alone
-    is enough: a tokenizer can carry unrelated added tokens while its chat sentinels stay in the
-    base SentencePiece vocabulary, so short-circuiting on a populated added_tokens_decoder left a
-    model's own turn boundaries out of the profile and a pasted copy reached the prompt
-    byte-exact (#7066)."""
+    """Reads added tokens and the base vocabulary; chat sentinels can live only in the base vocabulary."""
     out: list = []
     added = getattr(inner, "added_tokens_decoder", None)
     if isinstance(added, dict):
@@ -1220,18 +1135,7 @@ def _vocabulary_of(tokenizer) -> Optional[list]:
 
 
 def mapped_chat_template(model_info: dict, active_model_name):
-    """The template the generate-time mapper will install, resolved once and cached.
-
-    ``_generate_chat_response_inner`` applies ``get_chat_template`` only when it renders, so a
-    profile or an authorization catalog built before that saw the LOAD-time template, and a tool
-    whose schema carries a delimiter the mapped template introduces was dropped from the prompt but
-    still authorized for healing or execution (#7066).
-
-    Resolved on a COPY of the tokenizer: ``get_chat_template`` assigns ``tokenizer.chat_template``,
-    and this runs before the generation lock, so handing it the shared object would let this setup
-    mutate a tokenizer another request is rendering with. Only the resulting template string is
-    kept.
-    """
+    """Resolved on a copy, since get_chat_template mutates the tokenizer and other requests render it."""
     if not isinstance(model_info, dict):
         return None
     if "mapped_chat_template" in model_info:
@@ -1262,22 +1166,14 @@ def mapped_chat_template(model_info: dict, active_model_name):
 
 
 def _is_processor(obj) -> bool:
-    """True for a container processor: it holds a tokenizer AND renders chats itself.
-    ``ProcessorMixin.apply_chat_template`` does not switch to "tool_use" implicitly, so a
-    processor renders "default" unless a template is named. Three call sites need that
-    distinction and each had grown its own copy of the test."""
+    """Processors do not switch to tool_use implicitly; they render default unless a template is named."""
     return getattr(obj, "tokenizer", None) is not None and callable(
         getattr(obj, "apply_chat_template", None)
     )
 
 
 def chat_render_target(processor, tokenizer = None):
-    """The object whose chat template a render will actually use. ``_generate_vlm`` falls back to
-    the nested tokenizer when the processor cannot render a chat itself, so anything profiling
-    the prompt ahead of the render has to make the same choice. Reproducing the rule at the call
-    site let the two drift: a processor without a usable ``chat_template`` was profiled as a
-    processor, selecting "default", while the render used the nested tokenizer's tool_use
-    template (#7066)."""
+    """The object a render uses: the nested tokenizer when a processor cannot render a chat itself."""
     if processor is None:
         return tokenizer
     if (
@@ -1338,19 +1234,7 @@ _ENDRAW = re.compile(r"\{%-?\s*endraw\s*-?%\}")
 
 
 def _evaluated_spans(template: str) -> tuple:
-    """The ranges Jinja evaluates, walked quote-aware, with string literals taken out.
-
-    ``_jinja_expression_spans`` ends a block at the first ``}}``, so a template printing literal
-    Jinja -- ``{{ "{{ example.0 }}" }}`` -- reads as code. That scanner is shared with
-    ``model_markup`` (#7066) and stays as it is; this repair edits the template llama-server
-    launches with, so it walks the blocks itself.
-
-    A comment and a ``{% raw %}`` body are both skipped. Raw is tracked through this same walk
-    rather than matched in the source, so tag text that only appears inside a comment or a literal
-    cannot make a real expression between two of them look verbatim. Inside a raw body nothing is
-    interpreted at all, the way Jinja reads it: the walk runs to the terminator, so a comment marker
-    there stays text.
-    """
+    """Walks blocks itself: the shared scanner stops at the first }}, so literal Jinja looks like code."""
     spans: list = []
     index, end = 0, len(template)
     verbatim = False
@@ -1407,18 +1291,7 @@ _NUMERIC_MEMBER = re.compile(r"([A-Za-z_]\w*|\)|\])((?:\s*\.\s*\d+)+)")
 
 
 def repair_numeric_member_access(template) -> Optional[str]:
-    """Rewrite ``x.0`` as ``x[0]`` in evaluated code, or None when nothing needs it.
-
-    llama.cpp's Jinja rejects a numeric member property. The throw lands inside its capability
-    probe, which swallows it, so ``supports_object_arguments`` stays false and a replayed tool
-    call's arguments are never decoded back into an object -- the template's own
-    ``arguments.items()`` then dies on the JSON string (GLM-5.3).
-
-    Only the ranges Jinja evaluates are rewritten, never prompt text, a quoted literal, a raw block,
-    or Jinja syntax a template prints as an example. A chain rewrites whole ("x.0.1" -> "x[0][1]"):
-    leaving the tail behind still throws. Jinja lets whitespace sit around each dot, and llama.cpp
-    throws on that spelling too.
-    """
+    """llama.cpp's Jinja rejects x.0 and silently disables object arguments; a chain is rewritten whole."""
     if not isinstance(template, str) or not template:
         return None
     spans = _evaluated_spans(template)
@@ -1453,17 +1326,7 @@ def _template_reads_tools(
     prefer_tool_use: bool = True,
     require_tools_variable: bool = False,
 ) -> bool:
-    """True unless the template selected out of *value* takes no part in tool calling.
-
-    Reading the ``tools`` variable is the direct case. Replaying tool calls counts too: such a
-    template round-trips a tool turn it never advertised, so the schema came from the caller's own
-    system prompt and the catalog is authorized after all.
-
-    ``require_tools_variable`` drops that second clause, for callers asking whether THIS render puts
-    the schema in the prompt: a template that only round-trips renders byte-identically with and
-    without a catalog, so the healer would otherwise promote calls for tools the model never saw
-    (#7066).
-    """
+    """A replayed tool call counts too, unless require_tools_variable is set, which needs a tools read."""
     bodies = _selected_template_strings_from_value(value, tools, prefer_tool_use = prefer_tool_use)
     if not bodies:
         # Unreadable, not proven silent: emptying the catalog would disable healing broadly.
@@ -1474,11 +1337,7 @@ def _template_reads_tools(
 
 
 def _accepts_tools_kwarg(target) -> bool:
-    """False only when ``apply_chat_template`` provably rejects ``tools=``.
-    apply_chat_template_for_generation catches that TypeError and succeeds with a no-tools
-    attempt, so the prompt carries no schema however often the template body names the variable.
-    Signature rather than a probe render: a render needs messages this function does not have,
-    and would raise for unrelated reasons on a strict template."""
+    """Checks the signature, not a probe render, which needs messages and could fail for other reasons."""
     apply = getattr(target, "apply_chat_template", None)
     if apply is None:
         return True
@@ -1497,13 +1356,7 @@ def _renders_tool_schema(
     tools,
     template_is_processor: bool = False,
 ) -> bool:
-    """True unless the template *target* will select provably cannot advertise tools. A processor is
-    held to the stricter test: its render has no native-template fallback behind it (a text
-    model's template cannot place the image), so what the processor's own body does with
-    ``tools`` is the whole answer. ``template_is_processor`` says the *template* is a processor
-    body even though *target* is not: under the orchestrator the route has only the body mirrored
-    through worker IPC, which would otherwise be judged by the permissive tokenizer rule
-    (#10092)."""
+    """A processor is held to the stricter test, since its render has no native-template fallback."""
     if tools and not _accepts_tools_kwarg(target):
         return False
     value = template or getattr(target, "chat_template", None)
@@ -1527,20 +1380,7 @@ def renderable_tool_catalog_for_targets(
     template = None,
     template_is_processor: bool = False,
 ):
-    """The catalog safe under every object a backend could render this turn with.
-
-    The two backends disagree about which object renders a text turn on a vision model: MLX keeps
-    the processor when it has a usable chat template, while the transformers path unwraps to the
-    nested tokenizer unconditionally. Their profiles can differ, so authorizing against one of them
-    lets the other's render drop a tool that stays in the healer's catalog (#7066).
-
-    Rather than guessing which backend will serve the request, this takes the same conservative
-    intersection ``renderable_tool_catalog`` already takes across the active and native templates: a
-    tool has to survive every candidate to stay authorized. Chained rather than intersected by name,
-    so the surviving descriptions carry every candidate's sweep too. Sanitizing an already-sanitized
-    catalog is stable, since a broken marker no longer matches, so a clean catalog stays
-    byte-identical.
-    """
+    """A tool must survive every render target, since MLX and transformers can pick different objects."""
     live = [target for target in targets if target is not None]
     if not live:
         # The parent-side mirror carries no tokenizer; a None target takes the curated sweep (#7066).
@@ -1566,18 +1406,7 @@ def renderable_tool_catalog(
     template = None,
     template_is_processor: bool = False,
 ):
-    """The catalog that survives EVERY template this request could render with.
-
-    A tool-calling turn may render with the active template or, when that template drops the schema,
-    with the model's native one, and the two profiles can disagree about which tools carry markup. A
-    healer or controller is an authorization boundary, so it has to be built from the catalog that
-    is safe either way: promoting a call for a tool the prompt never advertised is the failure this
-    guards (#7066).
-
-    The cost of the conservative direction is narrow and one-sided. A tool dropped only by the
-    template that did NOT get selected stays advertised and directly callable; it just is not
-    auto-healed out of text-form output that round.
-    """
+    """Keeps only tools that survive every template the request could render with; healers rely on this."""
     # The mapper installs its template on the TOKENIZER; a processor render never sees it.
     if template is None and not _is_processor(tokenizer):
         template = mapped_chat_template(model_info or {}, active_model_name)
@@ -1623,11 +1452,7 @@ def renderable_tool_catalog(
 
 
 def reconciled_tool_choice(tool_choice, openai_tools, safe_tools):
-    """Downgrade a forced ``tool_choice`` to "auto" when WE dropped its tool (#7066). Only when the
-    neutralizer removed it: the name has to be in the caller's catalog and gone from the
-    sanitized one. A client forcing a function it never declared is a different, pre-existing
-    case the healing path deliberately reads to decide a streamed call must NOT be promoted, so
-    rewriting it there would change unrelated behaviour."""
+    """Downgrades forced tool_choice to auto only if the sanitizer removed that tool; unknown names stay."""
     forced = forced_tool_name(tool_choice)
     if forced is None or forced in catalog_tool_names(safe_tools):
         return tool_choice
@@ -1727,10 +1552,7 @@ def _detect_reasoning_channel_markers_from_templates(
 
 
 def detect_reasoning_channel_markers(tokenizer, tools = None) -> Optional[tuple[str, ...]]:
-    """Return the native reasoning-channel markers a tokenizer's template emits. Detection uses the
-    active chat template rather than model names or vocabulary membership: some models expose
-    Gemma control tokens without using the native thought-channel response protocol, and those
-    must keep normal ``skip_special_tokens`` streaming."""
+    """Read from the chat template, not names or vocabulary: Gemma tokens alone do not mean a channel."""
     for obj in _tokenizer_objects(tokenizer):
         templates = _selected_chat_template_strings(obj, tools)
         if templates:
@@ -1894,10 +1716,7 @@ def _atem_surrounding_text(segment: str, *, complete: bool = True) -> str:
 
 
 def _atem_block_pieces(block: str, *, complete: bool) -> Optional[list[tuple[bool, str]]]:
-    """Split a tool-addressed block into ``(is_call, text)`` pieces, or None when it holds no call
-    syntax: nothing downstream recognizes the native form, so a block passed through is shown as
-    prose instead of executed. Text around the calls keeps its place among them. ``complete`` is
-    False for a block the stream cut short."""
+    """None when no call syntax: a block passed through unparsed would be shown as prose, not executed."""
     pieces: list[tuple[bool, str]] = []
     cursor = 0
     saw_call = False
@@ -2191,23 +2010,7 @@ def prompt_opens_reasoning_channel(
     markers: Optional[tuple[str, str]],
     continued: bool = False,
 ) -> bool:
-    """Whether a rendered prompt *ends* by opening the native reasoning channel.
-
-    Gemma-style templates end a post-tool generation prompt with the opener, so generation starts
-    inside reasoning and emits only the closing marker.
-
-    Only the tail decides -- the rule ``strip_open_reasoning_prefill`` already uses for ``<think>``.
-    Position alone cannot tell a template's own prefill from replayed history, which keeps this
-    markup through ``neutralize_control_markup_in_messages``, so an opener with content after it
-    reads as closed; otherwise history could hide a plain answer in a think block. The cost is that
-    a spliced continuation resuming inside a channel also reads as closed, leaving its reasoning
-    visible as it was before.
-
-    ``continued`` means this render resumed a trailing assistant turn, so the prompt ends on client
-    text whose tail proves nothing. It is the render's own state, not the request flag, which
-    outlives the continuation: the next tool-loop pass keeps the flag but renders an ordinary
-    post-tool prompt that must still be read.
-    """
+    """Only the tail counts, as history can hold the opener; a continued turn proves nothing about it."""
     if continued or not prompt or not markers:
         return False
     opening_marker = markers[0]
@@ -2266,31 +2069,7 @@ def detect_think_prefill(
     preserves_think_close: bool = False,
     resumes_thought: bool = False,
 ) -> str:
-    """Return the trailing open ``<think>`` prefill of a rendered prompt.
-
-    Reasoning templates (Qwen3.6, DeepSeek-R1-style) end the generation prompt with ``<think>\\n``
-    so the model starts reasoning immediately. Because that opening tag is part of the *prompt*,
-    skip_prompt streaming never emits it, and the frontend's ``<think>``/``</think>`` parser shows
-    the reasoning as plain text instead of a thinking block. (The GGUF path is unaffected:
-    llama-server's reasoning parser returns ``reasoning_content``, which gets re-wrapped in think
-    tags.)
-
-    Returns the exact prompt tail to re-emit at the start of the generated stream, or ``""`` when
-    the prompt does not end with an open think block, including the ``enable_thinking=False`` case
-    where templates prefill an already-closed ``<think>\\n\\n</think>``.
-
-    ``special_tokens`` is the tokenizer's special-token list. If ``</think>`` is one, the streamer's
-    skip_special_tokens strips the model's closing tag, so re-emitting the open would leave an
-    unclosed block that swallows the answer; in that case return ``""`` and fall back to plain text.
-
-    ``preserves_think_close`` says the stream keeps that closer anyway, as
-    ``NativeToolTokenDecoder`` does so the parser can see a call rehearsed inside the block, and as
-    a path streaming the detokenizer's own text does. The special-token list then says nothing, and
-    skipping the opener is the same bug mirrored: a stray ``</think>``.
-
-    ``resumes_thought``: the prompt ends inside a resumed thought (the client's text), so only the
-    bare opener is returned.
-    """
+    """Returns empty if </think> is special: stripping the closer would leave the think block open."""
     if not prompt:
         return ""
     open_idx = prompt.rfind(_THINK_OPEN)
@@ -2305,13 +2084,7 @@ def detect_think_prefill(
 
 
 def _normalize_tool_call_arguments(messages: list) -> list:
-    """Coerce each assistant ``tool_calls[].function.arguments`` from a JSON string to a dict. The
-    OpenAI wire format carries ``arguments`` as a JSON string, but some chat templates (e.g. the
-    stricter Qwen tool templates shipped with mlx-community checkpoints) iterate
-    ``arguments.items()`` and raise ``TypeError: Can only get item pairs from a mapping.`` on the
-    string form when a prior tool call is re-rendered on the next turn. A dict works on both
-    strict and lenient templates, so parse the string; leave non-JSON or non-dict values
-    untouched. Returns the original list unchanged when nothing needed coercing (no copy)."""
+    """Parses JSON-string tool arguments to dicts, since strict templates call .items() on them."""
     mutated = False
     out: list = []
     for msg in messages:
@@ -2548,10 +2321,7 @@ def trailing_assistant_resume_kind(messages: list) -> Optional[str]:
 
 
 def last_user_text(messages: list) -> str:
-    """Text of the newest user turn, with any ``<img>`` markup stripped. Scans back rather than
-    reading ``messages[-1]``: a continuation ends on the assistant partial. Stops at the newest
-    user turn even when it is empty (an image-only message), so an older question is never
-    resurrected."""
+    """Scans back for the newest user turn, even an empty one, so an older question is never resurrected."""
     from core.inference.message_content import content_to_text
 
     for message in reversed(messages or []):
@@ -2679,23 +2449,7 @@ def messages_with_attached_image(
     audio: Any = None,
     extra_audio: Sequence[Any] = (),
 ) -> list:
-    """The conversation to render for a turn that carries attached media.
-
-    Prepends *system_prompt* as a leading system turn, then injects *image* ``{"type": "image"}``
-    parts, or a ``{"type": "video"}`` part, plus any *audio* waveform as an ``{"type": "audio"}``
-    part (one more per *extra_audio* clip, in order), into the LAST user turn and leaves every
-    other turn -- assistant ``tool_calls`` and ``role="tool"`` results included -- exactly as the
-    caller sent it.
-    Rebuilding from the newest user TEXT instead dropped the folded system instruction and the
-    tool history an OpenAI tool loop replays (#10092). Nothing the caller owns is mutated: callers
-    still read those dicts after generation, and a retry re-renders the same list.
-
-    *structured_content* wraps content in part lists, as a processor template expects; MLX may
-    render through the nested text tokenizer, whose template expects a string. *fallback_user_text*
-    stands in for a user turn with no text of its own, and opens one when there is no user turn at
-    all. Left empty, the conversation is unchanged, so a backend that would rather refuse an image
-    nobody asked about keeps refusing it.
-    """
+    """Only the last user turn changes; tool_calls and tool results in other turns are kept as sent."""
     conversation = list(messages or [])
     if structured_content:
         # EVERY message: a processor template raises on a replayed turn left as a string.
@@ -2761,15 +2515,7 @@ def messages_with_attached_image(
 
 
 def render_advertising_tools(render, tools):
-    """Render with *tools*, and say whether the prompt actually carries them.
-
-    Returns ``(prompt, advertised)``; *render* takes a catalog and returns a prompt. Comparing the
-    two renders rather than reading the body: a body that merely names the ``tools`` variable can
-    still drop the schema, and a renderer taking ``tools=`` through ``**kwargs`` can swallow it
-    without ever raising. The no-tools probe runs FIRST so the prompt this turn uses is the last
-    thing the renderer produced, for anything that caches or observes the render. A probe that
-    raises answers "advertised": the render that failed is the throwaway one.
-    """
+    """Compares two renders, since a template naming tools can still drop the schema without raising."""
     if not tools:
         return render(None), False
     try:
@@ -2787,17 +2533,7 @@ def append_assistant_turn(
     *,
     continue_final_message: bool = False,
 ) -> None:
-    """Append a generated assistant turn to *conversation*.
-
-    A continuation leaves the resumed partial trailing, and the partial plus what the model just
-    added are one turn, so they are merged: appending would instead give two consecutive assistant
-    messages and break role alternation. Self-limiting, since after a tool result the conversation
-    no longer ends with a plain assistant turn.
-
-    Merge over the resumed turn rather than replacing it, or every key the partial carried but the
-    continuation does not repeat is lost. ``extra_content`` is such a key, and Gemini reads the text
-    part's thought signature back from it alone, so a resumed turn replayed without it is rejected.
-    """
+    """Merges into a resumed partial to keep role alternation and extra keys such as extra_content."""
     prev_text = trailing_assistant_text(conversation) if continue_final_message else None
     if prev_text is not None and isinstance(assistant_msg.get("content"), str):
         merged_msg = {**conversation[-1], **assistant_msg}
@@ -2816,11 +2552,7 @@ def append_assistant_turn(
 
 
 def strip_open_reasoning_prefill(prefix: str) -> str:
-    """Drop a generation prompt's unclosed ``<think>`` opener. A splice appends the visible partial
-    to this prefix, so on a template that prefills an open block (DeepSeek-R1, QwQ,
-    Qwen3-Thinking) the answer would resume as reasoning. Only an opener the prompt itself ends
-    on counts: a bare "<think>" typed into an earlier turn is rendered text, and cutting there
-    would eat the transcript."""
+    """Drops only an unclosed opener the prompt ends on; a bare think tag in an earlier turn is kept."""
     open_at = prefix.rfind(_THINK_OPEN)
     if open_at == -1 or open_at < prefix.rfind(_THINK_CLOSE):
         return prefix
@@ -2863,11 +2595,7 @@ def render_prompt_with_boundary(
     continue_final_message: bool = False,
     tools: Optional[list] = None,
 ) -> str:
-    """Render *messages* through a renderer's own chat template. With *continue_final_message* the
-    prompt ends inside the trailing assistant turn, so the model resumes it. Processors predating
-    the kwarg get a manual splice, taking the partial from *messages* (which the caller already
-    swept) rather than a separate copy: a raw partial could close the turn or open another role
-    instead of resuming (#7066)."""
+    """Processors lacking the kwarg get a manual splice, using the already-swept partial from messages."""
     from core.inference.mcp_images import prepare_image_turn_boundaries
 
     for template in _selected_chat_template_strings(processor, tools):
@@ -2915,10 +2643,7 @@ def apply_chat_template_for_generation(
     preserve_thinking: Optional[bool] = None,
     continue_final_message: bool = False,
 ) -> str:
-    """Render the chat prompt. Try richest kwargs first; drop one group at a time on TypeError.
-    Jinja / missing-variable errors propagate. With *continue_final_message* the prompt ends
-    inside the trailing assistant turn, so the model resumes the partial instead of restarting
-    it."""
+    """Tries the richest kwargs first, dropping one group per TypeError; template errors propagate."""
     from core.inference.mcp_images import prepare_image_turn_boundaries
 
     for template in _selected_chat_template_strings(tokenizer, tools):
@@ -3089,12 +2814,7 @@ def resolve_native_chat_template(
     active_model_name,
     hf_token = None,
 ):
-    """The model's native chat template, fetched once and cached on *model_info*. Returns False when
-    the repo has none and None when the fetch failed, so a failure is retried rather than pinned.
-    Shared by the render path and by the authorization catalog, which must know the native
-    template on the FIRST request too: it is fetched during rendering, so a catalog built before
-    that saw no native profile at all and could authorize a tool the native render then left out
-    of the prompt (#7066)."""
+    """None on fetch failure is retried rather than pinned; False means the repo has no native template."""
     native_tpl = model_info.get("native_chat_template")
     if native_tpl is not None:
         return native_tpl
@@ -3133,28 +2853,7 @@ def render_native_template(
     hf_token: Optional[str] = None,
     return_metadata: bool = False,
 ):
-    """Render ``messages`` + ``tools`` with the model's NATIVE chat template.
-
-    Some Unsloth override templates (e.g. ``mistral``, ``gemma-4``) do not emit the ``tools``
-    schema, so a tool-calling turn silently stops advertising tools. The native template ships in
-    the model repo and carries the family's tool-calling syntax; it is loaded straight from the repo
-    (bypassing any override on the live tokenizer) and cached on ``model_info``. Returns the
-    rendered prompt only if the native template actually emits the tools (render differs with vs
-    without tools); otherwise ``None``. With ``return_metadata``, returns
-    ``ChatTemplateRenderResult`` so callers can stream with the response protocol selected by this
-    request's template.
-
-    ``hf_token`` is the token the model was loaded with, passed to the repo load so a gated/private
-    model's native template can still be fetched (otherwise the fallback fails silently and keeps
-    the override prompt that dropped tools).
-
-    ``trust_remote_code`` is sourced from ``model_info`` (the value the model was actually loaded
-    with) rather than a call-site argument, so the reload uses exactly the consent already granted
-    at load: a custom-code tokenizer repo raises in ``AutoTokenizer.from_pretrained`` without it,
-    and the fallback would fail silently. For a LoRA adapter the reload targets the base model,
-    whose remote code was gated and loaded under the same stored flag, so re-passing it executes no
-    unconsented code.
-    """
+    """Loads the native template straight from the repo, reusing the load-time trust_remote_code consent."""
     if apply_fn is None:
         apply_fn = apply_chat_template_for_generation
     native_tpl = resolve_native_chat_template(model_info, active_model_name, hf_token)
@@ -3234,13 +2933,7 @@ def render_with_native_template_fallback(
     hf_token: Optional[str] = None,
     return_metadata: bool = False,
 ):
-    """Return ``formatted_prompt``, swapping in a native-template render when an override template
-    dropped the ``tools`` schema. If ``tools`` were requested but the live render is identical
-    with and without them (detected by comparison, robust against tool names in the system
-    prompt), re-render with the model's native template. Shared by the transformers and MLX
-    backends so both advertise tools consistently. ``hf_token`` is forwarded so a gated/private
-    model's native template can still be fetched. With ``return_metadata``, returns the selected
-    prompt plus reasoning-channel markers for the exact template used by this request."""
+    """Re-renders with the native template when an override drops tools, detected by comparing renders."""
     live_markers = detect_reasoning_channel_markers(tokenizer, tools = tools)
 
     def _result(

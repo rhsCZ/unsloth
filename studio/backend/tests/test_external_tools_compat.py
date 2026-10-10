@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Upgrade / version-skew guards for the studio-tools-on-every-provider change.
-
-These tests do not exercise the tool loop itself (``test_studio_tool_loop.py``
-owns that). They pin the contract at the seams where an *existing* install can
-break during an upgrade, because each of those seams is a place where the two
-halves of Unsloth are versioned independently:
-
-* the ``/api/providers/registry`` payload, read by a browser that may still be
-  running a JS bundle from before this capability existed (old FE + new BE);
-* the ``ProviderRegistryEntry`` schema, which a new bundle parses from a
-  backend that may predate the new fields (new FE + old BE);
-* the ``llm_providers`` sqlite schema, which this change must not migrate;
-* ``response_format``, newly forwarded on the OpenAI-compatible path, which
-  must stay opt-in because not every OpenAI-compatible server tolerates it.
-"""
+"""Upgrade-skew guards: registry payload and schema, no sqlite migration, opt-in response_format."""
 
 import asyncio
 import json
@@ -81,15 +67,7 @@ LEGACY_REGISTRY_KEYS = frozenset(
 
 
 def test_registry_default_still_hides_self_hosted_presets():
-    """The default payload is byte-for-byte the *set* the old bundle expected.
-
-    A browser holding a pre-change bundle filters the provider dropdown on a
-    hardcoded ``HIDDEN_PROVIDER_TYPES`` set that contains only ``qwen``; it has
-    no idea to filter on a ``hidden`` field. If the default response started
-    including the self-hosted presets, that bundle would render vLLM / Ollama /
-    llama.cpp / Custom as four extra dropdown entries duplicating the custom
-    presets it already lists above the separator. Hence: opt-in.
-    """
+    """Self-hosted presets stay hidden by default, since old bundles ignore the hidden field."""
     types = {entry["provider_type"] for entry in list_available_providers()}
     for preset in SELF_HOSTED_PRESETS:
         assert preset not in types, (
@@ -203,12 +181,7 @@ def test_registry_rows_keep_every_pre_change_key():
 
 
 def test_registry_entry_schema_tolerates_a_pre_change_payload():
-    """A new bundle against an old backend gets no ``supports_studio_tools``.
-
-    The pydantic model must default it to False rather than reject the row, so
-    the capability degrades *closed*: pills stay off instead of arming a tool
-    loop the old backend cannot run.
-    """
+    """Missing supports_studio_tools defaults to False, so an old backend degrades closed."""
     from models.providers import ProviderRegistryEntry
 
     legacy_payload = {
@@ -254,17 +227,7 @@ def test_capability_flag_agrees_with_the_registry_entry():
 
 
 def test_llm_providers_schema_gains_no_column():
-    """Existing sqlite rows need no migration; the capability is not persisted.
-
-    It is derived from the registry at read time, so an install upgrading in
-    place keeps its ``llm_providers`` rows verbatim.
-
-    Asserted as "the pre-existing columns are all still there, and this change
-    added none of its own" rather than as an exact snapshot of the table. An
-    exact snapshot fails on any unrelated column main adds later (it already
-    would on ``max_output_tokens``), which says nothing about whether this
-    change needs a migration and would only train people to update the literal.
-    """
+    """llm_providers gains no column; the capability is derived at read time, not stored."""
     from storage import providers_db
 
     conn = sqlite3.connect(":memory:")
@@ -294,13 +257,7 @@ def test_llm_providers_schema_gains_no_column():
 
 
 def test_response_format_is_omitted_when_the_caller_does_not_ask(monkeypatch):
-    """Not every OpenAI-compatible server tolerates ``response_format``.
-
-    TGI types it as a Rust enum with no ``text`` variant and 422s on the
-    OpenAI-default ``{"type": "text"}``; LM Studio before 0.3.18 400s on the
-    same. Unsloth talks to those through the ``custom`` preset, so the field has
-    to stay absent unless a caller explicitly asked for structured output.
-    """
+    """response_format stays absent unless asked; TGI and older LM Studio reject the text default."""
     captured: dict = {}
     _mock_http_client(monkeypatch, _capturing_handler(captured))
 
@@ -353,11 +310,7 @@ def test_response_format_is_forwarded_verbatim_when_requested(monkeypatch):
 
 
 def test_gemini_translates_response_format_to_a_response_mime_type(monkeypatch):
-    """Deep research plans on Gemini now, and its planning hop asks for JSON.
-
-    Gemini never sees ``response_format``; it is a generationConfig MIME type,
-    so dropping it left the planner parsing prose.
-    """
+    """Gemini maps response_format to a generationConfig MIME type, or the planner parses prose."""
     captured: dict = {}
     _mock_http_client(monkeypatch, _capturing_handler(captured))
 

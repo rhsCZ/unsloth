@@ -43,11 +43,7 @@ def int8_rotation_group() -> int:
 
 @lru_cache(maxsize = 1)
 def _row_major_op() -> Any:
-    """``unsloth_studio::native_row_major``: a row-major copy Inductor cannot re-layout, or None.
-
-    cuBLASLt runs int8 GEMMs only with a row-major activation. Inductor lays the int8 activation out in the stride
-    order of whatever produced it (a transposed view upstream, even one passed through ``.contiguous()``, which it
-    drops), so ``torch._int_mm`` can get it column-major and fail with CUBLAS_STATUS_NOT_SUPPORTED."""
+    """Row-major copy Inductor cannot re-layout; cuBLASLt int8 GEMMs fail on a column-major activation."""
     import torch
 
     ns = getattr(torch.ops, "unsloth_studio", None)
@@ -91,10 +87,8 @@ def native_linear_class():
             codes: Any = None,
             scale: Any = None,
         ):
-            """``codes`` / ``scale``: int8 (or, for the fp8 scheme, float8_e4m3fn) codes [out, in] and per-row
-            scales made elsewhere, stored as given (``linear`` then supplies only the shapes, dtype and bias).
-            With ``rot_group`` int8 codes are already ConvRot-rotated, so the rotation is installed whether or
-            not activations go int8."""
+            """Codes arrive pre-rotated under rot_group; the rotation is installed even without int8
+            activations."""
             super().__init__()
             if scheme not in _QMAX:
                 raise ValueError(f"unsupported native scheme {scheme!r}")

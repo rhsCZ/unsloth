@@ -348,12 +348,7 @@ def test_mlx_vlm_adapter_applies_chw_layout_to_message_images():
 
 
 def test_activate_transformers_version_or_warn_logs_on_failure(monkeypatch):
-    """A failed activation in the MLX fast-path must be logged, not swallowed.
-
-    The non-MLX path already surfaces this failure; the MLX path used a bare
-    ``except Exception: pass`` so a missing/broken transformers venv produced
-    no trace and a confusing downstream crash.
-    """
+    """The MLX fast-path activation must log failures; a bare except Exception: pass hid broken venvs."""
     warnings_logged = []
     fake_logger = types.SimpleNamespace(
         warning = lambda *a, **k: warnings_logged.append((a, k)),
@@ -431,11 +426,7 @@ def _run_masking(
     detect = None,
     **overrides,
 ):
-    """Execute the real masking block from _run_mlx_training and return its events.
-
-    _run_mlx_training only runs on Apple Silicon, so the block is lifted out and executed
-    directly. That keeps the production statements under test rather than a copy of them.
-    """
+    """Lifts the real masking block out of _run_mlx_training, which only runs on Apple Silicon."""
     block = compile(ast.Module(body = [_masking_block()], type_ignores = []), "<masking>", "exec")
     events = []
     trainer = types.SimpleNamespace(processing_class = types.SimpleNamespace(), tokenizer = None)

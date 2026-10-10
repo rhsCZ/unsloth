@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression for #8868: a wildcard bind (``-H 0.0.0.0``) must not hand a
-device on the LAN the machine's public WAN IP.
-
-``_resolve_external_ip()`` (used for the reachability probe and the
-Cloudflare line) can return a public address from ``ifconfig.me`` or the GCE
-metadata server. ``_network_share_host_for_bind()`` is the LAN-only answer --
-no third-party network call -- and is what the "another device on your
-network" banner line and ``app.state.server_url`` must use instead.
-"""
+"""The LAN share host must come from _network_share_host_for_bind, never the public IP probe."""
 
 import logging
 import socket

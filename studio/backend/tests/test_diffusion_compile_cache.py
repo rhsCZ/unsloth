@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the pre-warmed torch.compile cache (``diffusion_compile_cache.py``).
-
-The Mega-cache API (``torch.compiler.save_cache_artifacts`` / ``load_cache_artifacts``)
-is monkeypatched with deterministic in-memory fakes so the fingerprint / exact-match /
-integrity / fallback / lifecycle logic is exercised without a real compile. The
-fingerprint helpers run against the real torch on this box.
-"""
+"""torch.compile cache tests use fake Mega-cache APIs; fingerprint helpers run on real torch."""
 
 from __future__ import annotations
 
@@ -393,13 +387,7 @@ def test_the_import_fallback_matches_the_resolver(monkeypatch):
 def test_an_unparseable_cache_root_never_pins_the_unparseable_path(
     name, monkeypatch, tmp_path, fake_megacache
 ):
-    """Startup declines to pin TORCHINDUCTOR_CACHE_DIR into a root the C++ builders cannot
-    parse, and this assignment used to overwrite that decision on the first compiled diffusion
-    run. Checking the environment just after launch would not have caught it.
-
-    What replaces it has to stay PER KEY. Simply keeping whatever startup left would keep the
-    one process-wide fallback, and save_cache_artifacts then serialises that shared cache into
-    every fingerprinted bundle, so each model accumulates the others'."""
+    """The cache root must stay per key, so a shared fallback is not serialised into every bundle."""
     import os
 
     root = tmp_path / name
@@ -439,10 +427,7 @@ def test_two_models_under_an_unparseable_root_do_not_share_one_inductor_cache(
 
 
 def _seed_legacy_bundle(monkeypatch, tmp_path, fake_megacache) -> tuple:
-    """Write a bundle under a fake pre-relocation root, then hand back an upgraded install:
-    ``(legacy_root, studio_home, legacy_bundle)``, with the environment already pointing at a
-    non-portable install whose new default root is empty. The bundle is content-addressed, so its
-    name comes from the seeding save rather than from a constant."""
+    """Seeds a bundle under a pre-relocation legacy root, then returns an upgraded install to migrate it."""
     legacy = tmp_path / "legacy" / "diffusion_compile_cache"
     studio_home = tmp_path / "studio"
     monkeypatch.setenv(cc._ENV_MODE, "auto")
@@ -477,13 +462,7 @@ def test_legacy_bundle_is_read_but_the_new_root_takes_the_writes(
 
 
 def test_an_interrupted_migration_leaves_no_partial_pair(monkeypatch, tmp_path, fake_megacache):
-    """The migration copies through a temp file and renames, as every other write here does.
-
-    A plain copyfile onto the live name is visible while it is still partial. The manifest is the
-    commit point, so a torn one is read as a miss and costs the cold compile the migration exists
-    to avoid; a second backend migrating the same key would interleave its writes into the same
-    destination. Interruption is injected at the manifest copy, the later of the two.
-    """
+    """Migration must copy through a temp file and rename, or a torn manifest reads as a miss."""
     legacy, studio_home, legacy_bundle = _seed_legacy_bundle(monkeypatch, tmp_path, fake_megacache)
 
     import shutil as _shutil
@@ -612,12 +591,7 @@ def test_an_unreadable_legacy_bundle_pair_is_a_miss_not_a_failure(monkeypatch, t
 
 
 def test_a_manifest_that_is_not_an_object_is_a_miss(monkeypatch, tmp_path, fake_megacache):
-    """json.loads returns [] for "[]" and None for "null", and .get() on either raises.
-
-    _try_load's whole contract is that a bad cache entry is a miss, and the legacy root makes
-    this reachable in a way it was not before: the manifest being validated was written by an
-    older build, on a disk this run has never checked.
-    """
+    """A manifest that is not a JSON object must be a cache miss, since .get() on it raises."""
     legacy, _, legacy_bundle = _seed_legacy_bundle(monkeypatch, tmp_path, fake_megacache)
     for payload in ("[]", "null", '"a string"', "42"):
         for key_dir in legacy.iterdir():
@@ -627,12 +601,7 @@ def test_a_manifest_that_is_not_an_object_is_a_miss(monkeypatch, tmp_path, fake_
 
 
 def test_an_unreadable_write_root_falls_back_to_legacy(monkeypatch, tmp_path, fake_megacache):
-    """Path.exists() raises rather than answering False when a parent denies traversal.
-
-    This branch moves the write root, so it can land on a directory the process does not own on
-    some machine. Unguarded, that exception left begin() before the legacy fallback could run,
-    which is the fallback the relocation depends on for a warm start.
-    """
+    """An exists() that raises on an unreadable parent must fall back to legacy, not abort begin()."""
     legacy, studio_home, legacy_bundle = _seed_legacy_bundle(monkeypatch, tmp_path, fake_megacache)
     real_exists = Path.exists
 
@@ -924,11 +893,7 @@ def test_an_interrupted_bundle_write_leaves_the_previous_pair_loadable(
 def test_a_bundle_published_without_its_manifest_leaves_the_previous_pair_loadable(
     monkeypatch, tmp_path, mutable_megacache
 ):
-    """Window 2: the NEW bundle landed and the manifest never committed.
-
-    This is the case a single fixed ``cache.bin`` got wrong: it left the old manifest describing a file that had
-    already been overwritten, so the sha256 check discarded a warm start that was fine.
-    """
+    """A bundle published without its manifest must leave the previous pair loadable."""
     ctx = _cold_pair(monkeypatch, tmp_path)
     live, live_bytes = ctx.bundle, ctx.bundle.read_bytes()
 

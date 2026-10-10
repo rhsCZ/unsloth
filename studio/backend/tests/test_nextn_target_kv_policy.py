@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Which architectures may drop the embedded MTP blocks from target KV.
-
-GGUF ``block_count`` includes the trailing NextN/MTP blocks, and
-``llama_hparams::n_layer()`` subtracts them (llama-hparams.cpp:297) -- but the
-target KV cache walks ``n_layer_all`` (llama-kv-cache.cpp:100) and drops blocks
-only through an optional per-architecture filter (:169). So "carries a
-nextn_predict_layers key" and "its MTP blocks are outside the target context"
-are different questions, and only the second one may reduce the estimate.
-
-Filters, ggml-org/llama.cpp @ adb55e5:
-  llama-model.cpp:2289   hybrids -- qwen3next / qwen35 / qwen35moe / minimax-01,
-                         and nemotron_h via is_recr
-  llama-model.cpp:2129   glm-dsa / deepseek32
-  llama-model.cpp:2356   step35 / hy_v3 / mimo2
-Everything else (deepseek2, glm4, glm4moe, bailingmoe2, cohere2moe, exaone4)
-gets ``filter == nullptr``, so its trailing MTP block DOES get target KV and
-subtracting it would under-reserve.
-
-Recurrent state is the exception that always subtracts: llama_memory_recurrent
-sizes on ``n_layer()`` directly (llama-memory-recurrent.cpp:29).
-"""
+"""Only architectures with a KV filter may drop nextn blocks; the rest still allocate KV for them."""
 
 import sys
 import types as _types
@@ -67,15 +47,7 @@ def _gqa_backend(**overrides):
 
 
 def test_glm4_moe_nextn_block_stays_in_target_kv():
-    """GLM-4.5-Air shape: block_count 47 = 46 trunk + 1 nextn.
-
-    conversion/glm.py:116 writes block_count INCLUDING the nextn block and
-    :154 writes nextn_predict_layers, so a shipped GLM-4.5/4.6 MoE GGUF carries
-    both. src/models/glm4-moe.cpp:23 reduces n_layer(), but the target context
-    for LLM_ARCH_GLM4_MOE is a plain llama_kv_cache with filter == nullptr, so
-    llama-kv-cache.cpp:100 still walks all 47 blocks and allocates KV for the
-    nextn block. The estimate must therefore cover 47 layers, not 46.
-    """
+    """GLM-4.5 MoE has no KV filter, so its nextn block keeps target KV: count all 47 layers."""
     b = _gqa_backend(_nextn_predict_layers = 1)
     cells = 4096
     per_layer = cells * 8 * (128 + 128) * 2
@@ -95,14 +67,7 @@ def test_glm4_moe_target_kv_does_not_move_when_the_head_is_declared():
 
 
 def test_gemma4_assistant_shaped_header_does_not_collapse_to_one_layer():
-    """src/models/gemma4-assistant.cpp:15 asserts n_layer_nextn == n_layer_all.
-
-    block_count - nextn is 0 there, so an unconditional subtraction behind a
-    max(1, ...) floor would price a 12-layer model as one layer. The arch gate
-    keeps it out of the subtraction entirely. Reachable through the
-    separate-drafter call at _mtp_draft_kv_bytes, which sizes a drafter GGUF's
-    own KV with this function, and by loading the assistant model directly.
-    """
+    """gemma4-assistant has nextn equal to all layers, so a max(1, ...) floor would price one layer."""
     b = _gqa_backend(_n_layers = 12, _nextn_predict_layers = 12)
     cells = 4096
     per_layer = cells * 8 * (128 + 128) * 2
@@ -113,14 +78,7 @@ def test_gemma4_assistant_shaped_header_does_not_collapse_to_one_layer():
 
 
 def test_qwen35_hybrid_nextn_subtraction_is_correct():
-    """The control: the PR's own target case, which upstream DOES filter.
-
-    llama-model.cpp:2289 filters both the attention and recurrent halves to
-    il < n_layer() for QWEN35/QWEN35MOE/QWEN3NEXT, and
-    llama-memory-recurrent.cpp:29 sizes on n_layer() too, so subtracting is right
-    here. This is what the cases above must not be allowed to break: the arch
-    gate has to keep the hybrid saving while dropping the rest.
-    """
+    """Qwen3.5 hybrids filter nextn upstream, so subtracting it is right; the arch gate must keep that."""
     b = LlamaCppBackend()
     for k, v in {
         "_n_layers": 65,
@@ -201,12 +159,7 @@ def test_no_nextn_key_is_never_reduced(arch, _excludes):
 
 
 def test_a_hybrid_header_is_evidence_even_for_an_unknown_arch():
-    """Forwards compat: a future hybrid Mamba arch must still get the subtraction.
-
-    Every hybrid llama.cpp takes a nextn key from is filtered at
-    llama-model.cpp:2289 and its recurrent half is sized on n_layer() regardless
-    (llama-memory-recurrent.cpp:29), so the ssm dims answer without the name.
-    """
+    """A hybrid header's ssm dimensions count as evidence for subtraction, even for an arch not named."""
     b = _backend_from_gguf(
         "qwen39_hypothetical",
         {
@@ -232,11 +185,7 @@ def test_a_hybrid_header_is_evidence_even_for_an_unknown_arch():
 
 
 def test_the_glm4_moe_regression_is_gone():
-    """The concrete case: a shipped GLM-4.5-Air GGUF keeps its 47th layer.
-
-    conversion/glm.py:116 writes block_count INCLUDING the nextn block and :154
-    writes the key, so this is what a real file looks like.
-    """
+    """Shipped GLM-4.5-Air GGUFs count the nextn block in block_count, so layer 47 must stay priced."""
     with_head = _backend_from_gguf("glm4moe", {**_GQA_FIELDS, "nextn_predict_layers": 1})
     without = _backend_from_gguf("glm4moe", dict(_GQA_FIELDS))
 
@@ -246,11 +195,7 @@ def test_the_glm4_moe_regression_is_gone():
 
 
 def test_a_nextn_equal_to_block_count_does_not_collapse():
-    """gemma4-assistant asserts n_layer_nextn == n_layer_all (gemma4-assistant.cpp:15).
-
-    block_count - nextn is 0 there, and a max(1, ...) floor would price a 12-layer
-    model as one layer. The arch gate keeps it out of the subtraction entirely.
-    """
+    """A nextn count equal to block_count must not collapse to one layer; the arch gate excludes it."""
     b = _backend_from_gguf(
         "gemma4-assistant",
         {**_GQA_FIELDS, "block_count": 12, "nextn_predict_layers": 12},
@@ -261,12 +206,7 @@ def test_a_nextn_equal_to_block_count_does_not_collapse():
 
 
 def test_recurrent_state_is_independent_of_the_arch_gate():
-    """llama_memory_recurrent sizes on n_layer() for EVERY arch.
-
-    llama-memory-recurrent.cpp:29 takes hparams.n_layer(), which subtracts nextn
-    unconditionally, so _mamba_recurrent_state_bytes must keep subtracting even
-    where the attention half does not. Guards against a fix that over-corrects.
-    """
+    """Recurrent state always subtracts nextn, since its memory is sized on n_layer() for every arch."""
     b = _backend_from_gguf(
         "qwen35",
         {

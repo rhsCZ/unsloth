@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Cached-path authorization for training starts.
-
-Companion to test_training_ambient_hf_token.py, which covers the token plumbing. These cover the
-path-to-repository mapping the model and dataset legs authorize against, where a miss is fail-OPEN:
-``cached_repo_ref_for_path`` returning ``None`` means the caller skips the access check entirely.
-"""
+"""A None from cached_repo_ref_for_path fails open and skips the access check."""
 
 import sys
 from pathlib import Path
@@ -182,11 +177,7 @@ def test_an_unreadable_cache_root_authorizes_rather_than_skips(monkeypatch, tmp_
 
 
 def test_repo_ids_round_trip_through_the_cache_dir_name(cache_root):
-    """ "--" is forbidden inside a repo id, so the split is unambiguous.
-
-    Guards the mapping against a "fix" for a name that cannot exist: huggingface_hub's own
-    validate_repo_id rejects "org/my--model", and _scan_cached_repo parses the same way.
-    """
+    """Repo ids cannot contain a double hyphen, so the cache dir name splits unambiguously on it."""
     from huggingface_hub.utils import HFValidationError, validate_repo_id
 
     from hub.utils.hf_cache_state import cached_repo_ref_for_path
@@ -306,11 +297,7 @@ def test_diffusion_child_leaves_a_studio_session_alone(monkeypatch):
 
 
 def test_a_cached_diffusion_base_requires_caller_authorization(monkeypatch, cache_root):
-    """Scrubbing the child environment does not protect a base that is ALREADY cached.
-
-    _preflight_gated_base returns early for a local path and _assert_trusted_base_model accepts any
-    real pipeline directory, so from_pretrained read it off disk with no credential.
-    """
+    """Scrubbing the child env does not protect an already-cached base, which is read from disk."""
     import routes.training as training_routes
     from fastapi import HTTPException
 
@@ -350,11 +337,7 @@ def test_a_cached_diffusion_base_requires_caller_authorization(monkeypatch, cach
 def test_a_remote_named_cached_base_is_authorized_when_the_hub_probe_fails_open(
     monkeypatch, cache_root
 ):
-    """`org/private` names no path, and the HEAD that would cover it is best-effort.
-
-    `_preflight_gated_base` treats an unreachable Hub as "not a denial", so on an offline box the
-    scrubbed child still loaded the cached private copy. The disk is asked directly instead.
-    """
+    """A repo-named cached base must be authorized from disk, since an offline Hub probe fails open."""
     import routes.training as training_routes
     from fastapi import HTTPException
 
@@ -408,12 +391,7 @@ def test_a_remote_named_cached_base_is_authorized_when_the_hub_probe_fails_open(
 
 
 def test_the_worker_rebuilds_the_anonymous_sentinel_rather_than_none():
-    """`or None` handed an API key the AMBIENT caller class inside the worker.
-
-    The scrub covers network traffic only, and cache_reads_authorized(None) is True, so cached
-    private weights stayed readable for the repos the route never authorized: a LoRA checkpoint's
-    base, sibling scan targets, a fallback load target.
-    """
+    """Worker rebuilds the anonymous sentinel: None would authorize cached private weights."""
     from core.training.worker import _worker_hf_token
     from hub.utils.hf_tokens import AmbientAuthorizedToken, cache_reads_authorized, is_anonymous
 
@@ -445,10 +423,7 @@ def test_the_worker_no_longer_launders_the_sentinel_through_or_none():
 
 
 def test_an_interrupted_download_is_not_evidence_of_a_cached_read(monkeypatch, cache_root):
-    """A repo DIRECTORY with no usable snapshot has disclosed nothing, so refusing it protects
-    nothing. Reachable because the anonymous rescue needs /auth-check, which an HF_ENDPOINT mirror
-    need not serve: there a PUBLIC model is rejected for bytes that were never on disk.
-    """
+    """A repo directory with no usable snapshot has disclosed nothing, so refusing it protects nothing."""
     from hub.utils.hf_cache_state import repo_cache_has_usable_snapshot
 
     metadata = ("config.json", "adapter_config.json")
@@ -503,11 +478,7 @@ def test_a_disabled_eval_path_is_not_authorized(monkeypatch, cache_root):
 
 
 def test_only_the_effective_diffusion_fetch_target_is_authorized():
-    """The DiT trainer loads fetch_base_model, and for SDXL the two are equal by construction.
-
-    Authorizing the original base_model as well refused a public mirror whenever a stray or partial
-    snapshot of the gated upstream happened to sit in the cache.
-    """
+    """Authorize only the effective fetch target; checking the original base refuses public mirrors."""
     import inspect
 
     import routes.training as training_routes

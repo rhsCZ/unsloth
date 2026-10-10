@@ -449,12 +449,7 @@ def test_raw_dataset_cache_has_data_counts_a_linked_payload_directory(monkeypatc
 
 
 def test_raw_dataset_cache_has_data_ignores_payload_in_an_unpinned_revision(monkeypatch, tmp_path):
-    """A payload-bearing sibling revision does not make the row usable.
-
-    `training_dataset_cache_pin` resolves through `dataset_snapshot_from_cache_path`, which
-    prefers the revision `refs/main` names. Clearing `partial` because some other revision
-    holds data would offer a row whose pinned load path is the metadata-only revision, so the
-    run falls back to the network and fails outright offline."""
+    """A payload in an unpinned sibling revision does not clear partial; refs/main decides the load path."""
     repo_root = _dataset_snapshot(monkeypatch, tmp_path, ("README.md",))
     (repo_root / "refs").mkdir(parents = True, exist_ok = True)
     (repo_root / "refs" / "main").write_text("abc")
@@ -466,12 +461,7 @@ def test_raw_dataset_cache_has_data_ignores_payload_in_an_unpinned_revision(monk
 
 
 def test_raw_dataset_cache_has_data_never_walks_outside_the_snapshot(monkeypatch, tmp_path):
-    """The prune is a containment test, not a link-type test.
-
-    `Path.is_symlink()` is false for a Windows junction and `Path.is_junction()` does not
-    exist before 3.12, which this package still supports, so a link-type test would let
-    `os.walk` descend a junction into an arbitrary external tree. A directory that resolves
-    outside the snapshot is left unvisited whatever kind of redirect it is."""
+    """Prune by containment: is_symlink misses Windows junctions, so never walk outside the snapshot."""
     outside = tmp_path / "outside"
     (outside / "deep").mkdir(parents = True)
     (outside / "deep" / "huge.parquet").write_bytes(b"PAR1")

@@ -149,12 +149,7 @@ def _portable_mode() -> bool:
 
 
 def _toolchain_path_unparseable(value: str) -> bool:
-    """storage_roots' test, imported per call like _default_root's.
-
-    The fallback repeats the whole rule rather than narrowing to whitespace, or one path would
-    be refused or accepted depending only on whether studio/backend was on sys.path.
-    test_the_import_fallback_matches_the_resolver sweeps both over every printable character.
-    """
+    """Repeats the storage_roots rule in full, so the verdict never depends on sys.path."""
     try:
         from utils.paths.storage_roots import toolchain_path_unparseable
     except ImportError:
@@ -201,12 +196,7 @@ def cache_root() -> Path:
 
 
 def legacy_cache_root() -> Optional[Path]:
-    """The pre-relocation root, when it is still worth READING old bundles from.
-
-    Read-only on purpose: returning it as the write root would pin an upgraded install to the home
-    directory forever. Skipped under an explicit dir override (it names one exact directory) and
-    in portable mode (the host's home is not part of the install).
-    """
+    """Read-only pre-relocation root for reads; never a write root, so an upgrade does not pin home."""
     if os.environ.get(_ENV_DIR) or _portable_mode():
         return None
     if _LEGACY_ROOT == _default_root():
@@ -237,11 +227,7 @@ def _diffusers_version() -> Optional[str]:
 
 
 def environment_fingerprint() -> dict[str, Any]:
-    """HARD-portability dimensions: any difference invalidates a bundle.
-
-    Mirrors what torch's inductor cache keys on (torch + triton + CUDA + GPU type) plus
-    diffusers (the graph source), surfaced explicitly so the manifest is self-describing.
-    """
+    """Hard portability fields; any change invalidates a bundle, mirroring torch's inductor cache key."""
     fp: dict[str, Any] = {
         "format": _FORMAT_VERSION,
         "torch": None,
@@ -446,11 +432,8 @@ def model_fingerprint(
     shape_bucket: Any = None,
     reduction_filter: bool = False,
 ) -> dict[str, Any]:
-    """MODEL-graph dimensions that change the compiled artifact.
-
-    Reads ``transformer``'s class name + ``_repeated_blocks`` so the key tracks exactly
-    what gets compiled.
-    """
+    """Model-graph key: the transformer class and its repeated blocks, so the key tracks what is
+    compiled."""
     blocks = list(getattr(transformer, "_repeated_blocks", []) or [])
     if not blocks and transformer is not None:
         from .diffusion_regional_compile import verified_repeated_blocks
@@ -544,11 +527,7 @@ def begin(
     logger: Any = None,
     reduction_filter: bool = False,
 ) -> Optional[CacheContext]:
-    """Point inductor at a per-key dir and load a matching bundle, BEFORE compile.
-
-    Returns a ``CacheContext`` for ``save``/``restore``, or ``None`` when disabled or torch
-    lacks the Mega-cache API. Never raises.
-    """
+    """Points inductor at a per-key dir and loads a matching bundle before compile; never raises."""
     mode = cache_mode()
     if mode == "off":
         return None
@@ -649,11 +628,7 @@ def begin(
 
 
 def _load_from_legacy(ctx: CacheContext, logger: Any) -> bool:
-    """Load the same key's bundle from the pre-relocation root, then migrate it.
-
-    The key already covers every portability dimension, so a legacy bundle under it is the same
-    artifact this run would have written. The copy stops the read fallback becoming permanent.
-    Best-effort, and skipped when saving is off, since that mode promises a read-only cache."""
+    """Copies a same-key legacy bundle forward, so the read fallback does not become permanent."""
     root = legacy_cache_root()
     if root is None:
         return False
@@ -685,12 +660,7 @@ def _load_from_legacy(ctx: CacheContext, logger: Any) -> bool:
 
 
 def register_shape(ctx: Optional[CacheContext], shape: Any, *, static: bool) -> None:
-    """Record a generation's (width, height, batch) against the bundle coverage.
-
-    Only meaningful for a STATIC compile: each new shape triggers its own compile, so the
-    existing bundle lacks those artifacts -- clear ``saved`` so the next ``save`` rewrites
-    the enriched set. Dynamic compiles reuse one artifact and never dirty the context.
-    Never raises."""
+    """Static compiles only: a new shape clears saved so the next save rewrites the bundle with it."""
     if ctx is None or not static:
         return
     try:
@@ -776,14 +746,7 @@ def _try_load(
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
-    """Write ``data`` to ``path`` via a temp file in the SAME directory plus ``os.replace``.
-
-    A save runs on a daemon thread, so interpreter exit can kill it anywhere. Renaming a
-    fully written temp file into place means a half-written file is never visible under a
-    name anything reads. Paired with the content-addressed bundle names above, that is
-    what makes an interrupted save leave a matching manifest/bundle pair rather than a
-    good bundle the sha256 check has to reject.
-    """
+    """Temp file in the same directory plus os.replace, so a killed save never exposes a partial file."""
     tmp: Optional[str] = None
     try:
         fd, tmp = tempfile.mkstemp(
@@ -804,14 +767,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
 
 
 def _atomic_copy(src: Path, dst: Path) -> None:
-    """``shutil.copyfile`` into a temp file in *dst*'s directory, then ``os.replace``.
-
-    Same rule and same reason as _atomic_write: a plain copyfile onto the live name is visible
-    while it is still partial, and the migration below runs on the same interruptible path as a
-    save. A torn manifest costs only a miss, but a miss here means the cold compile the migration
-    exists to avoid, and two backends migrating one key would otherwise interleave their writes
-    into a single destination file.
-    """
+    """Copy via a same-directory temp file and os.replace, so a torn migrated manifest is never visible."""
     tmp: Optional[str] = None
     try:
         fd, tmp = tempfile.mkstemp(dir = str(dst.parent), prefix = f".{dst.name}.", suffix = _TEMP_SUFFIX)
@@ -828,16 +784,7 @@ def _atomic_copy(src: Path, dst: Path) -> None:
 
 
 def _collect_superseded(cdir: Path, logger: Any) -> list[str]:
-    """Delete bundles no manifest names any more. Returns the names removed. Never raises.
-
-    Two rules keep this from deleting a bundle somebody is about to need:
-
-    1. The live name is re-read from the manifest ON DISK, not from the context that just wrote it, so a manifest
-       another process committed in between decides what survives rather than our stale idea of it.
-    2. A file younger than the grace window is spared regardless. Between a racing process publishing its bundle
-       and committing its manifest, that bundle is named by nothing; deleting it there would hand the loser of the
-       race exactly the broken pair this whole scheme exists to prevent.
-    """
+    """Re-reads the on-disk manifest before deleting, and spares bundles inside the grace window."""
     removed: list[str] = []
     try:
         manifest = _read_manifest(cdir / _MANIFEST_NAME)
@@ -921,14 +868,7 @@ def _write_bundle(ctx: CacheContext, logger: Any) -> bool:
 
 
 def save(ctx: Optional[CacheContext], *, logger: Any = None) -> bool:
-    """Persist compiled artifacts to the bundle + manifest, AFTER a warmup forward.
-
-    No-op unless save is enabled and the context is dirty: a bundle HIT starts clean
-    (rewriting the just-loaded artifacts costs ~0.5 s for no change); a new static-compile
-    shape re-dirties via ``register_shape`` so the bundle grows to cover every shape used.
-    Returns True if a bundle was written. Synchronous: the write has happened when this
-    returns. ``save_async`` is what the generate path uses.
-    """
+    """Synchronous bundle write; no-op unless the context is dirty, since a bundle hit starts clean."""
     if ctx is None:
         return False
     return _write_bundle(ctx, logger)
@@ -974,13 +914,7 @@ def _start_worker_locked() -> None:
 
 
 def save_async(ctx: Optional[CacheContext], *, logger: Any = None) -> bool:
-    """Queue ``save`` on the shared worker and return at once. Never raises.
-
-    Returns True when a save was queued (or, under the SYNC env, written). Already queued
-    is False: the pending save reads the context when it runs, so it covers every shape
-    registered up to that point. A context whose save is IN FLIGHT does get queued again,
-    since the running save cannot contain what was registered after it started.
-    """
+    """Queue save on the worker; an in-flight save is re-queued since it cannot include later shapes."""
     if ctx is None:
         return False
     note_use(ctx)

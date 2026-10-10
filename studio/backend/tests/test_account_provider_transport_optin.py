@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Which httpx client a managed account gets, and that the choice follows the switch live.
-
-The pin is not merely an optimisation: with the switch on it would refuse the very
-connection the owner allowed, so the selection has to move with the setting rather
-than being decided once at import.
-"""
+"""The httpx client must follow the opt-in switch live, or it refuses connections the owner allowed."""
 
 from pathlib import Path
 import sys

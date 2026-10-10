@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""MiniMax-H3 LoRA training: the clip dataset layer, the packed-sequence geometry, the
-two-schedule sigma coupling, the LoRA target surface, the routing, and the forward contract.
-
-CPU-only and free of a diffusers import wherever the contract allows it: the two places that
-genuinely need the pipeline's own layout builders are exercised against a fake transformer, so
-the forward contract is checkable without the 66 GB checkpoint.
-"""
+"""MiniMax-H3 LoRA: clip datasets, packing, sigma coupling and forward contract, CPU only."""
 
 from __future__ import annotations
 
@@ -230,11 +224,7 @@ def test_discover_clip_pairs_is_sorted_and_stable(tmp_path):
 
 
 def test_discover_training_pairs_routes_h3_to_the_clip_discovery(tmp_path):
-    """The gap this closes: /diffusion/start preflights the dataset BEFORE freeing the resident
-    GPU models, and it ran the IMAGE discovery unconditionally. An H3 dataset is captioned clips
-    -- the only thing its trainer accepts -- so a perfectly valid one was rejected at the route
-    with "No captioned images found" and the advertised H3 trainer could not be reached at all.
-    """
+    """H3 discovery must use clip discovery, not image discovery, or valid clip datasets are rejected."""
     from core.training.diffusion_train_common import discover_training_pairs
 
     _clip(tmp_path, "a.mp4")
@@ -276,11 +266,7 @@ def test_the_two_shifts_come_from_the_released_scheduler_configs():
 
 
 def test_an_omitted_flow_shift_reaches_the_trainer_as_the_released_video_shift():
-    """The gap this closes: ``normalized()`` resolved an omitted flow_shift to the identity 1.0
-    for every family outside AUTO_FLOW_SHIFT_FAMILIES, and the H3 loop only falls back to
-    _H3_VIDEO_SHIFT when the value is NOT a number. 1.0 is a number, so it won over the 12.0 the
-    released scheduler uses and every default run trained against an unshifted video-noise
-    distribution the sampler never visits -- silently, at full cost."""
+    """An omitted flow_shift must become H3's video shift, since 1.0 is a number and wins the fallback."""
     from core.training.diffusion_train_common import AUTO_FLOW_SHIFT_FAMILIES, DiffusionLoraConfig
 
     assert "minimax-h3" in AUTO_FLOW_SHIFT_FAMILIES
@@ -723,11 +709,7 @@ def test_the_saved_adapter_carries_the_diffusers_transformer_prefix(tmp_path):
 
 
 def test_the_hosted_prequant_denoiser_is_refused_as_a_training_base():
-    """The two registries mean opposite things by ``prequant_repos``: an image family's entry is a
-    full quantized PIPELINE mirror, a video family's is the pre-quantized DENOISER alone. Reading
-    both as bases let the H3 denoiser repo through the preflight -- its name resolves to the
-    family, the unsloth/* trust gate passes it -- so the run evicted the resident GPU workloads
-    and only then failed inside ModularPipeline.from_pretrained."""
+    """The hosted H3 prequant is a denoiser, not a pipeline, so it must be refused as a training base."""
     from core.inference.video_families import detect_video_family
     from core.training.diffusion_train_common import (
         _component_only_repos,
@@ -801,12 +783,7 @@ def test_an_image_family_keeps_its_checkpointing():
 
 
 def test_int8_training_applies_h3s_small_m_guards():
-    """Without the family, ``adaln_proj`` (Linear(2688 -> 96768) on the dense checkpoint) clears
-    the 512-feature floor, gets quantized, then runs at M = 1 and raises
-    ``self.size(0) needs to be greater than 16`` on the first step -- after the whole 66.3 GB
-    base has loaded. The family also carries the PAD list, which is the other half of the same
-    contract: context_embedder and the two token_refiner blocks are in neither exclusion list
-    precisely because they are meant to be padded instead."""
+    """H3 int8 needs small-M guards: adaln_proj would reach M=1 and fail after the 66 GB base loads."""
     from core.inference.diffusion_transformer_quant import (
         exclude_tokens_for_scheme,
         pad_tokens_for_scheme,
@@ -849,11 +826,7 @@ def test_int8_quantize_base_pads_the_families_small_m_linears(monkeypatch):
 
 
 def test_a_non_default_lora_alpha_survives_the_export(tmp_path):
-    """``load_lora_adapter`` reads the rank off the B matrices and then sets
-    ``lora_alpha = r`` unless the file carries adapter metadata, so an adapter trained at
-    rank 16 / alpha 32 used to come back at half its trained strength. The metadata layout is
-    diffusers' own: JSON under ``lora_adapter_metadata``, every key packed with the same
-    ``transformer.`` prefix the tensors carry, because the loader strips it off both."""
+    """A non-default lora_alpha must survive export, carried as adapter metadata the loader reads back."""
     from safetensors import safe_open
 
     from core.training.diffusion_h3_trainer import _save_lora
@@ -885,10 +858,7 @@ def test_the_export_without_a_config_still_writes_a_plain_file(tmp_path):
 
 
 def test_a_mostly_silent_soundtrack_is_refused_rather_than_padded(tmp_path):
-    """The mandatory-audio check only asks whether the container declares an audio stream, and
-    the pad had no ceiling, so a clip carrying a fraction of a second of sound was accepted and
-    zero-padded out to the whole window -- training the shared adapter on the silence the check
-    exists to keep out."""
+    """A mostly silent soundtrack must be refused rather than zero-padded into the training window."""
     import numpy as np
 
     from core.training import diffusion_h3_clips as clips
@@ -934,13 +904,7 @@ def test_a_mostly_silent_soundtrack_is_refused_rather_than_padded(tmp_path):
 
 
 def test_a_soundtrack_that_is_silent_throughout_is_refused(tmp_path):
-    """A muted track is full length, so the duration checks above all pass and the window comes
-    back all zeros -- the very target the short-audio refusal exists to keep out, arriving by a
-    route that refusal cannot see. Training on it teaches the shared adapter to stop making
-    sound, so it is refused with the rest of the audio validation rather than accepted.
-
-    The control matters as much as the refusal: a track that is quiet, or silent for almost all
-    of its length with one real sound in it, is still a usable soundtrack and must be kept."""
+    """A fully silent soundtrack must be refused, but a quiet or mostly silent one with a sound is kept."""
     import types
 
     import numpy as np
@@ -999,13 +963,7 @@ def test_a_soundtrack_that_is_silent_throughout_is_refused(tmp_path):
 
 
 def test_the_knobs_h3_cannot_honour_are_refused_or_normalised():
-    """Same rule as the other pins this trainer applies: a setting the loop does not implement
-    must not be accepted and then silently dropped. Refused where the value can only be an
-    explicit non-default, normalised where the SCHEMA DEFAULT is the one the loop disagrees with
-    -- refusing there would 422 every untouched request.
-
-    Read off the shared preflight, which is also what the START ROUTE calls before it evicts the
-    user's resident models."""
+    """Unsupported H3 knobs are refused if explicit, normalised if default, never silently dropped."""
     from dataclasses import replace as _replace
 
     from core.training.diffusion_train_common import h3_train_unsupported_reason
@@ -1051,10 +1009,7 @@ def test_the_h3_preflight_runs_before_the_start_route_evicts_anything():
 
 
 def test_the_augmentation_knobs_record_what_h3_actually_does():
-    """Every frame goes through the same centre cover-crop and nothing is flipped, but the
-    schema defaults say the opposite (center_crop=False, random_flip=True), so an untouched
-    request described augmentation that never happened. Normalised rather than refused: a
-    refusal would 422 every default request."""
+    """H3 always centre-crops and never flips, so the run record must say that, not the schema defaults."""
     from dataclasses import replace as _replace
 
     from core.training import diffusion_h3_trainer as h3
@@ -1069,16 +1024,7 @@ def test_the_augmentation_knobs_record_what_h3_actually_does():
 
 
 def test_h3_is_advertised_as_trainable_with_the_precisions_it_has():
-    """The Train panel reads an EMPTY precision_modes on a non-SDXL family as "this GPU cannot
-    train this family" and disables Start with "Not supported on this GPU". MiniMax-H3 was only
-    in _FLOW_TRAIN_FAMILIES, while the info builder keyed the precision branch on
-    _DIT_TRAIN_FAMILIES, so it reported [] even on a host that can train, and the trainer this
-    PR adds was unreachable from Unsloth.
-
-    Judged against a reference DiT family rather than against a hardcoded list, so the test
-    describes the host it runs on: on a GPU-less runner BOTH are legitimately empty, and the
-    invariant under test is that H3 is never the only one that is. fp8/mxfp8 stay out either
-    way -- the trainer refuses both outright."""
+    """H3 must be advertised as trainable with its precisions, or the Train panel disables Start."""
     from core.training.diffusion_train_common import family_train_infos
 
     infos = {i["name"]: i for i in family_train_infos()}
@@ -1162,17 +1108,7 @@ def test_an_over_long_clip_says_that_only_its_opening_trains(tmp_path, monkeypat
 
 
 def test_the_precision_recorded_for_h3_is_the_one_its_loop_runs_in():
-    """``identity_for_config`` records the EFFECTIVE mixed precision, and the helper it reads it
-    from keyed the "this loop ignores the knob" branch on _DIT_TRAIN_FAMILIES, which H3 is not in.
-
-    H3's loop is byte-identical to the DiT loop here -- bf16 on CUDA, fp32 otherwise, and the
-    string "mixed_precision" appears nowhere in it -- so the two families must resolve to the same
-    answer. Judged against a reference DiT family rather than a hardcoded value, so the test
-    describes the host it runs on (a CPU runner legitimately answers "no" for both).
-
-    Not reachable as a live mismatch today: an H3 request may only be bf16 (two independent gates
-    below), and H3 writes no checkpoint at all, so nothing consults the identity. Pinned anyway
-    because both of those are documented as temporary."""
+    """H3 must record the same effective mixed precision as the DiT loop it is byte-identical to."""
     import inspect
 
     from core.training import diffusion_dit_trainer, diffusion_h3_trainer
@@ -1216,10 +1152,7 @@ def test_an_h3_run_can_never_record_a_precision_it_did_not_use():
 
 
 def test_the_persisted_h3_recipe_is_the_one_the_loop_runs():
-    """The loop replaces center_crop / random_flip / snr_gamma, but the run record is written by
-    the PARENT from the config handed to ``service.start`` -- the child's ``replace`` never
-    reached it, so Previous runs described cropping, flipping and min-SNR weighting that no step
-    used. Both sides read one shared table now."""
+    """The persisted H3 recipe must be the one the loop runs, since the parent writes the run record."""
     import inspect
 
     from core.training.diffusion_training_service import DiffusionTrainingService
@@ -1249,10 +1182,7 @@ def test_the_persisted_h3_recipe_is_the_one_the_loop_runs():
 
 
 def test_the_strict_start_gate_probes_the_h3_transformer_not_modular_pipeline(monkeypatch):
-    """A diffusers old enough to predate H3's blocks still exports the generic ``ModularPipeline``,
-    so the listing probe (which reads the family's own transformer class) hid H3 while a direct
-    POST /diffusion/start sailed through both training gates, evicted the resident GPU models and
-    failed in the child. Both gates read the same probe class now."""
+    """Start gate must probe the H3 transformer class; ModularPipeline exists even in old diffusers."""
     from core.inference.diffusion_families import family_pipeline_available, family_probe_class
     from core.training.diffusion_train_common import (
         _trainable_family_spec,
@@ -1279,10 +1209,7 @@ def test_the_strict_start_gate_probes_the_h3_transformer_not_modular_pipeline(mo
 
 
 def test_the_probe_still_fails_open_for_a_record_that_names_no_pipeline_class():
-    """``family_pipeline_available`` hides nothing it cannot judge. The probe helper reads
-    ``pipeline_class`` with a default, so a record without one arrives as the empty string, and
-    ``hasattr(diffusers, "")`` is False -- which would drop a usable repo out of a picker over a
-    stand-in family object rather than over a real missing class."""
+    """A probe record with no pipeline_class must fail open, not drop the repo from the picker."""
     from core.inference.diffusion_families import family_pipeline_available, family_probe_class
 
     assert family_probe_class(object()) == ""
@@ -1290,10 +1217,7 @@ def test_the_probe_still_fails_open_for_a_record_that_names_no_pipeline_class():
 
 
 def test_a_local_modular_h3_pipeline_is_an_acceptable_training_base(tmp_path):
-    """A local MiniMax-H3 pipeline carries ``modular_model_index.json`` and NO
-    ``model_index.json`` -- that is the layout ``ModularPipeline.from_pretrained`` reads and the
-    one the local-model scanners already count. The shared shape check knew only the conventional
-    index, so it rejected the only local layout the family has."""
+    """A local modular pipeline (modular_model_index.json only) is a valid H3 training base."""
     from core.training.diffusion_train_common import _assert_trusted_base_model
 
     modular = tmp_path / "MiniMax-H3"
@@ -1320,11 +1244,7 @@ def test_a_local_modular_h3_pipeline_is_an_acceptable_training_base(tmp_path):
 
 
 def test_the_start_route_reaches_the_same_modular_verdict_as_the_trainer():
-    """The route runs the trainers' trust gate first, so an untrusted base 400s before the
-    resident GPU models are freed. It called it with the default conventional-only shape check,
-    while the H3 loop called it with allow_modular -- so a local modular pipeline, the only local
-    layout the family HAS, was rejected at the route and the loop that can load it never ran.
-    Both sides now select off one set, which is the only way they cannot disagree again."""
+    """Start route and H3 loop must agree on modular bases, or the route refuses what the loop can load."""
     import inspect
 
     from core.training import diffusion_h3_trainer
@@ -1358,10 +1278,7 @@ def test_h3_advertises_that_it_cannot_checkpoint():
 
 
 def test_the_batch_cap_survives_the_response_model():
-    """family_train_infos emitting it is not enough: the route builds a DiffusionTrainableFamily
-    from that dict, and Pydantic drops any field the model does not declare. Undeclared, the
-    panel reads the cap as undefined, keeps rendering Batch, and sends a carried-over value the
-    validation refuses -- the clamp exists but never receives its input."""
+    """The batch cap must be a declared response field, or Pydantic drops it before the clamp sees it."""
     from core.training.diffusion_train_common import (
         SINGLE_SEQUENCE_FAMILIES,
         family_train_infos,
@@ -1383,11 +1300,7 @@ def test_the_batch_cap_survives_the_response_model():
 
 
 def test_the_h3_conditioner_load_carries_the_hub_token(monkeypatch):
-    """``ModularPipeline.from_pretrained``'s token opens the modular INDEX only: every component
-    is fetched by its own ``from_pretrained`` inside ``load_components``, which swallows a failure
-    as a logger.warning and leaves the attribute unset. A gated or private base therefore loaded
-    its components anonymously and died on a None, after the route's authenticated preflight had
-    passed. The inference H3 loader forwards it again for exactly this reason."""
+    """Hub token must reach each component load; a gated base otherwise leaves components unset."""
     from core.training import diffusion_h3_trainer as h3
 
     seen: list[dict] = []
@@ -1471,11 +1384,7 @@ def test_the_h3_denoiser_load_is_pinned_to_the_live_cache(monkeypatch, base_prec
 
 
 def test_the_audio_decode_stops_at_the_training_window(tmp_path):
-    """An over-long source is accepted input -- only its first num_frames train, and the caller is
-    warned -- so the soundtrack past that window is never used. The video loop already breaks at
-    the window; the audio one decoded and resampled the whole recording and kept every chunk
-    before truncating, so a long clip cost a recording's worth of time and memory to build a
-    sub-second sample (and failed on damage in a region that is never read)."""
+    """Audio decode must stop at the training window, not resample the whole recording first."""
     import numpy as np
 
     from core.training import diffusion_h3_clips as clips
@@ -1515,13 +1424,7 @@ def test_the_audio_decode_stops_at_the_training_window(tmp_path):
 
 
 def _stub_training_stack(monkeypatch):
-    """Satisfy the four training-stack names ``_train_h3`` binds on entry.
-
-    The backend CI image installs neither diffusers nor peft, so the function-level
-    ``from diffusers.optimization import get_scheduler`` aborted the cache-gate tests before they
-    reached the gate. None of the four is called on the path under test -- the gate raises, or
-    the faked ``_load_transformer`` does -- so binding them to placeholders keeps the tests
-    running everywhere rather than skipping them on the only host that runs them in CI."""
+    """Stubs the training-stack names _train_h3 binds on entry, so CI without diffusers still runs them."""
     scheduler = types.ModuleType("diffusers.optimization")
     scheduler.get_scheduler = lambda *_a, **_k: None
     training_utils = types.ModuleType("diffusers.training_utils")
@@ -1546,10 +1449,7 @@ def _stub_training_stack(monkeypatch):
 
 
 def _h3_cache_run(monkeypatch, *, num_clips: int):
-    """Drive ``_train_h3`` through phase 2 only, with every model call faked.
-
-    ``_load_transformer`` raises a sentinel, so "got past the cache gate" is observable without
-    the 66 GB base."""
+    """Drive _train_h3 through phase 2 with a sentinel _load_transformer, so reaching it is observable."""
     import torch
 
     from core.training import diffusion_h3_trainer as h3
@@ -1599,13 +1499,7 @@ def _h3_cache_run(monkeypatch, *, num_clips: int):
 
 
 def test_the_h3_latent_cache_is_size_gated_like_the_image_trainers(monkeypatch):
-    """Both shared image trainers measure the FIRST real entry and refuse to build a latent cache
-    over the host-memory budget. H3 built one entry per discovered clip unconditionally, so a
-    large clip dataset was OOM-killed at the end of the whole preparation with nothing saved.
-
-    It cannot answer the way they do -- they drop the cache and encode per step, and H3 frees both
-    VAEs to make room for the 66 GB transformer -- so it says so up front instead, with the
-    numbers and the same explicit override the size gate already has."""
+    """H3 must size-gate its latent cache against the host-memory budget, as the image trainers do."""
     from core.training import diffusion_train_common as common
 
     monkeypatch.delenv("UNSLOTH_DIFFUSION_FORCE_LATENT_CACHE", raising = False)
@@ -1736,10 +1630,7 @@ def test_decode_clip_returns_the_rotated_picture(tmp_path):
 
 
 def test_a_local_modular_pipeline_under_a_gguf_path_is_not_refused_as_gguf(tmp_path):
-    """``resolve_trainable_family`` exempted a local checkout by ``model_index.json`` only. A
-    MODULAR_BASE_FAMILIES base has ``modular_model_index.json`` and no ``model_index.json``, so
-    the one local layout MiniMax-H3 HAS was refused as a GGUF repo whenever its path contained
-    'gguf', before model_family was even consulted."""
+    """A local modular pipeline under a gguf path must not be refused as a GGUF repo."""
     from core.training.diffusion_train_common import resolve_trainable_family
 
     base = tmp_path / "gguf" / "MiniMax-H3"

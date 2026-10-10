@@ -1508,12 +1508,7 @@ def _fit_mode(cmd):
 
 
 def _run_full_offload_spawns(monkeypatch, tmp_path, *, outputs, returncodes):
-    """Drive load_model with a model that fits on GPU (--fit off).
-
-    Each spawn's stdout is ``outputs[i]`` and its exit is ``returncodes[i]``
-    (None means healthy). The child env prepends /opt/rocm/lib unless
-    ``use_system_rocm=False``, which is the retry under test.
-    """
+    """Runs load_model with --fit off; use_system_rocm=False skips /opt/rocm/lib, as the retry does."""
 
     def _gguf_string(value: str) -> bytes:
         encoded = value.encode()

@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Regression test for the /recommended-folders (and /browse-folders) 500
-caused by an unreadable model directory, e.g. a stock root-owned
-``ollama`` install at ``/usr/share/ollama/.ollama/models``.
-
-Root cause: ``routes.models`` folder-scan helpers probed candidates with a
-bare ``Path(p).is_dir()``. On Python <= 3.11 that returned ``False`` for an
-unreadable path; on Python >= 3.12 ``is_dir()`` propagates
-``PermissionError`` (EACCES), so the endpoint 500-ed through the whole
-middleware stack instead of skipping the directory. Probes now go through
-the module-level ``_safe_is_dir`` helper.
-
-``routes.models`` pulls the full backend dep tree (fastapi, structlog, the
-models package, ...), so rather than stand up the app we extract the real
-``_safe_is_dir`` from the source file and exercise it in isolation —
-dependency-free while still running the shipped code.
-
-Run:
-    python -m pytest studio/backend/tests/test_recommended_folders_permission.py -v
-"""
+"""Probe via _safe_is_dir: on Python 3.12+ is_dir() raises PermissionError on unreadable dirs."""
 
 import ast
 import os

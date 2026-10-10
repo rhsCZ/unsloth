@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the ``max_context_length`` warning-threshold semantics.
-
-The ctx slider in the chat settings sheet reads
-``/api/inference/status.max_context_length`` to decide when to render the
-"Exceeds estimated VRAM capacity. The model may use system RAM." warning:
-
-    ctxDisplayValue > maxContextLength → show warning
-
-When weights fit on some GPU subset, the threshold is the largest ctx that
-fits fully in VRAM (the binary-search cap from ``_fit_context_to_vram``).
-When weights exceed 90% of every GPU subset's free memory, the warning must
-fire as soon as the user drags above what Auto itself selects (otherwise
-loading e.g. MiniMax-M2.7 on a 97 GB GPU shows a slider up to 196608 with no
-hint that any larger value triggers ``--fit on`` and degrades performance).
-
-The threshold therefore tracks ``_AUTO_OFFLOAD_CTX`` and is not a literal.
-Anchoring it below that constant is worse than having no warning: Auto's own
-context then exceeds the ceiling Auto published, so every load in this branch
-warns about itself while advising the user to leave it on Auto.
-
-These tests pin both cases. No GPU probing, subprocess, or GGUF I/O.
-Cross-platform: Linux, macOS, Windows, WSL.
-"""
+"""max_context_length must track _AUTO_OFFLOAD_CTX; anchoring it lower makes Auto warn about itself."""
 
 from __future__ import annotations
 

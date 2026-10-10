@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A turn that spends the whole window thinking must not surface as an empty message.
-
-Observed on a 4096-token window: the model generated 2301 tokens, all of them reasoning,
-and stopped on `finish_reason: length` -- exactly the room the prompt left. It never
-reached a tool call or an answer, and because `_finalize_reasoning_only_cumulative`
-refuses to promote a truncated thought (correctly -- it is not an answer), the thread
-showed nothing at all. Twice, on consecutive turns.
-
-Compaction is not the lever: there was no tool result to compact, and the prompt was only
-1795 tokens of a 3072-token budget. The window went entirely on thinking, so the fix is to
-resume with thinking off rather than to reclaim prompt room that was never the problem.
-"""
+"""A turn that exhausts the window on reasoning resumes with thinking off, not an empty message."""
 
 from __future__ import annotations
 
@@ -235,11 +224,7 @@ def test_continuation_is_capped_so_a_small_window_cannot_loop(monkeypatch):
 
 
 def test_giving_up_says_so_instead_of_returning_an_empty_turn(monkeypatch):
-    """Returning silently IS the original defect, so the give-up path must not repeat it.
-
-    Mirrors the advice hermes-agent gives from `_thinking_exhausted` and Codex gives for
-    the same symptom: name the lever (effort, window, task size) rather than show nothing.
-    """
+    """Giving up must name the lever (effort, window, task size), never return an empty turn silently."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -259,11 +244,7 @@ def test_giving_up_says_so_instead_of_returning_an_empty_turn(monkeypatch):
 
 
 def test_a_good_tool_round_restores_the_full_allowance(monkeypatch):
-    """NousResearch/hermes-agent#79100: a surviving counter gives a later stall fewer tries.
-
-    Stall, continue, run a tool, then stall again. The second stall is a new problem and
-    is entitled to the same allowance the first one had.
-    """
+    """A good tool round restores the continuation allowance, so a later stall gets full retries."""
 
     payloads: list[dict] = []
     _truncated = [_sse({"reasoning_content": _LONG_THOUGHT}), _finish("length"), _done()]
@@ -331,15 +312,7 @@ def test_thinking_comes_back_on_after_a_good_tool_round(monkeypatch):
 
 
 def test_a_turn_that_answers_is_handled_as_an_answer_not_a_stalled_thought(monkeypatch):
-    """The trigger for THIS path is an EMPTY length stop, not any length stop.
-
-    Retargeted rather than deleted. It used to assert that a turn producing content was
-    never continued at all, which was true when the stalled-thought path was the only one.
-    A truncated ANSWER is now continued too, by the sibling path in
-    `test_truncated_answer_continuation.py`, and the distinction that still matters is
-    which one takes it: resuming an answer must not switch thinking off, because thinking
-    was never the problem, and must extend the partial rather than start a fresh turn.
-    """
+    """Only an empty length stop triggers this path; a truncated answer resumes elsewhere, thinking kept."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -380,14 +353,7 @@ def test_a_clean_reasoning_only_stop_is_left_alone(monkeypatch):
 
 
 def test_the_final_pass_continues_a_reasoning_only_stop(monkeypatch):
-    """The in-loop continuation cannot reach this pass, which runs after the loop breaks.
-
-    A turn that spends its last permitted tool call, or a one-shot tool that sets
-    `force_final_answer`, produces its answer here. If that generation spends the window
-    thinking, the user gets an empty message and no indication anything went wrong: the
-    exact failure the in-loop continuation exists to prevent, on the path it does not
-    cover.
-    """
+    """The final pass runs after the loop, so the in-loop continuation never reaches it."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -454,13 +420,7 @@ def _effort_backend(monkeypatch, streams, payloads):
 
 
 def test_an_explicit_effort_does_not_survive_the_continuation(monkeypatch):
-    """For this style an explicit effort WINS over enable_thinking.
-
-    `_request_reasoning_kwargs` returns the caller's "high" and never reaches the
-    enable_thinking branch, so turning thinking off for the retry changed nothing that
-    llama-server could see and the retry re-ran the turn that had just spent the whole
-    window thinking. The second failure then looked identical to the first.
-    """
+    """An explicit effort overrides enable_thinking here, so the retry must clear the effort too."""
 
     payloads: list[dict] = []
     backend = _effort_backend(
@@ -537,12 +497,7 @@ def _tool_call_sse(index: int) -> str:
 
 
 def test_a_request_that_never_stalls_keeps_the_bound_it_always_had(monkeypatch):
-    """The credit is granted as continuations happen, not reserved up front.
-
-    The loop bound moved from a `range(...)` to an explicit counter to make room for
-    them. A request with no stall must be unaffected by that: same number of model
-    calls, same tool budget, nothing extra.
-    """
+    """Continuation credit is granted on use, not reserved, so requests that never stall are unchanged."""
 
     streams = [[_tool_call_sse(i), _done()] for i in range(6)]
     streams.append([_sse({"content": "Done."}), _done()])
@@ -559,14 +514,7 @@ def test_a_request_that_never_stalls_keeps_the_bound_it_always_had(monkeypatch):
 
 
 def test_a_stall_does_not_eat_the_tool_budget(monkeypatch):
-    """The defect the credit exists for: at a small budget the retries spent it all.
-
-    Codex's scenario, built literally. `max_tool_iterations=1` and `MAX_ACT_REPROMPTS=3`
-    give the loop five slots. Three plan-without-action turns take three of them, two
-    truncated reasoning turns take the other two, and the model has still not issued its
-    call: control falls through to the tool-free final pass and the action the user asked
-    for is never performed, though no real tool iteration was ever spent.
-    """
+    """Stall retries must not spend the real tool budget, or the requested action is never performed."""
 
     streams = [
         [_sse({"content": "I will search for the prices now."}), _done()],
@@ -593,13 +541,7 @@ def test_a_stall_does_not_eat_the_tool_budget(monkeypatch):
 
 
 def test_the_final_pass_blames_the_cap_when_the_cap_is_what_was_spent(monkeypatch):
-    """The in-loop give-up already told these two walls apart; this pass did not.
-
-    A caller-set Max Tokens smaller than the window leaves no remainder to continue with,
-    so the final pass gives up here. Naming the CONTEXT window then sends the user to
-    raise the one setting that was never the constraint, and this text reaches the client
-    as ordinary content, so nothing downstream can correct it.
-    """
+    """The final pass must blame Max Tokens when that cap was spent, not the context window."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -637,13 +579,7 @@ def test_the_final_pass_still_blames_the_window_when_no_cap_was_set(monkeypatch)
 
 
 def test_the_final_pass_retry_is_admitted_under_the_kwargs_it_will_be_sent_with(monkeypatch):
-    """Admission has to price the prompt that is actually about to be sent.
-
-    The retry goes out with thinking OFF, which renders a different prompt from the
-    thinking-on kwargs the turn started with. Counting the candidate under the original
-    kwargs measures a prompt nobody sends: it refuses a retry that would have fit, or
-    admits one llama-server then rejects.
-    """
+    """Admission must price the retry with the kwargs it is actually sent with, not the original turn."""
 
     seen: list[object] = []
     payloads: list[dict] = []
@@ -675,13 +611,7 @@ def test_the_final_pass_retry_is_admitted_under_the_kwargs_it_will_be_sent_with(
 
 
 def test_the_in_loop_retry_is_admitted_under_the_kwargs_it_will_be_sent_with(monkeypatch):
-    """The final pass got this right; the in-loop path, which is the one a request with
-    tools actually takes, still admitted the retry under the previous attempt's kwargs.
-
-    `_reasoning_kw` is computed once at the top of each iteration, with thinking on. The
-    retry goes out with it off, a different rendered prompt on any template that reads
-    `enable_thinking`, so the admission priced a request nobody sends.
-    """
+    """In-loop retry admission priced the previous kwargs with thinking on, not the retry actually sent."""
 
     seen: list[object] = []
     payloads: list[dict] = []
@@ -709,12 +639,7 @@ def test_the_in_loop_retry_is_admitted_under_the_kwargs_it_will_be_sent_with(mon
 
 
 def test_the_in_loop_give_up_names_the_cap_when_the_last_attempt_spent_it(monkeypatch):
-    """`_reasoning_cap_spent` is only set when a continuation is REFUSED.
-
-    Reaching the give-up by exhausting the retry limit instead leaves it at its default,
-    so a turn whose last permitted attempt finished off an explicit Max Tokens was told
-    to raise the Context Length.
-    """
+    """_reasoning_cap_spent is set only on refusal, so exhausting retries misnames the cap."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -740,16 +665,7 @@ def test_the_in_loop_give_up_names_the_cap_when_the_last_attempt_spent_it(monkey
 
 
 def test_a_continuation_one_eviction_short_is_not_abandoned(monkeypatch):
-    """Refusing here ends the turn, so the next iteration's preflight never runs.
-
-    The single-turn case the check was written for really does have nothing left to
-    evict. A multi-turn chat under `truncate_oldest` usually does, and abandoning it
-    there throws away a recoverable answer rather than dropping one old exchange.
-
-    The gap is `prompt_budget` against the continuation's own floor: with a small
-    `max_tokens` the preflight fits the chat to 3996 of a 4096 window, while the retry
-    needs 3840 or less. The fit succeeded and the continuation is still unservable.
-    """
+    """Refusing ends the turn before the next preflight, so a continuation one eviction short is kept."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -849,13 +765,7 @@ def test_final_pass_continuation_counts_strip_media_and_payloads_keep_it(monkeyp
 
 
 def test_a_continuation_is_sized_by_what_is_left_of_the_cap(monkeypatch):
-    """`prompt_budget` shrinks as `max_tokens` grows, so the two must agree.
-
-    The remainder was applied to the payload only AFTER the preflight had already fitted
-    the chat against the caller's original cap. A continuation with 100 of 1000 tokens
-    left was therefore priced as if it could still emit 1000, and under
-    `truncate_oldest` that evicts history the request never needed to lose.
-    """
+    """Preflight must see the remaining cap, since prompt_budget shrinks as max_tokens grows."""
 
     targets: list[int] = []
     payloads: list[dict] = []

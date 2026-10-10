@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A healed text-form tool call must withhold its turn's finish_reason, like a structured one.
-
-A provider that writes ``<tool_call>...</tool_call>`` as ordinary content instead of
-``delta.tool_calls`` -- the small self-hosted GGUF models ``heals_text_tool_calls`` exists
-for -- has that markup healed into a real call and executed by the loop. But the call never
-reaches the wire as a ``tool_calls`` key, so ``ServerToolCallStripper`` cannot see it, and
-the turn's ``finish_reason: "stop"`` used to reach a headerless caller intact. A client that
-ends on the first finish reason then returns the sentence before the tool ran and never
-reads the answer, which is the exact failure the control-frame gate exists to prevent.
-
-These drive the real loop and the real stripper in the route's relay order, because the bug
-lives in the interleaving: the loop must flag the call while the stripper is still upstream
-of the chunk that closes the turn.
-"""
+"""Withhold the finish_reason of a healed text-form tool call, or clients stop before the tool runs."""
 
 import asyncio
 import json
@@ -125,11 +112,7 @@ def loop_env(monkeypatch):
 
 
 def _relay(turns, *, ui_events):
-    """The route's relay for one request: drop control frames, then strip, lazily.
-
-    Laziness matters. Draining the loop and stripping afterwards would let the loop's flag
-    arrive before any line was stripped, which passes even when the fix is absent.
-    """
+    """The relay must strip lazily; draining the loop first would hide the ordering the fix depends on."""
 
     async def _run():
         stripper = ServerToolCallStripper()
@@ -248,13 +231,7 @@ def test_a_turn_with_no_call_keeps_its_only_finish_reason(loop_env):
 
 
 def test_a_healed_call_owes_a_terminal_even_with_no_finish_chunk(loop_env):
-    """A provider may close a turn on [DONE] alone, sending no finish_reason at all.
-
-    Nothing is held back in that case, but the call is still promoted and run, so the debt
-    has to be armed anyway. Otherwise a loop that then ends without a genuine terminal --
-    here the second pass says nothing -- closes the stream on [DONE] carrying no
-    finish_reason, which openai-node rejects with "missing finish_reason for choice 0".
-    """
+    """A healed call must arm its terminal debt even when the provider sends no finish_reason at all."""
     no_finish = [
         _sse({"content": "Let me look that up. "}),
         _sse({"content": '<tool_call>{"name": "web_search", '}),
@@ -268,14 +245,7 @@ def test_a_healed_call_owes_a_terminal_even_with_no_finish_chunk(loop_env):
 
 
 def test_holding_the_turn_end_does_not_reorder_the_text(loop_env):
-    """Only the finish_reason waits for healing; the content on that chunk goes out in place.
-
-    The healer withholds any trailing run that could still become a tool marker, so a final
-    delta ending in "<to" releases its prose and buffers the rest. Parking that whole chunk
-    let the residue flushed by finalize() overtake the prose and reverse it on the wire --
-    "Comparing: <tothe value " -- even though the conversation replay stayed correct. No
-    tool call is involved: any healing turn whose last delta ends in "<" hits this.
-    """
+    """Only finish_reason waits for healing; the chunk's content goes out in place, or text reorders."""
     trailing_marker = [
         _sse({"content": "Comparing: "}),
         _sse({"content": "the value <to"}, finish = "stop"),
@@ -302,14 +272,7 @@ def test_the_opt_in_stream_keeps_that_order_too(loop_env):
 
 
 def test_the_next_turns_legacy_call_keeps_its_own_reason(loop_env):
-    """A withheld call must not reach past the turn it belonged to.
-
-    The wire is not always enough to close a turn: a provider can end one on [DONE] alone,
-    and the loop eats that sentinel rather than relaying it, so the withheld-call flag stayed
-    raised into the next turn. A legacy delta.function_call there is the caller's own to
-    dispatch, and it dispatches on the finish_reason, so stripping that reason as though it
-    closed the previous call means the call never runs.
-    """
+    """The withheld-call flag must not survive into the next turn; its legacy call keeps its own reason."""
     server_call_then_done = [
         _sse({"content": "looking. "}),
         _sse(
@@ -341,11 +304,7 @@ def test_the_next_turns_legacy_call_keeps_its_own_reason(loop_env):
 
 
 def test_a_truncated_turn_keeps_its_reason(loop_env):
-    """ "length" cut the call off half-written, so the loop refuses to run it.
-
-    Nothing follows, so that reason is genuinely the end of the response and withholding it
-    would leave the caller with none at all.
-    """
+    """A truncated turn ending in finish_reason length keeps that reason, since nothing follows it."""
     truncated = list(_TEXT_FORM_TURN)
     truncated[-2] = _sse(finish = "length")
     lines = _relay([truncated, _ANSWER_TURN], ui_events = False)

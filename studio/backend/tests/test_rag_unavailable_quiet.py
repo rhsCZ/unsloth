@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A missing sqlite-vec binary must be reported once, not on every KB poll.
-
-sqlite_vec imports fine while its native vec0 library is absent from the venv (a
-real macOS condition), so RAG_AVAILABLE stays True and every
-/api/rag/knowledge-bases poll used to raise, producing a 500 plus two full
-tracebacks a few seconds apart for a condition that cannot change mid-session.
-rag_db now warns once and raises RagExtensionUnavailable.
-
-The router answers that with one contract: the polled KB list degrades to an empty
-list plus an availability marker, so the frontend can tell an empty store from a
-machine where RAG cannot run, and every other endpoint answers a clean 503 carrying
-the same reason, so clicking Create in that state gets a stated reason rather than a
-500 and a fresh traceback. Genuine database errors are untouched.
-"""
+"""A missing sqlite-vec library is warned once; KB polls degrade to an empty list, not a 500."""
 
 import sqlite3
 

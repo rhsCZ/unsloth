@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Numerical + lifecycle tests for the shared eager speedup patches.
-
-Builds the REAL diffusers 0.38 modules, captures the stock output, installs the patches,
-and asserts the patched output matches within tolerance (fp32 on CPU always; bf16 on CUDA
-when available). Also checks install/uninstall reversibility + idempotency, the
-signature-guard no-op, and that a patched block compiles ``fullgraph=True`` (no graph break).
-"""
+"""Numerical and lifecycle tests for the eager speedup patches against real diffusers 0.38 modules."""
 
 from __future__ import annotations
 

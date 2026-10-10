@@ -518,10 +518,8 @@ class GroupPrefetcher:
         return where is not None and self.slot_owner.get(where) == id(group)
 
     def enable_slots(self, logger: Any = None) -> int:
-        """Give every streamed block group one of ``depth + 1`` byte slots, round-robin in block order (the prefetch
-        never holds more groups than that), each slot as large as the largest packed group: the ring is the prefetch
-        window. A group's copies always land at the same offsets of its slot. Returns the ring's MiB (allocated on
-        first use). The top-level group keeps fresh copies: no graph reads it."""
+        """Round-robin slots sized to the largest group keep each group's copy offsets fixed for
+        graph replay."""
         if self.slot_of:
             return self.slot_bytes_planned >> 20
         members: list = []
@@ -941,11 +939,7 @@ def _pinned_done(pinner: Any, group: Any) -> bool:
 
 
 def capture_refusal(module: Any) -> Optional[str]:
-    """Why a CUDA graph cannot record ``module``'s block-streamed forward with its copies inside, else None.
-
-    A replay repeats every copy from the host address it recorded into the device buffer it recorded, so every
-    streamed group must copy from a pinned host tensor no background pin is still replacing, and every group must be
-    driven by the prefetcher, pinned resident, or the dense top-level group's pinned upload."""
+    """Replays repeat recorded host addresses, so streamed copies must come from stable pinned hosts."""
     pf = module_prefetcher(module)
     if pf is None:
         return "block streaming without the event-fenced prefetch (its stream waits are host synchronizations)"

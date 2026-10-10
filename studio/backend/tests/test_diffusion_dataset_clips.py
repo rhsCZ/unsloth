@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Clip datasets in the diffusion dataset routes.
-
-The families that train from video read a folder of clips and the caption beside each one.
-Before this, the routes only knew about images, so such a folder summarised as empty and
-``/diffusion/info`` never listed it: the video trainer was unreachable from the UI.
-
-The claim these tests exist to hold is that admitting clips is PURELY ADDITIVE. That rests on
-two properties, both asserted below rather than asserted in prose:
-
-* the image and clip extension sets are DISJOINT, so no file changes which branch it takes;
-* the caption rules over them are IDENTICAL, so a clip resolves its caption through the very
-  same function, with the same sidecar-over-metadata precedence and the same empty-sidecar
-  tombstone, as an image does.
-
-Everything else here is the behaviour those two properties buy: a clip folder is listed, a
-clip uploads with its sidecar, and the stem-keyed sidecar is shared between kinds exactly as
-it is shared between two images.
-"""
+"""Video clips in dataset routes; the clip and image sets stay disjoint and share caption rules."""
 
 from __future__ import annotations
 
@@ -79,10 +62,7 @@ def ds_root(monkeypatch, tmp_path):
 
 
 def test_image_and_clip_extension_sets_are_disjoint():
-    """The whole design rests on this. Every site that widened from images to media assumes an
-    extension belongs to exactly ONE kind: the summary picks its counter with an if/elif, so an
-    overlapping extension would count as an image and never as a clip, and the two counts would
-    stop summing to the number of trainable files in the folder."""
+    """An extension in both sets would count as an image, so the kind counts would stop summing."""
     assert _DIFFUSION_DATASET_IMAGE_EXTS & _DIFFUSION_DATASET_CLIP_EXTS == set()
     assert _DIFFUSION_DATASET_MEDIA_EXTS == (
         _DIFFUSION_DATASET_IMAGE_EXTS | _DIFFUSION_DATASET_CLIP_EXTS
@@ -102,12 +82,7 @@ def test_routes_read_the_shared_clip_definition():
 
 
 def test_trainer_clip_discovery_uses_the_same_set_when_it_is_present():
-    """A divergence tripwire for the video trainers.
-
-    The clip trainer lands separately from this. Once it is in the tree its own extension set
-    has to be the shared one, or the two halves can drift: a clip the upload accepts and the
-    summary counts but the trainer skips is a run that starts and trains on nothing. Skipped
-    while the module is absent, enforced the moment it appears."""
+    """Trainer clip discovery must use the shared extension set, or a clip is counted but never trained."""
     clips = pytest.importorskip("core.training.diffusion_h3_clips")
     assert set(clips._VIDEO_EXTS) == set(CLIP_EXTS)
 
@@ -404,12 +379,7 @@ def test_start_refuses_a_mixed_folder_rather_than_training_the_images_alone(tmp_
 
 
 def test_the_summary_reads_a_video_keyed_metadata_caption(tmp_path):
-    """The clip discovery accepts {"video": ..., "text": ...}; the summary loader must too.
-
-    It knew only file_name/image/file, so a clip dataset written with the video key reported
-    caption_count 0 while the trainer had a caption for every clip, and the panel blocked Start
-    on a trigger prompt that was not needed.
-    """
+    """The summary must read video-keyed metadata captions, or clip datasets report zero captions."""
     import json
 
     folder = tmp_path / "video-keyed"

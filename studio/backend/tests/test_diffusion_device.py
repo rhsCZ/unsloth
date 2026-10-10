@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic, CPU-only tests for the diffusion device/dtype resolver.
-
-`torch` is stubbed via a fake module so no GPU/torch is needed, and
-`utils.hardware` is either stubbed (studio-layer path) or forced to fail
-(torch-probe fallback path). Both paths are asserted.
-"""
+"""Device resolver on CPU with torch faked; both the studio-layer and torch-probe fallback paths."""
 
 from __future__ import annotations
 
@@ -608,11 +603,7 @@ def test_decoder_sync_no_op_without_a_hookable_decoder(monkeypatch, pipe):
 
 
 def _mps_torch_without_recommended(used = 0) -> types.ModuleType:
-    """torch 2.4's mps surface: driver_allocated_memory and synchronize, no working-set reading.
-
-    Verified against torch/mps/__init__.py at v2.4.0 (absent) and v2.5.0 (present), and against
-    an installed torch 2.4.1.
-    """
+    """torch 2.4 has no mps working-set reading: only driver_allocated_memory and synchronize exist."""
     torch = _mps_torch(used = used)
     del torch.mps.recommended_max_memory
     return torch

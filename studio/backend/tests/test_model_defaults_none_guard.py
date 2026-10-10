@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""load_model_defaults must not raise on a None/empty model id.
-
-Before the guard, calling it before a model is selected logged
-`Error loading model defaults for None: 'NoneType' object has no attribute 'lower'`.
-"""
+"""Calling it before a model is selected passes None, so a None or empty model id must not raise."""
 
 from __future__ import annotations
 

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""System-directory denylist enforcement for the folder browser.
-
-Once the allowlist can hold a whole Windows drive root (C:\\) or a legacy /
-root, the browse endpoints must re-apply the ``_denied_path_prefixes()`` policy
-``add_scan_folder`` enforces, so /etc, /proc, C:\\Windows, C:\\Program Files stay
-unbrowseable even under an allowlisted root. Windows/macOS branches run on this
-POSIX host by AST-extracting the pure helper with ``ntpath`` / a mocked ``platform``.
-"""
+"""Browse endpoints re-apply the add_scan_folder denylist, so allowlisted roots still hide /etc."""
 
 from __future__ import annotations
 

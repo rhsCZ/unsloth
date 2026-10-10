@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The wide, edge-aligned tiled VAE decode for every image VAE whose stock tiles fall under the floor.
-
-diffusion_vae_tiling reads each VAE's own tile geometry (diffusers' tile and overlap, in latents) and its compression
-ratio, and per decode keeps the stock tiles when they meet the floor (every tile >= 32 latents, every overlap >= 16)
-and takes the wide tiles when they do not. These pin the rule for 8x, 16x and 32x VAEs."""
+"""Stock tiles below the floor (tiles >= 32 latents, overlaps >= 16) go wide and edge-aligned."""
 
 from __future__ import annotations
 
@@ -363,10 +359,7 @@ def test_budget_uses_the_fused_figure_only_where_the_fused_kernels_are_installed
 
 
 def test_only_large_stock_tile_vaes_size_past_the_floor_from_device_free_memory(monkeypatch):
-    """AutoencoderKL / FLUX.2 take the wide tiles only to drop a sliver: their tiles grow past the floor only into the
-    device's free memory, not the allocator's cached blocks (an untiled FLUX.1 decode out of the denoiser's cache
-    stalled on cache flushes at 8 GB: 0.21 s median against stock's 0.08). The Wan family and HunyuanImage count the
-    cache, as #12696 does for Qwen-Image-2.1 (it measured faster there)."""
+    """AutoencoderKL and FLUX.2 grow tiles into device free memory, not the allocator's cache."""
     monkeypatch.delenv(vt.MAX_TILE_ENV)
     seen = {}
 
@@ -414,10 +407,7 @@ def _stock_decoded(length, tile, overlap):
 @pytest.mark.parametrize("length", list(range(129, 420)))
 @pytest.mark.parametrize("max_area", [None, 23_200, 10**6])
 def test_large_floor_tiles_never_decode_more_than_stock(length, max_area):
-    """FLUX.1 / SDXL / FLUX.2 sliver sizes. Before, the floor kept 128-latent tiles and spread them (two 128s with a
-    56-latent overlap on a 200-latent side: 7% more decode than stock, 9% slower). Now, per side, no more decoded
-    latents than the stock loop (up to rounding where only the smallest covering side exists), fewer decoder calls,
-    no sliver, every overlap >= 32, and the widest tile that allows (two 120s on a 200-latent side)."""
+    """Large-floor tiles must never decode more latents than the stock loop, and leave no sliver."""
     if vt.stock_layout_ok((128, 32), length, length):
         return  # no sliver: these sizes decode through the stock tiles
     th, tw = vt.choose_tiles(length, length, max_area, 128, 32, 128)

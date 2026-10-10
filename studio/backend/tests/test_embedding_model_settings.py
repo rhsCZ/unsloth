@@ -142,10 +142,7 @@ def test_a_completed_transfer_retires_the_pending_marker(settings_store):
 
 
 def test_a_concurrent_save_is_not_reverted_by_a_late_pending_clear(settings_store):
-    """The loader reads model A's pending resolution, the user saves model B, and
-    only then does the clear land. A plain upsert would put A's record back beside
-    B's override, leaving B to re-derive a backend and a companion it never
-    resolved. The write is conditional on the record it read."""
+    """A pending clear is conditional on the record read, so a late clear cannot revert a new save."""
     ems.set_rag_embedding_model(
         "org/a", gguf_repo = "org/a-GGUF", backend = "llama-server", download_pending = True
     )
@@ -190,10 +187,7 @@ def test_a_pinned_jobs_resolved_repo_survives_a_save_for_another_model(settings_
 
 
 def test_a_reset_keeps_the_repo_a_running_job_still_needs(settings_store, monkeypatch):
-    """Reset clears the selection, but a job pinned to the old model is still
-    ingesting through the repo that was resolved for it. The memo is per model and
-    consulted only when the store has nothing, so dropping it here moved that job
-    onto the derived <model>-GGUF mid-run."""
+    """Reset must keep the memoized GGUF repo, since a job pinned to the old model still needs it."""
     monkeypatch.delenv("RAG_EMBED_GGUF_REPO", raising = False)
     ems._resolved_gguf_memo.clear()
     from core.rag import config
@@ -262,10 +256,7 @@ def test_retiring_the_pending_marker_retires_it_in_the_memo_too(settings_store, 
 
 
 def test_a_reset_makes_the_restored_defaults_resolution_durable(settings_store, monkeypatch):
-    """The memo survives a reset for jobs still pinned to a model, but the restored
-    default is not a running job: new work resolves through it too, and a
-    process-only answer would change identity on the next restart, stranding
-    whatever was indexed in between."""
+    """Persist the default's resolution, or a restart changes its identity and strands indexed work."""
     monkeypatch.delenv("RAG_EMBED_GGUF_REPO", raising = False)
     ems._resolved_gguf_memo.clear()
     default = ems.default_embedding_model()
@@ -364,10 +355,7 @@ def test_a_reset_keeps_a_pending_only_resolution_for_the_default(settings_store)
 
 
 def test_pinning_a_model_memoizes_what_was_resolved_for_it(settings_store, monkeypatch):
-    """A worker pins its model by reading the effective one, then scans for a while
-    and embeds afterwards. Only the repo/backend getters used to populate the memo,
-    so a save for another model in that gap left the pinned job with nothing to
-    fall back to and moved it onto the derived <model>-GGUF mid-run."""
+    """Pinning a model must memoize its resolution too, or a save in the gap moves the job mid-run."""
     monkeypatch.delenv("RAG_EMBED_GGUF_REPO", raising = False)
     from core.rag import config
 

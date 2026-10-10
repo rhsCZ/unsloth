@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A user who already holds a hosted ``.pt`` checkpoint must not download its ``.safetensors`` twin.
-
-The candidate chain prefers safetensors, so once a repo publishes the twin every path that walks
-the chain in order (the transformer resolver, the text-encoder resolver, the download planners and
-the video prefetch) would fetch it again next to the multi-GB pickle already in the cache. These
-tests drive a fake Hub cache through ``try_to_load_from_cache`` / ``hf_hub_download``."""
+"""Safetensors is preferred, so a cached .pt repo must not re-download its safetensors twin."""
 
 from __future__ import annotations
 

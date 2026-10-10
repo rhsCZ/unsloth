@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the llama.cpp prebuilt freshness check.
-
-Pins the marker parser, disk+memory cache, stale-decision matrix, and
-fail-open behaviour on missing data.
-"""
+"""Pins fail-open behaviour when freshness data is missing, plus the marker parser and cache."""
 
 from __future__ import annotations
 
@@ -23,12 +19,7 @@ if _BACKEND_DIR not in sys.path:
 
 
 class _NoopLogger:
-    """structlog-style logger: every method swallows positional + kwargs.
-
-    A stdlib logging.Logger rejects structlog's keyword fields (e.g.
-    ``logger.warning(msg, error=...)``), which leaked into the update module's
-    error path and failed only when this file's stub loaded first.
-    """
+    """A stdlib Logger rejects structlog keyword fields, so the stub must accept them for update code."""
 
     def __getattr__(self, _name):
         return lambda *a, **k: None
@@ -164,13 +155,7 @@ def test_read_install_marker_handles_non_utf8(tmp_path):
     ids = ["empty-list", "list", "string", "int", "bool", "null"],
 )
 def test_read_install_marker_rejects_non_object_json(tmp_path, payload):
-    """JSON that parses but is not an object must read as "no marker".
-
-    Every caller treats a non-None return as a mapping -- the update planner, the
-    backend picker and crash recovery all reach straight for ``.get`` -- so a marker
-    holding ``["cpu"]`` used to raise AttributeError out of a plain status read
-    instead of degrading to the source-build path a corrupt file deserves.
-    """
+    """Valid JSON that is not an object must read as no marker, since callers call .get on the result."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir(parents = True)
     (install_dir / "UNSLOTH_PREBUILT_INFO.json").write_text(payload)

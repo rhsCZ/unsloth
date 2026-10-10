@@ -1,37 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: ``import main`` must not import torch or pandas, and the warm that
-replaces torch must be safe.
-
-uvicorn binds the socket only after ``import main`` and the lifespan both finish, so
-anything they import is time the login screen does not exist. torch and what it drags
-in was about 5s of that on a GPU host. Four eager edges caused it:
-
-  utils/models/model_config.py  _build_detection_sets() at module scope
-  routes/models.py              from core.inference import get_inference_backend
-  core/inference/orchestrator.py  from utils.hf_xet_fallback import DownloadStallError
-  utils/datasets/raw_text.py    from datasets import Dataset  (annotation only)
-
-pandas arrived by a fifth, through the data-recipe seed route:
-
-  routes/data_recipe/seed.py    from data_designer_unstructured_seed.chunking import ...
-  ...chunking.py                import pandas as pd  at module scope
-  ...__init__.py                re-exports .config and .impl, which import the data
-                                designer engine, which imports pandas and pyarrow
-
-Importing the submodule runs the package first, so dropping only the chunking-level
-import left the cost in place. The route resolves the plugin on first use now. The
-Startup profile workflow measured this edge at 2.247s of a 7.284s ``import main`` on
-windows-latest, 901ms self on macos-15.
-
-All of them are lazy. A fresh interpreter is used for the import invariant, since
-importing in-process would measure an already-warm sys.modules. CPU-only, no network,
-no GPU, no weights.
-
-The runtime guards only bite where the optional plugin is installed, so a source-level
-guard covers the environments that do not have it.
-"""
+"""Importing main must not pull in torch or pandas, since uvicorn binds only after that import."""
 
 from __future__ import annotations
 
@@ -399,17 +369,7 @@ def test_a_failed_detection_degrades_instead_of_raising():
 
 
 def _confine_the_torch_import_error(monkeypatch, hw):
-    """Undo hw.TORCH_IMPORT_ERROR at teardown, for a test that watches an import fail.
-
-    The three tests below restore ``builtins.__import__``, ``sys.modules`` and the detection
-    verdict, but _has_torch() also writes that module global as a SIDE EFFECT, and nothing
-    put it back: the worker carried ``OSError(...)`` into every later test in the same
-    process. classify_torch_build(), _torch_reports_an_xpu_runtime() and
-    _torch_reports_a_hip_runtime() all branch on it and read the wheel off DISK when it is
-    set, ignoring the fake torch a later test installed in sys.modules -- so
-    test_torch_cpu_build_on_nvidia_host.py failed only in the xdist worker that happened to
-    inherit the leak. Snapshot-restore rather than force None: nothing here owns the value.
-    """
+    """_has_torch() sets hw.TORCH_IMPORT_ERROR as a side effect; a leaked value breaks later tests."""
     monkeypatch.setattr(hw, "TORCH_IMPORT_ERROR", hw.TORCH_IMPORT_ERROR)
 
 
@@ -512,12 +472,7 @@ def test_a_broken_torch_purges_its_own_zombie(monkeypatch):
 
 
 def test_one_detection_pass_probes_torch_once(monkeypatch):
-    """A detection pass must import torch at most once.
-
-    _has_torch() is the expensive part: a broken wheel takes seconds to fail, and the purge
-    then declines because a compiled submodule is loaded, so the partial tree stays and a
-    second probe re-runs torch/__init__ against those cache hits -- same cost again, with no
-    guarantee it fails the same way. The CUDA branch and the XPU fallback share one probe."""
+    """A detection pass probes torch once: after a broken import a second probe costs the same again."""
     import builtins
     from types import ModuleType
 
@@ -562,10 +517,7 @@ def test_one_detection_pass_probes_torch_once(monkeypatch):
 
 
 def test_every_importing_warm_stage_purges_on_failure():
-    """A failed stage must not leave a half-imported package behind. An import that dies
-    partway leaves its submodules cached under an evicted parent, so the retry returns a
-    package that imports but is missing attributes: broken until restart, while
-    warm_status() reports nothing worse than a cold stage."""
+    """A failed warm stage must purge its partial package, or a retry gets a package missing attributes."""
     from utils import torch_warmup
 
     importing = {name for name, _ in torch_warmup._STAGES} - {"inference_backend"}

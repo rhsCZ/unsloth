@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Text I/O must name its encoding, or Windows silently uses the ANSI codepage.
-
-``open()``, ``Path.read_text()`` and ``subprocess(text = True)`` fall back to
-``locale.getencoding()`` when no ``encoding`` is passed. On Windows that is
-cp1252 (or cp932, cp1251, ... by system locale), not UTF-8, so a chat template,
-model config or path containing ``ä ö ü → 世`` mojibakes or raises
-``UnicodeDecodeError`` mid-load. Unsloth's files are UTF-8, so say so.
-"""
+"""Text I/O must pass encoding explicitly, since Windows falls back to the ANSI codepage, not UTF-8."""
 
 from __future__ import annotations
 
@@ -138,12 +131,7 @@ def _subprocess_names(tree: ast.AST) -> set[str]:
 
 
 def _subprocess_aliases(tree: ast.AST, names: set[str]) -> set[str]:
-    """Plain names bound to a subprocess callable, called without the module.
-
-    ``install_wheel(run = subprocess.run)`` calls its injected ``run`` as a bare
-    name, so matching only the attribute form leaves those installer calls
-    unguarded. Imports, assignments and parameter defaults all bind one.
-    """
+    """Bare names bound to subprocess callables count too, e.g. install_wheel(run = subprocess.run)."""
 
     def _is_bound(value: ast.expr | None) -> bool:
         return (
@@ -230,14 +218,7 @@ def _encoding_assigned_later(tree: ast.AST, name: str) -> bool:
 
 
 def _splatted_kwargs_offenders(tree: ast.AST) -> list[ast.Dict]:
-    """Text-mode kwargs built in a dict and splatted into a call.
-
-    Kwargs are collected in a dict and splatted (``run(cmd, **run_kwargs)``)
-    where a branch has to add a timeout or an env, and the call is often through
-    a helper, so neither the callee nor the keywords are visible at the call
-    site. Only dicts that reach a call this way are judged: an unrelated payload
-    that happens to carry ``"text": True`` is not subprocess configuration.
-    """
+    """Only kwargs dicts splatted into a call are judged; a payload that merely holds text: True is not."""
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -551,11 +532,7 @@ def test_a_torn_line_does_not_relabel_a_utf8_shard(tmp_path: Path) -> None:
 
 
 def test_an_undecodable_transport_marker_reads_as_unknown(tmp_path: Path) -> None:
-    """Pinning the decode turns an undecodable marker into UnicodeDecodeError,
-    which is a ValueError and so is not an OSError. Before the pin those bytes
-    simply read as an unknown value and the caller safely purged and restarted
-    the partial download; letting the error escape aborts the transfer instead.
-    """
+    """An undecodable marker must read as unknown; a raised UnicodeDecodeError would abort the transfer."""
     _shared_setup_1(__file__)
     from hub.utils import download_registry as registry
 
@@ -567,10 +544,7 @@ def test_an_undecodable_transport_marker_reads_as_unknown(tmp_path: Path) -> Non
 
 
 def test_a_torn_cache_ref_reads_as_not_cached(tmp_path: Path, monkeypatch) -> None:
-    """hf_cache_snapshot_dir answers "is this model already on disk", and the
-    offline embedding checks turn a raise into a 500. A refs/main holding a byte
-    the codepage used to decode into a nonsense commit simply missed the snapshot
-    dir before the pin; it has to keep missing it."""
+    """A refs/main with undecodable bytes must read as not cached, since a raise would turn into a 500."""
     _shared_setup_1(__file__)
     from utils import utils as backend_utils
 
@@ -713,11 +687,7 @@ def test_an_undecodable_bootstrap_password_does_not_stop_startup(
 
 
 def test_a_damaged_checkpoint_resets_instead_of_resuming_on_a_broken_cursor(tmp_path: Path) -> None:
-    """A checkpoint holds only base64 cursors and booleans, so a codepage reading
-    can only ever add non-ASCII, never recover any. Resuming on a mojibaked cursor
-    sends GitHub one it answers with INVALID_CURSOR_ARGUMENTS, and the empty page
-    that comes back marks the stream done and skips the rest of it for good.
-    Dropping the checkpoint only replays pages the writers already dedup."""
+    """A mojibaked cursor makes GitHub report the stream done; reset the checkpoint, don't resume it."""
     module = _load_state_store("cp1252")
     cursor = "Y3Vyc29yOnYyOpK0MjAxMi0wMi0xNlQwNjo1Mzo0MVrOADGL_A=="
     healthy = json.dumps({"issues_cursor": cursor, "issues_done": False}, indent = 2)
@@ -770,13 +740,7 @@ def test_a_utf8_record_is_not_parsed_a_second_time(tmp_path: Path) -> None:
 
 
 def _too_deeply_nested_json() -> str:
-    """A JSON document nested past what this interpreter will descend into.
-
-    Probed rather than hardcoded: the depth json.loads gives up at is bounded by
-    sys.getrecursionlimit() up to 3.11 and by the C recursion limit from 3.12,
-    which sys.setrecursionlimit no longer moves and which varies by micro
-    version. That is ~995 on 3.9 and ~9999 on 3.13.
-    """
+    """Probed: json.loads' nesting limit is the C recursion limit from 3.12, not setrecursionlimit."""
     depth = 1
     while depth <= 1 << 17:
         document = "[" * depth + "]" * depth
@@ -789,11 +753,7 @@ def _too_deeply_nested_json() -> str:
 
 
 def test_an_unparseably_nested_document_is_discarded_not_raised(tmp_path: Path) -> None:
-    """json.loads answers nesting it cannot descend with RecursionError, which is
-    a RuntimeError and so is neither a ValueError nor a UnicodeDecodeError.
-    _parse is called outside any other handler in both StateStore.__init__ and
-    JsonlWriter._scan_existing, so letting it escape aborts the scraper at
-    startup on a file the catch-all it replaced simply discarded."""
+    """RecursionError is neither ValueError nor UnicodeDecodeError, so catch it or startup aborts."""
     module = _load_state_store("cp1252")
     nested = _too_deeply_nested_json()
 
@@ -814,12 +774,7 @@ def test_an_unparseably_nested_document_is_discarded_not_raised(tmp_path: Path) 
 
 
 def test_vendored_laya_reads_utf8_config_under_a_non_utf8_locale(tmp_path):
-    """The loader in _UTF8_BY_LOADER really makes vendored laya decode its JSON as UTF-8.
-
-    Run in a C locale with coercion and UTF-8 mode off, so a bare open() does not decode as
-    UTF-8. laya's tokenizer repair must still read a config holding non-ASCII special tokens
-    and write them back unchanged.
-    """
+    """Under a non-UTF-8 locale bare open() misdecodes, so vendored laya must read its config as UTF-8."""
     config = tmp_path / "tokenizer" / "tokenizer_config.json"
     config.parent.mkdir()
     config.write_text(

@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Unit tests for the OpenAI `/v1/responses` translation in external_provider.
-
-Covers:
-- Request body shape: system messages collapse into `instructions`,
-  user/assistant messages go into `input`, and unsupported sampling knobs
-  (presence_penalty, top_k) are not forwarded.
-- SSE translation: `response.output_text.delta` → Chat Completions chunks,
-  `response.completed` → a `finish_reason: stop` chunk, stream ends with
-  `data: [DONE]`.
-- Image parts rewritten from Chat Completions
-  `{type: image_url, image_url: {url}}` to Responses
-  `{type: input_image, image_url: <url>}`.
-"""
+"""Unit tests for the /v1/responses translation in external_provider: body, SSE and image parts."""
 
 import asyncio
 import json
@@ -314,11 +301,7 @@ def test_responses_sse_translates_to_chat_completions_chunks(monkeypatch):
 
 
 def test_responses_function_call_output_translates_to_delta_tool_calls(monkeypatch):
-    """Round 12: function tools forwarded into /v1/responses must have their
-    `function_call` output items translated back into Chat Completions
-    delta.tool_calls, and the terminal chunk must emit
-    finish_reason="tool_calls" (not "stop") so the frontend's accumulator runs
-    the function."""
+    """Function calls must surface as delta.tool_calls with finish_reason tool_calls, not stop."""
 
     captured: dict = {}
 
@@ -497,10 +480,7 @@ def test_responses_parallel_function_calls_get_distinct_indices(monkeypatch):
 
 
 def test_responses_follow_up_tool_result_uses_function_call_output_items(monkeypatch):
-    """Round 13: a second turn after a Responses function call must serialize
-    the tool_calls history and tool result as Responses `function_call` /
-    `function_call_output` input items, not Chat Completions role="tool"
-    content."""
+    """A follow-up turn must send tool history as function_call and function_call_output input items."""
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:

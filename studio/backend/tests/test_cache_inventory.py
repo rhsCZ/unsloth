@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Only caches may be deleted, and only ones this backend resolved itself.
-
-The purge takes a cache KEY and turns it into a directory here, so these tests
-cover the two halves that keep that honest: the sizing that decides what the UI
-offers, and every refusal that stands between a key and an rmtree.
-"""
+"""Only caches this backend resolved itself may be deleted; a purge key becomes a directory here."""
 
 import os
 import sys
@@ -35,12 +30,7 @@ def _write(path: Path, text: str = "x") -> Path:
 
 @pytest.fixture
 def isolated_caches(tmp_path, monkeypatch):
-    """Point every resolver at tmp_path, so no test can reach a real cache.
-
-    The host running these tests has real HF_HOME / XDG_CACHE_HOME values, and
-    the resolvers are supposed to honour exactly those, so the isolation has to
-    be as complete as it is here.
-    """
+    """Point every resolver at tmp_path; the host's real HF_HOME and XDG_CACHE_HOME must not leak in."""
     from utils import cache_cleanup, hf_cache_settings
 
     hf_home = tmp_path / "hf"
@@ -285,16 +275,7 @@ def test_a_refused_root_reports_itself_and_deletes_nothing(tmp_path, monkeypatch
 
 @pytest.fixture
 def only_the_configured_compiled_cache(monkeypatch, tmp_path):
-    """Keep the compiled-cache clear off any install-tree cache of this checkout.
-
-    cache_cleanup's own ownership model stays in force: that is the thing under
-    test here, and re-deriving it in cache_inventory is exactly what this
-    feature must not do.
-
-    _configured_cache_dirs also offers the CWD, and importing unsloth creates a
-    compiled cache there, so these run from a directory that has none. Skipping
-    on one instead meant they never ran at all.
-    """
+    """Clear must not touch install-tree caches; tests chdir to an empty dir, as unsloth fills CWD."""
     from utils import cache_cleanup
 
     monkeypatch.setattr(cache_cleanup, "_CACHE_DIRS", [])
@@ -1407,12 +1388,7 @@ def test_a_compiled_cache_the_clear_would_refuse_says_so_on_the_row(
 def test_moving_the_models_folder_forgets_the_old_roots_sizes(
     tmp_path, monkeypatch, isolated_caches
 ):
-    """The memo is keyed by cache, not by path, so nothing about a new root evicts it.
-
-    A browser hides this by forcing a refresh off the inventory-version event. An API-key
-    caller may change the folder and read the inventory but may not pass refresh=true, so
-    without this it reads the previous volume's figures for the rest of the TTL.
-    """
+    """Keyed by cache, not path, so a new root never evicts it; API callers cannot force a refresh."""
     from utils import cache_inventory as module
 
     _write(tmp_path / "hub" / "blob", "b" * 40)
@@ -1453,12 +1429,7 @@ def test_setting_the_cache_home_invalidates_the_inventory(monkeypatch):
 
 
 def test_bytes_still_linked_from_outside_are_not_called_reclaimable(tmp_path, isolated_caches):
-    """uv's default link mode on Windows is hardlink: an installed environment's files ARE
-    links into this cache, so unlinking the cache copy frees nothing.
-
-    Counting them anyway is how a reclaimable total, and the freed_bytes a purge reports,
-    came to overstate by the size of the installed packages.
-    """
+    """Bytes still hardlinked from outside are not reclaimable; unlinking the cache copy frees nothing."""
     root = tmp_path / "uv"
     shared = _write(root / "archive" / "wheel.so", "w" * 800)
     venv = tmp_path / "venv" / "lib"
@@ -1487,12 +1458,7 @@ def test_a_purge_reports_only_the_bytes_it_actually_freed(tmp_path, isolated_cac
 
 
 def test_a_whole_hub_clear_waits_for_a_loaded_model(monkeypatch, isolated_caches):
-    """Deleting ONE repo already runs the inference load-state guards.
-
-    Emptying the whole cache is every repo at once, so skipping them was the wider action with
-    the weaker check. sd.cpp re-reads its companion VAE and text-encoder files for every
-    generation, so this breaks a model loaded long before the clear, not only one mid-load.
-    """
+    """A whole-cache clear must honor load guards too; sd.cpp re-reads companion files every generation."""
     import hub.services.models.deletion as deletion
 
     monkeypatch.setattr(
@@ -1564,10 +1530,7 @@ def test_an_unreachable_dictation_probe_does_not_block_a_hub_clear(monkeypatch):
 
 
 def test_a_whole_hub_clear_waits_for_a_chat_load_that_has_not_spawned_yet(monkeypatch):
-    """chat_load_active's own docstring: is_active covers a live llama-server process, which an
-    HF-backed load does not have until its GGUF finished downloading. Those minutes are exactly
-    when the bytes are arriving, and they come through hf_hub_download_with_xet_fallback rather
-    than the download registry, so the purge's own reservation does not cover them either."""
+    """A chat load before llama-server spawns still blocks a whole-cache clear during GGUF download."""
     from core.inference import llama_cpp
     from hub.services.models.deletion import any_model_load_blocks_cache_clear
 
@@ -1580,10 +1543,7 @@ def test_a_whole_hub_clear_waits_for_a_chat_load_that_has_not_spawned_yet(monkey
 
 
 def test_a_whole_hub_clear_waits_for_a_draining_image_load(monkeypatch):
-    """A cancelled diffusers load leaves loading_repo_ids() immediately but keeps its repos in
-    draining_repo_ids() while the worker thread reads on inside _prefetch_files, holding no lock.
-    _diffusion_blocks_delete already refuses on that, and emptying the whole cache is every repo
-    at once, so it cannot ask less than the per-repository path does."""
+    """Repos a cancelled diffusers load still drains must block a whole-cache clear, as per-repo does."""
     import types
 
     from hub.services.models.deletion import any_model_load_blocks_cache_clear
@@ -1660,12 +1620,7 @@ def test_an_ordinary_uv_cache_is_still_offered(tmp_path, isolated_caches):
 
 
 def test_a_partial_purge_reports_only_what_it_actually_removed(tmp_path, isolated_caches):
-    """rmtree can delete some children and then hit a permission error or a file that moved.
-
-    The whole subtree is measured before the removal, so without subtracting the survivors the
-    toast claimed bytes that are still on disk, which is the one thing a "freed" figure must
-    not do.
-    """
+    """A partial rmtree reports only bytes it removed; survivors are subtracted from the freed total."""
     root = tmp_path / "uv"
     _write(root / "tree" / "gone.bin", "g" * 100)
     stubborn = root / "tree" / "stays"
@@ -1682,13 +1637,7 @@ def test_a_partial_purge_reports_only_what_it_actually_removed(tmp_path, isolate
 
 
 def test_a_curated_dataset_import_holds_off_a_model_cache_clear():
-    """The curated import calls load_dataset and snapshot_download directly.
-
-    It is not a managed download and not a training run, so it claimed nothing and a Clear of
-    hf_hub, hf_xet or hf_datasets passed every guard: begin_cache_purge asks about jobs, owners
-    and deletes, and this was none of the three. The snapshot then went out from under the copy
-    and the import failed in front of the user.
-    """
+    """A curated dataset import must hold off a model cache clear, since it calls load_dataset directly."""
     from hub.utils.download_registry import get_datasets_registry
 
     registry = get_datasets_registry()
@@ -1726,12 +1675,7 @@ def test_the_import_route_takes_that_claim_and_gives_it_back():
 
 
 def test_every_account_dataset_registry_is_reserved_by_a_purge(monkeypatch):
-    """A managed-account install has one dataset registry PER ACCOUNT, not one in total.
-
-    _account_registry() builds a fresh DownloadRegistry the first time each account downloads,
-    so reserving only the singleton left every other account's download invisible to the purge,
-    which would then remove files under its worker.
-    """
+    """Each managed account has its own dataset registry; a purge must reserve all of them."""
     from hub.services.datasets import downloads as dataset_downloads
     from hub.utils import download_registry
 
@@ -1747,12 +1691,8 @@ def test_every_account_dataset_registry_is_reserved_by_a_purge(monkeypatch):
 
 
 def test_a_registry_created_during_a_purge_is_born_reserved(monkeypatch):
-    """The other half: an account whose first download starts AFTER the purge began.
-
-    Reserving the registries that exist at the moment the purge starts is not enough, because
-    _account_registry() mints new ones on demand. The existing code already carries _deleting
-    into a new registry for exactly this reason; the purge count rides along the same way.
-    """
+    """A registry minted during a purge must be born reserved, as _deleting already is for new
+    registries."""
     from hub.services.datasets import downloads as dataset_downloads
     from hub.utils import download_registry
 

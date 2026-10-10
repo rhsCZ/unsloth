@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for ``LlamaCppBackend.load_progress()``.
-
-For large MoE GGUFs, llama-server spends minutes paging shards into the page
-cache after download. ``load_progress()`` samples ``/proc/<pid>/status VmRSS``
-against the total shard size on disk so the UI can render a real bar plus
-rate/ETA. Contract pinned here:
-
-  * ``None`` when no load is in flight
-  * ``{"phase": "mmap", ...}`` while the subprocess is alive but ``_healthy`` is False
-  * ``{"phase": "ready", ...}`` once ``_healthy`` flips
-  * ``bytes_total`` derived from the resolved on-disk path (``self._gguf_path``)
-  * ``bytes_loaded`` is VmRSS in bytes, capped by total, rounded
-  * ``fraction`` clamped to 0..1, rounded to 4 dp
-
-Linux-only via ``/proc``; returns ``None`` (not raises) without it, so tests
-skip cleanly on macOS / Windows.
-"""
+"""load_progress samples /proc VmRSS against on-disk shard size; returns None where /proc is absent."""
 
 from __future__ import annotations
 

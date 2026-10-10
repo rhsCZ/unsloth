@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A calibration imatrix is not a model, so no GGUF surface may offer one.
-
-unsloth/Qwen3.8-27B-GGUF publishes imatrix_unsloth.gguf beside the weights (most
-repos use the .dat / .gguf_file spellings the Hub does not list as GGUF). Carrying
-a real .gguf suffix, it reached the chat model picker as an unlabelled ~13 MB row
-called "GGUF", downloadable and then unloadable.
-"""
+"""An imatrix calibration file ending in .gguf is not a model, so no GGUF surface may list it."""
 
 from __future__ import annotations
 

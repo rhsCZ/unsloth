@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The reaper must never signal pid 0 or pid 1.
-
-`killpg(1, sig)` is not "process group 1". POSIX defines it as `kill(-1, sig)`:
-every process the caller has permission to signal. So a single record naming
-pid 1 as a child turns the startup sweep into a SIGTERM of everything the user
-owns, a five second wait, then a SIGKILL of the same.
-
-That is not hypothetical. It was observed on a shared build box, from a record
-holding `{"pid": 1, "identity": "...", "pgid": 1}`: starting Unsloth killed the
-user's tmux server and all twenty of their unrelated agent processes within one
-second, then SIGKILLed the replacement tmux server exactly `timeout` later.
-
-Nothing rejected it on the way in or on the way out:
-
-  * `adopt_pid` guarded `not pid`, which rejects None and 0 but not 1.
-  * The recycled-pid defence compares a recorded start time against the current
-    one. init's start time never changes, so a recorded pid 1 matches forever.
-    The check designed to make this safe is what guaranteed it fired.
-  * `getpgid(1) == 1`, so pid 1 reads as a group leader and selects `killpg`.
-  * The liveness probe between SIGTERM and SIGKILL is `killpg(1, 0)`, which can
-    never fail, so the grace period always runs to completion.
-
-These tests assert the outcome rather than the helper: no signalling call in
-this module is reached with a pid below 2, on any path, and the same floor is
-asserted at the sibling boundaries in `llama_cpp` and `download_registry` that
-signal on a pid they read from disk rather than one they hold a handle to.
-"""
+"""Reaper must never signal pid 0 or 1; killpg(1, sig) is kill(-1, sig), hitting every user process."""
 
 from __future__ import annotations
 
@@ -66,10 +40,7 @@ def recorded_signals(monkeypatch):
 
 @pytest.mark.parametrize("pid", [None, 0, 1, -1, -12345, "1", 1.0, True, False])
 def test_unsignalable_values_are_rejected(pid):
-    """`True` is here for the floor's benefit, not the bool check's: `True >= 2`
-    is already False, so `not isinstance(pid, bool)` is belt to the floor's
-    braces and this case would still pass without it. It earns its place by
-    pinning the behaviour if the floor is ever expressed a different way."""
+    """True is rejected explicitly, so the rule holds even if the pid floor is ever written differently."""
     assert pl.is_signalable_pid(pid) is False
 
 

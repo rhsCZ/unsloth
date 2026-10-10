@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the cache-aware disk-space preflight in ``LlamaCppBackend.load_model``.
-
-The preflight used to compare the repo's total GGUF size against free disk
-without counting bytes already in the HF cache, so re-loading a cached large
-model failed cold even though nothing needed downloading. These tests exercise
-the preflight arithmetic in isolation (no network/GPU/subprocess).
-"""
+"""The disk preflight must not count cached GGUF bytes as needing download, or cached loads fail."""
 
 from __future__ import annotations
 
@@ -82,12 +76,7 @@ def _preflight(
     hf_repo = "unsloth/Example-GGUF",
     hf_token = None,
 ):
-    """Run the llama_cpp.py preflight arithmetic; return the decision as a dict.
-
-    ``repo_files``: list of (filename, remote_bytes).
-    ``cached_files``: {filename: on_disk_bytes} for files already cached.
-    ``free_bytes``: shutil.disk_usage(cache_dir).free.
-    """
+    """Mirrors the disk preflight over (name, bytes) repo_files and cached_files; returns a dict."""
     import os
     import shutil
 

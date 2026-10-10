@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-Sandbox test for multi-GPU selection logic.
-
-Tests GPU selection, memory estimation, and device_map logic in
-isolation. Runs on Linux, macOS, and Windows without real GPUs -- all
-hardware calls are mocked.
-
-Usage:
-    python -m pytest studio/backend/tests/test_gpu_selection_sandbox.py -v
-    # or directly:
-    python studio/backend/tests/test_gpu_selection_sandbox.py
-"""
+"""Multi-GPU selection, memory estimate and device_map logic, tested with all hardware mocked."""
 
 import os
 import sys
@@ -401,11 +390,7 @@ class TestApplyGpuIds(unittest.TestCase):
 
 
 class TestMultiGpuOverheadAccounting(unittest.TestCase):
-    """Multi-GPU overhead is applied correctly.
-
-    The first GPU keeps its full free memory; the overhead factor applies
-    only to additional GPUs.
-    """
+    """The first GPU keeps its full free memory; the overhead factor applies only to additional GPUs."""
 
     def _make_utilization(self, devices):
         return {

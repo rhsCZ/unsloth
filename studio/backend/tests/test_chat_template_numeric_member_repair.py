@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A GGUF whose chat template uses numeric member access ("m.content.0.output", which
-zai-org/GLM-5.3 and its re-quants ship) launches with a repaired copy: llama-server's
-Jinja rejects that form, and the throw leaves replayed tool calls unrenderable.
-"""
+"""llama-server's Jinja rejects m.content.0.output, so such a GGUF launches from a repaired copy."""
 
 from __future__ import annotations
 

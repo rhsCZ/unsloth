@@ -370,14 +370,8 @@ def test_trusted_companion_snapshot_finds_nested_projector(tmp_path: Path):
 
 
 def test_a_containing_trusted_root_does_not_recurse_into_a_sibling_quant(tmp_path: Path):
-    """#10599's widening must not reach the quant next door.
-
-    ``allow_disjoint_search_root`` used to set ``recursive_root`` for every root, including
-    the one holding the weights, which is the case the incremental walk at the top of
-    detect_mmproj_file exists to confine. Every other quant subdirectory of the snapshot
-    became a candidate, and since none of them shares a prefix with the weight stem they
-    all tie at zero, so the shorter-stem rule handed UD-Q4_K_XL the IQ1_S projector.
-    """
+    """Disjoint-root widening must not recurse into sibling quants; a foreign projector then wins
+    the tie."""
     snapshot = tmp_path / "snapshots" / "rev"
     weight = _touch(snapshot / "UD-Q4_K_XL" / "Qwen3-VL-235B-UD-Q4_K_XL.gguf")
     mine = _touch(snapshot / "UD-Q4_K_XL" / "mmproj-UD-Q4_K_XL.gguf")
@@ -390,11 +384,8 @@ def test_a_containing_trusted_root_does_not_recurse_into_a_sibling_quant(tmp_pat
 
 
 def test_a_containing_trusted_root_keeps_its_own_root_level_projector(tmp_path: Path):
-    """The same guard, where the only correct projector sits at the snapshot root.
-
-    The ancestor walk still has to reach it, and a foreign quant's projector must not win
-    on a longer shared prefix just because the recursion made it a candidate.
-    """
+    """The ancestor walk must still reach a root-level projector without foreign quants winning on
+    prefix."""
     snapshot = tmp_path / "snapshots" / "rev"
     weight = _touch(snapshot / "UD-Q4_K_XL" / "vision-model-UD-Q4_K_XL.gguf")
     root_level = _touch(snapshot / "mmproj-F16.gguf")

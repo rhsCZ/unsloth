@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the sd-cli engine + routing (``sd_cpp_engine.py``).
-
-Hermetic: the binary finder is driven against a tmp filesystem, and ``generate``
-runs a fake ``subprocess.Popen`` that emits canned lines and writes the output
-PNG -- no real ``sd-cli``, no GPU.
-"""
+"""Sd-cli engine and routing tests use a fake Popen and tmp binary finder; no real sd-cli runs."""
 
 from __future__ import annotations
 
@@ -50,19 +45,7 @@ def _shared_setup_2(e, out):
 
 @pytest.fixture(autouse = True)
 def _isolate_binary_discovery(tmp_path_factory, monkeypatch):
-    """Point every hop of the finder at an empty tree, so a real install on the machine running the
-    tests cannot satisfy it.
-
-    Clearing ``SD_CLI_PATH`` / ``UNSLOTH_SD_CPP_PATH`` and patching ``Path.home`` is not enough:
-    hop 3 goes through ``managed_install_root()``, which honors ``UNSLOTH_STUDIO_HOME`` /
-    ``STUDIO_HOME`` and resolves to ``<studio home>/../stable-diffusion.cpp``. Anyone running the
-    suite with an Unsloth home set -- which is the documented way to run side-by-side Unsloth instances -- gets
-    a real binary back and every "nothing is installed" assertion here fails. Hop 4 (the in-tree
-    developer build) has the same problem for anyone who built sd.cpp in the checkout.
-
-    Autouse rather than a helper because the failure does not need a fixture to reach it:
-    ``SdCppEngine(binary = None)`` calls the finder from its constructor.
-    """
+    """Each finder hop must point at an empty tree, or a real install under UNSLOTH_STUDIO_HOME is found."""
     eng._IDENTITY_MEMO.clear()
     root = tmp_path_factory.mktemp("no_sd_cpp")
     monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(root / "studio"))
@@ -933,13 +916,7 @@ def test_iter_records_delivers_every_redraw():
 
 
 def test_iter_records_delivers_a_redraw_as_soon_as_it_is_flushed():
-    """The actual regression: progress was not merely late-ish, it was one redraw behind, so a
-    30-step job showed 0/30 until step 2 and never showed the last step before completion.
-
-    Delivering after ONE read is the whole claim. A redraw carries no newline, and its carriage
-    return sits at the front of the NEXT redraw, so a reader terminating only on CR/LF cannot
-    produce step 1 until step 2 has been flushed -- which is a second read.
-    """
+    """A redraw is delivered after one read, since its CR only arrives at the front of the next redraw."""
     stream = _ChunkStream([_REDRAW.format(i, 3).encode() for i in (1, 2, 3)])
     records = eng.iter_sd_cpp_records(stream)
     first = next(r for r in records if r.strip())

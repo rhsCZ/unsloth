@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regressions for the second review pass on the local STT dictation feature:
-
-1. scripts/build_whisper_cpp.sh must not rm -rf a whisper.cpp/src tree under a
-   custom Unsloth home unless Unsloth itself created it (ownership marker), the
-   same policy studio/setup.sh applies before its destructive replacements.
-2. _snapshot_is_complete must reject pickle (pytorch_model.bin) checkpoints
-   outright; only safetensors weights count as a usable snapshot.
-3. _snapshot_is_complete must require tokenizer assets (tokenizer.json or
-   vocab.json + merges.txt); weights + config alone decode to blank text.
-4. Custom-repo downloads must pin the revision validated beforehand and
-   restrict snapshot_download to the model/tokenizer/config/preprocessor file
-   classes (TOCTOU + unbounded-download hardening).
-5. The GGML sidecar's readiness probe must not treat an arbitrary local HTTP
-   responder as whisper-server (mic audio would be posted to it), and the port
-   reservation must stay held until just before spawn.
-"""
+"""_snapshot_is_complete needs safetensors and tokenizer assets; readiness must prove whisper-server."""
 
 from __future__ import annotations
 

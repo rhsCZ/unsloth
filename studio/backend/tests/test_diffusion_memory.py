@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the diffusion memory planner (``diffusion_memory.py``).
-
-Hermetic and CPU-only: no torch, diffusers, GPU, or network. The device target
-and the device-memory snapshot are constructed directly, so the planner's policy
-matrix and the applier's pipeline calls are exercised in isolation.
-"""
+"""Hermetic CPU-only tests for the diffusion memory planner and applier, with no torch or GPU."""
 
 from __future__ import annotations
 
@@ -1366,12 +1361,7 @@ def test_raise_on_unified_memory_shortfall_raises_runtime_error_with_the_message
 
 
 def test_unified_oversize_decision_matrix_for_the_real_video_families():
-    """The shipped video family tables against real Mac RAM sizes: the refusal must fire exactly
-    where the weights genuinely cannot fit, and must stay silent where they can.
-
-    ``video_families`` is a pure table module (no torch, no diffusers), so this stays hermetic.
-    ``free`` is modelled at 80% of RAM, the share left once macOS, a browser and Unsloth are up.
-    """
+    """The video family tables must refuse oversize models exactly where weights cannot fit on Mac RAM."""
     from core.inference.video_families import _FAMILIES
     from core.inference.diffusion_memory import (
         DEFAULT_BASE_OVERHEAD_MIB,
@@ -1651,11 +1641,7 @@ def test_apply_group_offload_streams_text_encoders_when_asked(monkeypatch):
 
 
 def _stream_te_kwargs(monkeypatch, **call_kw):
-    """The kwargs _apply_group_offload hands diffusers, with a signature-complete fake.
-
-    The other fakes here take **kw, which makes the signature gating in _apply_group_offload read
-    as "diffusers does not support this". This one declares the real parameters so the gate is
-    actually exercised."""
+    """Use a signature-complete fake so the group-offload kwargs gate is actually exercised."""
     seen: dict = {}
 
     def _apply(
@@ -1723,10 +1709,7 @@ def test_the_unchanged_group_tier_still_pins_for_speed(monkeypatch):
 
 
 def _swap_group_offloading(monkeypatch, apply_group_offloading):
-    """Replace apply_group_offloading on the ALREADY-installed fake diffusers.hooks.
-
-    _install_fake_torch_and_hooks mints a fresh stand-in Module class each call, so calling it a
-    second time would leave the components built by the first call failing isinstance."""
+    """Swap apply_group_offloading in place; reinstalling the fake mints a new Module class."""
     import sys
     monkeypatch.setattr(
         sys.modules["diffusers.hooks"], "apply_group_offloading", apply_group_offloading

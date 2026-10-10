@@ -211,12 +211,7 @@ def test_system_gpu_info_does_not_merge_metrics_across_backend_index_spaces(monk
 
 
 def test_vulkan_inference_gpu_uses_real_device_names_and_igpu_flag(monkeypatch):
-    """The picker and the GPU labels need ggml's real device description, not a
-    Vulkan<i> placeholder, and an explicit iGPU flag rather than inferring one
-    from a zero total. Memory still comes from _get_gpu_memory so the iGPU host
-    reserve is applied; budgeting off the raw shared total would hand out the
-    whole machine's RAM with no OS headroom.
-    """
+    """Vulkan needs ggml's real device names and an explicit iGPU flag; memory takes the iGPU reserve."""
     from core.inference import llama_cpp
     from core.inference.llama_cpp import LlamaCppBackend
     from utils.hardware.hardware import get_vulkan_inference_gpu_info

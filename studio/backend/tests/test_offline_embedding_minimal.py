@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Offline RAG embedding-model handling (issue #6817).
-
-Offline the studio must never call the Hub (a DNS-dead session hangs on retries). Using a fake
-HF cache under a temp HF_HUB_CACHE, assert that offline: is_embedding_model classifies from the
-cached modules.json without the Hub; the file-security gate fails CLOSED on an unscanned pickle
-weight with no safetensors alternative and allows an inert cache; the embedder threads
-local_files_only into the load. Online behavior is unchanged (bounded timeout + cache fallback).
-"""
+"""Offline the studio must never call the Hub, since a DNS-dead session hangs on retries."""
 
 import sys
 import types
@@ -105,11 +98,7 @@ def _is_embedding_model(*args, **kwargs):
 
 @pytest.fixture
 def hf_cache(tmp_path, monkeypatch):
-    """Point the HF cache at a fresh temp dir.
-
-    get_hf_cache_paths() reads an import-time env snapshot, not live os.environ,
-    so point it (and thus active_hf_hub_cache + the snapshot lookup's selected
-    root) at this temp cache too."""
+    """get_hf_cache_paths reads an import-time env snapshot, so the temp root must be pointed there too."""
     root = tmp_path / "hub"
     root.mkdir()
     monkeypatch.setenv("HF_HOME", str(tmp_path))
@@ -990,11 +979,7 @@ def test_get_online_omits_local_files_only(monkeypatch):
 
 
 def test_an_unrelated_incomplete_blob_does_not_condemn_a_complete_snapshot(hf_cache):
-    """The blob directory is shared by every revision and every scoped GGUF job in
-    the repo, and caches predating managed downloads carry no manifest to appeal to.
-    A stray partial from one of those used to make a model that was entirely on disk
-    report as not downloaded, which the settings save then persisted as a pending
-    transfer and the loader refused to index."""
+    """A stray partial in the shared blob dir must not mark a complete snapshot as not downloaded."""
     snapshot = _make_cache(
         hf_cache, "org/stray-blob", {"config.json": "{}", "model.safetensors": "x"}
     )
@@ -1019,10 +1004,7 @@ def test_a_snapshot_linking_to_an_unfinished_blob_is_still_pending(hf_cache):
 
 
 def test_get_online_loads_the_snapshot_settings_called_cached(hf_cache, monkeypatch):
-    """Settings reports on-device from `hf_cache_snapshot_is_loadable`, so handing
-    SentenceTransformer the repo id is what lets it fetch a revision published
-    since and change the vectors without changing the identity they carry. The
-    picker exists to replace exactly that transfer."""
+    """Hand SentenceTransformer the cached snapshot, not the repo id: the id can fetch a newer revision."""
     from core.rag import embeddings
 
     snapshot = _make_cache(
@@ -1211,10 +1193,7 @@ def test_a_partial_st_transfer_keeps_the_pending_marker(monkeypatch, tmp_path):
 
 
 def test_the_alias_snapshot_is_the_one_loaded(monkeypatch, tmp_path):
-    """cached_st_source can match under sentence-transformers/ while a separate
-    hf_cache_snapshot_dir lookup returns a stale literal entry. Pinning that one
-    hands SentenceTransformer the wrong directory while the valid alias snapshot
-    sits right there."""
+    """Load the valid sentence-transformers alias snapshot, not a stale literal-name cache entry."""
     from core.rag import embeddings
     import utils.utils as utils
 
@@ -1264,10 +1243,7 @@ def test_the_alias_snapshot_is_the_one_loaded(monkeypatch, tmp_path):
 
 
 def test_a_pending_transfer_does_not_make_the_security_scan_offline(monkeypatch, tmp_path):
-    """`local_only` folds two questions together: load from cache, and is the Hub
-    reachable. The security gate needs the second. Told offline while online it
-    applies the fail-closed cached-pickle rule and rejects a .bin-only repo the
-    resolver just accepted and scanned, failing the first index outright."""
+    """Cache-only loads are not offline for the security gate, which needs real Hub reachability."""
     from core.rag import embeddings
     import utils.embedding_model_settings as ems
     import utils.utils as utils
@@ -1321,11 +1297,7 @@ def test_a_pending_transfer_does_not_make_the_security_scan_offline(monkeypatch,
 
 
 def test_a_failed_st_constructor_keeps_the_pending_marker(monkeypatch, tmp_path):
-    """The snapshot can be complete while the constructor still fails: an
-    unsupported architecture, or a device that cannot initialize. Retiring the
-    marker before that point let _build_st_backend_or_fallback swap to
-    llama-server with nothing left to stop it fetching the GGUF companion during
-    the first index."""
+    """Keep the pending marker until the ST constructor succeeds, or llama-server fetches the GGUF."""
     from core.rag import embeddings
     import utils.embedding_model_settings as ems
     import utils.utils as utils
@@ -1376,10 +1348,7 @@ def test_a_failed_st_constructor_keeps_the_pending_marker(monkeypatch, tmp_path)
 
 
 def test_a_local_path_is_not_replaced_by_a_hub_cache_of_the_same_name(monkeypatch, tmp_path):
-    """The picker takes a slashless relative directory, so a local folder can share
-    its name with a cached Hub model. Resolving the cache for it handed
-    SentenceTransformer the Hub's weights while the vectors kept the local path's
-    identity: a silent swap of the artifact the user selected."""
+    """A slashless local folder must not resolve to a same-named Hub cache, which would swap the weights."""
     from core.rag import embeddings
     import utils.utils as utils
 
@@ -1422,10 +1391,7 @@ def test_a_local_path_is_not_replaced_by_a_hub_cache_of_the_same_name(monkeypatc
 
 
 def test_an_alias_cache_hit_names_the_namespace_that_supplied_it(monkeypatch, tmp_path):
-    """Real cache layout, no stub over the lookup: hf_cache_snapshot_dir tries the
-    ST alias itself, so asking it about the literal slashless name returned the
-    namespaced snapshot paired with a repo id that had supplied nothing. The
-    resolver reports that id, and the PUT verifies and scans it."""
+    """An alias cache hit must report the namespace that supplied it, so the PUT verifies that repo."""
     import utils.utils as utils
 
     hub = tmp_path / "hub"

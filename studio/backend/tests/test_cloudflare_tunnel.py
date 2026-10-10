@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the Cloudflare quick-tunnel helper and run.py wiring.
-
-cloudflare_tunnel.py is stdlib-only (storage_roots is imported lazily), so it
-loads via spec_from_file_location without the studio venv. run.py defaults are
-checked by AST so we never import its heavy deps (uvicorn/structlog).
-"""
+"""Loads cloudflare_tunnel.py without the venv; run.py defaults are read by AST, not imported."""
 
 import ast
 import errno

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""wheel_utils must resolve a CUDA-matched xFormers wheel, on Windows too.
-
-The platform-tag helper returned None for Windows, so nothing in the backend could
-resolve a Windows wheel URL at all -- which is why the on-demand xFormers install fell
-back to an unpinned ``pip install xformers`` and landed the PyPI CUDA-12.8 build next to
-a cu130 torch.
-"""
+"""wheel_utils must resolve a CUDA-matched xFormers wheel on Windows, not fall back to unpinned pip."""
 
 from __future__ import annotations
 
@@ -191,10 +185,7 @@ def test_flash_attn_resolution_is_untouched():
 
 
 def test_filename_python_tag_is_ranged_not_open_ended():
-    """xFormers has changed its wheel filename tag twice. Guessing the tag for an unreleased
-    version is how a resolver starts emitting URLs that 404, so an unknown release must
-    resolve to nothing. Verified against the real WHEEL metadata: 0.0.34 is
-    cp39-abi3-win_amd64, 0.0.35 is py39-none-win_amd64."""
+    """An unknown xFormers release must resolve to nothing: a guessed wheel tag gives 404 URLs."""
     assert wheel_utils.xformers_filename_python_tag("0.0.31.post1") == "cp39-abi3"
     assert wheel_utils.xformers_filename_python_tag("0.0.34") == "cp39-abi3"
     assert wheel_utils.xformers_filename_python_tag("0.0.35") == "py39-none"
@@ -251,12 +242,7 @@ def test_every_url_the_matrix_can_produce_is_live(platform_tag):
 
 
 class TestStableAbiPatchReleases:
-    """A supported resident build must not be refused for want of a table row.
-
-    The exact-key matrix can only ever list releases that exist when it is written, so
-    2.10.1 / 2.11.1 / 2.12.1 -- all of them builds this repo names as supported elsewhere --
-    resolved to nothing and left Unsloth on native attention with no xFormers at all.
-    """
+    """Supported torch patch releases resolve with no table row; exact-key matrices lag new releases."""
 
     @pytest.mark.parametrize(
         "torch_version",
@@ -301,10 +287,7 @@ class TestPytorchMirror:
         assert url.startswith("https://mirror.example/pytorch/whl/cu130/xformers-")
 
     def test_a_query_token_mirror_keeps_its_token(self, monkeypatch):
-        """Private mirrors authenticate by query string as often as by userinfo. Appending
-        after the query buried the wheel path inside the token value -- the request path
-        stayed /whl and the token became "abc/cu130/xformers-..." -- so the one shape this
-        setting exists for was the one that could not resolve a wheel."""
+        """Put the wheel path before the query string, or it lands inside the token value."""
         monkeypatch.setenv("UNSLOTH_PYTORCH_MIRROR", "https://mirror.example/whl?token=abc")
         url = wheel_utils.xformers_wheel_url(_env())
         assert url is not None

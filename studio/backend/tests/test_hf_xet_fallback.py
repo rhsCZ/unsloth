@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the Unsloth shim over the shared unsloth_zoo Xet -> HTTP fallback.
-
-The transport-policy matrix is tested once in unsloth_zoo; here we assert only the
-Unsloth seam: re-exporting the shared API and injecting the marker-aware
-prepare_cache_for_transport on the HTTP retry. CPU-only, no network, no real subprocess.
-"""
+"""Tests the Unsloth seam only; the Xet to HTTP policy matrix is tested once in unsloth_zoo."""
 
 from __future__ import annotations
 
@@ -50,17 +45,7 @@ DL_REPO, FILE = "ztest/xet-dl", "model-Q4_K_XL.gguf"
 
 @pytest.fixture(autouse = True)
 def _restore_shim_module_identity():
-    """Put BOTH bindings of the shim back after every test in this file.
-
-    The degraded-path tests below drop ``utils.hf_xet_fallback`` from ``sys.modules`` and import a
-    throwaway copy. Restoring only the ``sys.modules`` entry is not enough: the import machinery
-    also rebinds the module as an attribute of the ``utils`` PACKAGE, and that binding keeps
-    pointing at the throwaway. The two then disagree, and a later test in the same process
-    monkeypatches one copy (pytest resolves a dotted target through the package attribute) while
-    the code under test imports the other, so the patch silently does nothing and the real
-    downloader runs against the network. Caught by
-    tests/test_video_backend.py::test_fetch_te_prequant_only_reports_what_it_downloaded, which
-    reached the Hub and got a 401 when it ran after this file."""
+    """Restore sys.modules and the utils package attribute together, or later patches silently miss."""
     import utils as _utils_pkg
 
     original = sys.modules.get("utils.hf_xet_fallback")
@@ -330,12 +315,7 @@ def test_degrades_when_shared_helper_import_raises_importerror():
 
 
 def test_no_light_gpu_init_retry_on_an_accelerator_host(monkeypatch):
-    """The UNSLOTH_ZOO_DISABLE_GPU_INIT retry makes unsloth_zoo take its MLX/CPU path, which injects
-    triton and bitsandbytes STUBS into sys.modules for the whole process. On a GPU host whose
-    unsloth_zoo import failed for an unrelated reason (a bitsandbytes/CUDA mismatch, say), those
-    stubs raise "called on Apple Silicon / MLX" from the first CUDA-only kernel a later GGUF or
-    compiled diffusion generation touches, so a healthy GPU starts 500ing. The shim must degrade
-    instead of retrying there."""
+    """The GPU-init retry stubs triton and bitsandbytes process-wide, so accelerator hosts must degrade."""
     monkeypatch.delenv("UNSLOTH_ZOO_DISABLE_GPU_INIT", raising = False)
     attempts = []
 
@@ -501,10 +481,7 @@ def test_operator_xet_switches_survive_a_missing_health_module(monkeypatch, env)
 
 
 def test_retries_under_light_gpu_init_when_import_fails(monkeypatch):
-    """GPU detection in unsloth_zoo's __init__ raises NotImplementedError on a GPU-less host. The shim
-    retries under UNSLOTH_ZOO_DISABLE_GPU_INIT=1, restores the env, and degrades if the retry fails.
-    The backend loads lazily (first use of a heavy helper), so this triggers the load explicitly
-    before asserting the retry/degrade behavior."""
+    """A GPU-less import failure retries once under UNSLOTH_ZOO_DISABLE_GPU_INIT=1 and restores the env."""
     monkeypatch.delenv("UNSLOTH_ZOO_DISABLE_GPU_INIT", raising = False)
     seen_env = []
 
@@ -596,11 +573,7 @@ def test_a_worker_spawned_during_the_gpu_init_retry_does_not_inherit_the_overrid
 
 
 def test_a_spawn_cannot_overlap_the_loader_env_override_window():
-    """multiprocessing spawn copies the parent's LIVE os.environ and takes no env argument, so the
-    only way to keep the shim's transient UNSLOTH_ZOO_DISABLE_GPU_INIT out of a worker is that a
-    spawn cannot start while a loader holds it; a child that inherits it silently trains against
-    unsloth_zoo's stub triton and bitsandbytes. Structural on purpose: it asserts the two share one
-    lock rather than trying to hit a microsecond window by timing."""
+    """Spawn copies live os.environ, so it must wait on the same lock as the transient GPU-init override."""
     from utils.hf_cache_settings import child_environment_for_spawn
 
     loader_holds = threading.Event()
@@ -665,11 +638,7 @@ def test_an_operator_set_gpu_init_override_still_reaches_the_child(monkeypatch):
 
 
 def test_importing_child_should_disable_xet_stays_light(monkeypatch):
-    """Regression guard for the stale-transformers-sidecar bug: importing the shim (and
-    ``child_should_disable_xet``) must NOT pull in ``transformers``/``unsloth_zoo``. The worker calls
-    this at startup to decide the Xet env flip BEFORE activating the sidecar; an eager import here
-    would cache the default transformers 4.57.x in sys.modules, defeating the sidecar sys.path prepend
-    and breaking 5.x models (Qwen3.5/GLM/gemma-4)."""
+    """Importing the shim must not pull in transformers or unsloth_zoo, or the sidecar is defeated."""
     for name in [
         m
         for m in list(sys.modules)
@@ -709,10 +678,7 @@ def test_first_download_dispatch_loads_zoo_once(monkeypatch):
 
 
 def test_start_watchdog_drops_kwargs_the_installed_zoo_cannot_take(monkeypatch):
-    """Version-skew adapter, and load-bearing: the floor's start_watchdog is keyword-only with no
-    **kwargs and no connect_timeout, so passing one raises TypeError into the caller's
-    `except Exception` and the watchdog silently never starts. That is the feature entirely off.
-    """
+    """Unknown kwargs to an older start_watchdog raise TypeError, which silently disables the watchdog."""
     seen = {}
 
     def _old_signature_watchdog(
@@ -808,10 +774,7 @@ def test_apply_xet_env_returns_none_when_the_zoo_cannot_size(monkeypatch):
 
 
 def test_a_zoo_that_can_resize_is_asked_for_the_workers_own_cache(monkeypatch):
-    """``env`` is a copy of ours and already carries the zoo's import-time sizing, which its
-    setdefault apply would keep. A zoo that can resize gets the worker's cache instead, so a backend
-    whose cache moved after startup does not size the worker for the volume it left behind. An older
-    zoo, with no resize to call, keeps the previous behaviour."""
+    """A resizable zoo gets the worker cache dir, so a moved cache does not size for its old volume."""
     seen = {}
 
     def _resize(env, cache_dir, **kwargs):
@@ -1143,14 +1106,7 @@ def test_one_download_on_an_idle_machine_is_still_untouched(clean_ledger):
 
 
 def test_the_transport_gate_counts_ram_promised_to_running_downloads(clean_ledger, monkeypatch):
-    """The clamp bottoms out at Xet's floor, so enough simultaneous workers would still add up past
-    free RAM. Subtracting reservations sends the next one to HTTP instead.
-
-    Both halves of that guard are asserted, because the promise and the RAM reading cover different
-    moments: three just-admitted workers have taken nothing yet, so only the ledger can stop the
-    fourth; three that have finished allocating are already missing from `available`, which stops it
-    without the ledger. `os.getpid()` stands in for all three, so its own RSS is stubbed out rather
-    than credited three times against promises it has nothing to do with."""
+    """Promised RAM of running downloads is subtracted from free RAM, so the next one falls back to HTTP."""
     shim = clean_ledger
     monkeypatch.setattr(shim, "available_ram_bytes", lambda: (8 * _GB, 4 * _GB))
     assert shim.free_ram_pressure_reason() is None, "8GB free is not pressure on its own"
@@ -1176,12 +1132,7 @@ def test_the_transport_gate_counts_ram_promised_to_running_downloads(clean_ledge
 
 
 def test_a_resident_promise_is_not_charged_against_free_ram_twice(clean_ledger, monkeypatch):
-    """Once a worker's buffers are resident, `available` has already dropped by them.
-
-    The reservation exists to cover the gap between sizing and allocation, so charging the whole
-    promise on top of a reading that already reflects it counts the same bytes twice for the
-    worker's entire lifetime. On an 8GB-free host that is the difference between the next Auto
-    download getting Xet and being told "only 2.0GB RAM free" while 4GB genuinely is."""
+    """Resident buffers already lower available RAM, so charging their promise again counts them twice."""
     shim = clean_ledger
     module = _fake_tuning(32 * _GB, 8 * _GB)
     sized = module.xet_env_overrides(_fake_profile_cls()(32 * _GB, 8 * _GB))
@@ -1230,12 +1181,7 @@ def test_the_ledger_reads_a_real_workers_rss(clean_ledger):
 
 
 def test_concurrent_sizings_cannot_all_claim_the_same_free_ram(clean_ledger, monkeypatch):
-    """The reservation tests above start workers one after another, which never exercises the race:
-    read the ledger, then reserve, with a gap in between. These threads sit in that gap together.
-
-    The barrier is in system_profile, which the clamp reads OUTSIDE the lock, so all four arrive at
-    the decision at once; the sleep in xet_env_overrides widens the read-to-reserve window that a
-    split critical section would leave open."""
+    """Threads meet at a barrier inside the read-to-reserve gap, so a split lock would overbook free RAM."""
     import time
 
     shim = clean_ledger
@@ -1293,12 +1239,7 @@ def test_concurrent_sizings_cannot_all_claim_the_same_free_ram(clean_ledger, mon
 
 
 def test_the_ledgers_liveness_probe_never_signals_on_windows(clean_ledger, monkeypatch):
-    """`os.kill(pid, 0)` is not a probe on Windows.
-
-    CPython's `os_kill_impl` routes every signal other than CTRL_C_EVENT/CTRL_BREAK_EVENT into
-    `OpenProcess(PROCESS_ALL_ACCESS)` + `TerminateProcess(handle, sig)`, so signal 0 KILLS the
-    target. The ledger prunes dead reservations on every sizing and on every capability probe, so
-    the old probe would terminate a running download merely because a second one was considered."""
+    """os.kill(pid, 0) terminates the target on Windows, so the liveness probe must not use it there."""
     import os as _os
 
     import utils.process_lifetime as pl

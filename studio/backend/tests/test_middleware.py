@@ -458,12 +458,7 @@ class TestMaxBodyMiddleware:
         assert r.status_code == 413
 
     def test_a_passthrough_outside_the_chunked_set_still_demands_a_length(self, main_module):
-        """Counting a body means holding it, and this runs before authentication.
-
-        Only paths explicitly opted in may omit Content-Length; the big ones (the
-        dataset cap reaches 8 GB) keep their 411 so an unauthenticated chunked POST
-        cannot make the server retain the whole allowance.
-        """
+        """Only opted-in paths may skip Content-Length; big uploads keep 411 so no pre-auth body is held."""
         app = _make_protected_app(
             128,
             main_module,
@@ -1366,12 +1361,8 @@ class TestCspHfEndpoints:
     def test_a_path_prefixed_mirror_is_listed_as_an_origin(
         self, main_module, monkeypatch, endpoint, expected_source
     ):
-        """CSP3 6.7.2.7: a host-source with a path that does not end in "/" matches
-        that path EXACTLY. Listing "https://hub.internal/hf" would therefore allow
-        exactly that one URL and block every /hf/api/... request under it, in
-        Chrome, Edge, Firefox and Safari alike. The path belongs in the request
-        URL; the policy gets the origin.
-        """
+        """A CSP host-source with a path matches only that exact URL, so mirrors are listed by
+        origin alone."""
         monkeypatch.setenv("HF_ENDPOINT", endpoint)
         sources = _connect_src(main_module._build_csp("NONCE"))
         assert expected_source in sources
@@ -1438,13 +1429,7 @@ class TestCspHfEndpoints:
 
 
 class TestRemoteAccessCORS:
-    """Publishing a tunnel must admit the tunnel, not every origin.
-
-    In plain --api-only (the desktop shell's own launch mode) the startup allowlist is the five
-    Tauri origins. Turning on Settings > Remote access used to replace that at request time with
-    unconditional reflection plus Access-Control-Allow-Credentials, on the loopback socket too, so
-    any page the user had open could read the local API's unauthenticated responses.
-    """
+    """Tunnel publishing admits the tunnel origin only; reflecting every origin exposed the local API."""
 
     def test_configured_cors_exposes_typesafe_request_id(self, main_module):
         cors = next(

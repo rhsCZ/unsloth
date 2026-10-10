@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for _select_torchao_spec in install_python_stack.py.
-
-torchao's C++ extensions are built against one exact torch release, so the
-installer must pick the torchao version matching the torch installed in the
-venv (otherwise the cpp kernels are skipped). This pins that mapping.
-"""
+"""The torchao pick must match the resident torch, since its C++ extensions target one release."""
 
 from __future__ import annotations
 
@@ -110,10 +105,7 @@ def test_matching_torchao_pin_does_not_need_force_reinstall(monkeypatch):
     ],
 )
 def test_the_torchao_index_follows_the_resident_torch_build(monkeypatch, torch_version, leaf):
-    """torchao publishes a wheel per accelerator and PyPI's default is the CUDA-12 one, so
-    an unpinned install puts a CUDA-12 cpp beside a CUDA-13 or ROCm torch. That is the
-    `libcudart.so.12: cannot open shared object file` the 2.10 CUDA-13 row already dodges by
-    picking a build whose cpp gets skipped instead."""
+    """The torchao index must follow the resident torch build; PyPI's default torchao is CUDA-12."""
     mod = _load_module(monkeypatch)
     monkeypatch.delenv("UNSLOTH_TORCH_INDEX_URL", raising = False)
     monkeypatch.delenv("UNSLOTH_TORCH_INDEX_FAMILY", raising = False)
@@ -133,15 +125,7 @@ _TORCHAO_INDEX_GAPS = {
 
 
 def test_the_index_pin_starves_only_where_the_retry_covers_it(monkeypatch):
-    """A pin that could not be served would fail an install, because this step is fatal.
-
-    Four cells cannot be served, and none of them is predictable from a rule: cu118 stops at
-    torchao 0.11.0, rocm7.0 carries 0.16.0 alone, and cu129 has 0.14.1 where the 2.9 row asks
-    for 0.14.0 exactly -- a hole in the MIDDLE of its range, which no floor could describe.
-    All four resolve from the default index, which is where they came from before this step
-    pinned anything, so the retry makes them identical to today rather than broken. Recording
-    them here means a fifth cannot appear unnoticed.
-    """
+    """Lists the four torchao index gaps the retry covers, so a fifth gap cannot go unnoticed."""
     mod = _load_module(monkeypatch)
     starved = set()
     for leaf, (published, torch_minors) in _TORCHAO_INDEX_GAPS.items():
@@ -229,10 +213,7 @@ def test_pin_needs_reinstall(monkeypatch, installed, spec, want_tag, expected):
 
 
 def test_the_wanted_tag_follows_the_index_that_will_be_pinned(monkeypatch):
-    """The provenance tag has to come from the leaf the pin resolves to, not from the
-    resident torch. With UNSLOTH_TORCH_INDEX_FAMILY=cu130 over a +cu128 venv the pin goes to
-    cu130 while the old comparison asked for cu128, so an 0.18.0+cu128 wheel looked correct,
-    pip found the requirement satisfied and the cu130 build was never fetched."""
+    """The wanted tag must come from the index the pin resolves to, or pip skips the cu130 build."""
     mod = _load_module(monkeypatch)
     monkeypatch.delenv("UNSLOTH_TORCH_INDEX_URL", raising = False)
     monkeypatch.setenv("UNSLOTH_TORCH_INDEX_FAMILY", "cu130")
@@ -278,11 +259,7 @@ def test_no_torchao_install_can_resolve_a_dependency():
 
 
 def test_torchao_is_re_selected_after_the_linux_torch_repair():
-    """Step 4 chooses torchao from the torch present BEFORE step 13's repairs, which move
-    torch across families and releases. The explicit XPU pin is the sharp case: its spec is
-    torch>=2.6,<2.11.0, so it necessarily lands below the 2.11 floor torchao 0.18.0 needs,
-    leaving 0.18.0 beside torch 2.10. Only the Windows flavor repair reaches
-    _resync_torch_coupled_packages, so on Linux nothing re-selected it."""
+    """torchao is re-selected after the Linux torch repair, since only the Windows repair resyncs it."""
     source = _INSTALL_SCRIPT.read_text(encoding = "utf-8")
     step = source.split('_progress(_torch_step_label("final"))', 1)[1]
     step = step.split("# 13w.", 1)[0]

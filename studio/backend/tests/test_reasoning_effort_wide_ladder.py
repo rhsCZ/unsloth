@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A ``reasoning_effort`` template's own ladder reaches the request kwargs.
-
-Detection publishes every effort literal a ``reasoning_effort``-style template
-branches on, and the Think menu offers exactly those. The request builder,
-though, forwarded only gpt-oss's ``none`` / ``low`` / ``medium`` / ``high``:
-anything wider fell through to the ``enable_thinking`` fallback, so picking
-'xhigh' or 'max' sent 'high' (or, with no ``enable_thinking`` alongside, no
-``chat_template_kwargs`` at all), and 'minimal' was rewritten to 'low'. On a
-model whose named levels are coerced to a numeric dial that put 'max' and
-'minimal' on their neighbours' values.
-
-The advertised levels now widen the allowlist rather than replace it, so a
-template that exposes no list keeps the four-level behaviour exactly.
-"""
+"""Advertised reasoning_effort levels widen the allowlist; without a list the four levels stay."""
 
 from __future__ import annotations
 

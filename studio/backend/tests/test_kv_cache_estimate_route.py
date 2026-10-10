@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Route-level tests for ``GET /kv-cache-estimate``.
-
-These drive the real handler and the real drafter resolver, not a replayed copy: the MTP
-reserve must follow the loader's own ``is_mtp_model`` precondition, since
-``_estimate_mtp_overhead_bytes`` over-reserves for an unsure caller, and drafter discovery
-must resolve the same file ``_download_mtp`` opens on hosts that disagree about case.
-"""
+"""Real handler and drafter resolver; the MTP reserve must follow the is_mtp_model precondition."""
 
 from __future__ import annotations
 
@@ -969,11 +963,7 @@ class TestTheInheritedEnvironmentIsPriced:
 
 
 def test_the_shared_loggers_stub_is_still_a_package():
-    """``routes.models`` reaches ``loggers.media_progress``, and ``test_kv_cache_estimation``
-    installs a bare ``ModuleType`` stub that shadows the whole package, so without
-    ``__path__`` this module cannot be collected at all (#11028). Asserted against the stub
-    object, not the ``sys.modules`` slot, which the conftest guard usually wins.
-    """
+    """The shared loggers stub needs __path__ or this module cannot be collected at all."""
     stub = test_kv_cache_estimation._loggers_stub
     search_path = list(getattr(stub, "__path__", ()) or ())
     assert search_path, (

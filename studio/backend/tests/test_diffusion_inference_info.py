@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the pure per-family inference-info helper.
-
-Covers ``family_inference_infos()``: every auto-policy family appears, the component sizes
-round-trip, and the quant estimates order correctly (quantised < bf16, nvfp4 < int8). No
-torch / diffusers / GPU."""
+"""family_inference_infos lists every auto-policy family; quantised estimates sit below bf16."""
 
 from __future__ import annotations
 

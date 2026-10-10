@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for the durable chat generation progress lease.
-
-A durable run sets cancel_on_disconnect=False on purpose, so a closed browser cannot kill
-a long generation. Nothing else bounded it: a producer that stopped producing left the run
-active forever, which kept the thread "generating", unmounted Send in the UI, and held the
-engine slot. The repair, reconcile_orphaned_runs, only ran at process boot, so reloading
-the page never cleared it.
-
-These cover the two halves of the fix: streamed output renews a lease on the run row, and a
-periodic sweep settles only runs whose lease has expired -- never a slow but advancing one.
-"""
+"""Durable runs skip cancel-on-disconnect, so a lease must bound a stalled producer."""
 
 from __future__ import annotations
 
@@ -316,12 +306,7 @@ def test_lease_settings_come_from_the_environment(monkeypatch):
 
 @pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "Infinity", "NaN"])
 def test_a_non_finite_timeout_falls_back_to_the_default(monkeypatch, raw):
-    """float() accepts these, and each then breaks the sweep in its own quiet way.
-
-    inf survives every comparison and only fails at int(timeout * 1000) inside the sweep,
-    once per pass, forever. nan loses to nothing, so max(0.0, nan) returns 0.0 and the
-    sweeper reports itself disabled. Both leave stuck runs unreaped, so neither may parse.
-    """
+    """Non-finite timeouts must fall back to default: inf breaks the sweep, nan disables it quietly."""
     monkeypatch.setenv("UNSLOTH_STUDIO_CHAT_RUN_LEASE_TIMEOUT_S", raw)
     sweeper = ChatGenerationLeaseSweeper(SimpleNamespace(state = SimpleNamespace()))
     assert sweeper._timeout == runs_mod._LEASE_TIMEOUT_SECONDS
@@ -480,14 +465,7 @@ asyncio.run(main())
 
 
 def test_an_abandoned_sweep_cannot_hold_the_process_open():
-    """Asserts the PROCESS exits, not merely that stop() returned.
-
-    asyncio.to_thread runs on non-daemon executor threads that an atexit hook joins, so a
-    sweep parked on the writer lock kept the interpreter alive indefinitely after shutdown
-    had given up on it. Studio Desktop allows five seconds for a graceful backend exit
-    before force-killing, and stops the backend this way before it updates, so that hang
-    is user visible. A stop() that returns proves nothing here; only exit does.
-    """
+    """Assert process exit, not stop() returning: a parked sweep thread keeps the interpreter alive."""
     import subprocess
 
     program = _ABANDONED_SWEEP_PROGRAM.format(backend = str(Path(__file__).resolve().parent.parent))

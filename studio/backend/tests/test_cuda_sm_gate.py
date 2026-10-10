@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The CUDA SM gate: a prebuilt whose oldest compiled arch is newer than every
-GPU on this host (e.g. a cloud image baked on an H100, run on a T4) must fail
-fast instead of llama-server aborting on every launch attempt. The reverse,
-a bundle older than the card, JITs its PTX forward and must still run."""
+"""A bundle whose oldest arch is newer than every GPU fails fast; an older bundle JITs PTX and runs."""
 
 import json
 import os
@@ -177,10 +174,7 @@ def _gated_backend(
     *,
     supported_sms = ("86", "89", "120"),
 ):
-    """A load on the incident host: the installed bundle's oldest image is
-    compute_86 and the only GPU is an sm_75 T4, so no cubin and no back-compatible
-    PTX exists and the gate wants to refuse. Everything below the placement
-    decision is faked -- Popen never runs and health answers True."""
+    """A compute_86 bundle on an sm_75 T4 has no cubin or PTX, so the gate must refuse the launch."""
     install = tmp_path / "llama.cpp"
     (install / "build" / "bin").mkdir(parents = True)
     binary = _binary_with_marker(install, {"supported_sms": list(supported_sms)})

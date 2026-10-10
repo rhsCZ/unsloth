@@ -116,31 +116,7 @@ def _pick(
     reserve_oldest: bool = False,
     reserve_leading: int = 0,
 ) -> list[str]:
-    """The selection itself, over positions that are either (text, cost) or not an item.
-
-    Shared by the two paths that select, so the pair rule cannot hold on one and not the other: the
-    fresh walk over evicted TURNS (`_select_items`) and the re-cap of a merged list of
-    already-rendered STRINGS (`_recap`). It was written against turns only, and the merged path then
-    re-capped with a plain newest-first walk that could take the opening and drop the successor the
-    fresh walk had paired it with.
-
-    `reserve_oldest` takes the opening item before the newest-first walk. It is for the thread of
-    short prompts, where the FIRST turn is the one that says what is being built: newest-first alone
-    would spend all eight slots on the increments nearest the end and evict the statement of the
-    task itself. The walk still runs newest-first afterwards, and rendering is oldest-first either
-    way. It reserves the opening item TOGETHER WITH the next one, both or neither, because the turn
-    right after the opening is the one that can contradict it without any newer turn showing that it
-    did (see `_reserved_order`).
-
-    `reserve_leading` is the same rule for a list whose first N entries arrived as one
-    already-rendered block, where WHICH of them is the successor cannot be recovered: the block is
-    oldest-first by the position of each item's NEWEST copy, so a successor the user restated later
-    renders after the turns that came between, and reserving only its first two entries let the walk
-    drop the actual correction. So the whole block is reserved as ONE unit instead of guessing: the
-    successor is somewhere in it, and an abandoned opening is always the FIRST entry, since an
-    opening the user restated is not abandoned and renders at the restatement. Keep the unit whole
-    or drop its first entry -- no bullet has to be identified.
-    """
+    """Reserves the opening turn with its successor, both or neither, since the successor may correct it."""
 
     def _item(index: int) -> Optional[tuple[str, int]]:
         return entries[index]
@@ -197,27 +173,7 @@ def _pick(
         return _walk(plain)
 
     def _reserved_order() -> list[int]:
-        """The walk order with the opening PAIR slotted in behind the newest usable turn.
-
-        The opening turn is reserved because it is where the task is stated, but on its own that
-        reservation states the task WRONG whenever the user changed direction early: the reserved
-        turn was carried and the turn immediately after it was the one the slot cap dropped, so
-        "Build Flappy Bird", "Actually build Tetris instead", "Add music" carried Flappy Bird and
-        the music. Reserving the opening turn together with its successor is the fix that needs no
-        reading of the English: whatever the user said next about the opening request is carried
-        alongside it, at the cost of one more slot.
-
-        It moves the hole rather than closing it, and only the TOKEN cap is really fixed. Against
-        the SLOT cap, reserving the opening leaves a contiguous run of n - max_items turns dropped
-        whatever the order: the single reservation drops [1, n-k] and the pair drops [2, n-k+1], so
-        the pair wins at index 1 and loses at index n-k+1. Fuzzed over 40,000 threads it is a net
-        18% fewer blocks that state the abandoned task. Closing the class outright means not
-        carrying the opening at all once it does not fit, which is the loss #9379 landed to stop.
-
-        Placed behind the newest turn that CAN BE TAKEN, not merely the newest one that qualifies: a
-        turn costing more than the whole cap is skipped by the walk without spending anything, so
-        reserving behind it would put the opening pair ahead of every usable recent turn.
-        """
+        """Places the opening pair behind the newest turn that can be taken; oversize turns are skipped."""
         held = set(unit)
         rest = [index for index in plain if index not in held]
         newest = next((index for index in rest if _takeable(index)), None)
@@ -283,26 +239,7 @@ def carried_forward_items(
     max_items: int = MAX_ITEMS,
     estimate_message: Callable[[dict], int] = estimate_message_tokens,
 ) -> list[str]:
-    """The user's standing instructions from the evicted turns, oldest first.
-
-    Selected NEWEST-first so the budget is spent on the most recent instructions, then reversed for
-    rendering, because reading order decides which of two conflicting instructions the model treats
-    as current. Instructions older than the budget are silently dropped, which is why `max_items` is
-    small and the header says "lossy". Repeats collapse to their newest copy, on the same key
-    `_recap` uses.
-
-    ONE walk, with no length floor. The floor was 80 characters, and a real chat does not clear it:
-    measured on a live session, "Create a Flappy Bird game in HTML", "Add music to the game" and
-    "Continue work" all failed it, so three resets each carried an EMPTY block. Keeping it as a
-    fallback taken only when the floored pass found nothing was worse than useless in the case that
-    matters most: a long opening request followed by a short "Actually make it Tetris" clears the
-    floor on the first turn alone, so the fallback never ran and the block carried only the
-    abandoned request.
-
-    `is_substantive` still applies `_CONTINUATIONS`, which is what actually keeps "ok" and
-    "continue" out of the system turn; the floor was only ever a second guess at the same question,
-    and an empty block is not the safer answer.
-    """
+    """One newest-first walk with no length floor: a floor left real chats with empty carried blocks."""
     if not evicted or max_tokens <= 0 or max_items <= 0:
         return []
     return _select_items(
@@ -338,12 +275,7 @@ _BLOCK = re.compile(
 
 
 def _block_items(text: str) -> list[str]:
-    """The instructions a system message's existing block holds, oldest first.
-
-    Parsed rather than discarded: by the second reset the turns that produced the first
-    block are gone, so its text is the only copy of those instructions left. `_neutralise`
-    defangs quoted delimiters, so a real `</carried_forward>` can only be one we wrote.
-    """
+    """Re-parses a prior block, since its turns are gone; a real closing tag can only be one we wrote."""
     items: list[str] = []
     for body in _BLOCK.findall(text):
         current: Optional[list[str]] = None
@@ -370,19 +302,7 @@ def _recap(
     carried: int = 0,
     estimate_message: Callable[[dict], int] = estimate_message_tokens,
 ) -> list[str]:
-    """Re-apply the caps to a merged list. Newest-first selection, oldest-first render.
-
-    Repeats collapse to their newest copy: an instruction can be carried, evicted and re-selected,
-    and newest wins, which is the order the walk already runs in.
-
-    `carried` is how many of the leading entries arrived as one already-rendered block, so this walk
-    owes them the same rule the fresh walk owes the opening pair. Without it the merge re-created
-    the exact output the pair exists to prevent, one compaction later. A COUNT rather than a pair,
-    because which two bullets were the pair does not survive the render: the block is ordered by
-    each item's newest copy, so the successor of a restated correction sits behind the turns that
-    came between. The block is held whole or its first bullet is dropped, which needs no bullet to
-    be identified. See `_pick`.
-    """
+    """The leading carried entries form one block, held whole or dropped from its first bullet."""
     return _pick(
         [(item, estimate_message({"role": "user", "content": item})) for item in items],
         max_tokens = max_tokens,
@@ -392,15 +312,7 @@ def _recap(
 
 
 def _without_block(messages: list[dict]) -> list[dict]:
-    """``messages`` with any block Unsloth rendered removed from the system turn.
-
-    The no-X fallback drops the block and re-measures before refusing. Handing it
-    `fitted` alone did not drop anything when the INCOMING system message already carried
-    a block, which is the ordinary case in a tool loop: an earlier iteration appended one
-    and the refit sees it again. The recount then still included X, so a request whose
-    base system prompt plus newest turn fits comfortably was refused, or pushed back to
-    rolling. Measured at a 160-token target: 381 counted where 59 was due.
-    """
+    """Removes any block already in the system turn, so a refit stops counting it."""
     out = list(messages)
     for index, message in enumerate(out):
         if message.get("role") in ("system", "developer"):
@@ -411,11 +323,7 @@ def _without_block(messages: list[dict]) -> list[dict]:
 
 
 def _append_to_system(messages: list[dict], block: str) -> list[dict]:
-    """Rewrite the leading system/developer message with the block appended.
-
-    A NEW dict, never a mutation: `_branch_boundary` counts by identity. It skips system
-    and developer roles, so replacing this one cannot disturb the boundary arithmetic.
-    """
+    """Builds a new system dict, never mutating: _branch_boundary counts messages by identity."""
     if not block:
         return messages
     out = list(messages)
@@ -445,21 +353,7 @@ def fit_checkpoint_context(
     # Signature compatibility with `fit_rolling_context`.
     headroom_ratio: Optional[float] = None,
 ) -> tuple[list[dict], Optional[dict[str, Any]]]:
-    """Fit a chat by resetting the epoch, keeping the newest turn and a carried-forward X.
-
-    Signature-compatible with ``fit_rolling_context`` so the call sites can choose a policy
-    without knowing which one they got.
-
-    ``can_reset`` and ``searchable`` may each be a callable, resolved only where they are
-    actually needed: establishing them means probing the store and the embedder, which is
-    wasted on the great majority of requests, since neither overflows nor renders a block.
-
-    ``can_reset`` is the caller's assertion that the dropped turns will be archived and the
-    search tool can be offered. False forbids STARTING a new epoch (an unsearchable reset is
-    data loss, not compaction) while still replaying one already in force, so a thread whose
-    archive disappears mid-conversation does not silently un-compact. `_fit_context` already
-    routes such requests to the rolling window; this is the second lock on that door.
-    """
+    """can_reset=False blocks new epochs (unsearchable reset loses data) but still replays one in force."""
     if context_length <= 1:
         return messages, None
 

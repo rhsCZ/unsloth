@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""routes/llama_compat.py: the discovery surface a third-party client probes.
-
-Reproduces a real user report. A client pointed at Studio's port ran this sequence:
-
-    GET  /api/v1/models  404      GET  /props    200 text/html
-    GET  /api/tags       404      GET  /version  200 text/html
-    GET  /v1/props       404      POST /api/show 405
-
-The two 200s are the bug: neither was a Studio route, so both fell through the SPA
-catch-all and returned index.html, which a probe reads as "supported" before failing
-on the body. The module is loaded standalone with a double for routes.inference.
-"""
+"""Discovery paths like /props and /version must not 200 with index.html via the SPA catch-all."""
 
 from __future__ import annotations
 

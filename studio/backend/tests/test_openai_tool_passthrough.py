@@ -193,10 +193,8 @@ class TestFriendlyUpstreamError:
         assert "compile a grammar" in _anthropic_upstream_error("failed to parse grammar")
 
     def test_anthropic_upstream_error_keeps_kv_starvation_out_of_the_overflow_rewrite(self):
-        """llama-server says "Context size has been exceeded" when concurrent
-        generations drain the shared KV cache. Nothing about the request was too
-        long, so rewording it as an oversized prompt sends the client compacting a
-        valid conversation instead of retrying."""
+        """KV-cache starvation text must not be reworded as an oversized prompt; that makes clients
+        compact."""
         from routes.inference import _anthropic_upstream_error
 
         from routes.inference import _anthropic_upstream_error, _classify_llama_generation_error
@@ -572,10 +570,7 @@ class TestChatCompletionRequestToolFields:
         assert req.stop is None
 
     def test_extra_fields_accepted(self):
-        """Declared fields bind and are typed; unknown ones still survive
-        extra="allow". Declaring response_format is what turns away a value of
-        the wrong shape -- a bare string names no schema to constrain to. What
-        is inside the object is the serving path's business, not the schema's."""
+        """Declaring response_format rejects a bare string, since it names no schema to constrain to."""
         from pydantic import ValidationError
 
         req = self._make(
@@ -832,11 +827,7 @@ class TestChatCompletionRequestToolFields:
     def test_the_gguf_tool_loop_refuses_a_contract_it_cannot_forward(
         self, monkeypatch, enabled_tools
     ):
-        """Unsloth's loop runs its own turns and never forwards response_format, so
-        serving the request would answer with text that violates the contract while
-        the client has no way to tell. A selection that resolves to no tool routes to
-        the ordinary generator, which forwards it no more than the loop does, and the
-        refusal lands after the monitor row opens, so it must close it."""
+        """The tool loop never forwards response_format, so it must refuse it and close the monitor row."""
         import routes.inference as inference_route
 
         class _GGUFBackend:
@@ -988,11 +979,8 @@ class TestChatCompletionRequestToolFields:
         return self._v1_client(monkeypatch, _LlamaOff(), backend), backend
 
     def test_several_undecodable_images_on_one_message_are_still_refused(self, monkeypatch):
-        """The count is of image PARTS, not of images extraction could decode.
-
-        Only a data URL becomes base64, so several remote image URLs decode to
-        nothing; gating on a decoded image would let exactly those be flattened
-        away unannounced, which is the silent drop this guard exists to stop."""
+        """Count image parts, not decodable images: remote URLs decode to nothing yet must still be
+        refused."""
         monitor = ApiMonitor(max_entries = 3)
         client, backend = self._standard_vision_client(monkeypatch, monitor)
         remote = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
@@ -2224,11 +2212,8 @@ class TestChatCompletionRequestToolFields:
     def test_studio_tool_history_under_guided_decoding_has_no_adjacent_user_turns(
         self, monkeypatch
     ):
-        """A response_format on this same thread routes to the guided-decoding passthrough,
-        which is the one path that never coalesces. Folding a tool result there leaves it
-        next to the turn that follows it, and Gemma checks alternation by index parity, so
-        llama-server answered 'Unable to generate parser for this template' for the whole
-        request until the fold merged them itself."""
+        """Guided decoding never coalesces, so the tool-result fold must merge adjacent user turns
+        itself."""
         import routes.inference as inference_route
 
         captured = {}
@@ -2292,10 +2277,8 @@ class TestChatCompletionRequestToolFields:
     def test_studio_tool_history_under_guided_decoding_survives_a_stopped_turn(
         self, monkeypatch, sentinel
     ):
-        """Stop leaves an empty assistant turn between the tool result and the next question. The
-        coalesce cannot merge across it and the passthrough drops it downstream without
-        coalescing, so the two user turns land adjacent again -- the failure above, one Stop
-        later. Sanitizing before the fold, not after it, is what holds it."""
+        """A stopped turn leaves an empty assistant turn, so sanitizing must run before the fold,
+        not after."""
         import routes.inference as inference_route
 
         captured = {}
@@ -2472,12 +2455,8 @@ class TestChatCompletionRequestToolFields:
     def test_the_non_gguf_paths_refuse_what_they_cannot_serve(
         self, monkeypatch, param, model_entry, extra_body, unreachable_pre_switch
     ):
-        """Plain non-GGUF text now serves extra choices, so only the paths that
-        answer something other than a sample still refuse n: one waveform, one
-        transcript of the one recording, a loop that runs turns rather than
-        samples, and one SSE stream, which carries a single choice whether or not
-        the pre-switch check (reached only when a load may) ran. And no non-GGUF
-        backend can constrain decoding at all."""
+        """Non-GGUF backends refuse n and response_format where they cannot serve them; plain text
+        serves n."""
         import routes.inference as inference_route
 
         class _NoGGUFBackend:
@@ -4448,10 +4427,7 @@ class TestGgufVisionMessages:
         assert all(self._PNG_B64 not in str(m.get("content")) for m in priced)
 
     def test_a_mixed_catalog_provider_still_forwards_an_attached_image(self):
-        """openrouter and huggingface are vision-capable for the family and name no
-        model, so the MCP gate says no for every model on them. Passed as the general
-        vision flag it also stripped the picture the caller attached to a chosen
-        vision model, which main forwarded."""
+        """The MCP gate says no on openrouter and huggingface, so it must not strip an attached image."""
         from core.inference.providers import get_provider_info
         from routes.inference import _build_external_messages, _external_takes_mcp_images
 
@@ -10763,10 +10739,8 @@ class TestExternalProviderParticipantNames:
 
 
 def test_every_gguf_choice_gets_a_seed_of_its_own():
-    """llama-server holds the seed as a uint32 and draws at random for exactly
-    one value, LLAMA_DEFAULT_SEED (0xFFFFFFFF). Only -1 converts to it, so every
-    other negative is an ordinary fixed seed there: exempting all of them from
-    the offset sent n identical requests and returned n copies of one run."""
+    """Every GGUF choice needs its own seed; only -1 maps to the random sentinel, other negatives
+    are fixed."""
     from routes.inference import _choice_seed
 
     sent = 0xFFFFFFFF
@@ -10788,10 +10762,7 @@ def test_every_gguf_choice_gets_a_seed_of_its_own():
 
 
 def test_the_two_seed_helpers_agree_on_which_seeds_are_random():
-    """``-1`` is not the only request seed that reaches LLAMA_DEFAULT_SEED: the seed is a
-    uint32 there, so ``-1``, ``4294967295`` and ``2**64-1`` are all the sentinel and the
-    schemas accept all three. Both helpers must agree, or choice 0 keeps the caller's random
-    seed while choice 1 is offset into a fixed one, half reproducible and half uncached."""
+    """The seed helpers must agree on what is random: -1, 4294967295 and 2**64-1 are the same sentinel."""
     from core.inference.llama_cpp import _LLAMA_RANDOM_SEED, _apply_seeded_llama_request
     from routes.inference import _choice_seed
 
@@ -11247,11 +11218,7 @@ class TestMcpImageAdmissionAndCaps:
             assert self._PNG not in json.dumps(estimate), vision
 
     def test_an_attachment_counts_against_the_replay_cap(self):
-        """promote_history_local caps the replay alone; the attachment lands after it.
-        Its marker goes on the newest user turn -- here a placeholder already holding
-        a replay marker -- and a non-GGUF message carries one picture, so the replay
-        marker is displaced and pixels_in_marker_order drops its payload rather than
-        sliding it onto the next marker. Markers and pixels stay in step at the cap."""
+        """Attachments count against the replay cap, and their marker must stay in step with the pixels."""
         from core.inference import mcp_images
 
         conversation = []
@@ -11428,11 +11395,7 @@ def test_kimi_stays_permissive_because_its_allowlist_already_narrowed_it():
 
 
 def test_admission_prices_replay_against_what_generation_really_sends():
-    """The GGUF paths keep the full replay allowance BESIDE the caller's own picture
-    (only a provider reserves the caller's room), so this request sends nine and is
-    charged nine. Subtracting the attachment admitted a second such request into KV
-    the first had already taken; charging a second full allowance on top of it would
-    over-reserve instead, so the replay is still capped at MAX_TOTAL_MODEL_IMAGES."""
+    """Admission charges the full replay allowance beside the caller's image, as generation sends it."""
     import json as _json
 
     from core.inference import mcp_images

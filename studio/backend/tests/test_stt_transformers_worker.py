@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The out-of-process Transformers dictation engine.
-
-The engine moved into a spawn child because an accelerator context is never
-returned while the process holding it lives, so the backend must not be the
-process that takes one. These cover both halves: what the child does with a
-command, and what the parent-side handle does with a child that answers late,
-dies, or is cancelled.
-"""
+"""The dictation engine lives in a spawn child, since an accelerator context is freed only at exit."""
 
 import queue
 import signal
@@ -310,11 +303,7 @@ def _run_child(
     load = None,
     transcribe = None,
 ):
-    """Drive run_stt_worker over in-process queues and collect its responses.
-
-    The bootstrap handshake is asserted here and dropped, so each test reads the
-    answers to its own commands.
-    """
+    """The bootstrap handshake is consumed here, so each test sees only the answers to its own commands."""
     cmd_queue: queue.Queue = queue.Queue()
     resp_queue: queue.Queue = queue.Queue()
     cancel_event = threading.Event()
@@ -789,11 +778,7 @@ def test_a_spawn_failure_on_an_accelerator_leaves_the_cpu_retry_to_the_sidecar(m
 
 
 class _StillbornProcess:
-    """A child that starts but whose fresh interpreter never comes up.
-
-    A frozen POSIX build re-runs its own binary rather than an interpreter, so
-    start() returns and the child is gone before it can read a command.
-    """
+    """A frozen POSIX build re-runs its own binary, so the child can exit before it reads any command."""
 
     def __init__(self, exitcode = 1) -> None:
         self.pid = 4243
@@ -864,14 +849,7 @@ def test_a_child_killed_by_a_signal_keeps_its_crash_instead_of_falling_back(monk
 
 
 class _NativeCrashProcess:
-    """A child that bootstraps and then dies inside the native model load.
-
-    Runs the real child entrypoint, whose load neither returns nor reports
-    anything, exactly as a fault in native code does not; the process is then
-    simply gone. Its exit code is positive because Windows has no signals to
-    report a fault with (0xC0000005 reads as 3221225477), which is what a child
-    that never bootstrapped looks like from the exit code alone.
-    """
+    """A native-fault child exits with a positive code, since Windows has no signals to report."""
 
     def __init__(self, kwargs, faulted: threading.Event) -> None:
         self.pid = 4244
@@ -1018,15 +996,7 @@ def test_the_in_process_fallback_reports_the_checkpoint_language_support(monkeyp
 
 
 class _LosesTheReadyMessage(queue.Queue):
-    """A response queue that drops the ready word, as a real one does.
-
-    multiprocessing.Queue.put only hands the object to a feeder thread. A child
-    that faults before that thread drains the buffer delivers nothing, and the
-    load command is already queued when the child reaches get(), so it faults
-    almost immediately: measured at 17 losses in 20 runs, against 0 for an
-    Event. A thread queue.Queue delivers in the caller, which is why a queued
-    handshake looks sound in tests and is not.
-    """
+    """Queue.put returns before its feeder thread sends, so a fault can lose the ready message."""
 
     def put(self, item, *args, **kwargs):
         if isinstance(item, dict) and item.get("type") == "ready":

@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A TTS model must never be chat-loadable.
-
-The Audio page loads speech models into the single slot chat reads, and
-``openai_chat_completions`` answers a turn on one by SYNTHESIZING the prompt
-rather than refusing it. Auto-load picks the smallest downloaded model and TTS
-models are small, so one became the default chat model on a fresh install.
-
-Architecture cannot answer this -- Orpheus and OuteTTS are ``LlamaForCausalLM``,
-Spark is ``Qwen2ForCausalLM`` -- so the codec vocabulary in
-``tokenizer_config.json`` is the signal, with the curated ids covering the GGUF
-companions that ship no tokenizer at all.
-"""
+"""TTS models must never be chat-loadable: chat would synthesize the prompt, not refuse it."""
 
 from __future__ import annotations
 

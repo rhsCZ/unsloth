@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the server identity handshake (`GET /api/auth/identity`).
-
-The endpoint lets a client confirm an endpoint is really this Unsloth install
-before sending it a credential: the client sends a random nonce and checks the
-returned HMAC against one computed from the install identity secret. A process
-that cannot read this same-user secret cannot forge a matching proof.
-"""
+"""Clients check a nonce HMAC keyed by the same-user install secret before sending any credential."""
 
 import base64
 import hashlib

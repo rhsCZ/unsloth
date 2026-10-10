@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Integration tests for the confirmation gate inside the real tool loop.
-
-These drive ``run_safetensors_tool_loop`` (no model -- hand-crafted fake
-generators) with ``confirm_tool_calls=True`` and resolve each pending
-decision inline. The slot is registered before ``tool_start`` is yielded,
-so resolving right after receiving that event always lands before the
-loop blocks. Covers: allow executes once, deny skips execution and feeds
-back the rejection, disabled/duplicate calls are not prompted, and a
-denied call does not pollute duplicate detection.
-"""
+"""Each decision is resolved right after tool_start, since the slot already exists by then."""
 
 import pytest
 
@@ -79,12 +70,7 @@ def _drive(
     *,
     tools = None,
 ):
-    """Run the loop, resolving each gated tool_start with the next decision.
-
-    The advertised ``tools`` list drives the loop's enabled-tool filter
-    (pass a list omitting a tool to make a call to it "disabled").
-    Returns (events, execute_calls).
-    """
+    """Omitting a tool from the advertised tools list makes calls to it disabled, so no prompt."""
     decision_iter = iter(decisions)
     exec_fn = _FakeExecuteTool()
     gen = run_safetensors_tool_loop(

@@ -326,11 +326,7 @@ def test_the_audio_trainer_paths_install_the_decoder():
 def test_a_concurrent_first_install_captures_the_original_encode_once(
     monkeypatch, broken_torchcodec
 ):
-    """Two first-time callers must not both capture Audio.encode_example.
-
-    The loser captured the already-installed shim as _ORIGINAL_ENCODE, so its fallback
-    branch recursed into itself until RecursionError.
-    """
+    """Concurrent first installs must capture the original encode once, or the shim recurses into itself."""
     import threading
 
     from datasets.features.audio import Audio
@@ -363,11 +359,7 @@ def test_a_concurrent_first_install_captures_the_original_encode_once(
 
 
 def test_a_multi_repo_mapping_picks_the_token_of_the_source_repo():
-    """Interleaved or concatenated streaming splits carry one token per source repo.
-
-    Handing an arbitrary one to xopen sends a private repo's credential to a different
-    repo's host, so the repo id has to come from the URL being opened.
-    """
+    """Takes the token of the URL's own repo, since another repo's credential must not reach this host."""
     from datasets import config
 
     tokens = {"org/first": "token-first", "org/second": "token-second"}

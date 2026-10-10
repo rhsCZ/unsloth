@@ -1230,12 +1230,7 @@ def test_two_paths_on_one_line_are_two_matches():
 
 
 def test_the_mirror_module_does_not_pull_logging_into_a_spawned_worker():
-    """Every inference worker imports this module before its entrypoint runs.
-
-    A fresh spawn child has no ``logging`` yet, and importing it there was 4.2ms of the
-    5.3ms this module added to each worker spawn. Nothing on the spawn path needs it: the
-    record marking runs later, after the worker has configured logging.
-    """
+    """Every inference worker imports this module at spawn, so it must not pull in logging."""
     import ast
 
     source = (Path(_BACKEND_DIR) / "utils/worker_stderr.py").read_text(encoding = "utf-8")
@@ -1272,13 +1267,7 @@ def test_the_mirror_module_does_not_pull_logging_into_a_spawned_worker():
 
 
 def test_a_second_formatter_class_cannot_wrap_a_handler_that_is_already_marked():
-    """The marking class is built on first use, so there can be more than one of it.
-
-    Two threads that both find the cache empty each build a class, and ``isinstance`` is
-    false across the pair, so identity would wrap one handler twice and emit every
-    continuation line with a doubled prefix. Rebuilding the class here is the same
-    observation as that race, without depending on an interleaving.
-    """
+    """Marking classes built by a race differ, so a marked handler must never be wrapped twice."""
     import io
     import logging as logging_module
 

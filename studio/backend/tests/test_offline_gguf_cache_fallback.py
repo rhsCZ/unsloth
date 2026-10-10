@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for the offline GGUF cache fallback path (#5505).
-
-When ``huggingface.co`` is unreachable but the repo is cached, three failures
-hit: ``list_gguf_variants`` 500'd (empty dropdown), ``detect_gguf_model_remote``
-returned None (GGUF-only repo misrouted), and ``_download_gguf`` synthesised a
-name absent from cache. Follow-ups: the cache filter matches the snapshot-relative
-path (subdir layouts findable), DNS auto-detect scopes ``HF_HUB_OFFLINE`` to
-one load so a transient hiccup can't pin the singleton offline, and the probes above
-share a repo document within one request rather than each fetching it.
-
-No GPU, no network, no subprocess. Linux/macOS/Windows compatible.
-"""
+"""Offline, a cached GGUF repo must still list variants, detect as GGUF, and download."""
 
 from __future__ import annotations
 
@@ -891,12 +880,7 @@ class TestDetectGgufModelRemoteOffline:
 
 
 class TestSharedHubModelInfo:
-    """The probes above share an ``/api/models/<repo>`` read within a single request.
-
-    Scoped rather than cached, so the 404-beats-a-stale-cache rule the class above asserts
-    still holds between requests. Every read inside a scope asks for file sizes, so one
-    response serves the GGUF variant listing as well as the probes that ignore them.
-    """
+    """Probes share one model-info read per request, scoped not cached, so a 404 beats a stale cache."""
 
     @pytest.fixture(autouse = True)
     def hub(self, monkeypatch):
@@ -1037,10 +1021,7 @@ class TestSharedHubModelInfo:
         assert [fm for _r, _t, fm, _to in hub.calls] == [True]
 
     def test_one_request_entering_does_not_destroy_another_s_scope(self, hub):
-        """Sequenced, not raced: B opens a scope while A holds one, then A reads again.
-
-        Module-global state would hand A request B's scope, which lacks A's credential.
-        """
+        """Scopes are per request: global state would give A the scope of B, which lacks A's credential."""
         import threading
 
         b_is_inside = threading.Event()
@@ -2508,13 +2489,7 @@ class TestProbeDnsDeadNoGlobalTimeoutMutation:
         )
 
     def test_wedged_resolver_is_inconclusive_not_dead(self, monkeypatch):
-        """A missed deadline must not take the offline shortcut.
-
-        Slow-but-working DNS resolves past 2s, and this shortcut skips the fail-open
-        reachability probe, so calling it dead strands a working machine offline for a
-        whole job. A genuinely wedged resolver is still caught downstream, by the HEAD
-        probe hanging on the same lookup.
-        """
+        """A DNS lookup past its deadline is inconclusive, not dead; calling it dead skips the probe."""
         import socket as _socket
         import threading
 
@@ -2851,15 +2826,7 @@ class TestHttpsProxyDefaultPort:
 
 
 class TestMetadataReadsUseTheHubProxy:
-    """The reachability probe and the metadata reads must agree about egress.
-
-    urllib's default opener ignores ALL_PROXY: ``getproxies`` reports it under an ``all``
-    key, but ``ProxyHandler`` only ever dispatches ``<scheme>_open``. huggingface_hub 0.36
-    is built on requests, which does honour it. So on a proxy-only machine the probe
-    reported "online" through the proxy while every raw config.json / tokenizer_config.json
-    / adapter_config.json read went direct and silently failed, dropping the sidecar tier
-    decision back to name matching. Served by a real loopback proxy, not a mock.
-    """
+    """Probe and metadata reads must use one egress path: urllib ignores ALL_PROXY; requests uses it."""
 
     @pytest.fixture(autouse = True)
     def _no_ambient_proxy(self, clean_proxy_env, clean_offline_env):
@@ -2998,12 +2965,7 @@ class TestMetadataReadsUseTheHubProxy:
 
 
 class TestSlowProxyDoesNotForceOffline:
-    """A functional-but-slow proxy is ambiguous, so the shared guard must fail open.
-
-    Otherwise an uncached load through a corporate proxy whose HEAD exceeds the probe
-    timeout is turned cache-only, and the hub client's longer request never runs. The
-    worker already passes proxy_timeouts_offline=False; the route guard must agree.
-    """
+    """A slow but working proxy must fail open, or an uncached load is forced cache-only."""
 
     @pytest.fixture(autouse = True)
     def _fresh(self, monkeypatch):
@@ -3053,11 +3015,7 @@ class TestSlowProxyDoesNotForceOffline:
 
 
 class TestValidateGuardCoversMetadataPreflights:
-    """/validate resolves the config under the guard, then runs more remote reads.
-
-    Those preflights (upgrade check, trust-remote-code, sizing, training guard) each
-    fetch raw metadata, so leaving them outside the window just moves the stall.
-    """
+    """Every remote preflight on /validate must sit inside the offline guard window, or the stall moves."""
 
     def test_every_remote_preflight_on_validate_is_wrapped(self):
         """AST check: no bare await asyncio.to_thread(<remote preflight>, ...) remains."""
@@ -3619,12 +3577,7 @@ class TestGuardsShareOneDnsLookup:
 
 
 class TestPinnedReachability:
-    """One request, one reachability verdict, however long the request runs.
-
-    The memo expires on wall-clock, which is right between requests and wrong inside one: a
-    model-config request on a slow link outlives the TTL, so the guards it opens later
-    re-probe, and can reach a different verdict than the guard that admitted the request.
-    """
+    """One request gets one reachability verdict: a wall-clock memo TTL can flip it mid-request."""
 
     @pytest.fixture
     def probe(self, monkeypatch, clean_offline_env):
@@ -3743,10 +3696,7 @@ class TestPinnedReachability:
         assert probe.calls == 0
 
     def test_one_request_pinning_does_not_take_over_another_s(self, monkeypatch, probe):
-        """Sequenced, not raced: B pins while A holds a pin, then A reads its verdict again.
-
-        Module-global state would hand A request B's pin, and A would report B's verdict.
-        """
+        """Pins are per request: global state would let one request's pin hand another its verdict."""
         import threading
         import utils.transformers_version as tv
         import utils.utils as uu

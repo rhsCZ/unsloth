@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the DiT base_precision work.
-
-Covers the new precision plumbing the precision PR adds: the ``base_precision``
-config validation (dense-vs-prequant + mixed-precision gating), the prequant-repo
-heuristic and its trainer alias, the pure ``auto`` precision policy table, the
-explicit-mode passthrough of ``_resolve_base_precision``, the fp8 module filter, the
-fp8 branch of the compile policy, the ``train_precision_modes`` machine probe, the
-family-info precision fields, and the request-model ``base_precision`` field. No GPU /
-model load: every helper here is pure or name-based, so the config validation runs on
-name matching (``resolve_trainable_family`` is offline) and the torch probe is monkeypatched.
-"""
+"""CPU-only base_precision tests for config validation, auto policy and the fp8 filter; no model load."""
 
 from __future__ import annotations
 
@@ -40,11 +30,7 @@ def _cfg(base_model = _FLUX_DENSE, **kw) -> DiffusionLoraConfig:
 
 @pytest.fixture(autouse = True)
 def _not_rocm(monkeypatch):
-    """Pin the ROCm gate off: every case here describes an NVIDIA capability tier.
-
-    They simulate a card via get_device_capability, but the gate reads the INSTALLED torch, so on
-    an AMD box it short-circuits and the answers are about the real machine -- an environment
-    leak. test_dense_quant_rocm_gate_9396.py pins it the other way to exercise the gate."""
+    """Pin the ROCm gate off: these cases simulate NVIDIA tiers, which an AMD host would leak."""
     for _mod in (common, dit):
         monkeypatch.setattr(_mod, "torch_is_rocm", lambda: False)
 

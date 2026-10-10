@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for `_TOOL_XML_RE` (routes/inference.py) -- strips tool-call XML that
-leaks past the speculative buffer in core/inference/llama_cpp.py when the
-open/close pair is split across the visible/DRAIN boundary.
-"""
+"""_TOOL_XML_RE strips tool-call XML leaked when its open/close pair straddles the DRAIN boundary."""
 
 from __future__ import annotations
 
@@ -396,12 +393,7 @@ def test_gdpval_parameter_orphans_get_stripped(leak):
 
 
 def test_no_catastrophic_backtracking_on_open_bracket_spam():
-    """'<' spam must fail fast on the literal mismatch at char 2, not backtrack.
-
-    Asked as growth rather than as a deadline. Backtracking here is superlinear by
-    definition, so 4x the spam costing ~4x the time IS the property; `elapsed < 0.5`
-    was a budget that said as much about the runner as about the regex.
-    """
+    """Open-bracket spam must scale linearly; a fixed time budget would measure the runner instead."""
     assert_linear(
         lambda text: _TOOL_XML_RE.sub("", text),
         lambda n: "<" * n + "X",

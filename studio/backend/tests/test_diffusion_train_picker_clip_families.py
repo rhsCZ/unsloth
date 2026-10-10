@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What the Train picker is allowed to ADVERTISE, versus what the API accepts.
-
-MiniMax-H3 trains from captioned video clips and from nothing else. ``/diffusion/info`` is
-what fills the Train tab's family dropdown, and the same response lists the datasets that
-dropdown can pick from. While every listed dataset is stills, offering H3 there offers a
-combination that cannot be completed: whichever dataset the user picks, Start comes back with
-"No captioned video clips found".
-
-So the family list in that response is narrowed to the families its own dataset list can feed.
-The narrowing is derived, not hardcoded: it reads the clip count the dataset layer reports for
-the folders it just listed, so the day that layer starts listing folders of clips, H3 is
-offered next to them with no edit here and no flag to flip.
-
-The API is deliberately NOT narrowed. ``family_train_infos()`` still describes H3 and
-``/diffusion/start`` still routes it through the clip discovery, in both dataset states. Only
-the advertisement moves.
-"""
+"""The picker narrows families to what its dataset list can feed; the API is not narrowed."""
 
 from __future__ import annotations
 
@@ -84,19 +68,7 @@ def _report_clips(
     count: int,
     images: int | None = None,
 ) -> None:
-    """Make the dataset layer report ``count`` clips for every folder it summarises.
-
-    ``images`` overrides the still count the real summariser found. The folders here are built
-    out of PNGs because there is no helper that writes a decodable clip, so a folder standing in
-    for a folder of CLIPS has to say ``images = 0`` -- otherwise it reports as a MIXED folder,
-    which is a different case with a different answer. Left as None it keeps the real count,
-    which is what an image dataset should report.
-
-    Written to survive the dataset layer growing a real clip count: if
-    ``DiffusionDatasetSummary`` already carries the field, the genuine model is used and this is
-    exactly the payload the layer will produce; if it does not yet, a subclass supplies it, which
-    is the same thing the gate sees. Either way the gate is exercised through the summary object
-    the route builds, never through a stub of the gate itself."""
+    """Clip count comes from DiffusionDatasetSummary.clip_count when present, else from a subclass."""
     import routes.training as tr
 
     has_field = "clip_count" in getattr(DiffusionDatasetSummary, "model_fields", {})
@@ -197,13 +169,7 @@ def test_the_gate_withholds_exactly_the_clip_trained_families():
 
 
 def test_a_mixed_folder_does_not_advertise_a_clip_family():
-    """The advertisement has to agree with the refusal that runs at Start, not merely with the
-    clip count.
-
-    ``_image_dataset_refusal`` turns a folder holding stills away from a clip family, so a mixed
-    folder that advertises H3 offers an option Start then rejects. That is the same dead end the
-    narrowing exists to close, reached one click later. A clip-only folder alongside it is enough
-    to bring the family back, because that folder really can start a run."""
+    """A mixed folder must not advertise a clip family, since Start refuses stills for clip families."""
     import routes.training as tr
     from core.training.diffusion_train_common import CLIP_TRAINED_FAMILIES, family_train_infos
 
@@ -275,10 +241,7 @@ def test_the_api_still_carries_the_family_the_picker_withholds(client, ds_root):
 
 
 def test_the_start_preflight_still_takes_a_clip_dataset_for_the_withheld_family(tmp_path):
-    """The concrete thing the picker gate must not have broken: the dataset preflight
-    ``/diffusion/start`` runs (``discover_training_pairs``, the same call the route makes) still
-    accepts a folder of captioned clips for a clip family. Nothing about a direct API start
-    depends on what the picker chose to show."""
+    """The Start preflight still accepts clip folders for families the picker withholds."""
     from core.training.diffusion_train_common import discover_training_pairs
     for family in sorted(_clip_families()):
         (tmp_path / f"{family}.mp4").write_bytes(b"\x00" * 16)

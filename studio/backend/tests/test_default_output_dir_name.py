@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Auto-generated training output dir names stay inside outputs_root.
-
-Regression for local-model training: a model loaded by absolute path (e.g.
-``G:\\modelsAI\\...\\gemma-4-12B-it`` on a non-system drive) used to seed the
-default run dir with that full path, so ``resolve_output_dir`` raised
-``path escapes root`` because the result was not under ``<studio>/outputs``.
-"""
+"""Default run dirs use the model basename, since an absolute model path escapes outputs_root."""
 
 import importlib.util
 from pathlib import Path

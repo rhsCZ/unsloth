@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the post-launch /props context readback.
-
-llama-server's memory-fit step or --parallel slot split can allocate less
-context than the requested -c while Unsloth keeps advertising the requested
-value; clients sized to it then die on exceed_context_size_error 400s.
-``_reconcile_effective_ctx_with_server`` must adopt the server's real
-``default_generation_settings.n_ctx`` whenever it is smaller.
-
-Stubbed httpx; no subprocess, GPU, or network. Cross-platform.
-"""
+"""Adopt the server's /props n_ctx when smaller than the requested -c, or clients get 400s."""
 
 from __future__ import annotations
 
@@ -211,12 +202,7 @@ def test_larger_server_ctx_does_not_inflate_advertised_value(monkeypatch):
 
 
 def test_explicit_extra_arg_ctx_adopts_larger_confirmed_server_value(monkeypatch):
-    """A trailing --ctx-size can override Studio's earlier VRAM-fit ``-c``.
-
-    The resolved explicit request is 100352, Studio's pre-launch estimate is
-    65983, and /props confirms that llama-server actually allocated 100352.
-    Publish the real window while retaining the VRAM warning threshold.
-    """
+    """A trailing --ctx-size that /props confirms is adopted, while the VRAM warning threshold is kept."""
     inst = _make_backend(effective_ctx = 65983)
     inst._max_context_length = 65983
     _stub_props(
@@ -232,12 +218,7 @@ def test_explicit_extra_arg_ctx_adopts_larger_confirmed_server_value(monkeypatch
 
 
 def test_no_explicit_flag_never_adopts_a_larger_server_value(monkeypatch):
-    """The ceiling is the pass-through flag, not the first-class field.
-
-    Only a --ctx-size emitted after Studio's own -c can make the child allocate
-    past the fit, so a load with no flag passes 0 and llama.cpp's own context
-    padding cannot be reported as an override the user never wrote.
-    """
+    """Only a pass-through --ctx-size can exceed the fit; an unflagged load never adopts a larger value."""
     inst = _make_backend(effective_ctx = 65983)
     _stub_props(
         monkeypatch,

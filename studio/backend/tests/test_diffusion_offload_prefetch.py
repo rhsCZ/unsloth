@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Event-fenced prefetch for block-streamed denoisers (``diffusion_offload_prefetch.py``).
-
-The order / depth / window logic runs on CPU with the copies stubbed. The CUDA cases build real diffusers block-level
-stream group offload through Studio's ``_apply_group_offload`` and check: no host synchronization per group (torch's
-sync debug mode), bit-identical outputs against the resident model, device memory bounded by the window while the host
-runs ahead of a slow GPU, no copy landing in a block the compute stream still reads, and a dropped prefetch never
-landing in a reused block.
-"""
+"""Event-fenced prefetch: CPU checks order and window; CUDA checks bit identity, no host sync."""
 
 from __future__ import annotations
 

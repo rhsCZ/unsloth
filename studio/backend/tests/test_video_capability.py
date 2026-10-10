@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for video generation capability gating.
-
-Video runs through the diffusers pipelines in core/inference/video.py, so it is supported on
-CUDA and XPU, and on Apple Silicon whenever torch exposes a Metal device -- which is independent
-of MLX, and so of whether the host can train. Everything else gets a reason: macos_unsupported /
-pytorch_not_installed / mps_unavailable / no_accelerator / detection_failed. Mirrors
-test_export_capability.py: the matrix mocks the hardware probes, wiring is checked with ast, so
-it runs on CPU.
-"""
+"""Video support follows torch devices (CUDA, XPU, Metal), not MLX; hardware probes are mocked."""
 
 import ast
 import sys

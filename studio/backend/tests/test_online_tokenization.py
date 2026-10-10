@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Which configurations may tokenize online, and what the lazy view produces.
-
-No GPU and no model: the gate is a pure function of the run's shape, and the
-transform runs against a real tokenizer on a real ``datasets.Dataset``. Every
-"degrades to the old path" claim is a test here, since a wrong answer is either a
-crash (VLM, pre-tokenized) or a run that trains on different rows.
-"""
+"""A wrong online-tokenization gate either crashes (VLM, pre-tokenized) or trains on different rows."""
 
 import sys
 from types import SimpleNamespace

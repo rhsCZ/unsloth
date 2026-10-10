@@ -34,17 +34,7 @@ from core.inference import diffusion as diffusion_mod
 
 
 def _call_keyword_sets(module_path: str, function: str, callee: str) -> list[set[str]]:
-    """The keywords EVERY call to *callee* inside *function* spells out, one set per call site.
-
-    Read from the source rather than driven: these branches need a real Krea single-file build, a
-    real 2.3 checkpoint header or a Modular Diffusers H3 pipeline to reach, which no unit test can
-    stage -- but the keyword either is written there or is not. ``callee`` matches a bare name
-    (``load_krea2_pipeline``) or the last attribute segment (``self._resolve_gguf_path``,
-    ``LTX2Pipeline.load_config``), so a call site that moves onto or off a receiver still counts.
-
-    Anchored on the package, not on the process CWD: CI runs pytest from the repo root with the
-    backend merely on PYTHONPATH, where a relative open raises FileNotFoundError.
-    """
+    """AST helper that reads keyword sets from source."""
     backend_root = pathlib.Path(diffusion_mod.__file__).resolve().parents[2]
     tree = ast.parse((backend_root / module_path).read_text(encoding = "utf-8"))
     found: list[set[str]] = []

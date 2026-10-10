@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic tests for the sandbox sitecustomize path-remap shim.
-
-The shim (``core/inference/sandbox_site/sitecustomize.py``) runs at interpreter
-startup inside every sandboxed tool subprocess and remaps ChatGPT
-code-interpreter habit paths (``/mnt/data`` etc.) onto the per-conversation
-working directory. Importing it calls ``_install()``, which monkeypatches
-``builtins.open`` / ``io.open`` / ``os.makedirs`` / ``os.mkdir`` /
-``pathlib.Path.mkdir`` process-wide, so these tests
-load it into a throwaway module and restore those globals immediately, then
-exercise the pure ``_remap()`` function directly -- no subprocess, and no real
-``/mnt`` or ``/tmp`` writes. The mkdir test keeps the patch installed under a
-``chdir`` into ``tmp_path`` so the only real writes land in that temp dir.
-"""
+"""Loads the sitecustomize path-remap shim into a throwaway module and restores patched globals after."""
 
 from __future__ import annotations
 
@@ -36,12 +24,7 @@ _SHIM = (
 
 
 def _save_patch_targets():
-    """Snapshot every global the shim patches, so tests can restore them.
-
-    On Python < 3.11 the shim also repoints ``pathlib._NormalAccessor.open``
-    (pathlib captured the original io.open at import there); the accessor is
-    absent on 3.11+, so the snapshot skips it.
-    """
+    """Snapshot the globals the shim patches; the pathlib accessor is included only before Python 3.11."""
     accessor = getattr(pathlib, "_NormalAccessor", None)
     return (
         (builtins.open, io.open, os.open, os.makedirs, os.mkdir, pathlib.Path.mkdir),

@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Qwen-Image-2.1 tiled VAE decode without seam lines (diffusion_vae_tiling).
-
-The stock geometry tiles this 16x VAE in 16-latent tiles with 4-latent blends and a 4-latent sliver at the right /
-bottom edge, which draws thin vertical / horizontal lines on every tiled (low-VRAM) decode."""
+"""Stock 16x VAE tiling leaves a 4-latent sliver that draws seam lines; this geometry avoids it."""
 
 from __future__ import annotations
 

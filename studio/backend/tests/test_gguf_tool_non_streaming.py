@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for `stream:false` on the GGUF agentic tool path (#6570).
-
-When server-side tools are enabled (e.g. `unsloth studio run --model ...`,
-which forces the tool policy on process-wide), a plain chat request used to be
-routed into the tool loop, which returned an SSE body *regardless* of
-`stream:false` -- breaking non-streaming clients and health checks like
-LiteLLM. These tests drive the real route with a fake tool-capable backend and
-assert the non-streaming path now returns a single JSON `chat.completion`,
-while `stream:true` still streams.
-"""
+"""With stream:false, the GGUF tool path returns one JSON chat.completion, not an SSE body."""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

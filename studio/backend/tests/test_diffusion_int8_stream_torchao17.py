@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""INT8 under streamed offload on torchao 0.17 (what a fresh install resolves: torch < 2.12 -> torchao 0.17).
-
-The planner used to require torchao 0.18 for int8 under any tier that streams the denoiser, so every offloading
-install got the fp8 transformer. 0.17 already ships the pinnable ``Int8Tensor``; only the v1 int8 class it still
-defaults to is unpinnable, and that is rebuilt before streaming. Version-simulated, CPU only."""
+"""Streamed int8 must not require torchao 0.18, since 0.17 already ships the pinnable Int8Tensor."""
 
 from __future__ import annotations
 

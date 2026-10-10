@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Regression tests for the export log ring-buffer cursor semantics.
-
-Race: the frontend opens the SSE connection AFTER the POST that starts the
-export, so lines emitted in the gap (seqs 1..k) are unreachable when the SSE
-default cursor `get_current_log_seq()` returns k.
-
-Fix: `clear_logs()` snapshots the pre-run seq into `_run_start_seq` (via
-`get_run_start_seq()`), and the SSE cursor defaults to that snapshot, so the
-client sees the full run regardless of connect time.
-
-These tests exercise the orchestrator contract only (no subprocess/FastAPI).
-"""
+"""The SSE cursor starts at clear_logs()'s run-start snapshot, so early export lines are not lost."""
 
 from __future__ import annotations
 

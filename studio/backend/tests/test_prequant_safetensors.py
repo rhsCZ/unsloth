@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The safetensors pre-quant container: its own round-trip, and how the loaders dispatch to it.
-
-Two layers, deliberately separated. The dispatch tests are hermetic -- they never touch torchao or
-safetensors -- because what they assert is routing: which reader a name selects, which gate a name
-answers, which source survives planning. The round-trip tests are the opposite and are skipped
-without the real libraries, because a fake that "round-trips" proves nothing about a format whose
-entire risk is in the metadata contract.
-"""
+"""Hermetic dispatch tests check routing only; round-trip tests need the real torchao and safetensors."""
 
 from __future__ import annotations
 
@@ -67,12 +60,7 @@ def test_load_dispatches_on_extension(monkeypatch):
 
 
 def test_safetensors_needs_no_pickle_allowlist(monkeypatch):
-    """The whole point of the container: an install that cannot open a pickle can still load one.
-
-    ``restricted_prequant_load_supported`` is the gate that makes ``video.py`` refuse a pre-quant
-    checkpoint outright. A safetensors artifact names no constructors, so answering the pickle's
-    question for it would strand exactly the installs this format exists to unblock.
-    """
+    """A safetensors checkpoint names no constructors, so the pickle gate must not refuse it."""
     monkeypatch.setattr(pq, "_register_prequant_safe_globals", lambda: False)
     monkeypatch.setattr(ps, "safetensors_prequant_supported", lambda: True)
 
@@ -90,12 +78,7 @@ def test_safetensors_gate_still_needs_torchao_helpers(monkeypatch):
 
 
 def test_usable_source_survives_a_pickle_only_refusal(monkeypatch):
-    """Regression for the ordering: the gate is asked about the RESOLVED names, not the scheme.
-
-    Asking first and resolving second (what this did before safetensors existed) returns None for a
-    repo whose primary artifact is safetensors, on an install that merely cannot open pickles. The
-    pre-quant is then invisible to memory planning and the load silently runs dense.
-    """
+    """Resolve names before the gate, or a safetensors-primary pre-quant is invisible to memory planning."""
     fam = _family(
         prequant_repos = (("fp8", "org/model-fp8"),),
         prequant_filenames = (("fp8", "Model-FP8.safetensors"),),
@@ -109,15 +92,8 @@ def test_usable_source_survives_a_pickle_only_refusal(monkeypatch):
 
 
 def test_usable_source_still_refused_when_nothing_is_readable(monkeypatch):
-    """A family with no DECLARED safetensors name, on a pickle-less install, keeps answering None.
-
-    Regression for a hazard the safetensors-first chain introduced. Every family now derives a
-    ``<Model>-<SCHEME>.safetensors`` candidate, so a naive "is any candidate readable" gate answers
-    yes on a pickle-less install even for a repo that hosts only ``.pt``. Planning would then budget
-    a 6 GB artifact, the download would 404 to the pickle, the pickle would be refused, and the
-    load would fall back to dense under a plan that never budgeted it: the evict-then-OOM this
-    function exists to prevent. A derived name is a guess and does not count as evidence.
-    """
+    """A derived <Model>-<SCHEME>.safetensors name is a guess, not evidence that a readable source
+    exists."""
     fam = _family(prequant_repos = (("fp8", "org/model-fp8"),))
     monkeypatch.setattr(pq, "_register_prequant_safe_globals", lambda: False)
     monkeypatch.setattr(ps, "safetensors_prequant_supported", lambda: True)
@@ -244,12 +220,7 @@ def test_plain_reader_matches_real_writer_without_torchao(tmp_path, monkeypatch)
 
 
 def test_header_is_readable_as_a_torchao_checkpoint(tmp_path):
-    """Interop, and the trap that makes it fail silently.
-
-    torchao hands back metadata ALREADY JSON-encoded. Encoding it again round-trips perfectly
-    against our own reader and still produces a header ``is_metadata_torchao`` rejects, so every
-    transformers / diffusers loader refuses the file and nothing here would notice.
-    """
+    """torchao metadata is already JSON; encoding it again writes a header is_metadata_torchao rejects."""
     _real_libs()
     import torch
     from safetensors import safe_open
@@ -351,10 +322,7 @@ def test_quantized_round_trip_is_exact(tmp_path, scheme):
 
 
 def test_the_windows_rocm_torchao_stub_is_not_safetensors_support(monkeypatch):
-    """The stub answers every ``torchao.*`` import with a fabricated callable, so importing the
-    flatten/unflatten pair proves nothing on Windows ROCm: both names bind, both return None, and
-    an install that reported support here would have planning drop the dense shards for a
-    checkpoint the loader can never rebuild. The pickle probe already asks the same question."""
+    """The torchao Windows ROCm stub binds fake callables, so importing them is not safetensors support."""
     import core._torchao_stub as stub
     from core.inference import prequant_safetensors as ps
     from core.inference.diffusion_prequant import restricted_prequant_load_supported
@@ -375,12 +343,7 @@ def test_the_windows_rocm_torchao_stub_is_not_safetensors_support(monkeypatch):
 
 
 def test_a_scheme_this_torchao_cannot_flatten_is_reported_before_the_build(monkeypatch):
-    """The helpers importing is not the same question as this scheme producing something they take.
-
-    Through torchao 0.17 int8 quantises to LinearActivationQuantizedTensor, which flatten refuses,
-    so the builder's container preflight passed and the failure arrived only after the download and
-    the hours of GPU quantization.
-    """
+    """Importing helpers proves nothing; torchao 0.17 int8 cannot flatten, so report it before building."""
     import torchao.quantization as tq
     from core.inference import prequant_safetensors as ps
 
@@ -431,12 +394,7 @@ def test_the_real_installed_torchao_answers_the_int8_question(monkeypatch):
 
 
 def test_a_root_level_plain_tensor_round_trips_instead_of_failing_the_build(tmp_path):
-    """z-image is not hypothetical: ``ZImageTransformer2DModel`` holds ``x_pad_token`` and
-    ``cap_pad_token`` at the root, so refusing every undotted key refused the only safetensors build
-    of a family this repo ships, and it did so AFTER the download and the GPU quantization.
-
-    torchao still never sees them: they are split out before flatten and restored after unflatten.
-    """
+    """Root-level plain tensors are split before flatten and restored after, so z-image builds survive."""
     torch = pytest.importorskip("torch")
     if not ps.safetensors_prequant_supported():
         pytest.skip("this install cannot write safetensors pre-quant checkpoints")
@@ -473,14 +431,7 @@ def test_a_root_level_tensor_subclass_is_still_refused_up_front(monkeypatch):
 
 
 def test_a_field_a_newer_torchao_added_is_dropped_when_it_is_inert(monkeypatch):
-    """The live regression: torchao 0.18 records ``reduce_range`` in
-    ``QuantizeTensorToInt8Kwargs``, 0.17's constructor refuses it, and the published
-    Qwen-Image-2.1 int8 checkpoint therefore failed to load on a stock install with
-    ``Failed to create instance of QuantizeTensorToInt8Kwargs: ... unexpected keyword argument
-    'reduce_range'``. The loader reported no usable checkpoint, and the dense bf16 denoiser was
-    downloaded and quantized at runtime instead, which is the entire saving gone for a field the
-    file records as false.
-    """
+    """Drop the inert reduce_range field torchao 0.18 added, since 0.17's constructor refuses it."""
     calls: list = []
 
     def _unflatten(tensors, header):

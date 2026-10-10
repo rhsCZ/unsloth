@@ -336,10 +336,7 @@ def test_a_mistral_model_outside_the_reasoning_docs_gets_no_effort_whatever_the_
 
 
 def _snapshot_reasoning_models(provider_type: str) -> dict[str, list[str]]:
-    """The ids the committed frontend snapshot marks reasoning-capable, with their effort lists.
-
-    Read out of the TypeScript rather than a fixture: the point is to catch the real file drifting
-    away from the wire allowlist, which a copy could not do."""
+    """Reasoning-capable ids and effort lists are read from the TypeScript snapshot, so drift is caught."""
     path = (
         Path(__file__).resolve().parents[2] / "frontend/src/features/chat/model-catalog-snapshot.ts"
     )

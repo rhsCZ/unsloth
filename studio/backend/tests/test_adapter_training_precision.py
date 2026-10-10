@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A Studio adapter must load on the base precision it was trained on.
-
-A 16-bit Continued Pretraining run is tagged "CPT", which the resolvers treated as
-neither lora nor qlora, so Chat's load_in_4bit=True loaded the base in 4-bit.
-"""
+"""A 16-bit CPT-tagged adapter matched neither lora nor qlora, so Chat loaded its base in 4-bit."""
 
 import ast
 import json
@@ -141,11 +137,7 @@ def _forced_16bit_branches_in_load_model():
 
 
 def _declared_forced_16bit_audio_types():
-    """_FORCED_16BIT_AUDIO_TYPES read out of the source.
-
-    Read rather than imported: importing core.training.trainer pulls in torch and unsloth,
-    and a runner without them turns this assertion into a skip instead of a failure.
-    """
+    """Read _FORCED_16BIT_AUDIO_TYPES from source: importing the trainer needs torch and unsloth."""
     for node in ast.parse(_TRAINER.read_text(encoding = "utf-8")).body:
         if isinstance(node, ast.Assign) and any(
             getattr(t, "id", None) == "_FORCED_16BIT_AUDIO_TYPES" for t in node.targets

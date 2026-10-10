@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for issue #7072 -- "VRAM Usage in System Tab is wrong".
-
-Reporter: dual AMD (Radeon PRO W7900 ~48GB + W7500 8GB), Windows 10, ROCm 7.13,
-torch 2.11.0+rocm7.13. On Windows without a HIP SDK, amd-smi is permanently
-disabled (avoids a UAC/DiskPart prompt) and hipMemGetInfo returns free==total
-(used 0). Two symptoms followed:
-
-  * System tab (/api/system -> get_visible_gpu_utilization) showed ~0 VRAM used on
-    every GPU (mem_get_info free==total; see rocm_windows_free_is_untrusted for why
-    the reading is optimistic).
-  * get_gpu_utilization()'s Windows fallback SUMMED "GPU Adapter Memory\\Dedicated
-    Usage" across all adapters into ONE fake device with only GPU 0's total, so
-    the second GPU never appeared.
-
-The fix reads the per-adapter (LUID-instanced) Dedicated Usage performance
-counter -- Task Manager's source -- for per-GPU used, takes per-GPU total from
-torch device properties, and guards the free==total mem_get_info quirk. CI has no
-AMD GPU/Windows, so torch, the performance counter, and platform are all mocked.
-
-The last section covers the DirectX LUID join layered on top of that counter,
-which resolves the single-GPU host capacity ranking alone can never attribute.
-"""
+"""Windows hipMemGetInfo reports free equal to total, so per-GPU VRAM comes from the adapter counter."""
 
 from __future__ import annotations
 
@@ -337,13 +316,7 @@ def test_match_adapter_reports_unknown_when_hidden_usage_fits_visible_card():
 
 
 def test_match_adapter_capacity_forced_matrix():
-    """Exhaustive hidden-adapter matrix for the capacity-forced rule.
-
-    A value is emitted only when the supra-threshold counters number exactly the
-    visible devices AND a device's ranked usage strictly exceeds every smaller
-    card's capacity. Otherwise (a visible card idle, a merely-fitting usage, or the
-    smallest card) every device reports unknown.
-    """
+    """Usage is attributed only if counters match the visible devices and exceed every smaller card."""
     m = hw._match_adapter_used_to_devices
     assert m([40 * GB, 0.5 * GB, 3 * MiB], [48 * GB, 8 * GB]) == [40 * GB, None]
     assert m([40 * GB, 20 * GB, 5 * GB, 3 * MiB], [48 * GB, 24 * GB, 8 * GB]) == [
@@ -558,12 +531,7 @@ def test_the_arch_answers_when_the_names_do_not(win_rocm, monkeypatch):
 
 
 def test_a_partial_name_pass_still_lets_the_arch_finish_the_job(win_rocm, monkeypatch):
-    """Three cards, one uniquely named and two sharing a name but not an arch.
-
-    The name pass places the unique card and leaves the pair unknown, which is a
-    real result and used to end the search. It should not: the arch separates
-    all three, and the pass that places more devices is the one to keep.
-    """
+    """After a partial name pass, the arch pass still runs and places the remaining cards."""
     devices_spec = [
         ("AMD Radeon PRO W7900", 48 * GB, "gfx1100"),
         ("AMD Radeon RX 9070", 16 * GB, "gfx1201"),
@@ -1242,19 +1210,7 @@ def test_a_name_collision_falls_through_to_the_gfx_pass(win_rocm, monkeypatch):
 
 
 def test_the_measured_strix_halo_registry(win_rocm, monkeypatch):
-    """The one real Windows AMD reading taken so far, pinned.
-
-    Windows 11 Pro 26200, AMD Radeon(TM) 8060S Graphics, driver 32.0.21041.1000.
-    Two things it establishes that no CI machine could: AdapterLuid comes back as
-    an Int64 rather than the bytes a REG_BINARY would give, so int() is a no-op;
-    and that driver writes no AdapterFamily at all, so the gfx pass is skipped
-    and the NAME pass is what carries the join. DirectX and props.name agreed
-    exactly there, which is why it lands.
-
-    The counter set is also not a subset of the DirectX key: instance 94361 has
-    1.273 GB shared and no adapter record at all, so anything assuming every
-    instance resolves to a record would be wrong.
-    """
+    """Windows 8060S registry: LUID is an Int64, no AdapterFamily is written, one instance has no record."""
     records = {86826: {"name": "AMD Radeon(TM) 8060S Graphics"}}
     monkeypatch.setattr(hw, "_windows_amd_adapter_records_by_luid", lambda: records)
     adapters = [
@@ -1279,25 +1235,7 @@ def test_the_measured_strix_halo_registry(win_rocm, monkeypatch):
 
 
 def test_the_measured_strix_halo_needs_the_join_for_any_aggregate(win_rocm, monkeypatch):
-    """Measured on the Windows gfx1151 while it held a model: THREE counter
-    instances for ONE visible GPU.
-
-    The AMD adapter plus two placeholders that never go away. So on this host the
-    counter list is never as long as the visible set, the cardinality gate in
-    ``_rocm_windows_aggregate_used_bytes`` fails closed permanently, and capacity
-    ranking can never supply an aggregate no matter what is loaded. The LUID join
-    is not a second opinion here, it is the only path to a figure at all.
-
-    This is the shape a single-GPU Windows AMD host actually has, which is why
-    #7072's reporter saw Unknown where the hardware was plainly busy.
-
-    The figure itself moved when the APU pairing landed on top of the join. The
-    join reads Dedicated Usage, which pins at the carve-out, and this part is a
-    confirmed APU whose retained total spans the pool, so the published number is
-    now Dedicated+Shared (31.681 + 17.820, the counters measured together on the
-    same host). What the join still supplies, and nothing below it can, is the
-    aggregate: that is the claim this test exists for and it is unchanged.
-    """
+    """gfx1151 shows three counter instances for one GPU, so only the LUID join yields an aggregate."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
     monkeypatch.setitem(
         sys.modules,
@@ -1342,10 +1280,7 @@ def test_the_measured_strix_halo_needs_the_join_for_any_aggregate(win_rocm, monk
 
 
 def test_the_join_declines_usage_it_cannot_place(win_rocm, monkeypatch):
-    """A hidden AMD card carrying the visible device's torch name, while the
-    visible card's own record is spelled differently. The visible device's
-    counter sits under a key no device claims, so pairing the remaining one would
-    report the hidden card's bytes as the visible card's."""
+    """Unclaimed counter must not pair with the remaining card, or a hidden card's bytes read as visible."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
     monkeypatch.setitem(
         sys.modules,
@@ -1455,10 +1390,7 @@ def _mixed_host(monkeypatch):
 
 
 def test_widened_apu_total_does_not_cost_the_discrete_card_its_usage(win_rocm, monkeypatch):
-    """Hidden-adapter branch. Against carve-out totals [8, 24] the 10 GiB counter
-    exceeds 8 GiB, so capacity forces it onto the 24 GiB card. Against a 128 GiB
-    pool the APU takes rank 0, 10 GiB no longer exceeds the next capacity, and
-    the discrete card reads Unknown."""
+    """A widened APU pool must not cost the discrete card its usage; the 10 GiB counter stays on it."""
     _mixed_host(monkeypatch)
     monkeypatch.setattr(
         hw.subprocess, "run", _subprocess_run(adapter_output = _adapter_output(MIXED_ADAPTERS))
@@ -1472,10 +1404,7 @@ def test_widened_apu_total_does_not_cost_the_discrete_card_its_usage(win_rocm, m
 
 
 def test_widened_apu_total_does_not_make_every_pairing_ambiguous(win_rocm, monkeypatch):
-    """Equal-length branch, no placeholder counter. The ambiguity check asks
-    whether the two usages could be swapped without breaking capacity: 10 GiB
-    does not fit the 8 GiB carve-out, so they could not, but it fits a 128 GiB
-    slot, so every ranking on a mixed host becomes swappable."""
+    """Widening the APU to the pool must not make every mixed-host ranking look swappable."""
     _mixed_host(monkeypatch)
     monkeypatch.setattr(
         hw.subprocess, "run", _subprocess_run(adapter_output = _adapter_output(MIXED_ADAPTERS[:2]))
@@ -1487,10 +1416,7 @@ def test_widened_apu_total_does_not_make_every_pairing_ambiguous(win_rocm, monke
 
 
 def test_widened_apu_total_does_not_admit_an_impossible_counter(win_rocm, monkeypatch):
-    """A 50 GiB counter fits no visible card, so the list is not the visible set
-    and every device must read Unknown. Against a 128 GiB slot it fits, shifts
-    the others down a rank and fabricates 30 GiB on the 48 GiB card: a wrong
-    reading rather than an unknown one, which the guard does not cover."""
+    """A 50 GiB counter that fits no visible card must make every device Unknown, not shift the readings."""
     torch = _fake_torch(
         [
             ("AMD Radeon(TM) 8060S Graphics", 8 * GB),
@@ -1522,10 +1448,7 @@ def test_widened_apu_total_does_not_admit_an_impossible_counter(win_rocm, monkey
 
 
 def test_a_driver_total_below_the_carve_out_is_not_adopted(win_rocm, monkeypatch):
-    """The classifier says carve-out for a discrete card on an unsettled runtime
-    too, and this path carries a used alongside the total. A driver total below
-    props.total_memory there reports past 100% utilization and, through
-    free = max(total - used, 0), zero free on a card that is mostly empty."""
+    """A driver total below props.total_memory is refused, or free clamps to zero on a mostly empty card."""
     torch = _fake_torch(DEVICES, free_equals_total = True)
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setattr(hw, "_rocm_props_total_is_carve_out", lambda props: True)
@@ -1555,10 +1478,7 @@ def test_a_failing_carve_out_probe_keeps_the_device(win_rocm, monkeypatch):
 
 
 def test_the_inventory_path_also_refuses_to_shrink_a_total(monkeypatch):
-    """The sibling correction this one is modelled on. It publishes no used, so a
-    shrink cannot break the used <= total invariant there, but an understated
-    total still hides models the device can hold, which is the failure the
-    classifier exists to prevent."""
+    """Inventory path must not shrink a total either, since an understated total hides models that fit."""
     # Pin get_device: on a GPU-less CI runner cached detection answers CPU and empties the inventory.
     monkeypatch.setattr(hw, "get_device", lambda: hw.DeviceType.CUDA)
     monkeypatch.setattr(hw, "IS_ROCM", True)
@@ -1575,14 +1495,7 @@ def test_the_inventory_path_also_refuses_to_shrink_a_total(monkeypatch):
 
 
 def _apu_host(monkeypatch, unified_used = 12.0 * GB):
-    """A lone 8 GiB carve-out / 128 GiB pool APU.
-
-    ``unified_used`` stands in for _rocm_windows_unified_used_bytes, which sums
-    Dedicated and Shared. Patched rather than driven through the counters because
-    what is under test here is that a widened device takes that figure, not the
-    counter plumbing, which #9362's own tests already cover. ``None`` simulates it
-    declining.
-    """
+    """Lone 8 GiB carve-out APU with a 128 GiB pool; the Dedicated plus Shared figure is patched in."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
     torch = _fake_torch([APU])
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -1634,10 +1547,8 @@ def test_a_declining_unified_read_leaves_the_apu_unknown(win_rocm, monkeypatch):
 
 
 def test_shared_usage_needs_a_positively_unified_part(win_rocm, monkeypatch):
-    """_rocm_props_total_is_carve_out fails open, so a discrete card on an
-    unsettled runtime can widen. Shared Usage is host memory that its
-    props.total_memory never counted, so the sum must not become its numerator:
-    the stricter classifier has to gate it, exactly as get_gpu_memory_info does."""
+    """Shared usage is host memory outside props.total_memory, so the sum needs a positively unified
+    part."""
     _apu_host(monkeypatch, unified_used = 90.0 * GB)
     monkeypatch.setattr(hw, "_rocm_props_are_positively_unified", lambda props: False)
 
@@ -1648,10 +1559,7 @@ def test_shared_usage_needs_a_positively_unified_part(win_rocm, monkeypatch):
 
 
 def test_a_nonzero_sub_threshold_row_declines_the_unified_sum(win_rocm, monkeypatch):
-    """The helper picks the lone counter above the noise floor. With only the APU
-    visible but a hidden GPU active, that counter is the hidden one and the APU is
-    the small row, so its usage would be published as the APU's. The matcher
-    declines this shape by requiring every dropped counter to be an exact zero."""
+    """A nonzero sub-threshold row could be a hidden GPU's counter, so the unified sum needs exact zeros."""
     _apu_host(monkeypatch, unified_used = 30.0 * GB)
     monkeypatch.setattr(
         hw.subprocess,
@@ -1683,18 +1591,7 @@ def test_a_negative_counter_never_publishes_negative_usage(win_rocm, monkeypatch
 
 
 def test_an_apu_beside_a_discrete_card_probes_only_the_apu(win_rocm, monkeypatch):
-    """The mixed host, which is the one configuration nobody has hardware for.
-
-    An APU whose props.total_memory IS the 32 GiB carve-out, beside a 48 GiB
-    discrete card holding 40 GiB. Three things have to hold at once, and only
-    the middle one is covered elsewhere:
-
-      * the APU's total widens to the pool, 32 -> 89.46
-      * the discrete card KEEPS its capacity-forced 40 GiB; widening one device
-        must not rerank the others out of a reading
-      * exactly one mem_get_info call, on the APU. The discrete card must not be
-        asked, because that call attaches a permanent ~612 MiB context.
-    """
+    """APU beside a discrete card: the APU widens, the discrete card keeps its usage and is never probed."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0,1")
     torch = _fake_torch(
         [
@@ -1736,11 +1633,7 @@ def test_an_apu_beside_a_discrete_card_probes_only_the_apu(win_rocm, monkeypatch
 
 
 def test_the_poll_does_not_probe_an_unclassified_discrete_card(win_rocm, monkeypatch):
-    """mem_get_info attaches a primary HIP context worth ~612 MiB that is never
-    released, and main reaches this function without ever calling it. The
-    carve-out classifier fails open for an unclassified discrete card, so gating
-    the probe on it would take that off every discrete GPU on the host on every
-    telemetry poll, for a total the device then does not use."""
+    """mem_get_info leaves a ~612 MiB HIP context behind, so the poll must not probe unclassified cards."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0,1")
     torch = _fake_torch(DEVICES)
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -1754,10 +1647,7 @@ def test_the_poll_does_not_probe_an_unclassified_discrete_card(win_rocm, monkeyp
 
 
 def test_a_failed_driver_probe_keeps_the_apu_on_the_dedicated_counter(win_rocm, monkeypatch):
-    """Being a UMA part says what the device is, not what scope its total has. A
-    confirmed APU whose mem_get_info probe fails keeps a carve-out-sized total,
-    and Dedicated Usage is the correct numerator for that one. Summing Shared
-    into it would clamp to a fabricated 100%."""
+    """A confirmed APU whose probe fails keeps Dedicated usage; summing Shared would fabricate 100%."""
     _apu_host(monkeypatch, unified_used = 40.0 * GB)
     torch = sys.modules["torch"]
     monkeypatch.setattr(
@@ -1773,17 +1663,7 @@ def test_a_failed_driver_probe_keeps_the_apu_on_the_dedicated_counter(win_rocm, 
 
 
 def test_the_measured_strix_halo_at_64_gib_held(win_rocm, monkeypatch):
-    """Real numbers off a Windows gfx1151, driver 32.0.21041.1000, 32 GiB carve-out.
-
-    Holding 64 GiB, Dedicated Usage reads 31.637 GB and Shared 33.887: Dedicated
-    tracks the allocation one for one until it pins at the carve-out, then stays
-    flat while Shared absorbs every further GiB. props.total_memory is already
-    89.465 GB, so nothing widens and total_is_pool never fires.
-
-    Pre-PR this reported 31.64 used against an 89.46 total, i.e. 57.82 GB free
-    with 64 GiB resident. Overstating free by 33.88 GB is the direction that
-    OOMs, and it is the case this pairing exists to fix.
-    """
+    """Dedicated plateaus at the carve-out at 64 GiB held; alone it overstates free, the OOM direction."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
     torch = _fake_torch([("AMD Radeon(TM) 8060S Graphics", int(89.465 * GB))])
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -1819,10 +1699,7 @@ def test_the_measured_strix_halo_at_64_gib_held(win_rocm, monkeypatch):
 
 
 def test_a_confirmed_apu_takes_the_unified_sum_even_unwidened(win_rocm, monkeypatch):
-    """The measured gfx1151 has props.total_memory already spanning the pool, so
-    nothing widens and total_is_pool stays false. The total is pool-scoped all
-    the same, and Dedicated alone plateaus at the carve-out under it, which is
-    the reading that reports a loaded APU as mostly free."""
+    """Confirmed APU uses the unified sum even unwidened, because Dedicated alone plateaus at carve-out."""
     _apu_host(monkeypatch, unified_used = 4.0 * GB)
     torch = sys.modules["torch"]
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda i: (0, APU[1]))
@@ -1834,10 +1711,8 @@ def test_a_confirmed_apu_takes_the_unified_sum_even_unwidened(win_rocm, monkeypa
 
 
 def test_the_unified_sum_is_clamped_to_the_widened_total(win_rocm, monkeypatch):
-    """Dedicated plus Shared counts driver and desktop allocations too, so it can
-    exceed torch's pool. Every other reading is clamped on its way through the
-    matcher; this one bypasses it and the payload derives free as total minus
-    used, so an unclamped sum publishes negative free."""
+    """The unified sum is clamped to the widened total, since driver plus desktop use can exceed the
+    pool."""
     _apu_host(monkeypatch, unified_used = 140.0 * GB)
 
     devices, aggregate = hw._rocm_windows_per_device_vram([0])
@@ -1919,11 +1794,7 @@ def _phoenix_host(
     gfx = "gfx1103",
     name = "AMD Radeon(TM) 780M Graphics",
 ):
-    """A lone Windows APU on a pre-6.2 HIP runtime, driven through the counters.
-
-    ``_rocm_props_are_positively_unified`` is deliberately NOT patched: what is
-    under test is the classification itself, so the real helper has to run.
-    """
+    """The real _rocm_props_are_positively_unified runs unpatched on a pre-6.2 HIP runtime APU."""
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
     torch = _fake_torch([(name, int(PHOENIX_POOL), gfx)])
     torch.__version__ = "2.9.0+rocm6.1"
@@ -1976,11 +1847,7 @@ def test_a_discrete_card_is_not_positively_unified(win_rocm):
 
 
 def test_a_phoenix_pool_total_takes_the_shared_sum_not_the_plateau(win_rocm, monkeypatch):
-    """16.90 GiB pool under an 8 GiB carve-out with 12 GiB resident.
-
-    Pre-fix: 7.90 used, i.e. 9.00 free with 12 GiB in the pool. Overstating free
-    by 4.10 GB is the direction that OOMs, and it is the same reading the
-    measured gfx1151 gets when Dedicated alone is paired with a pool total."""
+    """A phoenix pool total takes the shared sum, not the plateau, or free is overstated by 4.10 GB."""
     _phoenix_host(monkeypatch)
 
     devices, aggregate = hw._rocm_windows_per_device_vram([0])

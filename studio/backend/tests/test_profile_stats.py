@@ -819,11 +819,7 @@ def test_training_totals(stats_db):
 
 
 def test_first_token_time_is_read_as_a_duration(stats_db):
-    """firstTokenTime is `Date.now() - streamStartTime`, not a wall-clock stamp.
-
-    Treating it as a stamp and subtracting streamStartTime made the comparison
-    fail for every real message, so the average was always empty.
-    """
+    """firstTokenTime is a duration (Date.now() minus streamStartTime), not a timestamp to subtract."""
     now = datetime.now()
     conn = studio_db.get_connection()
     try:
@@ -1017,12 +1013,7 @@ def test_recent_run_name_prefers_the_users_rename(stats_db):
 
 
 def test_historical_daylight_saving_offsets_are_respected(stats_db):
-    """A fixed offset would put a winter message on the wrong day.
-
-    2026-01-15 04:30 UTC is 23:30 on the 14th in New York, which is UTC-5 in
-    January. Reusing a summer offset of UTC-4 pushes it to 00:30 on the 15th,
-    so the one hour of drift crosses midnight and moves the activity grid.
-    """
+    """Historical DST offsets matter: a fixed summer offset moves a winter message across midnight."""
     winter = datetime(2026, 1, 15, 4, 30, tzinfo = timezone.utc)
     conn = studio_db.get_connection()
     try:
@@ -1368,12 +1359,7 @@ def test_daily_series_is_dense_and_clamped(stats_db):
 
 
 def test_route_does_not_block_the_event_loop(stats_db, monkeypatch):
-    """A cold stats pass must not stall streaming for the rest of the app.
-
-    The aggregation is CPU-bound and can run for a second on large histories,
-    so the route offloads it to a worker thread. This drives the endpoint with a
-    heartbeat coroutine alongside it and asserts the loop kept ticking.
-    """
+    """Stats aggregation runs in a worker thread so a cold pass cannot stall the event loop."""
     import asyncio
 
     from routes import profile_stats as route_module

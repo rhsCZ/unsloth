@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the native_context_length feature (PR #4746).
-
-Verifies the `native_context_length` property on LlamaCppBackend and the
-matching Pydantic fields. The raw GGUF `_context_length` must never be
-overwritten by VRAM-capping logic.
-
-Needs no GPU, network, or libraries beyond pytest and pydantic.
-"""
+"""The raw GGUF _context_length must never be overwritten by VRAM-capping logic."""
 
 import io
 import json
@@ -386,11 +379,7 @@ class TestRouteCompleteness:
         assert "for name in _InferenceRuntimeFields.model_fields" in self._source
 
     def test_non_gguf_load_responses_report_the_native_window(self):
-        """Non-GGUF LoadResponse blocks carry native_context_length and max_context_length.
-
-        These once had to be absent, back when only GGUF knew its own window; a non-GGUF
-        block that leaves them off now defaults them to None and blanks the control.
-        """
+        """Non-GGUF LoadResponse must set native_context_length, or the control blanks on a None default."""
         blocks = self._find_construction_blocks("LoadResponse")
         npu = [b for b in blocks if "is_npu = True" in b]
         non_gguf = [
@@ -420,11 +409,7 @@ class TestRouteCompleteness:
             ), f"Non-GGUF LoadResponse should set context_length:\n{block[:200]}"
 
     def test_status_path(self):
-        """InferenceStatusResponse construction with llama_backend has the field.
-
-        The route may splat the helper's result straight in, or bind it first
-        and adjust a field before passing it on. Both carry the runtime fields.
-        """
+        """InferenceStatusResponse built from llama_backend must carry the runtime fields, however bound."""
         blocks = self._find_construction_blocks("InferenceStatusResponse")
         found = False
         for block in blocks:

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""detect_hardware() records WHY a host is chat-only so the UI can explain the
-greyed-out Train/Export instead of disabling them silently.
-
-The key case is Apple Silicon without an importable MLX -> "mlx_unavailable",
-which is the usual cause of "Train and Export greyed out" on Macs after a
-reinstall/update dropped MLX.
-"""
+"""detect_hardware() records why a host is chat-only; Apple Silicon without MLX gives mlx_unavailable."""
 
 from __future__ import annotations
 

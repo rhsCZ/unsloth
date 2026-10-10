@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Fake lemond 11.9.0 with authenticated requests, model state and download progress.
-
-Accepts LemonadeServer's arguments and logs requests to cache/requests.jsonl.
-"""
+"""Fake lemond 11.9.0 that logs each request to cache/requests.jsonl; accepts LemonadeServer args."""
 
 from __future__ import annotations
 

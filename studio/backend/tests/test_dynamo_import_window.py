@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The partially-initialised ``torch._dynamo`` window (#10350, #10963).
-
-``torch/__init__.py`` makes ``_dynamo`` a lazy submodule, so ``torch._dynamo.X`` imports it
-on demand and returns whatever ``sys.modules`` holds, a still-initialising module included.
-``diffusers.hooks`` opens that window on every diffusion load with an offload policy, because
-it evaluates ``@torch.compiler.disable()`` at class-body time and that is ``import
-torch._dynamo``. Nothing on the offload path is guarded, so a read from another thread in
-that window fails the whole load with a bare one-line error.
-
-These tests pin the three things the fix depends on, none of which need a real torch:
-
-  1. ``ensure_dynamo_imported`` resolves ``.utils`` BY ATTRIBUTE, so the state an ``import``
-     cannot see (submodule in sys.modules, never bound on the parent) is still caught.
-  2. It is idempotent and single-flight, which is the property that closes the window.
-  3. The load path calls it BEFORE ``apply_memory_plan``, and the load failure handler logs
-     with ``exc_info``. Both are asserted against the source, since reaching them for real
-     needs a GPU and a model.
-"""
+"""ensure_dynamo_imported resolves .utils by attribute, runs single-flight, and precedes loads."""
 
 from __future__ import annotations
 
@@ -44,12 +27,7 @@ def warm(monkeypatch):
 
 
 def _fake_torch(monkeypatch, *, bind_utils: bool):
-    """A ``torch`` whose ``_dynamo`` may or may not have ``.utils`` bound on it.
-
-    ``bind_utils=False`` is the reported state: ``torch._dynamo`` and ``torch._dynamo.utils``
-    are both in ``sys.modules``, so both imports succeed, but the parent never got the
-    attribute -- which is how the compile stack reads it.
-    """
+    """bind_utils=False: torch._dynamo.utils is in sys.modules but never bound on the parent."""
     torch = types.ModuleType("torch")
     dynamo = types.ModuleType("torch._dynamo")
     utils = types.ModuleType("torch._dynamo.utils")
@@ -83,13 +61,7 @@ def test_absent_torch_is_not_fatal(warm, monkeypatch):
 
 
 def test_concurrent_callers_import_once(warm, monkeypatch):
-    """Single-flight is the whole mechanism: the window closes because exactly ONE thread
-    performs the first import while the rest wait on our lock rather than racing CPython's.
-
-    Asserted by counting the IMPORTS, not the lock entries. Threads that arrive before the
-    first one latches legitimately queue on the lock, so a bound on lock entries is a race
-    against thread scheduling; the double-checked flag inside the lock is what guarantees
-    the import body runs once, and that is the property worth pinning."""
+    """Counts imports, not lock entries; the double-checked flag ensures the import body runs once."""
     _fake_torch(monkeypatch, bind_utils = True)
 
     real_import = builtins.__import__
@@ -119,12 +91,7 @@ def test_concurrent_callers_import_once(warm, monkeypatch):
 
 
 def test_the_warm_closes_the_window_before_it_starts_a_thread():
-    """The warm is what actually fixes this: it gets the first import done while the process
-    is still single-threaded. _prime_nvlink_topology starts the first thread this module
-    spawns, so warming after it would forfeit that.
-
-    Asserted on source order rather than by running the stage, which would need real hardware
-    detection."""
+    """Warm runs before any thread starts, so the first torch._dynamo import happens single-threaded."""
     import inspect
     from utils import torch_warmup
 
@@ -158,14 +125,7 @@ def _load_pipeline_body():
 
 
 def test_load_path_closes_the_window_before_every_dynamo_consumer():
-    """Order is the point, not presence, and there is more than one consumer.
-
-    ``apply_memory_plan`` imports ``diffusers.hooks``, but the speed path gets there FIRST on the
-    default GGUF profile: ``apply_speed_optims`` reads ``torch._dynamo.config`` and
-    ``compile_cache.begin`` enters the compile stack. Whichever runs first is the one that can
-    lose the race, and the speed path's own best-effort handler would swallow it, quietly
-    disabling compile while leaving the module poisoned for the offload below. So the pre-import
-    has to precede all three, not just the offload."""
+    """The pre-import must precede all dynamo consumers, since the speed path may import first."""
     body = _load_pipeline_body()
     # keyed on lineno: ast.walk is breadth-first, so a try/except wrapper would reorder it
     lines = {}
@@ -198,14 +158,7 @@ def test_load_path_closes_the_window_before_every_dynamo_consumer():
 
 
 def test_the_video_path_closes_the_window_before_each_of_its_diffusers_imports():
-    """The image path is not the only one that reaches diffusers.
-
-    ``core/inference/video.py`` imports it twice: once during modular validation, which runs on
-    the REQUEST thread, and once during pipeline assembly. The server accepts requests as soon as
-    the socket binds, while the background warm may still be inside ``import torch._dynamo``, so
-    a video load issued right after startup can recreate exactly the race this PR closes for
-    images. Every ``import diffusers`` in this file must be preceded by the guard.
-    """
+    """Each import diffusers in video.py needs the guard first; requests can arrive during the warm."""
     src = (_BACKEND / "core/inference/video.py").read_text(encoding = "utf-8").splitlines()
     # assert_pipeline_class_available closes the window itself, ahead of its own import
     guards = [
@@ -227,14 +180,7 @@ def test_the_video_path_closes_the_window_before_each_of_its_diffusers_imports()
 
 
 def test_the_pipeline_class_probe_closes_the_window_itself():
-    """The guard belongs where the import is, not at each call site.
-
-    ``assert_pipeline_class_available`` does its own ``import diffusers`` and then a ``hasattr``
-    that imports the pipeline's submodule, and all three request-thread entry points reach it:
-    image validation (diffusion.validate_load_request), video validation, and the training
-    preflight (_assert_family_pipeline_available -> DiffusionLoraConfig.normalized). Guarding it
-    once here covers every caller, including any added later, which chasing call sites does not.
-    """
+    """Guard lives inside assert_pipeline_class_available, so every request-thread caller is covered."""
     tree = ast.parse(
         (_BACKEND / "core/inference/diffusion_families.py").read_text(encoding = "utf-8")
     )

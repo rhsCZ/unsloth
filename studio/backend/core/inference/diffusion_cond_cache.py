@@ -118,11 +118,8 @@ def install(
     te_quant: Any = None,
     logger: Any = None,
 ) -> bool:
-    """Wrap ``pipe.encode_prompt`` with the persistent cache. No-op (False) when
-    the env knob is unset, the pipe has no ``encode_prompt``, or setup fails.
-
-    Instance-level assignment only: the wrapper dies with the pipe on unload and
-    never mutates the pipeline class."""
+    """Instance-level wrapper of pipe.encode_prompt, so it dies with the pipe and never mutates the
+    class."""
     root = cache_dir()
     if root is None:
         return False
@@ -219,11 +216,7 @@ def _diffusers_version() -> Optional[str]:
 
 
 def _source_revision(ref: Any) -> str:
-    """Revision marker for a checkpoint reference (see the shared helper for why).
-
-    Delegates to ``diffusion_train_extras.source_revision`` so the trainer's cache
-    namespace and this wrapper cannot drift apart on what counts as the same source.
-    """
+    """Delegates to the trainer's source_revision so both caches agree on what counts as the same source."""
     try:
         from core.training.diffusion_train_extras import source_revision  # noqa: PLC0415
         return source_revision(ref)

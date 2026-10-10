@@ -485,15 +485,7 @@ def test_two_plots_in_one_code_execution_turn_replay_no_base64():
 
 
 def test_a_flood_of_stacked_image_markers_stays_linear():
-    """A hosted result's length is the provider's to choose and this runs on the request
-    thread, so the cost has to follow it. Re-partitioning the shortened string once per
-    marker copies it again every time: quadruple the markers and the work grows about
-    sixteenfold instead of fourfold.
-
-    Measured as CPU time, and as the best of several runs. A shared runner can deschedule
-    the process mid-call, which adds wall clock but no CPU, and taking the minimum drops
-    the samples where it happened -- interference can only ever make a run look slower.
-    """
+    """Stacked image markers must cost linear time; repartitioning the string per marker is quadratic."""
 
     def cost(markers: int) -> float:
         flood = '\n__IMAGES__:["x"]' * markers
@@ -511,10 +503,7 @@ def test_a_flood_of_stacked_image_markers_stays_linear():
 
 
 def test_a_large_source_map_is_still_taken_off_the_result():
-    """No length bound here either. Every source record repeats its whole chunk and
-    `search_knowledge_base` honours the model's `top_k` without a ceiling, so a real map
-    can be megabytes; one refused for being big would be left for `_fit_result_to_room`
-    to cut into malformed JSON in front of the model."""
+    """A big source map must still be stripped, or _fit_result_to_room cuts it into malformed JSON."""
     import json as _json
 
     chunk = "retrieved text. " * 400
@@ -545,10 +534,7 @@ def test_a_large_plot_is_still_taken_off_the_result():
 
 
 def test_only_the_tools_that_emit_an_envelope_have_one_taken_off():
-    """`_strip_files_sentinel` is already scoped this way. A document an MCP tool read,
-    or a page that was fetched, can end in a well-formed line of either kind, and it is
-    content: the card keeps it, so cutting it leaves the model with less than the user
-    is looking at."""
+    """Only envelope-emitting tools lose it; a document an MCP tool read or a fetched page is content."""
     manifest = 'icons/\n__IMAGES__:["icon.png"]'
     citation = 'notes\n__RAG_SOURCES__:[{"filename": "a.pdf"}]'
 
@@ -732,10 +718,7 @@ def test_replayed_arguments_keep_the_order_the_model_generated():
 
 
 def test_two_xml_calls_written_in_different_orders_replay_in_their_own():
-    """Each call's own order, not one fixed order that happens to look unsorted.
-
-    No fixed order satisfies both, so on the sorted encoder both replay as the same string.
-    """
+    """Each XML call replays in its own parameter order; a sorted encoder would replay both the same."""
 
     def replay(*parameters):
         content = (

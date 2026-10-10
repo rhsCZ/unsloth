@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The document roster on old installs, hostile file names, and every platform.
-
-The roster reads ``rag.db`` on the request path and puts what it finds in the system
-prompt, so the two ways it can go wrong are a database written by an older Unsloth that
-does not have the tables the predicate names, and a file name carrying something the
-quoting does not stop. Both are covered here, along with the async conversion and a
-proof that none of it depends on the host or the accelerator.
-"""
+"""Roster on old rag.db schemas and hostile file names, independent of host and accelerator."""
 
 import asyncio
 import os
@@ -102,19 +95,7 @@ CREATE TABLE chunks (
 
 
 def _requires_rag():
-    """Skip where the roster cannot exist at all.
-
-    Called AFTER the legacy file is written: rag_available() opens the connection that
-    creates and migrates rag.db, so checking first would leave create_document's own
-    tables in place and the legacy schema could not be laid down at all.
-
-    A migration test asserts a document gets named, and naming one needs rag_available()
-    to be True. On a host where the sqlite-vec package imports but its vec0 library does
-    not load -- the common macOS case, called out in rag_available()'s own docstring --
-    it is False by design and the roster is correctly empty. That path has its own test
-    (test_roster_is_quiet_when_the_vector_extension_is_missing); asserting the opposite
-    here would only make the suite red on macOS.
-    """
+    """Skip when vec0 will not load: rag_available() is then False by design and no roster exists."""
     from storage import rag_db
     if not rag_db.rag_available():
         pytest.skip("sqlite-vec unavailable here, so there is no roster to migrate into")
@@ -190,10 +171,7 @@ def test_roster_is_quiet_when_no_database_exists_at_all(rag_home, fresh_process)
 
 
 def test_roster_degrades_rather_than_raising_when_the_gate_lies(rag_home, monkeypatch):
-    """A7. rag_db sets _extension_loaded before it ensures the schema, and
-    rag_available() short-circuits on that flag. So a process whose first _ensure_schema
-    failed reports "available" over an unmigrated file. The request still has to be
-    served: an empty roster, never a 500."""
+    """A failed schema migration can still report rag_available() True; the roster must degrade to empty."""
     from storage import rag_db
 
     _write_legacy_db(rag_home)
@@ -381,10 +359,7 @@ def test_a_name_that_reads_as_an_order_is_marked_as_data(rag_conn):
 
 
 def test_a_name_python_cannot_encode_never_reaches_the_database(rag_conn):
-    """B10. An undecodable byte in a Linux file name becomes a lone surrogate, and the
-    roster's byte accounting would raise on one. It cannot: sqlite3 refuses the bind
-    first, and folder_sync records the file as a failure. Pinned so the roster does not
-    grow a guard for something upstream already stops."""
+    """sqlite3 rejects lone-surrogate file names before the roster sees them, so no guard is needed."""
     with pytest.raises(UnicodeEncodeError):
         _doc(rag_conn, "project_p1", "d1", "bad\udcffname.pdf")
 
@@ -403,13 +378,7 @@ def _rag_db_fds():
 
 
 def test_many_concurrent_reads_leak_no_database_handles(rag_conn):
-    """C1. One connection per call, opened and closed in a finally on the request path.
-
-    The count does rise at first and then stops: each threadpool worker keeps a handle,
-    so it plateaus at the pool size and never passes it. That plateau is the oracle -- a
-    connection that escaped its finally would keep climbing with the number of reads, so
-    the assertion is that 400 further reads add nothing at all.
-    """
+    """Reads close their connection in finally; 400 further reads must add no open file descriptors."""
     from routes import inference
 
     if not os.path.isdir("/proc/self/fd"):
@@ -496,15 +465,7 @@ def test_the_read_does_not_run_on_the_event_loop(rag_conn, monkeypatch):
 
 
 def test_roster_strip_table_covers_every_control_and_format_character():
-    """The table is written out rather than derived, because deriving it costs ~90 ms of
-    startup. This is what keeps the two in step.
-
-    Only a MISSING codepoint is a defect. Extra ones are expected and fine: the table is
-    written against the newest Unicode, and an older interpreter's unicodedata has not
-    classified them yet -- Python 3.9 and 3.10 ship Unicode 13, which predates U+0890 and
-    the upper half of the Egyptian hieroglyph format controls. Stripping a character that
-    a later Unicode calls a format character is the safe direction to be wrong in.
-    """
+    """The strip table must cover every Cc and Cf codepoint; extra entries are fine on older Unicode."""
     from routes import inference
 
     expected = {c for c in range(0x110000) if unicodedata.category(chr(c)) in ("Cc", "Cf")}
@@ -569,10 +530,7 @@ _ACCELERATORS = [
 
 
 def test_the_roster_is_byte_identical_across_accelerators(rag_conn, monkeypatch):
-    """F. The claim is that [Windows, Linux, WSL, macOS] x [NVIDIA, AMD, CPU] is not a
-    real matrix for this change, because the roster is a pure function of rag.db. This is
-    that claim as an assertion rather than a comment: the sentence cannot move when the
-    accelerator does."""
+    """The roster is a pure function of rag.db, so output is byte-identical across every accelerator."""
     _doc(rag_conn, "project_p1", "d1", "syllabus.pdf")
     outs = {}
     for label, env in _ACCELERATORS:
@@ -605,10 +563,7 @@ def test_the_roster_touches_no_device_or_accelerator_code():
 
 
 def test_count_tokens_prices_the_same_roster_the_completion_sends(rag_conn, monkeypatch):
-    """The whole point of the count payload carrying real ids rather than a flag is that
-    the composer's context meter prices the roster the model will actually receive. If
-    the ids are dropped, or the count path stops awaiting the nudge, the meter
-    under-reports by exactly the roster and nothing else notices."""
+    """Count payload must carry the real ids, so the context meter prices the roster the model receives."""
     # conftest puts the backend root on sys.path, not tests/, so import the sibling harness that way.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from test_openai_auto_switch import _count_request, _count_tokens_backend, _counted_body
@@ -656,23 +611,7 @@ def test_count_tokens_prices_the_same_roster_the_completion_sends(rag_conn, monk
 @pytest.mark.parametrize("overlap", [0, 1, 39, 40])
 @pytest.mark.parametrize("project_only", [0, 1, 60])
 def test_an_omitted_document_always_earns_and_n_more(rag_conn, thread_names, overlap, project_only):
-    """Each scope is limited separately and the dedupe is shared, so the worry is that a
-    scope clipped by its own LIMIT contributes only duplicates, leaves `truncated` false,
-    and returns a list that reads as the whole set while documents sit behind it.
-
-    It cannot happen, and the reason is the `+ 1` on the limit. Only thread names are in
-    `seen` when the project scope starts, because each query is GROUP BY name and LIMIT
-    applies after aggregation, so a scope never returns a duplicate of itself. With T
-    names taken from the thread, duplicates in the project result are at most T, so a
-    project query that returns its full MAX_NAMES + 1 rows yields at least
-    (MAX_NAMES + 1) - T new ones and the running total reaches MAX_NAMES + 1, which trips
-    the cap first. A query returning fewer rows exhausted its scope. Either way, anything
-    dropped sets `truncated` and the count query runs.
-
-    Parametrised across both sides of every boundary rather than asserted once, because
-    the argument is arithmetic on the cap and the limit and would break silently if either
-    moved.
-    """
+    """The +1 on each scope's LIMIT means a clipped scope always sets truncated; no document is hidden."""
     from routes import inference
 
     if overlap > thread_names:

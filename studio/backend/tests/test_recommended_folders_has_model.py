@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Regression test for /recommended-folders suggesting empty scaffolds.
-
-The endpoint used to surface any well-known dir that merely existed, so a
-freshly installed LM Studio or Ollama (empty ``models`` dir) showed up as a
-"Recommended" chip with no models behind it. ``_dir_has_downloaded_model``
-now gates each candidate on real weights: a GGUF/safetensors file anywhere in
-the tree, or a non-empty Ollama ``manifests/`` beside ``blobs/``.
-
-``routes.models`` pulls the full backend dep tree, so we extract the real
-helper (and its ``_safe_is_dir`` dependency) from the source via AST and run
-the shipped code in isolation, mirroring
-``test_recommended_folders_permission.py``.
-
-Run:
-    python -m pytest studio/backend/tests/test_recommended_folders_has_model.py -v
-"""
+"""Recommended folders must show only dirs with real weights, not empty LM Studio or Ollama scaffolds."""
 
 import ast
 import json

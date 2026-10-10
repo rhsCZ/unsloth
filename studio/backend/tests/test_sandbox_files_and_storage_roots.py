@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Where a chat's files live, and how a user gets them back.
-
-Every assertion here failed before: the sandbox ignored UNSLOTH_STUDIO_HOME, only
-images could be fetched, nothing listed a chat's files, bash reported none, the
-compiled cache landed in the launcher's CWD, and a deleted chat left its folder
-behind. Verified on Windows, macOS and Linux.
-"""
+"""Chat files live under UNSLOTH_STUDIO_HOME and can be listed, fetched and cleaned up with the chat."""
 
 import asyncio
 import functools
@@ -247,13 +241,7 @@ _FRONTEND_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 @functools.lru_cache(maxsize = None)
 def _frontend_text(*rel: str) -> str:
-    """The named frontend sources concatenated, read once per distinct scope.
-
-    Two scopes, deliberately different sizes. A promise the dialog MUST make is looked for where
-    user-visible copy legitimately lives, so an unrelated occurrence elsewhere cannot satisfy it;
-    a promise it must NOT make is looked for everywhere, where breadth only makes the check
-    stricter. The cache matters because the wide scope is ~1200 files.
-    """
+    """Must-make promises are searched only in user-visible copy; must-not-make ones across all sources."""
     paths: list[Path] = []
     for r in rel:
         target = _FRONTEND_SRC / r
@@ -350,16 +338,8 @@ def test_legacy_sandbox_is_migrated(tmp_path, monkeypatch):
 
 
 def test_images_stay_inline_and_everything_else_downloads():
-    """Images keep a real media type; the rest are opaque attachments.
-
-    The allowlist is deliberately NOT just widened: the model picks these
-    filenames, so an inline text/html would be same-origin script execution.
-
-    `.avif` joined because it is a raster codec, not a document type -- `nosniff`
-    pins the type either way, and a model that writes `photo.avif` should get an
-    image rather than an attachment it cannot see. `.svg` stays out for exactly
-    that document-type reason: inline SVG is same-origin script execution.
-    """
+    """Images stay inline with a real type; other files download, since inline text/html would run
+    script."""
     from core.inference import tools as _t
     from routes.inference import _SANDBOX_MEDIA_TYPES
 
@@ -464,11 +444,7 @@ def test_compiled_cache_is_pinned_under_the_studio_home(tmp_path, monkeypatch):
 
 
 def test_cache_cleanup_finds_the_configured_and_cwd_caches(tmp_path, monkeypatch):
-    """Cleanup can now see a cache created outside the source tree.
-
-    Both cases matter: the pinned location for new installs, and the launcher's
-    CWD for a machine that already has one sitting in the user profile.
-    """
+    """Cache cleanup must find the pinned compiled cache and a legacy one left in the launcher's CWD."""
     from utils import cache_cleanup
 
     monkeypatch.chdir(tmp_path)
@@ -679,12 +655,7 @@ def test_the_legacy_migration_is_startup_work(tmp_path, monkeypatch):
 def test_a_read_does_not_answer_from_inside_a_legacy_move_s_staging_window(
     tmp_path, monkeypatch, paused_after, session_id
 ):
-    """A listing or download that lands while a session sits in staging must wait for the move.
-
-    Through that window the session is in neither root. Before the staging tree is marked a read
-    falls through to the destination before it exists; after, it finds the staging tree, which
-    the rename is about to take away. Either way the sandbox lists empty and every file card 404s.
-    """
+    """Reads during a legacy move's staging window must wait for the move, or the sandbox lists empty."""
     fake_home = tmp_path / "userprofile"
     fake_home.mkdir()
     _shared_setup_11(fake_home, monkeypatch, tmp_path)
@@ -743,12 +714,7 @@ def test_a_read_does_not_answer_from_inside_a_legacy_move_s_staging_window(
 
 
 def test_a_read_that_waited_out_a_stranded_move_finds_the_staging_tree(tmp_path, monkeypatch):
-    """A move whose rename and rollback both fail leaves the only copy in its marked staging tree.
-
-    A read whose first scan ran before the staging tree was marked waits the move out at the
-    legacy lookup, finds the legacy folder gone, and must look for the staging tree again rather
-    than hand back a destination that will never exist.
-    """
+    """After waiting out a stranded move, a read must re-check staging, not return a missing destination."""
     fake_home = tmp_path / "userprofile"
     fake_home.mkdir()
     _shared_setup_11(fake_home, monkeypatch, tmp_path)
@@ -833,14 +799,7 @@ def test_the_migration_is_serialised(tmp_path, monkeypatch):
 
 
 def test_a_first_tool_call_waits_out_a_move_already_in_staging(tmp_path, monkeypatch):
-    """The window above, forced rather than raced for.
-
-    ``_staged_move`` renames the tree aside into staging before renaming it into place, so in
-    between the legacy copy is gone and the destination does not exist yet. A first tool call
-    landing there used to read the missing source as nothing to do, create an empty sandbox
-    under the name the pending rename needs, and hand the chat a directory with none of its
-    files in it. The test above only hits this when the scheduler happens to line the two up,
-    which on CI was about one run in a hundred; this one blocks the mover inside the window."""
+    """A tool call in the staging window must wait for the move, not create an empty sandbox there."""
     import shutil
     import threading
 
@@ -894,12 +853,7 @@ def test_a_first_tool_call_waits_out_a_move_already_in_staging(tmp_path, monkeyp
 
 
 def test_the_migrated_flag_cannot_be_set_over_a_move_still_in_staging(tmp_path, monkeypatch):
-    """A whole-tree pass must not call the migration finished over a move still in staging.
-
-    While one session sits in staging, neither root holds it, so a pass that lists the legacy
-    root right then finds it empty and moves nothing. Reporting that as finished retires the
-    retry a rollback would need, and removes the legacy root a rollback renames back into. The
-    first tool call underneath has to come back with the files either way."""
+    """The migrated flag must not be set while a move is still in staging, or the rollback retry is lost."""
     import shutil
     import threading
 
@@ -959,10 +913,7 @@ def test_the_migrated_flag_cannot_be_set_over_a_move_still_in_staging(tmp_path, 
 
 
 def test_a_rolled_back_move_puts_the_migration_back_on_the_table(tmp_path, monkeypatch):
-    """_staged_move restores the legacy copy when the final rename fails, and says so in its
-    own comment: put it back and let the next pass retry. With the done flag already set by a
-    pass that ran while this sat in staging there is no next pass, and every later call short
-    circuits on the flag, so the chat keeps an empty sandbox until the process restarts."""
+    """A rolled-back move must keep the migration retryable; the done flag must not short-circuit it."""
     import os
     import shutil
     import threading
@@ -1025,12 +976,7 @@ def test_a_rolled_back_move_puts_the_migration_back_on_the_table(tmp_path, monke
 
 
 def test_a_move_that_begins_and_ends_inside_the_pass_still_counts(tmp_path, monkeypatch):
-    """The reversed interleaving: the rollback finishes before the pass looks.
-
-    Asking what is in flight only answers "right now". A move that starts after the pass has
-    listed the legacy root and rolls back before the pass reaches its check leaves nothing in
-    flight to find, yet the listing never saw it and the restored source is sitting at the
-    legacy root unlisted. The pass would call the migration done over it."""
+    """A move that begins and ends inside a pass must still count, since listing may have missed it."""
     import os
     import shutil
 
@@ -1088,14 +1034,7 @@ def test_a_move_that_begins_and_ends_inside_the_pass_still_counts(tmp_path, monk
 
 
 def test_a_rollback_between_the_two_reads_is_not_read_as_nothing_to_do(tmp_path, monkeypatch):
-    """Whether the session directory is there and whether a move is running are two reads.
-
-    A failing rename between them restores the tree, so the absence the first read saw and the
-    quiet the second saw describe different instants and neither is now. A caller splitting its
-    decision across that pair leaves without the files, which are back at the legacy root, and
-    caches an empty sandbox in their place. Nothing else picks it up either: the rolled-back
-    mover is the live background migration, so _start_legacy_migration hands back that same
-    thread rather than starting the pass that would have found it."""
+    """A rollback between the two reads must not be read as nothing to do and cache an empty sandbox."""
     import os
     import shutil
     import threading
@@ -1171,10 +1110,7 @@ def test_a_rollback_between_the_two_reads_is_not_read_as_nothing_to_do(tmp_path,
 
 
 def test_a_stalled_migration_does_not_grow_a_lock_per_chat(tmp_path, monkeypatch):
-    """The legacy root staying put is the normal shape of a migration that keeps failing, and
-    every uncached session consults it. _legacy_session_locks is documented as bounded by the
-    chats that had a legacy folder, so a chat with nothing there must not leave an entry, or a
-    stalled migration turns the table into a per-chat cache that only a restart clears."""
+    """A stalled migration must not add a lock per chat; only chats with a legacy folder get an entry."""
     fake_home = tmp_path / "userprofile"
     fake_home.mkdir()
     _shared_setup_11(fake_home, monkeypatch, tmp_path)
@@ -1434,10 +1370,7 @@ def test_the_download_route_serves_the_full_depth_under_the_scratch_dir(tmp_path
 
 
 def test_only_the_real_scratch_dir_skips_a_path_segment(tmp_path, monkeypatch):
-    """The walks read the stored spelling off os.walk and never follow links, so
-    the discount is the resolved directory's, not the name's. A model-made link
-    would otherwise serve a file neither walk lists, as a wrong-case entry does
-    on NTFS or APFS."""
+    """The walks never follow links, so the scratch-dir skip must key on the resolved directory."""
     HTTPException, tools = _shared_setup_19(monkeypatch, tmp_path)
     from routes import inference
 
@@ -3868,10 +3801,8 @@ def test_a_snapshot_stops_hashing_once_it_has_read_enough(tmp_path, monkeypatch)
 
 
 def test_a_call_that_shared_its_workdir_claims_nothing(tmp_path):
-    """Chats in one project share a workdir. Each call diffs the whole tree, so
-    the other call's output was advertised on this card and its download served
-    that content. No timestamps: a coarse or remote clock is exactly what this
-    cannot depend on."""
+    """A shared workdir yields no claimed outputs, since a whole-tree diff would expose other calls'
+    files."""
     from core.inference import tools
 
     workdir = tmp_path / "project-workspace"
@@ -5197,10 +5128,7 @@ def test_a_missing_file_manager_is_not_reported_as_a_missing_folder(tmp_path, mo
 
 
 def test_revealing_a_sandbox_demands_a_directory(tmp_path, monkeypatch):
-    """A tool can replace its own sandbox with a file between the route's isdir
-    check and the open, and the file branch names the parent, here the root
-    holding every other chat's. The route says up front that it only reveals a
-    directory rather than re-checking and losing the same race."""
+    """Revealing a sandbox demands a directory, since a tool can swap it for a file before the open."""
     import asyncio
     import inspect
 
@@ -5319,16 +5247,7 @@ def test_a_traversal_id_stays_inside_the_sandbox_root_and_opens_nothing(tmp_path
 
 
 def test_an_unusable_id_still_reads_the_legacy_shared_bucket(tmp_path, monkeypatch):
-    """The other half of the test above, and the reason it needs a fake home.
-
-    Before the per-id names, every id the filesystem could not hold shared one
-    bucket at the legacy root. `_legacy_session_dir` still reads that bucket, on
-    purpose, so those chats' files stay reachable after the upgrade. So "a
-    traversal id resolves to nothing" is not unconditional: it holds while the
-    bucket is absent, which is a precondition the previous test now states
-    instead of inheriting from whoever runs it. Pinning the read-back here means
-    deleting it cannot quietly turn that test into a tautology.
-    """
+    """Unusable ids still read the legacy bucket, so those chats' files stay reachable after the upgrade."""
     from core.inference import tools
 
     _shared_setup_11(tmp_path / "fake-home", monkeypatch, tmp_path)
@@ -6009,12 +5928,7 @@ def test_a_project_created_during_the_record_write_keeps_its_files(tmp_path, mon
 
 
 def test_a_project_created_inside_the_record_write_itself_keeps_its_files(tmp_path, monkeypatch):
-    """The same rescue, pinned to the window the name describes rather than to a call count.
-
-    The test above is satisfied by the `recreated` probe, well before the record write, so it
-    never reached the last check. Here the project appears during `record_orphaned_project`
-    itself, so only that check can save the files.
-    """
+    """A project created during record_orphaned_project's write keeps its files via the final recheck."""
     monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path / "home"))
 
     from core.inference import tools

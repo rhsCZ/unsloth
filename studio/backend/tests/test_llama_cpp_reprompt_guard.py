@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the plan-without-action re-prompt guard.
-
-The re-prompt in ``LlamaCppEngine.chat_stream`` nudges a model that said what
-it *will* do without calling a tool. On the intent regex and a length cap
-alone, ``First, let me set up pygame.`` plus a closed ```python block matched
-too, and the synthetic STOP turn then wiped the code.
-
-The guard adds the shapes a plan cannot contain: a closed code fence, a
-complete HTML page, a complete SVG. A numbered list is deliberately not one,
-so ``Here's my plan:\\n1. search\\n2. summarise`` still re-prompts.
-"""
+"""A closed fence or complete HTML/SVG is an answer artifact; a plain numbered list is not."""
 
 from __future__ import annotations
 
@@ -142,10 +132,7 @@ def test_artifact_regex_detects_html_page():
 
 
 def test_artifact_regex_ignores_incomplete_html_mention():
-    """A plan-only mention of <html> / <!doctype> without </html> close
-    must NOT be treated as a completed answer. Pre-fix the guard matched
-    bare ``<!doctype\\b`` and ``<html\\b`` and suppressed the re-prompt
-    even though the model never emitted a complete page."""
+    """A bare <html> or <!doctype> mention without </html> is a plan, not a completed page."""
     samples = [
         "First, I'll create an <html> skeleton, then add CSS and JavaScript.",
         "First, I'll write a complete <!doctype html> page with a button.",
@@ -397,12 +384,7 @@ def test_blockquote_marker_does_not_close_an_open_fence_early():
 
 
 def test_numbered_list_is_not_an_answer_artifact():
-    """A numbered list is never an answer artifact.
-
-    ``1. ... 2. ...`` is a plan as often as an answer and nothing in the text
-    separates them. A list answer with no intent phrasing never reached the
-    re-prompt anyway; one with intent phrasing behaves as it did on main.
-    """
+    """A numbered list alone is never an answer artifact, since it reads as a plan as often as an answer."""
     plan_stalls = [
         "Here's my plan:\n1. Search the web for the chart.\n2. Summarise.",
         "I will:\n1. review code.\n2. summarize.",
@@ -529,11 +511,7 @@ def test_plan_framing_requires_apostrophe_in_ill():
 
 
 def test_no_reprompt_on_plan_titled_final_answer_without_actions():
-    """A final answer naturally titled ``Plan:`` / ``My plan:`` /
-    ``Approach:`` must NOT wipe. Bare ``Plan:`` / ``Approach:`` is
-    deliberately NOT an intent signal in _INTENT_SIGNAL because it
-    too often appears as a normal answer heading (lesson plan, meal
-    plan, business plan, project plan, ...)."""
+    """Bare Plan: or Approach: headers are not intent signals, because they title ordinary answers."""
     samples = [
         "Plan:\n1. Warm-up: Students review fractions.\n2. Group practice.\n3. Assessment.",
         "My plan:\n1. Breakfast: oatmeal and fruit.\n2. Lunch: rice bowl.\n3. Dinner: lentil soup.",
@@ -544,13 +522,7 @@ def test_no_reprompt_on_plan_titled_final_answer_without_actions():
 
 
 def test_no_reprompt_on_bare_plan_header_action_stall():
-    """Bare ``Plan:`` / ``Approach:`` headers paired with tool-action
-    verbs are NOT classified as plan stalls. Adding them as intent
-    markers caused false positives on legitimate plan answers; we
-    accept the smaller false negative (action plans titled only with
-    ``Plan:`` slip through) in exchange for not wiping valid answers.
-    Plan stalls that use an explicit first-person intent phrase ("I'll
-    search...", "First, I'll fetch...") are still caught."""
+    """Bare Plan:/Approach: headers with action verbs are not stalls; first-person intent still counts."""
     samples = [
         "Plan:\n1. search the docs\n2. summarise the result",
         "My plan:\n1. fetch the data\n2. verify the rows",
@@ -656,13 +628,7 @@ def test_no_backtrack_on_tilde_fence_spam():
 
 
 def test_artifact_regex_rejects_backtick_close_with_trailing_text():
-    """``\\n```not actually closed`` must NOT match a closed fence.
-
-    The closing fence must end the line (only trailing whitespace
-    before a newline or end-of-string). Otherwise an unclosed fence
-    where a later line begins with three backticks plus prose is
-    treated as a complete artifact and the re-prompt is wrongly
-    suppressed."""
+    """A closing fence must end its line, so a closing fence followed by prose is not complete."""
     samples = [
         "First, let me write it.\n```python\nprint('hi')\n```not actually closed",
         "First, let me show:\n```python\nprint('hi')\n```more text after",
@@ -750,10 +716,7 @@ def test_no_reprompt_on_lesson_plan_answer_without_explicit_header():
 
 
 def test_same_line_open_fence_with_numbered_body_still_reprompts():
-    """An OPEN code fence on the same line as preceding prose ("First,
-    let me write it. ``\\u00e0``text\\n...") still gates the numbered-list
-    fallback. The unclosed-fence helper now uses ``search`` so inline
-    openers are tracked, not just openers at column 0."""
+    """Unclosed-fence check uses search, so an inline opener still blocks the numbered-list fallback."""
     content = "First, let me write it. ```text\n1. Install dependencies\n2. Run the app"
     assert not _has_answer_artifact(content)
     assert _would_reprompt(content)
@@ -789,10 +752,7 @@ def test_reprompts_on_incomplete_html_with_inner_numbered_list():
 
 
 def test_complete_html_with_trailing_prose_tag_still_counts():
-    """A complete <html> answer followed by prose that mentions <html>
-    or <svg> tags (explanatory text) stays a complete artifact. The
-    unbalanced-tag count is skipped once a real artifact exists so
-    common explanatory prose does not falsely wipe valid answers."""
+    """Skip the unbalanced-tag count once an artifact is complete, so explanatory prose cannot wipe it."""
     samples = [
         "Here is the page:\n<html><body>1</body></html>\nUse the <html> tag for the root.",
         "Here is the SVG: <svg width='10'><circle/></svg> Place it inside an <html> page.",
@@ -815,10 +775,7 @@ def test_reprompts_on_empty_html_or_svg_skeleton_mention():
 
 
 def test_no_reprompt_on_code_fence_containing_markup_literal():
-    """A closed code fence whose body contains literal ``<html>``,
-    ``<svg>``, ``<body>`` strings is still a complete code answer.
-    The unclosed-markup cross-check operates on text with closed
-    fences stripped out so code literals do not falsely trip it."""
+    """The unclosed-markup check strips closed fences first, so literal tags in code do not trip it."""
     samples = [
         (
             "First, let me write the scraper.\n"
@@ -952,10 +909,7 @@ def test_doctype_empty_html_skeleton_still_reprompts():
 
 
 def test_reprompts_when_later_fence_is_open_after_closed_fence():
-    """A response with a complete code fence followed by a SECOND,
-    unclosed fence is still mid-stream and must re-prompt. The
-    `_has_unclosed_code_fence` cross-check must short-circuit even
-    after `_HAS_ANSWER_ARTIFACT` finds the first complete fence."""
+    """A later open fence after a complete one must still re-prompt, so the fence check always runs."""
     content = (
         "First, let me provide two files:\n"
         "```python\n"

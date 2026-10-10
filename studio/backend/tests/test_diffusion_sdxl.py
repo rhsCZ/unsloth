@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the SDXL diffusion family.
-
-SDXL is the one U-Net family: the denoiser is ``pipe.unet`` (not ``pipe.transformer``)
-and a single-file ``.safetensors`` is the whole pipeline (not a transformer-only file).
-These tests cover the pure helpers that encode those differences -- family detection,
-the ``denoiser_attr`` / ``single_file_is_pipeline`` flags, the non-GGUF trust allowlist,
-the VAE-dtype alignment reading the U-Net denoiser, and the LoRA-support gate -- with no
-torch/diffusers/GPU needed.
-"""
+"""SDXL's denoiser is pipe.unet, and one single-file safetensors is the whole pipeline."""
 
 from __future__ import annotations
 

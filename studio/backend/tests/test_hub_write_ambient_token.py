@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The backend's own HF_TOKEN must not be lent to an sk-unsloth API key (issue #10126).
-
-Two things have to hold. A write path refuses rather than publishing or pushing as the
-operator, and a load started by such a caller does not *run* as the operator: that needs the
-anonymous sentinel rather than None, because None is what unsloth reads as "go and find a
-credential" (``if token is None: get_token()``).
-"""
+"""sk-unsloth callers must not write or run as the operator; None would trigger a token lookup."""
 
 from unittest.mock import MagicMock
 
@@ -656,10 +650,7 @@ def test_every_mcp_tool_that_calls_a_gated_route_names_the_policy():
 
 
 def test_the_worker_can_still_disable_implicit_tokens_when_it_starts():
-    """huggingface_hub latches HF_HUB_DISABLE_IMPLICIT_TOKEN into a module constant at
-    import, so the scrub only works while the worker module has not pulled it in yet. An
-    import added anywhere in that chain would disable the switch with every other test in
-    this file still green, because they only read os.environ."""
+    """HF_HUB_DISABLE_IMPLICIT_TOKEN is latched at import, so any early huggingface_hub import breaks it."""
     import subprocess
     import sys
     import textwrap

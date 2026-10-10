@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A quantized V cache is priced with flash attention on, because llama.cpp will
-not run it any other way.
-
-``flash_attn = False`` used to be passed unconditionally as the conservative arm. It is
-conservative for a *choice*; for a quantized V cache it is not one. llama.cpp turns
-flash attention on itself --
-
-    enabling flash_attn since it is required for quantized V cache
-
--- and aborts without it, which ``_tensor_quant_kv_unsupported_binary`` documents as
-"V cache quantization requires flash_attn". The False arm sets
-``bpe_v = max(bpe_k, f16)``, charging the entire quantized saving on the V axis back
-and reporting a launch that cannot happen.
-
-Measured against llama-server b10632 (commit ``11cd98842``), Qwen3-0.6B-Q4_K_M,
-identical on the CPU and Vulkan builds:
-
-    ctx    -ctk/-ctv   reserved before   allocated     after
-    4096   q8_0            343 MiB        238 MiB     238 MiB
-    4096   q4_0            287 MiB        126 MiB     126 MiB
-    32768  q8_0           2744 MiB       1904 MiB    1904 MiB
-    32768  q4_0           2296 MiB       1008 MiB    1008 MiB
-
-The tests below do not need a binary: they assert the arithmetic identity that
-produced those numbers, which is that BOTH axes shrink with the cache type, not just
-K. A regression puts the f16 V back and the ratio jumps.
-"""
+"""A quantized V cache is always priced with flash attention on, since llama.cpp forces it."""
 
 import sys
 import types as _types
@@ -222,14 +196,7 @@ def test_a_quantized_v_in_the_extra_arguments_is_read_the_same_way(qwen3_shaped_
 
 
 def test_a_cpu_only_manual_launch_is_not_charged_for_a_pinned_card(monkeypatch, qwen3_shaped_gguf):
-    """Manual with zero layers is a CPU-only launch, and the loader drops the split
-    flags for it. Charging the pinned card count added per-device pipeline overhead
-    and replicated the context-linear compute term for buffers no card allocates:
-    measured on a two-card pin, 1039 -> 2105 MiB at 4k and 1417 -> 5129 MiB at 262k.
-
-    Driven through the route, because the defect was in what the route HANDS the
-    device count, not in the device count itself. Asserting the two helpers in
-    isolation passes on the unfixed tree."""
+    """A zero-layer manual launch is CPU-only and must not be charged for pinned cards."""
     one = ri._gguf_runtime_bytes(
         qwen3_shaped_gguf, 32768, None, 4, "f16", False, None, None, n_devices = 1
     )
@@ -307,10 +274,7 @@ def test_an_explicit_ngl_in_the_extras_still_beats_the_inherited_count(
 def test_pass_through_adapters_are_charged_and_follow_the_base_placement(
     tmp_path, qwen3_shaped_gguf
 ):
-    """llama.cpp loads every --lora / --control-vector into resident tensors on top of
-    the base model, on the base tensor's buffer type. The files term prices only the
-    target and its companions, so without this an adapter load was a fit on the base
-    model's size alone."""
+    """Each --lora or --control-vector adapter is resident, so its bytes must be charged too."""
     from core.inference.llama_cpp import _sidecar_adapter_bytes
 
     lora = tmp_path / "adapter.gguf"
@@ -401,15 +365,7 @@ def test_grok_is_priced_without_flash_attention(monkeypatch, qwen3_shaped_gguf):
 
 
 def test_the_admission_estimate_keeps_the_no_flash_reserve(monkeypatch, ragged_swa_gguf):
-    """``_estimate_gguf_kv_gb`` feeds the active-training admission guard, and ``load_model``
-    holds the reading down through ``_reserved_flash_attn_state`` where a flash-attention-off
-    respawn cannot be re-placed. Resolving only the plan here admitted a load against the
-    smaller cache that the same placement then reserves the larger one for, so the respawn
-    could take VRAM the guard never admitted and take a training run with it.
-
-    A ragged-SWA shape with an f16 cache: a quantized V forces flash attention on, and an
-    equal-width f16 cache does not move with the state, so on either of those the control
-    below could not fail."""
+    """The admission estimate keeps the no-flash reserve, or a respawn can take training VRAM."""
     monkeypatch.delenv("LLAMA_ARG_FLASH_ATTN", raising = False)
     monkeypatch.delenv("LLAMA_ARG_FIT", raising = False)
     monkeypatch.delenv("LLAMA_ARG_N_GPU_LAYERS", raising = False)

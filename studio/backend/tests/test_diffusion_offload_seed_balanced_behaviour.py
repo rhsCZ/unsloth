@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Behaviour of the two small-card fixes through entry points that exist before and after them.
-
-Imports only names present on main, so on main these fail by ASSERTION, not ImportError:
-
-1. The pipeline seed call in diffusion.py, evaluated as written, drives ``load_prequantized_transformer`` (checkpoint
-   I/O faked) under an offloading Qwen-Image-2.1 plan: the module must be materialised on the host, not the GPU.
-2. The post-load refinement expression in diffusion.py, evaluated as written, applied to a balanced 16 GB plan and a
-   pipe whose loaded fp8 text encoder is 8960 MiB: the encoder must not stay resident.
-"""
+"""Small-card fixes exercised through diffusion.py's own expressions, so main fails by assertion."""
 
 from __future__ import annotations
 

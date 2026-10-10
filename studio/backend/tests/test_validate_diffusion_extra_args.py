@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""/api/inference/validate must ignore pass-through arguments for a diffusion GGUF.
-
-/load already drops them: the visual runner builds its own command and appends none of
-them. /validate is the call that approves the load, and it reads a --ctx-size out of the
-same list to size the estimate, so leaving them in place approves a load against a
-command that will never carry them. The caller cannot decide this itself either, since
-its staged metadata is inconclusive for a GGUF it has not finished downloading, which is
-why the drop belongs after the authoritative classification rather than before it.
-"""
+"""/validate drops pass-through args for diffusion GGUFs only after classifying, like /load does."""
 
 import asyncio
 import importlib.util
@@ -98,10 +90,7 @@ class TestValidateDropsDiffusionExtraArgs(unittest.TestCase):
 
 
 class TestValidateJudgesTheListBeforeRewritingIt(unittest.TestCase):
-    """The manual translation reads -ngl out of the extras and strips it, so it has to
-    run AFTER the list has been validated: otherwise a spelling /load refuses is
-    parsed and removed before validation sees it, and the switch is approved for a
-    load that answers 400."""
+    """Validate the extras before stripping -ngl from them, or a spelling /load refuses gets approved."""
 
     def _validate(
         self,
@@ -165,11 +154,7 @@ class TestValidateJudgesTheListBeforeRewritingIt(unittest.TestCase):
 
 
 class TestValidateTranslatesManualNgl(unittest.TestCase):
-    """Manual GPU memory owns the offload flags, and /load turns an explicit -ngl into
-    the first-class field before stripping them. /validate has to do the same, or the
-    call that APPROVES the switch is judging a different command than the one that runs:
-    gpu_layers 0 with "-ngl 20" was approved as a load that places nothing on any device
-    and cannot compete with training for VRAM, and then launched twenty layers on it."""
+    """/validate must promote -ngl to gpu_layers as /load does, or it approves a different load."""
 
     def _validate(
         self,
@@ -264,10 +249,7 @@ class TestValidateTranslatesManualNgl(unittest.TestCase):
 
 
 class TestValidateTranslatesManualTensorSplit(unittest.TestCase):
-    """Manual GPU memory strips ``-ts`` / ``--tensor-split`` because the first-class
-    ``tensor_split`` field owns it. /validate must promote the extras value first,
-    the same way it promotes ``-ngl``, or it judges a near-even default while /load
-    would have emitted the asymmetric MoE split (#11330)."""
+    """/validate must promote -ts to tensor_split as /load does, or it judges a different split."""
 
     def _validate(
         self,

@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Who may eject, and in which order the claims are read.
-
-Three claims can speak for the backend at once: a PUBLISHED resident, an admitted BACKGROUND load,
-and a bare INVOCATION record for a caller still in preflight (a CPU Diffusers load claims no GPU and
-publishes nothing, so for its whole construction it is only that record). They disagree, so the order
-matters:
-
-  * the resident wins, because require_resident_control has already authorized the caller against the
-    model that is actually loaded -- a newcomer queueing a replacement over it must not cost the owner
-    the right to eject its own model;
-  * with no resident, the admitted background load decides;
-  * with neither, the invocation record decides, which is what keeps a second account from cancelling
-    someone else's pending CPU load.
-"""
+"""Eject authority: resident first, then admitted background load, then the invocation record."""
 
 from __future__ import annotations
 
@@ -210,10 +197,7 @@ def test_a_load_waiting_out_an_eject_sleeps_instead_of_spinning(backend):
 
 
 def test_stop_cancels_a_queued_generation_while_an_eject_waits_for_the_lock(backend):
-    """An eject raises the load fence when it is ACCEPTED and reserves the teardown only once
-    construction releases _lock. Through that window the same counter denies a queued generation
-    admission, so Stop had to be able to reach it: it answered False instead, and the request it
-    could not cancel went on to run once the eject finished."""
+    """Stop must cancel a queued generation while an eject waits for the lock; the fence denies it."""
     queued = threading.Event()
     backend._queued_generate_cancels.add(queued)
     with backend._load_cancel_lock:

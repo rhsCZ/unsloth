@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The upgrade preflight the Train tab runs before it starts a worker.
-
-A training start on a model whose ``model_type`` no installed transformers ships used
-to be accepted and then killed at model load ("... is not supported yet in
-transformers==5.3.0"). Chat asks first, through /validate; training could not reuse that
-route (it resolves a ModelConfig, picks a GPU placement and runs the chat coexistence
-guard), so it asks here instead.
-"""
+"""The Train tab's upgrade preflight must catch a model_type the installed transformers lacks."""
 
 import asyncio
 import sys
@@ -42,11 +35,7 @@ def _stub(
     trust_remote_code = False,
     inspected = None,
 ):
-    """Answer the three preflights the route composes, and nothing else.
-
-    ``inspected`` collects every target the preflights were pointed at, so a test can
-    assert WHICH copy of the model was read.
-    """
+    """Answers only the three preflights; inspected records each target, to check which copy was read."""
     inf_mod = _route()
     import utils.transformers_latest as latest_mod
     import utils.transformers_version as tv

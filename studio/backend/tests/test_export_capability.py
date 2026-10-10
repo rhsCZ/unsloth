@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for export capability gating.
-
-Export is supported iff ``get_device() in {CUDA, XPU, MLX}``, with a torch-aware reason otherwise
-(pytorch_not_installed / no_accelerator / mlx_unavailable), and the backend must import without
-PyTorch. The matrix mocks the hardware probes; wiring is checked with ast so it runs on CPU.
-"""
+"""Export is supported only on CUDA, XPU or MLX, and the backend must import without PyTorch."""
 
 import ast
 import builtins
@@ -155,10 +150,7 @@ def test_export_capability_reads_no_torch_helper():
 
 
 def test_a_failed_detection_is_reported_as_such(monkeypatch):
-    """Do not send the user to fix something that is not wrong. ensure_hardware_detected()
-    records CPU + "detection_failed" when the probe raises, so the host looks CPU-only to
-    export_capability; reporting no_accelerator (or pytorch_not_installed) there points the
-    remediation at hardware or an install that may both be fine."""
+    """A failed probe must report detection_failed, not no_accelerator, which misdirects the user."""
     from utils.hardware import hardware as hw
 
     monkeypatch.setattr(hw, "get_device", lambda: hw.DeviceType.CPU)

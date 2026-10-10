@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The picker asks what saving a model would need fetched before it saves, so the
-download can be offered up front instead of happening invisibly at the first index.
-
-The endpoint must agree with the loader about which repo and which file that is,
-and with the PUT about what is unusable here."""
+"""Fetch plan must name the same repo and file the loader uses, and the PUT must agree."""
 
 from pathlib import Path
 import sys
@@ -851,10 +847,7 @@ def test_a_cached_safetensors_model_is_selectable_offline(client, monkeypatch, t
 
 
 def test_a_local_dir_without_weights_is_not_already_present(client, monkeypatch, tmp_path):
-    """A folder holding modules.json and no checkpoint also passes
-    is_embedding_model's local-path check, so it was reported cached and accepted
-    without force, then failed at the first index when SentenceTransformer went
-    looking for the weights."""
+    """A dir with modules.json but no weights is not cached; it would fail at the first index."""
     monkeypatch.setattr(settings, "_llama_backend_active", lambda *_: False)
     monkeypatch.setattr(settings, "_st_weight_files", lambda m, t: None)
     import utils.utils as utils
@@ -990,12 +983,7 @@ def test_a_cached_alias_names_the_namespace_it_is_filed_under(client, monkeypatc
 def test_a_stale_literal_cache_does_not_hide_a_complete_alias_snapshot(
     client, monkeypatch, tmp_path
 ):
-    """hf_cache_snapshot_is_loadable stops at the first matching cache directory
-    while the ST predicate walks candidates for a complete one. Conjoining them
-    let a stale models--all-MiniLM-L6-v2 entry report the model uncached even with
-    a complete sentence-transformers/ snapshot beside it; offline the Hub probe
-    then failed and /resolve returned an error the loader would have disagreed
-    with."""
+    """A stale literal cache must not hide a complete sentence-transformers alias snapshot."""
     literal = tmp_path / "literal"
     literal.mkdir()
     (literal / "config.json").write_text("{}")
@@ -1024,11 +1012,7 @@ def test_a_stale_literal_cache_does_not_hide_a_complete_alias_snapshot(
 
 
 def test_a_remote_gguf_repo_is_served_by_llama_server_on_an_st_host(monkeypatch):
-    """A GPU host resolves ``auto`` to sentence-transformers, which then searches a
-    typed or API-selected ``owner/model-GGUF`` for safetensors, finds none and errors.
-    Saving over that error sets the pending marker, and the ST loader answers a
-    pending model with "not downloaded" before the runtime fallback can reach
-    llama-server, so the repo could never load however it was cached."""
+    """A remote GGUF repo on an ST host must route to llama-server, not fail the safetensors search."""
     from core.rag import embeddings as rag_embeddings
     import utils.embedding_model_settings as ems
 
@@ -1061,10 +1045,7 @@ def test_a_local_directory_named_gguf_is_still_a_sentence_transformers_model(mon
 
 
 def test_a_gguf_only_model_is_refused_when_llama_server_is_missing(client, monkeypatch):
-    """A GGUF-named model routes to llama-server because nothing else can open it,
-    which says nothing about whether this install can run that backend. Without the
-    binary the plan was advertised as valid and the transfer persisted, and the
-    first warm failed in _resolve_binary with the download already done."""
+    """A GGUF-only model is refused when the llama-server binary is missing, not advertised as valid."""
     monkeypatch.setattr(settings, "_llama_backend_active", lambda *_: True)
     monkeypatch.setattr(settings, "_llama_runtime_available", lambda: False)
 
@@ -1095,10 +1076,7 @@ def test_a_safetensors_model_still_falls_back_when_llama_server_is_missing(clien
 
 
 def test_a_cached_alias_is_verified_under_the_namespace_it_is_filed_under(client, monkeypatch):
-    """A slashless model cached only as sentence-transformers/<name> is on disk and
-    loadable, but reporting the literal alias as the download repo sent the PUT's
-    verification and security scan at a top-level repo that usually does not exist,
-    rejecting a valid cached model with a 409 the loader would have ignored."""
+    """Verify a cached slashless alias under sentence-transformers/, where it is filed."""
     monkeypatch.setattr(settings, "_llama_backend_active", lambda *_: False)
     monkeypatch.setattr(
         settings,
@@ -1113,10 +1091,7 @@ def test_a_cached_alias_is_verified_under_the_namespace_it_is_filed_under(client
 
 
 def test_a_validated_backend_outranks_the_gguf_name_heuristic(monkeypatch):
-    """A repo called <name>-GGUF whose published family is torn or absent falls
-    back to its own safetensors, and the resolver persists that plan. Reading the
-    name as llama-server anyway sent the first index down the GGUF pending path,
-    to fail as "not downloaded" on a model whose weights were validated."""
+    """Validated backends outrank the -GGUF name heuristic; otherwise the first index fails."""
     from core.rag import embeddings as rag_embeddings
     import utils.embedding_model_settings as ems
 
@@ -1169,10 +1144,7 @@ def test_a_declared_module_the_directory_lacks_is_not_present(client, monkeypatc
 
 
 def test_an_explicit_llama_policy_refuses_any_model_without_the_binary(client, monkeypatch):
-    """An explicit RAG_EMBED_BACKEND=llama-server refuses the safetensors fallback
-    for every model, not only GGUF-named ones, so an ordinary repo id is just as
-    unservable without a binary. Scoping the check to the name offered and
-    persisted a managed download _resolve_binary would reject at first use."""
+    """An explicit RAG_EMBED_BACKEND=llama-server must refuse any model when the binary is missing."""
     monkeypatch.setattr(settings, "_llama_backend_active", lambda *_: True)
     monkeypatch.setattr(settings, "_llama_runtime_available", lambda: False)
     monkeypatch.setattr(settings, "_sentence_transformers_fallback_allowed", lambda model: False)
@@ -1188,10 +1160,7 @@ def test_an_explicit_llama_policy_refuses_any_model_without_the_binary(client, m
 
 
 def test_a_whole_segment_gguf_name_routes_to_llama_server(monkeypatch):
-    """config.gguf_repo_candidates treats "gguf" as a whole name segment, so
-    owner/GGUF-model is a direct GGUF repo there. Deciding it by suffix here sent
-    those to sentence-transformers, which has nothing to open, and the rejection
-    stuck even under a forced selection."""
+    """gguf as a whole name segment (owner/GGUF-model) must route to llama-server, not ST."""
     from core.rag import embeddings as rag_embeddings
     import utils.embedding_model_settings as ems
 

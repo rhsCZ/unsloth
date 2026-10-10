@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A managed account must not reach owner-local or LAN provider endpoints.
-
-Managed MCP servers are already restricted to public destinations; provider base
-URLs are the same caller-controlled server-side egress, so they get the same rule.
-"""
+"""Managed accounts must not reach owner-local or LAN provider URLs, as MCP servers already don't."""
 
 import http.server
 import threading

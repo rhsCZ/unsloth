@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What may and may not be continued when a turn is cut off mid-answer.
-
-The guard's job is narrow: refuse to extend a fragment that is mostly an echo of itself,
-because continuing one stitches the echo into the final answer. Everything else, including
-text that merely looks repetitive, must still be continued -- a false positive abandons a
-real answer halfway, which is worse than the wasted call a false negative costs.
-
-Thresholds follow NousResearch/hermes-agent's `agent/repetition_guard.py`.
-"""
+"""Refuse to continue only echo-dominated fragments; a false positive abandons a real answer."""
 
 from __future__ import annotations
 
@@ -74,12 +66,7 @@ _A_RULE = "-" * 80
 
 
 def test_a_horizontal_rule_does_not_condemn_the_answer_around_it():
-    """Occurrences have to be counted without overlap, or one run counts as many.
-
-    An 80-character rule contains 21 identical 60-character windows, which alone clears
-    `_MIN_REPEAT_COUNT`. The answer it divides is real work, and abandoning it mid-stream
-    over one line of markdown is the failure this guard exists to avoid causing.
-    """
+    """Repeat counts must not overlap, or one horizontal rule's windows clear the repeat threshold alone."""
     text = (
         "Here is the plan for the game loop, written out before any code so the shape is "
         "clear.\n" + _A_RULE + "\nThe bird accelerates downward each frame and the pipes "
@@ -101,13 +88,7 @@ def test_a_genuine_echo_of_the_same_window_is_still_caught():
 
 
 def test_the_scan_does_not_grow_with_the_length_of_the_fragment():
-    """The scan kept one 60-character slice per starting offset.
-
-    An 800,000-character fragment therefore held roughly 180 MB of substrings alive, on a
-    path whose only job is to decide whether to send one more continuation. What is
-    asserted is the SHAPE, not a byte count: doubling the fragment must not double the
-    cost. Before the bound it did, exactly.
-    """
+    """Repetition scan must not hold a slice per offset; memory cannot grow with fragment length."""
     import tracemalloc
 
     from core.inference import repetition_guard

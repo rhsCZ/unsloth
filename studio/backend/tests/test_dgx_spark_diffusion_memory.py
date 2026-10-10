@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A diffusion load on a DGX Spark must not be refused against its own download.
-
-``cudaMemGetInfo``'s free half on an integrated SoC is the kernel's ``MemFree``, which
-counts the page cache as used. Measured on a GB10: writing a 60 GiB file took it from
-103.25 GiB to 41.52 GiB while ``MemAvailable`` never moved off 115.6 GiB. Downloading a
-diffusion model is that same write, so the load that follows is budgeted against a pool
-the download appears to have consumed, and ``flux.2-klein`` was refused at "about 0 GB
-usable (of the 3 GB currently free)" on a 121 GiB machine (#9919).
-
-Hermetic: torch and host memory are stubbed, so these run anywhere.
-"""
+"""Integrated SoC cudaMemGetInfo free counts page cache as used, so a download shrinks the budget."""
 
 from __future__ import annotations
 
@@ -103,12 +93,7 @@ def test_spark_snapshot_is_unified_and_credits_the_cache(monkeypatch):
 
 
 def test_a_rocm_apu_snapshot_is_not_credited(monkeypatch):
-    """A ROCm APU sets the same integrated flag and reaches `unified_memory` too.
-
-    Its free reading is wrong in the OTHER direction (Windows HIP reports free == total,
-    #7072), so crediting host memory on top would enlarge an over-report. Caught by the
-    scenario matrix, not by reading the code.
-    """
+    """No host-memory credit for ROCm APUs: Windows HIP already over-reports free memory as total."""
     import sys as _sys
 
     class _ApuProps:
@@ -161,12 +146,8 @@ def test_unified_free_is_bounded_by_an_enforcing_cgroup(
 
 
 def test_a_bound_cgroup_prices_the_reserve_against_the_container(monkeypatch):
-    """The reserve is 20% of capacity, so capacity has to be the pool that exists.
-
-    Capping the free reading alone left the device total at the host's 121 GiB, and
-    ``_safe_device_budget_mib`` then took 24 GiB of reserve out of a 32 GiB container:
-    about 8 GiB usable on a machine that could serve 25, refusing models that fit.
-    """
+    """Reserve is 20% of capacity, so the device total must be the container's limit, not the host's
+    pool."""
     monkeypatch.setattr(diffusion_memory, "_available_system_memory_mib", lambda: 32 * 1024)
     monkeypatch.setattr(diffusion_memory, "_cgroup_available_memory_mib", lambda: 32 * 1024)
     monkeypatch.setattr(diffusion_memory, "_cgroup_memory_limit_mib", lambda: 32 * 1024)
@@ -187,11 +168,7 @@ def test_a_bound_cgroup_prices_the_reserve_against_the_container(monkeypatch):
 
 
 def test_a_slack_cgroup_leaves_the_device_total_alone(monkeypatch):
-    """A readable limit that does not bind says nothing about capacity.
-
-    Shrinking the total whenever a limit is merely present would report an idle Spark's
-    121 GiB pool as whatever happened to be free at snapshot time.
-    """
+    """Only a binding cgroup limit lowers the device total; a slack limit must not shrink it."""
     monkeypatch.setattr(diffusion_memory, "_available_system_memory_mib", lambda: 115 * 1024)
     monkeypatch.setattr(diffusion_memory, "_cgroup_available_memory_mib", lambda: 200 * 1024)
     monkeypatch.setattr(diffusion_memory, "_cgroup_memory_limit_mib", lambda: 200 * 1024)
@@ -203,13 +180,7 @@ def test_a_slack_cgroup_leaves_the_device_total_alone(monkeypatch):
 
 
 def test_capacity_is_the_cgroup_limit_not_what_is_left_of_it(monkeypatch):
-    """The remainder shrinks as the container fills; the capacity does not.
-
-    A 64 GiB container holding a 30 GiB model has about 34 GiB left, and reporting that
-    as total capacity prices the reserve against a pool that gets smaller the more of it
-    is in use, and refuses a 40 GiB replacement that only has to fit once the resident
-    model is evicted.
-    """
+    """Capacity is the cgroup limit, not the remainder, which shrinks as the container fills."""
     monkeypatch.setattr(diffusion_memory, "_available_system_memory_mib", lambda: 34 * 1024)
     monkeypatch.setattr(diffusion_memory, "_cgroup_available_memory_mib", lambda: 34 * 1024)
     monkeypatch.setattr(diffusion_memory, "_cgroup_memory_limit_mib", lambda: 64 * 1024)
@@ -261,13 +232,7 @@ def test_the_two_cgroup_readings_are_not_the_same_number(monkeypatch):
 
 
 def test_a_finite_limit_caps_capacity_even_when_the_remainder_is_slack():
-    """A tighter host reading does not make a 64 GiB container a 121 GiB device.
-
-    With 44 GiB of cgroup remainder but only 16 GiB of host availability, the remainder
-    is not what caps the free reading, yet the limit still bounds the pool. Leaving the
-    device total in place there reserved 24 GiB against a pool that cannot exceed 64 and
-    produced a zero budget for a model that fits.
-    """
+    """A finite cgroup limit caps capacity even when the remainder is slack; the host total is wrong."""
     from core.inference import diffusion_memory as dm
 
     saved = (
@@ -326,12 +291,7 @@ def test_free_memory_above_a_finite_limit_is_not_free():
 
 
 def test_a_rocm_wheel_without_version_hip_is_still_rocm(monkeypatch):
-    """AMD SDK and Radeon wheels leave version.hip unset and only tag __version__.
-
-    Reading one as CUDA credits host memory onto an APU's free reading, which is
-    already an over-report on Windows HIP (free == total, #7072), so the guard would
-    approve a load the OS then kills.
-    """
+    """AMD and Radeon wheels leave version.hip unset and tag only __version__; read them as ROCm."""
     import sys as _sys
 
     class _ApuProps:

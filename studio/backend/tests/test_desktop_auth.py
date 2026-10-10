@@ -1081,10 +1081,8 @@ def test_desktop_auth_provision_has_bounded_timeout():
 
 
 def test_the_router_stub_covers_every_router_main_imports():
-    """The stub is derived from main.py, so it cannot go stale as it did for #8511's
-    ``openai_codex_auth_router`` and #8648's ``youtube_router``. What can still break is the
-    derivation: a reshaped import block would silently yield a short list. So pin it against the
-    real package's ``__all__``, read textually for the same no-import reason."""
+    """Router stub is derived from main.py; check it against __all__, since a reshaped import
+    shortens it."""
     import re
     from pathlib import Path
 
@@ -1119,11 +1117,7 @@ def test_the_router_stub_covers_every_router_main_imports():
 
 
 def test_desktop_login_validates_off_the_event_loop():
-    """A sync def hands the 100k-iteration PBKDF2 to the threadpool.
-
-    As an ``async def`` the KDF ran on the single uvicorn event loop, so unauthenticated callers
-    could stall every other request the server was serving. /identity is sync for the same reason.
-    """
+    """Keep desktop_login sync so its 100k PBKDF2 runs in the threadpool, not the uvicorn event loop."""
     auth_route = auth_route_module()
 
     assert not asyncio.iscoroutinefunction(auth_route.desktop_login)
@@ -1177,13 +1171,7 @@ def test_desktop_login_still_admits_the_real_shell_after_a_miss():
 
 @pytest.mark.parametrize("probe", _SHIPPED_PROBE_SECRETS)
 def test_the_shipped_desktop_probes_never_consume_the_login_budget(probe):
-    """The desktop app's own compatibility probes must not be read as attempts on the credential.
-
-    The shell posts one of these on every preflight, on every 15s watchdog tick, once per candidate
-    port it finds alive, and around every install mutation. Thirty in a minute is ordinary. Counting
-    them means the next probe, and the valid secret exchange that follows it, both get a 429, which
-    the shell reads as its own healthy backend being unmanageable.
-    """
+    """Desktop probes must not use the login budget, or the shell's own secret exchange gets a 429."""
     seed_user(must_change_password = False)
     auth_route = auth_route_module()
     client = auth_client(auth_route)
@@ -1201,12 +1189,8 @@ def test_the_shipped_desktop_probes_never_consume_the_login_budget(probe):
 
 
 def test_the_shipped_desktop_probe_is_answered_during_a_real_lockout():
-    """A lockout earned by real guesses must still not turn a probe's 401 into a 429.
-
-    The shell cannot tell a throttled backend from an incompatible one: anything but 401 is
-    ``desktop_login_not_found`` or ``desktop_login_probe_failed``. So the shape check has to come
-    before the bucket is read, not just before it is written.
-    """
+    """Shape-check probes before reading the lockout bucket, so a real lockout still answers 401,
+    not 429."""
     seed_user(must_change_password = False)
     auth_route = auth_route_module()
     client = auth_client(auth_route)
@@ -1222,11 +1206,8 @@ def test_the_shipped_desktop_probe_is_answered_during_a_real_lockout():
 
 
 def test_a_malformed_desktop_secret_never_reaches_the_kdf(monkeypatch):
-    """A candidate that cannot be the stored secret is rejected on shape, before the 100k PBKDF2.
-
-    This is what makes the probes free rather than merely uncounted: the route is unauthenticated,
-    so anything it spends before it can reject an attacker-chosen string, an attacker can spend.
-    """
+    """Reject malformed secrets before the KDF: the route is unauthenticated, so attackers could
+    spend it."""
     seed_user(must_change_password = False)
     auth_route = auth_route_module()
     client = auth_client(auth_route)
@@ -1281,13 +1262,7 @@ def test_a_well_formed_guess_still_pays_the_kdf_and_still_throttles(monkeypatch)
 
 
 def test_a_minute_of_watchdog_ticks_does_not_lock_the_shell_out():
-    """The shell's real order over one window, and the order that has no success to rescue it.
-
-    The health watchdog runs every 15s (commands.rs) and probes with ``require_desktop_secret =
-    false``, so a live app emits four uncounterbalanced probes a minute and nothing clears the
-    bucket. The preflight that follows is the one that sends the real secret, and it is the one
-    that has to still work.
-    """
+    """Watchdog probes must not lock the shell out before its preflight sends the real secret."""
     seed_user(must_change_password = False)
     raw = storage.create_desktop_secret()
     auth_route = auth_route_module()
@@ -1303,15 +1278,7 @@ def test_a_minute_of_watchdog_ticks_does_not_lock_the_shell_out():
 
 
 def test_desktop_login_failures_do_not_lock_everyone_out_of_login():
-    """/desktop-login must not fill the bucket /login reads for every account.
-
-    /login 429s on max(its own account bucket, the unknown-user bucket), but it never WRITES the
-    unknown-user one: an unknown username is recorded per name, deliberately, so the shared slot
-    is not an existence oracle. Nothing filled it before this route did. Sharing it means five
-    unauthenticated desktop attempts a minute reject every account's correct password, and behind
-    a tunnel UNSLOTH_STUDIO_TRUST_FORWARDED is off by default, so every visitor arrives as the
-    same cloudflared peer and one caller locks out the whole installation.
-    """
+    """Desktop failures must not fill the unknown-user bucket that /login reads; tunnels share one peer."""
     seed_user(must_change_password = False)
     auth_route = auth_route_module()
     client = auth_client(auth_route)
@@ -1331,15 +1298,7 @@ def test_desktop_login_failures_do_not_lock_everyone_out_of_login():
 
 
 def test_a_password_spray_does_not_lock_the_desktop_shell_out():
-    """The other direction: /login's per-IP aggregate must not withhold the shell's own secret.
-
-    cloudflared and the desktop shell both reach the backend over loopback, and
-    UNSLOTH_STUDIO_TRUST_FORWARDED is off by default, so every tunnel visitor and the shell are
-    ONE address. Sharing the aggregate lets a remote visitor spray thirty password guesses a
-    minute and keep the shell's valid exchange at 429, which it reads as its own healthy backend
-    being unmanageable. On main this route consulted no bucket at all, so the coupling arrived
-    with the throttle.
-    """
+    """A password spray must not lock the shell out: tunnel visitors share its loopback address."""
     seed_user(must_change_password = False)
     raw = storage.create_desktop_secret()
     auth_route = auth_route_module()
@@ -1360,13 +1319,8 @@ def test_a_password_spray_does_not_lock_the_desktop_shell_out():
 
 
 def test_a_desktop_exchange_does_not_reset_the_shared_password_throttle():
-    """The desktop secret proves the shell owns the backend, not that anyone signed in.
-
-    /login's per-IP aggregate is what stops password spraying across many usernames, none of which
-    reaches its own per-account limit. Letting /desktop-login clear it hands one holder of the local
-    secret a fresh aggregate budget for every account behind the same NAT, and in multi-user mode it
-    does so while returning no session at all.
-    """
+    """The desktop secret must not reset /login's per-IP throttle, or each NAT account gets fresh
+    guesses."""
     seed_user(must_change_password = False)
     raw = storage.create_desktop_secret()
     auth_route = auth_route_module()
@@ -1389,12 +1343,7 @@ def test_a_desktop_exchange_does_not_reset_the_shared_password_throttle():
 
 
 def test_a_desktop_success_clears_its_own_ip_aggregate():
-    """Misses interleaved with successes must not accumulate into a lockout.
-
-    The desktop aggregate is this route's own entry, so clearing it cannot reset /login's
-    password-spray budget, and leaving it would let repeated rotate-then-reconnect cycles reach
-    _LOGIN_IP_MAX_FAILS and 429 a valid secret.
-    """
+    """A success clears only this route's own IP aggregate, so cycles cannot lock a valid secret out."""
     seed_user(must_change_password = False)
     auth_route = auth_route_module()
     client = auth_client(auth_route)
@@ -1430,10 +1379,7 @@ def test_multi_user_desktop_exchange_grants_no_session_and_clears_no_aggregate(m
 
 
 def test_storage_rejects_a_malformed_desktop_secret_before_the_kdf(monkeypatch):
-    """The shape gate lives in storage, so every caller of the validator gets it.
-
-    main.py's shell health probe validates the same secret on a separate path.
-    """
+    """Shape gate lives in storage so every validator caller gets it, not only the desktop route."""
     seed_user(must_change_password = False)
     storage.create_desktop_secret()
 

@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guards for the model-picker per-model-config feature (the set of
-bugs that got the predecessor PR reverted). Pure-function / validation checks
-only, so they run on CPU in the backend pytest job with no model download.
-
-Covers, at the backend layer:
-  - infra-model hiding: the RAG embedder (bge-small-en-v1.5) and the llama.cpp
-    install-validation probe (ggml-org/models / stories260K) stay hidden, while
-    normal chat repos are not hidden;
-  - the HF token is honored from the dedicated header with the query string as a
-    fallback, never the other way around;
-  - the chat-template byte caps reject oversized overrides (both the char-count
-    fast path and the UTF-8 byte path) and the sidecar reader is size-bounded.
-"""
+"""Pure checks: infra models stay hidden, and the HF header token beats the query-string fallback."""
 
 from __future__ import annotations
 

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Edge-case coverage for Anthropic fast-mode + refusal wiring.
-
-Complements ``test_anthropic_fast_mode_and_refusal.py`` (happy path) with
-dated snapshots, strict opt-in (future Opus families do not auto-enable),
-multi-beta header merging, refusal stream ordering, and the
-non-destruction guarantee for unset/None fast_mode.
-"""
+"""Fast mode is strict opt-in, so future Opus families do not auto-enable."""
 
 import asyncio
 import json

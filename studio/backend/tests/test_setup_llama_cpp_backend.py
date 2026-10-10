@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Backend selector coverage for setup.sh and setup.ps1.
-
-The scripts do not act on UNSLOTH_LLAMA_CPP_BACKEND: install_llama_prebuilt.py
-reads it directly, and it is also the only side that can see a choice recorded in
-the install marker. What is left here is reporting -- the match is
-case-insensitive and whitespace-trimmed, unknown values warn, and macOS says so
-for the two choices its universal Metal build cannot honour.
-"""
+"""The scripts only report UNSLOTH_LLAMA_CPP_BACKEND; install_llama_prebuilt.py reads it."""
 
 import os
 import re

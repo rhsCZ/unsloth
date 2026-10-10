@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The terminal tool must run bash on Windows, not cmd.
-
-Models write bash for a shell tool, and every other platform runs bash. ``cmd /c``
-executes only the first line of a multi-line command, leaves single quotes in
-the argument, and does not understand bash quoting, so a correct script
-half-executes and reports success. These run on every OS by faking the platform,
-because studio-backend-ci is Linux-only.
-"""
+"""The terminal tool runs bash on Windows: cmd /c runs only the first line of a multi-line command."""
 
 import os
 import sys
@@ -33,12 +26,8 @@ def _clear_bash_cache():
 
 
 def _fake_trusted_root(monkeypatch, root):
-    """Point the Program Files trust check at ``root``.
-
-    _windows_program_roots goes through SHGetKnownFolderPath, absent off
-    Windows. The roots are faked here rather than %ProgramFiles%, which the
-    resolver deliberately does not read (a caller could relocate the boundary).
-    """
+    """Fake _windows_program_roots: the resolver never reads %ProgramFiles%, as callers could
+    relocate it."""
     monkeypatch.setattr(tools, "_windows_program_roots", lambda: [str(root)])
 
 

@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guards for silent tensor-parallel downgrades in load_model.
-
-PR #6416 blanket-disabled tensor parallelism for vision models to dodge a
---split-mode tensor + --mmproj GGML_ASSERT (#6415), which silently single-GPU'd
-any mmproj/MTP GGUF that fit on one card. The fix makes the skip self-healing:
-tensor is tried by default and recorded per (binary, model) only on a real abort.
-
-load_model is too entangled to drive end-to-end, so these tests inspect the
-source / drive the pure helpers. That holds for ordering and binding invariants;
-anything observable in the launched argv belongs in test_llama_cpp_placement.py
-instead, driven through its _launch harness. The headline test pins the set of
-TP-drop conditions, so a new silent drop fails CI. No GPU; fully deterministic.
-"""
+"""Guards silent tensor-parallel drops: tensor is tried first, latched only on a real abort."""
 
 from __future__ import annotations
 
@@ -498,11 +486,7 @@ def test_preserved_fallback_carried_across_non_drop_reload():
 
 
 def test_same_model_guard_checks_path_and_variant():
-    """The same-model guard matches the resolved config.identifier (what load_model
-    stores, after from_identifier normalizes shorthands) -- not the raw request id --
-    and also matches the loaded quant by path (local multi-variant dir) else variant (HF
-    repo), so a reload keeps the carry-forward and a different variant doesn't inherit
-    the prior one's preserved tensor intent (#6659)."""
+    """The same-model guard matches the resolved identifier, then the quant by path or variant."""
     route = (Path(_BACKEND_DIR) / "routes" / "inference.py").read_text(encoding = "utf-8")
     assert "same_loaded_model = llama_backend.matches_load_source(gguf_intent)" in route
     matcher = inspect.getsource(LlamaCppBackend.matches_load_source)
@@ -573,14 +557,7 @@ def test_should_record_tensor_split_abort_decision():
 
 
 def test_fit_off_retry_skipped_on_a_tensor_capability_crash():
-    """The fit-independent --fit off retry is skipped on the split-axis marker, else
-    the model crashes a second time before the latch records it (reviewer.py, #6659).
-
-    It now also covers the pre-b9455 quantized-KV refusal in tensor mode
-    (ggml-org/llama.cpp#23792) and the unified-cache refusal: no second spawn helps
-    any of the three, and each costs a full model load. Hence _capability_crash,
-    with _tensor_capability_crash left as the half the ROCm rung gates on.
-    """
+    """No --fit off retry after a tensor capability crash: a second spawn cannot help and costs a load."""
     src = inspect.getsource(LlamaCppBackend.load_model)
     retry = src.find('run_cmd = [*run_cmd, "--fit", "off"]')
     assert retry != -1
@@ -673,10 +650,7 @@ def _matches_request(request, backend) -> bool:
 
 
 def test_tensor_off_echo_preserves_multi_gpu_fallback():
-    """The Unsloth UI always sends tensor_parallel and echoes the /load response's
-    resolved value, so after a fallback a ctx/settings reload carries tensor_parallel=
-    false even though the user never changed it. That echo must NOT collapse the
-    preserved multi-GPU placement -- it dedupes (Codex #6659)."""
+    """A tensor_parallel=false echo after a fallback must not collapse the multi-GPU placement."""
     from models.inference import LoadRequest
 
     req = LoadRequest(model_path = "owner/repo", tensor_parallel = False)
@@ -752,11 +726,7 @@ def test_tensor_off_under_env_tensor_does_not_reload_loop(monkeypatch):
 
 
 def test_is_explicit_tensor_drop_truth_table():
-    """Only an explicit non-tensor --split-mode override is a drop. A bare
-    tensor_parallel field (the UI always sends it and echoes the fallback's false), an
-    empty clear, an unrelated extra (--top-k), or inherit (None) must NOT collapse a
-    preserved fallback; --split-mode tensor / tensor_parallel=true re-engage (Codex
-    #6659)."""
+    """Only an explicit non-tensor --split-mode drops a fallback; a bare tensor_parallel does not."""
     from models.inference import LoadRequest
 
     f = _load_inference_routes_module()._is_explicit_tensor_drop
@@ -864,10 +834,7 @@ def _dedup_loaded_backend(*, extra_args):
 
 
 def test_explicit_gpu_ids_dedupes_when_device_already_stripped():
-    """A GGUF loaded with explicit gpu_ids had a user --device stripped from its stored
-    extras. A repeat identical request re-sending --device must still dedupe: the request-
-    side strip (gated on gpu_ids) compares equal to the stripped backend extras, so the
-    load hits the fast path instead of a needless reload / training 409 (#7188)."""
+    """A repeat request re-sending a stripped --device must dedupe under explicit gpu_ids, not reload."""
     from models.inference import LoadRequest
 
     req = LoadRequest(

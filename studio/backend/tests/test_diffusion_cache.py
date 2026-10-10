@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic CPU tests for opt-in step caching (First-Block-Cache).
-
-``diffusers`` is stubbed via ``sys.modules`` (the module under test imports
-``FirstBlockCacheConfig`` lazily), and the pipeline is a fake that records the engaged config.
-So normalisation, the CacheMixin (``enable_cache``) gating, threshold selection, and the
-best-effort failure handling are all exercised without torch or a real diffusers model.
-"""
+"""Hermetic CPU tests for First-Block-Cache step caching, with diffusers stubbed in sys.modules."""
 
 from __future__ import annotations
 
@@ -65,10 +59,7 @@ class _MixinTransformer:
 
 
 class _NonCacheMixinTransformer:
-    """A transformer with no ``enable_cache`` (not a CacheMixin) -> must run uncached.
-
-    Its pipeline opens no ``cache_context``, so installing FBCache would crash at generation;
-    the load runs uncached instead (e.g. Z-Image)."""
+    """Without enable_cache (not a CacheMixin) the load runs uncached; FBCache would crash at generation."""
 
 
 class _CtxPipe:
@@ -429,13 +420,7 @@ def test_toggle_disengages_below_the_bar(monkeypatch):
 
 
 class _DiffusersLikeTransformer(_ToggleTransformer):
-    """A toggle fake that records ``_cache_config`` the way diffusers itself does.
-
-    diffusers sets it inside ``enable_cache`` and clears it inside ``disable_cache``, and the cache
-    layer reads THAT (never our own marker) to tell a cache it installed from one adopted through
-    the low-level ``apply_first_block_cache``. A fake without it models a transformer whose hooks
-    can never be accounted for, which is not what a real DiT looks like after a successful engage.
-    """
+    """Fake records _cache_config as diffusers does; the cache layer trusts that, not its own marker."""
 
     def enable_cache(self, config):
         super().enable_cache(config)
@@ -454,14 +439,7 @@ def _hide_private_hook_names(monkeypatch):
 
 
 def test_toggle_disengages_even_when_the_private_hook_names_are_gone(monkeypatch):
-    """A cache diffusers owns comes off on diffusers' word, not on the private-name sweep.
-
-    The sweep exists for an ADOPTED low-level cache, where disable_cache removes nothing because
-    _cache_config is None. Requiring it for our own cache too makes every disengage depend on
-    `diffusers.hooks.first_block_cache` staying importable, and on the versions where it is not,
-    FBCache stays engaged on short trajectories forever -- the quality regression the auto policy
-    exists to prevent. That is what took test_video_backend's auto-toggle test red on main.
-    """
+    """Our own FBCache must disengage via diffusers' disable_cache, not depend on private hook names."""
     _stub_diffusers(monkeypatch)
     t = _DiffusersLikeTransformer()
     maybe_toggle_step_cache(_pipe(t), steps = 28)
@@ -475,11 +453,7 @@ def test_toggle_disengages_even_when_the_private_hook_names_are_gone(monkeypatch
 
 
 def test_toggle_keeps_an_adopted_cache_it_cannot_verify_removed(monkeypatch):
-    """The other half: with no live config, disable_cache removed nothing, so the marker stays.
-
-    Clearing it over live hooks is what would let the CUDA graph wrapper capture a graph across
-    them, so "cannot verify" has to mean "still engaged" here.
-    """
+    """No live config means disable_cache removed nothing; an unverifiable adopted cache stays engaged."""
     _stub_diffusers(monkeypatch)
     t = _ToggleTransformer()
     maybe_toggle_step_cache(_pipe(t), steps = 28)
@@ -697,13 +671,7 @@ def test_invalidate_child_registry_cache_tolerates_absence():
 
 
 class _RealisticCacheMixin:
-    """``CacheMixin`` as diffusers actually implements it, which the simple stub above does not model.
-
-    The two behaviours that matter: ``enable_cache`` RAISES when a cache is already enabled ("To apply a new
-    caching technique, please disable the existing one first"), and ``is_cache_enabled`` reports the live
-    state. Without them a redundant ``apply_step_cache`` looks harmless in tests while tearing the running
-    cache down in production.
-    """
+    """CacheMixin as diffusers implements it: enable_cache raises if a cache is already enabled."""
 
     def __init__(self):
         self.enabled_with = None
@@ -822,11 +790,7 @@ def test_a_failed_cleanup_removes_the_hooks_itself_then_clears_the_marker(monkey
 
 
 def test_a_silently_partial_engage_still_has_its_hooks_taken_off(monkeypatch):
-    """The shape diffusers actually produces. CacheMixin.enable_cache assigns _cache_config as its LAST
-    statement, after apply_first_block_cache returns, and disable_cache returns early with a warning when
-    _cache_config is None. So a raise part-way through hooking leaves hooks LIVE while is_cache_enabled
-    reads False and disable_cache does nothing: every signal says uncached about a transformer that is
-    partly hooked. Removing by name is the only thing here that does not depend on those signals."""
+    """A partial engage leaves hooks live with is_cache_enabled False; removal must go by name."""
     registry = _stub_diffusers(monkeypatch)
 
     class _PartlyHooked:
@@ -935,10 +899,7 @@ def test_a_reconfigure_that_cannot_be_verified_keeps_reporting_the_prior_mode(mo
 
 
 def test_a_reconfigure_that_dies_between_the_two_hook_removals_finishes_the_job(monkeypatch):
-    """diffusers removes the FBC leader and block hooks in SEPARATE calls and clears _cache_config only
-    after both. A raise in between leaves block hooks with no leader to decide the skip, which is worse
-    than either a whole cache or none, while is_cache_enabled still reads True and would have this
-    report the prior cache as healthy. The removal has to be finished, not diagnosed."""
+    """A raise between the two hook removals must be finished; leftover block hooks are worse than none."""
     registry = _stub_diffusers(monkeypatch)
 
     class FirstBlockCacheConfig:  # noqa: N801 - matched by NAME, so the name is the fixture
@@ -1007,10 +968,7 @@ def test_another_cache_type_is_left_alone(monkeypatch):
 
 
 def test_a_lost_marker_does_not_cost_a_healthy_cache(monkeypatch):
-    """The marker can be absent on a transformer whose cache someone else engaged. Trusting it as the
-    source of truth would tear down a cache already running these exact settings and rebuild it, which
-    is what this guard exists to prevent, and loses it outright if the rebuild fails. The live config
-    decides, and the marker is repaired on the way out."""
+    """A lost _cache_config marker must not tear down a healthy cache; the live config decides."""
     registry = _stub_diffusers(monkeypatch)
 
     class FirstBlockCacheConfig:  # noqa: N801 - matched by NAME
@@ -1083,10 +1041,7 @@ def test_a_stale_marker_cannot_authorize_the_no_op(monkeypatch):
 
 
 def test_an_adopted_cache_gets_the_post_enable_integration(monkeypatch):
-    """A live cache we did not install has not had our post-enable steps run against it. Returning
-    on it without invalidating the cached child-registry list leaves the next ``cache_context``
-    reaching no block ("No context is set"), and without re-pointing the hooks at compiled inners
-    a regionally compiled transformer runs its blocks uncompiled."""
+    """An adopted live cache still gets post-enable integration, or cache_context reaches no block."""
     _stub_diffusers(monkeypatch)
     import core.inference.diffusion_cache as dc
 
@@ -1122,11 +1077,7 @@ def test_an_adopted_cache_gets_the_post_enable_integration(monkeypatch):
 
 
 def test_a_cache_installed_through_the_low_level_api_is_not_torn_down(monkeypatch):
-    """``diffusers.hooks.apply_first_block_cache`` is public and hooks WITHOUT setting
-    ``_cache_config``, so a caller who used it leaves live hooks behind ``is_cache_enabled is
-    False``. Our engage then raises out of ``register_hook`` ("Hook with name ... already exists")
-    having changed nothing, and the recovery must not read the absent config as permission to remove
-    hooks that are not ours and are working."""
+    """Hooks from low-level apply_first_block_cache lack _cache_config; recovery must leave them alone."""
     registry = _stub_diffusers(monkeypatch)
     import core.inference.diffusion_cache as dc
 

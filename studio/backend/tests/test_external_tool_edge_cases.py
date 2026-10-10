@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Adversarial edge cases for the provider-agnostic Unsloth tool loop.
-
-``tests/test_studio_tool_loop.py`` covers the happy paths. This file covers what
-a hostile, buggy or merely unusual provider can do to the loop: malformed SSE,
-duplicate/absent tool-call indices, text and structured calls describing the
-same intent, unicode straddling chunks, megabyte arguments, a stream that never
-terminates, cancellation mid-tool, and the conversation the loop replays back to
-a strict server.
-
-Every test that FAILS is asserting the behaviour the loop should have, so a
-failure names a defect rather than a preference.
-"""
+"""Hostile or buggy provider inputs for the tool loop; a failure here names a real defect."""
 
 from __future__ import annotations
 
@@ -279,14 +268,7 @@ def _answer_turn(text = "final answer"):
 
 
 def test_intermediate_done_sentinel_is_not_relayed(executed):
-    """A per-turn [DONE] must never reach the client mid-loop.
-
-    Every transport ends each turn with one. Relaying it tells a spec-compliant
-    client the response is finished, so it stops before the tool cards and the
-    real answer. The loop swallows all of them and the route appends exactly one
-    terminal sentinel after the generator finishes, which is how the Codex path
-    has always behaved.
-    """
+    """Per-turn [DONE] sentinels are swallowed, since a relayed one ends the client's response early."""
     transport = FakeTransport(
         [
             [
@@ -348,12 +330,7 @@ def test_hostile_chunk_shapes_do_not_crash_the_loop(executed, payload):
 
 
 def test_transport_exception_is_reported_as_a_stream_error(executed):
-    """A mid-stream transport failure should surface, not propagate raw.
-
-    The route wraps the generator, so a raw exception does produce an error
-    frame today. This pins the contract that the loop itself does not corrupt
-    state on the way out.
-    """
+    """A mid-stream transport error propagates, and the loop must leave its state uncorrupted."""
     transport = RaisingTransport([_sse({"content": "partial"})], RuntimeError("socket died"))
     with pytest.raises(RuntimeError, match = "socket died"):
         _run(transport)
@@ -366,11 +343,7 @@ def test_zero_line_turn_terminates(executed):
 
 
 def test_call_without_finish_reason_is_still_executed(executed):
-    """Some OAI-compatible servers close with [DONE] and no finish_reason.
-
-    Dropping a fully formed tool call because the terminal chunk was missing
-    ends the turn with an empty answer and no sign anything was requested.
-    """
+    """A complete tool call is executed even without finish_reason, since some servers end on [DONE]."""
     transport = FakeTransport(
         [
             [
@@ -386,11 +359,7 @@ def test_call_without_finish_reason_is_still_executed(executed):
 
 
 def test_structured_call_with_finish_reason_stop_is_executed(executed):
-    """The Ollama shape: real ``delta.tool_calls`` closed with ``stop``.
-
-    Gating execution on ``finish_reason == "tool_calls"`` throws the call away
-    and the user gets whatever prose came with it, if any.
-    """
+    """Structured calls ending in finish_reason stop must still run; gating on tool_calls drops them."""
     transport = FakeTransport(
         [
             [
@@ -449,11 +418,7 @@ def test_empty_string_id_is_still_executed(executed):
 
 
 def test_argument_fragments_without_an_index_continue_the_open_call(executed):
-    """A server that stamps `index` only on the opening fragment.
-
-    ``index = len(by_index)`` invents a second call for the continuation, so the
-    real call runs with empty arguments and the fragments are lost.
-    """
+    """Index-less argument fragments must continue the open call instead of starting a new one."""
     transport = FakeTransport(
         [
             [
@@ -473,11 +438,7 @@ def test_argument_fragments_without_an_index_continue_the_open_call(executed):
 
 
 def test_two_distinct_calls_at_the_same_index_are_not_merged(executed):
-    """Parallel calls that both report index 0 must stay two calls.
-
-    Merging concatenates their argument JSON into an unparseable blob, which is
-    then handed to the tool as ``{"_raw": ...}``.
-    """
+    """Two calls reporting the same index 0 must stay separate, or their argument JSON gets merged."""
     transport = FakeTransport(
         [
             [
@@ -531,11 +492,7 @@ def test_negative_index_does_not_reorder_calls(executed):
 
 
 def test_ids_repeated_across_turns_stay_unique_in_the_replay(executed):
-    """A provider that reuses the same call id every turn.
-
-    The replayed conversation must not carry two different tool results under
-    one tool_call_id: a strict server rejects the request outright.
-    """
+    """Reused provider call ids must be made unique in the replay, or a strict server rejects it."""
     transport = FakeTransport(
         [
             _call_turn(call_id = "same", arguments = '{"query":"a"}'),
@@ -568,11 +525,7 @@ def test_healed_ids_are_unique_across_turns(executed):
 
 
 def _healed_history(*call_ids):
-    """A chat whose earlier turns already ran a healed call, as the route replays it.
-
-    The replay normalization strips the stored "<backend id>:<uuid4>" back to the
-    bare base, so this is the shape run.messages arrives in on the next request.
-    """
+    """History of healed calls, with ids stripped back to their bare base as the route replays them."""
     out = [{"role": "user", "content": "search something"}]
     for call_id in call_ids:
         out.append(
@@ -601,13 +554,7 @@ def _replayed_ids(transport):
 
 
 def test_healed_ids_do_not_collide_with_replayed_history(executed):
-    """The healer restarts at call_0 on a history that already replays a call_0.
-
-    The counter behind the healer's ids is per request, not per chat, so a
-    history normalized down to a bare call_0 lands in the same upstream body as
-    the newly minted one. The ledger only catches that if it is seeded from the
-    replayed history.
-    """
+    """Seed the id ledger from replayed history: the healer's call_0 counter restarts each request."""
     heal = '<tool_call>{"name": "web_search", "arguments": {"query": "b"}}</tool_call>'
     transport = FakeTransport(
         [
@@ -624,12 +571,7 @@ def test_healed_ids_do_not_collide_with_replayed_history(executed):
 
 
 def test_history_rename_does_not_collide_again_on_the_next_request(executed):
-    """The id the rename mints comes back as history, so it must not repeat.
-
-    Renaming to "<id>_<round>_<position>" once is not enough: the client stores
-    that id too, so the next request replays both call_0 and call_0_1_0 and a
-    single-shot rename lands on the call_0_1_0 already in the body.
-    """
+    """A renamed id returns as history on the next request, so the rename must not collide again."""
     heal = '<tool_call>{"name": "web_search", "arguments": {"query": "c"}}</tool_call>'
     transport = FakeTransport(
         [
@@ -645,11 +587,7 @@ def test_history_rename_does_not_collide_again_on_the_next_request(executed):
 
 
 def test_history_without_a_colliding_id_leaves_the_minted_id_alone(executed):
-    """Seeding the ledger must not churn ids it has no reason to rename.
-
-    A renamed id is longer, is not what the provider streamed, and invalidates
-    the card key the client already painted.
-    """
+    """Leave non-colliding ids alone: renaming changes the streamed id and the painted card key."""
     heal = '<tool_call>{"name": "web_search", "arguments": {"query": "d"}}</tool_call>'
     transport = FakeTransport(
         [
@@ -680,13 +618,7 @@ def test_finish_reason_length_mid_tool_call_does_not_execute(executed):
 
 
 def test_a_provider_that_always_calls_a_tool_terminates(executed):
-    """The budget must bound the number of PROVIDER TURNS, not just executions.
-
-    Once the budget is spent the loop stops executing but keeps replaying: each
-    turn appends an assistant message plus a synthetic "budget exhausted" tool
-    result and asks again. A provider that keeps emitting the same call spins
-    forever, growing the conversation on every pass.
-    """
+    """The tool budget must bound provider turns, not just executions, or a repeating call never ends."""
     transport = FakeTransport([_call_turn()], repeat_last = True, max_turns = 40)
     try:
         _run(transport, max_calls = 2)
@@ -720,10 +652,7 @@ def test_budget_exhaustion_stops_asking_the_provider_again(executed):
 
 
 def test_text_and_structured_form_of_one_call_run_once(executed):
-    """llama.cpp can leak the raw markup AND emit the parsed call.
-
-    Executing both runs a side-effecting tool twice for one model intent.
-    """
+    """Raw markup and the parsed call can both arrive for one intent; execute it once, not twice."""
     transport = FakeTransport(
         [
             [
@@ -745,11 +674,7 @@ def test_text_and_structured_form_of_one_call_run_once(executed):
 
 
 def test_empty_structured_tool_calls_list_does_not_disable_healing(executed):
-    """``"tool_calls": []`` is not evidence that grammar mode worked.
-
-    Treating it as such makes the healer dormant for the rest of the turn, so a
-    text-form call later in the same turn is relayed as prose and never runs.
-    """
+    """An empty tool_calls list must not disable text-call healing for the rest of the turn."""
     transport = FakeTransport(
         [
             [
@@ -772,15 +697,7 @@ def test_empty_structured_tool_calls_list_does_not_disable_healing(executed):
 
 
 def test_marked_call_inside_a_code_fence_matches_the_local_loops(executed):
-    """A fenced <tool_call> executes here exactly as it does locally.
-
-    The fence gate added in #8312 covers the markerless `name[ARGS]{...}` form,
-    which has no sentinel of its own and so cannot be told from prose. The
-    marked form does have a sentinel, and the local GGUF and safetensors loops
-    promote it inside a fence too. Diverging here would make the same answer
-    behave differently depending on where the model runs, so the behaviour is
-    pinned rather than special-cased.
-    """
+    """A marked tool_call inside a code fence runs here, as in the local loops, so behaviour matches."""
     transport = FakeTransport(
         [
             [
@@ -940,11 +857,7 @@ def test_unterminated_block_larger_than_the_hold_cap_is_released(executed):
 
 
 def test_hold_cap_releases_before_the_stream_ends(executed):
-    """Memory must be bounded DURING the turn, not only at finalize().
-
-    The released text has to appear before the terminal chunk, otherwise a model
-    rambling XML-lookalike prose buffers without limit until it stops.
-    """
+    """Held text must be released mid-turn once it reaches the hold cap, not only at finalize()."""
     from core.inference.passthrough_healing import _MAX_HOLD_CHARS
 
     body = "z" * (_MAX_HOLD_CHARS + 5000)
@@ -1028,11 +941,7 @@ def test_disallowed_call_still_gets_a_tool_result_message(executed):
 
 
 def test_non_string_content_reaches_the_conversation_replay(executed):
-    """List-form content (Anthropic-shaped blocks) must not vanish from history.
-
-    The client sees it, but the assistant message replayed to the provider does
-    not, so the model loses its own prior words on the follow-up turn.
-    """
+    """List-form content must reach the replayed assistant message, or the model loses its own words."""
     transport = FakeTransport(
         [
             [
@@ -1068,11 +977,7 @@ def test_cancel_before_the_first_turn_does_nothing(executed):
 
 
 def test_cancel_during_tool_execution_still_closes_the_tool_card(executed, monkeypatch):
-    """A cancelled tool must not leave a card spinning forever.
-
-    tool_start is already on the wire; returning without tool_end leaves the UI
-    showing a running tool for a turn that ended.
-    """
+    """A cancelled tool must still send tool_end, since tool_start is already on the wire."""
     cancel_event = threading.Event()
 
     def _execute(name, arguments, **kwargs):
@@ -1105,13 +1010,7 @@ def test_cancel_between_turns_stops_before_asking_again(executed, monkeypatch):
 
 
 def test_closing_the_generator_closes_the_transport_stream(executed):
-    """The route calls gen.aclose(); the provider's HTTP stream must close too.
-
-    Leaving the inner async generator to the garbage collector holds an httpx
-    response open for an indeterminate time after the client is gone: today the
-    transport stream is finalised by the asyncgen hook a tick later, which is
-    also where the route's "httpcore asyncgen cleanup" RuntimeError comes from.
-    """
+    """Closing the outer generator must close the provider's HTTP stream, not leave it to the GC."""
     transport = FakeTransport([_call_turn(), _answer_turn()])
 
     async def _partial():

@@ -448,12 +448,7 @@ print(json.dumps({"stored": None if stored is None else str(stored)}))
 
 
 def test_a_studio_home_that_is_a_file_still_reads_the_database_on_windows(tmp_path):
-    """The POSIX arm of this is test_uninspectable_studio_db_keeps_the_stored_cache_home
-    [not_a_directory], which passes there because ENOTDIR is its own exception type. Windows
-    reports the same situation as FileNotFoundError, so the skip read it as "no database stored"
-    and discarded the cache home chosen in Settings -- on Windows and nowhere else. Caught by the
-    cross-platform leg, held here by reproducing the error shape rather than the platform.
-    """
+    """On Windows a file-as-directory is FileNotFoundError, which must not discard the chosen home."""
     studio_home = tmp_path / "root" / "studio"
     studio_home.parent.mkdir(parents = True)
     studio_home.write_text("", encoding = "utf-8")

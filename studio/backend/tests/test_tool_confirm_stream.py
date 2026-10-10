@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""End-to-end handshake test for the tool-confirmation gate, no model.
-
-The real Unsloth stream wrappers in ``routes/inference.py`` drive the
-synchronous agentic generator with ``await asyncio.to_thread(next, gen,
-...)`` so the blocking ``threading.Event`` wait runs off the event loop.
-This test rebuilds that exact pattern around the real
-``state.tool_approvals`` functions, served by a real uvicorn process on
-loopback (the same server Unsloth uses), and proves the load-bearing
-property:
-
-* ``tool_start`` reaches the client before the gate blocks, and
-* the separate ``/tool-confirm`` POST is served *while* the stream
-  connection is blocked, after which the stream resumes with the executed
-  (allow) or rejected (deny) result -- i.e. no deadlock.
-
-Each scenario runs under a socket-level timeout, so a regression that
-reintroduces a deadlock fails fast instead of hanging the suite.
-"""
+"""The blocking gate wait runs off the loop via to_thread, so a /tool-confirm POST can be served."""
 
 import asyncio
 import json
@@ -139,12 +122,7 @@ class _Server:
 
 
 async def _gate_is_blocking(approval_id) -> None:
-    """Wait until the stream thread is parked on this approval's slot.
-
-    The slot is registered before ``tool_start`` is yielded, so it exists
-    by the time the client receives the event -- exactly as in reality,
-    where the confirm POST only arrives after the card renders.
-    """
+    """Waits until the stream thread parks on this approval's slot, which exists before tool_start."""
     for _ in range(400):
         with tool_approvals._lock:
             slot = tool_approvals._pending.get(approval_id)

@@ -73,12 +73,8 @@ def test_upsert_and_delete_are_idempotent():
 
 
 def test_one_read_reports_the_value_and_whether_a_row_is_there(isolated_databases):
-    """Absent and unreadable are different answers, and the gate now gets both from ONE read.
-
-    Against the real store rather than a stub: the reader it replaced asked `get_hf_token` and
-    then `hf_token_row_exists`, so a refactor that collapsed them could satisfy stubbed callers
-    while telling a caller that an undecryptable credential is no credential, which authorizes.
-    """
+    """Absent and unreadable must stay distinct: an undecryptable credential reading as none would
+    authorize."""
     assert credential_secrets.get_hf_token_with_presence() == (None, False)
 
     credential_secrets.save_hf_token("hf_saved")

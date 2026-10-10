@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for ``core.youtube_transcript``, which backs the composer's transcript offer.
-
-Covers the parts that decide what the model ends up reading: which URLs count as
-YouTube videos, which caption track is picked when several languages exist, how json3
-cues flatten into text, and the bounds on the caption fetch itself. All offline; the
-caption hop runs against an httpx MockTransport rather than YouTube."""
+"""Offline tests: the caption fetch runs against an httpx MockTransport, never YouTube."""
 
 import asyncio
 import json

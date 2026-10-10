@@ -1233,13 +1233,7 @@ def _torchao_epilogue(c: Any, xs: Any, ws: Any, bias: Any, out_dtype: Any) -> An
 
 
 def int8_linear(module: Any, x: Any) -> Any:
-    """``module(x)`` for a plain ``nn.Linear`` or ``ConvRotLinear`` holding a plain per-row ``Int8Tensor``: the module's
-    own input rotation, torchao's act quant, ``_int_mm`` and torchao's epilogue, minus one term. torchao 0.17 applies
-    the ASYMMETRIC zero-point correction whenever the activation carries a zero point, which its symmetric quant always
-    does (zeros): a row sum of the int8 weight and a full-output ``- 0`` on every call (~4 ms per Z-Image 1024px step
-    on B200). 0.18 skips it for symmetric activations, as this does; the values are the same (``y - 0 == y``).
-    Anything else (LoRA wrappers, legacy tensors, small M, CPU, a Linear running diffusion_int8_gemm's fused GEMM) is
-    ``module(x)``."""
+    """Skips torchao 0.17's zero-point correction, which is a no-op for symmetric int8 activations."""
     from torch import nn
 
     from .diffusion_convrot import is_rotated_linear

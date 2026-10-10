@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Restart survival for the Anthropic /v1/messages passthrough.
-
-A crashed llama-server relaunches on a NEW ephemeral port. Before the retry the
-passthrough kept posting to the dead port, so a Claude Code session stayed broken
-until the next explicit load. These cover the respawn-and-retry on both the
-streaming and non-streaming passthroughs.
-"""
+"""A crashed llama-server relaunches on a new port, so the passthrough must respawn and retry."""
 
 from __future__ import annotations
 

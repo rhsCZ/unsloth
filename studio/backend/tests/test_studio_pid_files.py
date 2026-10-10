@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Per-port PID files, so `unsloth studio stop` can find every server.
-
-Imports run.py directly, so run under the Unsloth venv.
-"""
+"""Per-port PID files so unsloth studio stop finds every server; needs the Unsloth venv for run.py."""
 
 from __future__ import annotations
 

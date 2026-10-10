@@ -195,12 +195,7 @@ def test_non_external_and_non_request_rows_never_emit_usage_receipts():
 
 
 def _get_monitor(monkeypatch, *, enabled: bool):
-    """Call GET /monitor against a monitor in a known state.
-
-    Swaps the whole singleton rather than poking ``_enabled`` on it: the route
-    reads ``snapshot()``, which does not consult the flag, so a shared monitor
-    carrying rows from an earlier test would leak into the assertions.
-    """
+    """Swaps in a fresh monitor, since snapshot() ignores _enabled and a shared one leaks earlier rows."""
     monkeypatch.setattr(inference_route, "api_monitor", ApiMonitor(enabled = enabled))
     app = FastAPI()
     app.include_router(inference_route.studio_router)
@@ -555,12 +550,7 @@ def test_request_rows_report_kind_request():
 
 
 def test_clear_hides_shared_lifecycle_rows_for_that_caller_only():
-    """A lifecycle row is shared, so it is visible to every caller but owned by
-    none. A subject-scoped clear dropped only that subject's own rows, so the
-    shared ones survived and the reload straight after "Clear log" brought them
-    back: the button visibly did nothing to them. Dropping them outright is not
-    an option either, since that erases another caller's history.
-    """
+    """Clear hides shared lifecycle rows for that caller only; deleting them would erase others' history."""
     monitor = ApiMonitor(max_entries = 10)
     mine = _start(monitor, model = "org/A", prompt = "user: hi", subject = "alice")
     monitor.finish(mine)
@@ -602,10 +592,7 @@ def test_hidden_shared_ids_do_not_outlive_their_entries():
 
 
 def test_an_api_triggered_lifecycle_row_carries_the_attribution():
-    """The overlay opens on API-key traffic only. An auto-switch or auto-download
-    that is refused never reaches api_monitor.start, so the lifecycle row is the
-    whole trace of that request; without the attribution the monitor stayed shut
-    on exactly the failures it exists to surface."""
+    """A refused auto-switch never reaches start, so its lifecycle row must carry via_api_key."""
     monitor = ApiMonitor(max_entries = 5)
 
     api_load = monitor.record_lifecycle(
@@ -625,10 +612,7 @@ def test_an_api_triggered_lifecycle_row_carries_the_attribution():
 
 
 def test_an_api_lifecycle_row_pops_the_overlay_only_for_its_own_caller():
-    """A lifecycle row is shared so it appears in every monitor list, and it also
-    carries via_api_key, which is what the floating panel auto-opens on. Reported
-    to everyone, the panel springs open in a browser that had nothing to do with
-    the traffic. The row stays visible to all; only the attribution is scoped."""
+    """The row is shared, but via_api_key only opens the overlay for the caller that made the request."""
     monitor = ApiMonitor(max_entries = 5)
 
     row = monitor.record_lifecycle(
@@ -676,12 +660,7 @@ def test_sse_done_detection_accepts_both_spacings():
 
 
 def test_sse_done_detection_is_independent_of_the_monitor():
-    """The external-provider proxy sets ``sent_done`` from the line itself.
-
-    It used to read the monitor helper's return, which is None for every line
-    once recording is off -- so the proxy appended a second [DONE] after the
-    provider's own, changing client-visible framing based on a logging flag.
-    """
+    """The proxy sets sent_done from the line itself, so a logging flag cannot add a second [DONE]."""
     line = "data: [DONE]"
     assert inference_route._monitor_openai_sse_line(None, line) is None
     assert inference_route._is_openai_sse_done(line) is True
@@ -878,10 +857,7 @@ def test_parked_tool_resume_counts_as_queued():
 
 
 def test_free_never_reports_a_slot_admission_would_refuse():
-    """`free` is what a new arrival could take, so it must track _can_admit_locked:
-    a resume ticket holds a slot back, so counting it in `queued` without dropping it
-    from `free` prints free slots next to a queued request.
-    """
+    """free must match _can_admit_locked, since a resume ticket holds a slot back from new arrivals."""
     from core.inference.llama_admission import LlamaAdmissionQueue
     for capacity, held, tickets in itertools.product(range(1, 5), range(0, 5), range(0, 3)):
         if held > capacity:
@@ -928,10 +904,7 @@ def test_queue_panel_never_shows_a_free_slot_next_to_a_resume(monkeypatch):
 
 
 def test_set_perf_survives_an_out_of_range_engine_number():
-    """float() on a huge upstream int raises OverflowError, which is not ValueError,
-    and these helpers run inside streaming generators where a raise truncates the
-    user's response.
-    """
+    """float() of a huge int raises OverflowError, which a ValueError handler misses, inside a stream."""
     monitor = ApiMonitor(max_entries = 3)
     entry_id = _start(monitor, model = "local-model", prompt = "user: hello")
     huge = int("9" * 400)
@@ -969,10 +942,7 @@ def test_monitor_chunk_never_raises_on_a_malformed_upstream_chunk(monkeypatch, c
 
 
 def test_direct_llama_counter_is_started_last_before_its_guarding_try():
-    """Anything between started() and the try leaks a permanent +1 if it raises, and
-    this counter has no reset hook, so one leak pins the slot panel at busy until the
-    process restarts.
-    """
+    """started() must come last before the try, since anything raised between them leaks a busy slot."""
     import ast
     import inspect
     import textwrap
@@ -1033,10 +1003,7 @@ def _llama_slot_readout(
 
 
 def test_queue_state_counts_rag_vision_captioning(monkeypatch):
-    """RAG captioning/OCR reaches llama-server with no lease (see the
-    LlamaAdmissionQueue docstring), so without the direct count the panel reported an
-    idle server for the whole ingestion.
-    """
+    """RAG captioning reaches llama-server with no lease, so the panel must count it directly."""
     import routes.inference as inf
     from core.rag import captioner
 

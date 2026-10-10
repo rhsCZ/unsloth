@@ -184,10 +184,7 @@ def get_active_diffusion_engine() -> Any:
 
 
 def cancel_generation_for_account(account_id: str) -> bool:
-    """Stop an in-flight image generation owned by ``account_id``; True when one was signalled.
-
-    Engines come from ``sys.modules`` (no import, no construction); both are checked because a
-    deselected engine can still be draining."""
+    """Checks both engines via sys.modules, not imports, since a deselected engine can still be draining."""
     cancelled = False
     for module_name, attribute in (
         ("core.inference.diffusion", "_diffusion_backend"),
@@ -257,15 +254,7 @@ def _activate(name: str, reason: Optional[str]) -> Any:
 
 
 def begin_load_on(expected_engine: Any, start: Callable[[], Any]) -> Any:
-    """Run ``start`` under the transition lock, refusing if the engine changed since selection.
-
-    A load route selects its engine, then yields (device probe, arbiter acquire) before it
-    registers the load. A second /images/load picking the OTHER engine can transition in that
-    gap and unload the still-idle engine this request captured, which would then load a model
-    nothing can reach: generate / status / unload and the arbiter's evictor all resolve through
-    get_active_diffusion_engine(). Re-checking under the same lock the switch takes makes
-    selection and registration one operation.
-    """
+    """Re-checks the engine under the transition lock; a second load can switch engines in the start gap."""
     with _transition_lock:
         if expected_engine is not get_active_diffusion_engine():
             raise RuntimeError(
@@ -294,13 +283,7 @@ def select_and_activate_engine(
     gpu_ordinal: Optional[int] = None,
     before_fallback: Optional[Callable[[], None]] = None,
 ) -> Any:
-    """Pick + activate the engine for loading ``fam`` on this host; return the engine.
-    ``before_fallback`` may raise to refuse a diffusers fallback before it unloads the resident model.
-
-    Falls back to diffusers (recording a reason) when the native route is disabled, the device has
-    a usable GPU, MPS is not enabled, the family has no native asset, or the binary is unavailable
-    -- always BEFORE the slow load, so a fallback never strands a half-native load.
-    """
+    """Falls back to diffusers before any slow load, so a fallback never strands a half-native load."""
     if model_kind and model_kind != "gguf":
         return _activate(ENGINE_DIFFUSERS, f"non-GGUF load ({model_kind}) requires diffusers")
 
@@ -425,18 +408,8 @@ def select_and_activate_engine(
 def native_binary_installed(
     *, gpu_ordinal: Optional[int] = None, fam: Optional[DiffusionFamily] = None
 ) -> bool:
-    """Whether a RUNNABLE sd.cpp binary is already on disk, installing nothing to find out.
-
-    Separated from the prediction because the two answers differ where it matters: prediction
-    counts an absent binary as available whenever installing one is allowed, and a caller that
-    must know whether selection could still fall back to diffusers needs the unassumed answer.
-
-    Filters exactly as selection does, card included, or the plan stages the wrong engine's files.
-    Given ``fam``, that includes selection's architecture gate: a build that cannot run this family
-    is not a native route for it, and a prediction that says otherwise stages sd-cli's companion
-    VAE and text encoder for a load that goes to diffusers. Without ``fam`` the question is the
-    older one, "is there a binary at all".
-    """
+    """Answers whether a runnable sd.cpp binary exists on disk, never installing one, unlike the
+    prediction."""
     backend = resolve_diffusion_device_target().backend
     off_torch = off_torch_sd_cpp_device(backend)
     if off_torch is not None:
@@ -470,20 +443,7 @@ def predict_engine(
     model_kind: Optional[str] = None,
     gpu_ordinal: Optional[int] = None,
 ) -> str:
-    """The engine a load of ``fam`` would select on this host, WITHOUT any side effect.
-
-    Same policy as ``select_and_activate_engine`` -- and it has to be, because the download plan
-    is built from it: the two engines need different files (sharded diffusers components vs
-    sd-cli's single-file VAE + text encoders), so a plan built for the wrong one stages GB the
-    load never opens and then fetches the right files inline, outside the manager.
-
-    It differs from selection in exactly two ways, both deliberate. Nothing is activated (staging
-    a download must not unload the resident model), and the binary is only LOCATED, never
-    installed -- but an absent binary on a host where install is allowed still counts as
-    available, because that is what the load will do. Getting that wrong the other way (planning
-    diffusers for the very first native load, when no binary is on disk yet) would mispredict the
-    common case: a fresh CPU host.
-    """
+    """Same policy as selection with no side effects, so the download plan stages the matching files."""
     if model_kind and model_kind != "gguf":
         return ENGINE_DIFFUSERS
 
@@ -512,22 +472,7 @@ def predict_engine(
 
 
 def family_buildable_here(fam: Optional[DiffusionFamily], *, model_kind: Optional[str]) -> bool:
-    """True when THIS host can actually build ``fam`` for a ``model_kind`` load, by either engine.
-
-    The two engines need different things. diffusers instantiates ``fam.pipeline_class``, which the
-    newer families ship only in a newer diffusers -- and packaging still allows an older one on
-    Python 3.9, whose ceiling predates them. The native sd.cpp engine assembles the same GGUF from
-    single-file assets and imports no pipeline class at all, so a supported family loads there on a
-    diffusers that has never heard of it.
-
-    A family is therefore unbuildable only when NEITHER engine can do it, and both one-sided answers
-    are wrong: gating on the diffusers class alone refuses (and hides) a GGUF the native engine
-    serves fine, on the very hosts the native engine exists for; not gating at all advertises a pick
-    that can only fail. The listing routes and ``validate_load_request`` share this one predicate so
-    the picker and the loader cannot disagree.
-
-    Cheap on an ordinary host: the engine prediction is reached only when the class is missing.
-    ``predict_engine`` activates nothing and installs nothing."""
+    """Unbuildable only when neither engine can build it; the diffusers class alone hides native GGUFs."""
     if fam is None:
         return False
     if family_pipeline_available(fam):

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the denoiser CUDA-graph layer (``diffusion_cuda_graph.py``).
-
-Hermetic by default: the ``stub_torch`` fixture installs a fake torch into ``sys.modules``, so
-every refusal, the cap, poisoning and the lifecycle run without a GPU. The last test imports real
-torch inside the body, skips without CUDA, and asserts bit-identity.
-"""
+"""Denoiser CUDA-graph tests run on a fake torch; only the last test uses real torch and needs CUDA."""
 
 from __future__ import annotations
 

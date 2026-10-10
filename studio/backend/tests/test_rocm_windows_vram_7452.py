@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for issue #7452 -- "Stops Reading VRAM Total / Usage on RDNA3".
-
-Reporter: the same host as #7072 (AMD Radeon PRO W7900 45 GiB + W7500 7.98 GiB,
-Windows 10, ROCm 7.13, torch 2.11.0+rocm7.13), six days after the #7072 fix (#7238)
-shipped, so the two are a regression pair rather than duplicates.
-
-#7238 stopped fabricating a per-device usage when the LUID performance counters
-cannot be attributed to torch ordinals: Windows shares no key between the two, so
-usage is paired by capacity ranking and kept only when capacity FORCES it. Here the
-smaller card is 7.98 GiB, so every usage at or below that -- idle, and every small
-model -- is swappable between the cards and reports Unknown. Honest per device, but
-the System tab's aggregate VRAM tile went Unknown too, and the aggregate does NOT
-depend on the pairing: the sum of a permutation is the same whichever way round. His
-screenshot shows the per-device totals intact (45.0 / 7.98 GiB) with used, free and
-percent all Unknown.
-
-Mocks: torch, the performance counter and the platform are all faked (no AMD GPU and
-no Windows or ROCm CI in this repository), imported from test_rocm_windows_vram_7072
-so both halves of the pair are driven by one fixture shape.
-"""
+"""Windows ROCm aggregate VRAM must survive capacity pairing, since a permuted sum is unchanged."""
 
 from __future__ import annotations
 
@@ -137,15 +118,7 @@ def test_aggregate_rejects_a_usage_larger_than_any_visible_card():
 
 
 def test_aggregate_never_sums_bytes_that_are_not_on_a_visible_card():
-    """The reason an unexplained instance is refused rather than filtered out.
-
-    ``Get-Counter`` lists every WDDM adapter and the instance names carry no vendor,
-    LUID or PCI key, so a counter cannot be told apart from a foreign adapter's.
-    Dropping the small ones to force a 1:1 count keeps the foreign reading and drops
-    the quiet visible card whenever the foreign adapter is the busier of the two, and
-    the host total then reports bytes on no visible card. Each case below is one that
-    a noise filter would have summed.
-    """
+    """Counters cannot be tied to a visible card, so an unexplained instance is refused, not filtered."""
     agg = hw._rocm_windows_aggregate_used_bytes
     pair = [45 * GB, 8 * GB]
     assert agg([30 * GB, 5 * GB, 30 * MiB], pair) is None
@@ -185,12 +158,8 @@ def test_aggregate_tolerates_a_wddm_spill_over_the_smaller_card(win_rocm, monkey
 
 
 def _merged_gpu_info(monkeypatch, visibility, utilization):
-    """Run main's payload merge over two stubbed probes and return the training half.
-
-    Both probes are function-local imports from utils.hardware, so they are patched on
-    the package. The module-level cache is cleared first, or a neighbouring test's
-    payload comes back instead.
-    """
+    """Main's payload merge over stubbed probes, with the cache cleared so no neighbour's payload
+    returns."""
     import main
     import utils.hardware as uh
 
@@ -219,15 +188,7 @@ def _probe_pair(visible_indices, util_indices, aggregate):
 
 
 def test_aggregate_is_dropped_when_the_probes_enumerate_different_cards(monkeypatch):
-    """The tile divides the aggregate by the SUMMED totals of the rows it shows, so a
-    total taken over cards the rows do not list reads above 100 percent and free
-    clamps to 0. metrics_match cannot catch it: on the only path that sets an
-    aggregate, Windows ROCm, both probes label themselves "rocm", so it is
-    unconditionally true and says nothing about which cards were counted. The probes
-    really do enumerate independently -- visibility calls mem_get_info per device and
-    drops one that raises, the aggregate side reads torch properties only and keeps
-    it -- so the sets can differ with both probes reporting success.
-    """
+    """The tile divides by the summed totals of shown rows, so the probes must enumerate the same cards."""
     visibility, utilization = _probe_pair([0], [0, 1], 46.0)
     gpu_info = _merged_gpu_info(monkeypatch, visibility, utilization)
     shown_total = sum(d["memory_total_gb"] for d in gpu_info["devices"])

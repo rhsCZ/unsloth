@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Min P / Repetition Penalty / Top K must reach a self-hosted OpenAI-compatible server.
-
-The panel offered all three and persisted them, but ``stream_chat_completion`` built only
-``temperature`` / ``top_p`` / ``presence_penalty`` / ``max_tokens``, so the sliders moved
-and nothing changed.
-
-They stay opt-in: the schema defaults (20 / 0.01 / 1.0) are non-None for the local path, so
-forwarding unconditionally would start sending sampling to providers that never got any.
-"""
+"""Min P, repetition penalty and top K forward only when set; local schema defaults are non-None."""
 
 from __future__ import annotations
 

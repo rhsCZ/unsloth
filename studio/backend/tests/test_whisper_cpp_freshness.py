@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the whisper.cpp prebuilt freshness check.
-
-Pins the whisper-specific version policy: the release-tag parser, the
-is_behind decision matrix (with its downgrade guard), and one end-to-end
-wiring smoke through the shared freshness flow. The shared marker-walk and
-fail-open mechanics are covered by test_llama_cpp_freshness.py.
-"""
+"""Whisper version policy only; shared mechanics are tested in test_llama_cpp_freshness.py."""
 
 from __future__ import annotations
 

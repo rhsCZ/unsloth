@@ -68,11 +68,7 @@ def _missing_flash_attn_import():
 
 
 def _flash_attn_import_until_installed(state: dict[str, bool]):
-    """Import stub for a flash_attn that appears only once ``state['installed']`` is set.
-
-    The installers verify the import, so a mock that keeps failing models a broken wheel,
-    not a working one: "the wheel worked" means flipping the flag when install_wheel runs.
-    """
+    """Stub flash_attn that imports only once state['installed'] is set, as installers verify imports."""
     real_import = builtins.__import__
 
     def fake_import(
@@ -151,12 +147,7 @@ class TestIsImportableIsolated:
 
 
 class TestNoExitLeavesAnUnusableInstall:
-    """Every unsuccessful exit discards the distribution, not just the ones with a call.
-
-    The metadata gate in unsloth/models/_utils.py imports the extension in process, so
-    anything left behind is loaded anyway. Four rounds of review found four separate exits
-    that forgot to clean up, which is why this is enforced in one place.
-    """
+    """Every failed exit must discard the flash-attn distribution, since the metadata gate imports it."""
 
     def _run(self, monkeypatch, *, run_side_effect):
         removals: list[list[str]] = []
@@ -631,11 +622,7 @@ class _FakeQueue(list):
 
 
 def _make_fake_gate(initial_return: bool):
-    """Callable mimicking transformers' lru_cache-decorated gates.
-
-    Tracks call count and exposes `cache_clear`. Flip `.next_return` to
-    mimic install-then-True behaviour.
-    """
+    """Stands in for transformers' lru_cache-decorated gates, which callers reset through cache_clear."""
 
     class Gate:
         def __init__(self, initial: bool) -> None:
@@ -804,10 +791,7 @@ def test_hook_clears_lru_cache_before_first_check(monkeypatch):
 
 
 def test_hook_rewrites_previously_imported_module_bindings(monkeypatch):
-    """Modeling files bind is_causal_conv1d_available locally via
-    `from ... import is_X`. Reassigning the attribute on import_utils alone
-    misses those; the hook installer sweeps sys.modules and rebinds them.
-    """
+    """Rebinding import_utils alone misses modules that did a from-import, so sys.modules is swept too."""
     conv_gate = _make_fake_gate(initial_return = False)
     _patch_iu_gate(monkeypatch, conv_gate)
 
@@ -855,10 +839,7 @@ def test_hook_skips_when_import_utils_unavailable(monkeypatch):
 
 
 def test_hook_trusts_installer_bool_not_metadata(monkeypatch):
-    """If pip exits 0 but deep imports fail, the installer returns False; the hook
-    must propagate that False even though the metadata-only gate flipped True, so
-    transformers takes the torch fallback.
-    """
+    """The hook trusts the installer's bool, not the metadata gate, so a broken import falls back."""
     conv_gate = _make_fake_gate(initial_return = False)
     _patch_iu_gate(monkeypatch, conv_gate)
 
@@ -883,10 +864,7 @@ def test_hook_trusts_installer_bool_not_metadata(monkeypatch):
 
 
 def test_rebind_does_not_trigger_module_getattr(monkeypatch):
-    """The rebind sweep must use __dict__, not getattr(), to avoid invoking
-    transformers' lazy module __getattr__ which spits out hundreds of
-    "Accessing X from .models..." warnings.
-    """
+    """The rebind sweep reads __dict__, not getattr, so the lazy __getattr__ emits no warnings."""
     original = object()
     replacement = object()
 
@@ -915,11 +893,7 @@ def test_rebind_does_not_trigger_module_getattr(monkeypatch):
 
 
 def test_run_training_process_eagerly_installs_causal_conv1d_in_normal_mode():
-    """SSM modeling files use lazy_load_kernel and never call
-    is_causal_conv1d_available(), so the hook won't fire; the orchestrator must
-    always run the eager installer. Reads the worker source and asserts the eager
-    install happens before the hooks are wired.
-    """
+    """The eager causal_conv1d install must run in normal mode, as SSM files never reach the hook."""
     import inspect
 
     src = inspect.getsource(worker.run_training_process)

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the prebuilt sd-cli asset resolver (``install_sd_cpp_prebuilt``).
-
-Pure: the host -> release-asset matrix is exercised against a fixed asset list
-(a real stable-diffusion.cpp release), no network. The installer lives under
-``studio/`` (not ``studio/backend``), so the test puts that dir on the path.
-"""
+"""Prebuilt sd-cli asset resolver tests: host to release-asset mapping against a fixed asset list."""
 
 from __future__ import annotations
 
@@ -1099,11 +1094,7 @@ def test_find_sd_cpp_binary_honors_studio_home(tmp_path, monkeypatch):
 
 
 def test_managed_root_is_under_the_studio_home_like_every_other_component(tmp_path, monkeypatch):
-    """The sd.cpp tree installs *under* the Unsloth home, not beside it.
-
-    llama.cpp (``default_managed_llama_dir``), whisper.cpp and node all place their tree at
-    ``<studio home>/<component>``. sd.cpp used the home's *parent*, which put the tree outside the
-    home the user chose."""
+    """sd.cpp installs under the Unsloth home like other components, not in the home's parent."""
     from core.inference import sd_cpp_engine as eng
 
     studio_home = tmp_path / "sxs" / "studio_a"
@@ -1117,12 +1108,7 @@ def test_managed_root_is_under_the_studio_home_like_every_other_component(tmp_pa
 def test_a_relative_studio_home_does_not_put_the_install_in_the_working_directory(
     tmp_path, monkeypatch
 ):
-    """A relative ``UNSLOTH_STUDIO_HOME`` used to collapse to the working directory.
-
-    ``Path("home").parent`` is ``Path(".")``, so the managed root became ``./stable-diffusion.cpp``
-    -- exactly the name ``git clone`` of the upstream project produces. A checkout sitting in the
-    working directory then shadowed the managed install and the installer refused to run, because
-    the target was a pre-existing non-empty directory without the ownership marker."""
+    """A relative UNSLOTH_STUDIO_HOME must not collapse the managed root to `./stable-diffusion.cpp`."""
     from core.inference import sd_cpp_engine as eng
 
     monkeypatch.chdir(tmp_path)
@@ -1138,11 +1124,7 @@ def test_a_relative_studio_home_does_not_put_the_install_in_the_working_director
 
 
 def test_the_legacy_sibling_tree_is_adopted_only_when_it_carries_the_marker(tmp_path, monkeypatch):
-    """An install an older build really made is still found; a bare checkout is not.
-
-    Back-compat is marker-gated on purpose: the old location is ``<home>/../stable-diffusion.cpp``,
-    which for a relative home is the working directory, so an unmarked match there is far more
-    likely to be someone's clone than a previous Unsloth install."""
+    """A legacy sibling tree is adopted only with the ownership marker; an unmarked match may be a clone."""
     from core.inference import sd_cpp_engine as eng
 
     monkeypatch.delenv("SD_CLI_PATH", raising = False)
@@ -1371,11 +1353,7 @@ def test_install_falls_back_to_upstream_when_mirror_missing(tmp_path, monkeypatc
 
 
 def test_the_shipped_pin_is_mirror_only(tmp_path, monkeypatch):
-    """The default pin carries the H3 patch set, which only the mirror can build.
-
-    If this ever goes back to a plain upstream tag (because upstream released the fixes and
-    patches/ was emptied), the two tests below stop describing the shipped default, so fail here
-    loudly rather than letting them quietly assert nothing."""
+    """The shipped pin is mirror-only (H3 patch set); fail loudly if it becomes a plain upstream tag."""
     assert sdmod.is_mirror_only_tag(DEFAULT_TAG)
     assert not sdmod.is_mirror_only_tag("master-813-bfbef5b")
     assert not sdmod.is_mirror_only_tag("")
@@ -1383,15 +1361,7 @@ def test_the_shipped_pin_is_mirror_only(tmp_path, monkeypatch):
 
 
 def test_a_mirror_only_pin_is_never_requested_upstream(tmp_path, monkeypatch):
-    """Upstream cannot have a -u<id> tag by construction, so asking for it is a guaranteed 404.
-
-    The mirror-only pin is instead TRANSLATED back to the upstream release it was built from, so
-    a host the mirror does not build keeps a pinned install rather than silently degrading to
-    upstream latest. Asking upstream for the literal -u<id> string is still wrong, and that is
-    what this pins.
-
-    The mirror must NOT serve here: when it does, the very first attempt succeeds and the upstream
-    attempts are never reached, so the assertion would hold no matter what the ordering says."""
+    """A mirror-only pin is never requested upstream as -u<id>, a guaranteed 404; it maps to the release."""
     _shared_setup_5(monkeypatch)
     asked = []
     real = sdmod._fetch_release
@@ -1409,12 +1379,7 @@ def test_a_mirror_only_pin_is_never_requested_upstream(tmp_path, monkeypatch):
 
 
 def test_falling_back_off_a_mirror_only_pin_warns_about_h3(tmp_path, monkeypatch, capsys):
-    """The generic fallback line is not enough here.
-
-    Every other model still works on an unpatched upstream build, so falling back beats having no
-    native engine at all. H3 does not: it aborts on the default cfg-scale and on --vae-on-cpu, and
-    a blanket --type silently renders a broken video rather than failing. A user who sees only
-    "falling back to leejet" has no way to connect that to the H3 output they get."""
+    """Falling back off a mirror-only pin must warn about H3 specifically."""
     _shared_setup_5(monkeypatch)
     install(install_dir = tmp_path)
     err = capsys.readouterr().err
@@ -1716,12 +1681,7 @@ def test_a_cpu_install_is_reinstalled_when_cuda_is_requested(tmp_path, monkeypat
 
 
 def test_a_legacy_sibling_install_is_read_from_its_own_root(tmp_path, monkeypatch):
-    """The accelerator record belongs to the tree the binary is in.
-
-    A tree an older build installed BESIDE the Unsloth home is still found by the finder, but the
-    current managed root is now under the home and holds nothing. Reading the record from there
-    reports the install as unrecorded, and unrecorded reads as a mismatch for a GPU target: the
-    matching CUDA bundle already on disk would be downloaded again on every load."""
+    """The accelerator record is read from the tree the binary sits in."""
     import core.inference.sd_cpp_backend as bk
 
     home = tmp_path / "sd-home" / "studio"
@@ -1812,10 +1772,7 @@ def test_a_failed_upgrade_keeps_the_working_binary_and_stops_retrying(tmp_path, 
 
 
 def test_the_upgrade_waits_for_the_resident_server_to_stop(tmp_path, monkeypatch):
-    """The install replaces the sd-server file, and the resident server is executing that exact
-    path: Linux refuses to open a running executable for writing (ETXTBSY) and Windows locks it.
-    Resolving must therefore NOT install while a server is up; the load retries once it is
-    stopped, which is the only moment the file is free."""
+    """The install must wait for the resident sd-server to stop (ETXTBSY, Windows lock)."""
     bk, root, server = _shared_setup_1(monkeypatch, tmp_path)
     _shared_setup_4(bk, monkeypatch)
     installs: list = []
@@ -1860,10 +1817,7 @@ def test_a_failed_post_teardown_upgrade_keeps_the_existing_server(tmp_path, monk
 
 
 def test_a_recorded_gpu_install_is_replaced_when_the_cpu_build_is_wanted(tmp_path, monkeypatch):
-    """The mirror image of the CPU-to-CUDA upgrade. Nothing on the sd-server/sd-cli command line
-    selects a backend -- the build itself is the choice -- so a recorded CUDA install keeps running
-    on the GPU after the device target resolves to CPU. Only a RECORDED mismatch reinstalls: an
-    unrecorded install stays put, else every legacy CPU host would redownload on a CPU target."""
+    """Only a recorded accelerator mismatch reinstalls; a GPU install is replaced when CPU is wanted."""
     bk, root, server = _shared_setup_9(monkeypatch, tmp_path)
     monkeypatch.setattr(bk, "find_sd_server_binary", lambda: str(server))
     monkeypatch.setattr(bk, "_server_binary_runnable", lambda *_a, **_k: True)
@@ -1886,10 +1840,7 @@ def test_a_recorded_gpu_install_is_replaced_when_the_cpu_build_is_wanted(tmp_pat
 
 
 def test_the_upgrade_waits_for_an_active_one_shot_generation(tmp_path, monkeypatch):
-    """A one-shot load holds the managed tree just as hard as a resident server: begin_load only
-    signals the in-flight generation to cancel, and _resolve_backend runs before the load waits on
-    _generate_lock, so the old sd-cli can still be executing from the tree an install would
-    overwrite. Defer there too, and land the upgrade after the teardown."""
+    """A one-shot load holds the managed tree, so the upgrade defers until teardown."""
     bk, root, server = _shared_setup_1(monkeypatch, tmp_path)
     _shared_setup_4(bk, monkeypatch)
     installs: list = []
@@ -1940,10 +1891,8 @@ def test_an_idle_backend_installs_the_matching_build_immediately(tmp_path, monke
 
 
 def test_the_router_entry_point_cannot_replace_a_running_server(tmp_path, monkeypatch):
-    """select_and_activate_engine calls ensure_sd_server_binary DIRECTLY, before begin_load stops
-    anything, so a deferral that lives only in _resolve_backend does not cover it: a /images/load
-    that resolves to CUDA while the managed CPU server is resident would extract over the running
-    executable. The refusal therefore lives in _accelerator_changed, where every caller passes."""
+    """The refusal lives in _accelerator_changed; select_and_activate_engine calls the installer
+    directly."""
     bk, root, server = _shared_setup_1(monkeypatch, tmp_path)
     installs: list = []
 
@@ -1969,10 +1918,7 @@ def test_the_router_entry_point_cannot_replace_a_running_server(tmp_path, monkey
 
 
 def test_the_one_shot_fallback_keeps_the_requested_accelerator(tmp_path, monkeypatch):
-    """_resolve_engine is also the fallback a GPU sd-server that would not start lands on. It
-    asked for the default "cpu", which -- now that a recorded GPU install counts as a mismatch
-    against a CPU request -- would reinstall the plain bundle over the working GPU one and run the
-    whole generation on the CPU because of an unrelated server startup failure."""
+    """`_resolve_engine` fallback must keep the requested accelerator, not default to cpu."""
     import core.inference.sd_cpp_backend as bk
 
     root = _managed_tree(tmp_path, monkeypatch, accelerator = "cuda")
@@ -2039,10 +1985,7 @@ def test_a_serverless_deferred_install_still_lands_after_teardown(tmp_path, monk
 
 
 def test_a_server_still_starting_also_holds_the_tree(tmp_path, monkeypatch):
-    """The startup window: between spawning sd-server and committing it to _state, the load has
-    published only _pending_server. A second /images/load asking for a different accelerator would
-    read the tree as idle and extract over the executable that is starting -- and start() blocks
-    for as long as the checkpoint takes to load, so the window is minutes, not milliseconds."""
+    """A server still starting holds the tree via `_pending_server`."""
     bk, root, server = _shared_setup_1(monkeypatch, tmp_path)
     installs: list = []
 
@@ -2104,10 +2047,7 @@ def test_a_serverless_install_is_not_replaced_under_a_running_cli(tmp_path, monk
 
 
 def test_the_tree_stays_in_use_until_a_stopping_server_is_gone(tmp_path, monkeypatch):
-    """unload() clears _state and _pending_server under the lock and stops OUTSIDE it, because
-    terminate can take seconds. In that window both fields say idle while the process is still
-    running its own executable, so a router call asking for another accelerator could extract over
-    it. The stop is counted, and the count keeps the tree marked in use."""
+    """The tree stays in use while a stopping server is still running."""
     import core.inference.sd_cpp_backend as bk
 
     backend = bk.SdCppDiffusionBackend()
@@ -2155,10 +2095,7 @@ def test_a_failed_server_upgrade_is_not_retried_by_the_cli_probe(tmp_path, monke
 
 
 def test_a_bundle_drops_the_binaries_it_did_not_supply(tmp_path, monkeypatch):
-    """Extraction MERGES, so a bundle whose layout differs from the previous one (or that ships no
-    server at all) leaves the old accelerator's executables behind -- and _layout_candidates
-    prefers build/bin over the prebuilt's versioned subdirectory, so the stale copy keeps winning
-    while the record claims the new accelerator."""
+    """Extraction merges, so drop binaries the bundle did not supply, or stale build/bin copies win."""
     target = tmp_path / "sd"
     suffix = ".exe" if sys.platform == "win32" else ""
     old_dir = target / "build" / "bin"
@@ -2222,10 +2159,7 @@ def test_a_superseded_binary_that_cannot_be_removed_fails_the_install(tmp_path, 
 
 
 def test_a_bundle_with_no_cli_is_refused_before_anything_is_swept(tmp_path, monkeypatch, capsys):
-    """The sweep deletes every managed binary the bundle did not write, so an archive that ships
-    no sd-cli would take the working one with it -- and only then would the malformed-bundle check
-    fire. ensure_sd_cpp_binary keeps that copy precisely so a failed upgrade still leaves something
-    to generate with, so the refusal has to come first."""
+    """A bundle with no CLI is refused before the sweep, so the working binary survives."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(f"build/bin/{_SERVER}", b"#!/bin/sh\necho sd-server\n")
@@ -2246,10 +2180,7 @@ def test_a_bundle_with_no_cli_is_refused_before_anything_is_swept(tmp_path, monk
 
 
 def test_an_unreadable_record_does_not_retire_the_memo(tmp_path, monkeypatch):
-    """The memo exists for a record this process could not WRITE. A record it cannot READ right
-    now (another writer holding it open, a permission blip) is not evidence that someone else
-    rewrote it, and retiring the memo on that hands the next selection the stale accelerator --
-    a multi-GB reinstall on every load."""
+    """An unreadable record does not retire the memo."""
     root = _shared_setup_10(tmp_path)
 
     real_open = builtins.open
@@ -2409,10 +2340,7 @@ def test_a_stale_unwritable_record_does_not_outrank_what_was_just_installed(tmp_
 
 
 def test_a_generation_cannot_start_inside_the_install_window(tmp_path, monkeypatch):
-    """The window a point-in-time check leaves open: the tree is idle when the install is decided,
-    then the download runs for seconds or minutes, and a generation admitted in that gap launches
-    the very sd-cli the extraction overwrites. Admission and the install are one decision, held
-    across the whole install, not sampled before the download."""
+    """Admission and install are one decision, held across the install window."""
     bk, root, server = _shared_setup_1(monkeypatch, tmp_path)
     monkeypatch.setattr(bk, "_sd_cpp_backend", None)
 
@@ -2707,11 +2635,7 @@ def _owned_tree_holding(tmp_path, rel: str) -> Path:
 
 
 def test_an_upgrade_is_a_replacement_from_the_extract_on(tmp_path, monkeypatch):
-    """The boundary has to open at the EXTRACT, not at the sweep. Extraction merges and zipfile
-    rewrites each member in place, so an archive that lands its executables where the previous
-    bundle's are has already destroyed them by the time the cudart fetch runs -- and the new
-    sd-cli.exe cannot start without those DLLs. Called an ordinary failure, ensure_* memoises the
-    accelerator and hands the caller back that very path."""
+    """An upgrade is a replacement from the extract on, not an ordinary failure to memoise."""
     zb = _zip_with_sd_cli()
     _stub_release(monkeypatch, zip_bytes = zb, digest = "sha256:" + hashlib.sha256(zb).hexdigest())
     _owned_tree_holding(tmp_path, f"build/bin/{_CLI}")
@@ -2723,12 +2647,7 @@ def test_an_upgrade_is_a_replacement_from_the_extract_on(tmp_path, monkeypatch):
 
 
 def test_a_different_layout_upgrade_is_a_replacement_too(tmp_path, monkeypatch):
-    """Same path is not the only way to mix two bundles. This archive writes to build/bin while
-    the previous copy sits in a versioned subdirectory, so the old one survives the extract -- and
-    loses anyway, because _layout_candidates puts build/bin first. The next lookup therefore
-    resolves a copy that has had neither the sweep, nor _make_executable, nor the cudart DLLs, and
-    calling the failure ordinary memoises the accelerator and suppresses the retry that repairs
-    it."""
+    """A different-layout upgrade is a replacement too; build/bin outranks the versioned directory."""
     zb = _zip_with_sd_cli()
     _stub_release(monkeypatch, zip_bytes = zb, digest = "sha256:" + hashlib.sha256(zb).hexdigest())
     old = _owned_tree_holding(tmp_path, f"sd-master-old/bin/{_CLI}")
@@ -2755,10 +2674,7 @@ def test_a_first_install_failing_before_the_sweep_is_an_ordinary_failure(tmp_pat
 
 
 def _server_load_backend(tmp_path, monkeypatch, root, server, on_fetch):
-    """A native image backend wired to load out of ``root`` with the download stubbed.
-
-    ``on_fetch`` stands in for the multi-GB asset pull: minutes during which this load holds no
-    claim on the tree, which is exactly where an install lands."""
+    """Drives the _server_load_backend helper with the download stubbed."""
     import core.inference.sd_cpp_backend as bk
     from core.inference.diffusion_families import detect_family
 
@@ -2814,11 +2730,7 @@ def _server_load_backend(tmp_path, monkeypatch, root, server, on_fetch):
 
 
 def test_a_same_path_accelerator_swap_is_refused_before_the_server_starts(tmp_path, monkeypatch):
-    """The asset download runs for minutes with no claim on the tree, so an install can replace
-    sd-server IN PLACE while it does: same path, still runnable, a different build. The re-resolve
-    under the reader claim asks ensure_sd_server_binary, and with allow_install=False that returns
-    whatever it found, mismatch included -- so the CPU server was published and started while this
-    load had already committed the CUDA device and its offload policy. Existence is not identity."""
+    """A same-path accelerator swap is refused before the server starts; existence is not identity."""
     root = _managed_tree(tmp_path, monkeypatch, accelerator = "cuda")
     server = root / "sd-bin" / _SERVER
     server.write_bytes(b"cuda-build")
@@ -2855,12 +2767,7 @@ def test_an_untouched_tree_still_starts_the_server_after_the_download(tmp_path, 
 
 
 def test_a_started_server_holds_the_tree_until_state_is_published(tmp_path, monkeypatch):
-    """The started server stays in _pending_server until _state takes it over, under one lock.
-
-    Clearing it as soon as start() returned left a window in which nothing published says the tree
-    is busy -- no reader, no pending server, no resident state -- while the process is up and
-    running out of it. An ensure_* landing there is admitted, downloads for minutes and then
-    extracts over the executable of a live server."""
+    """A started server holds the tree until `_state` is published, under one lock."""
     bk, root, server = _shared_setup_9(monkeypatch, tmp_path)
 
     backend, started, run = _server_load_backend(tmp_path, monkeypatch, root, server, lambda: None)
@@ -2941,10 +2848,7 @@ def test_a_serverless_install_does_not_fall_back_to_the_legacy_server(tmp_path, 
 
 
 def test_a_serverless_install_is_not_downloaded_again_on_every_later_load(tmp_path, monkeypatch):
-    """Rejecting the legacy server is only half the answer. The tree beside the Unsloth home keeps
-    that mismatched server, so the next load found it again, judged the accelerator changed and
-    reinstalled the bundle already sitting in the current root -- once per model load, forever.
-    The completed matching install in that root is the authoritative one: serverless, not stale."""
+    """A serverless install is not downloaded again on every load."""
     bk, home, legacy = _shared_setup_3(monkeypatch, tmp_path)
     old_server = legacy / "sd-bin" / _SERVER
     old_server.write_bytes(b"cpu-build")
@@ -3031,10 +2935,8 @@ def test_a_matching_legacy_server_is_still_preferred_over_the_one_shot_cli(tmp_p
 
 
 def test_a_deleted_server_still_reinstalls_rather_than_reading_as_serverless(tmp_path, monkeypatch):
-    """A missing sd-server is not proof the bundle never had one: the runnability repair unlinks a
-    broken managed server precisely so the next load puts it back. Only a record that positively
-    says the bundle shipped none may suppress that reinstall, so an install predating the field
-    keeps repairing itself."""
+    """A missing sd-server is not proof the bundle shipped none; only a record saying so blocks
+    reinstall."""
     bk, home, legacy = _shared_setup_3(monkeypatch, tmp_path)
     old_server = legacy / "sd-bin" / _SERVER
     old_server.write_bytes(b"cpu-build")

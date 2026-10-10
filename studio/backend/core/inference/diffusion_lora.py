@@ -94,12 +94,8 @@ def loras_dir() -> Path:
 
 
 def sanitize_alias(raw: str) -> str:
-    """Deterministic, filesystem- and prompt-tag-safe alias from an id/stem.
-
-    The `<lora:NAME:w>` tag resolves NAME as a filename stem (no path separators, spaces, colons,
-    or angle brackets), and the diffusers PEFT adapter name also forbids "." (a module separator),
-    so dots are replaced too. The caller breaks cross-source collisions with a numeric suffix.
-    """
+    """Dots are dropped because PEFT adapter names forbid them; the tag grammar rejects spaces and
+    colons."""
     stem = raw.rsplit("/", 1)[-1]
     for ext in _ALL_EXTS:
         if stem.lower().endswith(ext):
@@ -173,11 +169,7 @@ def _read_lora_sidecar(weight_path: Path) -> tuple[tuple[str, ...], float]:
 
 
 def list_loras(*, family: Optional[str] = None) -> list[LoraCatalogEntry]:
-    """The merged catalog (curated + local), optionally family-filtered.
-
-    Cheap: one directory scan plus the in-memory curated list. Network is only touched on
-    resolve(), when a hub adapter is selected.
-    """
+    """Cheap: one directory scan plus the in-memory curated list; network is touched only in resolve()."""
     merged = list(_CURATED) + _scan_local()
     if family:
         fam = family.strip().lower()
@@ -198,16 +190,7 @@ def resolve_one(
     hf_token: Optional[str] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> ResolvedLora:
-    """Resolve a request LoRA id + weight to a concrete local file.
-
-    Accepts a catalog/local id or a bare HF repo id (``owner/name[:weight_file.safetensors]``).
-    Downloads hub weights via the xet-fallback helper. Raises FileNotFoundError/ValueError on an
-    unresolvable/unsupported id, which the caller maps to a 400.
-
-    ``family`` (the loaded model family) enforces catalog family tags HERE, not only in the picker,
-    so a direct API client cannot load a LoRA tagged for another family through the wrong pipeline.
-    An untagged catalog entry (empty ``families``) stays unrestricted.
-    """
+    """Enforces family tags here, not only in the picker, so direct API calls cannot skip them."""
     # An empty token triggers an auth error instead of anonymous access; normalise to None.
     hf_token = hf_token.strip() if hf_token and hf_token.strip() else None
     entry = _catalog_by_id().get(spec_id)
@@ -297,11 +280,7 @@ def resolve_specs(
     hf_token: Optional[str] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> list[ResolvedLora]:
-    """Resolve request (id, weight) pairs, dropping zero-weight entries.
-
-    ``family`` (the loaded model family) enforces catalog family tags in :func:`resolve_one` for
-    direct API callers. Maps the named not-found/gated Hub errors to a 400 (URL scrubbed); does NOT
-    catch the base HfHubHTTPError, so a Hub 5xx stays a 500. A mid-download cancel maps to a 409."""
+    """Maps not-found and gated Hub errors to 400 but not base HfHubHTTPError, so a Hub 5xx stays a 500."""
     from huggingface_hub.errors import (
         EntryNotFoundError,
         GatedRepoError,
@@ -370,12 +349,7 @@ _TAG_RE = re.compile(r"<lora:([^:>]+):([^>]+)>")
 
 
 def inject_prompt_tags(prompt: str, resolved: list[ResolvedLora]) -> str:
-    """Append `<lora:ALIAS:WEIGHT>` tags for the selected adapters, using the validated weights.
-
-    sd-cli strips these tags before the model, so appending is safe. The validated weight (0-2)
-    must WIN over any user-typed `<lora:ALIAS:...>`, so strip ALL user tags first (unselected ones
-    are dead anyway, not in the managed dir) then append the validated ones.
-    """
+    """Strips all user <lora:...> tags first so the validated weight wins over any typed weight."""
     cleaned = _TAG_RE.sub("", prompt)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
     tags = [f"<lora:{r.alias}:{_fmt_weight(r.weight)}>" for r in resolved]
@@ -415,17 +389,7 @@ def supports_lora(
     transformer_quant: Optional[str],
     compiled: bool = False,
 ) -> bool:
-    """Single gate for whether the current load can apply LoRA (status + backends).
-
-    Native (sd_cpp): GGUF via sd-cli, LoRA-capable families only (Qwen excluded). Diffusers:
-    bf16 / bnb-4bit apply at generation time (but NOT once the transformer is torch.compile'd:
-    diffusers needs the adapter loaded before compilation); torchao int8/fp8 apply via the
-    load-time bake (select adapters when loading; a different selection needs a reload), so
-    ``compiled`` does not gate them -- the bake precedes compilation by construction. The quant
-    check runs BEFORE the gguf-kind check because the quant fast path keeps the PICKER kind
-    ("gguf") while the effective transformer is a dense torchao build. nvfp4/mxfp8 stay
-    unsupported; GGUF-via-diffusers stays on the native engine for LoRA.
-    """
+    """Adapters load before torch.compile; torchao int8/fp8 bake at load, so compile does not gate them."""
     fam = (family or "").lower()
     if engine == "sd_cpp":
         return any(tok in fam for tok in _NATIVE_LORA_FAMILY_TOKENS)

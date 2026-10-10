@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the diffusion training extras: LoRA EMA math, the persistent
-conditioning cache, aspect-ratio bucketing, and the short-run preset plumbing.
-
-CPU-only; the full trainer integration is exercised by the live GPU smokes."""
+"""CPU-only tests for diffusion training extras; full trainer integration runs in live GPU smokes."""
 
 from __future__ import annotations
 
@@ -242,13 +239,7 @@ _SCHEDULERS_THAT_IGNORE_WARMUP = {"constant", "piecewise_constant"}
 
 
 def test_warmup_presets_survive_into_a_built_config():
-    """What /training/diffusion/info advertises has to be constructible as-is.
-
-    test_diffusion_warmup_defaults.py owns the pairing invariant itself. This is the one guard
-    it does not give: its own helper filters train_defaults() down to the dataclass fields, so
-    a key added to FAMILY_TRAIN_DEFAULTS that DiffusionLoraConfig refuses would pass there and
-    still break every client that posts the advertised defaults back verbatim.
-    """
+    """Advertised train defaults must build a DiffusionLoraConfig verbatim, as clients post them back."""
     for family, defaults in FAMILY_TRAIN_DEFAULTS.items():
         if not defaults.get("lr_warmup_steps"):
             continue
@@ -313,10 +304,7 @@ def test_source_revision_marks_a_dir_update_and_never_raises(tmp_path):
 
 
 def test_source_revision_reads_the_active_hub_cache(tmp_path, monkeypatch):
-    """Unsloth can move its HF cache mid-session and loading follows the live setting, but
-    huggingface_hub's HF_HUB_CACHE constant is a snapshot from import time. Reading only that left
-    the marker unresolved (or pinned to the old root), so pulling a new revision of the same
-    checkpoint stopped invalidating the conditioning cache and a warm run reused stale latents."""
+    """Read the active Hub cache, not the HF_HUB_CACHE import-time constant, or revisions go stale."""
     from core.training import diffusion_train_extras as extras
 
     old_root = tmp_path / "old" / "hub"

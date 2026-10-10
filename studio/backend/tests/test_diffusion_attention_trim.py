@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the HunyuanVideo-1.5 padded-text attention trim.
-
-``_trim_stream`` / ``_hunyuan_trim_pre_hook`` / ``install_hunyuan_attention_trim`` use real torch
-tensor ops, so unlike the attention-backend policy tests in ``test_diffusion_attention.py`` these
-require torch. Kept in a separate module so that file stays collectable without torch installed.
-"""
+"""Real-torch trim tests, kept apart so test_diffusion_attention.py stays collectable without torch."""
 
 from __future__ import annotations
 

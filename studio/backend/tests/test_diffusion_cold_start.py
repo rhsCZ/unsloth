@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Cold-start levers for the diffusion backend: background compile of a dense denoiser, the persisted quant smoke-probe
-table, the mapped pre-quant checkpoint read, and the deeper diffusers prewarm.
-
-CPU only. The background compile is driven through a real ``torch.compile`` with a counting backend, so "no compile on
-the render" is observed, not assumed.
-"""
+"""Cold-start levers: background compile, quant probe table, pre-quant read and diffusers prewarm."""
 
 from __future__ import annotations
 

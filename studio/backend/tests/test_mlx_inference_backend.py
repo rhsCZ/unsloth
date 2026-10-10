@@ -54,12 +54,7 @@ def _neutral_scope(
     *_args,
     **_kwargs,
 ):
-    """A scope that does nothing and yields the model, whatever else zoo passes.
-
-    contextlib.nullcontext takes one argument, so it stood in only while every helper took just the
-    model. unsloth_zoo #1546 calls nax_quantized_linear(model, int8_prefill), and the stub raised
-    TypeError inside generation_mode on every macOS vision batch test.
-    """
+    """Zoo passes extra arguments to some scopes, which a bare nullcontext rejects with TypeError."""
     return contextlib.nullcontext(model)
 
 
@@ -77,12 +72,7 @@ PLAIN_HELPERS = {"_fusion_modules": _fusion_modules}
 
 
 def _neutral_zoo_helper(name):
-    """Every other public helper zoo's generate.py enters around a model is neutral too.
-
-    unsloth_zoo #1541 added nax_quantized_linear to that import list, and a stub holding only the
-    fused_* names failed every real-model test on macOS with an ImportError. fused_* stay explicit,
-    so a test that deletes one still sees it missing.
-    """
+    """Other zoo helpers are neutral; fused_* stay explicit so a test deleting one still sees it missing."""
     if name.startswith("_") or name.startswith("fused_"):
         raise AttributeError(name)
     return _neutral_scope
@@ -1194,10 +1184,7 @@ def test_vlm_iterator_restores_each_callers_stream_and_closes_on_generation_stre
 def test_mlx_vlm_reemits_think_prefill_inside_adapter_context(
     monkeypatch, mlx_moe, mlx_decode, feature
 ):
-    """A prefilled <think> block must be re-emitted as the first VLM snapshot,
-    inside the adapter context (so unsupported requests still raise first), so
-    the UI renders the thinking block during prefill and a pre-first-token
-    cancel does not drop it. Mirrors _generate_text."""
+    """Prefilled <think> is re-emitted as the first VLM snapshot, so a pre-token cancel does not drop it."""
     from core.inference import mlx_inference
     from core.inference.mlx_inference import MLXInferenceBackend
 
@@ -1804,12 +1791,7 @@ def test_mlx_text_normalizes_native_reasoning_and_close_releases_lock(monkeypatc
 
 
 def test_mlx_text_post_tool_prompt_opens_reasoning_channel(monkeypatch):
-    """Gemma-style templates open the thought channel in the POST-TOOL prompt.
-
-    Generation then emits only the closing marker, so a parser assuming it starts
-    outside reasoning would leak the post-tool reasoning and a raw ``<channel|>``
-    into the visible answer.
-    """
+    """Gemma-style post-tool prompts open the thought channel, so output shows only the closing marker."""
     from core.inference.mlx_inference import MLXInferenceBackend
 
     _install_fake_mlx(monkeypatch)
@@ -2577,11 +2559,7 @@ def test_mlx_audio_classification(monkeypatch, processor, renders, capable, expe
     ],
 )
 def test_mlx_audio_classification_survives_a_broken_dependency(monkeypatch, capability):
-    """A probe must never fail a model load, whatever the dependency does.
-
-    unsloth_zoo is pinned by a floor, so a version whose capability call raises
-    or returns another shape has to degrade to "no audio", not abort the load.
-    """
+    """A broken or odd-shaped unsloth_zoo capability call must degrade to no audio, never abort the load."""
     from core.inference import mlx_inference
 
     fake_utils = types.ModuleType("unsloth_zoo.mlx.utils")
@@ -2607,13 +2585,7 @@ def test_mlx_audio_classification_survives_an_absent_dependency(monkeypatch):
 
 @pytest.mark.parametrize("codec", ["snac", "dac", "bicodec", "csm", "whisper"])
 def test_mlx_audio_classification_keeps_a_classification_it_cannot_judge(monkeypatch, codec):
-    """A TTS codec or Whisper is never a vision model, so the probe never runs.
-
-    The worker mirrors this entry over the pre-load config, so returning a bare
-    None here would strip is_audio from a codec checkpoint mlx-lm loads happily
-    (Orpheus/Llasa/Spark-TTS are plain llama/qwen2), and the chat route's TTS
-    redirect would stop firing.
-    """
+    """A bare None would strip is_audio from codec checkpoints mlx-lm loads, breaking the TTS redirect."""
     from core.inference import mlx_inference
 
     monkeypatch.setitem(sys.modules, "unsloth_zoo.mlx.utils", None)
@@ -2637,12 +2609,7 @@ def test_mlx_audio_classification_keeps_a_classification_it_cannot_judge(monkeyp
     ],
 )
 def test_mlx_audio_capability_survives_a_probe_that_could_not_run(monkeypatch, capability):
-    """An unjudgeable probe defers; it does not retract audio_vlm.
-
-    Every currently released unsloth_zoo lands here, so treating "could not look"
-    as a verified negative would hide the upload control the pre-load detection
-    had already earned.
-    """
+    """A probe that could not run must defer, not count as a verified negative that retracts audio_vlm."""
     from core.inference import mlx_inference
 
     if capability is None:
@@ -2707,12 +2674,7 @@ def test_mlx_audio_probe_that_answered_no_still_retracts_audio_vlm(monkeypatch):
     ],
 )
 def test_mlx_vlm_renderer_audio_marker_contract(model_type, places_marker):
-    """Pins which mlx-vlm message builders honour num_audios.
-
-    This is the message-construction layer, not the final template render:
-    Every currently registered native-audio formatter preserves the requested
-    audio count under mlx-vlm 0.6.10.
-    """
+    """Each registered native-audio formatter keeps the requested audio count under mlx-vlm 0.6.10."""
     pu = pytest.importorskip("mlx_vlm.prompt_utils")
     render = lambda n: pu.apply_chat_template(
         None,
@@ -3011,11 +2973,7 @@ def test_mlx_audio_input_normalizes_split_native_reasoning_channels(monkeypatch)
 
 @pytest.mark.parametrize("feature", FUSIONS)
 def test_mlx_audio_input_honors_adapter_selection(monkeypatch, mlx_moe, mlx_decode, feature):
-    """Base-vs-LoRA compare sends audio_base64 and use_adapter in one body.
-
-    The audio stream has to enter _temporary_mlx_adapter_state like the text and
-    vision paths, or the base side silently runs the loaded adapter.
-    """
+    """Audio must enter _temporary_mlx_adapter_state like text/vision, or base runs the loaded adapter."""
     from core.inference import mlx_inference
     from core.inference.mlx_inference import MLXInferenceBackend
 
@@ -3429,11 +3387,7 @@ def test_a_uniformly_quantized_text_load_goes_through_mlx_vlm_only_when_that_bat
 
 
 def test_reload_comparison_and_response_carry_the_resolved_setting():
-    """A load-time knob must force a reload and reach the client.
-
-    Both were silently broken: the comparator tripped on a mirror key CUDA
-    never stored, and the response fields sat on a request model.
-    """
+    """Load-time knobs must reach the response model and trigger reloads on the keys actually stored."""
     from routes.inference import _mlx_runtime_settings_match
     from models.inference import LoadRequest, LoadResponse
 
@@ -3604,11 +3558,7 @@ def test_a_batch_session_holds_int8_prefill_for_its_whole_life(monkeypatch, mlx_
 
 
 def test_kv_quant_probe_reports_what_the_runtime_would_really_do(monkeypatch):
-    """Attempt the conversion instead of predicting it from config or names.
-
-    Static proxies were wrong both ways: a declared head_dim a model ignores,
-    and windows spelled differently from `max_size`.
-    """
+    """Static config and name proxies were wrong both ways, so probe the real KV conversion instead."""
     from core.inference import mlx_inference
 
     pytest.importorskip("mlx_lm")
@@ -3658,13 +3608,7 @@ def test_parent_mirror_omits_runtime_fields_a_backend_never_reported():
 
 
 def test_chat_template_override_installs_only_where_one_already_exists():
-    """Replace a template; never create one.
-
-    Both render selectors choose their target by whether a template is
-    present, so creating one where there was none moves the render to a
-    different object -- on the vision side, to one that never selects the
-    tool_use variant.
-    """
+    """Overrides replace an existing chat template only; creating one moves the render to another object."""
     from core.inference import mlx_inference
 
     tokenizer = SimpleNamespace(chat_template = "native")
@@ -3789,13 +3733,7 @@ def test_chat_template_override_crosses_both_ipc_hops():
 
 
 def test_template_probe_renders_through_the_path_generation_uses(monkeypatch):
-    """The probe must exercise the real renderer, and reject an empty prompt.
-
-    Rendering through the VLM recovery renderer instead would pass for a model
-    outside mlx-vlm's family list, because that helper returns None rather than
-    raising -- so an unrenderable template would be recorded as applied and
-    then throw on every generation.
-    """
+    """Probe through the generation path, since the VLM recovery helper returns None instead of raising."""
     from core.inference import mlx_inference
 
     seen = {}
@@ -3891,12 +3829,7 @@ def test_a_vision_reply_cuts_at_its_own_stop_sequence(monkeypatch):
 
 
 def test_the_audio_refusal_puts_the_native_template_back(monkeypatch):
-    """The refusal itself, not just the marker check.
-
-    Capability was classified against the native template, so an override that
-    stops marking audio has to be undone -- otherwise the model keeps
-    advertising an input it can no longer place.
-    """
+    """Refusing audio must restore the native template, or the model keeps offering audio it can't place."""
     from core.inference import mlx_inference
 
     marks = {"audio": False}
@@ -3938,13 +3871,7 @@ def test_the_audio_refusal_puts_the_native_template_back(monkeypatch):
 
 
 def test_a_created_template_is_not_reported_as_the_model_default():
-    """A model that shipped no template must keep reporting none.
-
-    The override is installed on the tokenizer for text models, so reading the
-    live object back would report the user's own template as the model's
-    default -- which makes the editor treat it as the default and clear it on
-    the next save, leaving the model unchattable again.
-    """
+    """A model with no shipped template must report none, or the editor clears the override on save."""
     from core.inference import mlx_inference
 
     backend = mlx_inference.MLXInferenceBackend.__new__(mlx_inference.MLXInferenceBackend)
@@ -3987,11 +3914,7 @@ def _marker_renderer(monkeypatch, marks_image):
 
 
 def test_an_override_that_stops_marking_images_is_revoked(monkeypatch):
-    """A text-only probe renders fine while the image placeholder is gone.
-
-    The failure would otherwise land on the first image request, inside a
-    processor that counts markers against image features.
-    """
+    """A text-only probe renders fine with the image placeholder gone; check the image marker too."""
     from core.inference import mlx_inference
 
     processor = SimpleNamespace(
@@ -4035,11 +3958,7 @@ def test_an_override_that_keeps_the_image_marker_is_left_alone(monkeypatch):
 
 
 def test_the_model_default_comes_from_the_object_that_renders():
-    """A processor owning its own template is what generation reads.
-
-    Reporting the nested tokenizer's instead lets "reset to default" install the
-    tokenizer's template over the processor, losing its media and tool variants.
-    """
+    """Report the processor's own template, not the nested tokenizer's, or reset loses its variants."""
     from core.inference import mlx_inference
 
     nested = SimpleNamespace(chat_template = "{{ nested }}")
@@ -4064,12 +3983,7 @@ def test_the_model_default_comes_from_the_object_that_renders():
 
 
 def test_template_targets_follow_the_object_that_can_actually_render():
-    """A processor holding a template it cannot render with is not the target.
-
-    chat_render_target falls back to the nested tokenizer there, so judging
-    eligibility against the processor would install onto an object nothing
-    reads and then pass a probe rendered from the untouched native template.
-    """
+    """A processor template it cannot render is not the target; installing there would reach no reader."""
     from core.inference import mlx_inference
 
     nested = SimpleNamespace(chat_template = "{{ nested }}")
@@ -4093,12 +4007,7 @@ def test_template_targets_follow_the_object_that_can_actually_render():
 
 
 def test_an_entry_the_upstream_lru_cannot_size_is_not_retainable(monkeypatch):
-    """Upstream LRUPromptCache.insert_cache sums entry.nbytes itself.
-
-    So an mlx-lm whose QuantizedKVCache.nbytes raises cannot admit the entry
-    however else it could be measured, and measuring it another way here would
-    drop the no-reuse caveat while every quantized turn still failed to insert.
-    """
+    """Upstream sums entry.nbytes itself, so a raising QuantizedKVCache.nbytes blocks every insert."""
     from core.inference import mlx_inference
 
     class _Broken:
@@ -4187,10 +4096,7 @@ class _SentinelRandomState:
 
 
 def test_kv_quant_probe_rewinds_the_rng_without_assigning_to_the_state(monkeypatch):
-    """mlx 0.32.1 made mx.random.state a sentinel with no __setitem__, so the
-    assignment this used to do raised out of the probe's finally and failed the
-    whole model load.
-    """
+    """mx.random.state has no __setitem__ since mlx 0.32.1, so the rewind must not assign to it."""
     from core.inference import mlx_inference
 
     _install_fake_mlx(monkeypatch)
@@ -4307,11 +4213,7 @@ def test_vlm_prompt_cache_session_starts_from_a_pre_quantized_cache(monkeypatch)
 
 
 def test_a_successful_override_does_not_pin_the_tokenizer_past_load(monkeypatch):
-    """The restore pairs hold the tokenizer, so unload_model cannot free it.
-
-    Nothing reads them once the audio and image checks have run, and the worker
-    outlives the model, so holding them defeats part of what unload releases.
-    """
+    """Restore pairs must not outlive the load: they hold the tokenizer, so unload_model cannot free it."""
     from core.inference.mlx_inference import MLXInferenceBackend
 
     _install_fake_mlx(monkeypatch)
@@ -4333,12 +4235,7 @@ def test_a_successful_override_does_not_pin_the_tokenizer_past_load(monkeypatch)
 
 
 def test_an_override_that_renders_the_image_as_prose_is_not_a_marker(monkeypatch):
-    """A difference between the two probes is not proof of a placeholder.
-
-    A template emitting "Image attached", or the content dict itself, renders
-    differently from the text-only probe while placing nothing the processor
-    can bind the image to.
-    """
+    """A render difference is not a placeholder: prose such as 'Image attached' binds to nothing."""
     from core.inference import mlx_inference
 
     nested = SimpleNamespace(chat_template = "{{ nested }}")
@@ -4382,11 +4279,7 @@ def test_an_override_that_renders_the_image_as_prose_is_not_a_marker(monkeypatch
 
 
 def test_the_load_response_declares_every_runtime_field_status_reports():
-    """A field only /status declares is silently dropped from a load response.
-
-    Pydantic ignores an extra keyword, so a route can construct the echo and
-    the client still sees nothing, with no error anywhere to notice it by.
-    """
+    """Load responses must declare each /status runtime field, since Pydantic silently drops extras."""
     from models.inference import (
         InferenceStatusResponse,
         LoadResponse,
@@ -4415,14 +4308,8 @@ def test_the_load_response_declares_every_runtime_field_status_reports():
 
 
 def test_a_vision_override_is_checked_even_when_the_native_render_needs_recovery(monkeypatch):
-    """Gating the check on the native template skipped the models that need it.
-
-    A native template that places nothing still renders images, because
-    _generate_vlm falls back to the registered renderer once _vlm_prompt_issue
-    fires. An override rendering plain text fires nothing, so the image goes
-    unplaced with no error, and recovery is unavailable anyway once tools or
-    reasoning controls are set.
-    """
+    """Gating on the native template skipped models that need recovery; check vision overrides
+    regardless."""
     from core.inference import mlx_inference
 
     _install_fake_mlx(monkeypatch)
@@ -4556,11 +4443,7 @@ def test_mlx_processors_penalize_in_range_ids_and_route_strays_away(
     ids = ["dict-config", "object-config", "dict-_config", "object-_config", "config-then-_config"],
 )
 def test_eos_ids_are_read_from_every_shape_a_config_arrives_in(model):
-    """A checkpoint's config is a dict on some models and an object on others,
-    under config or _config -- the spread _mlx_vlm_model_config already walks. A
-    getattr-only read silently fell through to the tokenizer, which is the source
-    the priority order exists to outrank, so an EOS sampled on the last allowed
-    token was reported as truncation."""
+    """A getattr-only read of eos ids falls through to the tokenizer; config may be a dict or an object."""
     from core.inference.mlx_inference import _mlx_finish_reason, _mlx_stop_token_ids
 
     tokenizer = SimpleNamespace(eos_token_id = 9)
@@ -4579,11 +4462,7 @@ def test_the_tokenizer_is_still_the_fallback_when_no_config_carries_eos():
 
 
 def test_finish_reason_separates_truncation_from_natural_end():
-    """At the limit the count alone is ambiguous -- a stop token sampled as the
-    final allowed token looks identical to exhaustion -- so the last token
-    decides, against the ids read from the source the runtime stops on. Those
-    sources disagree on real repos: Kimi-VL lists two config ids and a different
-    tokenizer id, and each may be a bare int (Qwen2-VL) rather than a list."""
+    """At the token limit the last token decides, since a stop token sampled last looks like exhaustion."""
     from core.inference.mlx_inference import _mlx_finish_reason, _mlx_stop_token_ids
 
     model = SimpleNamespace(config = SimpleNamespace(eos_token_id = [163584, 163586]))
@@ -4643,15 +4522,7 @@ def _fake_rng_state(monkeypatch, words):
     ],
 )
 def test_rng_capture_reinterprets_signed_words(monkeypatch, words, expected):
-    """A negative word is the two's complement of the uint32 mlx stores.
-
-    Reinterpreting it loses nothing, and it is what keeps the seed inside the
-    uint64 domain. The rewind is deliberately unguarded, which only holds if the
-    words cannot put it out of range; capture does not type-check the state, so
-    this conversion is what makes that true. A raise would land in the probe's
-    finally and replace the probe's own outcome, the failure shape #9478 set out
-    to remove.
-    """
+    """Negative words are reinterpreted as uint32 two's complement, so the seed stays in uint64 range."""
     from core.inference import mlx_inference
 
     mlx_inference, seeded = _fake_rng_state(monkeypatch, words)
@@ -4668,13 +4539,7 @@ def test_rng_capture_reinterprets_signed_words(monkeypatch, words, expected):
     "words", [(2**32, 0), (0, 2**32), (2**63, 1), (-(2**31) - 1, 0), (0, -(2**40))]
 )
 def test_rng_capture_declines_words_that_are_not_32_bit(monkeypatch, words):
-    """Masking these would be worse than declining them.
-
-    (2**32, 0) masks to (0, 0): a key we cannot represent becomes a plausible
-    wrong one, the probe reports success, and sampling silently diverges from an
-    unprobed run. Declining is the outcome the caller already handles, and it is
-    the only one that says so out loud.
-    """
+    """Words that are not 32-bit must be declined; masking turns them into a plausible wrong key."""
     from core.inference import mlx_inference
 
     mlx_inference, seeded = _fake_rng_state(monkeypatch, words)
@@ -7026,11 +6891,7 @@ def test_advance_before_the_first_mask_raises_rather_than_dropping_the_token(tin
 
 
 def _uncopyable_naive_detokenizer(detokenizers):
-    """mlx-vlm's naive detokenizer as it behaves BELOW 0.6.0, which is where ``__copy__`` arrived.
-
-    Pinning the behaviour rather than the installed version: on 0.6.0 and later ``copy.copy``
-    succeeds, so a test that let the real class decide passed only on an older wheel and said
-    nothing about the branch it meant to cover."""
+    """The pre-0.6.0 naive detokenizer, whose copy raises; pinned by behaviour, not the installed wheel."""
 
     class _Uncopyable(detokenizers.NaiveStreamingDetokenizer):
         def __copy__(self):
@@ -7042,11 +6903,7 @@ def _uncopyable_naive_detokenizer(detokenizers):
 
 
 class _SpmTurn:
-    """One generated turn, standing in for both the tokenizer and the runtime's detokenizer.
-
-    The SPM detokenizer releases text only when a piece begins with the SPM space marker, so a
-    control reaches ``response.text`` inside a later segment. Fakes handing each piece back on its
-    own step hide that, and under that shape re-decoding a control on its own step reads correct."""
+    """SPM releases text only at space-marked pieces, so a control can land in a later segment."""
 
     def __init__(
         self,
@@ -7096,12 +6953,7 @@ class _SpmTurn:
         ).replace("▁", " ")
 
     def stream(self, *_a, **_k):
-        """A segment per step from the runtime's own detokenizer, then the flush ending the turn.
-
-        ``ends`` picks that last yield's shape: exhausting the sampler repeats the position already
-        reported, while breaking out reports one never yielded -- on a stop token the detokenizer
-        never saw, or on the token limit, which mlx-lm reaches after feeding it.
-        ``reports_finish_reason`` is off for the supported mlx-vlm floor, which has no such field."""
+        """ends picks the last yield's shape; the mlx-vlm floor has no reports_finish_reason field."""
         if self._block:
             yield self._yielded(self.decode(self.ids), self.ids[-1], len(self.ids), "stop")
             return
@@ -7358,10 +7210,7 @@ def test_mlx_stream_detokenizer_handles_one_that_cannot_be_copied():
 
 
 def test_mlx_stream_detokenizer_rebuilds_the_one_a_retained_source_cannot_copy():
-    """mlx-vlm's processor hands back a single retained instance, and below 0.6.0 -- which is
-    where ``__copy__`` arrives -- copying the naive one raises. Falling back to no detokenizer
-    there would pass the runtime's text through unfiltered for the whole turn, so a control the
-    allowlist suppresses would reach the reply."""
+    """Below mlx-vlm 0.6.0 copying the naive detokenizer raises, so rebuild it, never drop the filter."""
     detokenizers = pytest.importorskip("mlx_vlm.tokenizer_utils")
     from core.inference.mlx_inference import _mlx_stream_detokenizer
 
@@ -7664,10 +7513,7 @@ def test_mlx_normalizes_a_replay_only_conversation_for_a_processor_template():
 
 
 def test_mlx_binds_an_earlier_attachment_to_its_own_turn_not_a_newer_replay():
-    """The attachment's turn can PRECEDE a tool's picture. The route used to pre-add
-    its marker, so the backend counted that marker as history's, the top-up became a
-    no-op, and the two pixels bound to each other's turns -- the model was shown the
-    screenshot where the user's own diagram belonged."""
+    """Pre-added markers make the top-up a no-op, so an attachment and a tool picture swap turns."""
     from core.inference.mcp_images import placeholder_turn
     from core.inference.mlx_inference import MLXInferenceBackend
 
@@ -8623,13 +8469,7 @@ def _resolving_utils():
 def test_mlx_vlm_every_release_reads_one_models_rate_the_same_way(
     monkeypatch, processor, expected_fps
 ):
-    """A model's declared rate must not depend on which mlx-vlm is installed.
-
-    Studio pins ``mlx-vlm>=0.4.4,<=0.7.4``, which spans both shapes: releases with no resolver
-    and, from 0.7.0, releases that have one. Reading the rate only through the resolver left
-    every install on the older shape sampling at the library default instead of the rate the
-    checkpoint asked for.
-    """
+    """Read the declared rate from fields on every mlx-vlm release, not only the 0.7.0+ resolver."""
     from core.inference import mlx_inference
 
     seen = []
@@ -8664,12 +8504,7 @@ def test_mlx_vlm_a_release_naming_no_fps_knob_still_bounds_a_clip(monkeypatch):
 
 
 def test_mlx_vlm_without_opencv_refuses_a_clip_by_name(monkeypatch):
-    """The capability must not promise what the decoder cannot deliver.
-
-    mlx-vlm's ``load_video`` and the frame budget both import cv2. OpenCV ships as an mlx-vlm
-    dependency, but a stack that lost it used to still report ``has_video_input``, so the composer
-    offered video and the request died with ModuleNotFoundError mid-stream instead of being refused.
-    """
+    """Video is offered only when cv2 is present, since load_video and the frame budget both import it."""
     from core.inference import mlx_inference
 
     _require_video_stack()

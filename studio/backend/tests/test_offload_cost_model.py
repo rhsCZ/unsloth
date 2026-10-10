@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The cost model against every measurement that produced it.
-
-Anchors are real llama-bench runs on one B200 with a 192-core host, llama.cpp
-b10360-era build, at 128K context unless stated. Each ``MEASURED_*`` figure is a
-throughput in t/s converted to milliseconds per token, because time is the
-quantity that composes and throughput is not.
-"""
+"""MEASURED_* throughputs are stored as ms per token, since time composes and throughput does not."""
 
 from __future__ import annotations
 
@@ -84,13 +78,7 @@ def test_the_model_reproduces_every_measured_anchor(label, placement, measured_d
 
 
 def test_the_kv_ratio_transfers_across_two_unrelated_models():
-    """The strongest calibration point, and the only genuinely predictive one.
-
-    The KV rate was derived from the dense model alone. Applied unchanged to a
-    MoE model with a different layer count, head count and cache size, it lands
-    within the same tolerance. Two structurally unrelated models agreeing on one
-    constant is what makes "never move the cache" a rule rather than a datum.
-    """
+    """The KV rate fitted on the dense model alone predicts the MoE within 3%, so cache spill is a rule."""
     dense_rate = (DENSE_KV_HOST - DENSE_BASE) / (DENSE_KV_BYTES / GIB)
     moe_rate = (MOE_KV_HOST - MOE_BASE) / (MOE_KV_BYTES / GIB)
     assert rel_err(moe_rate, dense_rate) < 0.03
@@ -116,13 +104,7 @@ def test_ffn_is_cheaper_per_byte_than_lm_head():
 
 
 def test_spilling_two_groups_costs_MORE_than_the_sum_not_less():
-    """The correction that matters most.
-
-    Read as throughput percentages, lm_head "costs 43% alone but only 16% on top
-    of FFN", which reads as a discount. In time it is the opposite: the same
-    0.97 GiB adds 10.2 ms alone and 14.4 ms once FFN is already spilled. Ranking
-    on percentages would pick the wrong placement.
-    """
+    """Penalties must rank in ms: as throughput percentages lm_head looks like a discount on top of FFN."""
     alone = generation_penalty_ms(Placement([DENSE_LM_G]))
     ffn_only = generation_penalty_ms(Placement([DENSE_FFN_G]))
     both = generation_penalty_ms(Placement([DENSE_FFN_G, DENSE_LM_G]))
@@ -169,10 +151,7 @@ def test_spilling_less_always_costs_less():
 
 
 def test_moe_wins_at_generation_and_loses_at_prefill():
-    """The crossover the two regimes produce, and the reason they are modelled
-    apart. Generation reads 8/256 of the experts; a 512-token prefill ubatch
-    reads all of them, so the sparsity that makes MoE cheap to spill during
-    generation buys nothing during prefill."""
+    """MoE spills cheaply in generation (8 of 256 experts read) but not in prefill, which reads all."""
     moe = Placement([MOE_EXPERT_G])
     dense = Placement([DENSE_FFN_G])
     assert generation_penalty_ms(moe) < generation_penalty_ms(dense)
@@ -189,21 +168,7 @@ def test_the_measured_penalties_show_that_same_crossover():
 
 
 def test_a_smaller_host_makes_every_spill_worse():
-    """Generation cost tracks host threads, measured 2.42 / 5.83 / 11.82 t/s at
-    4 / 16 / 64 with the FFN spilled, against a flat 87.30 resident. A desktop
-    is not a small version of this box; it is a different recommendation.
-
-    This used to under-warn by about 22% at 16 threads, predicting 2.26x against
-    a measured 2.885x. That gap was the one-machine fit being applied across
-    machines. The cross-host floor closes it: the prediction is now 2.93x, a
-    little OVER the measured ratio rather than well under it.
-
-    Over is the side to be on. Under-warning quotes a spill that then runs
-    several times slower than promised, which is the same direction as every
-    real defect this planner has had; over-warning costs some throughput a user
-    could have had. Held to within 10% so "conservative" cannot drift into
-    "useless".
-    """
+    """Spill cost is held slightly above the measured ratio, since under-warning promises a slower spill."""
     big = generation_penalty_ms(Placement([DENSE_FFN_G]), HostProfile(threads = 192))
     small = generation_penalty_ms(Placement([DENSE_FFN_G]), HostProfile(threads = 16))
     assert small > 2 * big
@@ -221,14 +186,7 @@ def test_thread_scaling_matches_the_measured_sweep():
 
 
 def test_prefill_ignores_host_threads_while_generation_does_not():
-    """The asymmetry between the two regimes, asserted as a contrast rather than
-    by comparing a call to itself.
-
-    Prefill clears ggml's op-offload batch threshold (32, ggml-cuda.cu:5465) so
-    the op moves to the GPU and the weights are copied in: link-bound, cores
-    irrelevant. Generation at batch 1 stays below it and runs on the CPU
-    backend: core-bound.
-    """
+    """Prefill is link-bound and ignores host threads; batch-1 generation runs on CPU and is core-bound."""
     p = Placement([DENSE_FFN_G])
     big, small = HostProfile(threads = 192), HostProfile(threads = 8)
     assert prefill_penalty_ms_per_token(p, host = small) == prefill_penalty_ms_per_token(p, host = big)
@@ -276,13 +234,7 @@ def test_a_prefill_heavy_mix_can_reorder_dense_against_moe():
 
 
 def test_the_cross_host_floor_matches_the_measured_cloud_hosts():
-    """The floor is fitted to real cloud VMs, so hold it to them.
-
-    Measured dense Q4_K_XL, ms per GiB of spilled weights, over 70 runs on
-    T4 / L4 / A100 / RTX PRO 6000: 24.21 at 12 vCPU, 6.82 at 48, and 5.498 at
-    the 192-thread reference. Before the floor the 12 vCPU case was predicted at
-    17.1, i.e. 0.59 of the truth.
-    """
+    """The host-thread floor is fitted to measured cloud VMs, not the 192-thread reference box alone."""
     rate = lambda t: (  # noqa: E731 - one expression, reads better inline
         HostProfile(threads = t).generation_slowdown * REFERENCE_CONTIGUOUS_MS_PER_GIB
     )
@@ -294,10 +246,7 @@ def test_the_cross_host_floor_matches_the_measured_cloud_hosts():
 
 
 def test_a_host_cache_is_not_free_during_prefill():
-    """generation_penalty_ms charges kv_host_bytes and prefill did not, so a
-    cache-offloaded placement prefilled for free and TIED with a fully resident
-    one at n_generated = 0. The asymmetry was the bug: the cache crosses the same
-    link as the weights."""
+    """Host-resident KV must cost prefill time too: the cache crosses the same link as the weights."""
     resident = Placement()
     kv_host = Placement(kv_host_bytes = int(4 * GIB))
 

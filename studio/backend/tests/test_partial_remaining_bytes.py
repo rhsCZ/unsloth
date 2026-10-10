@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A partial row is priced by what a resume still has to fetch.
-
-The card used to print the variant total beside a resume button, so continuing a
-sharded download that was 40 GB in still read "56 GB". Bytes reused are whole
-files: a finished shard is kept, an unresumable partial is refetched, so a
-one-file quant really does read back its full size.
-"""
+"""A partial row is priced by the bytes a resume still has to fetch, not the variant total."""
 
 from __future__ import annotations
 

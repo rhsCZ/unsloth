@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""chat_eos: resolve assistant-turn-end stop tokens from the chat_template and
-repair generation_config so a chat model whose eos is a bare document terminator
-(Qwen3.5: config eos <|endoftext|>, turns end with <|im_end|>) stops at the turn
-boundary instead of running past it and looping. Dependency-light: imported here
-without the full inference stack.
-"""
+"""Stop at the turn end: a bare document eos like Qwen3.5's <|endoftext|> runs past it and loops."""
 
 from __future__ import annotations
 

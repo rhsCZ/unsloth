@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for utils/hardware and utils/utils: device detection, GPU memory, error formatting.
-
-Passes on any platform (NVIDIA/CUDA, Apple Silicon/MLX, CPU-only). No ML framework
-is imported at top level; tests needing torch/mlx internals skip when unavailable.
-"""
+"""No ML framework is imported at top level, so these run on CUDA, MLX and CPU-only hosts alike."""
 
 import platform
 import sys
@@ -288,10 +284,7 @@ class TestGetGpuMemoryInfo:
         assert abs(result["free_gb"] - 11.0) < 0.01
 
     def test_mlx_free_is_not_reduced_by_whole_device_gpu_use(self):
-        """The working set is a per-process budget, and the AGX counter behind
-        used_gb is whole-device and only the active subset, so charging one
-        against the other would let another app's GPU work pick the training
-        method."""
+        """The MLX working set is per-process, so other apps' GPU use must not reduce free memory."""
         busy = self._mlx_memory_info(available_gb = 6, recommended_gb = 11, used_gb = 8)
         idle = self._mlx_memory_info(available_gb = 6, recommended_gb = 11, used_gb = 0.4)
 
@@ -315,10 +308,7 @@ class TestGetGpuMemoryInfo:
         assert abs(result["free_gb"] - 6.0) < 0.01
 
     def test_mlx_utilization_device_publishes_the_same_free_as_the_summary(self):
-        """The Resources tab reads the per-device figure, and /api/system falls
-        back to total - used for any device that does not report free. On
-        unified memory that fallback is the 14.8 GB overstatement the tests
-        above reject, so this probe has to carry free itself."""
+        """Utilization must report free itself; total minus used overstates unified memory by 14.8 GB."""
         from utils.hardware.hardware import get_visible_gpu_utilization
 
         with self._mlx_machine(available_gb = 6, recommended_gb = 11):
@@ -724,11 +714,7 @@ class TestSafeErrorDetailNamesAMetalFailure:
 
 
 class TestAuthSafeRedirectHandler:
-    """A Hub token must not leave the origin the operator configured.
-
-    Origin cases run over loopback sockets; scheme cases go through redirect_request
-    directly, since a loopback TLS server would need a cert this suite does not carry.
-    """
+    """A Hub token must not follow a redirect off the configured origin; scheme cases skip sockets."""
 
     TOKEN = "Bearer hf_FAKE_TOKEN_FOR_TESTS"
 
@@ -871,10 +857,7 @@ class TestAuthSafeRedirectHandler:
         assert req.headers.get("Authorization") == self.TOKEN
 
     def test_a_refused_redirect_reaches_the_caller_as_an_http_error(self):
-        """Stubs the refusal rather than driving it, since that needs an https origin.
-
-        Settles the caller contract only: returning None raises HTTPError on the 3xx.
-        """
+        """Returning None from the redirect handler raises HTTPError on the 3xx; the refusal is stubbed."""
         import urllib.error
         import urllib.request
 

@@ -173,10 +173,7 @@ _ESPEAK_DATA_NAMES = ("espeak-ng-data.bin", "espeak-ng-data.gguf", "espeak-ng-da
 
 
 def binary_has_espeak(binary: Optional[str]) -> bool:
-    """Whether this build can phonemize with eSpeak-ng: a static build ships its data beside the server.
-
-    Upstream bundles are built without it, so Kokoro, Piper, KittenTTS and Inflect cannot run on them.
-    """
+    """Upstream bundles lack eSpeak-ng data, so Kokoro, Piper, KittenTTS and Inflect cannot run on them."""
     if not binary:
         return False
     bin_dir = Path(binary).parent
@@ -378,11 +375,8 @@ class AudioCppServer:
         cancel_event: Optional[threading.Event] = None,
         on_process: Optional[Any] = None,
     ) -> "AudioCppServer":
-        """Launch the server for ``model`` loaded from ``model_path`` and wait until it serves.
-
-        ``on_process`` is called with the Popen as soon as it exists, so an owner can
-        terminate a start that training pre-empts.
-        """
+        """on_process gets the Popen as soon as it exists, so training can pre-empt and terminate a
+        start."""
         binary = ensure_binary()
         problem = model_runtime_problem(model, binary)
         if problem:
@@ -535,10 +529,8 @@ class AudioCppServer:
         cancel_event: Optional[threading.Event] = None,
         sink: Optional[BinaryIO] = None,
     ) -> tuple[int, str, bytes]:
-        """One HTTP round trip; a set ``cancel_event`` closes the socket and raises.
-
-        With a ``sink`` a 2xx body is streamed into it and ``b""`` returned (separation answers are
-        hundreds of MB)."""
+        """A sink streams a 2xx body into it and returns b'', since separation answers run to
+        hundreds of MB."""
         if cancel_event is not None and cancel_event.is_set():
             raise AudioCppRequestCancelledError("Request cancelled.")
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout = timeout)

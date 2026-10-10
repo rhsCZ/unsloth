@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""unload_model cancels an in-flight generation instead of waiting it out.
-
-The sequential subprocess used to queue ``unload`` behind a running ``generate``,
-hanging the UI. ``unload_model`` now cancels first (the mp.Event the worker checks
-each token) and takes ``_gen_lock`` before the unload round-trip.
-"""
+"""unload_model cancels generation first, so unload never queues behind a running generate."""
 
 import inspect
 import queue
@@ -2662,10 +2657,7 @@ def test_audio_input_stopped_while_queued_is_never_sent(monkeypatch):
 
 
 def test_a_scoped_load_cancel_that_never_reports_back_releases_the_load():
-    """Only /unload's finally sets cancel_complete, so a disconnect or shutdown between the
-    two leaves nobody to set it. An unbounded wait parks the load under
-    inference_lifecycle_gate for the process lifetime, and asyncio.to_thread's executor
-    threads are non-daemon, so it also blocks exit."""
+    """A load cancel must release even if nothing reports back, or it parks the lifecycle gate forever."""
     from models.inference import LoadRequest, UnloadRequest
     import asyncio
 
@@ -2766,12 +2758,7 @@ def test_the_idle_wait_is_bounded_when_no_timeout_is_asked_for():
 
 
 def test_shutdown_cancels_loads_that_have_not_reached_the_backend():
-    """A /load between admission and the backend call holds nothing the backend's
-    shutdown flag can see: it can sit in the lifecycle gate or preflight for
-    minutes and then arrive in a lifecycle that has already been reset, loading a
-    model the new server never asked for. _graceful_shutdown cancels through the
-    attempt's own event, the same path /unload uses.
-    """
+    """Shutdown must cancel loads that have not reached the backend, through each attempt's own event."""
     import importlib
 
     inf = importlib.import_module("routes.inference")
@@ -2845,10 +2832,7 @@ def _mk_attempt(
 
 
 def test_shutdown_closes_the_cancel_handshake_itself():
-    """Only /unload sets cancel_complete, and at shutdown there is none, so setting
-    cancel_event alone leaves _run_tracked_load_model_impl's finally waiting the full
-    handshake timeout in a to_thread. Those executor threads are non-daemon and hold
-    the process open, which is what the comment above the timeout warns about."""
+    """Shutdown must set the cancel handshake itself, since only /unload sets cancel_complete."""
     import importlib
 
     inf = importlib.import_module("routes.inference")
@@ -2928,11 +2912,7 @@ def test_run_server_clears_the_route_latch_too():
 
 
 def _run_server_call_lines(name, *, owner = None):
-    """First line of each call to *name* inside run_server, by AST rather than text.
-
-    Text offsets kept breaking here: the comments above these calls name them too, and
-    indentation-anchored searches go stale the moment a call moves inside a `with`.
-    """
+    """Finds the first line of each call to a name inside run_server by AST, since text offsets go stale."""
     import ast
     from pathlib import Path
 
@@ -2958,14 +2938,7 @@ def _run_server_call_lines(name, *, owner = None):
 
 
 def test_the_route_latch_clears_only_after_the_backend_lifecycle_reopens():
-    """_begin_server_lifecycle blocks on the teardown lock while a kill is running.
-    Clearing the route latch before that wait leaves a request the OLD lifecycle
-    admitted uncancelled, and it then captures the freshly advanced generation and
-    loads the previous session's model into the new one.
-
-    Nothing legitimate is refused by clearing later: uvicorn does not serve until
-    thread.start(), which is below both calls.
-    """
+    """Route latch clears after the backend reopens, or an old-lifecycle load adopts the new generation."""
     backend_reset = _run_server_call_lines("_begin_server_lifecycle")
     route_reset = _run_server_call_lines("begin_load_lifecycle")
     serve = _run_server_call_lines("start", owner = "thread")
@@ -2994,12 +2967,7 @@ def _load_impl_ast():
 
 
 def test_the_shutdown_latch_is_enforced_in_the_load_impl_not_only_at_the_route():
-    """Auto-switch and preview await _load_model_impl directly, without ever
-    registering a _ScopedLoadAttempt, so the shutdown sweep has no event to set for
-    them. With the latch checked only where /load registers, one of those loads can
-    survive the sweep, reach a non-GGUF target after run.py already tore the
-    inference subprocess down, and spawn a worker that outlives quit.
-    """
+    """The shutdown latch must be enforced in the load impl, since auto-switch and preview bypass /load."""
     import ast
 
     src, impl = _load_impl_ast()
@@ -3032,11 +3000,7 @@ def test_the_shutdown_latch_is_enforced_in_the_load_impl_not_only_at_the_route()
 
 
 def test_the_impl_cancel_check_refuses_a_load_once_shutdown_has_latched():
-    """Runs the shipped closure, rather than asserting on its text.
-
-    The callers of this helper are the load's points of no return, so refusing here
-    is what stops a shutdown-crossing load before it spawns anything.
-    """
+    """Runs the shipped cancel-check closure, so a load past shutdown is refused before it spawns."""
     import ast
     import textwrap
     import threading
@@ -3104,11 +3068,7 @@ def test_a_second_backend_instance_is_covered_by_the_shutdown_latch():
 
 
 def test_the_worker_spawn_refuses_once_shutdown_has_latched():
-    """The preview path supplies no load_cancel_event and is not a _ScopedLoadAttempt,
-    so its latch read is one-shot: it can pass that check, spend time in the drain and
-    teardown, and only then reach the worker spawn. Guarding at the spawn is what makes
-    the answer un-stale.
-    """
+    """The worker spawn must check the latch itself, since the preview path's earlier read goes stale."""
     from core.inference.orchestrator import InferenceOrchestrator
     from utils import process_lifetime
 
@@ -3122,10 +3082,7 @@ def test_the_worker_spawn_refuses_once_shutdown_has_latched():
 
 
 def test_the_process_latch_clears_between_the_backend_and_the_route():
-    """Ordering, for the same reason the route latch clears late: the process latch is
-    what every other spawner reads, so it must outlast the teardown _begin_server_lifecycle
-    waits on, and be clear before uvicorn admits anything.
-    """
+    """The process latch must clear between the backend and the route, after teardown and before serving."""
     backend = _run_server_call_lines("_begin_server_lifecycle")
     process = _run_server_call_lines("begin_process_lifecycle")
     route = _run_server_call_lines("begin_load_lifecycle")
@@ -3138,10 +3095,7 @@ def test_the_process_latch_clears_between_the_backend_and_the_route():
 
 
 def test_shutdown_latches_the_process_before_any_subsystem_is_torn_down():
-    """The orchestrator is stopped at step 2 but loads are swept at step 5. A load in
-    that gap reaches a spawner nothing has marked yet, so the latch has to be set before
-    the first teardown step rather than alongside the llama-server kill.
-    """
+    """Shutdown must latch the process before any teardown step, not beside the llama-server kill."""
     import ast
     import textwrap
     from pathlib import Path
@@ -3167,10 +3121,7 @@ def test_shutdown_latches_the_process_before_any_subsystem_is_torn_down():
 
 
 def test_a_shutdown_that_begins_during_the_spawn_reaps_the_new_worker():
-    """The pre-spawn gate is a process start away from the child existing. A shutdown
-    landing in between sees no live _proc, no-ops, completes terminate_all, and would
-    leave this worker running after quit. The post-spawn recheck is what closes it.
-    """
+    """A shutdown during the spawn must reap the new worker, since the post-spawn recheck closes the gap."""
     from unittest import mock
 
     from core.inference.orchestrator import InferenceOrchestrator
@@ -3209,11 +3160,7 @@ def test_a_shutdown_that_begins_during_the_spawn_reaps_the_new_worker():
 
 
 def test_a_llama_server_spawned_as_shutdown_began_is_reaped():
-    """The pre-spawn stale check and the process latch are only atomic for the instance
-    run.py tears down, which sets its own flag under the spawn lock. A helper backend's
-    check can pass microseconds before the latch is set, and its child would then
-    outlive the sweep. The recheck after the pid is recorded is what reaps it.
-    """
+    """A llama-server spawned as shutdown began must be reaped by the recheck after its pid is recorded."""
     import ast
     import textwrap
     from pathlib import Path
@@ -3239,11 +3186,7 @@ def test_a_llama_server_spawned_as_shutdown_began_is_reaped():
 
 
 def test_a_load_that_finishes_during_shutdown_is_not_published_as_resident():
-    """The spawn checks stop once the worker exists. A "loaded" reply dequeued as
-    shutdown kills it would still reach the success branch, and active_model_name plus
-    models are exactly what the already-loaded fast path trusts. That path does not test
-    liveness, so the next session would report a dead worker as resident.
-    """
+    """A load that finishes during shutdown must not be published as resident; the fast path trusts it."""
     from core.inference.orchestrator import InferenceOrchestrator
     from utils import process_lifetime
 
@@ -3304,11 +3247,7 @@ def _fn_named(source, name):
 
 
 def test_the_primary_llama_launch_rechecks_after_recording_the_pid():
-    """mark_process_shutting_down does not take _spawn_lock, and terminate_all does not
-    take it when it snapshots, so the in-lock check is not atomic against the
-    process-wide latch for a helper-owned backend. Without a recheck the child sits
-    outside the completed sweep for the whole 600s health wait.
-    """
+    """The launch must recheck the shutdown latch after recording the pid; the in-lock check races it."""
     import ast
     from pathlib import Path
 
@@ -3339,10 +3278,7 @@ def test_the_primary_llama_launch_rechecks_after_recording_the_pid():
 
 
 def test_the_worker_mirrors_are_published_under_the_shutdown_lock():
-    """active_model_name is what the already-loaded fast path trusts, and it does not
-    test liveness. Checked and published apart, shutdown can kill the worker in between
-    and the next session reports a dead one as resident.
-    """
+    """Publish worker mirrors under the shutdown lock; active_model_name does not test liveness."""
     import ast
     from pathlib import Path
 
@@ -3386,11 +3322,7 @@ def test_the_worker_mirrors_are_published_under_the_shutdown_lock():
 
 
 def test_the_worker_handle_is_captured_before_start_not_after():
-    """`self._proc` is not a handle this code can rely on once start() is running: a
-    concurrent _shutdown_subprocess can observe a not-yet-alive child and clear it.
-    Snapshotting the attribute AFTER start() therefore captures None and loses the only
-    reference to a live child, which is exactly the orphan this change prevents.
-    """
+    """Capture the worker handle before start(); a concurrent shutdown can clear _proc afterwards."""
     import ast
     from pathlib import Path
 
@@ -3467,11 +3399,7 @@ def test_the_rag_embed_server_spawn_is_gated_and_rechecked():
 
 
 def test_the_stt_sidecar_spawns_are_gated_and_rechecked():
-    """Neither STT sidecar is stopped by any _graceful_shutdown step and neither is
-    covered by cancel_pending_loads, which only reaches the chat /load attempt maps.
-    The process-wide latch is the only thing that can stop a quit during an STT load
-    from leaving whisper-server or the MTMD llama-server behind.
-    """
+    """STT sidecar spawns must be gated, since no shutdown step or cancel_pending_loads reaches them."""
     import ast
     from pathlib import Path
 
@@ -3509,13 +3437,7 @@ def test_the_stt_sidecar_spawns_are_gated_and_rechecked():
 
 
 def test_the_latch_is_set_before_the_atexit_sweep():
-    """atexit is LIFO, so the handler registered LAST runs FIRST.
-
-    The only thing that latched shutdown on the atexit path was the backend's own
-    _cleanup hook, registered when the routes singleton was built and therefore run
-    AFTER run_server's terminate_all. The sweep took its snapshot with the latch clear,
-    which is exactly the unguarded behaviour this change removes on the graceful path.
-    """
+    """The latch must be set before the atexit sweep, which runs ahead of the backend's cleanup hook."""
     import ast
     from pathlib import Path
 
@@ -3545,11 +3467,7 @@ def test_the_latch_is_set_before_the_atexit_sweep():
 
 
 def test_every_long_lived_spawner_consults_the_shutdown_latch():
-    """The premise of this change is one flag read at every spawn. A spawner that
-    adopts a long-lived child without consulting it is a hole in exactly the guarantee
-    the PR claims, so the set is pinned here rather than rediscovered one report at a
-    time.
-    """
+    """Every long-lived spawner must consult the shutdown latch, or it is a hole in the guarantee."""
     import ast
     from pathlib import Path
 
@@ -3648,10 +3566,8 @@ def test_the_adapter_path_forwards_images_to_the_worker_command():
 
 
 def test_both_generation_paths_forward_the_image_ordinal():
-    """The dispatched path forwarded it and the locked one dropped it, so ordinary
-    non-adapter generation reached the worker with None. The marker top-up then put
-    the attachment's marker on the newest user turn rather than the turn that
-    supplied it, which changes which question appears to own the picture."""
+    """Both generation paths must forward the image ordinal, or the marker top-up lands on the wrong
+    turn."""
     import inspect
 
     from core.inference.orchestrator import InferenceOrchestrator

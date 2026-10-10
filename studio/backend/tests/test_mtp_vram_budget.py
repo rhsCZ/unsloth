@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the deterministic MTP VRAM reserve used by load-time auto-fit.
-
-reserve(ctx) = draft_KV(ctx, draft_cache_type) + separate_drafter_weights, sized
-from GGUF dims (embedded head from the main model's dims; separate drafter from
-its own KV). Anchors checked against real llama-server measurements. Pure: no
-GPU, network, subprocess, or GGUF I/O."""
+"""MTP reserve = draft KV plus separate drafter weights, sized from GGUF dims; no GPU or I/O."""
 
 from __future__ import annotations
 
@@ -1033,15 +1028,7 @@ def test_mtp_draft_budget_prefers_user_extras_drafter():
 
 
 class TestUnemittableCacheTypeFallsBackToTheEnvBudget:
-    """A type llama.cpp's kv_cache_type_from_str does not know is never emitted
-    (_VALID_CACHE_TYPES), so the child inherits LLAMA_ARG_CACHE_TYPE_K/_V instead.
-
-    Before ggml-org/llama.cpp#23792 Unsloth's tensor gate happened to cover this:
-    it dropped any type outside {f16,bf16,f32} -- including an unknown one -- and
-    then re-adopted the heavier env type for the reserve, with the comment "Else
-    the child allocates f32 KV against an f16 budget." Removing the gate removed
-    that re-adoption too, so the budget has to notice on its own.
-    """
+    """An unemittable cache type is never passed, so the child inherits the env type; price that."""
 
     @staticmethod
     def _budget_type(cache_type_kv, env):
@@ -1087,10 +1074,7 @@ class TestUnemittableCacheTypeFallsBackToTheEnvBudget:
 
 
 class TestAnUnsetInheritedCacheAxisIsStillF16:
-    """_env_main_cache_type_for_budget takes the heavier axis, so an axis that is
-    not set has to take part in that max at its real default, f16. Dropping it
-    lets one quantized axis carry the whole scalar, and the caller then prices the
-    OTHER axis as quantized too."""
+    """Unset cache axes count as f16 in the max, so one quantized axis cannot carry the scalar alone."""
 
     @staticmethod
     def _budget(env):

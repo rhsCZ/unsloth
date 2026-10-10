@@ -109,11 +109,7 @@ def _wav_sample_rate(wav_bytes: bytes) -> int:
 
 
 def _music_seconds(max_new_tokens: Optional[int]) -> float:
-    """Map the shared speech-token budget onto a clip length.
-
-    The Audio page sends MiniMax's 25-frames-per-second budget for music; the same
-    number here means the same length, so one duration control drives every model.
-    """
+    """Maps the shared speech-token budget to seconds at 25 frames per second, MiniMax's music rate."""
     try:
         frames = int(max_new_tokens or 0)
     except (TypeError, ValueError):
@@ -759,10 +755,7 @@ class AudioCppBackend:
         options: dict,
         cancel_event,
     ) -> bytes:
-        """Speak ``text`` in the voice of ``audio_inputs["reference"]`` (a server-local WAV path).
-
-        An emotion clip has no field on the speech endpoint, so that request goes to /v1/tasks/run
-        with the clip as top-level ``audio``."""
+        """An emotion clip has no field on the speech endpoint, so it is sent to /v1/tasks/run as audio."""
         clone = model.clone or CloneSpec()
         reference = audio_inputs.get("reference")
         if not reference:

@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Deterministic backend-wiring test for the safetensors / MLX tool-calling path.
-
-The parser and the cumulative-text state machine are already covered exhaustively by
-``test_safetensors_tool_loop.py`` with fake generators. What that suite does not touch is the
-*backend's own tool-injection seam*: both ``InferenceBackend`` (transformers) and
-``MLXInferenceBackend`` render the prompt through the shared
-``apply_chat_template_for_generation(..., tools=...)`` helper and stream cumulative text into the
-shared ``run_safetensors_tool_loop`` (see ``core/inference/inference.py`` and
-``core/inference/mlx_inference.py`` -- both call the same helper and the same loop, so a single CPU
-test of that seam covers the macOS MLX path too).
-
-This test drives that exact seam with deterministic fakes -- a fake tokenizer that records the
-``tools`` it is handed, a canned tool-call generation, and a stub executor -- and asserts the full
-agentic chain end to end:
-
-    tools injected into the template -> loop parses the call -> tool dispatched once ->
-    tool result fed back -> generation re-entered -> final answer streamed.
-
-It is the deterministic, download-free stand-in for the real-model MLX / GGUF browser tool-calling
-end-to-end: it imports no torch / unsloth / mlx, so it runs in the portable Backend CI alongside the
-tool-call parser tests. Follow-up to the parser test PRs (#5620 / #5704).
-"""
+"""Drives the tool-injection seam with fakes, so the whole agentic chain runs without torch or mlx."""
 
 from core.inference.chat_template_helpers import apply_chat_template_for_generation
 from core.inference.safetensors_agentic import run_safetensors_tool_loop
@@ -47,13 +26,7 @@ TOOL_RESULT = "Paris: sunny, 22C"
 
 
 class RecordingTokenizer:
-    """Fake tokenizer that records the ``tools`` handed to ``apply_chat_template``.
-
-    Modelled on ``TestChatTemplateHelper._Tok`` in ``test_safetensors_tool_loop.py``: it accepts the
-    real helper's kwargs and returns a canned prompt, so the test can assert the backend seam actually
-    forwarded the tool schema -- a silent drop on a chat-template fallback would leave ``tools_seen``
-    holding ``None``.
-    """
+    """Records the tools handed to apply_chat_template; a silent drop would leave tools_seen as None."""
 
     def __init__(self):
         self.tools_seen: list = []
@@ -73,10 +46,7 @@ class RecordingTokenizer:
 
 
 class StubExecutor:
-    """Stand-in for ``core.inference.tools.execute_tool``: records calls, returns a fixed result.
-
-    A fake tool name plus this stub means no real python / terminal / web / RAG side effect can run.
-    """
+    """Stub executor records calls and returns a fixed result, so no real tool side effect can run."""
 
     def __init__(self, result: str):
         self.result = result

@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Two accumulation rules the external loop has to get right per provider.
-
-1. Streamed tool-call names arrive in two dialects. llama-server re-sends the
-   whole name as it grows, OpenAI sends fragments that continue it. Handling
-   only one produces ``webweb_search`` or ``_search``, and either way the name
-   fails the enabled-tool check and the call silently never runs.
-
-2. Usage. The loop withholds the provider's usage chunks and emits one summed
-   chunk at the end, so a usage block riding on a chunk that also carries a
-   choice has to be stripped rather than relayed: the totals already include it,
-   and a client that sums chunks would count the turn twice.
-"""
+"""Tool names arrive whole (llama-server) or in fragments (OpenAI); usage must be counted once."""
 
 from __future__ import annotations
 
@@ -197,11 +186,7 @@ def test_a_cumulative_name_is_not_doubled(executed):
 
 
 def test_an_incremental_name_is_joined(executed):
-    """OpenAI sends fragments: "web" then "_search".
-
-    Assignment would leave "_search", which is not a selected tool, so the call
-    is refused and the user sees nothing run.
-    """
+    """Name fragments are joined, not assigned: assigning leaves _search, which is never run."""
     transport = FakeTransport(
         [
             [
@@ -264,11 +249,7 @@ def _usage_chunks(lines: list[str]) -> list[dict]:
 
 
 def test_usage_riding_on_a_content_chunk_is_counted_once(executed):
-    """A chunk carrying both a choice and usage must keep only the choice.
-
-    The loop's summed chunk already includes those tokens, so relaying them here
-    makes a client that adds up chunks report the turn twice.
-    """
+    """Strip usage from chunks that carry a choice, since the loop's summed usage already counts it."""
     content_with_usage = "data: " + json.dumps(
         {
             "choices": [{"index": 0, "delta": {"content": "hello"}}],

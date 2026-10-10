@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The post-training save must be visible, and must stay non-terminal (#7897).
-
-After the last optimizer step the worker still merges and saves, emitting no step
-updates, so /api/train/status reported phase="training" at 100% throughout,
-indistinguishable from a hang. The `finalizing` phase names it.
-
-Two invariants matter more than the label:
-  1. Reaching total_steps must never imply completion; `completed` still comes
-     only from progress.is_completed.
-  2. Every phase the route emits must be in TrainingStatus's Literal, or pydantic
-     raises ValidationError and the blanket handler turns /status into a 500.
-"""
+"""Post-training save shows as finalizing, not completed; reaching total_steps must not imply done."""
 
 from __future__ import annotations
 

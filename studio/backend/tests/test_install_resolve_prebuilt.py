@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""install_llama_prebuilt.py: the --resolve-prebuilt probe (plans against the fork
-by default; --published-repo overrides).
-
-These back the in-app update for source-build (markerless) installs: the backend
-asks the installer whether an official prebuilt exists for this host without
-downloading. Network and host detection are stubbed; no GPU or internet needed. The one
-exception is the windows-rocm floor guard, which reads the fork's published manifest
-because nothing in-tree mirrors it, and skips when that release is unreachable.
-"""
+"""Backs the in-app update check for source-build installs; network and host detection are stubbed."""
 
 from __future__ import annotations
 
@@ -45,23 +37,14 @@ UPSTREAM = ilp.UPSTREAM_REPO
 
 @pytest.fixture(autouse = True)
 def _no_ambient_hip_device_mask(monkeypatch):
-    """These tests describe hosts through HostInfo, not through the environment.
-
-    A mask inherited from the shell (ML boxes commonly export CUDA_VISIBLE_DEVICES) means
-    the arch probe saw only part of the GPUs, which the Windows auto-Vulkan guard treats as
-    an unknown physical inventory. Clear all three so a host is described by its fields
-    alone; the tests that are about the mask set it explicitly."""
+    """Clears inherited device-mask variables so the host is described by HostInfo alone, not the shell."""
     for _env in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
         monkeypatch.delenv(_env, raising = False)
 
 
 @pytest.fixture(autouse = True)
 def _no_amd_vulkan_icd(monkeypatch):
-    """Same reason as the mask fixture: describe the host through HostInfo, not the box.
-
-    The probe reads this machine's real manifests, and mesa ships radeon_icd.json on hosts
-    with no AMD GPU, so leaving it live makes the route fire or not per developer. Absent
-    is the pre-route answer; the tests about it turn it on explicitly."""
+    """Forces the AMD Vulkan ICD probe absent, since mesa ships that manifest on non-AMD hosts too."""
     monkeypatch.setattr(ilp, "_amd_vulkan_icd_present", lambda: False)
 
 
@@ -1565,18 +1548,7 @@ _FORK_WINDOWS_ROCM_GFX = (
 
 
 def _published_fork_windows_rocm_artifacts():
-    """The fork's windows-rocm artifact records, read the way an install reads them.
-
-    _download_host_resolved_release is the path a default fork install takes first: it
-    resolves the latest release off the download host and hands llama-prebuilt-manifest.json
-    to parse_published_release_bundle, so these are the very records
-    published_rocm_choice_for_host later matches a host gfx against. No api.github.com call,
-    hence no shared rate-limit bucket to exhaust.
-
-    The manifest ships only as a release asset and nothing in-tree mirrors it, so this is
-    the one honest source. Only OSError and the release-side PrebuiltFallback become a skip,
-    so an offline run stays quiet while a manifest that fetches but no longer parses still
-    fails loudly."""
+    """Reads the published manifest of the fork, which nothing in-tree mirrors; only OSError skips."""
     try:
         resolved = ilp._download_host_resolved_release(FORK)
     except OSError as exc:
@@ -2050,12 +2022,7 @@ def test_a_plan_that_already_carries_rocm_keeps_its_cpu_tail(monkeypatch, amd_vu
 
 
 def _icd(path, library = "libvulkan_driver.so"):
-    """Write a manifest where the loader would look, and return its path as a string.
-
-    Real, because the probe reads it: a driver beside the manifest named by a relative
-    library_path, the shape Adrenalin and mesa both ship. ``library = None`` omits the
-    library, i.e. the leftover an uninstall leaves behind.
-    """
+    """Writes a real Vulkan ICD manifest where the loader looks; library None leaves the driver missing."""
     path.parent.mkdir(parents = True, exist_ok = True)
     driver = path.parent / (library or "gone_driver.so")
     if library is not None:
@@ -2447,14 +2414,7 @@ def test_marker_records_no_backend_when_vulkan_fell_back_to_cpu(tmp_path):
 
 
 def test_automatic_amd_vulkan_marker_records_the_routing_gfx(tmp_path, monkeypatch):
-    """An "auto" Vulkan marker must carry the arch that produced it.
-
-    The Windows AMD hosts that route here have no arch probe of their own
-    (setup.ps1 skips amd-smi without a HIP SDK and hipinfo is absent), so the
-    forwarded --rocm-gfx is the only evidence. The Vulkan asset name has no gfx
-    for rocm_install_args() to recover, so an update that re-detects the host
-    would find no ROCm at all and drop the bundle to CPU.
-    """
+    """The auto Vulkan marker must store the routing gfx; the asset name has none for an update to read."""
     monkeypatch.delenv("UNSLOTH_FORCE_VULKAN", raising = False)
     monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
     monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
@@ -2731,12 +2691,8 @@ def test_the_forced_cpu_guard_is_not_vacuous():
 
 
 def test_the_icd_search_path_is_built_per_call_not_at_import(monkeypatch):
-    """A host with no resolvable home directory must still be able to INSTALL.
-
-    ``Path.home()`` raises rather than defaulting (a Windows service account with no
-    USERPROFILE), so evaluating it at module scope takes the installer down at import over
-    a directory only the Vulkan probe reads -- and the failure would not mention Vulkan.
-    """
+    """Path.home() can raise with no home directory, so build the ICD search path per call, not at
+    import."""
 
     def _no_home():
         raise RuntimeError("Could not determine home directory.")
@@ -3230,11 +3186,7 @@ def test_the_presence_probe_answers_none_when_the_walk_raises(monkeypatch):
 
 
 class _Utf16Buffer:
-    """create_unicode_buffer over Windows' 2-byte code units.
-
-    Indexing matches ctypes: int index is one character, a slice keeps embedded NULs,
-    .value stops at the first NUL.
-    """
+    """Emulates create_unicode_buffer over 2-byte code units, with ctypes indexing and .value semantics."""
 
     def __init__(self, length):
         self._units = [0] * length
@@ -3283,13 +3235,8 @@ class _WindowsWcharT:
 
 
 class _WindowsCfgMgr(_FakeCfgMgr):
-    """_FakeCfgMgr speaking the units the API documents, not this host's.
-
-    CM_Get_DevNode_Registry_PropertyW sizes in BYTES
-    (_Out_writes_bytes_opt_(*pulLength) PVOID Buffer), twice the element count under a
-    2-byte wchar_t. Assert ``under_allocated`` from OUTSIDE the probe: it catches
-    Exception around the whole walk and would read a failed assert as a clean skip.
-    """
+    """CM_Get_DevNode_Registry_PropertyW sizes in bytes, so under_allocated is asserted outside the
+    probe."""
 
     under_allocated = False
 
@@ -3311,13 +3258,7 @@ class _WindowsCfgMgr(_FakeCfgMgr):
 
 @contextlib.contextmanager
 def _windows_widths(cfgmgr):
-    """Run the probe as Windows runs it: 2-byte wchar_t, 32-bit scalars.
-
-    Native ctypes makes sizeof(c_wchar) 4 here and 2 on Windows, so the byte-to-element
-    conversion in _windows_present_class_instances is only ever exercised at the runner's
-    width and a green suite says nothing about the arithmetic that ships. The probe
-    imports ctypes inside the function, so swapping sys.modules is enough.
-    """
+    """Runs the probe at Windows widths, since native ctypes hides the byte-to-element conversion."""
     shim = ModuleType("ctypes")
     wintypes = ModuleType("ctypes.wintypes")
     wintypes.ULONG = _Windows32Bit

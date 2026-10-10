@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A finished GGUF chat stream must free its llama-server slot at [DONE].
-
-llama-server has a fixed slot count, gated by an admission lease. Releasing that lease only in
-the stream's outer finally, which runs at ASGI teardown, let a wedged teardown pin a slot
-llama-server had already freed, so the next chat request queued behind a finished generation
-with no timeout to bound the wait.
-
-The wedge below stands in for the real one: the frontend never cancels its reader after [DONE]
-(chat-api.ts), and uvicorn advertises ASGI spec_version 2.3, so Starlette's
-OSError/ClientDisconnect path, the only disconnect detector _SameTaskStreamingResponse keeps,
-cannot fire.
-"""
+"""A finished GGUF stream must free its llama-server slot at data: [DONE], not at ASGI teardown."""
 
 import asyncio
 import json
@@ -176,11 +165,7 @@ class _OneSlotGgufBackend(FakeLlamaCppBackend):
 
 
 def test_real_stream_frees_the_slot_at_done_with_a_wedged_teardown(monkeypatch):
-    """Drive the real ASGI route, wedged exactly where CI wedged.
-
-    Hanging ``_stop_local_disconnect_cancel_watcher``, which runs in ``gguf_stream_chunks``'s
-    success-path finally, leaves a response that has sent [DONE] but cannot finish.
-    """
+    """A wedged _stop_local_disconnect_cancel_watcher in the success-path finally must not hold the slot."""
     monkeypatch.setattr(inference_route, "get_llama_cpp_backend", lambda: _OneSlotGgufBackend())
     monkeypatch.setattr(inference_route, "_effective_enable_tools", lambda payload: False)
 

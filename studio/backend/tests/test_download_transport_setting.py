@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The install's download transport setting.
-
-A stored preference, nothing more: the transport an install runs on is unchanged until someone
-picks one in Settings > General. These tests pin the default, the validation, and the routes the
-settings row reads and writes.
-"""
+"""Stored preference only: the transport does not change until a user picks one in Settings."""
 
 from __future__ import annotations
 

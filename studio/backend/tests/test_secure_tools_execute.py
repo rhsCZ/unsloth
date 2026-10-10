@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Server-side tools actually EXECUTE when policy leaves them on (the `--secure`
-contract). A fake llama-server stream emits native tool calls and the real
-``execute_tool`` runs them: python counts 1..100, terminal returns a UTC
-datetime, and web_search is exercised through real ``_web_search`` with only the
-``ddgs`` network boundary mocked. No model, GPU, or live network. The policy
-tie-in proves the post-fix secure path (policy ``None`` + per-request
-``enable_tools``) is what keeps these executions reachable.
-"""
+"""Server-side tools still execute under --secure, kept reachable by the per-request enable_tools."""
 
 from __future__ import annotations
 

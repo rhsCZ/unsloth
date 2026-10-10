@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Tests for routes/training_vram.py -- the VRAM-aware decision to keep or unload a
-resident chat model when a training run starts.
-"""
-
 import importlib.util
 import sys
 import types

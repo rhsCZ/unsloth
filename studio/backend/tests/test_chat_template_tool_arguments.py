@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""apply_chat_template_for_generation must coerce assistant tool_call arguments
-from the OpenAI JSON-string form to a dict before rendering. Strict tool
-templates (e.g. mlx-community Qwen3.5 checkpoints) iterate arguments.items() and
-raise "Can only get item pairs from a mapping." on the string form when a prior
-tool call is re-rendered on the next turn (MLX + transformers paths).
-
-It must likewise split parallel tool calls for templates that render only one
-call per message (Llama 3.x).
-"""
+"""tool_call arguments must become dicts before rendering, as strict templates call arguments.items()."""
 
 from __future__ import annotations
 

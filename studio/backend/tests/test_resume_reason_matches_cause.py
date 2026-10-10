@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The refusal reason has to match the reason the run was actually refused.
-
-``300fe6321`` and ``a98e721f4`` set out to stop a provenance refusal being reported as a
-checkpoint problem. They overshot: both sites asked
-``resource_provenance_resume_blocker`` whenever ``can_resume_run`` said no, but that
-function refuses for several reasons and the blocker is computed independently of which
-one fired. Since ``initialize_resource_provenance`` writes ``{"version": 1, "status":
-"pending"}`` at the start of every run, the blocker answers "The model revision used by
-this run was not attested." for any Hub-model run -- including one whose checkpoint is
-simply missing, which is the *more* common way to be unresumable. So the fix traded one
-misdiagnosis for another and the new one covered the bigger population.
-
-The discriminator is ``has_resume_state``, the same one ``can_resume_run`` short-circuits
-on: with no saved trainer state the checkpoint is the cause and the client's own wording
-is right; with the state intact a refusal really is provenance's doing.
-"""
+"""Reason must key on has_resume_state: no saved state means blame the checkpoint, not provenance."""
 
 import json
 
@@ -119,13 +104,8 @@ def test_a_row_with_no_output_dir_is_not_diagnosed_as_provenance(tmp_path, unres
 
 
 def test_the_start_route_gates_the_substitution_on_the_checkpoint(tmp_path):
-    """Wiring contract: the route must not ask the blocker unconditionally.
-
-    Driving the real async start path here would mean standing up the whole request
-    stack; what regressed is a missing guard, so pin the guard -- but over the AST, not
-    the source text. A substring search is satisfied by the explanatory comment that
-    sits right next to the code, which makes it pass with the guard deleted.
-    """
+    """The guard is checked over the AST, since a substring match is satisfied by the explanatory
+    comment."""
     import ast
     import inspect
 

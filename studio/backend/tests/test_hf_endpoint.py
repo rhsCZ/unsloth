@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for HF_ENDPOINT / HF_DATASETS_SERVER env var handling in utils.hf_endpoint.
-
-Both getters read the environment on every call (no import-time freezing), so
-the tests just monkeypatch the environment and call them directly.
-"""
+"""Getters read HF_ENDPOINT and HF_DATASETS_SERVER per call, so tests just monkeypatch the env."""
 
 from __future__ import annotations
 

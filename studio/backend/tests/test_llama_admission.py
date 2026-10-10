@@ -794,11 +794,7 @@ def test_dead_waiters_stop_counting_against_the_queue_limit():
 
 
 def test_parking_frees_the_slot_for_a_waiter():
-    """A holder waiting on a tool approval must not hold a decode slot.
-
-    It is not generating, and with several prompts unanswered every slot would
-    be held by a run parked on a human while llama-server sits idle.
-    """
+    """Parked runs wait on a human, not the model, so parking must free the decode slot for others."""
 
     async def _run():
         queue = get_llama_admission_queue("http://llama.test")

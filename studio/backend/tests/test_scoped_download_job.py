@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The scoped download flavour: fetch an explicit file list through the normal download
-manager, so the Images/Video pages stage models the same way Chat and the Hub do.
-
-A diffusion load reads a deliberate subset of a repo (no packaged root single, no
-transformer/ shards, no fp16 twins), so a plain snapshot would pull tens of GB it never
-opens. These cover the scoping, the separate job key, and the XET -> HTTP retry.
-"""
+"""Scoped downloads fetch an explicit file list, since a full snapshot would pull tens of GB unused."""
 
 from __future__ import annotations
 
@@ -47,14 +41,7 @@ REPO = "black-forest-labs/FLUX.1-dev"
 
 @pytest.fixture(autouse = True)
 def _repo_with_no_running_job():
-    """No job of this repo is left running around a test in this file.
-
-    The download registry is a process global and nothing resets it between tests, while a
-    running scoped job deliberately blocks a full snapshot of the same repo. Any test that
-    leaves one running therefore fails a later one here with "no full-snapshot row", and under
-    `--dist load`, which spreads a file across workers, which tests share a process changes
-    from run to run. Retiring the repo's jobs on both sides keeps that out of the assertions.
-    """
+    """The download registry is process-global, so each test must retire the repo's running jobs."""
 
     def _retire():
         for ref in download_lifecycle.active_download_refs(dl._registry, REPO, with_variant = True):
@@ -311,10 +298,7 @@ def test_an_unavailable_backend_never_blocks_a_download(monkeypatch):
 
 
 def test_active_downloads_publish_the_scoped_file_list(monkeypatch):
-    """An adopting client (a second browser profile, or a tab opened before the throttled state
-    write) has no local record of what a live job is fetching. Every file set of one repo shares
-    the "@scope" slot, so without this list it cannot tell its own transfer from a sibling
-    checkpoint's and would report a never-fetched file as already downloading."""
+    """An adopting client has no local record of a live job, so the scoped file list must be published."""
     _shared_setup_1(monkeypatch)
 
     key = dl._download_job_key("black-forest-labs/FLUX.1-dev", dl._scope_variant("diffusion"))

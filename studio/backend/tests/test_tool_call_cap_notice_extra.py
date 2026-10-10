@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Edge cases around the over-cap tool-call notice.
-
-The notice is text the model reads, so the load-bearing property is that a turn which
-does NOT overflow the cap reads exactly as it did before. These cover that, plus the
-per-turn reset, the retry actually executing, the dedup boundary, and
-``disable_parallel_tool_use``.
-"""
+"""A turn under the cap must read exactly as before, since the notice is text the model reads."""
 
 import copy
 import json

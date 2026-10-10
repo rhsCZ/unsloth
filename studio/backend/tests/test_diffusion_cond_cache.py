@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the inference-side conditioning cache (``diffusion_cond_cache.py``).
-
-Runs against the real torch/safetensors on CPU with a stub ``encode_prompt`` pipe, so
-the wrapper's hit/miss/bypass behaviour and the on-disk reuse (the reason warm repeats
-never run the text encoder) are exercised without any model weights."""
+"""Conditioning cache tests with a stub encode_prompt; warm repeats must never run the encoder."""
 
 from __future__ import annotations
 

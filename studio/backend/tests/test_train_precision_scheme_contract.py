@@ -1,25 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Contract: the diffusion TRAINING precision menu never gains an INFERENCE-only scheme.
-
-Inference and training share a vocabulary of quantisation names, but not the same set.
-Inference offers ``nvfp4`` (torchao 4-bit weight-only, Blackwell) and ``fp8_dynamic``;
-the DiT trainer offers neither -- there is no training path for them, so a UI that
-advertised one would evict every resident model, start a run, and then fail. The chain
-that has to stay honest is:
-
-    train_precision_modes()  ->  family_train_infos()  ->  GET /diffusion/info
-                                                              |
-                                       diffusion-train-panel.tsx `precisionModes`
-                                                              |
-                              DiffusionTrainingStartRequest.base_precision (422 gate)
-
-These assertions read BOTH ends -- the live Python probe over a simulated GPU matrix, and
-the frontend source -- so adding ``nvfp4`` to either one reddens. They are deliberately
-paired with a positive check that ``nvfp4`` really is a supported INFERENCE scheme, so the
-suite cannot pass by the name having quietly disappeared everywhere.
-"""
+"""The diffusion training menu must never offer nvfp4 or fp8_dynamic, which have no training path."""
 
 from __future__ import annotations
 
@@ -77,11 +59,7 @@ def _probe(
     cuda = True,
     torchao = True,
 ) -> tuple[list[str], str]:
-    """(modes, recommended) as train_precision_modes() would answer on the given machine.
-
-    The recommendation is returned, not discarded: the Train panel seeds basePrecision from it,
-    so a recommendation outside the reported list is an option the user starts on and the select
-    never offered."""
+    """Returns the recommendation too, since the Train panel seeds its base precision from it."""
     import torch
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda)
@@ -169,13 +147,7 @@ def test_the_start_request_rejects_an_inference_only_precision(scheme):
 
 
 def test_the_trainer_accepts_exactly_what_the_schema_advertises():
-    """The one link the rest of this file cannot supply. Every set above is derived from the
-    request schema and the probe, so a mode added to BOTH of those disappears from
-    ``_INFERENCE_ONLY`` and every assertion here passes -- while
-    ``DiffusionLoraConfig.normalized()`` keeps its own hardcoded tuple and rejects the run after
-    it has already evicted the resident model. Asked of the trainer directly rather than parsed
-    out of it, so a refactor of that tuple cannot fool the check.
-    """
+    """The trainer's hardcoded tuple must match the schema, or runs fail after evicting the model."""
     accepted, refused = set(), {}
     for mode in sorted(_TRAIN_PRECISIONS):
         config = DiffusionLoraConfig(

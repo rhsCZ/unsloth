@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Xet notice counter: the count survives, and concurrency cannot beat the limit.
-
-It lived in per-origin localStorage, and an Unsloth origin moves whenever port 8888 is
-taken, so "three times" meant "three times per port, forever".
-"""
+"""Notice count must survive port changes: per-origin localStorage counts separately for each port."""
 
 from __future__ import annotations
 

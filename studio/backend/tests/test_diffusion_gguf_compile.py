@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the compiled GGUF dequant accelerator (``diffusion_gguf_compile.py``).
-
-Covers install/uninstall idempotency + exact reversibility, the kill-switch, and the
-on-by-default behaviour. Runs on CPU -- patching the module attribute is lazy
-(torch.compile only traces on the first real call).
-"""
+"""Compiled GGUF dequant accelerator: install, reversibility and kill-switch, run on CPU."""
 
 from __future__ import annotations
 
@@ -70,11 +65,7 @@ def test_uninstall_all(monkeypatch):
 
 
 class TestGgufTrimmedDimsAreRestored:
-    """GGUF stores no leading size-1 axes, so ``nn.Parameter(torch.zeros((1, dim)))`` comes back as
-    ``(dim,)`` and diffusers' exact shape check refuses the load. Z-Image is the live case: a GGUF
-    pick with Precision = Off died with ``cap_pad_token expected shape torch.Size([1, 3840]), but
-    got torch.Size([3840])``.
-    """
+    """GGUF drops size-1 axes, so trimmed dims must be restored or diffusers refuses the shape check."""
 
     @staticmethod
     def _model():

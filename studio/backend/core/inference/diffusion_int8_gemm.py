@@ -699,10 +699,7 @@ def install(
     offload_active: bool = False,
     device: Any = None,
 ) -> int:
-    """Idempotent; returns the (candidate) count. Must run before the first compiled forward.
-
-    ``device``: the onload device of a block-streamed denoiser, whose weights sit on the host between blocks; the
-    probe runs there and the swap happens now. Without it an offloaded denoiser keeps the stock path."""
+    """Idempotent; a block-streamed denoiser needs device passed, or it keeps the stock path."""
     if int8_gemm_mode() == "off" or transformer is None:
         return 0
     if device is not None:

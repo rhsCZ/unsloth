@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for LlamaCppBackend._classify_llama_start_failure.
-
-When llama-server exits before becoming healthy, load_model turns its
-captured stdout/stderr into a user-facing reason. A diffusion/image GGUF
-(FLUX, Qwen-Image, ...) is a valid file with plenty of memory, so the
-generic "invalid file or out of memory" message is misleading (issue
-#5842). These tests pin the classification.
-"""
+"""Diffusion GGUFs are valid files, so they must not get the generic invalid-file or OOM message."""
 
 from __future__ import annotations
 
@@ -121,11 +114,7 @@ class TestUnsupportedNonDiffusionArchitecture:
         assert "diffusion" not in msg.lower()
 
     def test_an_unknown_llm_arch_points_at_the_build_not_at_the_file(self):
-        """The arch branches above name models llama-server will never run. This
-        one is everything else, and "cannot be run with llama-server" was wrong for
-        the case that actually reached users: a build older than the architecture.
-        Seen on qwen4exp, where the identical file loaded after a llama.cpp update
-        and ran for six days, and the user reinstalled four times in between."""
+        """An unknown architecture points at updating llama.cpp, since an older build is the usual cause."""
         out = "error loading model: unknown model architecture: 'qwen4exp'"
         msg = _classify(out, "/models/x.gguf", "local/x")
         assert "qwen4exp" in msg
@@ -196,10 +185,7 @@ class TestOllamaAndFallback:
 
 
 class TestOsKillReturncode:
-    """SIGKILL (-9) with no diagnostic output is the OOM killer and gets a named,
-    actionable message; SIGTERM (-15) is also unload/cancel/supervisor stop, so it
-    stays neutral; a recognized output still wins; a hard fault (-11) keeps the
-    generic fallback."""
+    """SIGKILL with no output names OOM; SIGTERM stays neutral; -11 keeps the generic fallback."""
 
     def test_sigkill_with_no_output_names_oom(self, monkeypatch):
         # Pin the platform: macOS SIGKILL wording differs (see TestMacOSLoaderFailures).
@@ -470,10 +456,7 @@ class TestMissingSharedLibrary:
 
 
 class TestBundledHipRocrMismatch:
-    """Unsloth prepends system ROCm, the prebuilt still binds its bundled HIP,
-    and glibc exits 127 on the symbol lookup (#8998). That used to read as a
-    missing llama-server and get retried as a VRAM miss. Neither is true.
-    """
+    """A HIP/ROCr symbol lookup failure (exit 127) is a runtime mismatch, not a missing binary."""
 
     _FIELD_OUT = (
         "0.00.018.048 I srv    load_model: loading model '/models/x.gguf'\n"
@@ -1063,12 +1046,7 @@ class TestShortSecrets:
 
 
 class TestDiagnosticsAreAFixedPoint:
-    """Decorating an already-decorated message must be a no-op.
-
-    Only one call site exists today, so none of this can fire yet. It is pinned
-    because the failure mode is silent: a second caller would double the tail
-    and the log line, and nothing else would notice.
-    """
+    """Decorating a message twice must be a no-op, or the tail and log line would silently double."""
 
     _OUT = "some unrecognised startup noise"
     _LOG = "/Users/me/.unsloth/studio/logs/llama-server/llama-1-port-8080.log"
@@ -1125,13 +1103,7 @@ class TestTheDyldReasonIsBounded:
 
 
 class TestOnlyDyldsOwnOutputIsReadAsDyld:
-    """llama.cpp echoes GGUF metadata while loading.
-
-    A model whose general.name contains "Library not loaded:" or "Symbol not
-    found" put those words in llama-server's stderr, and every case below was
-    answered with library advice instead of the classification it had before.
-    Two of them outranked branches that were already correct.
-    """
+    """Only dyld's own lines count as dyld errors; model metadata echoed in stderr must not match."""
 
     _BIN = "/Users/me/.unsloth/llama.cpp/build/bin/llama-server"
 
@@ -1227,15 +1199,7 @@ class TestHttpCredentialsInTheTail:
 
 
 class TestOutputIsNeverTrustedForBeingOurOwnFraming:
-    """Child stdout gets the full treatment however it is worded.
-
-    An earlier revision short-circuited when the OUTPUT carried our framing, to
-    keep re-classification a fixed point. That handed a wrapper the whole error
-    message: printing "llama-server output:" as its first line returned its
-    stdout verbatim, past the redaction and past the 2000-character cap. The
-    fixed point was for a caller that does not exist; the bypass was reachable
-    by anything Unsloth launches.
-    """
+    """Child output always gets redaction and the 2000-character cap, even if it echoes our framing."""
 
     _LOG = "/Users/me/.unsloth/studio/logs/llama-server/llama-1-port-8080.log"
 
@@ -1282,14 +1246,7 @@ class TestOutputIsNeverTrustedForBeingOurOwnFraming:
 
 
 class TestAnEncodedSecretIsStillRedacted:
-    """Redacting on the value alone only works if the child prints it verbatim.
-
-    A wrapper that dumps its environment as JSON prints pa"ss\\word as
-    pa\\"ss\\\\word. That is a different string, so the literal replacement
-    missed it and the credential reached the API error fully reconstructible.
-    Redacting whatever sits beside a secret-looking NAME does not care how the
-    value was encoded.
-    """
+    """Redact by secret-looking NAME, since a JSON dump escapes the value so literal matching misses it."""
 
     SECRET = 'pa"ss\\word-12345'
 
@@ -1354,12 +1311,7 @@ class TestAnEncodedSecretIsStillRedacted:
 
 
 class TestQuotedShortSecrets:
-    """A short secret survived quoting.
-
-    The name-adjacent rule for values under eight characters matched only the
-    bare NAME=value form, so a wrapper dumping its environment as shell-ish or
-    JSON put the credential straight into the startup-output tail.
-    """
+    """Short secrets in quoted shell or JSON dumps must also be redacted, not only bare NAME=value lines."""
 
     @pytest.mark.parametrize(
         "dump",
@@ -1382,14 +1334,7 @@ class TestQuotedShortSecrets:
 
 
 class TestASecretLongerThanTheTailWindow:
-    """The pre-slice window cut long credentials in half.
-
-    _scrub_secret_values matches a whole value, so a secret longer than the
-    8000-character prefilter lost its head to the slice and the surviving
-    suffix matched neither the literal nor any token shape. A secret SHORTER
-    than the window cannot straddle it: if its end is inside a window wider
-    than the secret, so is its start.
-    """
+    """Secrets longer than the 8000-char tail window must be matched whole, not sliced before redaction."""
 
     def test_a_long_key_does_not_reach_the_message(self, monkeypatch):
         secret = "A" * 12000 + "TAILMARKER"
@@ -1418,12 +1363,7 @@ class TestASecretLongerThanTheTailWindow:
 
 
 class TestTheLibraryNameIsBounded:
-    """The install name is quoted from untrusted output into an HTTP error.
-
-    A real dyld install name is a path, and macOS PATH_MAX is 1024, but nothing
-    stopped a wrapper from printing a longer one: a 200000-character input
-    produced a 100000-character API response.
-    """
+    """A dyld install name from child output is truncated, so an absurd one cannot bloat the HTTP error."""
 
     def test_an_absurd_install_name_is_truncated(self):
         huge = "lib" + "A" * 100000 + ".dylib"
@@ -1446,12 +1386,7 @@ class TestTheLibraryNameIsBounded:
 
 
 class TestEveryClassifiedBranchIsRedacted:
-    """Redaction covered the tail only, so the other branches leaked.
-
-    A dyld message names the library it could not load, and that name comes
-    from the child. A credential appearing there went out in the API error
-    while the same credential in the startup-output tail was starred out.
-    """
+    """Every classified branch must redact, since a secret in a dyld library name reached the API error."""
 
     def test_a_secret_in_a_dyld_library_name_is_redacted(self, monkeypatch):
         token = "sk-supersecret-abcdefghijk"
@@ -1483,12 +1418,7 @@ class TestEveryClassifiedBranchIsRedacted:
 
 
 class TestAQuotedValueEndsOnItsOwnDelimiter:
-    """A JSON value may contain an apostrophe, and a shell one a quote.
-
-    Rejecting both quote characters inside the value made the quoted arm fail,
-    so the bare arm took over and stopped at the first whitespace, leaving the
-    rest of the credential standing in the API error.
-    """
+    """A quoted value ends at its own delimiter; an apostrophe or quote inside must not cut it short."""
 
     @pytest.mark.parametrize(
         "dump,leak",
@@ -1505,11 +1435,7 @@ class TestAQuotedValueEndsOnItsOwnDelimiter:
 
 
 class TestTheRedactionHolesCodexFound:
-    """Three ways a credential got past the name pass.
-
-    Each was reachable by a wrapper or crash handler printing its own
-    configuration rather than the environment we could match on.
-    """
+    """Three redaction holes: credentials printed as config, not env, slipped past the name-based pass."""
 
     @pytest.mark.parametrize(
         "dump",
@@ -1704,10 +1630,7 @@ class TestArgumentErrorsAreQuotedShort:
 
 
 class TestTensorSplitQuantizedKvUnsupported:
-    """llama.cpp before ggml-org/llama.cpp#23792 (b9455) refused a quantized KV
-    cache under --split-mode tensor. Unsloth no longer pre-empts that refusal, so
-    the message has to name the remedy: the generic invalid-GGUF/OOM fallback sends
-    the user to check their file or buy VRAM, neither of which is the problem."""
+    """Quantized KV with --split-mode tensor is refused by older llama.cpp; name that remedy, not OOM."""
 
     _OUT = (
         "llama_init_from_model: simultaneous use of SPLIT_MODE_TENSOR and "

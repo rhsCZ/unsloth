@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Concurrency tests for the per-call tool-call confirmation gate.
-
-``state.tool_approvals`` coordinates two threads: the agentic loop thread
-blocked in ``wait_tool_decision`` and the request thread that delivers the
-user's choice through ``resolve_tool_decision``. Each gated call carries a
-unique ``approval_id`` so a stale or concurrent confirmation can never
-resolve the wrong call. These tests exercise that handshake directly --
-no model, no server -- so the race windows are fast and deterministic.
-"""
+"""Each call's unique approval_id stops a stale or concurrent confirmation resolving the wrong call."""
 
 import threading
 import time
@@ -127,12 +119,7 @@ def test_approval_ids_are_unique():
 
 
 def test_resolve_before_wait_is_not_lost():
-    """A decision delivered after ``begin`` but before ``wait`` survives.
-
-    The loop registers the slot before it yields ``tool_start``, so even a
-    confirmation that races ahead of the blocking ``wait`` is recorded on
-    the slot and returned -- never dropped.
-    """
+    """Slots are registered before tool_start, so a decision that beats the wait is kept, not lost."""
     aid = new_approval_id()
     slot = begin_tool_decision("sess", aid)
     assert resolve_tool_decision(aid, "allow", session_id = "sess") is True
@@ -172,14 +159,7 @@ def test_duplicate_resolve_after_completion_returns_false():
 
 
 def test_first_decision_is_immutable():
-    """A second confirmation cannot flip an already-recorded decision.
-
-    The waiter reads ``slot["decision"]`` outside the lock and then cleans up,
-    so a duplicate or out-of-order POST that lands in that window must be
-    rejected and must not overwrite the first decision -- an Allow can never
-    become a Deny. Distinct from the after-completion case above: here the slot
-    is still pending (no waiter has consumed it yet).
-    """
+    """A duplicate confirmation must not overwrite the first, so an Allow can never become a Deny."""
     aid = new_approval_id()
     slot = begin_tool_decision("sess", aid)
     assert resolve_tool_decision(aid, "allow", session_id = "sess") is True
@@ -209,11 +189,8 @@ def test_timeout_returns_deny():
 
 
 def test_two_pending_calls_same_session_are_independent():
-    """Keying on approval_id, not session, keeps concurrent calls distinct.
-
-    Resolving the first call's id must not unblock or alter the second
-    call pending in the same session.
-    """
+    """Keying on approval_id, not session, keeps concurrent calls distinct; each call waits on its
+    own id."""
     a1, a2 = new_approval_id(), new_approval_id()
     w1 = _Waiter("sess", a1).start()
     w2 = _Waiter("sess", a2).start()
@@ -271,13 +248,7 @@ def test_durable_cancel_still_denies():
 
 
 def test_an_unanswered_park_is_released_by_the_settles_cancel_not_a_ceiling():
-    """The sweeper's settle-cancel releases a park that the park timeout has not yet reached.
-
-    At 0.6s the default park timeout (300s) has not elapsed, so the only thing that can release
-    the gate is an external cancel — exactly what ``supervisor.cancel()`` does after
-    ``reconcile_runs`` settles a lease-expired run. The parked gate must deny and pop its own
-    slot, so the reservation unwinds.
-    """
+    """Only the settle-cancel can release this park, since the default park timeout has not elapsed."""
     cancel = threading.Event()
     cancel.durable = True
     aid = new_approval_id()
@@ -290,12 +261,7 @@ def test_an_unanswered_park_is_released_by_the_settles_cancel_not_a_ceiling():
 
 
 def test_durable_park_denies_at_park_timeout(monkeypatch):
-    """A durable park denies at the park timeout so an unattended agent adapts and continues.
-
-    This is the release path for agentic work where the user has left: the approval times out,
-    the model receives TOOL_REJECTED_MESSAGE, and the loop proceeds to the next step. The sweeper
-    remains a backstop for producers wedged before they reach wait_tool_decision.
-    """
+    """An unattended durable park times out to TOOL_REJECTED_MESSAGE, so the agent adapts and carries on."""
     monkeypatch.setattr(tool_approvals, "_PARK_TIMEOUT_S", 0.2)
     cancel = threading.Event()
     cancel.durable = True
@@ -399,11 +365,7 @@ def _clear_subscribers():
 
 
 def test_an_attended_park_does_not_expire_at_the_park_ceiling(monkeypatch):
-    """A user watching the run keeps their decision past the park ceiling.
-
-    The regression this pins: with the ceiling keyed on the durable marker alone, an Approve/Deny
-    card the user was reading auto-denied at 300s and the model was told they had declined it.
-    """
+    """The park ceiling must not auto-deny an Approve/Deny card the user is still reading."""
     monkeypatch.setattr(tool_approvals, "_PARK_TIMEOUT_S", 0.2)
     cancel = threading.Event()
     cancel.durable = True
@@ -564,11 +526,7 @@ def test_one_tab_closing_leaves_another_tabs_attendance_intact():
 
 
 def test_an_attended_park_survives_a_second_tab_closing(monkeypatch):
-    """The reachable consequence, end to end: a short ceiling plus two tabs.
-
-    At 0.2s the ceiling is well under the 15s a surviving follower may take to stamp again, which
-    is exactly the window the single-stamp version left open.
-    """
+    """A follower may take up to 15s to re-stamp, so a short park ceiling would expire an attended park."""
     monkeypatch.setattr(tool_approvals, "_PARK_TIMEOUT_S", 0.2)
     cancel = threading.Event()
     cancel.durable = True

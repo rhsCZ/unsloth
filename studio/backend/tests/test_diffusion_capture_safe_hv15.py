@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""HunyuanVideo-1.5's capture-safe forward (``diffusion_capture_safe``).
-
-CPU: a tiny random ``HunyuanVideo15Transformer3DModel`` run through the stock and the rewritten
-forward must agree bit for bit over t2v (all-zero and emptied image stream) and i2v, batch 1 and 2,
-partially padded masks, and the inputs Studio's eager trim pre-hook hands the forward. The rewritten
-forward must also dispatch no op that reads a device value on the host.
-
-CUDA: the rewritten forward records into a ``torch.cuda.CUDAGraph`` and replays bit-identical to
-eager; the stock forward does not record.
-"""
+"""Rewritten HunyuanVideo-1.5 forward matches stock bit for bit and reads no device value on host."""
 
 from __future__ import annotations
 

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Restart survival for the OpenAI /v1/chat/completions passthrough.
-
-A crashed llama-server relaunches on a NEW ephemeral port. /v1/messages already
-respawns and retries; this surface did not, so a harness on the OpenAI API kept
-posting to the dead port and stayed broken until the user reloaded the model by
-hand, while an Anthropic-API client on the same backend recovered itself.
-
-Twin of test_anthropic_passthrough_respawn.py, same stubs and same cases.
-"""
+"""The OpenAI passthrough must respawn and retry after llama-server relaunches on a new port."""
 
 from __future__ import annotations
 
@@ -326,14 +318,7 @@ def test_a_backend_without_respawn_hooks_is_untouched(monkeypatch):
     ],
 )
 def test_only_lost_connections_are_replayable(exc, retryable):
-    """A timeout means the server is slow, not gone.
-
-    ``httpx.RequestError`` also covers ``TimeoutException``, and a 20-minute
-    generation on a live llama-server raises ``ReadTimeout``: replaying it
-    resubmits a prompt the server is still decoding. Same split as
-    ``_open_chat_stream_with_respawn_retry``. ``RemoteProtocolError`` is a
-    sibling of ``NetworkError``, not a subclass, so it is named explicitly.
-    """
+    """A ReadTimeout means a slow server still decoding, so only lost connections may be replayed."""
     assert _is_lost_upstream_connection(exc) is retryable
 
 
@@ -449,13 +434,7 @@ def test_streaming_retry_uses_the_respawned_api_key(monkeypatch):
 
 
 class _SlowDeadTransport(httpx.AsyncBaseTransport):
-    """The dead port takes longer than the 100 ms pre-header window to fail.
-
-    That is the ordinary shape of a llama-server that dies while the request is
-    queued or prefilling: dispatch is still pending when the status window
-    closes, so the failure surfaces inside _stream, not in the pre-header
-    handler.
-    """
+    """A dead port can fail after the 100 ms pre-header window, so the failure surfaces inside _stream."""
 
     def __init__(
         self,
@@ -524,12 +503,7 @@ def test_streaming_does_not_replay_a_slow_generation_after_the_status_window(mon
 
 
 class _SlowRespawnBackend(_Backend):
-    """A relaunch that takes real time, the way reloading a large GGUF does.
-
-    Blocks until the consumer reports a keep-alive that arrived AFTER the reload
-    began, so the stub records whether the downstream connection was still being
-    fed while the model loaded.
-    """
+    """The fake reload blocks until the consumer sees a keep-alive sent after the reload began."""
 
     def __init__(self):
         super().__init__()
@@ -546,10 +520,7 @@ class _SlowRespawnBackend(_Backend):
 
 
 def test_streaming_keeps_the_stream_alive_while_the_server_respawns(monkeypatch):
-    """The reload is a full model load, minutes for a large GGUF. The response is
-    already committed and this loop keeps it alive every five seconds, so going
-    silent for the reload lets a proxy or client drop the stream before the
-    recovered request is ever submitted."""
+    """Keep-alives must continue during a respawn, or a proxy drops the stream before the retry."""
     monkeypatch.setattr(inf_mod, "_OPENAI_PASSTHROUGH_PENDING_RESPONSE_KEEPALIVE_S", 0.05)
     calls = []
     transport = _SlowDeadTransport(calls)

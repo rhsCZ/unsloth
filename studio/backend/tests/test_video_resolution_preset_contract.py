@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Contract: every video resolution the UI offers is a real family preset, and vice versa.
-
-The Video tab's Resolution select is populated from ``status.defaults.resolution_presets``,
-which is ``VideoFamily.resolution_presets`` copied straight through
-``video.py::status()`` -> ``VideoGenerationDefaults``. Before a model is loaded it falls back
-to ``FALLBACK_RESOLUTION_PRESETS`` in ``video-page.tsx``. Two things have to hold:
-
-  * the offline fallback names only sizes some family actually declares, so the first paint
-    cannot offer a shape no checkpoint was trained at;
-  * every family declares at least one preset, because ``video.py``'s generate path indexes
-    ``fam.resolution_presets[0]`` unguarded when width/height are omitted -- an empty tuple
-    there is an IndexError on the very first generate of that family.
-
-Pure-module: no torch, no network, no browser. The frontend half reads the TSX source, the
-same way the other cross-language contract checks in this suite do.
-"""
+"""UI resolutions must be real family presets, and each family needs one (generate indexes [0])."""
 
 from __future__ import annotations
 
@@ -82,12 +67,7 @@ def test_every_preset_survives_the_family_snap_unchanged(name):
 
 @pytest.mark.parametrize("name", _FAMILY_NAMES)
 def test_presets_are_unique_and_land_in_the_status_payload(name):
-    """Through the real ``VideoBackend.status()``, not a hand-built VideoGenerationDefaults.
-
-    Constructing the model here would assert only that Pydantic round-trips a list, and would
-    stay green if status() ever hardcoded a preset list or stopped emitting the key at all --
-    which is the loaded UI offering shapes the checkpoint was never trained at.
-    """
+    """Read presets through the real VideoBackend.status(), so a hardcoded preset list cannot pass."""
     import core.inference.video as video_module
 
     fam = _family(name)

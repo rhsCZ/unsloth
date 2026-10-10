@@ -1,13 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""_shutdown_subprocess returns whether the worker actually died, and preserves the
-live handle when it survives terminate/kill.
-
-A GPU worker wedged in an uninterruptible CUDA syscall can outlive SIGKILL. If shutdown
-nulled its handle anyway, is_worker_alive() would report False and the pre-swap liveness
-guard would let the destructive .venv_t5_latest rename proceed while a live worker still
-holds sidecar transformers modules (breaking the rename on Windows). The methods must keep
-the handle and return False so callers can refuse the swap.
-"""
+"""A worker that survives kill must keep its handle, so is_worker_alive() still guards the swap."""
 
 import threading
 

@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Compatibility contract for GET /kv-cache-estimate.
-
-The route already shipped, so an existing caller must keep working across an
-upgrade. Two directions matter:
-
-* An OLD client still sends n_ctx and reads kv_bytes / weights_bytes /
-  native_context. Making n_ctx optional is a widening, and the new spec_bytes
-  and n_ctx fields are additions, so nothing it relies on may move.
-
-* A NEW client may omit n_ctx to ask for the model's native length. That is the
-  only request shape the previous version would have rejected, so it is the one
-  worth pinning.
-
-No GPU, no network.
-"""
+"""Old callers send n_ctx and read existing fields; omitting n_ctx is the one newly accepted shape."""
 
 from __future__ import annotations
 

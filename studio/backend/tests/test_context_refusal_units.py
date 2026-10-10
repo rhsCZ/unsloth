@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Two regressions the refusal diagnosis still carries.
-
-`test_an_estimated_turn_never_claims_to_be_most_of_the_prompt` is item A: the dominance
-ratio weighs a four-characters-a-token GUESS against a real tokenizer COUNT.
-`test_a_respawn_refit_that_refuses_is_not_lost_when_the_retry_is_refused` is item B: a
-refit that refuses after a respawn is never recorded, so the retry's own context error
-falls back to the generic advice.
-"""
+"""Estimated turns must not claim prompt dominance; a respawn refit refusal must reach the diagnosis."""
 
 import contextlib
 
@@ -54,12 +47,7 @@ def _sparse_tool_conversation() -> list[dict]:
 
 
 def test_an_estimated_turn_never_claims_to_be_most_of_the_prompt():
-    """The tool result is 6.5% of this prompt and the system prompt is 93% of it.
-
-    `latest_turn_tokens` is an estimate over the message's JSON while
-    `irreducible_tokens` is a tokenizer count of the rendered prompt, so the dominance
-    ratio compares a guess against a truth and blames the turn that is nearly absent.
-    """
+    """Dominance ratio must not compare an estimated turn size against a tokenizer count of the prompt."""
     messages = _sparse_tool_conversation()
     context_length = 8192
 
@@ -87,12 +75,7 @@ def test_an_estimated_turn_never_claims_to_be_most_of_the_prompt():
 
 
 def test_a_dominant_tool_result_still_gets_the_tool_advice():
-    """The counterweight: an estimated turn that really IS the prompt keeps its advice.
-
-    Same conversation with no system prompt, so the 557-token tool result is 93% of what
-    is left. Gating the dominance test on `latest_turn_exact` would send this back to the
-    generic wording, which is the loss the estimate branch exists to prevent.
-    """
+    """An estimated turn that is nearly the whole prompt must keep the tool advice, not generic wording."""
     messages = [message for message in _sparse_tool_conversation() if message["role"] != "system"]
     context_length = 512
 
@@ -118,13 +101,8 @@ def test_a_dominant_tool_result_still_gets_the_tool_advice():
 
 
 def test_a_respawn_refit_that_refuses_is_not_lost_when_the_retry_is_refused():
-    """A refused refit is only forwarded from INSIDE the reopened stream.
-
-    `_refit_*_after_respawn` appends its refusal to `_respawn_truncations`, but the
-    consumer drains that list INSIDE the `with` block, so a retry refused at the door
-    raises before any `context_truncated` event exists. `_friendly_error` then has no
-    diagnosis and tells the user to shorten a conversation that is already irreducible.
-    """
+    """A respawn refit refusal is drained only inside the stream, so a retry refused at the door
+    loses it."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     backend = object.__new__(LlamaCppBackend)
@@ -173,11 +151,7 @@ def test_a_respawn_refit_that_refuses_is_not_lost_when_the_retry_is_refused():
 
 
 def test_the_respawn_refits_record_the_refusal_rather_than_only_forwarding_it():
-    """Structural pin for the two callsites the behavioural test cannot reach.
-
-    Both refit callbacks live inside `generate_chat_completion_with_tools`, so the only
-    way to hold them to recording a refusal is to read them.
-    """
+    """Source pin: refit callbacks sit in generate_chat_completion_with_tools, unreachable by behaviour."""
     import inspect
 
     from core.inference.llama_cpp import LlamaCppBackend

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the VRAM budget setting.
-
-The budget decides how much of each card a load may claim, so the bar is that an
-unset budget behaves exactly as the hard-coded 0.97 did, and that no malformed
-value can ever reach the fit. A NaN in particular would turn every per-GPU budget
-into NaN and silently fit nothing.
-"""
+"""Unset VRAM budget equals the old 0.97; a malformed value such as NaN must never reach the fit."""
 
 from __future__ import annotations
 
@@ -198,15 +192,7 @@ class TestActiveFractionWiring:
 
 
 class TestLaunchedMarker:
-    """``_vram_fraction_launched`` must describe the child that is actually running.
-
-    The settings route reports "reload required" by comparing the saved budget
-    against this marker, so a path that returns without launching must leave it
-    alone. The duplicate-load fast path is the reachable one: the route declines
-    to reuse a resident model while its audio probe is unfinished, so the request
-    reaches ``load_model``, which adopts the live server and returns without
-    replacing it.
-    """
+    """_vram_fraction_launched must track the running child, so the reload prompt stays accurate."""
 
     @staticmethod
     def _resident_backend(monkeypatch, *, launched: float, active: float):
@@ -543,13 +529,7 @@ class TestRetriesAndDedup:
 
 
 class TestFitTarget:
-    """The budget has to reach llama.cpp's own fitter on the --fit fallback.
-
-    ``--fit-target`` is documented by the bundled llama-server as the "target
-    margin per device for --fit ... default: 1024". Unsloth passes a tighter 512
-    under Manual + Auto and nothing at all on the legacy auto path, so a lowered
-    budget stopped at the planner and the fitter still packed to its own margin.
-    """
+    """The budget must reach llama.cpp's own fitter via --fit-target, not stop at Unsloth's planner."""
 
     _CAPS = {"supports_fit_ctx": True, "supports_fit_target": True, "supports_kv_unified": True}
 

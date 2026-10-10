@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""MTP draft reserve for MLA models keeps a duplicated target KV context.
-
-llama.cpp's MTP speculative decoding allocates a second full copy of the target
-model's KV context (``ctx_tgt=yes``) for draft verification, at f16. On MLA
-models (GLM-5.x, DeepSeek, Kimi-K2) that copy is ~the main KV again and dwarfs
-the tiny embedded draft head, so omitting it let auto-fit pick a context that
-fit on paper but OOMed ``cublasCreate`` at the first decode (e.g. GLM-5.2
-UD-IQ1_S advertised the native 1M context on 2x B200, then crashed on the first
-generation). Non-MLA MTP (Qwen/Gemma) keeps no such copy and must stay exactly
-as #6312 tuned it.
-"""
+"""MLA models keep a second full target KV copy for MTP verification; omitting it lets auto-fit OOM."""
 
 import sys
 import types as _types
@@ -189,13 +179,7 @@ class TestMlaTargetCtxReserve:
 
 
 class TestKdaRollbackReserve:
-    """A KDA hybrid pays draft rollback copies the Mamba helper cannot see.
-
-    Dims are GLM-5.3-Flash UD-IQ1_S as shipped (34 recurrent layers of 46,
-    kda.head_dim 128, head_count 64, ssm.conv_kernel 4). llama.cpp allocates
-    582.25 MiB for `1 seqs 3 rs_seq`, i.e. 4 x 145.5625 MiB, so the MTP share
-    is the 3 extra copies and the reserve must carry them.
-    """
+    """A KDA hybrid's MTP share is the 3 extra rollback copies that the Mamba helper cannot see."""
 
     MIB = 1024**2
     PER_SEQ = 145.5625  # MiB, the size llama.cpp logs per context checkpoint

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Focused tests for the GGUF llama.cpp agentic tool loop.
-
-These tests drive ``LlamaCppBackend.generate_chat_completion_with_tools``
-with fake llama-server SSE streams. They require no model, subprocess, GPU,
-or network access.
-"""
+"""Drives generate_chat_completion_with_tools with fake SSE streams; needs no model or GPU."""
 
 from __future__ import annotations
 
@@ -216,10 +211,7 @@ def _backend_and_payloads(monkeypatch, streams):
 
 
 def _record_tool_calls(monkeypatch, result):
-    """Pin execute_tool to record each (name, arguments) pair and answer `result`.
-
-    A callable result is handed the tool name, for the cases that echo it back.
-    """
+    """Stub execute_tool to record (name, arguments) pairs; a callable result receives the tool name."""
     calls: list[tuple[str, dict]] = []
 
     def fake_execute_tool(name, arguments, **_kwargs):
@@ -415,10 +407,7 @@ def _structured_tool_call(tool_name: str, arguments: dict, call_id: str) -> list
 
 
 def test_forced_web_search_tool_choice_is_sent_until_a_tool_runs(monkeypatch):
-    """#9730: a forced web_search must reach llama-server on the first turn.
-
-    After the call executes, the follow-up is auto so the model can answer.
-    """
+    """A forced web_search tool_choice is sent until a tool has run; the follow-up turn reverts to auto."""
     first_stream = _structured_tool_call(
         "web_search", {"query": "current Linux kernel version"}, "call_search"
     )
@@ -563,10 +552,7 @@ def test_none_tool_choice_never_executes_model_tool_calls(monkeypatch):
 
 
 def test_structured_tool_call_after_visible_preface_is_executed(monkeypatch):
-    """llama-server may emit content first and then native delta.tool_calls.
-
-    Unsloth must not drop that tool call after it has streamed the preface.
-    """
+    """A structured tool call after streamed preface content must still execute, not be dropped."""
 
     tool_call_id = "call_render_late"
     first_stream = [
@@ -1172,13 +1158,7 @@ def test_noop_reasoning_without_continuation_adds_clean_assistant_turn(monkeypat
 
 
 def test_noop_feedback_is_not_folded_into_another_tool_s_result(monkeypatch):
-    """Feedback about tool A must never ride tool B's result.
-
-    Templates label the whole block with the result's OWN tool name (gemma-4.jinja
-    resolves tool_call_id -> name and wraps the body), so a note about a suppressed
-    ``python`` call folded into a ``web_search`` result reads as web_search's output.
-    Only a same-tool result may carry it; otherwise the user turn is the lesser loss.
-    """
+    """Feedback about tool A must not fold into tool B's result, which templates label with B's name."""
     tool_stream = [
         _sse({"reasoning_content": "Plan the batch."}),
         _sse(
@@ -1328,13 +1308,7 @@ def test_same_tool_noop_feedback_still_rides_its_own_result(monkeypatch):
 
 
 def test_tool_loop_does_not_mutate_the_caller_s_messages(monkeypatch):
-    """The caller's own message dicts stay untouched across a fold.
-
-    ``conversation`` copies the list, not the dicts. Every fold target is a result this
-    loop just built, so nothing caller-owned is reachable today; pinning it matters
-    because /v1/messages passes a client's own history through, and a fold that moved
-    to a different target would leave the hidden instruction in that client's list.
-    """
+    """Folds must not mutate caller message dicts, since /v1/messages passes client history straight in."""
     messages = [
         {"role": "user", "content": "weather?"},
         {
@@ -1971,13 +1945,7 @@ def test_disabled_tool_call_is_internal_noop(monkeypatch):
 
 
 def test_render_html_success_does_not_reprompt_render_html_intent(monkeypatch):
-    """After render_html succeeds, do not force another render_html call.
-
-    The post-tool model pass can say it will use render_html again without
-    emitting a tool call. That should be accepted as a final model mistake,
-    not turned into repeated internal re-prompts after the canvas already
-    exists.
-    """
+    """Once render_html succeeds, its intent text is not re-prompted, since the canvas already exists."""
 
     first_stream = [
         _tool_call_sse(
@@ -2101,11 +2069,7 @@ def test_post_tool_reprompt_budget_is_one(monkeypatch):
 
 
 def test_repeat_guard_resets_after_a_tool_runs(monkeypatch):
-    """A tool execution opens a new phase, so the same intent text is nudged again.
-
-    Without the reset the pre-tool stall text still sits in the repeat tracker and
-    the identical post-tool stall is surrendered as the visible final answer.
-    """
+    """A tool run resets the repeat tracker, so an identical post-tool stall is nudged, not accepted."""
 
     stall = "I will search the web now."
     streams = [
@@ -2200,11 +2164,7 @@ def test_forced_turn_suppression_covers_obligation_phrasing():
 
 
 def test_forced_turn_intent_lead_in_needs_a_restatement_to_be_dropped():
-    """A bare intent match is a stall only when the retry restates the nudge.
-
-    ``INTENT_SIGNAL`` fires on lead-ins that introduce a real answer ("Now I
-    have the results. ..."), so matching it alone would discard the answer.
-    """
+    """INTENT_SIGNAL matches real answer lead-ins, so drop a turn only when it restates the nudge."""
     stall = "I will summarize the results now"
     answer = "Now I have the search results. The capital of Japan is Tokyo."
 
@@ -2217,12 +2177,7 @@ def test_forced_turn_intent_lead_in_needs_a_restatement_to_be_dropped():
 
 
 def test_forced_turn_answer_with_an_intent_lead_in_survives_after_a_tool(monkeypatch):
-    """The post-tool retry answers behind a lead-in; the answer must still ship.
-
-    The nudge budget is spent, so the reply lands on the suppression branch.
-    ``INTENT_SIGNAL`` matches its "Now I ..." opener, and dropping it on that
-    alone left the user with the stall and no answer at all.
-    """
+    """After a tool, an answer behind an intent lead-in must still ship, not be dropped as a stall."""
 
     answer = "Now I have the results. The capital of Japan is Tokyo."
     streams = [
@@ -2758,11 +2713,7 @@ def test_confirm_tool_calls_skips_gguf_rag_autoinject(monkeypatch):
 
 
 def test_rag_autoinject_counts_as_a_prior_tool_execution(monkeypatch):
-    """Autoinjected retrieval runs before the controller, so history stays empty.
-
-    Without counting it the turn reads as pre-tool and gets the full re-prompt
-    budget, repeating the expensive retrieval the post-tool cap exists to stop.
-    """
+    """Autoinjected RAG counts as a prior tool execution, so the post-tool re-prompt cap still applies."""
 
     stall = "I will summarize the retrieved passages now."
     streams = [
@@ -2924,10 +2875,7 @@ def _streamed_structured_tool_call(
 
 
 def test_large_python_tool_call_emits_early_provisional_start(monkeypatch):
-    """Regression: a large streamed tool-call argument surfaces a provisional
-    tool card BEFORE the full arguments finish, so the UI shows progress during
-    generation instead of a frozen 'Generating...'. (The bug: only render_html
-    surfaced early; python/terminal/etc. were silent until the call completed.)"""
+    """A large streamed tool-call argument must open a provisional card before its arguments finish."""
 
     big_code = "total = 0\n" + "\n".join(f"total += {i}" for i in range(120))
     args_json = json.dumps({"code": big_code})
@@ -2962,12 +2910,7 @@ def test_large_python_tool_call_emits_early_provisional_start(monkeypatch):
 
 
 def test_gated_python_call_still_streams_its_arguments(monkeypatch):
-    """A call awaiting approval still streams its code into the card.
-
-    Suppressing it left the chat completely blank for as long as the model took
-    to write the payload, which for a large file is minutes. Nothing runs before
-    the decision either way, and the code is what the user is approving.
-    """
+    """Approval-gated calls still stream arguments into the card; the code is what the user approves."""
 
     big_code = "total = 0\n" + "\n".join(f"total += {i}" for i in range(120))
     assert len(json.dumps({"code": big_code})) > _PROVISIONAL_ARGS_MIN_CHARS
@@ -3025,10 +2968,7 @@ def test_only_an_approved_call_is_marked_approved(monkeypatch, verdict):
 
 
 def test_auto_mode_render_html_suppresses_provisional_card_under_confirm(monkeypatch):
-    """render_html is no longer unconditionally safe (a networked canvas asks), so
-    with confirm_tool_calls set under permission_mode="auto" its early provisional
-    card is suppressed; the real full-argument tool_start still fires and a static
-    canvas runs without a prompt."""
+    """Under confirm, render_html suppresses its provisional card; the full tool_start still fires."""
     args = {"code": "<html>" + "x" * 80 + "</html>"}
     first_stream = _streamed_structured_tool_call("render_html", args, "call_rh")
     final_stream = [_sse({"content": "Done."}), _done()]
@@ -3716,11 +3656,7 @@ def test_rolling_preflight_counts_the_sanitized_payload(monkeypatch):
 
 
 def test_a_respawn_refit_archives_what_it_evicts(monkeypatch):
-    """The respawn refits run against a smaller replacement window.
-
-    They evict more of the conversation, and without archiving there those turns are
-    gone for good: unlike the ordinary preflight, nothing else sees them.
-    """
+    """Respawn refits evict more turns against a smaller window, so they must archive what they evict."""
     archived: list = []
 
     def fake_archive(conversation, before, **kwargs):
@@ -3770,11 +3706,7 @@ def test_a_respawn_refit_archives_what_it_evicts(monkeypatch):
 
 
 def test_the_respawn_retry_keeps_the_thread(monkeypatch):
-    """The retry refits for the replacement window, so it can evict more.
-
-    Without the thread those extra turns are archived nowhere and no reserve or boundary
-    applies, on the one path that deliberately compacts a second time.
-    """
+    """The respawn retry must keep the archiving thread, since it refits and can evict more turns."""
     payloads: list[dict] = []
     backend = _make_backend(
         monkeypatch,
@@ -4086,10 +4018,7 @@ def test_mtp_crash_recovery_wins_over_respawn(monkeypatch):
 
 
 def test_empty_tool_call_id_does_not_emit_provisional_card(monkeypatch):
-    """llama.cpp can stream a tool call whose id is an empty string. A provisional
-    card keyed by "" cannot reconcile with the real tool_start (the frontend mints
-    its own id per event), so it must not be emitted -- otherwise the empty card
-    would dangle. The real call must still execute normally."""
+    """An empty tool-call id must emit no provisional card, since it can never reconcile with tool_start."""
 
     big_code = "total = 0\n" + "\n".join(f"total += {i}" for i in range(120))
     assert len(json.dumps({"code": big_code})) > _PROVISIONAL_ARGS_MIN_CHARS
@@ -4194,11 +4123,7 @@ def test_incomplete_bare_json_truncation_is_not_leaked(monkeypatch):
 
 
 def test_gguf_truncated_ordinary_json_with_name_key_is_shown_not_suppressed(monkeypatch):
-    """A truncated markerless object whose "name" is NOT an enabled tool (a person
-    record cut off mid-stream, ``{"name":"Alice","age":``) must still be shown. The
-    end-of-stream ``_is_bare_tc`` heuristic routed any ``{...,"name",...}`` fragment
-    to DRAINING (dropped); it is now gated on the enabled tool names so only a real
-    truncated tool call is suppressed, ordinary JSON streams through."""
+    """Truncated JSON whose name is not an enabled tool must still be shown, not drained as a call."""
 
     truncated = '{"name": "Alice", "age": 30, "bio": "loves '
     stream = _streamed_content(truncated)
@@ -4297,10 +4222,7 @@ def test_gguf_oversized_disabled_name_json_is_preserved(monkeypatch):
 
 
 def test_gemma_wrapperless_call_streamed_is_not_leaked_and_executes(monkeypatch):
-    """Gemma 4 GGUF (skip_special_tokens) streams a wrapper-less ``call:NAME{..}``
-    with no XML signal. Like bare JSON, the BUFFERING scan must recognise it via
-    _GEMMA_BARE_TC_RE, drain it silently, and execute the tool -- never leaking
-    the ``call:`` markup to the user-visible stream."""
+    """Wrapper-less Gemma call:NAME{..} must be drained via _GEMMA_BARE_TC_RE and run, never leaked."""
 
     gemma_call = 'call:web_search{query:"weather in Sydney"}'
     first_stream = _streamed_content(gemma_call)
@@ -4322,11 +4244,7 @@ def test_gemma_wrapperless_call_streamed_is_not_leaked_and_executes(monkeypatch)
 
 
 def test_gemma_wrapperless_execution_call_opens_no_provisional_card(monkeypatch):
-    """A bare ``call:terminal{..}`` is prose (see EXECUTION_CLASS_TOOL_NAMES), so the
-    leading-shape drain must not sniff it into a live ``terminal`` card that the stream
-    then closes with an empty ``tool_end``: nothing runs, and the card would claim a
-    terminal command was executing on attacker-quotable text. Long enough to clear
-    _PROVISIONAL_ARGS_MIN_CHARS, which is what gates the card."""
+    """A bare call:terminal{..} is prose, so it must not open a live terminal card that never runs."""
 
     payload = "echo hi; " * 40
     gemma_call = f'call:terminal{{command:"{payload}"}}'
@@ -4407,13 +4325,7 @@ def _usage_done(usage: dict, finish_reason: str = "stop") -> str:
 
 
 def test_metadata_event_preserves_prompt_tokens_details(monkeypatch):
-    """The tool loop's metadata event must carry llama-server's
-    ``prompt_tokens_details`` (KV-cache hits) through ``_build_metadata_event``,
-    so the route reports real ``cached_tokens`` instead of always 0 (#6570).
-
-    This drives the *real* generator; the route-level test feeds a pre-built
-    metadata event and so never exercises this code.
-    """
+    """Keep prompt_tokens_details in _build_metadata_event so cached_tokens reports real KV-cache hits."""
     stream = [
         _sse({"content": "The answer is 42."}),
         _usage_done(
@@ -4503,10 +4415,7 @@ def test_metadata_event_context_tokens_count_earlier_passes_once(monkeypatch):
 
 
 def test_gguf_rehearsal_name_split_before_args_is_not_leaked(monkeypatch):
-    """Finding 6: a rehearsal call whose name (``web_search``) and ``[ARGS]{...}``
-    arrive in separate content deltas must hold the bare name in the buffer until
-    ``[ARGS]`` flips it to a drain. Without _is_rehearsal_prefix the GGUF path
-    streams the tool name as visible content before the call executes."""
+    """Hold a bare rehearsal name until [ARGS] arrives, or the tool name streams as visible text."""
 
     first_stream = [
         _sse({"content": "web_search"}),
@@ -4593,11 +4502,7 @@ def test_gguf_lone_blocked_bare_json_is_released_at_eof(monkeypatch):
 
 
 def test_gguf_initial_buffer_flush_holds_split_rehearsal_name(monkeypatch):
-    """The first flush out of BUFFERING (prose plus a trailing active-tool-name in
-    the first delta, ``[ARGS]{...}`` in the next) must apply the same trailing-name
-    hold the STREAMING branch uses. The first delta has spaces so it is not a
-    rehearsal prefix and falls to the initial flush, which previously emitted the
-    bare name before the call drained."""
+    """The initial BUFFERING flush needs the same trailing-name hold as STREAMING, or the name leaks."""
 
     first_stream = [
         _sse({"content": "I will use web_search"}),
@@ -4626,10 +4531,7 @@ def test_gguf_initial_buffer_flush_holds_split_rehearsal_name(monkeypatch):
 
 
 def test_gguf_rehearsal_name_after_prose_in_streaming_is_not_leaked(monkeypatch):
-    """Finding 9: the BUFFERING guard only covers a rehearsal at the turn start.
-    When prose has already streamed (STREAMING state) and the model then emits the
-    tool name and ``[ARGS]{...}`` in later deltas, the bare name must still be held,
-    not flushed as visible content before the call drains."""
+    """The rehearsal hold also applies in STREAMING state, not just at the turn start."""
 
     first_stream = [
         _sse({"content": "Let me think. "}),
@@ -4721,11 +4623,7 @@ def test_gguf_long_tool_name_split_rehearsal_is_not_capped_and_executes(monkeypa
 
 
 def test_gguf_streaming_keeps_bare_args_before_think_block(monkeypatch):
-    """F4: the GGUF streaming strip must run its open-ended ``[ARGS]`` tail cleanup
-    only on the LAST segment. A bare ``foo[ARGS]`` (no JSON body, ``foo`` not a tool)
-    before a <think> block is prose, not a truncated call, so the final visible text
-    must keep it verbatim instead of dropping ``foo[ARGS]`` and corrupting the
-    sentence."""
+    """Run the [ARGS] tail cleanup only on the last segment; a bare foo[ARGS] before <think> is prose."""
 
     first_stream = [
         _sse({"content": "Please pass foo[ARGS] "}),
@@ -4754,11 +4652,7 @@ def test_gguf_streaming_keeps_bare_args_before_think_block(monkeypatch):
 
 
 def test_gguf_inactive_name_args_in_prose_is_not_drained(monkeypatch):
-    """BUG A: an inactive-name ``foo[ARGS]{...}`` in a prose answer must not be treated
-    as a tool call. The BUFFERING and end-of-stream safety-net ``[ARGS]`` checks gate on
-    active tool names (like the safetensors loop and the mid-stream path), so ``foo``
-    (``web_search`` is the only enabled tool) is neither drained/parsed into a disabled
-    no-op nor forced into another generation turn."""
+    """An inactive-name foo[ARGS]{...} in prose must not be drained or forced into another turn."""
     first_stream = [
         _sse({"content": 'foo[ARGS]{"x":1} is just syntax.'}),
         _done(),
@@ -4892,10 +4786,8 @@ def test_gguf_bare_json_call_not_replayed_in_next_turn_content(monkeypatch):
 
 
 def test_gguf_textual_fallback_caps_distinct_tool_calls_per_turn(monkeypatch):
-    """A single textual-fallback turn that parses many DISTINCT tool calls must be
-    capped at _MAX_TOOL_CALLS_PER_TURN (structured delta.tool_calls are grammar
-    bounded by llama-server; text parsed from content is not). Mirrors the
-    safetensors loop so one runaway turn cannot fan out into dozens of executions."""
+    """Textual fallback calls are capped at _MAX_TOOL_CALLS_PER_TURN; llama-server bounds structured
+    ones."""
     from core.inference.llama_cpp import _MAX_TOOL_CALLS_PER_TURN
 
     n = _MAX_TOOL_CALLS_PER_TURN + 4
@@ -4998,13 +4890,7 @@ def test_gguf_textual_fallback_over_cap_on_last_turn_does_not_ask_for_retry(monk
 
 
 def test_gguf_over_cap_notice_is_not_folded_into_an_unrelated_tools_result(monkeypatch):
-    """The final-turn notice must not ride a result whose tool it says nothing about.
-
-    Templates label a folded block with the result's own tool name (gemma-4.jinja resolves
-    tool_call_id -> name and wraps the body), so a note about t8..t11 inside t7's result
-    reads as t7's own output. max_tool_iterations = 1 is the value that routes the notice
-    through the final branch, which is why the cap test above uses 2 and this one does not.
-    """
+    """Final-turn notices must not fold into an unrelated result, since it is labelled with that tool."""
     n = 12
     blocks = "".join(
         '<tool_call>{"name":"t%d","arguments":{"x":"t%d"}}</tool_call>' % (i, i) for i in range(n)
@@ -5069,12 +4955,7 @@ def test_gguf_over_cap_notice_for_several_tools_is_not_folded_into_one_tools_res
 
 
 def test_gguf_over_cap_does_not_ask_for_a_retry_when_the_range_check_ends_the_loop(monkeypatch):
-    """The iteration range is a second exit; the notice must not ask for a retry there.
-
-    No-op turns burn the range budget without advancing the executed-tool counter, so the
-    loop can stop without the tool-iteration cap ever tripping. Asking for a retry there
-    lands next to the budget nudge that says not to call any more tools.
-    """
+    """Range-exit must not ask for a retry: no-op turns end the loop before the tool-cap ever trips."""
 
     def _call(q):
         return '<tool_call>{"name":"web_search","arguments":{"query":"%s"}}</tool_call>' % q
@@ -5234,10 +5115,7 @@ def _python_tool_schema() -> list[dict]:
 
 
 def test_structured_tool_args_stream_to_provisional_card(monkeypatch):
-    """A large structured tool call must stream its arguments as tool_args events
-    to the provisional card (backlog that triggered the card, then each
-    fragment), while the executed call and the model's view stay exactly what the
-    accumulator built."""
+    """Stream a large structured call's arguments as tool_args events to its provisional card."""
 
     code = "print('x')\n" + ("# pad\n" * 80)
     args_json = json.dumps({"code": code})
@@ -5350,10 +5228,7 @@ def test_ordinary_json_answer_streams_no_tool_args(monkeypatch):
 
 
 def test_provisional_text_card_closed_when_parse_fails(monkeypatch):
-    """A >=256-char enabled-name text sniff opens a provisional card; if the
-    drained text then fails to parse (auto-heal off, truncated call), the
-    DRAINING false-positive path must close the card with a tool_end instead of
-    leaving it spinning forever."""
+    """A text-sniffed provisional card must close with tool_end when its drained text fails to parse."""
 
     call_text = '<tool_call>{"name": "python", "arguments": {"code": "' + "x" * (
         _PROVISIONAL_ARGS_MIN_CHARS + 64
@@ -5467,15 +5342,7 @@ def _tool_call_opening(index: int, call_id: str, name: str, arguments: str) -> s
 
 
 def test_second_structured_call_at_one_index_keeps_its_own_fragments(monkeypatch):
-    """Two tool rounds in one llama-server response, both streamed at index 0.
-
-    llama-server restarts ``delta.tool_calls[].index`` at 0 for every round
-    while giving each call its own id, and the continuation fragments carrying
-    the rest of the arguments arrive bare. Keying the accumulator on the index
-    alone appended round two's name and argument tail to round one, leaving a
-    single ``web_searchweb_search`` entry that matched no enabled tool, so
-    neither call ran.
-    """
+    """Key structured fragments by call id, since llama-server restarts delta index at 0 each round."""
 
     stream = [
         _tool_call_opening(0, "call_a", "web_search", '{"query":'),
@@ -5521,13 +5388,7 @@ def test_second_structured_call_at_one_index_keeps_its_own_fragments(monkeypatch
 
 
 def test_structured_fragment_naming_its_call_goes_back_to_that_call(monkeypatch):
-    """Two calls at index 0 with the id repeated on every argument fragment.
-
-    The latest-index mapping only exists to place fragments that carry no id,
-    so a fragment naming the call the index opened first has to go back to it
-    rather than fork a third slot. Forking left that call with truncated JSON
-    and dropped the fragment for having no function name.
-    """
+    """A fragment naming a call's id must return to that call, not fork a third slot with truncated JSON."""
 
     stream = [
         _tool_call_opening(0, "call_a", "web_search", '{"query":'),
@@ -5566,13 +5427,7 @@ def test_structured_fragment_naming_its_call_goes_back_to_that_call(monkeypatch)
 
 
 def test_structured_call_id_arriving_after_the_opening_delta_updates_that_call(monkeypatch):
-    """llama-server can open a call with no id and send the real one later.
-
-    The opening slot holds the synthetic ``call_0`` until then, and treating
-    that placeholder as a rival id forked a second nameless slot: the fork was
-    dropped for having no function name and the original call ran on truncated
-    arguments.
-    """
+    """A late real id must update the call opened with the placeholder call_0, not fork a nameless slot."""
 
     stream = [
         _sse(
@@ -5613,12 +5468,7 @@ def test_structured_call_id_arriving_after_the_opening_delta_updates_that_call(m
 
 
 def test_structured_call_forked_onto_a_reused_index_executes_last(monkeypatch):
-    """A first round at indices 0 and 1, then a second round back at index 0.
-
-    The fork belongs at the end: it arrived after both first-round calls, and
-    running it ahead of the index-1 call reorders side effects for stateful
-    tools. Grouping every fork next to the index it reused did exactly that.
-    """
+    """A fork onto a reused index runs last, so side effects of stateful tools keep their order."""
 
     stream = [
         _tool_call_opening(0, "call_a", "web_search", '{"query":"a"}'),
@@ -5656,12 +5506,7 @@ def test_structured_call_forked_onto_a_reused_index_executes_last(monkeypatch):
 
 
 def test_parallel_disabled_suppresses_provisional_for_reused_index(monkeypatch):
-    """A later call at reused index 0 is not the first accumulated call.
-
-    ``parallel_tool_calls=false`` permits a provisional card only for the call
-    that can execute. Checking the raw index admitted every fork at index 0,
-    leaving a card for the truncated call that could only close empty.
-    """
+    """With parallel_tool_calls=false, only the first accumulated call may get a provisional card."""
 
     big_code = "total = 0\n" + "\n".join(f"total += {i}" for i in range(120))
     big_cmd = "echo start\n" + "\n".join(f"echo line {i}" for i in range(60))
@@ -5705,11 +5550,7 @@ def test_parallel_disabled_suppresses_provisional_for_reused_index(monkeypatch):
 
 
 def test_conversation_search_budget_counts_the_tool_catalogue(monkeypatch):
-    """The estimator sees the messages only; the tools array is prompt too.
-
-    A large (MCP) catalogue can be thousands of tokens, so a budget ignoring it reports
-    room the request lacks, into a tool exchange the next iteration cannot evict.
-    """
+    """Conversation-search budget must count the tools array, since a large MCP catalogue is prompt too."""
     payloads: list[dict] = []
     backend = _make_backend(
         monkeypatch,
@@ -5776,13 +5617,7 @@ def test_conversation_search_budget_counts_the_tool_catalogue(monkeypatch):
 
 
 def test_a_long_tool_run_reports_a_boundary_in_the_requests_own_terms(monkeypatch):
-    """dropped_messages is summed by the client, and it counts THIS request's messages.
-
-    A tool loop refits every iteration, so a long agent run also counts the tool
-    exchanges it created, which the next request's transcript lacks. Re-applying that
-    total advances the boundary past the turns actually evicted, so the boundary is
-    carried separately, measured against the messages the request was sent with.
-    """
+    """Carry the dropped boundary in the request's own message terms; re-summing per refit overshoots."""
     calls = 6
     streams = []
     for index in range(calls):
@@ -5851,14 +5686,7 @@ def test_a_long_tool_run_reports_a_boundary_in_the_requests_own_terms(monkeypatc
 
 
 def test_conversation_search_budget_is_exact_when_nothing_was_truncated(monkeypatch):
-    """`fit_rolling_context` returns None when it drops nothing.
-
-    A prompt that simply FITS, after a context-length increase or on a shorter branch,
-    therefore left the budget to a character estimate that cannot see the template's own
-    framing. It reported room the request did not have, the recall appended a passage too
-    large for the real window, and the next iteration could not evict it again because the
-    current tool exchange is protected.
-    """
+    """fit_rolling_context returns None when nothing drops, so the budget must not fall back to chars."""
     payloads: list[dict] = []
     backend = _make_backend(
         monkeypatch,
@@ -5917,12 +5745,7 @@ def test_conversation_search_budget_is_exact_when_nothing_was_truncated(monkeypa
 
 
 def test_the_exact_recall_budget_is_recomputed_after_an_intervening_tool(monkeypatch):
-    """The exact count is absolute, so caching it for the request goes stale.
-
-    The loop appends the assistant call and the tool result of every intervening tool to
-    the conversation, so a figure taken before them understates the prompt by exactly
-    those exchanges and hands the search room that is already spent.
-    """
+    """Recompute the exact recall budget after each intervening tool; a cached count goes stale."""
     payloads: list[dict] = []
     backend = _make_backend(
         monkeypatch,
@@ -6000,19 +5823,7 @@ def test_the_exact_recall_budget_is_recomputed_after_an_intervening_tool(monkeyp
 
 
 def _count_from_size(messages, *_args, **_kwargs):
-    """Stand in for the tokenizer, priced the way a real chat template prices.
-
-    Two behaviours the fake has to keep or the tests pass while the gate is blind:
-
-    1. The size FALLS when the conversation shrinks, so re-pricing after a compaction is
-       distinguishable from the attempt before it.
-    2. An assistant turn's `tool_calls` cost NOTHING until a `tool` message answers them.
-       Qwen3.8's template renders them only then, which is what made the first version of
-       this gate useless: measured on the conversation as it stood, a 40 KB argument was
-       invisible, the turn priced at 1,063 tokens against a 4,096 window, and the tool ran
-       into a request that came back 400. A counter that charges for unanswered arguments
-       cannot catch that regression.
-    """
+    """Size falls as the conversation shrinks; tool_calls cost nothing until a tool message answers them."""
     answered = {
         str(message.get("tool_call_id"))
         for message in messages
@@ -6030,14 +5841,7 @@ def _count_from_size(messages, *_args, **_kwargs):
 
 
 def test_an_unservable_tool_call_is_refused_before_it_runs(monkeypatch):
-    """The write must not land on a turn llama-server is going to reject anyway.
-
-    The model's own arguments are already in the conversation by the time the tool is
-    invoked, so a whole-file `edit_file` can put the prompt over the window before the
-    tool has returned anything. `tool_result_budget` clamps to zero there and the
-    truncation reads that as "cut hard", so the tool used to run, the result was cut to
-    its notice, and the next request was refused with the file written.
-    """
+    """Refuse an unservable edit_file before it runs, since tool_result_budget clamps to zero."""
     immovable = "please read all of this: " + "u" * 40000
     streams = [
         _structured_tool_call(
@@ -6077,11 +5881,7 @@ def test_an_unservable_tool_call_is_refused_before_it_runs(monkeypatch):
 
 
 def test_compacting_an_earlier_call_lets_the_next_one_run(monkeypatch):
-    """The first lever, before refusing: arguments of a call that already returned.
-
-    They are pure replay -- the tool received them in full and the file is on disk -- so
-    spending them is what keeps a thread alive that would otherwise dead-end.
-    """
+    """Arguments of an already-returned call are the first lever, since dropping them frees prompt room."""
     earlier = "<!DOCTYPE html>" + "y" * 30000
     prior_call = {
         "id": "call_earlier",

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Simulation suite: edge cases for the /v1/models servability cache.
-
-The cache sits on a request path that several clients poll, so it has to be correct
-under concurrency, correct when the catalog is replaced, and must never let a stale
-residency answer through. A wrong answer here is worse than the latency it saves:
-it would advertise a model the server cannot serve, or hide one it can.
-"""
+"""Edge cases for the /v1/models servability cache: concurrency, catalog swaps and deletes."""
 
 from __future__ import annotations
 
@@ -223,10 +217,7 @@ def test_large_catalog_stays_correct(stub):
 
 
 def test_a_deleted_model_leaves_the_listing_within_the_catalog_ttl(monkeypatch):
-    """A delete invalidates the resolver, not _CATALOG_CACHE, so the catalog behind this
-    cache can stay standing for the rest of its 30s TTL. Keying on the resolver
-    generation is what stops the removed model being advertised for that window, which
-    the per-request scan used to drop at once."""
+    """A delete bumps the resolver generation, not the catalog cache, so the listing must key on it."""
     catalog = _catalog(2, "d")
     gone: set[str] = set()
 
@@ -363,10 +354,7 @@ def test_the_generation_key_names_all_three_signals():
 
 
 def test_every_delete_branch_invalidates_the_scan():
-    """An outputs/exports directory can be a registered scan folder, so a model deleted
-    through delete_finetuned_model may be one /v1/models is advertising. Both successful
-    branches count: deleting a single GGUF variant returns earlier than the full-model
-    delete, and only the later one was covered at first."""
+    """A model deleted via delete_finetuned_model must invalidate the scan on every successful branch."""
     import inspect
 
     from routes import models as models_route
@@ -392,10 +380,7 @@ def test_every_delete_branch_invalidates_the_scan():
 
 
 def test_a_generation_bump_while_waiting_for_the_lock_is_not_accepted(monkeypatch):
-    """Two callers miss together, one scans while the other queues on the lock, and a
-    delete lands during that scan. The scanner stamps its entry with the generation it
-    STARTED with, which is correct, so a waiter comparing against the value it captured
-    before queueing would be handed rows examined before the delete."""
+    """A generation bump during the lock wait must reject the scan, which started before the delete."""
     catalog = _catalog(1, "w")
     scanned = {"n": 0}
 

@@ -126,10 +126,7 @@ def _served_path(model: AudioCppModel, farm: Path) -> Path:
 
 
 def materialize(model: AudioCppModel, *, hub_cache: Optional[Path] = None) -> str:
-    """Path of the model for the server config: its GGUF under its real name, or a package's directory.
-
-    Raises ``FileNotFoundError`` when the variant is not downloaded.
-    """
+    """Server-config path: the GGUF, or a package directory. Raises FileNotFoundError if not downloaded."""
     root = hub_cache if hub_cache is not None else _hub_cache()
     found = _find(model, root)
     if found is None:
@@ -258,13 +255,7 @@ def _source_still_cached(model_dir: Path, hub_cache: Path) -> bool:
 
 
 def prune_link_farm(hub_cache: Optional[Path] = None) -> int:
-    """Drop farm entries whose files are no longer downloaded, so a deleted model frees its disk.
-
-    A hardlink keeps the blob's data alive after the cache deletes it, and a copy is a second
-    full copy, so either way the farm entry must go once the cache no longer holds the model.
-    Entries without a source record (an earlier layout) go too.
-    Returns the number of files removed. Never raises.
-    """
+    """Drops farm entries whose model left the cache: a hardlink would keep the blob's disk alive."""
     removed = 0
     try:
         root = hub_cache if hub_cache is not None else _hub_cache()

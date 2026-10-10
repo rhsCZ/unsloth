@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Backend contract for the Tensor Parallelism toggle.
-
-The toggle threads a single ``tensor_parallel`` bool from the chat UI
-through the load request to a ``--split-mode tensor`` llama-server flag,
-and round-trips it back via the load/status responses so the switch
-reflects what is actually running. These tests pin:
-
-  * the pydantic request/response/status contract (snake_case key,
-    default False),
-  * the backend ``tensor_parallel`` property and its reset on unload,
-  * the ``_already_in_target_state`` reload-detection branch, and
-  * that ``--split-mode tensor`` is emitted only behind the toggle.
-"""
+"""tensor_parallel must round-trip as a bool, and --split-mode tensor is emitted only behind it."""
 
 from __future__ import annotations
 
@@ -1091,12 +1079,7 @@ def test_fit_context_budget_frac_override_is_tighter():
 
 
 def test_fit_context_follows_the_user_vram_budget(monkeypatch):
-    """The VRAM budget setting moves the fitted context, in both directions.
-
-    This is the whole point of the setting: the reserve it controls is worth real
-    context. An unset budget must land exactly on the historical default, so the
-    change is a no-op for anyone who never touches it.
-    """
+    """A VRAM budget setting moves the fitted context both ways; unset keeps the historical default."""
     import utils.vram_budget_settings as vb
 
     backend = _kv_seeded_backend()
@@ -1128,16 +1111,7 @@ def test_fit_context_follows_the_user_vram_budget(monkeypatch):
 
 
 def test_tensor_plan_leaves_the_floor_reserve_at_a_full_budget():
-    """At 100% a tensor plan must leave the same 512 MiB the layer path leaves.
-
-    ``_plan_tensor_parallel`` sized its per-device budget with an inline
-    ``free - (1-frac)*total`` instead of ``_vram_usable_mib``, so it skipped
-    ``_VRAM_FLOOR_RESERVE_MIB``. The GPU ranking ahead of it applies the floor and
-    the model-config panel promises it in so many words ("At 100% a load still
-    leaves 512 MiB per card"), so a tensor plan could spend up to 512 MiB per card
-    that nothing had reserved -- and tensor mode has no ``--fit`` fallback to
-    absorb the overshoot, so it fails at startup instead.
-    """
+    """At 100% a tensor plan must keep the 512 MiB floor reserve, as the layer path does."""
     import core.inference.llama_cpp as lc
 
     backend = _kv_seeded_backend()
@@ -1643,15 +1617,7 @@ def test_load_model_does_not_gate_the_kv_cache_on_tensor_mode():
 
 
 class TestLegacyBuildQuantizedKvInTensorMode:
-    """Unsloth stopped pre-emptively rewriting a quantized KV cache for the tensor
-    attempt (ggml-org/llama.cpp#23792, b9455), so an older binary now refuses the
-    load itself. That refusal is a clean LLAMA_LOG_ERROR + return nullptr, not a
-    GGML_ASSERT, so nothing in the #6415 path can see it -- these pin the marker's
-    own handling: skip the --fit retry, latch it, and hand the route a message that
-    names the remedy.
-
-    The child is a captured Popen; no llama-server runs.
-    """
+    """Legacy binaries refuse quantized KV under tensor split; that must skip --fit and name the remedy."""
 
     _REJECTION = (
         "llama_init_from_model: simultaneous use of SPLIT_MODE_TENSOR and "
@@ -1799,11 +1765,7 @@ class TestLegacyBuildQuantizedKvInTensorMode:
 
 
 class TestLegacyBuildLatchIsBinaryWide:
-    """The pre-b9455 refusal is a missing capability of the BINARY: llama.cpp
-    refuses every quantized type for every model on it. Keying it per model and
-    per cache pair (like the #6415 split-axis abort, which really is specific to
-    both) would pay another doomed full model load for each new model and each
-    q8_0 -> q4_0 switch."""
+    """The pre-b9455 refusal is a binary capability, so the latch is binary-wide, not per model."""
 
     @pytest.fixture(autouse = True)
     def _clear(self):
@@ -1855,11 +1817,7 @@ class TestLegacyBuildLatchIsBinaryWide:
         assert not LlamaCppBackend._tensor_quant_kv_unsupported_binary(None, ("q8_0", "q8_0"))
 
     def test_the_skip_keeps_the_multi_gpu_request(self):
-        """A missing capability says nothing about capacity, so the layer load it
-        falls back to must still spread. Without the _layer_min_gpus bump the auto
-        layer planner starts at one GPU and stops there as soon as the model fits,
-        silently collapsing a multi-GPU request onto one card -- the same reason
-        the adjacent split-axis skip raises it."""
+        """A missing capability says nothing about capacity, so the layer fallback keeps _layer_min_gpus."""
         load = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
         gate = load.find("self._tensor_quant_kv_unsupported_binary(")
         assert gate != -1

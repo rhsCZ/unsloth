@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for transformer quantisation (``diffusion_transformer_quant.py``).
-
-Hermetic: torch + torchao are stubbed via ``sys.modules``, and the per-scheme smoke
-probe (``_scheme_supported`` / ``_smoke_probe``) is monkeypatched where the test cares
-about the selection ladder rather than the GPU probe, so everything runs CPU-only.
-"""
+"""Transformer quantisation tests with torch and torchao stubbed in sys.modules; CPU-only."""
 
 from __future__ import annotations
 
@@ -432,10 +427,7 @@ def test_a_spawn_failure_is_remembered_so_it_is_paid_once(monkeypatch):
 
 
 class _FakeProbeChild:
-    """Stand-in for the spawned probe: alive from start() until sent the signal it obeys.
-
-    ``dies_on = None`` is the wedged child -- uninterruptible in the driver, surviving SIGKILL --
-    which is exactly the case that must not lose its lifetime record."""
+    """dies_on None is a wedged child that survives SIGKILL; its lifetime record must survive too."""
 
     def __init__(self, dies_on = "terminate"):
         self.pid = 4321
@@ -941,11 +933,7 @@ def test_resolve_fast_accum(monkeypatch):
 
 
 def test_fp8_config_uses_per_row_granularity():
-    """FP8 must use PerRow (per-token activation + per-channel weight) scaling. torchao's
-    default is per-TENSOR: on a DiT with extreme activation outliers (z-image's ~6.6e4) one
-    outlier forces a tensor-wide scale that pushes normal values below fp8 resolution and the
-    denoise collapses to noise. This is the regression guard for that fix (validated on B200:
-    per-tensor fp8 = noise, per-row fp8 = matches bf16)."""
+    """FP8 must use PerRow: the per-tensor default collapses the denoise on outlier activations."""
     torchao_quant = pytest.importorskip("torchao.quantization")
     per_row = getattr(torchao_quant, "PerRow", None)
     if per_row is None:
@@ -958,10 +946,7 @@ def test_fp8_config_uses_per_row_granularity():
 
 
 def test_fp8_config_pins_torch_kernel_preference():
-    """FP8 must pin KernelPreference.TORCH. The AUTO default silently switches the weight
-    quantize to the MSLK kernel whenever an mslk package is importable, which changes fp8
-    scale rounding bitwise (measured 8/8 FLUX matrices differ) and would break the hosted
-    prequant bit-identity invariant; the mslk path is also slower under torch.compile."""
+    """Pin KernelPreference.TORCH: AUTO would pick MSLK and change fp8 rounding bitwise."""
     pytest.importorskip("torchao.quantization")
     try:
         from torchao.quantization.quantize_.common.kernel_preference import KernelPreference
@@ -1106,12 +1091,7 @@ def test_quantize_transformer_threads_base_repo(monkeypatch):
 
 
 def test_the_attention_trim_families_exclude_their_small_m_text_streams():
-    """The trim in this PR is what makes these excludes necessary, so they ship together.
-
-    It shrinks HunyuanVideo-1.5's text / image streams from padded length to valid tokens, and
-    quantize_transformer runs BEFORE the trim hook is installed, so those tiny-M activations flow
-    through already-int8 linears: M = 0 comes back unprojected (torchao passes the input through,
-    so the 2048-wide cond-type add crashes) and M <= 16 trips torch._int_mm's floor."""
+    """Small-M text streams must be excluded: M = 0 is unprojected and M <= 16 trips torch._int_mm."""
     from core.inference.diffusion_transformer_quant import TQ_INT8, exclude_tokens_for_scheme
 
     for family in ("hunyuanvideo-1.5", "hunyuanvideo-1.5-720p"):
@@ -1136,18 +1116,7 @@ def test_the_attention_trim_families_exclude_their_small_m_text_streams():
 
 
 def test_minimax_h3_int8_excludes_its_adaln_projection():
-    """H3's adaLN projection is named ``adaln_proj``, which the generic token list does not match.
-
-    "norm" is the closest generic token and it does not appear in the name, so on the DENSE
-    checkpoint Linear(2688 -> 96768) clears min_features = 512, gets quantized, then runs at M = 1
-    and raises "self.size(0) needs to be greater than 16, but got 1" at the first denoise. Measured:
-    the offline builder bakes it and torch.compile dies on that module.
-
-    The pruned-modulation form hides this rather than fixing it, since there adaln_proj is
-    Linear(8 -> 96768) and falls under min_features anyway (verified on the fl2va_pruned build:
-    all 51 of them are rejected for min_features, in_features = 8). So this exclusion is what
-    makes the DENSE path correct and is a no-op on the pruned one.
-    """
+    """adaln_proj needs an explicit exclude; generic tokens miss it and int8 then fails at M = 1."""
     from core.inference.diffusion_transformer_quant import TQ_INT8, exclude_tokens_for_scheme
 
     assert "adaln_proj" in exclude_tokens_for_scheme(TQ_INT8, "minimax-h3")
@@ -1160,14 +1129,7 @@ def test_minimax_h3_int8_excludes_its_adaln_projection():
 
 
 def test_minimax_h3_pads_its_text_stream_instead_of_excluding_it():
-    """context_embedder and the two token_refiner blocks are QUANTIZED and padded, not skipped.
-
-    They run at M = text tokens (10..19 across the seven eval prompts), which straddles
-    ``_int_mm``'s floor of 16, so they used to be excluded. Padding the activation up to 32 rows
-    is bitwise exact under per-row activation scaling and recovers 0.80 GB of weights, so the
-    two names moved from the exclude list to the pad list. Both halves are asserted here: a
-    change that dropped one without the other would either crash under compile or silently
-    quantise nothing."""
+    """Text-stream layers are padded to 32 rows, not excluded; per-row padding is bitwise exact."""
     from core.inference.diffusion_transformer_quant import (
         TQ_INT8,
         exclude_tokens_for_scheme,
@@ -1199,11 +1161,7 @@ def test_pad_and_exclude_sets_never_overlap():
 
 
 def test_only_minimax_h3_pads_today():
-    """Scoped deliberately. qwen-image, qwen-image-edit and hunyuanvideo-1.5 have the same
-    small-M shape and could adopt this, but each has a PUBLISHED int8 prequant checkpoint whose
-    metadata bakes the current exclusion set, and ``_validate_checkpoint`` compares that set
-    against ``exclude_tokens_for_scheme``. Flipping one of them without rebuilding and
-    republishing its artifact turns every hosted int8 load into a silent fallback."""
+    """Only MiniMax-H3 pads: other published int8 checkpoints bake the exclusion set into metadata."""
     from core.inference.diffusion_transformer_quant import TQ_INT8, pad_tokens_for_scheme
 
     for family in ("qwen-image", "qwen-image-edit", "hunyuanvideo-1.5", "hunyuanvideo-1.5-720p"):
@@ -1273,13 +1231,7 @@ def test_quantize_transformer_refuses_when_padding_cannot_be_proven(monkeypatch)
 
 
 def test_apply_small_m_padding_is_inert_without_a_pad_list(monkeypatch):
-    """No pad list means the padding module is never even IMPORTED.
-
-    That matters beyond the wasted traversal: ``diffusion_transformer_quant`` deliberately keeps
-    torch out of its own import path (every probe imports lazily), while ``diffusion_quant_pad``
-    subclasses ``nn.Module`` and so must import torch at module scope. Shadowing the module with
-    an empty stub makes the import observable: it raises for the family that pads, and must not
-    be reached at all for anything else."""
+    """Without a pad list diffusion_quant_pad is never imported, since it imports torch eagerly."""
     from core.inference.diffusion_transformer_quant import TQ_INT8, apply_small_m_padding
 
     stub = types.ModuleType("core.inference.diffusion_quant_pad")
@@ -2502,10 +2454,7 @@ def _capable_host(
     torchao_reason = None,
     cap = (8, 9),
 ):
-    """A CUDA host past the arch floor, with torchao, the probe cache and the compiler pinned.
-
-    ``compile_eligible`` is stubbed true because these targets are namespaces without a card's real
-    ``supports_default_torch_compile`` and dtype; the test that cares about it overrides this."""
+    """Fake CUDA host past the arch floor; compile_eligible is forced true for namespace targets."""
     from core.inference import diffusion_speed
 
     monkeypatch.setattr(diffusion_speed, "compile_eligible", lambda target, **kw: True)
@@ -2522,11 +2471,7 @@ def test_a_capable_host_advertises_dense_quant(monkeypatch):
 
 
 def test_a_host_whose_torchao_cannot_import_advertises_nothing(monkeypatch):
-    """An unimportable torchao makes every scheme decline, so the capability must be false.
-
-    `dense_transformer_supported` only catches the Windows-ROCm stub and `_capability` reads the
-    card, so without this the picker calls rows fast while every load falls back to bf16.
-    """
+    """Unimportable torchao must report no capability, else the picker advertises rows that fall back."""
     _capable_host(monkeypatch, torchao_reason = "ImportError: cannot import name 'ScalingType'")
     assert tq.dense_quant_host_capable(_target()) is False
 

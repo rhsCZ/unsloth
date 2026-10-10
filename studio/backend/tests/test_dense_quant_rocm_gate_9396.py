@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for #9396's ROCm capability misread and fatal child probe retry.
-
-Torch is stubbed through ``sys.modules`` and no process is spawned.
-"""
+"""ROCm capability misread and fatal child-probe retry regressions; torch is stubbed via sys.modules."""
 
 from __future__ import annotations
 
@@ -29,10 +26,7 @@ def _stub_torch(
     cc = (11, 0),
     current_device = 0,
 ):
-    """A torch stub that answers like a ROCm build when ``hip`` is set.
-
-    ``current_device`` is the ordinal this thread is pinned to; ``torch.cuda.selected`` records
-    every ``set_device`` the code under test makes."""
+    """Fake torch that reports ROCm when hip is set; records every set_device call the code makes."""
     torch = types.ModuleType("torch")
     torch.bfloat16 = "bfloat16"
     torch.float16 = "float16"
@@ -236,11 +230,7 @@ def test_a_scheme_missing_from_the_table_is_still_not_an_answer(monkeypatch):
 
 
 def test_child_is_asked_about_the_pinned_card_not_the_default_one(monkeypatch):
-    """A load pinned to GPU 1 caches under cuda:1, so the child has to be asked about cuda:1.
-
-    A freshly spawned child starts on ordinal 0 whatever this thread selected, so handing it a
-    bare "cuda" would file the default card's kernel support against the card the load runs on.
-    """
+    """Ask the child about the pinned card: a fresh child starts on ordinal 0, not the thread's device."""
     _stub_torch(
         monkeypatch,
         hip = None,
@@ -352,15 +342,7 @@ def test_auto_never_resolves_to_int8_on_rocm(monkeypatch):
 
 
 def test_the_explicit_decline_text_is_the_helper_not_a_copy_of_its_fallback():
-    """An AMD owner asking for a scheme outright gets the ROCm reason, not "needs a CUDA GPU".
-
-    ``dense_transformer_unsupported_reason`` distinguishes ROCm and the Windows torchao stub from
-    a genuinely unsuitable device, and both loaders already call it on the AUTO path. The pinned
-    path used to carry its own copy of the generic fallback string, so the one user whose GPU is
-    real and whose request was explicit -- the person most likely to go looking -- got the least
-    accurate of the three answers. Asserting on the SOURCE rather than the rendered text: a
-    reworded reason should not break this, only a reintroduced copy should.
-    """
+    """The pinned decline must reuse dense_transformer_unsupported_reason, not copy its fallback text."""
     from pathlib import Path
 
     here = Path(__file__).resolve().parents[1] / "core" / "inference"

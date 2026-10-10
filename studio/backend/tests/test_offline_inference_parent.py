@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Parent-process offline regression tests (follow-up to #5505).
-
-Pins the LoRA-detect, transformers_version urllib short-circuit, and
-training-worker DNS probe so a dead DNS no longer burns 30-60s of
-soft-failed timeouts before the worker subprocess spawns.
-
-No GPU, no network, no subprocess. Cross-platform.
-"""
+"""Dead DNS must not stall the parent with soft-failed timeouts before the training worker spawns."""
 
 from __future__ import annotations
 

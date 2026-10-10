@@ -1,12 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Presence-penalty parity between the GGUF path and the safetensors/MLX paths.
-
-The safetensors path historically dropped ``presence_penalty``, so the SAME model
-looked worse served as safetensors. These tests pin the processor semantics
-(subtract once per distinct completion token, prompt excluded, presence not
-frequency, zero a no-op, negatives raise) plus a param-propagation regression
-over route -> orchestrator cmd -> worker gen_kwargs.
-"""
+"""Presence penalty subtracts once per distinct completion token; GGUF and safetensors/MLX must agree."""
 
 import threading
 

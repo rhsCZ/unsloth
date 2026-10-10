@@ -89,11 +89,7 @@ def test_non_audio_tokens_classify_none():
 
 
 def test_orpheus_snac_codebook_beats_a_stray_audio_marker():
-    """Orpheus ships 28k <custom_token_N> SNAC codes AND a lone <|audio|>.
-
-    audio_vlm was tested first and won, so a TTS model came back as audio-INPUT:
-    is_audio stayed False and the Audio page refused it.
-    """
+    """SNAC codebook tokens must outrank a lone <|audio|> marker, or TTS is misread as audio input."""
     tokens = ["<|audio|>"] + [f"<custom_token_{i}>" for i in range(28683)]
     assert _classify(tokens) == "snac"
     assert is_audio_input_type(_classify(tokens)) is False
@@ -173,12 +169,7 @@ def test_a_detected_codec_is_definitive(monkeypatch):
 
 
 def test_a_local_path_never_reaches_the_hub(monkeypatch, tmp_path):
-    """A filesystem path is not a repo id, so the Hub URL would be nonsense.
-
-    /loras hits this for every adapter directory without its own tokenizer, and a transient
-    failure is never cached, so it paid two 15s timeouts per checkpoint on every scan while
-    blocking the event loop that called it.
-    """
+    """Local paths must never reach the Hub fetch, which would stall each adapter directory on timeouts."""
     from utils.models import model_config
 
     # Recorded, not raised: the fetch loop swallows exceptions as transient failures.
@@ -370,11 +361,7 @@ def _detect_against_cache(
     responses = None,
     **kwargs,
 ):
-    """Drive the probe against a cached snapshot, recording the Hub reads it still makes.
-
-    Returns ``(result, file_reads, document_reads)``. ``listed`` is what the repo document
-    says the repo holds; None stands for no document being available.
-    """
+    """Returns (result, file_reads, document_reads); listed=None means the repo document is unavailable."""
     import types as _types
 
     from utils.models import model_config as mc
@@ -419,11 +406,7 @@ def _tokenizer(marker):
 def test_the_current_snapshot_answers_without_fetching_the_file(
     monkeypatch, tmp_path, marker, expected
 ):
-    """Every tokenizer path this repo has was read from disk, so a fetch would re-read it.
-
-    The repo document is still read -- that is what says which paths the repo has. What the
-    snapshot saves is fetching the files themselves.
-    """
+    """The repo document is still read; the snapshot only saves fetching the tokenizer files."""
     repo_dir, _ = _cached_snapshot(
         tmp_path, "acme/tts-model", {"tokenizer_config.json": _tokenizer(marker)}
     )
@@ -560,10 +543,7 @@ def test_a_tokenizer_that_is_unreadable_still_asks_the_hub(monkeypatch, tmp_path
 
 
 def test_a_document_that_lists_no_files_cannot_answer_negatively(monkeypatch, tmp_path):
-    """The negative rests on having read every tokenizer path the repo lists. A document
-    that lists none satisfies that vacuously while proving nothing, and the answer here is
-    cached for the life of the process -- so the markers in LLM/tokenizer_config.json
-    would be missed for good. Nothing is answerable from it, so it answers nothing."""
+    """A repo document listing no files must not answer negatively; the result is cached for the process."""
     repo_dir, _ = _cached_snapshot(
         tmp_path, "acme/tts-model", {"tokenizer_config.json": _tokenizer("<bos>")}
     )
@@ -601,11 +581,7 @@ def test_a_document_without_siblings_at_all_cannot_answer_negatively(monkeypatch
 
 
 def test_a_marker_written_as_an_escape_is_still_found(monkeypatch, tmp_path):
-    """The raw scan that decides whether a file is worth parsing reads the text, so a
-    content written as a JSON escape does not match it. Go's encoding/json escapes < and >
-    that way by default, so it is a shape real tooling uploads. The Hub fallback decodes
-    before it looks; standing in for it has to classify what it would have classified, or
-    the miss becomes a definitive negative cached for the life of the process."""
+    """Markers written as JSON unicode escapes must still be found, or a miss gets cached as negative."""
     from utils.models.model_config import _may_hold_audio_tokens
 
     escaped = (

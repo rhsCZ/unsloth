@@ -530,12 +530,7 @@ _CONTENT_PART_PREFIX = "content-part-sha256-"
 
 
 def _content_part_id_for(message_id: str, kind: str) -> str:
-    """Resolve the stable content-hash id for a message's stored blob.
-
-    Content-part ids are SHA-256 hashes of the blob payload, not array
-    indices, so tests look them up from the listing instead of hardcoding an
-    index that would shift when an earlier part is deleted.
-    """
+    """Content-part ids are SHA-256 hashes, not indices, so look them up from the listing."""
     for record in studio_db.list_chat_attachments():
         if record["messageId"] == message_id and record["type"] == kind:
             return record["id"]

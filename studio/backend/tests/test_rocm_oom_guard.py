@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the ROCm OOM guard: device classification and fraction selection.
-
-Classification paths: (1) canonical gcnArchName, (2) alternate-spelling attr,
-(3) all arch attrs absent -> device-name substring match.
-
-Fraction selection: the unified-Linux reserve crossover, the discrete cap, the
-Windows budget-exact 1.0, and the UNSLOTH_ROCM_MEM_FRACTION override.
-
-The guard reaches the policy through _gpu_memory_fraction; its ROCm arm is what this
-file pins, and the backend-neutral half lives in test_gpu_mem_fraction_env.py.
-
-Regression: Strix Halo (gfx1151) was misclassified as discrete on Radeon wheels
-that set props.name="Radeon 8060S Graphics" but no gcnArchName, applying the
-wrong headroom factor on a 128 GiB unified-memory pool.
-"""
+"""Pins ROCm OOM-guard classification and fraction policy; Strix Halo was once misread as discrete."""
 
 from __future__ import annotations
 
@@ -58,10 +44,7 @@ def _props(**kwargs) -> SimpleNamespace:
 
 
 class TestIsIntegratedSignal:
-    """hipDeviceProp_t.integrated wins when truthy; 0/absent never downgrades.
-
-    Same universal gate PR #5988's UMA safetensors fast-load uses -- keeps
-    Unsloth's two unified-memory consumers on one signal."""
+    """A truthy hipDeviceProp_t.integrated upgrades an APU, and 0 or absent never downgrades."""
 
     def test_integrated_upgrades_unknown_apu(self) -> None:
         props = _props(gcnArchName = "gfx1103", name = "Radeon 780M", is_integrated = 1)
@@ -232,15 +215,7 @@ _WORKER_PY = Path(__file__).resolve().parents[1] / "core" / "training" / "worker
 
 
 class TestMemFractionSelection:
-    """Pin the per-platform fraction policy (_rocm_memory_fraction).
-
-    On native Windows, torch.cuda.mem_get_info's total is the WDDM budget
-    the driver grants HIP -- the OS share of RAM is already outside it, so
-    a sub-1.0 cap double-taxes (field report: 48.49 GiB budget -> '38.79 GiB
-    allowed' OOM denying a 47.29 GiB load that fit in free memory). 1.0
-    removes the double-tax; current AMD Windows wheels enforce only
-    sub-1.0 fractions, so it behaves like torch's uncapped default with
-    WDDM arbitrating residency (measured on gfx1151)."""
+    """Native Windows total is already the WDDM budget, so a sub-1.0 fraction would double-tax it."""
 
     def test_unified_win32_uses_budget_exact_fraction(self) -> None:
         assert _rocm_memory_fraction(128 * GIB, True, "win32") == 1.0
@@ -256,10 +231,7 @@ class TestMemFractionSelection:
         assert "Variable Graphics Memory" in source
 
     def test_guard_delegates_to_the_fraction_helper(self) -> None:
-        """Section 1g only runs behind _hw.IS_ROCM, which no CI machine satisfies, so its
-        wiring has no other coverage. Pins the three things this PR's review turned on:
-        the guard calls the helper, sizes against the allocator's own total, and tags the
-        log off the parsed override rather than the raw string."""
+        """Section 1g runs only on ROCm, which CI lacks, so this pins the source wiring instead."""
         source = _WORKER_PY.read_text(encoding = "utf-8")
         assert "_mem_fraction = _gpu_memory_fraction(" in source
         # From torch 2.10 the allocator multiplies by totalGlobalMem; before that, the driver's total.
@@ -267,12 +239,8 @@ class TestMemFractionSelection:
         assert "if _env_fraction is not None" in source
 
     def test_guard_reports_a_props_vs_driver_total_gap(self) -> None:
-        """The byte reserve is only the constant while the allocator divides by the same
-        total the guard did, which is not so before torch 2.10. A wheel that reports the
-        two differently silently resizes the reserve, and no CI machine can catch it, so
-        pin that the guard says which numbers it saw rather than needing a field report.
-        Scoped to the byte arm: discrete and win32 take a flat fraction, which no
-        denominator gap can distort."""
+        """The guard must say which totals it saw, since no CI machine can reproduce a props-vs-
+        driver gap."""
         source = _WORKER_PY.read_text(encoding = "utf-8")
         assert "mem_get_info(_mem_index)[1]" in source
         assert "if not _allocator_divides_by_props_total(" in source
@@ -282,11 +250,7 @@ class TestMemFractionSelection:
 
 
 class TestUnifiedLinuxReserve:
-    """Linux unified pools reserve a bounded amount, not a flat 20%.
-
-    A flat 0.80 withheld ~25 GiB on a 128 GiB Strix Halo. The reserve is
-    min(20% of total, 16 GiB), so the 20% arm still wins below the 80 GiB
-    crossover and those hosts keep exactly the historical cap."""
+    """Unified Linux pools reserve min(20% of total, 16 GiB), not a flat 0.80 that withheld ~25 GiB."""
 
     @pytest.mark.parametrize("share_of_crossover", [0.1, 0.2, 0.4, 0.8, 1.0])
     def test_at_or_below_crossover_is_unchanged(self, share_of_crossover: float) -> None:
@@ -323,10 +287,7 @@ class TestUnifiedLinuxReserve:
 
 
 class TestAllocatorDenominator:
-    """torch caps at fraction * props.total_memory from 2.10 and at fraction *
-    hipMemGetInfo total through 2.9. Those differ on a unified APU (carve-out against
-    the GTT-spanning budget), so an absolute reserve only lands where intended when the
-    fraction is solved for whichever the installed allocator uses."""
+    """Torch's allocator divides by props.total_memory from 2.10, so the fraction is solved per version."""
 
     @pytest.mark.parametrize(
         "version, props_total",

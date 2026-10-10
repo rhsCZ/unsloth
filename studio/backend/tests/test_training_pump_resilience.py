@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Parent-side training event-pump resilience.
-
-The pump is the only writer of the progress state /progress, /status, /metrics
-and DB history read. If it died while the worker ran, the run would continue while
-the UI froze -- the "training runs but no progress shows" symptom. These tests pin
-two guards: a bad event/queue error can't kill the pump, and a dead pump is
-detected and restarted (even after worker exit) so terminal events still finalize.
-Fakes only; no GPU, network, or subprocess.
-"""
+"""A bad event must not kill the progress pump; a dead pump must restart to finalize the run."""
 
 from __future__ import annotations
 

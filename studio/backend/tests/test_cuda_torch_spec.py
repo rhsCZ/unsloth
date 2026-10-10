@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for _CUDA_TORCH_PKG_SPEC in install_python_stack.py.
-
-The CUDA repair path installs the torch trio from an exclusive --index-url (no
-PyPI fallback), so these pinned ranges decide which torch the venv gets. The
-upper bound is locked to the 2.11.x family to match the base image and rocm7.2
-spec and to keep the companions off a torch-2.12 wheel that would ABI-mismatch.
-"""
+"""_CUDA_TORCH_PKG_SPEC caps torch at 2.11.x so companion wheels do not ABI-mismatch on 2.12."""
 
 from __future__ import annotations
 

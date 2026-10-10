@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A per-token cache is only a boundary if the two callers hash to different tokens.
-
-``token_fingerprint`` folded every falsy token into ``""``, so ``False`` shared an identity
-with ``None`` and the caches leaked both ways: a UI session's private-repo metadata read
-back by an API key, and an API key's 403 blanking the UI's next lookup. The dataset cache
-is sharpest -- its own ``not restricted or cached_fp == token_fp`` guard became ``"" == ""``.
-These drive the real cache, not the fingerprint in isolation.
-"""
+"""token_fingerprint mapped every falsy token to one value, so per-token caches leaked both ways."""
 
 import asyncio
 import time

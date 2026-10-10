@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the malware / unsafe-file gate (utils.security.file_security).
-
-The gate reads HF's security scan (model_info securityStatus) metadata-only and never
-downloads flagged files; only the Hub call is stubbed. Policy: block a non-"safe" level
-(unknown levels fail closed), inspect exact cached snapshots when the scan is unavailable,
-skip other local paths, and apply no first-party exemption. The block is scoped to the
-load-path RCE vector, so flagged inert files and unrelated subdir pickles do not block.
-"""
+"""Malware gate: HF scan metadata only; unknown levels fail closed; no first-party exemption."""
 
 import json
 from pathlib import Path

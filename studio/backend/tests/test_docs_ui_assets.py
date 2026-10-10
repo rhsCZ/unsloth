@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The vendored Swagger UI and ReDoc bundles stay byte-identical to the releases they came from.
-
-These files execute on the Unsloth origin, which is where session.ts keeps the access and
-refresh tokens, so the point of shipping them rather than loading them from a CDN is that
-their bytes are fixed at review time. A silent edit here is a script change nobody read.
-"""
+"""Vendored Swagger UI and ReDoc must stay byte-identical; they run on the origin holding tokens."""
 
 from __future__ import annotations
 

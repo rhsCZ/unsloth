@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The System tab's multi-GPU view must show system-wide VRAM on ROCm (#7072).
-
-When amd-smi is unavailable, get_visible_gpu_utilization fell back to torch,
-whose readings are process-local: a model held by the separate llama-server
-process read as ~0 VRAM used even with the GPU full. These tests cover the
-per-GPU system-wide overlay the multi-device endpoint now applies, matched by
-physical device identity.
-"""
+"""Multi-GPU System tab must show system-wide VRAM on ROCm, since torch readings are process-local."""
 
 from __future__ import annotations
 
@@ -79,11 +72,7 @@ def _device(
 
 
 def _fake_drm(tmp_path, monkeypatch, cards):
-    """Fake /sys/class/drm tree; glob returns cards REVERSED so the PCI sort must order them.
-
-    ``cards``: (card_no, pci_bdf, driver, vram) tuples; vram is (used_gb, total_gb)
-    or None for a device with no mem_info_vram_* files.
-    """
+    """The fake drm tree returns cards reversed, so the PCI-address sort is what puts them in order."""
     drivers = tmp_path / "drivers"
     card_paths = []
     for card_no, bdf, driver, vram in cards:
@@ -155,11 +144,7 @@ _NVIDIA = 4318  # 0x10DE; the open kernel module also registers KFD nodes
 
 
 def _fake_kfd(tmp_path, monkeypatch, nodes):
-    """Fake KFD topology nodes tree, returned out of node order so the sort must order it.
-
-    ``nodes``: (node_id, simd_count, location_id, domain, vendor_id); simd_count 0
-    marks a CPU node, location_id None omits the property.
-    """
+    """Fake KFD nodes come back out of order, so the test fails unless the node sort is applied."""
     node_paths = []
     for node_id, simd_count, location_id, domain, vendor_id in nodes:
         d = tmp_path / "kfd" / str(node_id)

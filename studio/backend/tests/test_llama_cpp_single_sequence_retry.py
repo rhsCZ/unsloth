@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The single-sequence retry for architectures that refuse a unified KV cache.
-
-Studio appends ``--kv-unified`` itself above one slot, so nothing the user changes
-in the UI reaches the flag that stops the model loading.
-"""
+"""Studio appends --kv-unified above one slot, so a single-sequence retry is the only way out."""
 
 from __future__ import annotations
 

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A binary body on a JSON route must yield 422, not 500 plus a megabyte of log.
-
-POSTing a multipart WAV upload to /api/inference/audio/transcribe (which takes a
-JSON body with base64 audio) failed request validation. The handler then ran
-jsonable_encoder over exc.errors(), whose "input" was the whole raw body, and
-FastAPI encodes bytes with o.decode(): UnicodeDecodeError. The 422 became a 500
-whose traceback embedded the escaped payload, so one 531 KB upload wrote a single
-2.2 MB line into the server log.
-"""
+"""Binary request bodies must return 422, since jsonable_encoder cannot decode the raw bytes."""
 
 from __future__ import annotations
 

@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for :func:`routes.models._resolve_quant_gguf` (PR #6364 follow-up).
-
-The /kv-cache-estimate resolver must mirror list_local_gguf_variants:
-- read the quant label from the snapshot-relative path so nested layouts like
-  ``BF16/model.gguf`` resolve (not just basenames),
-- skip MTP drafter files so a ``...-Q8_0-MTP.gguf`` drafter is never returned as
-  the Q8_0 weights, and
-- when several cache snapshots hold the quant, pick the most complete (largest
-  total) so a partial older revision can't underestimate the weight bytes.
-
-No GPU/network. The resolver only stats sizes and parses file names, so the
-GGUF files can be arbitrary bytes.
-"""
+"""Skips MTP drafter GGUFs and takes the largest snapshot, so a partial revision cannot undercount."""
 
 from __future__ import annotations
 

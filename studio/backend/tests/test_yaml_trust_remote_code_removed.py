@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression: model-default YAMLs must not pre-set trust_remote_code.
-
-It is a per-load decision made through the consent dialog (which scans and pins the
-auto_map code), never a config default -- a YAML flag would re-open the no-review
-bypass. Models that run custom code ship auto_map, so the dialog still fires without it.
-"""
+"""YAML defaults must not set trust_remote_code; the consent dialog decides per load, not config."""
 
 from pathlib import Path
 

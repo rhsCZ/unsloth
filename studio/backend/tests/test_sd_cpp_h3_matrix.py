@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The MiniMax-H3 native preflight across the host matrix.
-
-``_run_load_h3_native`` decides three things before it commits a runtime: which binary to run,
-which device to commit it on, and -- since #8507 -- whether to spend the four-file download at all.
-Those interact: the accelerator probe only runs on a GPU target, the CPU fallback rewrites both the
-binary and the device, and every refusal has to happen before the bundle is fetched.
-
-Parametrised over ``platform x GPU vendor x binary state`` because the combinations are what broke:
-a CPU-only prebuilt on a CUDA host has its own fallback path, and a refusal reached through that
-fallback used to download the bundle first on the way to failing.
-"""
+"""The H3 preflight must refuse every host before the four-file download, CPU fallback included."""
 
 from __future__ import annotations
 
@@ -168,12 +158,7 @@ def h3_host(monkeypatch, tmp_path):
 def test_h3_preflight_refuses_before_downloading(
     h3_host, platform, hw_label, backend, device, state, help_text, expected
 ):
-    """Every refusal, on every host, costs zero downloads.
-
-    The bundle is tens of GB. A refusal that arrives after it has been fetched is the failure mode
-    the H3 gate was written to prevent, and it was reachable on all of these hosts: the gate ran
-    after the download loop, and a None binary was not rejected until later still.
-    """
+    """Every refusal costs zero downloads, since the bundle is tens of GB and must not be fetched first."""
     host = h3_host(platform = platform, backend = backend, device = device, help_text = help_text)
     with pytest.raises(RuntimeError, match = expected):
         host.run()
@@ -245,11 +230,8 @@ def test_h3_cancellation_during_the_preflight_stops_before_the_asset_calls(
 def test_h3_revets_a_user_supplied_binary_swapped_during_the_download(
     h3_host, platform, hw_label, backend, device, monkeypatch
 ):
-    """Vetting before the download means the vet-to-commit window is now the whole download.
-
-    A user-supplied binary is not ours to reinstall, so nothing else guards it: if the file at that
-    path changes while the bundle is fetched, the re-vet is the only thing standing between the
-    replacement and being recorded as the identity every later generation compares against."""
+    """A user binary is re-vetted after the download, since a swap mid-fetch would otherwise go
+    unchecked."""
     from core.inference import sd_cpp_backend
 
     host = h3_host(platform = platform, backend = backend, device = device, help_text = _H3_HELP)
@@ -283,11 +265,7 @@ def test_h3_revets_a_user_supplied_binary_swapped_during_the_download(
 def test_h3_revet_checks_identity_not_just_the_h3_marker(
     h3_host, platform, hw_label, backend, device, monkeypatch
 ):
-    """The post-download re-vet asks both of the preflight's questions, not only capability.
-
-    --ref-video is a plain option name that unrelated reference-video tools expose too, so a swap
-    to one of those would clear a marker-only re-check and then be recorded by _sd_cli_identity as
-    the vetted build every later generation compares against."""
+    """The re-vet checks binary identity too, since --ref-video is a plain option other tools expose."""
     host, real_probe, sd_cpp_backend, swapped = _shared_setup_1(backend, device, h3_host, platform)
 
     def _probe(binary, *args):
@@ -318,10 +296,7 @@ def test_h3_revet_checks_identity_not_just_the_h3_marker(
 def test_h3_revet_catches_a_user_binary_whose_accelerator_changed(
     h3_host, platform, hw_label, backend, device, monkeypatch
 ):
-    """native_device is decided on the accelerator reading and then committed for the life of the
-    runtime, so the reading has to still hold at commit time -- for a user's own build too, not
-    only a managed one. A GPU device committed around a CPU binary means offload policy and an
-    arbiter claim written against hardware nothing is running on."""
+    """The device list is re-probed at commit, since a GPU device committed around a CPU binary is wrong."""
     host, real_probe, sd_cpp_backend, swapped = _shared_setup_1(backend, device, h3_host, platform)
 
     def _probe(binary, *args):
@@ -383,11 +358,7 @@ def test_h3_revet_tolerates_an_unreadable_accelerator_reprobe(
 def test_h3_probes_devices_only_where_the_answer_is_used(
     h3_host, platform, hw_label, backend, device
 ):
-    """--list-devices costs a subprocess, and the full probe timeout when a build hangs on it.
-
-    A CPU or MPS target never records a baseline, so neither the decision nor the re-check can use
-    the answer -- it must not be asked. A GPU target asks exactly twice: once to decide, once under
-    the claim to confirm the decision still holds."""
+    """--list-devices is probed only on GPU targets, since CPU and MPS never use the answer."""
     host = h3_host(platform = platform, backend = backend, device = device, help_text = _H3_HELP)
     host.run()
     expected = 2 if backend not in ("cpu", "mps") else 0

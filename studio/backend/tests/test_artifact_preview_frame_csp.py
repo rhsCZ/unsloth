@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The preview shell picks its CSP from ``allow_network`` and nothing else, so
-both directions of that switch are worth pinning: the permissive variant must
-require the flag, and its absence must land on the strict one. Every canvas
-reaches this route now, fenced HTML included, not just approved render_html
-output."""
+"""The preview CSP is picked by allow_network alone, so both directions of that flag are pinned."""
 
 import asyncio
 import pathlib

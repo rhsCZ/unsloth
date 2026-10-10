@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""MiniMax-H3's block-streamed denoiser runs on the event-fenced prefetch (``diffusion_offload_prefetch``).
-
-H3 streams through ``stream_prequantized_module`` (diffusers block-level stream groups), pins its top-level group onto
-the blocks' copy stream and keeps a resident prefix (``H3Residency``), none of which reached the prefetcher, so every
-streamed group was fenced on the host. The CUDA cases build that exact layout and check: no host synchronization per
-forward, bit-identical output to the resident model across residency re-fits, the first streamed block prefetched
-behind a resident prefix, and the kill switch keeping diffusers' path.
-"""
+"""H3's streamed denoiser must use the event-fenced prefetch, or every group syncs the host."""
 
 from __future__ import annotations
 

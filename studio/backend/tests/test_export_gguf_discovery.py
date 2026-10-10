@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GGUF export must find its output, or fail honestly (#7897).
-
-save_pretrained_gguf already returns the files it wrote, but export_gguf discarded
-that and guessed: cwd, new subdirs of the save dir, and a `<checkpoint>_gguf` dir.
-A GGUF written anywhere else, as a Windows local base-model path caused, was
-invisible, and the export still reported success over an empty directory.
-
-Reuses the harness in test_export_absolute_paths.py.
-"""
+"""export_gguf uses the paths save_pretrained_gguf returns and fails when none exist."""
 
 from __future__ import annotations
 
@@ -247,13 +239,7 @@ def test_nested_gguf_is_rescued_before_rmtree(monkeypatch, tmp_path):
 
 
 def test_hidden_gguf_is_reported_not_none(monkeypatch, tmp_path):
-    """An empty model stem produced '.Q5_K_M.gguf'; glob.glob could not see it.
-
-    A reporting defect, not file loss: the flatten pass uses Path.glob, which does
-    match dot-leading names, so the file was in place while the log said "(none)".
-    Still bites, because zero-files is now a failure: reverting the listing to
-    glob.glob would fail this export outright.
-    """
+    """Dot-leading GGUF names need Path.glob, since glob.glob misses them and zero files now fails."""
 
     class _Model:
         def save_pretrained_gguf(self, model_save_path, tokenizer, quantization_method):

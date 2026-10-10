@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The estimate and the launch price the same flash-attention state.
-
-``load_model`` used to pin ``planned_flash_attn = False`` while emitting ``--flash-attn on``,
-so every placement figure described a load that was not going to happen (#9697, #10489). The
-cushion that pin gave is not lost: tensor mode cannot take the FA-off recovery at all, and
-elsewhere the respawn re-enters ``_spawn_and_wait``, which re-places it with ``--fit on``.
-"""
+"""The placement estimate must price the flash-attn state the launch emits, not a pinned False."""
 
 from __future__ import annotations
 
@@ -398,12 +392,8 @@ class TestTheDowngradesRePlanTheAttention:
         assert getattr(call.args[0], "id", None) == "extra_args"
 
     def test_no_sizing_closure_freezes_the_plan_in_a_default_argument(self):
-        """A default argument is evaluated where the closure is written, so it holds
-        whatever the plan said there, and the downgrades below re-plan it. The MTP draft
-        reserve did that: a hybrid SWA draft head prices 4.5x larger with flash attention
-        off (262,144 tokens, 3.5 GB on a 4-layer shape), so a frozen tensor-mode True left
-        the reserve short of what the layer split it downgraded to actually allocates,
-        beside a KV cache that had already re-read the plan."""
+        """A default argument freezes the plan when written, so the MTP draft reserve misses later
+        downgrades."""
         import ast
 
         func = self._load_model_body()

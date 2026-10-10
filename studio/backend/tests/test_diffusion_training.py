@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the diffusion LoRA training service + routes.
-
-The service's subprocess context and target are injected with in-thread fakes, so the
-full start -> event-pump -> status -> complete path is exercised without real
-multiprocessing or torch. The routes are hit with the FastAPI TestClient and a mocked
-service, so wiring / validation / error mapping are covered without a GPU.
-"""
+"""Diffusion LoRA training service and routes, driven with in-thread fakes and a mocked service."""
 
 from __future__ import annotations
 
@@ -212,15 +206,7 @@ def _wait_record(
     job_id,
     timeout = 5.0,
 ):
-    """Block until the pump thread has written this run's record, and return it.
-
-    The status going terminal is not the record being on disk. _pump_loop calls _apply_event,
-    which publishes the status, and only then _persist_run_record, from its own thread, so
-    _wait_status can return before the file exists. The 0.1s sleep this replaces was a bet on
-    that thread being scheduled inside the sleep; on a loaded runner it is not, and the test
-    fails reading a file that is about to appear. Waiting for the file states the actual
-    precondition and costs nothing when the thread is prompt.
-    """
+    """Wait for the record file itself: the pump persists it after publishing the terminal status."""
     import json
 
     path = runs_dir / f"{job_id}.json"
@@ -339,14 +325,7 @@ def test_apply_event_transitions():
 
 
 def test_the_joint_losses_reach_status_and_history():
-    """MiniMax-H3 trains video and audio against one objective, and the combined loss can hold
-    steady while one half degrades. The trainer emits ``video_loss`` / ``audio_loss`` per step
-    for exactly that, so the service has to carry them: an emission the queue drops is a
-    diagnostic that silently does not exist.
-
-    Also pinned here: they stay index-aligned with ``steps``. A family that reports only the
-    combined loss contributes nulls rather than short arrays, so the two curves can be drawn
-    against the same x axis as the loss."""
+    """video_loss and audio_loss must reach status and history, index-aligned with steps."""
     svc = DiffusionTrainingService(ctx = _FakeCtx(), target = _happy_target)
     svc._apply_event(
         {
@@ -699,13 +678,7 @@ def test_route_start_preflights_gated_base_off_the_coroutine_thread(client, monk
 def test_a_clip_trained_family_is_not_turned_away_by_the_clip_refusal(
     client, monkeypatch, dit_train_host
 ):
-    """The refusal exists to protect the IMAGE discovery, so it must not outrank a clip family.
-
-    It ran unconditionally and fires on any folder with a clip in it, above the discovery that
-    was already taught to branch on the family. So every valid MiniMax-H3 request, whose dataset
-    is captioned clips and nothing else, came back 400 "training from clips is not supported
-    yet": the trainer this branch adds, unreachable through its own route.
-    """
+    """The clip refusal must not outrank clip families, or every valid MiniMax-H3 request gets a 400."""
     import routes.training as tr
     from core.training import diffusion_train_common as _dtc
 
@@ -734,13 +707,7 @@ def test_a_clip_trained_family_is_not_turned_away_by_the_clip_refusal(
 
 
 def test_a_clip_family_still_refuses_a_folder_holding_stills(client, monkeypatch, dit_train_host):
-    """Exempting a clip family from the clip refusal must not exempt it from the mixed case.
-
-    discover_clip_caption_pairs enumerates video extensions only, so a still in a clip folder
-    is dropped from the run while /diffusion/info and the picker both count it as a training
-    item: the same silent partial dataset the clip refusal exists to prevent, in the other
-    direction.
-    """
+    """Clip families still refuse mixed folders: discover_clip_caption_pairs silently drops the stills."""
     import routes.training as tr
     from core.training import diffusion_train_common as _dtc
 
@@ -810,14 +777,7 @@ def test_route_start_preflights_the_normalized_fetch_mirror(
 def test_a_tokenless_run_takes_the_mirror_even_with_the_vendor_repo_cached(
     monkeypatch, no_mirror_env
 ):
-    """Cache preference must not strand a token-less run on a GATED vendor repo.
-
-    The credentials this run lacks are the credentials the fetch needs, so the cached snapshot
-    is unusable however complete it looks. prefer_ungated_mirror's probe counts ANY cached
-    weight as a hit, so one leftover shard from an interrupted or previously authorized download
-    kept the vendor id, and the start route's HEAD then refused the request outright: the exact
-    case the mirrors exist for became the one that could not train.
-    """
+    """A token-less run takes the mirror even if a gated vendor repo has any leftover cached shard."""
     from core.inference import diffusion_families
     from core.training.diffusion_train_common import DiffusionLoraConfig
 
@@ -843,13 +803,7 @@ def test_a_tokenless_run_takes_the_mirror_even_with_the_vendor_repo_cached(
 
 @pytest.mark.parametrize("no_mirror_env", [False, True])
 def test_a_tokenless_run_keeps_a_cached_ungated_base(monkeypatch, no_mirror_env):
-    """The override is for gates, not for mirrors in general.
-
-    Most of the mirror table is ungated: those exist to keep the fetch inside unsloth/*, and the
-    upstream answers anonymously. Overriding the cache preference there would throw away a
-    complete local snapshot and re-pull gigabytes, or fail outright with no network. Klein base-4B
-    is the one that matters most here, since it is a default trainable base AND mirrored.
-    """
+    """The override is only for gated repos; ungated mirrors keep a complete cached snapshot."""
     from core.inference import diffusion_families
     from core.training.diffusion_train_common import DiffusionLoraConfig
 
@@ -873,12 +827,7 @@ def test_a_tokenless_run_keeps_a_cached_ungated_base(monkeypatch, no_mirror_env)
 
 
 def test_the_start_preflight_never_heads_the_hub_for_a_local_clone(monkeypatch, tmp_path):
-    """The preflight has to make the same exception the mirror override does.
-
-    A relative clone named like the vendor repo has one slash and no leading marker, so the
-    remote/local split by string shape alone sent it to a token-less HEAD of the gated repo and
-    turned the preserved local path into a 400 the run could not clear.
-    """
+    """A relative clone named like a vendor repo must not trigger a token-less Hub HEAD."""
     import urllib.request
 
     from routes.training import _preflight_gated_base
@@ -896,14 +845,7 @@ def test_the_start_preflight_never_heads_the_hub_for_a_local_clone(monkeypatch, 
 
 
 def test_a_tokenless_run_keeps_a_local_clone_named_like_a_gated_base(monkeypatch, tmp_path):
-    """A directory on disk is not a Hub id, even when it is spelled like a gated one.
-
-    The loaders resolve a relative `black-forest-labs/FLUX.1-dev` directory locally, and
-    prefer_ungated_mirror carves that out deliberately. The token-less gated override has to
-    make the same exception: rewriting a local clone to the mirror sends the fetch to the Hub
-    past the weights the user already has, so the run trains on a different repo or fails
-    outright with no network.
-    """
+    """A local directory named like a gated base is kept, never rewritten to the mirror."""
     from core.inference import diffusion_families
     from core.training.diffusion_train_common import DiffusionLoraConfig
 
@@ -2403,10 +2345,7 @@ def test_start_route_never_starts_a_run_with_a_non_finite_knob(client):
 
 
 def test_dataset_mutation_and_reserve_refuse_each_other():
-    """The route layer checked is_active() and only then handed the filesystem work to a thread, so
-    a /diffusion/start could reserve inside that gap and the caption or image changed underneath the
-    preflight or the live trainer. Registering the mutation under the same lock closes it from both
-    sides, and neither side waits on the other (a start must not block on a long dataset import)."""
+    """Dataset mutation and reserve refuse each other under one lock, closing the is_active gap."""
     from core.training.diffusion_training_service import (
         DatasetMutationInFlight,
         DiffusionTrainingService,

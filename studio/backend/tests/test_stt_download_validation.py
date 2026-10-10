@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The /audio/stt/download route must validate a custom Transformers repo before
-snapshot_download pulls it into the shared HF cache.
-
-Regression for a Codex finding: the Transformers engine accepts arbitrary
-`owner/model` repos, so an authenticated caller could make Unsloth download a
-large non-STT repository before load-time validation ever ran. Whisper-
-compatibility is now enforced (metadata-only, no weights) before the background
-download starts. The GGUF engine only accepts curated ids, so it is not gated.
-"""
+"""A custom Transformers repo must pass a metadata-only Whisper check before the download starts."""
 
 from __future__ import annotations
 

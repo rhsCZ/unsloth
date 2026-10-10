@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The GGUF header block says the same things about the same file every time.
-
-Ten call sites reach ``_read_gguf_metadata`` and one ``POST /api/inference/estimate-memory``
-walks the header three to five times: 140 of 296 log lines over a 20s four-tab session.
-These tests pin both halves of the fix: repeats are demoted, and demoting them does not
-change what is detected.
-"""
+"""Repeated GGUF header reads demote their log lines, without changing what is detected."""
 
 from __future__ import annotations
 

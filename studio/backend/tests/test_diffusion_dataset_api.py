@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the diffusion dataset labeling + example-import routes.
-
-The routes are hit with the FastAPI TestClient; the datasets root is redirected to a
-tmp_path so nothing touches a real Unsloth home. The example importer is exercised with a
-mocked datasets.load_dataset so no network / GPU is needed.
-"""
+"""Dataset label and example-import routes, via TestClient on a temp datasets root; no network."""
 
 from __future__ import annotations
 
@@ -954,10 +949,7 @@ def test_an_import_into_a_folder_filled_meanwhile_does_not_merge(client, ds_root
 
 
 def test_an_unreadable_sidecar_shadows_the_metadata_caption(client, ds_root):
-    """The trainer treats ANY existing sidecar, including one it cannot decode, as an empty
-    tombstone and never falls back to metadata (discover_image_caption_pairs). Reading it as
-    "no sidecar" here made the grid and the summary show a metadata caption that the run would
-    silently replace with the instance prompt, so the user trained on labels they never saw."""
+    """Any existing sidecar, even unreadable, shadows metadata captions, as the trainer treats it."""
     folder = ds_root / "tombstone"
     folder.mkdir()
     _write_png(folder / "a.png")

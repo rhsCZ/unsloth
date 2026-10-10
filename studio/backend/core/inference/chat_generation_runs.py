@@ -125,11 +125,7 @@ async def _close_iterator(iterator: AsyncIterator[Any] | None) -> None:
 
 
 def _env_seconds(name: str, default: float) -> float:
-    """Seconds from the environment, falling back on anything unusable.
-
-    Non-finite values parse cleanly and fail silently downstream: `inf` raises on
-    `int(timeout * 1000)` every sweep, and `max(0.0, nan)` returns 0.0, disabling reaping.
-    """
+    """Non-finite values are rejected: inf raises every sweep and nan disables reaping."""
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -159,15 +155,7 @@ def _env_seconds(name: str, default: float) -> float:
 
 
 async def _sweep_in_daemon_thread(fn, /, *args, **kwargs):
-    """Run one blocking sweep on a daemon thread.
-
-    Not asyncio.to_thread: its executor threads are non-daemon and joined by an atexit
-    hook, so a sweep parked on SQLite's writer lock keeps the whole process alive long
-    after shutdown gave up waiting for it. Studio Desktop allows five seconds for a
-    graceful backend exit before force-killing, and stops the backend this way before it
-    updates, so an unbounded exit is a user-visible hang. A daemon thread abandoned here
-    cannot hold the interpreter open.
-    """
+    """A daemon thread, since to_thread's non-daemon threads would keep a sweep alive past shutdown."""
     loop = asyncio.get_running_loop()
     future = loop.create_future()
 
@@ -313,13 +301,7 @@ class ChatGenerationLeaseSweeper:
         run_id: str,
         account: Any = None,
     ) -> None:
-        """Escalate from the cooperative cancel to cancelling the producer task.
-
-        supervisor.cancel() only sets a threading.Event, which a producer blocked inside
-        next(gen) never looks at, so it goes on holding its activity reservation and engine
-        slot. Cancelling the task releases that bookkeeping. It cannot unblock a thread
-        already inside the engine, and the warning says so rather than implying otherwise.
-        """
+        """Cancels the task: supervisor.cancel() only sets an Event that a blocked producer never checks."""
         await asyncio.sleep(self._FORCE_CANCEL_GRACE_S)
         task = getattr(supervisor, "_tasks", {}).get(run_id)
         if task is None or task.done():
@@ -372,12 +354,7 @@ _PREFILL_PROGRESS_MARKER = ": prefill-progress"
 
 
 def _minimum_lease_seconds() -> float:
-    """The shortest lease every renewal source can keep up with.
-
-    The admission keep-alive interval is upstream and not ours to speed up, so a queued run
-    only produces a renewable marker that often. A shorter lease expires between markers
-    however fast we poll, reaping a healthy queued run.
-    """
+    """A shorter lease expires between the upstream keep-alive markers and reaps healthy queued runs."""
     from core.inference.llama_admission import DEFAULT_ADMISSION_KEEPALIVE_INTERVAL_S
 
     try:
@@ -398,22 +375,14 @@ def _minimum_lease_seconds() -> float:
 
 
 def _applied_lease_timeout(configured: float) -> float:
-    """The lease actually in force, without the warning. Zero still means disabled.
-
-    Separate from the logging wrapper because the renewal cadence consults this on every
-    keep-alive, and warning once per keep-alive would bury the one line that matters.
-    """
+    """Kept separate from the warning wrapper, since renewal consults it on every keep-alive."""
     if configured <= 0.0:
         return 0.0
     return max(configured, _minimum_lease_seconds())
 
 
 def _clamped_lease_timeout(configured: float) -> float:
-    """Raise a lease that no renewal source could satisfy, and say so.
-
-    Silently honouring it would reap healthy queued runs, and silently ignoring it would
-    hide that the setting did nothing. Zero still means disabled.
-    """
+    """Raises a lease no renewal can satisfy and logs it; silently keeping it would reap healthy runs."""
     applied = _applied_lease_timeout(configured)
     if applied == configured:
         return applied
@@ -427,12 +396,7 @@ def _clamped_lease_timeout(configured: float) -> float:
 
 
 def _renew_interval_seconds() -> float:
-    """How often a lease may be renewed by something other than streamed output.
-
-    Derived from the lease rather than fixed: a fixed 30s against a shorter lease would
-    first renew after the sweep had already settled the run. A quarter gives three renewals
-    per window, and the floor keeps a short lease from becoming a write per second.
-    """
+    """Derived from the lease, not fixed: a fixed 30s would renew after a shorter lease had expired."""
     lease = _applied_lease_timeout(
         _env_seconds("UNSLOTH_STUDIO_CHAT_RUN_LEASE_TIMEOUT_S", _LEASE_TIMEOUT_SECONDS)
     )
@@ -587,12 +551,7 @@ class ChatGenerationSupervisor:
 
     @contextlib.asynccontextmanager
     async def _lease_heartbeat(self, run_id: str):
-        """Hold the progress lease open across work that produces no output.
-
-        Covers the lifecycle gate as well as model preparation: a run waiting on the gate is
-        still queued, so its lease ages from created_at with nothing renewing it. Cancelled
-        on exit, including an early return, so it never overlaps the streaming phase.
-        """
+        """Keeps the lease alive while queued or preparing; nothing else renews it before streaming."""
         task = asyncio.create_task(
             self._renew_lease_while_preparing(run_id),
             name = f"chat-generation-prepare-lease:{run_id}",
@@ -605,12 +564,8 @@ class ChatGenerationSupervisor:
                 await task
 
     async def _try_touch_progress(self, run_id: str) -> None:
-        """Renew the lease, treating contention as a missed stamp rather than a failure.
-
-        Every renewal that is not streamed output goes through here. A history transaction
-        holding SQLite's writer lock past the busy timeout would otherwise abort a healthy
-        generation; a missed stamp costs one interval instead.
-        """
+        """Lock contention costs one missed stamp, not a failure, so a busy SQLite writer cannot
+        abort it."""
         try:
             await asyncio.to_thread(db.touch_progress, run_id)
         except Exception:

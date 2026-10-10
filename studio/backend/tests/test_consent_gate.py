@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the trust_remote_code consent gate.
-
-The gate scans a repo's auto_map Python before a trust_remote_code=True load and
-refuses CRITICAL/HIGH code unless the user pinned this exact version. The scanner
-and fingerprint run for real; only the config/file fetch is stubbed.
-"""
+"""The consent gate refuses CRITICAL/HIGH auto_map code unless this exact version is pinned."""
 
 import importlib.util
 import json
@@ -1004,10 +999,8 @@ class TestStructuredFindingsForDialog:
         assert payload["scan_created_repos"] == []
 
     def test_scan_route_purges_remote_adapter_downloaded_by_base_resolution(self, monkeypatch):
-        """A remote adapter is reported scan-created even though resolving its base first
-        caches the adapter's own adapter_config.json. Otherwise the adapter (and the
-        auto_map .py the preflight fetched) is left on disk on decline. The static-lambda
-        tests above miss this by not modeling base resolution's side effect."""
+        """A remote adapter counts as scan-created, since base resolution caches it, so decline
+        purges it."""
         import asyncio
 
         import routes.models as models_route

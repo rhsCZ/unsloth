@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Which side executes the tools on an external provider, and under what permission.
-
-Two questions live at the same one-line gate in ``_proxy_to_external_provider``,
-and both are upgrade-shaped -- a browser can hold a cached bundle from before
-this capability existed, and a third-party client can send the documented
-hosted-tool body forever:
-
-* ``enable_tools: true`` + ``enabled_tools: ["web_search", "code_execution"]``
-  has always meant "the provider runs its own server tools". Unsloth's loop must
-  not read those same bytes as a request to run *its* web_search and drop
-  ``code_execution`` on the floor (it has no local implementation of it).
-* an omitted ``permission_mode`` must resolve exactly as it does on the Codex
-  path, since both build the same policy object from the same request fields.
-
-The route is driven for real (fake HTTP client, real payload model, real
-StreamingResponse body) so these pin behaviour, not helper return values.
-"""
+"""Hosted web_search and code_execution stay with the provider; default permission_mode as Codex."""
 
 import asyncio
 import ast
@@ -273,11 +257,7 @@ def test_the_other_self_hosted_providers_still_get_the_synthesized_turn(monkeypa
 
 
 def test_full_access_on_ollama_keeps_the_date_the_nudge_costs_nothing_to_carry(monkeypatch):
-    """Full access synthesizes its own system turn, displacing the Modelfile SYSTEM regardless.
-
-    Withholding the date there gives it up for a prompt that is lost anyway, which is the one
-    way the exemption can leave a caller worse off than having no exemption at all.
-    """
+    """Ollama full access keeps the date line: its own system turn displaces the Modelfile anyway."""
     inf = _install(monkeypatch, "ollama")
     monkeypatch.setattr(
         inf,
@@ -318,13 +298,7 @@ def test_a_hosted_code_execution_is_not_dropped(monkeypatch):
 
 
 def test_a_code_execution_with_run_tools_locally_still_answers_the_confirm_gate(monkeypatch):
-    """`run_tools_locally` must not smuggle a hosted-only turn past the 400.
-
-    Unsloth has no `code_execution`, so the local catalog is empty whatever the
-    flag says and the route falls back to the provider. The confirmation
-    rejection keys on the request NOT having taken the loop, so a "local"
-    reading here answers a confirm-me request with an unconfirmed sandbox run.
-    """
+    """run_tools_locally must not let a hosted-only code_execution turn skip the confirm-gate 400."""
     from fastapi import HTTPException
 
     inf = _install(monkeypatch, "openai")
@@ -416,10 +390,7 @@ def test_a_codex_declares_no_hosted_tools():
 
 
 def test_mcp_intent_with_no_tools_is_not_refused_for_a_prompt_it_can_never_show(monkeypatch):
-    """mcp_enabled arms the confirm gate on intent, but with no MCP tool enabled the
-    selection is empty and the loop is skipped, so a headerless stream has no prompt to
-    find a channel for. Refusing on intent would 400 a request that proxies straight
-    through, so the check waits for the selected catalog."""
+    """mcp_enabled must wait for the selected catalog; with no tools the loop never prompts."""
     monkeypatch.setattr(
         "core.inference.tools.get_enabled_mcp_tools",
         lambda: _noop_mcp(),

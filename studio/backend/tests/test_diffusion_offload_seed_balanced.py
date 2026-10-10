@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Two small-card load failures, Qwen-Image-2.1 sized, CPU only.
-
-1. An offloading plan must seed a pre-quantized (int8 / fp8) denoiser on the host: seeding it onto the GPU whole
-   (~7 GiB int8) left the 8 GB streaming hooks no room for their first block.
-2. An explicit ``memory_mode=balanced`` is fit-checked against the loaded companions, walking down the streamed
-   tiers, instead of loading every companion resident and OOMing at the first generate.
-"""
+"""Small-card loads: pre-quant denoisers must seed on host, and balanced mode must be fit-checked."""
 
 from __future__ import annotations
 

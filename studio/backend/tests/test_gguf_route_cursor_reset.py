@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""GGUF SSE cursor reset across an internal no-op tool decision.
-
-When a GGUF turn streams visible preface text ("I'll render it again...")
-and then hits an internal no-op (duplicate / disabled / repeat render_html),
-no ``tool_start`` event is emitted. The GGUF SSE route diffs each cumulative
-``content`` event against a ``prev_text`` cursor and resets that cursor on
-``tool_start`` *and* on an empty ``status`` event. The generator must emit an
-empty status between the preface turn and the final no-tools pass, otherwise
-the final answer would be diffed against the stale preface and truncated or
-dropped entirely.
-
-This test drives the real generator and replays its events through a faithful
-copy of the route's cursor loop (studio/backend/routes/inference.py), asserting
-the final answer survives in full and the no-op produces no phantom tool card.
-"""
+"""Cursor resets on an internal no-op tool turn; else the final answer is truncated by the preface."""
 
 from __future__ import annotations
 
@@ -77,14 +63,7 @@ def _make_backend(monkeypatch, streams: list[list[str]], payloads: list[dict]):
 
 
 def _replay_route_cursor(events: list[dict]) -> dict:
-    """Replicate the GGUF SSE route's cumulative-cursor loop.
-
-    Mirrors studio/backend/routes/inference.py: reset ``prev_text`` on empty
-    status and on ``tool_start``; otherwise diff each cumulative ``content``
-    snapshot against the cursor and stream the delta. The preface/final text
-    here carry no tool XML, so the display strip is the identity -- the cursor
-    reset is the behaviour under test.
-    """
+    """Replays the route's cumulative cursor loop: reset prev_text on empty status and tool_start."""
     prev_text = ""
     visible_deltas: list[str] = []
     tool_starts: list[dict] = []
@@ -156,12 +135,7 @@ def _web_search_tool() -> dict:
 
 
 def test_final_answer_survives_preface_then_disabled_tool_noop(monkeypatch):
-    """Preface text, then a call to a disabled tool (internal no-op).
-
-    A disabled-tool decision emits no ``tool_start`` and forces the final
-    no-tools pass. The route cursor must be reset before that pass so the
-    short final answer is not diffed away against the longer preface.
-    """
+    """A preface then a disabled-tool no-op must not truncate the shorter final answer."""
     preface = "Let me run a quick command to double-check."
     final = "All set."  # shorter than the preface so truncation is visible
 

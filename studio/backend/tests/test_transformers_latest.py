@@ -908,14 +908,7 @@ class TestCompatPlan:
 
 
 def test_get_snapshot_waits_for_inflight_fetch(monkeypatch):
-    """A caller arriving mid-fetch gets the running fetch's answer, not "no answer".
-
-    The Configure preview starts a check as soon as the tab renders, so a user who
-    presses Start while it is still running sends a second, concurrent check. Answering
-    that one None reads as "no upgrade needed" all the way up, and the run launches on a
-    model no installed transformers can load -- the exact failure this gate exists to
-    stop. The loser must wait for the snapshot instead.
-    """
+    """A caller arriving during a fetch must wait for it, not read a None as no upgrade needed."""
     import threading as _threading
 
     tl.clear_caches()
@@ -958,14 +951,7 @@ def test_get_snapshot_waits_for_inflight_fetch(monkeypatch):
 
 
 def test_inflight_wait_covers_a_whole_refresh():
-    """The wait a loser makes must outlast the fetch it is waiting for.
-
-    A refresh is five sequential URLs (PyPI, then both auto files at the release tag and
-    at main), each allowed one retry at the fetch timeout, so it can legitimately run for
-    the full product of those three numbers. A wait shorter than that expires while the
-    winner is still working, and the None it then answers is read as "no upgrade needed"
-    by the Start button -- the run launches on the architecture this gate exists to stop.
-    """
+    """The in-flight wait must cover a whole refresh's worst case, or the loser returns a false None."""
     urls = 1 + 2 * len(tl._AUTO_FILES)
     assert tl._REFRESH_URL_COUNT == urls
     worst_case = urls * (1 + tl._FETCH_RETRIES) * tl._FETCH_TIMEOUT_SECONDS
@@ -1263,12 +1249,7 @@ def test_failed_staging_install_removes_staging_dir(tmp_path, monkeypatch):
 
 
 def _slow_drip_server(chunks: int, gap: float):
-    """A localhost HTTP server that dribbles a body *gap* seconds at a time.
-
-    Every individual socket read completes well inside the fetch timeout, so a
-    socket-level timeout never fires; only a wall-clock budget on the transfer can stop
-    it. Returns the URL; the thread is a daemon and dies with the test session.
-    """
+    """Localhost server that sends a body one chunk per gap, so only a wall-clock budget stops it."""
     import socket as _socket
     import threading as _threading
 
@@ -1298,15 +1279,7 @@ def _slow_drip_server(chunks: int, gap: float):
 
 
 def test_fetch_text_bounds_the_whole_transfer_not_just_socket_operations(monkeypatch):
-    """A response that dribbles bytes must hit the fetch budget, not run indefinitely.
-
-    ``urlopen(timeout=...)`` is a SOCKET timeout: the CPython docs specify it as "a
-    timeout in seconds for blocking operations like the connection attempt", so it bounds
-    each individual read rather than the whole transfer. A mirror that sends a few bytes
-    just inside that timeout therefore keeps ``resp.read()`` alive for as long as it
-    likes, and every wait derived from the timeout stops being a worst case -- the loser
-    it strands answers None, which reads as "no upgrade needed" at the Start button.
-    """
+    """A dribbling body must hit the transfer budget; urlopen's timeout bounds only each read."""
     monkeypatch.setattr(tl, "_FETCH_RETRIES", 0)
     monkeypatch.setattr(tl, "_FETCH_TIMEOUT_SECONDS", 1.0)
     monkeypatch.setattr(tl, "_FETCH_DEADLINE_SECONDS", 0.4)
@@ -1319,12 +1292,7 @@ def test_fetch_text_bounds_the_whole_transfer_not_just_socket_operations(monkeyp
 
 
 def test_fetch_attempt_bound_covers_the_budget_and_one_blocking_read():
-    """The advertised per-attempt worst case must be the budget plus a straddling read.
-
-    The deadline is only checked between reads, so the one socket read already blocking
-    when it expires still runs to the socket timeout. Deriving the attempt bound from
-    both is what keeps the in-flight wait a real ceiling rather than an optimistic one.
-    """
+    """The attempt bound is the budget plus one straddling read, so the in-flight wait is a ceiling."""
     assert tl._FETCH_ATTEMPT_SECONDS == tl._FETCH_DEADLINE_SECONDS + tl._FETCH_TIMEOUT_SECONDS
     urls = 1 + 2 * len(tl._AUTO_FILES)
     worst_case = urls * (1 + tl._FETCH_RETRIES) * tl._FETCH_ATTEMPT_SECONDS
@@ -1332,14 +1300,7 @@ def test_fetch_attempt_bound_covers_the_budget_and_one_blocking_read():
 
 
 def test_waiter_never_answers_no_upgrade_while_the_refresh_is_still_running(monkeypatch):
-    """An expired wait must not be turned into "no upgrade needed".
-
-    The wait is a computed deadline, and the fetch it bounds is only as bounded as its
-    own budget makes it. If the winner is still legitimately working when the clock runs
-    out, the loser used to return None -- and None is read as "no upgrade needed" all the
-    way up to Start, which launches the run on the architecture this gate exists to stop.
-    A loser waits for the refresh's actual completion instead.
-    """
+    """A waiter must not answer no-upgrade while the refresh still runs, or the model can't load."""
     import threading as _threading
 
     tl.clear_caches()
@@ -1535,10 +1496,7 @@ def _bnb(model_type):
 
 
 def test_mlx_still_offers_the_upgrade_for_a_bitsandbytes_repo(monkeypatch):
-    """mlx-lm cannot read bnb weights, so the MLX loader dequantizes them through
-    ``AutoModelForCausalLM.from_pretrained``. That call is transformers building the
-    architecture, and on a brand-new type it raises the very unrecognized-architecture
-    error this offer fixes -- so a bnb repo keeps the offer even on MLX."""
+    """MLX dequantizes bnb weights via transformers, which raises on a new type, so the offer stays."""
     _shared_setup_2(monkeypatch)
     _shared_setup_1(monkeypatch)
     monkeypatch.setitem(sys.modules, "utils.hardware", _hardware_module("mlx"))
@@ -1554,11 +1512,7 @@ def test_mlx_still_offers_the_upgrade_for_a_bitsandbytes_repo(monkeypatch):
 
 
 def test_mlx_skips_the_unsloth_bnb_repo_it_swaps_for_a_base(monkeypatch):
-    """An ``unsloth/*-bnb-4bit`` id is remapped to its full-precision base before
-    the loader looks at the weights, so MLX quantizes it and transformers is never
-    asked to build it. Those keep the skip -- they are most of the bnb rows Studio
-    suggests on a Mac, and offering an install for them is the annoyance this
-    short-circuit exists to remove."""
+    """unsloth/*-bnb-4bit ids remap to a full-precision base on MLX, so they keep skipping the offer."""
     _shared_setup_2(monkeypatch)
     monkeypatch.setattr(tl, "_load_config_json", lambda *a, **k: _bnb("muse_glimmer"))
     _shared_setup_1(monkeypatch)

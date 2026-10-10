@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tool detection reads Jinja syntax, not the spelling of it.
-
-The detector is an over-approximation on purpose, so the tests are split three ways:
-what it must get right, what it deliberately answers loosely, and what it must never
-do (raise, or disagree with itself over line endings).
-"""
+"""Tool detection reads Jinja syntax and deliberately over-approximates; it must never raise."""
 
 from __future__ import annotations
 
@@ -257,15 +252,7 @@ def test_positives_match_a_real_render(template):
     ],
 )
 def test_known_over_approximations_answer_yes(template):
-    """These render no schema, and the detector says yes anyway.
-
-    A value handed to a container is assumed to stay there, a branch is walked whether
-    or not it can run, and a mapping's values are not told apart from its keys.
-    Tracking any of that properly needs a much larger analysis, and none of it is
-    reachable from the 120 published templates checked. The error runs towards showing
-    a tool control that the backend then re-checks, rather than hiding one that works,
-    so it is left here on purpose rather than papered over.
-    """
+    """Over-approximations answer yes: a wrongly shown tool control is re-checked, not wrongly hidden."""
     assert not _renders_catalog(template, item = {}, message = {}, messages = [])
     assert template_supports_tools(template) is True
 
@@ -308,10 +295,7 @@ def test_non_string_templates_are_turned_away(template):
 
 
 def test_a_string_subclass_cannot_escape_the_fail_closed_branch():
-    """`isinstance` lets a subclass through, and then its own `__hash__` and
-    `__contains__` run before the try: the cache hashes the argument and the early-out
-    does `"tool" not in template`. Narrowing to str is what keeps those from reaching
-    a caller that has no except around the model load."""
+    """Only exact str passes: a str subclass's own __hash__ or __contains__ could run unguarded."""
 
     class NoHash(str):
         __hash__ = None

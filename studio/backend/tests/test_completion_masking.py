@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Completion-only masking policy shared across CUDA and MLX training.
-
-Covers utils.datasets.completion_masking.apply_completion_masking, shared by
-the CUDA trainer (core/training/trainer.py) and the MLX worker
-(core/training/worker.py):
-  - unmapped models use chat template auto-detection (previously masking was
-    silently disabled),
-  - gpt-oss goes auto-first too (its quantized checkpoints ship a template
-    the manual markers cannot match),
-  - an auto-detection failure falls back to the template table markers,
-  - explicit dataset templates take precedence over tokenizer markers,
-  - a table miss after an auto failure warns and leaves the trainer unchanged.
-"""
+"""Completion-only masking for CUDA and MLX: auto-detect first, table markers as the fallback."""
 
 from __future__ import annotations
 

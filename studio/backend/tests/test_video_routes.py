@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""FastAPI round-trip tests for the text-to-video routes.
-
-The video backend is replaced with a lightweight fake, so these exercise the
-route wiring, validation, error mapping, and response shapes without torch,
-diffusers, weights, or a GPU. The gallery persists to a real tmp directory
-(via a patched gallery_dir), so the file/list/delete/clear paths run the actual
-video_gallery code.
-"""
+"""Text-to-video route round-trips against a fake backend; no torch, diffusers or GPU is needed."""
 
 from __future__ import annotations
 
@@ -114,10 +107,7 @@ def _unloaded_status():
 
 
 class _FakeBackend(video_module.VideoBackend):
-    """Overrides the heavy load/generate/status surface but INHERITS the real
-    begin_generate / _run_generate / generate_progress / cancel_generate job
-    machinery, so the asynchronous generate contract (immediate accept, busy
-    guard, terminal completed/failed state, cancel) is exercised for real."""
+    """Fakes load/generate/status, inheriting the real async job machinery under test."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -250,14 +240,7 @@ class _FakeBackend(video_module.VideoBackend):
 
 @pytest.fixture(autouse = True)
 def _healthy_diffusers(healthy_diffusers):
-    """These tests are about the route, not about the runner's diffusers.
-
-    The module docstring promises they run without diffusers, and most do, but the
-    MiniMax-H3 download plan reaches `import diffusers` in video.py's modular-workflow
-    branch. Backend CI installs no diffusers (it lives in requirements/diffusers-pin.txt,
-    which only install_python_stack.py applies), so without the proxy that one test dies
-    on ModuleNotFoundError. Same fixture the diffusion test modules already use.
-    """
+    """Fakes diffusers: the H3 download plan imports it, and backend CI installs none."""
 
 
 @pytest.fixture
@@ -552,13 +535,7 @@ def test_generate_happy_path_persists_and_reports_record(client, monkeypatch):
 
 
 def test_generate_accepts_a_half_specified_size_without_a_keyframe(client):
-    """Half a canvas is only ambiguous next to a keyframe, so the route must still take it.
-
-    validate_video_request_shape has always resolved a missing axis against the family's default
-    preset (768 alone means 768x512 on LTX-2) and that behaviour is pinned at the family level, so
-    a request-model XOR that fires with no keyframe present makes the two layers disagree and
-    breaks the half-spec case for every video family through the API.
-    """
+    """A half-given size is only ambiguous with a keyframe; the route must accept it without one."""
     backend = video_module.get_video_backend()
     backend.loaded = True
 

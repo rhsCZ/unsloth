@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Replayed tool-call ids must fit provider limits (#8913).
-
-The frontend stores them as "<provider id>:<uuid4>" (66 chars for OpenAI), and a
-provider that validates ids rejects the whole request, permanently breaking the chat.
-"""
+"""Replayed tool-call ids must fit provider limits, or the provider rejects the whole request."""
 
 import re
 

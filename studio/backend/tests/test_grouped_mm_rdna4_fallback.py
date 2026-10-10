@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Numerics + gating for the RDNA4 _grouped_mm CPU fallback (PRs #7276 / #7292).
-
-RDNA4 (gfx1200/gfx1201) ships a null HIP `_grouped_mm` kernel on ROCm <= 7.12
-(fixed in 7.13, ROCm/TheRock #5284). Training MoE models there crashes with
-0xC0000005 on Windows and a plain segfault on Linux, so worker.py registers a
-Python mm/bmm fallback on the CUDA dispatch key.
-
-The fallback is silent, GPU-gated, and reimplements a matmul: if it is wrong, an
-RX 9070 user does not crash, they train on quietly wrong gradients. Until now the
-only coverage was `assert '_gm_lib.impl("_grouped_mm"' in source` -- the math was
-never executed once, in any suite.
-
-worker.py cannot be imported here (module-level structlog/backend imports), so
-`_install_grouped_mm_cpu_fallback` is lifted out with ast and driven with a fake
-`torch_mod` that forwards to real CPU torch. That also pins the op surface: the
-fallback may only use the ops the fake exposes, and the registration is captured
-instead of hitting a real CUDA dispatch key that CI runners do not have.
-
-The two gates around it are exec'd straight out of the source so this file tests
-the shipped expressions rather than a copy of them.
-"""
+"""The RDNA4 _grouped_mm fallback is executed on CPU torch, limited to an allowlisted op surface."""
 
 import ast
 import re
@@ -80,10 +60,7 @@ class _RecordingLogger:
 
 
 def _fake_torch():
-    """Real CPU torch behind the exact op surface the fallback is allowed to use.
-
-    Anything else the fallback reaches for raises AttributeError here, which is
-    the point: a new dependency has to be a deliberate edit, not a silent one."""
+    """Real CPU torch exposing only the ops the fallback may use, so a new dependency must be deliberate."""
     return SimpleNamespace(
         library = SimpleNamespace(Library = _RecordingLibrary),
         mm = torch.mm,
@@ -329,11 +306,7 @@ class TestLinuxRdna4NameMatch:
     """The name regex is the fallback when a wheel omits gcnArchName."""
 
     def _pattern(self):
-        """Read whatever pattern worker.py currently uses, not a copy of the one
-        it used when this test was written. Anchoring on the literal pattern text
-        would make a *widened* regex -- the dangerous edit, since it silently
-        forces the slow Python fallback onto RDNA3 users -- fail as "moved"
-        instead of being checked against the cases below."""
+        """Read the live RDNA4 regex from worker.py, so a widened pattern fails the cases below."""
         m = re.search(r"re\.search\(r\"([^\"]+)\",\s*_lin_name\)", _WORKER_SOURCE)
         assert m, "could not locate the RDNA4 device-name regex in worker.py"
         return m.group(1)

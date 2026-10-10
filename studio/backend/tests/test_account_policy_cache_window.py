@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""No policy read may answer from the pre-write state once an account mutation has committed.
-
-The observation point is the account write's own ``conn.close()``: the INSERT/UPDATE is durable by
-then, and it sits inside the window that a concurrent request would land in.
-"""
+"""Policy reads must not see pre-write state after an account write commits at conn.close()."""
 
 import importlib.util
 import secrets

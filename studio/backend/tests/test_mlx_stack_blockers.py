@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The MLX gate has to say what it is unhappy about.
-
-`mlx_unavailable` is a single verdict covering three packages and four runtime
-imports, and the greyed-out Train row could only answer it with "run `unsloth
-studio update`". That is a dead end for the usual cause: an update that ran, and
-a resolver backtrack that left one package missing or too old for the pinned
-transformers. These cover the blocker list that message is built from.
-"""
+"""One mlx_unavailable verdict covers several packages, so the message must name the specific blocker."""
 
 from __future__ import annotations
 
@@ -37,12 +30,7 @@ def _fake_versions(monkeypatch, installed: dict[str, str]):
 
 
 def _healthy(**overrides: str) -> dict[str, str]:
-    """The floors mlx_repair requires, so "healthy" here follows a floor bump.
-
-    Hardcoding a healthy version made raising the mlx-lm floor to 0.31.2 fail six
-    tests that are about mlx-vlm, import errors and line length, none of which had
-    anything to say about mlx-lm.
-    """
+    """Healthy means the mlx_repair floors, so raising a floor does not break unrelated tests."""
     return {**mr._MLX_MIN_VERSIONS, **overrides}
 
 
@@ -132,11 +120,8 @@ def test_only_the_mlx_verdict_carries_a_detail(monkeypatch, reason):
 
 
 def test_a_failed_forced_redetect_restores_the_detail(monkeypatch):
-    """detect_hardware() puts back the verdict a raising pass clobbered, detail included.
-
-    Without it the restored verdict is still mlx_unavailable but has lost the blocker,
-    so the row goes back to the generic message this change exists to replace.
-    """
+    """A failed forced re-detect must restore the blocker detail too, not just the mlx_unavailable
+    verdict."""
     from utils.hardware import hardware as hw
 
     monkeypatch.setattr(hw, "DEVICE", hw.DeviceType.CPU)

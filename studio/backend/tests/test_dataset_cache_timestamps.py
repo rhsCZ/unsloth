@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""S9 for PR #9642: cached datasets need a timestamp for Recent to mean anything.
-
-/api/hub/datasets/cached carried no time field, while local recipe and upload
-datasets carried updated_at, so every cached Hub dataset sorted below every
-local one whatever the date.
-
-Deliberately not beside its subject in hub/tests/: studio-backend-ci runs
-`pytest tests/` from studio/backend, and hub/tests is a sibling of that path, so
-nothing there is collected. A guard that never runs is not a guard.
-"""
+"""Cached Hub datasets must carry a timestamp, or every one sorts below local datasets in Recent."""
 
 import os
 from types import SimpleNamespace

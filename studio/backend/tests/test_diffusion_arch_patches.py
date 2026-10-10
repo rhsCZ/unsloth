@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Numerical + lifecycle tests for the per-arch eager fusions (``diffusion_arch_patches``).
-
-Each per-arch patch only fuses ``a + b*c`` -> ``torch.addcmul`` (1-ULP, more accurate), so
-the patched method/forward must match the stock diffusers one within fp tolerance. We also
-check install/uninstall reversibility + idempotency, the kill-switch, and the body-drift
-guard (a diffusers whose block body changed is left unpatched). Runs on CPU.
-"""
+"""Fused a + b*c must match stock diffusers in fp tolerance; a drifted block body stays unpatched."""
 
 from __future__ import annotations
 

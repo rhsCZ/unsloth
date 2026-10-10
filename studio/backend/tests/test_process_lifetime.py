@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the parent-lifetime reaper (utils/process_lifetime).
-
-The Linux PDEATHSIG cases spawn real processes and assert actual liveness; the
-Windows Job Object path is exercised with a mocked kernel32 so it runs on CI.
-"""
+"""Linux PDEATHSIG cases spawn real processes; the Windows Job Object path uses a mocked kernel32."""
 
 from __future__ import annotations
 
@@ -660,11 +656,7 @@ def test_allow_child_processes_survives_a_missing_config(monkeypatch):
 
 
 def test_an_older_process_lifetime_still_gets_the_parent_death_binding(monkeypatch):
-    """A tree without `allow_child_processes` must keep the binding that predates it.
-
-    Importing both names in one statement would raise ImportError for the whole
-    block, costing the worker its parent-death binding as well.
-    """
+    """Import the names separately so a missing newer name cannot cost the parent-death binding."""
     from utils import native_path_leases
 
     calls = []

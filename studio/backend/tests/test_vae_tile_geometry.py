@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Seam guard: every VAE Studio tiles decodes in tiles wide and overlapping enough not to leave lines.
-
-Each family's VAE is built on the meta device from its real ``vae/config.json``, set up as a Studio load sets it
-up (``enable_tiling()`` plus every tile override module), and its real ``decode`` runs over every canvas side
-Studio offers with a shape-only decoder; the tile grid is read from the latent slices the decode takes. Off CUDA
-the overrides size tiles for zero free VRAM, the tightest tier.
-"""
+"""Seam guard: tiled VAE decodes must overlap enough to hide tile seams at every offered size."""
 
 from __future__ import annotations
 

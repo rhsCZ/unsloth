@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A context nobody could measure is not a ceiling, and must not overrule a request.
-
-Two arms fall back to a short context when the GGUF carries no attention dimensions, and
-both applied it to an explicit request and published it, so 256k came back as 4096 (#9653).
-A guess will not refuse against that number, so it may not overrule one either. Auto keeps
-the conservative fallback.
-"""
+"""An unmeasured context fallback is a guess, so it must not overrule an explicit request."""
 
 from __future__ import annotations
 
@@ -142,13 +136,7 @@ class TestTheNotice:
         assert LlamaCppBackend._unmeasured_context_notice(requested) is None
 
     def test_it_does_not_cost_the_load_a_memory_warning(self):
-        """``_record_load_warning`` is first-notice-wins with one slot, and both arms
-        that raise an unmeasured ceiling decide it long before the host-RAM and offload
-        advisories. Recording it there took the slot from a memory warning on the one
-        path that simultaneously raises the launched context, so the user who is told
-        their load will page from disk heard only that the ceiling was a guess. It is
-        held in ``_unmeasured_ctx_notice`` and flushed past both, appending when one
-        spoke."""
+        """_record_load_warning keeps one slot, so the ceiling notice is held apart from memory warnings."""
         import ast
         import inspect
         import textwrap

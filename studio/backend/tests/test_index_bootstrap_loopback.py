@@ -117,11 +117,7 @@ def test_colab_allows_notebook_proxy_but_not_shareable_tunnel(monkeypatch):
 
 
 def test_colab_withholds_from_every_relay_not_just_cloudflare(monkeypatch):
-    """Any relay, not only the one that sets cf-connecting-ip, is remote on the Colab branch.
-
-    The branch used to test cf-connecting-ip alone, so an ngrok / localtunnel / bore / ssh -R
-    publication of the notebook port was served the plaintext admin password by GET /.
-    """
+    """On Colab, any relay header marks the caller remote; otherwise GET / serves the admin password."""
     import main
 
     monkeypatch.setattr(main, "_IS_COLAB", True)

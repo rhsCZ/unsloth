@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The isolated Windows Terminal: cmd.exe inside MXC when Git Bash cannot start there.
-
-Faked platform throughout, since studio-backend-ci is Linux-only; the native tests cover a real host.
-"""
+"""cmd.exe inside MXC when Git Bash cannot start; platform is faked since CI is Linux-only."""
 
 import ntpath
 import os

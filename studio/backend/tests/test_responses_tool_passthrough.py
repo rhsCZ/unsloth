@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""
-Tests for the OpenAI /v1/responses client-side function-calling pass-through.
-
-Covers:
-- ResponsesRequest accepts Responses-shape `tools`, `tool_choice`,
-  `parallel_tool_calls`, and `function_call` / `function_call_output`
-  input items for multi-turn tool loops.
-- _translate_responses_tools_to_chat(): flat Responses tool shape ->
-  nested Chat Completions shape, drops non-function built-in tools,
-  returns None for empty lists.
-- _translate_responses_tool_choice_to_chat(): passes string choices
-  through, converts {type:function,name:X} to the nested shape.
-- _normalise_responses_input(): maps function_call_output items to
-  role="tool" ChatMessages with tool_call_id, and function_call items to
-  assistant messages with tool_calls.
-- _chat_tool_calls_to_responses_output(): keeps call_id, drops
-  non-function tool calls.
-- ResponsesOutputFunctionCall / ResponsesResponse round-trip tool-call
-  outputs without losing fields.
-
-No running server or GPU required.
-"""
+"""Client-side function-calling pass-through for /v1/responses; no running server or GPU is needed."""
 
 import os
 import sys
@@ -681,12 +660,8 @@ class TestNormaliseResponsesInputWithTools:
         assert _normalise_responses_input(payload) == []
 
     def test_instructions_plus_developer_message_are_merged(self):
-        """Codex CLI sends `instructions` (system prompt) AND a developer
-        message in `input`. Strict chat templates (harmony / gpt-oss,
-        Qwen3, ...) raise "System message must be at the beginning" on two
-        separate system-role messages, so we emit exactly one merged
-        system message at the top.
-        """
+        """Strict chat templates reject a second system message, so instructions and developer text
+        merge."""
         payload = ResponsesRequest(
             instructions = "Base instructions.",
             input = [
@@ -2732,10 +2707,8 @@ class TestResponsesStreamAdapter:
         assert self._payloads(lines, "response.function_call_arguments.done")
 
     def test_studio_ownership_marker_reaches_the_chat_request(self):
-        """ResponsesRequest takes the marker as an extra field, and every fold downstream reads
-        it off the ChatCompletionRequest. Dropped in translation, only the legacy
-        search_conversation arm can claim a Studio thread, so one that ran terminal or
-        search_knowledge_base is refused non-streaming and forwarded raw when streamed."""
+        """studio_tool_history must reach the chat request, or a Studio thread is refused or
+        forwarded raw."""
         from routes.inference import _build_chat_request
 
         payload = ResponsesRequest.model_validate(
@@ -3383,10 +3356,8 @@ class TestReasoningPrefilledExtractor:
 
 
 class TestResponsesStreamHealing:
-    """Route-level healing on the /v1/responses stream: text-form tool calls
-    are promoted through the same per-call item state machinery as structured
-    deltas, and healer events keep their order (text around a healed call must
-    not move relative to the function_call item)."""
+    """Text-form tool calls go through the structured item machinery, and healed text must keep its
+    order."""
 
     _XML = '<tool_call>{"name":"lookup","arguments":{"q":"x"}}</tool_call>'
     _TOOL = {"type": "function", "name": "lookup", "parameters": {"type": "object"}}

@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for Anthropic server-side context compaction wiring.
-
-Compaction is a beta (header ``compact-2026-01-12``) gated to Opus 4.6/4.7,
-Sonnet 4.6, and Mythos preview. When enabled, Unsloth attaches
-``context_management.edits[{type:"compact_20260112", trigger:{type:"input_tokens",
-value:N}}]``; the 50k-token minimum is clamped up so the request doesn't 400.
-
-Pins body shape per model, beta header merge with code-execution, threshold
-clamping, and silent no-op on unsupported models.
-"""
+"""The compaction trigger is clamped up to the 50k-token minimum so the request does not 400."""
 
 import asyncio
 import json

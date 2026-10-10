@@ -366,18 +366,7 @@ _UNKNOWN_USER = "~no-such-account-anywhere/llama.cpp"
 
 
 def test_an_unresolvable_named_user_does_not_raise_out_of_the_expansion():
-    """Codex 3962583754, P2. Path.expanduser() raises RuntimeError on a name it cannot
-    resolve, unlike os.path.expanduser, which hands the value straight back.
-
-    Measured on this host:
-
-        Path("~no-such-account-anywhere/llama.cpp").expanduser()
-        RuntimeError: Could not determine home directory.
-
-    Every reader of UNSLOTH_LLAMA_CPP_PATH used the raising form, so a stale pin made
-    runtime discovery itself throw rather than treating the override as unusable and
-    continuing down the documented search order.
-    """
+    """Path.expanduser() raises on an unknown user where os.path.expanduser returns the value unchanged."""
     with pytest.raises(RuntimeError):
         Path(_UNKNOWN_USER).expanduser()
     assert path_settings.expanded_user_path(_UNKNOWN_USER) == Path(_UNKNOWN_USER)

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The launch-time thinking default goes out as --reasoning where the build has it.
-
-llama-server deprecates enable_thinking via --chat-template-kwargs (#7526), per KEY, so
-only that key moves. The gate is the `llama-server --help` flag catalogue and is closed
-on anything short of a positive answer: a build predating --reasoning exits with
-"error: invalid argument: --reasoning" rather than starting without it. The help text
-below is verbatim from two real binaries, b10909 and b6277.
-"""
+"""Emit --reasoning only when help lists it; older builds exit on it, so the gate fails closed."""
 
 from __future__ import annotations
 
@@ -202,11 +195,7 @@ class TestOnlyTheDeprecatedKeyMoves:
         "caps", [MODERN_CAPS, OLD_CAPS, {}], ids = ["modern", "old-build", "nothing-known"]
     )
     def test_an_empty_dict_still_goes_out_as_main_sends_it(self, caps):
-        """Nothing moved, so the argument main appends has to be appended.
-
-        Unreachable from the launcher today; held so the untouched path is identical
-        to main by construction rather than by luck.
-        """
+        """With nothing moved, the empty kwargs argument must still be appended, as main does."""
         assert _build_launch_reasoning_args(caps, {}) == ["--chat-template-kwargs", "{}"]
 
     def test_an_empty_remainder_after_the_flag_appends_nothing(self):
@@ -312,10 +301,7 @@ _HOSTS = [(o, v) for o in OSES for v in VENDORS]
 
 
 class TestTheRealLaunchOnEveryHost:
-    """The reasoning arguments are invariant under OS and device.
-
-    Drives the real ``load_model``, since placement appends into the same command.
-    """
+    """Reasoning args must not vary by OS or device, so this drives the real load_model command."""
 
     @pytest.mark.parametrize("os_label,vendor", _HOSTS)
     def test_a_modern_build_gets_the_flag_and_keeps_the_preserve_kwarg(
@@ -371,11 +357,7 @@ class TestTheRealLaunchOnEveryHost:
 
 
 class TestAnInheritedReasoningModeIsHonoured:
-    """`unsloth start --reasoning` and `--reasoning-effort` reach Studio only as env.
-
-    The launch always emits its own default, and llama.cpp lets argv beat the env, so
-    the env value has to become that default for the argv and the backend to agree.
-    """
+    """The inherited reasoning env becomes the launch default, since argv would otherwise override it."""
 
     @pytest.mark.parametrize("modern", [True, False], ids = ["flag", "kwargs"])
     @pytest.mark.parametrize(
@@ -494,11 +476,7 @@ class TestAnInheritedReasoningModeIsHonoured:
 
 
 class TestInheritedExtrasTreatBothSpellingsAlike:
-    """Applying a chat template override recomputes the reasoning default.
-
-    An inherited copy is appended after ours and would last-wins-override it, so both
-    spellings have to be stripped.
-    """
+    """An inherited template override is appended last and would win, so both spellings must be stripped."""
 
     @pytest.mark.parametrize(
         "args",

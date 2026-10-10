@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression: the lease sweep must not cancel a different account's live run.
-
-Run ids are client chosen and the run rows live in per-account databases, so two accounts
-can legitimately hold the same id. The supervisor keys its tasks, cancel events and
-reservations by bare run id, so flattening every account's reconciled ids into one list and
-calling supervisor.cancel(run_id) lets one account's aged row stop another account's live
-generation.
-"""
+"""Lease sweep must cancel by account, not bare run id, since two accounts can share one run id."""
 
 from __future__ import annotations
 

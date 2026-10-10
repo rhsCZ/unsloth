@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""DELETE /api/models/delete-finetuned must refuse a directory the Images or Video
-engine is holding.
-
-Every other guard on that route is chat-only (llama.cpp + the transformers backend), so a
-local diffusion model under the storage root -- Images loads any existing local path -- used
-to be rmtree'd while a pipeline was still reading it, taking the companion VAE / text encoder
-files sd.cpp re-reads on every generation with it. The cached-model delete route already
-refuses this; these tests pin the same behaviour on the trained/exported route, which matches
-by PATH rather than by repo id.
-"""
+"""Refuse directories the Images or Video engine holds; other guards only cover chat models."""
 
 from __future__ import annotations
 

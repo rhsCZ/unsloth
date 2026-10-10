@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Source-level regression guards for the Training Config popover data source
-(#6853).
-
-The live Training Progress popover used to read the editable form store
-(useTrainingConfigStore) while a run was active, so it showed stale/static
-values whenever the user touched the form after starting the run; only the
-History view read the run's saved config snapshot. These guards pin the fixed
-wiring: both views feed ProgressSection a config override mapped from
-GET /api/train/runs/{id}, and ProgressSection prefers that override whenever
-one is present -- not only for historical views.
-"""
+"""The live progress popover must read the run's saved config, not the editable form store."""
 
 from __future__ import annotations
 

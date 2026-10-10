@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""No child outlives the Unsloth that spawned it.
-
-The chain this closes: a tool call runs under a shell wrapper, the kill path
-reaped only the wrapper on Windows, and the orphaned venv python then made
-`unsloth studio update` refuse to run until it was killed by hand.
-"""
+"""No child may outlive the Unsloth process that spawned it, so kill paths must reap the tree."""
 
 import json
 import os
@@ -2208,10 +2203,7 @@ def test_terminate_pid_keeps_a_record_taskkill_could_not_confirm(monkeypatch):
 
 
 def test_announced_children_survive_two_threads_draining_at_once():
-    """The watchdog and the reader thread both drain this set, and cancelling a
-    timer does not stop a callback that already began. A bare
-    `while announced: announced.pop()` raises KeyError out of whichever thread
-    loses that race, replacing the installer error the caller should see."""
+    """The announced-children set is drained by two threads, so a bare pop loop can raise KeyError."""
     from utils.prebuilt import update_flow
     import inspect
 

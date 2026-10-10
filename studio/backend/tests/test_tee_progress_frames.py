@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The session log's copy of carriage-return progress bars.
-
-A terminal overwrites a redraw in place; a file keeps every frame, so one tqdm bar landed as
-kilobytes of near-identical text. The tee keeps the last frame only, and withholds nothing
-except frames -- anything without a "\\r" is written the moment it arrives, so a hang cannot
-swallow a partial traceback or a prompt.
-"""
+"""A tee keeps only the last carriage-return frame; lines without one are written at once."""
 
 import io
 import json
@@ -148,10 +142,7 @@ def test_a_zero_length_write_does_not_glue_a_frame_onto_the_next_record():
 
 
 def test_the_collapse_matches_the_desktop_reader():
-    """Same rule as collapse_progress_frames in src-tauri/src/process.rs.
-
-    Settings > Logs offers both sinks side by side, so a line must look the same in either.
-    """
+    """Same collapse rule as collapse_progress_frames in src-tauri/src/process.rs, so both sinks match."""
     cases = {
         "plain line": "plain line",
         "a\rb\rc": "c",

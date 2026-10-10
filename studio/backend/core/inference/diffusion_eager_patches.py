@@ -124,10 +124,7 @@ _patched: list[type] = []
 
 
 def install_compile_safe_patches() -> int:
-    """Install the shared compile-safe speedup patches (idempotent).
-
-    Returns the number of patches applied. A second call while installed is a no-op.
-    """
+    """Returns the number of patches applied; a second call while installed is a no-op."""
     global _orig_rmsnorm_forward
     if not _patches_enabled():
         uninstall_patches()

@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Deterministic guard for refactors of the tool-call parsing / stripping stack.
-
-Three independent checks, none of which trusts a reading of the diff:
-
-1. **AST inventory** - every top-level name, signature, decorator and ``re.compile``
-   literal per guarded module, so a dropped or renamed symbol shows up as a diff.
-2. **Golden outputs** - every guarded function driven over a corpus of tool-call text,
-   its output recorded, and the strip functions asserted idempotent.
-3. **Patch-target routing** - the test suite patches module globals by string
-   (``patch("core.inference.llama_cpp.subprocess.run")``). A moved function leaves those
-   pointing at a namespace nobody reads, so the test passes while exercising unpatched
-   code; this asserts every target still resolves.
-
-Usage::
-
-    python tests/tools/refactor_guard.py snapshot   # record the baseline
-    python tests/tools/refactor_guard.py verify     # compare against it
-    python tests/tools/refactor_guard.py twins      # report healing/parser divergence
-
-``test_refactor_guard.py`` runs ``verify`` in CI.
-"""
+"""Snapshot/verify guard for tool-call parsing: AST inventory, golden outputs, patch-target routing."""
 
 from __future__ import annotations
 
@@ -63,11 +43,7 @@ _RE_CALLS = frozenset(
 
 
 def _compiled_patterns(mod_name: str) -> dict:
-    """Every compiled pattern reachable in the module's namespace, by its actual text.
-
-    The AST half records call *source*, so a pattern interpolating a constant pins only
-    that constant's name. ``.pattern`` off the live object pins what was compiled.
-    """
+    """Read `.pattern` from live objects: AST call source pins only a constant's name, not its text."""
     module = importlib.import_module(mod_name)
     out = {}
     for name in dir(module):
@@ -80,11 +56,7 @@ def _compiled_patterns(mod_name: str) -> dict:
 
 
 def _pattern_literals(tree: ast.Module) -> dict:
-    """Every ``re.compile(...)`` call in the module, as a multiset of its source.
-
-    A regex rewrite is the easiest silent change to stripping behaviour, so the literals
-    are pinned separately. Keyed by call text, so moving unrelated code is not a change.
-    """
+    """Regex literals are pinned on their own: a rewrite is the easiest silent change to stripping."""
     calls = []
     for node in ast.walk(tree):
         if (
@@ -102,14 +74,7 @@ def _pattern_literals(tree: ast.Module) -> dict:
 
 
 def ast_inventory() -> dict:
-    """Top-level surface per guarded module, at the detail that module needs.
-
-    The two restructured modules are pinned in full: signatures, decorators, methods and
-    every ``re.compile`` literal. The rest are pinned by name and kind only, which is all
-    "did this drop a symbol" needs; pinning their signatures too would fail on every
-    later unrelated change to files as busy as ``llama_cpp.py``, and a baseline that gets
-    regenerated reflexively guards nothing.
-    """
+    """Only two restructured modules pin signatures; the rest pin name and kind, to avoid churn."""
     inventory = {}
     for mod_name, path in GUARDED_MODULES.items():
         detailed = mod_name in BEHAVIOUR_MODULES
@@ -315,11 +280,7 @@ def _sweep_offsets(text: str):
 
 
 def _gemma_argument_body(text: str) -> str:
-    """A raw Gemma argument body out of ``text``, which is what this parser takes.
-
-    Handed a whole corpus entry it almost always raises ``JSONDecodeError``, so its digest
-    pinned the exception rather than the key quoting and array normalization it exists for.
-    """
+    """The parser takes a raw argument body; a whole corpus entry makes it raise JSONDecodeError."""
     from core import tool_healing
 
     brace = text.find("{")
@@ -351,11 +312,7 @@ def _tool_healing_all_pats():
 
 
 def _drive(func, text: str):
-    """Call ``func`` with ``text`` however its signature wants it.
-
-    Returns a JSON-safe result, or a marker string when the function raises: a refactor
-    that stops raising, or starts, is a change.
-    """
+    """Returns a marker string when func raises; a refactor that starts or stops raising is a change."""
     params = inspect.signature(func).parameters
     names = list(params)
     kwargs = {}
@@ -448,12 +405,7 @@ def _guarded_functions(mod_name):
 
 
 def golden_outputs(corpus) -> dict:
-    """A digest per guarded function over the whole corpus.
-
-    Storing every output would be a 7 MB file for no extra guarantee. The corpus is
-    rebuilt from ``build_corpus`` rather than checked in, so its own digest is recorded
-    too and a corpus edit reports as that instead of as 40 behaviour changes.
-    """
+    """Stores one digest per function, plus one for the corpus, so a corpus edit reports as one change."""
     out = {"corpus": _digest([len(corpus), corpus])}
     for mod_name in BEHAVIOUR_MODULES:
         per_module = {}
@@ -469,32 +421,22 @@ def _digest(value) -> str:
 
 
 def first_divergence(corpus, mod_name, func_name):
-    """Recompute one function's outputs so a digest mismatch can be localised.
-
-    Run it on both sides of the revision that moved the digest and compare.
-    """
+    """Recompute one function's outputs to localise a digest change; run it on both sides of the
+    revision."""
     module = importlib.import_module(mod_name)
     func = getattr(module, func_name)
     return [{"input": text, "output": _drive(func, text)} for text in corpus]
 
 
 def _variants(result):
-    """``(label, value)`` per boolean variant the driver produced, or one unlabelled pair.
-
-    Keyed off the tag, not off "is it a dict": a parser returning ``{}`` is a result, not
-    a set of variants, and reading it as one reports a meaningless failure.
-    """
+    """Detect variants by the tag key, not by dict type: a parser may legitimately return {}."""
     if isinstance(result, dict) and set(result) == {_VARIANTS_KEY}:
         return sorted(result[_VARIANTS_KEY].items())
     return [("", result)]
 
 
 def idempotence_failures(corpus) -> list:
-    """``f(f(x)) != f(x)`` for the str -> str functions.
-
-    A stripper that is not idempotent produces different display text depending on how a
-    stream is chunked.
-    """
+    """A stripper that is not idempotent shows different text depending on how a stream is chunked."""
     failures = []
     for mod_name in BEHAVIOUR_MODULES:
         for name, func in _guarded_functions(mod_name):
@@ -548,11 +490,7 @@ def patch_targets(tests_dir = None) -> dict:
 
 
 def unresolvable_patch_targets(targets = None) -> list:
-    """Targets that no longer resolve to an attribute of an importable module.
-
-    Splits ``a.b.c`` at every dot: the longest importable prefix is the module, the
-    remainder must be reachable by ``getattr``.
-    """
+    """Longest importable prefix of a dotted target is the module; the rest must resolve by getattr."""
     targets = targets if targets is not None else patch_targets()
     broken = []
     for dotted, users in sorted(targets.items()):
@@ -690,13 +628,7 @@ def _diff(
     *,
     additions_matter = True,
 ):
-    """Report the first differing JSON path, which is enough to locate the change.
-
-    ``additions_matter = False`` reports only what changed or disappeared. The question
-    these surfaces are asked is "did this refactor drop or alter something", and a later
-    unrelated commit adding a symbol or a patch is not a regression; a guard that fails
-    on those trains everyone to re-snapshot without reading.
-    """
+    """additions_matter = False reports only changes and removals; adding a symbol is not a regression."""
     if old == new:
         return []
     problems = []

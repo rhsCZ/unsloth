@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Checkpoint compaction: the reset, the carried-forward block, and the refusals.
-
-Each test here corresponds to something the evidence campaign measured or to a failure
-another project shipped. The two that matter most are the epoch test (a reset that repeats
-every turn is a window of one turn, not an epoch) and the archive gate (a reset with no
-archive is not compaction, it is data loss).
-"""
+"""A reset with no archive is data loss, not compaction, so the archive gate refuses it."""
 
 from __future__ import annotations
 
@@ -143,13 +137,7 @@ def test_the_epoch_accumulates_instead_of_resetting_every_turn():
 
 
 def test_a_stale_boundary_never_compacts_a_branch_that_now_fits():
-    """A saved boundary describes the branch AND the window it was measured against.
-
-    Grow the context mid-thread and the branch fits again, yet the boundary still rides on
-    a live assistant turn and is read straight back. Like the rolling fit, this one gates
-    its replay on the prompt not already fitting, or the thread loses eight turns for life
-    and the prompt comes back BIGGER than it went in.
-    """
+    """A stale boundary must not compact a branch that now fits, or the prompt comes back bigger."""
     messages = [{"role": "system", "content": "you are helpful"}]
     for index in range(6):
         messages += [
@@ -274,12 +262,7 @@ def test_the_block_is_appended_to_an_existing_system_turn_not_prepended_as_a_new
 
 
 def test_a_second_reset_merges_into_one_block_instead_of_stacking_another():
-    """One request can reset twice, and the second fit is handed the first fit's output.
-
-    Appending gave each reset its own capped block, bounding a block rather than the
-    (unevictable) system turn. Merged and re-capped instead, and the earlier instructions
-    must survive that merge, since the turns that produced them are already gone.
-    """
+    """A second reset merges into the existing block and re-caps it, keeping earlier instructions."""
     from core.inference import checkpoint
 
     already = {
@@ -303,12 +286,7 @@ def test_a_second_reset_merges_into_one_block_instead_of_stacking_another():
 
 
 def test_a_multiline_instruction_survives_being_read_back():
-    """The block claims to quote the user verbatim, so a merge must not edit the quote.
-
-    Rendered flat, each line of a wrapped instruction looked like its own bullet: reading
-    back kept only the "- " lines, so "Always do these:\\n1. ...\\n2. ..." came back as the
-    heading alone and a user's own list became separate items that ate the cap.
-    """
+    """Multiline instructions must read back intact, since flat rendering split their lines into bullets."""
     from core.inference import checkpoint
 
     multi = "Always do these:\n1. include STATUS::ZQXVARA123\n2. keep the identifier"
@@ -426,14 +404,7 @@ def test_a_short_instruction_is_carried_when_it_is_all_there_is():
 
 
 def test_a_short_remark_is_carried_alongside_a_long_instruction():
-    """The cost of dropping the length floor, stated rather than hidden.
-
-    A passing remark like "fix it" now reaches the block, where the floored pass would
-    have excluded it. Nothing structural separates it from "Actually make it Tetris", so
-    the two cannot be told apart, and the trade favours keeping both: a wasted slot out of
-    eight in a block that already labels itself lossy, against losing the user's latest
-    direction outright. Ordering still carries the meaning, oldest first.
-    """
+    """Short remarks are kept: dropping the length floor costs a slot but keeps the latest direction."""
     messages = [
         {"role": "user", "content": "fix it"},
         {"role": "assistant", "content": "ok"},
@@ -459,10 +430,7 @@ def test_filler_is_never_carried_even_when_the_block_would_be_empty():
 
 
 def test_the_task_statement_of_a_real_coding_session_survives_the_reset():
-    """The session that found this. Every user turn is short, so the first pass finds
-    nothing and the reset used to carry an empty block: three compactions in six turns,
-    `carried_forward_chars: 0` on all three, and the statement of what was being built
-    evicted with everything else. Budget was never the constraint (473 tokens free)."""
+    """A reset must carry the task statement even when every user turn is short."""
     messages = []
     for turn in ("Create a Flappy Bird game in HTML", "Add music to the game", "Continue work"):
         messages += [
@@ -498,12 +466,7 @@ def test_at_most_max_items_instructions_are_carried():
 
 
 def test_a_restated_instruction_does_not_crowd_out_every_other_rule():
-    """Users restate a standing rule, and each copy used to take a slot and its tokens.
-
-    What that costs is the OTHER rules: with the repeats counted, the second instruction
-    here fell off the end of the list entirely. `_recap` already collapsed duplicates when
-    it merged a block on the second reset, so the two paths disagreed about one thread.
-    """
+    """Restated instructions are deduplicated so repeats do not crowd out other standing rules."""
     rule = (
         "Standing instruction: always end every reply with STATUS::ZQXVARA123-ALPHA "
         "and report any results as a markdown table."
@@ -627,14 +590,7 @@ class _ToolCapableBackend:
 
 
 def test_studios_own_memory_history_does_not_steal_the_request_from_the_context_fit():
-    """The one that cost a whole epoch in a live 6-round chat.
-
-    The branch permanently gains an assistant `tool_calls` turn and a `role="tool"` result.
-    Counted as a CLIENT tool contract, that history routes every later turn to the
-    llama-server passthrough, which never calls `_fit_context`: rounds 3-6 reported only
-    llama-server's own overflow retry, with no `checkpoint` key, no token counts and no
-    boundary, one turn after the reset that created them.
-    """
+    """Studio's own tool history must not count as a client tool contract, or the fit is skipped."""
     from models.inference import ChatCompletionRequest
     from routes import inference as inference_route
 
@@ -721,12 +677,7 @@ def test_marked_python_history_keeps_compaction_on_the_fitted_path():
 
 
 def test_the_count_request_declares_the_studio_tool_history_marker():
-    """The context-usage bar prices the same prompt only if it routes the same way.
-
-    `ChatCountTokensRequest` sets `extra = "allow"`, so an undeclared marker arrives
-    uncoerced: the JSON string "false" would reach `_only_studio_tool_history` as a truthy
-    value and move the count onto the Unsloth tool path the completion never takes.
-    """
+    """The count request must declare the studio tool-history marker, or extra=allow leaves it uncoerced."""
     from models.inference import ChatCountTokensRequest
     from routes import inference as inference_route
 
@@ -761,13 +712,7 @@ def test_can_reset_false_replays_an_epoch_but_never_starts_one():
 
 
 def test_an_unreachable_archive_stops_the_epoch_on_the_TURN_IT_BREAKS(monkeypatch):
-    """`degraded()` is the verdict on the last write, which is the wrong tense here.
-
-    This request's write runs AFTER the fit and swallows its own failure, so the first
-    request after the store or embedder died committed a reset claiming the dropped turns
-    are searchable while nothing was indexed. Probed now, the reset is withheld on that
-    turn rather than the one after it.
-    """
+    """Probe archive reachability before the reset; degraded() only reflects the previous write."""
     from core.inference import llama_cpp
     from core.rag import conversation_archive
 
@@ -781,12 +726,7 @@ def test_an_unreachable_archive_stops_the_epoch_on_the_TURN_IT_BREAKS(monkeypatc
 
 
 def test_the_reachability_probe_is_no_for_an_embedder_that_cannot_initialize(monkeypatch):
-    """A tokenizer that is merely CONSTRUCTED proves nothing.
-
-    `embedding_identity` is string formatting over resolver metadata and `token_counter`
-    hands back a lazy closure, so both reported a healthy archive while the embedder could
-    not initialize, and the reset was committed claiming the dropped turns are searchable.
-    """
+    """Reachability must really initialise the embedder; constructing a tokenizer proves nothing."""
     from core.rag import conversation_archive, embeddings
 
     monkeypatch.setattr(conversation_archive, "enabled", lambda: True)
@@ -817,14 +757,7 @@ def test_the_reachability_probe_is_no_for_a_store_that_cannot_be_opened(monkeypa
 
 
 def test_a_degraded_archive_stops_a_NEW_epoch_but_keeps_the_one_in_force(monkeypatch):
-    """`enabled()` and `can_archive()` are capability checks, so both keep saying yes while
-    the embedder fails and nothing is indexed, and an epoch started there would promise a
-    searchable history that does not exist.
-
-    But refusing OUTRIGHT was worse: the request fell to the rolling window, which replays
-    the same boundary WITHOUT rebuilding the block, so a thread with an epoch silently lost
-    its standing instructions. So a degraded archive downgrades reset to replay.
-    """
+    """A degraded archive downgrades a new reset to replay, keeping the epoch already in force."""
     from core.inference import llama_cpp
 
     monkeypatch.setattr(llama_cpp, "_archive_is_degraded", lambda: True)
@@ -875,12 +808,7 @@ def test_a_healthy_archive_still_starts_an_epoch(monkeypatch):
 
 
 def test_only_a_checkpoint_fitted_request_is_told_the_conversation_was_reset():
-    """The checkpoint half of the nudge describes THIS request's fit, not the policy.
-
-    Only an exact-token path that opts into checkpoint fitting may claim a reset. GGUF and
-    MLX do; other safetensors and external-provider requests still share this helper without
-    fitting, so reading process-wide policy here would describe a reset that never happened.
-    """
+    """The reset nudge must describe this request's fit, not process policy, since not every path fits."""
     import routes.inference as routes_mod
 
     tools = [{"function": {"name": "search_conversation"}}]
@@ -906,14 +834,7 @@ def test_only_a_checkpoint_fitted_request_is_told_the_conversation_was_reset():
 
 
 def test_a_request_that_withdrew_the_tool_loop_never_resets(monkeypatch):
-    """The process policy is not the only way `search_conversation` fails to arrive.
-
-    Unsloth honours `tool_choice: "none"` twice over: the tool loop is suppressed, and the
-    request is excluded from the checkpoint repair that otherwise re-admits
-    search_conversation alone. A caller that sets it sets it every turn, so a reset would
-    hide the dropped turns behind a tool that never arrives. Same refusal as
-    `--disable-tools`, one scope down: the request, not the process.
-    """
+    """tool_choice none withdraws search_conversation for that request, so a reset must not fire then."""
     from core.inference import llama_cpp
 
     monkeypatch.setattr("core.rag.conversation_archive.enabled", lambda: True)
@@ -982,12 +903,7 @@ def test_the_first_compaction_is_not_refused_for_lacking_a_tool_that_cannot_exis
 
 
 def test_the_memory_tool_override_needs_a_request_that_can_actually_reset(monkeypatch):
-    """The policy says a reset is possible SOMEWHERE, not that this request can do one.
-
-    Exact-token GGUF and MLX branches run `fit_checkpoint_context`, while other safetensors,
-    external-provider loops and token counters share this selector without fitting. Reading
-    process-wide policy put the memory tool in front of requests on paths that never compact.
-    """
+    """The memory tool override must check the request can actually reset, not only the process policy."""
     import asyncio
     import types
 
@@ -1014,12 +930,7 @@ def test_the_memory_tool_override_needs_a_request_that_can_actually_reset(monkey
 
 
 def test_identical_retry_siblings_do_not_let_one_of_them_claim_the_branch(monkeypatch):
-    """Two Retry siblings can carry byte-identical replies with only one having reset.
-
-    The exact-text filter keeps both, and taking the first match reopened the tool loop on
-    the branch that never reset. Once the siblings also disagree on policy, neither boundary
-    is safe to replay: checkpoint cannot inherit rolling, and rolling cannot inherit checkpoint.
-    """
+    """Identical retry siblings must not let one that never reset claim the branch's policy."""
     import sys
     import types
 
@@ -1079,15 +990,7 @@ def test_identical_retry_siblings_do_not_let_one_of_them_claim_the_branch(monkey
 
 
 def test_a_protected_message_does_not_let_the_next_turn_un_compact_the_epoch():
-    """The boundary this fit records has to reproduce THIS fit on the next request.
-
-    `truncate_oldest_messages` skips a protected group and evicts past it, so a pin in the
-    middle of the thread leaves live turns on BOTH sides and the evicted set is no longer a
-    prefix. Counting only the leading run understates the boundary, and the next request
-    replays that smaller number, putting the compacted-away turns straight back one turn
-    after the user was told they were gone. Rolling cannot show this: it always trims to
-    fit, so it never restores what it dropped.
-    """
+    """Boundaries must count evictions past pinned messages, or the next turn un-compacts the epoch."""
     from core.inference.llama_cpp import _branch_boundary
 
     pinned = {
@@ -1138,13 +1041,7 @@ def test_a_protected_message_does_not_let_the_next_turn_un_compact_the_epoch():
 
 
 def test_the_final_answer_pass_never_starts_an_epoch_behind_the_tools_it_does_not_send():
-    """The gate has to be asked about the catalogue the request actually carries.
-
-    The synthesised final answer sends no tools array, so a model compacted there cannot
-    call `search_conversation` and has no loop left to run one. Asking
-    `_memory_tool_withheld` with the REQUEST's catalogue answers a different question and
-    lets a new epoch start exactly there, which is what the gate exists to refuse.
-    """
+    """The epoch gate must check the request's own tools, since the final answer sends none."""
     import inspect
 
     from core.inference import llama_cpp
@@ -1162,14 +1059,7 @@ def test_the_final_answer_pass_never_starts_an_epoch_behind_the_tools_it_does_no
 
 
 def test_a_reasoning_models_saved_reply_is_still_recognised_as_on_branch():
-    """Without this the sticky boundary is unreadable on every thinking model.
-
-    assistant-ui persists `<think>` as a `reasoning` content part, but the same reply goes
-    back on the wire as text only (the thought travels in the sibling `reasoning_content`
-    field). The stored probe is then longer than the branch, `content_on_branch` misses,
-    `_sticky_compaction_boundary` returns 0, and checkpoint phase one never runs -- so the
-    fit resets from scratch on every overflowing turn.
-    """
+    """Saved reasoning must still match the branch, since the wire reply sends the thought as text."""
     from core.rag import conversation_archive
 
     stored = [
@@ -1195,10 +1085,7 @@ def test_a_reasoning_models_saved_reply_is_still_recognised_as_on_branch():
 
 
 def test_an_epoch_that_may_not_reset_keeps_its_block_instead_of_being_trimmed_away(monkeypatch):
-    """The worst of both: a request that may not reset fell through to rolling, which
-    replays the checkpoint-sized (near-total) eviction WITHOUT rebuilding the block that
-    made it survivable. Measured at 22 dropped either way, but rolling left the standing
-    instruction gone entirely, one turn after the user was told it was searchable."""
+    """An epoch that cannot reset must keep its block, not fall through to rolling that drops it."""
     from core.inference import llama_cpp
 
     monkeypatch.setattr("core.rag.conversation_archive.reachable", lambda: True)
@@ -1242,15 +1129,7 @@ def test_a_block_never_promises_a_tool_the_request_will_not_be_given():
 
 
 def test_the_loop_is_only_reopened_for_a_request_that_can_actually_compact():
-    """The checkpoint repair overrides the caller's `enable_tools = false`, so it must fire
-    only where the reset it repairs can happen.
-
-    Every checkpoint fit sits behind `context_overflow == "truncate_oldest"`, which is
-    exactly `_rolling_context_policy`. Reading only the PROCESS policy (`checkpoint` by
-    default) meant any tools-off request on an ever-archived thread opened the loop, was
-    handed `search_conversation` alone, ran it unprompted and was told its older turns had
-    been removed.
-    """
+    """The tools-off loop override must fire only for requests whose reset can happen."""
     import inspect
 
     import routes.inference as routes_mod
@@ -1267,13 +1146,7 @@ def test_the_loop_is_only_reopened_for_a_request_that_can_actually_compact():
 
 
 def test_a_request_that_could_never_call_the_tool_keeps_the_rolling_window():
-    """Two more ways a request can be handed a loop it can get nothing out of.
-
-    `max_tool_calls_per_message: 0` means disabled, so the loop runs no iterations and its
-    final pass withholds tools; `n > 1` is rejected by the tool-path guard the moment the
-    loop opens, so a multi-choice conversation served before its first compaction started
-    returning 400 after it. Either way the epoch would sit behind an uncallable tool.
-    """
+    """A request that can never call the tool (max calls 0, or n > 1) must keep the rolling window."""
     import inspect
 
     import routes.inference as routes_mod
@@ -1358,12 +1231,7 @@ def test_request_compaction_overrides_are_optional():
 
 
 def test_checkpoint_needs_search_follows_the_request_policy(monkeypatch):
-    """Tool admission must use the same override `_fit_context` does.
-
-    With UNSLOTH_CONTEXT_POLICY=rolling, a Studio (or API) request that sends
-    context_policy=checkpoint still resets; the search tool and nudge have to
-    follow, or a tools-off chat archives history it can never retrieve.
-    """
+    """Tool admission must honour the request's context_policy override, as _fit_context does."""
     import types
 
     import routes.inference as routes_mod
@@ -1416,15 +1284,7 @@ def test_a_checkpoint_request_override_still_admits_the_memory_tool(monkeypatch)
 
 
 def test_a_degraded_archive_stops_the_block_promising_a_lookup_that_returns_nothing(monkeypatch):
-    """`degraded()` is the verdict on the last write, and the write runs AFTER the fit.
-
-    `enabled()` only asks whether sqlite-vec loaded and `can_archive()` only whether the
-    thread is persisted, so where the embedder cannot start both say yes and the first
-    compaction commits a reset before anything is indexed. Downgrading only the reset left
-    the block still promising a `search_conversation` lookup that returns nothing, repeated
-    for the life of the thread. The tool stays on the catalogue so a recovered archive is
-    not walled off; only the promise goes.
-    """
+    """A degraded archive must stop the block promising search_conversation lookups that return nothing."""
     from core.inference import llama_cpp
 
     messages = _thread() + [{"role": "user", "content": "continue"}]
@@ -1482,13 +1342,7 @@ def _checkpoint_metadata(boundary, **extra):
 
 
 def test_a_wire_shaped_tool_branch_restores_the_stored_rows_boundary(monkeypatch):
-    """One stored assistant row expands to call, result, and reply on the wire.
-
-    Requiring the row's combined text to occur inside one wire assistant message rejects
-    the live row: its result is a separate ``tool`` message. The durable parent chain says
-    which stored row the request descends from without weakening sibling isolation. The
-    anchor is also counted after that same wire expansion, not against three stored rows.
-    """
+    """Stored rows expand to call, result and reply on the wire, so match parent chains, not text."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -1767,12 +1621,7 @@ def test_a_cancelled_epoch_boundary_is_found_through_its_stored_descendant(monke
 
 
 def test_retrying_the_newest_turn_twice_still_resolves_the_proved_branch(monkeypatch):
-    """Leaves that fork BELOW what the request proves cannot make the answer ambiguous.
-
-    Both siblings trim to the same stored row, so scoring them as a tie discarded the
-    branch the request had just proved and dropped the thread back on the text path,
-    which is the path a tool-heavy row cannot survive.
-    """
+    """Siblings forking below the proved branch are not a tie, or the thread drops to the text path."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -1815,11 +1664,7 @@ def test_retrying_the_newest_turn_twice_still_resolves_the_proved_branch(monkeyp
 
 
 def test_the_unstored_newest_turn_cannot_move_the_request_to_a_sibling(monkeypatch):
-    """The turn being answered is stored only once the reply completes.
-
-    A sibling that already carries that text is the one place it can be matched, so
-    scoring it there handed this request the sibling's deeper boundary.
-    """
+    """The newest turn is unstored until its reply completes, so it must not match a sibling's text."""
     from core.inference import checkpoint, llama_cpp
 
     def _reply(identifier, boundary):
@@ -1843,11 +1688,7 @@ def test_the_unstored_newest_turn_cannot_move_the_request_to_a_sibling(monkeypat
 
 
 def test_an_indistinguishable_placeholder_twin_is_not_dropped_from_the_vote(monkeypatch):
-    """Skipping a placeholder defers to the epoch before it, which needs a proved branch.
-
-    Where only text separates two Retry siblings, dropping the unreadable one leaves the
-    other deciding alone, and it is the abandoned one whose boundary then gets replayed.
-    """
+    """A placeholder twin must stay in the vote; dropping it lets the abandoned sibling decide."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -1869,11 +1710,7 @@ def test_an_indistinguishable_placeholder_twin_is_not_dropped_from_the_vote(monk
 
 
 def test_a_rewound_turn_does_not_match_an_assistant_reply_of_the_same_text(monkeypatch):
-    """Ancestry is proved by text, so the match has to agree about the role too.
-
-    Rewinding and typing "Continue." matched the ABANDONED continuation's assistant reply
-    of that text, and the request adopted a boundary its own branch never had.
-    """
+    """The text match must agree on role, or a rewound turn adopts an abandoned reply's boundary."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -1896,13 +1733,7 @@ def test_a_rewound_turn_does_not_match_an_assistant_reply_of_the_same_text(monke
 
 
 def test_a_chain_that_skips_past_the_settled_proof_is_refused(monkeypatch):
-    """A role-compatible match on the unstored turn can still land on a sibling.
-
-    The abandoned continuation ends in a user row reading "Continue." too, so the chain ran
-    to it and dragged the abandoned reply's deeper boundary along. Rows past the settled
-    tip must carry text the request actually sent; a row that renders nothing (an
-    unfinished tool card, the cancelled-epoch case) is not evidence either way.
-    """
+    """Rows past the settled tip must carry text the request sent; an empty-render row proves nothing."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -1927,11 +1758,7 @@ def test_a_chain_that_skips_past_the_settled_proof_is_refused(monkeypatch):
 
 
 def test_a_repeated_text_earlier_in_the_request_cannot_admit_an_abandoned_row(monkeypatch):
-    """Rows past the settled tip are justified by the unstored turns, and only those.
-
-    Checking them against the whole request let the abandoned continuation in on "Q" and
-    "Same", which the request does carry, but earlier, as the turns it rewound TO.
-    """
+    """Post-tip rows are justified only by unstored turns, not by text earlier in the request."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -1991,18 +1818,7 @@ def test_a_research_row_is_recognised_under_custom_metadata(monkeypatch):
 
 
 def test_a_boundary_is_not_replayed_after_the_context_policy_changes(monkeypatch):
-    """A policy switch has to discard the old depth, not just select another fitter.
-
-    A checkpoint boundary is the depth of a RESET, affordable only because the block is
-    rebuilt on every replay. Under `UNSLOTH_CONTEXT_POLICY=rolling` neither `_fit_context`
-    guard fires (both are `and checkpoint.enabled()`), so the stored reset-sized boundary
-    flowed into `fit_rolling_context`, which evicted 18 messages where rolling picks 6 and
-    built no block at all.
-
-    Worse, the boundary launders itself: `boundary_messages` is re-recorded on every fit,
-    so the first rolling turn would persist 18 with no `checkpoint` key and outlive the
-    policy that made sense of it. Refusing at the READ makes rolling compute its own.
-    """
+    """A boundary must not be replayed after the context policy changes; rolling must compute its own."""
     from core.inference import llama_cpp
 
     stored = [
@@ -2065,16 +1881,7 @@ def test_a_boundary_is_not_replayed_after_the_context_policy_changes(monkeypatch
 
 
 def test_a_request_that_cannot_reset_still_replays_its_rolling_boundary(monkeypatch):
-    """`UNSLOTH_CONTEXT_POLICY=checkpoint` is not the same as "this fit will reset".
-
-    `_can_reset_epoch` refuses whenever the model's template cannot render tools, the tool
-    loop is off, or the archive is unavailable, and those requests compact through
-    `fit_rolling_context` and record a rolling boundary. Rejecting a rolling boundary on
-    the process policy alone therefore threw it away on every later turn for exactly those
-    threads: the boundary slid again, which is the thing `sticky_dropped` exists to stop.
-    The rolling boundary is only unsafe where `fit_checkpoint_context` would read it as an
-    epoch already in force and skip the reset's recall.
-    """
+    """A rolling boundary stays replayable unless the fit would read it as an epoch in force."""
     from core.inference import checkpoint, llama_cpp
 
     stored = [
@@ -2106,15 +1913,7 @@ def test_a_request_that_cannot_reset_still_replays_its_rolling_boundary(monkeypa
 
 
 def test_a_rolling_boundary_never_reaches_the_checkpoint_replay(monkeypatch):
-    """Replaying an epoch requires an epoch, and only the recorded policy says there is one.
-
-    A request that may not reset still takes the checkpoint REPLAY branch under a
-    checkpoint policy, so a rolling-origin count handed to `fit_checkpoint_context` reads
-    as an epoch already in force: the fit returns `checkpoint_started` false, and
-    `_archive_and_recall` reads that as "already recalled" and injects nothing. Measured at
-    context_length 1800 with a stored boundary of 30, the reply lost the archived turns the
-    rolling fallback would have pulled back.
-    """
+    """A rolling-origin count must never reach the checkpoint replay, which would read it as an epoch."""
     from core.inference import checkpoint, llama_cpp
 
     monkeypatch.setattr(checkpoint, "CONTEXT_POLICY", "checkpoint")
@@ -2177,13 +1976,7 @@ def test_the_boundary_reader_reports_which_fitter_recorded_it(monkeypatch):
 
 
 def test_changing_the_extra_trim_discards_the_old_boundary(monkeypatch):
-    """The "When context fills" ratio has to do something on an already-compacted chat.
-
-    Phase one of `fit_rolling_context` re-applies the saved count before anything else and
-    stops as soon as the result fits, so a boundary cut under a different ratio replays in
-    full and the phase that reads the new one never runs. Moving the setting either way
-    would then change nothing at all.
-    """
+    """Changing the extra-trim ratio must discard the saved boundary, or phase one replays it unchanged."""
     from core.inference import checkpoint, llama_cpp
 
     stored = [
@@ -2243,13 +2036,7 @@ def test_the_recorded_boundary_carries_the_ratio_that_cut_it():
 
 
 def test_a_rescued_boundary_is_recorded_but_never_replayed(monkeypatch):
-    """Recording a rescue's depth must not make it sticky.
-
-    Two different questions. "What did this fit evict?" places the compaction notice, and
-    a rescue has a real answer worth persisting. "Which boundary should the next request
-    re-apply?" is the one a missed reply reserve makes unsafe, and it is decided here, on
-    `fits` alone -- so the depth can be honest without the replay becoming wrong.
-    """
+    """A rescued boundary is recorded but never replayed, since a missed reply reserve makes it unsafe."""
     from core.inference import checkpoint, llama_cpp
 
     stored = [
@@ -2274,14 +2061,7 @@ def test_a_rescued_boundary_is_recorded_but_never_replayed(monkeypatch):
 
 
 def test_the_tool_loop_reopens_only_where_an_epoch_actually_happened(monkeypatch):
-    """An archive is not a checkpoint, and only one of them justifies the override.
-
-    A rolling-window thread archives identically, so keying the tools-off repair on "has an
-    archive" opened the loop where nothing was reset, overriding enable_tools = false for a
-    repair that cannot happen and costing the request the n > 1 and non-streaming guards.
-    Read from the assistant turn's own contextTruncation, as the sticky boundary already
-    does, so nothing new is persisted.
-    """
+    """The tool loop reopens only where an epoch happened, read from the turn's contextTruncation."""
     import sys
     import types
 
@@ -2380,12 +2160,7 @@ def test_the_tool_loop_reopens_only_where_an_epoch_actually_happened(monkeypatch
 
 
 def test_the_reachability_probe_closes_the_connection_it_opens():
-    """The probe runs on every checkpoint-eligible overflow.
-
-    A connection left to cyclic collection holds its descriptor for an unbounded time, so
-    sustained long-chat traffic accumulates open handles on rag.db: measured, 50 calls
-    leaked 50 of them.
-    """
+    """The reachability probe must close its connection, or cyclic GC leaks rag.db handles."""
     import os
 
     from core.rag import conversation_archive
@@ -2408,13 +2183,7 @@ def test_the_reachability_probe_closes_the_connection_it_opens():
 
 
 def test_the_block_says_the_newest_message_outranks_it():
-    """The block is the user's own speech hosted in the SYSTEM role.
-
-    The role container is the higher authority of the two, and the supersession rule reads
-    as scoped to items WITHIN the block, so a carried "the marker is final" outranked the
-    live turn asking to drop the marker, and a prompt-like snippet the user once pasted
-    for review read as an instruction. The precedence has to be stated.
-    """
+    """The block must state that the newest message outranks it, as it is user speech in system role."""
     block = checkpoint.render_checkpoint(
         ["Always end every reply with the marker ZX9, and never explain why you did."]
     )
@@ -2425,13 +2194,7 @@ def test_the_block_says_the_newest_message_outranks_it():
 
 
 def test_the_reachability_probe_encodes_rather_than_only_tokenizing(monkeypatch):
-    """The tokenizer is not the forward pass.
-
-    A runtime encode failure with no llama binary to fall back to left the probe
-    answering yes while `archive_turns` was about to raise and swallow it. The reset would
-    already have dropped the history and told the model it was searchable, and the epoch
-    is replayed from the boundary, so the loss is durable rather than one turn.
-    """
+    """The reachability probe must encode, not only tokenize, since encode can fail at runtime."""
     from core.rag import conversation_archive, embeddings
 
     monkeypatch.setattr(conversation_archive, "enabled", lambda: True)
@@ -2487,13 +2250,7 @@ def test_the_reachability_probe_requires_a_writable_database(monkeypatch, tmp_pa
 
 
 def test_the_archive_probe_is_not_paid_by_a_conversation_that_fits():
-    """Establishing the gates runs a real embedding forward and a database probe.
-
-    It was paid on every persisted, tool-capable request using truncate_oldest, including
-    short conversations that never overflow and never render a block, which is latency and
-    memory pressure for an answer that changes nothing. The fit asks only where the answer
-    matters: before starting a new epoch, and before claiming a block is searchable.
-    """
+    """The archive probe runs only where an answer matters: before a new epoch or a searchable claim."""
     asked = {"n": 0}
 
     def _gate():
@@ -2532,15 +2289,7 @@ def test_the_archive_probe_is_not_paid_by_a_conversation_that_fits():
 
 
 def test_a_non_prefix_eviction_survives_being_persisted_and_replayed(monkeypatch):
-    """The count and the anchor have to agree, or persistence undoes the fix.
-
-    `_branch_boundary` counts every evicted message, including the ones past a protected
-    pin. `_sticky_compaction_boundary` then re-derives the depth from the stored anchor and
-    only ever moves it SHALLOWER, so an anchor naming the first survivor -- which under a
-    mid-list pin IS the pin, sitting near the front -- clamps the count straight back down
-    and hands back every turn compacted after it. Passing `_branch_boundary` to the next
-    fit directly never sees that: the clamp lives on the persisted path.
-    """
+    """The boundary count and anchor must agree, or persistence clamps a mid-list pin's count back down."""
     from core.inference import checkpoint, llama_cpp
 
     monkeypatch.setattr(checkpoint, "CONTEXT_POLICY", "checkpoint")
@@ -2615,13 +2364,7 @@ def test_a_non_prefix_eviction_survives_being_persisted_and_replayed(monkeypatch
 
 
 def test_the_boundary_projection_hands_the_anchor_back_unchanged():
-    """One side writes the anchor, the other reads it, and only one goes through `_as_wire`.
-
-    `_branch_boundary_anchor` records it straight off the request, so the archive
-    projection has to return the same bytes. A client that sends the image tokens or
-    inline audio raw, which the Studio one never does, otherwise found no anchor at all
-    and replayed the stale count instead of rebasing it against its own branch.
-    """
+    """The anchor must round-trip through _as_wire unchanged, or raw image and audio clients lose it."""
     from core.inference import llama_cpp
     for text in (
         '<audio-player src="data:audio/wav;base64,QUJDRA==" />',
@@ -2644,14 +2387,7 @@ def test_the_boundary_projection_hands_the_anchor_back_unchanged():
 
 
 def test_a_caller_owned_carried_forward_tag_is_left_alone():
-    """The delimiter is prompt text, and prompt text belongs to whoever wrote it.
-
-    A caller whose own system prompt happens to use `<carried_forward>` had that section
-    read as Unsloth's block: stripped on every reset, its bullet lines reintroduced further
-    down as lower-authority quoted USER history, and anything not bullet-shaped deleted
-    outright. Silently rewriting a caller's system policy is worse than carrying nothing,
-    so the block is recognised by the header Unsloth itself writes, not by the tag alone.
-    """
+    """Match the carried block by its header, not the tag, so a caller's own carried_forward is kept."""
     caller = (
         "You are a support agent.\n"
         "<carried_forward>\n"
@@ -2680,16 +2416,7 @@ def test_a_caller_owned_carried_forward_tag_is_left_alone():
 
 
 def test_a_block_that_arrives_in_the_system_turn_is_dropped_when_it_will_not_fit():
-    """Dropping X has to drop the one already in the prompt, not just the one being built.
-
-    A tool loop refits a conversation an earlier iteration rewrote, so the system turn
-    arrives WITH a block. `_project` merges that block's items with the new ones and
-    re-caps them against a budget that is a tenth of the prompt target, so on a small
-    window everything is capped away and it returns an empty block -- and
-    `_append_to_system` returns early on an empty block, leaving the arriving one in
-    place. The recount then still carried X and the request was refused although the base
-    system prompt plus the newest turn fits with room to spare.
-    """
+    """An arriving block that will not fit must be dropped, or the recount still carries it."""
     block = render_checkpoint(["Always end every reply with STATUS::ZQX " + "w" * 600])
     messages = [{"role": "system", "content": "you are helpful\n\n" + block}]
     for index in range(6):
@@ -2708,14 +2435,7 @@ def test_a_block_that_arrives_in_the_system_turn_is_dropped_when_it_will_not_fit
 
 
 def test_the_checkpoint_check_reads_the_routes_own_message_models(monkeypatch):
-    """The ordinary completions path hands this Pydantic models, not dicts.
-
-    `branch_message_texts` reads messages with `.get`, so it raised, the caller swallowed
-    the exception and every thread reported no checkpoint. A tools-off thread that HAD
-    reset therefore never reopened the tool loop, so `search_conversation` was never
-    offered and the block's promise that the earlier turns are searchable was false for
-    the whole epoch.
-    """
+    """The checkpoint check must read Pydantic message models with attribute access, not dict .get."""
     import sys
     import types
 
@@ -2755,13 +2475,7 @@ def test_the_checkpoint_check_reads_the_routes_own_message_models(monkeypatch):
 
 
 def test_a_healthy_probe_is_not_trusted_on_the_next_request(monkeypatch):
-    """A yes describes the moment it was taken, and nothing longer.
-
-    Cached across requests, the first overflow after the store or embedder dies is still
-    told the archive is reachable: it starts an epoch, `archive_turns` swallows the write
-    failure, and the fitted prompt has already dropped the turns the block says are
-    searchable. The epoch replays from the boundary, so that loss is durable.
-    """
+    """A healthy archive probe must not be cached across requests, since the store can die afterwards."""
     from core.rag import conversation_archive, embeddings
 
     monkeypatch.setattr(conversation_archive, "enabled", lambda: True)
@@ -2782,14 +2496,7 @@ def test_a_healthy_probe_is_not_trusted_on_the_next_request(monkeypatch):
 
 
 def test_a_reset_that_no_longer_holds_stops_reopening_the_tool_loop(monkeypatch):
-    """A checkpoint is a state of the thread NOW, not a mark it carries for ever.
-
-    Reload a checkpointed thread with a bigger window and the whole branch fits again, so
-    the fit stops replaying the boundary and records no checkpoint. Scanning back to an
-    older reset then forced the Unsloth tool loop open on every later turn, overriding
-    enable_tools = false, and with it the n > 1 and non-streaming guards, to repair a
-    compaction that no longer exists.
-    """
+    """A reset that no longer holds after a window change must stop reopening the tool loop."""
     import sys
     import types
 
@@ -2828,13 +2535,7 @@ def test_a_reset_that_no_longer_holds_stops_reopening_the_tool_loop(monkeypatch)
 
 
 def test_a_restated_instruction_keeps_its_newest_position():
-    """Otherwise the block's own later-wins rule reports the opposite of the truth.
-
-    The all-short fallback reserves the oldest qualifying turn and walks it first, so a
-    repeat was dropped in favour of its own older copy. "metric", "imperial", "metric"
-    then rendered as metric followed by imperial, telling the model imperial was current
-    at the moment the user had just restored metric.
-    """
+    """A restated instruction keeps its newest position, since the block's later-wins rule reads order."""
     messages = [
         {"role": "user", "content": "Use metric units"},
         {"role": "assistant", "content": "ok"},
@@ -2863,13 +2564,7 @@ def test_the_plain_walk_still_keeps_one_copy_of_a_repeated_rule():
 
 
 def test_a_tight_cap_keeps_the_correction_not_the_abandoned_task():
-    """Reserving the opening task must not DISPLACE the newest instruction.
-
-    Placing the oldest turn first exhausted a cap of one before the newest-first walk
-    began, so "Build a Flappy Bird game" then "Actually build Tetris instead" carried
-    only the abandoned request: the block stated the opposite of the user's latest
-    direction.
-    """
+    """Reserving the opening task must not displace the newest correction from a tight cap."""
     messages = [
         {"role": "user", "content": "Build a Flappy Bird game"},
         {"role": "assistant", "content": "ok"},
@@ -2897,14 +2592,7 @@ def test_a_tight_cap_keeps_the_correction_not_the_abandoned_task():
 
 
 def test_an_oversized_newest_turn_does_not_hand_the_budget_to_the_opening_task():
-    """The reservation slots in behind the newest TAKEABLE turn, not the newest one.
-
-    A turn costing more than the whole cap is skipped by the walk without spending
-    anything, so reserving behind it put the opening task ahead of every usable recent
-    turn. On a 2048-token context (cap 153) an opening "Build Flappy Bird", a later
-    "Actually build Tetris" and a final oversized pasted request carried only the
-    abandoned Flappy Bird request.
-    """
+    """The opening reservation sits behind the newest takeable turn, since oversized turns are skipped."""
     opening = (
         "Build a Flappy Bird clone in a single HTML file: canvas rendering, a bird that "
         "flaps on space or click, randomly spaced pipes scrolling right to left, "
@@ -2954,12 +2642,7 @@ def test_the_opening_task_still_survives_a_run_of_short_increments():
 
 
 def test_a_short_correction_survives_a_long_earlier_instruction():
-    """The length floor used to gate the whole selection.
-
-    A long task statement cleared the 80-character floor on its own, so the no-floor
-    fallback never ran and a later short correction was dropped: the block carried only
-    the abandoned request, precisely because an earlier turn happened to be wordy.
-    """
+    """A long earlier task must not clear the length floor and starve a short later correction."""
     messages = [
         {
             "role": "user",
@@ -2991,14 +2674,7 @@ def _user_turns(*texts):
 
 
 def test_the_opening_request_is_never_carried_without_the_turn_that_follows_it():
-    """The reservation used to spend its slot on the abandoned request and let the slot
-    cap drop the correction to it, which is the exact statement of the task the
-    reservation exists to prevent.
-
-    "Build Flappy Bird", "Actually build Tetris instead", "Add music" at max_items 2
-    carried ["Build Flappy Bird", "Add music"]: the model is told to build the game the
-    user walked away from, and to add music to it.
-    """
+    """The opening request is never carried without the correction that follows it."""
     messages = _user_turns("Build Flappy Bird", "Actually build Tetris instead", "Add music")
 
     items = carried_forward_items(messages, max_tokens = 4096, max_items = 2)
@@ -3042,10 +2718,7 @@ def test_the_opening_task_survives_a_long_run_of_increments_with_no_correction()
 
 
 def test_the_opening_pair_is_taken_whole_or_not_at_all():
-    """The boundary of the rule. The pair needs two slots behind the newest usable turn,
-    so three slots is where it starts fitting. At two it is abandoned rather than
-    half-taken, because half of it is the abandoned request without its correction.
-    """
+    """The opening pair is taken whole or not at all, since half of it is the abandoned request."""
     messages = _user_turns(
         "Build Flappy Bird",
         "Actually build Tetris instead",
@@ -3061,11 +2734,7 @@ def test_the_opening_pair_is_taken_whole_or_not_at_all():
 
 
 def test_a_token_budget_too_small_for_the_pair_keeps_the_correction():
-    """The same both-or-neither rule against the token cap rather than the slot cap.
-
-    A budget with room for the newest turn and ONE of the two opening turns used to buy
-    the abandoned request, because the reservation was charged first.
-    """
+    """The pair rule applies to the token cap too: a small budget keeps the correction, not the opening."""
     opening = (
         "Build a Flappy Bird game in a single HTML file with canvas rendering, gravity, "
         "pipes and a score counter."
@@ -3082,15 +2751,7 @@ def test_a_token_budget_too_small_for_the_pair_keeps_the_correction():
 
 
 def test_abandoning_the_reservation_does_not_reselect_the_opening_on_its_own():
-    """The fallback walk must exclude the opening turn, or it recreates the bug.
-
-    Abandoning the reservation is not enough on its own: the plain newest-first fallback
-    simply picked the opening up again whenever it was the cheaper of the two. A 10-token
-    "Build Tetris", a 27-token correction and a 17-token newest turn under a 40-token
-    budget carried ["Build Tetris", "Add music ..."] -- the abandoned game with the
-    correction to it dropped, which is the bug this pass exists to fix, reached by another
-    route.
-    """
+    """The fallback walk must exclude the opening turn too, or the abandoned task is reselected."""
     opening = "Build Tetris"
     correction = "Actually scrap that and build Flappy Bird instead, same single HTML file please."
     newest = "Add music and a score counter to it now."
@@ -3103,19 +2764,7 @@ def test_abandoning_the_reservation_does_not_reselect_the_opening_on_its_own():
 
 
 def test_a_successor_nobody_could_afford_does_not_empty_the_block():
-    """The boundary of that exclusion, and the reason it is not unconditional.
-
-    When the successor costs more than the whole budget, no ordering carries it and there
-    was never a pair to take. Dropping the opening then buys nothing, because on these
-    threads the opening is the only affordable turn: the campaign's headline case is a
-    43-token standing instruction followed by eight 160-token sections under a 100-token
-    budget, and excluding the opening sends the block out EMPTY, which is the failure the
-    whole pass exists to stop.
-
-    The same shape with a correction (a 10-token opening, a 56-token correction and a
-    60-token newest turn under a 50-token cap) is indistinguishable from it by anything
-    but the English, so the two get the same answer and it is this one.
-    """
+    """Exclude the opening only when its successor is affordable, or the block empties."""
     instruction = {"role": "user", "content": INSTRUCTION}
     sections = []
     for index in range(8):
@@ -3135,14 +2784,7 @@ def test_a_successor_nobody_could_afford_does_not_empty_the_block():
 
 
 def test_a_newer_restatement_still_wins_when_the_reserved_pair_fills_the_cap():
-    """Position is meaning, so it is read off the transcript, not off the walk.
-
-    The reserved pair can fill the slot cap before the walk reaches a newer copy of an
-    instruction at all, and the surviving copy then rendered at the position of the older
-    one: "metric", "imperial", "metric", "add a table" at max_items 3 came back as metric,
-    imperial, table, and the header's later-wins rule told the model imperial was current
-    at the moment the user had just restored metric.
-    """
+    """Position is meaning: a newer restatement must win even when the reserved pair fills the cap."""
     messages = _user_turns(
         "Use metric units",
         "Use imperial units",
@@ -3194,17 +2836,7 @@ def test_a_nudge_is_still_excluded_without_the_length_floor():
 
 
 def test_the_carried_opening_pair_survives_the_next_compaction():
-    """The pair rule has to hold on the MERGED path, not only on the fresh walk.
-
-    The block arrives in the system turn (the ordinary case in a tool loop, and on every
-    request of an epoch already in force) holding the opening request and the correction
-    to it. The turns that produced them are long gone, so the merge is the only copy. The
-    plain newest-first re-cap then spent the budget on the increments evicted since,
-    skipped the long correction for cost, and STILL afforded the short opening: measured
-    at a 4096-token context, the block came back as "Build Flappy Bird" plus four Tetris
-    increments, which is the abandoned-request-plus-increments output the pair exists to
-    prevent, reached one compaction later.
-    """
+    """The pair rule must also hold on the merged path, since the merge is the only copy of the block."""
     opening = "Build Flappy Bird in one HTML file."
     correction = (
         "Actually scrap Flappy Bird and build Tetris instead: same single HTML file, no "
@@ -3250,14 +2882,7 @@ def test_the_carried_opening_pair_survives_the_next_compaction():
 
 
 def test_the_merged_recap_abandons_the_pair_the_same_way_the_fresh_walk_does():
-    """When the merged budget cannot hold the pair, half of it is still the bug.
-
-    Same shape as `test_abandoning_the_reservation_does_not_reselect_the_opening_on_its
-    _own`, one compaction later: a 10-token "Build Tetris", its 27-token correction and a
-    17-token increment under a 40-token budget re-capped to ["Build Tetris", the
-    increment], the abandoned game with its correction dropped. The merge must reach the
-    same answer the fresh walk does, which is to drop the opening and keep the newest.
-    """
+    """A merged recap that cannot hold the pair must drop the opening, as the fresh walk does."""
     opening = "Build Tetris"
     correction = "Actually scrap that and build Flappy Bird instead, same single HTML file please."
     newest = "Add music and a score counter to it now."
@@ -3270,13 +2895,7 @@ def test_the_merged_recap_abandons_the_pair_the_same_way_the_fresh_walk_does():
 
 
 def test_the_merged_recap_never_empties_a_block_it_could_have_filled():
-    """The both-or-neither rule must not answer "neither" with nothing left to say.
-
-    A block holding only the pair, re-capped under a budget that no longer holds both (the
-    user switched to a shorter context mid-thread), still goes out with one of them: the
-    correction where the correction is affordable, and the opening where it is not, which
-    is the `_takeable` escape hatch the fresh walk already had.
-    """
+    """A merged block that cannot hold both must still carry one bullet rather than empty out."""
     opening = "Build Tetris"
     correction = "Actually scrap that and build Flappy Bird instead, same single HTML file please."
 
@@ -3289,13 +2908,7 @@ def test_the_merged_recap_never_empties_a_block_it_could_have_filled():
 
 
 def test_a_one_bullet_block_is_not_paired_with_a_turn_it_never_preceded():
-    """The unit is the BLOCK, so a one-bullet block is never held to a partner.
-
-    A block with a single bullet says nothing about what followed that instruction, and a
-    rule that reached past it into the freshly evicted turns for a partner would invent a
-    relationship the transcript never had, then drop the bullet whenever the invented
-    partner did not fit. That bullet is the only copy of it left anywhere in the request.
-    """
+    """A one-bullet block is never paired with a turn it never preceded, so its bullet is not dropped."""
     carried = (
         "Build Tetris as a single HTML file with canvas rendering, keyboard controls for "
         "rotate, drop and hold, a next piece preview, a ghost piece, a pause key and a "
@@ -3338,13 +2951,7 @@ def test_a_one_bullet_block_is_not_paired_with_a_turn_it_never_preceded():
 
 
 def _restated_correction_block():
-    """A VALID block whose bullets are not [opening, successor, ...].
-
-    The user restated the correction after an intervening rule, and the block renders each
-    item at its newest copy, so the correction sits behind the rule that came between it
-    and the opening. Nothing here is malformed: the fresh walk reserved the pair and took
-    it whole, and this is what that looks like once rendered.
-    """
+    """A valid block can hold a restated correction behind an intervening rule, not in pair order."""
     opening = "Build Tetris"
     correction = "Actually scrap that and build a Flappy Bird clone instead, please now."
     intervening = "Dark theme"
@@ -3357,15 +2964,7 @@ def _restated_correction_block():
 
 
 def test_a_correction_restated_out_of_order_is_not_dropped_by_the_merge():
-    """The merge must not decide which bullets were the pair by counting from the front.
-
-    The block reads [opening, intervening rule, correction, newest], so reserving its
-    first TWO bullets reserves the opening and the intervening rule and lets the walk drop
-    the correction: measured at a 60-token budget with two 10-token instructions evicted
-    since, the block came back as "Build Tetris", "Dark theme", "Add music!", "Add a
-    menu", "Add a timer" -- the abandoned game carried, the correction to it gone, and
-    WORSE than no reservation at all, which keeps the correction here.
-    """
+    """The merge must not take the pair from the block's front, or it reserves the wrong bullets."""
     opening, correction, prior = _restated_correction_block()
     messages = [
         {"role": "system", "content": "you are helpful\n\n" + checkpoint.render_checkpoint(prior)}
@@ -3387,15 +2986,7 @@ def test_a_correction_restated_out_of_order_is_not_dropped_by_the_merge():
 
 
 def test_the_merge_never_states_the_abandoned_task_whichever_bullet_corrects_it():
-    """The invariant, stated without naming the successor: the block's first bullet is
-    never carried while any affordable bullet beside it is dropped.
-
-    Both positional readings fail this on their own. The plain newest-first re-cap keeps
-    the cheap opening and the cheap intervening rule and drops the 25-token correction
-    ("Build Tetris", "Dark theme", "Add music!" plus three increments at a 60-token
-    budget), and reserving the first two bullets does the same thing one increment
-    earlier. Holding the block WHOLE or dropping its first bullet needs neither reading.
-    """
+    """The block's first bullet is never kept while an affordable bullet beside it is dropped."""
     opening, correction, prior = _restated_correction_block()
     fresh = ["Add a menu", "Add a timer", "Add a pause"]
 
@@ -3409,13 +3000,7 @@ def test_the_merge_never_states_the_abandoned_task_whichever_bullet_corrects_it(
 
 
 def test_holding_the_block_whole_does_not_freeze_it_on_the_first_epoch():
-    """The unit is reserved BEHIND the newest usable item and abandoned when it will not
-    fit whole, so a block cannot take every slot forever and starve the newer rules.
-
-    Without that the merge would be sticky-oldest: eight carried bullets would hold all
-    eight slots on every later compaction and no instruction the user gave afterwards
-    could ever enter the block the model is shown.
-    """
+    """A held block must release its slots, or eight carried bullets freeze the block forever."""
     block = [f"standing rule {index} " + "w " * 20 for index in range(1, 5)]
     seen_rounds = []
     for round_index in range(1, 7):
@@ -3429,12 +3014,7 @@ def test_holding_the_block_whole_does_not_freeze_it_on_the_first_epoch():
 
 
 def test_every_epoch_the_writer_records_carries_a_count_the_reader_can_use():
-    """`_thread_has_checkpoint` now demands a resolved boundary, not just the flag.
-
-    The old gate read `checkpoint` alone, so a record with the flag and no count still
-    admitted the search tool. Nothing released can write that pair -- this pins it, since
-    a writer that dropped the count would silently close the loop on a live epoch.
-    """
+    """The thread checkpoint check requires a resolved boundary count, not only the checkpoint flag."""
     import ast
     import inspect
 
@@ -3456,13 +3036,7 @@ def test_every_epoch_the_writer_records_carries_a_count_the_reader_can_use():
 
 
 def test_a_cancelled_reply_that_reached_text_is_still_validated(monkeypatch):
-    """Stop is not omission: the client re-sends a partial reply, so it must match.
-
-    `isAbandonedAssistantTurn` (chat-adapter.ts) drops an assistant turn only when it
-    carries no text, image or attachment -- cancellation alone does not drop it. Exempting
-    every cancelled row from the post-tip check let this abandoned "Partial" ride in on
-    "Continue" and hand the request its boundary instead of the epoch that really ended.
-    """
+    """A cancelled reply that reached text must still be validated, as clients re-send it."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -3496,12 +3070,7 @@ def test_a_cancelled_reply_that_reached_text_is_still_validated(monkeypatch):
 
 
 def test_storage_order_does_not_prove_ancestry_between_indistinguishable_rows(monkeypatch):
-    """Rows written before `parentId` fall back to storage order, which is not ancestry.
-
-    Two identical Retry replies with no links become one artificial chain, the abandoned
-    one stored first becomes the live one's ancestor, and the trim stops on it. Its deeper
-    boundary then replayed instead of the conservative vote, evicting live history.
-    """
+    """Rows without parentId must not be chained by storage order, which is not ancestry."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -3525,11 +3094,7 @@ def test_storage_order_does_not_prove_ancestry_between_indistinguishable_rows(mo
 
 
 def test_a_stored_reply_is_not_justified_by_a_user_turn_of_the_same_words(monkeypatch):
-    """The carried set is keyed by role, as the branch match is.
-
-    A text-only set let a stored assistant "Continue" pass on the live USER "Continue",
-    so an abandoned chain matching the trailing user turns carried its boundary in.
-    """
+    """A stored assistant reply must not be justified by a live user turn with the same words."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -3555,11 +3120,7 @@ def test_a_stored_reply_is_not_justified_by_a_user_turn_of_the_same_words(monkey
 
 
 def test_a_completed_tool_turn_past_the_tip_is_validated_by_its_results(monkeypatch):
-    """A finished tool call is re-sent, calls and results, so it is not exempt.
-
-    Exempting every tool-only row let an abandoned tool exchange through unchecked; the
-    cancelled case stays exempt because its calls never returned and render nothing.
-    """
+    """A completed tool turn past the tip is validated by its results; only cancelled calls are exempt."""
     from core.inference import checkpoint, llama_cpp
 
     def _call(identifier, *, result):
@@ -3626,11 +3187,7 @@ def test_a_replayed_row_that_renders_no_text_is_refused_rather_than_trusted(monk
 
 
 def test_a_second_explicit_root_is_not_wired_onto_the_branch_before_it(monkeypatch):
-    """Editing the first prompt makes a real second root; storage order must not fuse them.
-
-    Standing the previous row in for every null parent joined the abandoned root's branch
-    onto the live one, so the walk reached back into it and could restore its boundary.
-    """
+    """A second explicit root must not be wired onto the earlier branch by storage order."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 
@@ -3659,11 +3216,7 @@ def test_a_second_explicit_root_is_not_wired_onto_the_branch_before_it(monkeypat
 
 
 def test_a_completed_reasoning_only_reply_is_replayed_so_it_must_match(monkeypatch):
-    """`isAbandonedAssistantTurn` keeps a turn that finished on reasoning alone.
-
-    `_as_wire` strips reasoning, so such a row offers no key. Treating it as dropped let
-    an abandoned one past the tip unchecked and carried its boundary onto the live branch.
-    """
+    """A completed reasoning-only reply is replayed, so it must match the branch and is not dropped."""
     from core.inference import checkpoint, llama_cpp
 
     rows = [
@@ -3712,13 +3265,7 @@ def test_an_instruction_typed_beside_an_image_is_still_carried():
 
 
 def test_an_image_turn_costs_the_same_as_the_words_it_carries():
-    """At the EXACT price of the bullet, so the assertion is about the price.
-
-    A roomy cap passes whatever the turn is charged, which is the assertion this test
-    was named for. One token below the bullet's own cost neither shape fits; at that
-    cost both do, and any surcharge for the attachment shows up as the image side
-    dropping out.
-    """
+    """An image turn costs exactly the words it carries, so one token below that cost drops it."""
     cost = estimate_message_tokens({"role": "user", "content": INSTRUCTION})
     plain = carried_forward_items([{"role": "user", "content": INSTRUCTION}], max_tokens = cost)
 
@@ -3728,14 +3275,7 @@ def test_an_image_turn_costs_the_same_as_the_words_it_carries():
 
 
 def test_a_text_only_turn_costs_the_same_whether_it_arrives_as_a_list_or_a_string():
-    """The same words, priced the same, however the client wrapped them.
-
-    An attachment is the loud case, but the `[{"type": "text", ...}]` shape is the
-    ordinary OpenAI wire form and carries no image at all. Pricing the whole message
-    charged that turn for its JSON part wrapper -- 50 tokens against the 43 the words
-    cost -- so between those two caps an instruction was carried when the client sent a
-    string and dropped when it sent the identical text as a list.
-    """
+    """A text-only turn is priced by its words, not its list-part JSON wrapper."""
     cost = estimate_message_tokens({"role": "user", "content": INSTRUCTION})
     listed = {"role": "user", "content": [{"type": "text", "text": INSTRUCTION}]}
 
@@ -3744,12 +3284,7 @@ def test_a_text_only_turn_costs_the_same_whether_it_arrives_as_a_list_or_a_strin
 
 
 def test_the_block_is_priced_with_the_estimator_the_caller_passed_in():
-    """`fit_checkpoint_context` takes the pricing rule; the block has to honour it.
-
-    The carried block used to price itself with the module-level estimate whatever the
-    caller asked for, so a caller counting a shape differently sized this block by a
-    rule it had already replaced.
-    """
+    """The carried block must use the caller's estimator, not the module-level default."""
     charged = []
 
     def double(message):
@@ -3792,10 +3327,7 @@ def test_an_oversized_instruction_is_still_excluded_whole():
 
 
 def test_a_nudge_sent_with_an_image_is_not_quoted_as_an_instruction():
-    """`is_substantive` passes any turn carrying an attachment, which is right for a
-    recall query and wrong here: the attachment never reaches the block, so only the
-    words can earn a bullet. Pricing the whole message used to hide this by making such
-    a turn unaffordable."""
+    """An image turn is not quoted as an instruction, since only its words can earn a bullet."""
     items = carried_forward_items([_image_turn("ok")], max_tokens = 1024)
 
     assert items == []

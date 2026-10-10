@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Mapper models whose own tokenizer ships no chat_template have their turn-end
-eos resolved at LOAD from an empty template (document eos only). The effective
-template is installed later, at generate time, via get_chat_template, so the
-turn-end-eos cache must be refreshed then; otherwise generate_stream runs past
-the ChatML <|im_end|> boundary and loops (the exact bug this PR fixes).
-"""
+"""Refresh the turn-end eos cache at generate time, since the chat template is only installed then."""
 
 import sys
 from pathlib import Path

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Continuing a truncated answer resumes the trailing assistant turn.
-
-With ``continue_final_message`` the prompt ends inside the partial response, so the
-model emits the next token of the same sentence; without it the same conversation
-renders a fresh assistant turn and restarts. Self-limiting: only a plain-text trailing
-assistant turn can be resumed, so anything else renders normally instead of raising.
-"""
+"""continue_final_message resumes a truncated trailing assistant turn; other shapes render normally."""
 
 from __future__ import annotations
 
@@ -37,10 +31,7 @@ _PARTIAL = "The three steps are: first, preheat the"
 
 
 class _AnyModule(types.ModuleType):
-    """Stand-in module: every attribute resolves, nothing runs.
-
-    ``__spec__`` is set because ``importlib.util.find_spec`` raises without one.
-    """
+    """__spec__ is set because importlib.util.find_spec raises on a module without one."""
 
     def __init__(self, name):
         super().__init__(name)
@@ -51,13 +42,7 @@ class _AnyModule(types.ModuleType):
 
 
 def _inference_backend():
-    """``InferenceBackend`` without the training stack.
-
-    ``inference.py`` imports unsloth and peft at module scope and the dependency-light
-    CI job installs neither, but the formatters under test touch neither. Stub rather
-    than skip, or the matrix that would catch a restart regression never runs it; the
-    stubs are dropped once the module is bound. Torch and transformers it does need.
-    """
+    """Stubs unsloth and peft so the restart-regression matrix runs in CI instead of being skipped."""
     try:
         import transformers  # noqa: F401 - settle optional-dep probes before faking
     except ImportError:
@@ -362,11 +347,7 @@ def test_without_the_flag_nothing_merges():
 
 
 def test_mlx_registered_vlm_recovery_preserves_the_continuation(monkeypatch):
-    """The mlx-vlm recovery renderer must not reopen the assistant turn.
-
-    Reached when a VLM's primary template render is rejected, it hardcodes a
-    generation prompt, so without the partial it silently restarts the answer.
-    """
+    """The mlx-vlm recovery renderer must keep the partial, or a hardcoded prompt restarts the answer."""
     import sys
     import types
 
@@ -589,11 +570,8 @@ def test_native_fallback_keeps_participant_names():
 
 
 def test_a_text_part_partial_merges_rather_than_doubling_the_turn():
-    """The merge follows the same rule as the prompt boundary.
-
-    OpenAI-format callers may send the partial as text parts, which the guard accepts;
-    a string-only merge would leave two assistant turns and strict templates reject it.
-    """
+    """Text-part partials must merge into one assistant turn, or strict templates reject the doubled
+    turn."""
     conversation = [
         {"role": "user", "content": "q"},
         {"role": "assistant", "content": [{"type": "text", "text": "Looking that "}]},
@@ -609,12 +587,7 @@ def test_a_text_part_partial_merges_rather_than_doubling_the_turn():
 
 
 def test_a_resumed_partial_keeps_the_metadata_the_continuation_does_not_repeat():
-    """Gemini pins the text part's signature back on from extra_content alone.
-
-    The merge used to assign the continuation into the slot, so every key the
-    partial carried and the continuation did not was dropped and the replayed
-    turn was rejected.
-    """
+    """Merging a resumed partial must keep keys only it carries, like Gemini's extra_content signature."""
     conversation = [
         {"role": "user", "content": "q"},
         {
@@ -753,11 +726,7 @@ def test_a_think_typed_into_the_conversation_is_not_treated_as_a_prefill():
 
 
 class _SplitTemplateLegacyTokenizer:
-    """Separate tool/default templates, rejecting both ``tools`` and the boundary kwarg.
-
-    The default template's ``<|eot_id|>`` is absent from the tool template, so only the
-    fallback sweep neutralizes it.
-    """
+    """Split tool/default templates: only the fallback sweep neutralizes the default's <|eot_id|>."""
 
     chat_template = {
         "tool_use": "{% for m in messages %}<|im_start|>{{m.role}}\n{{m.content}}<|im_end|>{% endfor %}",
@@ -883,11 +852,7 @@ def _sf_completion(
 
 
 def test_a_resumed_turn_that_called_a_tool_re_prefills_on_the_final_turn(monkeypatch):
-    """Request-wide de-prefilling would publish the last turn's thinking as the answer.
-
-    Streaming re-prefills per turn; non-streaming keeps only the last turn's text, so
-    it has to pin the mode of the turn that text came from.
-    """
+    """De-prefill mode must follow the final turn, or its thinking is published as the answer."""
     message = _sf_completion(monkeypatch, _RESUMED_TOOL_EVENTS)["message"]
     assert message["reasoning_content"] == "Tool says 21C, report it."
     assert message["content"] == "\n\nIt is 21C."

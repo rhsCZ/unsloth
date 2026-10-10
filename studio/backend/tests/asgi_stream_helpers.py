@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Wait for an SSE frame without swallowing the reason it never arrived.
-
-The slot-release tests drive the ASGI app in a task and wait on an event a fake ``send()`` sets. If
-the request path raises first, the wait times out and the ``finally``'s ``gather(...,
-return_exceptions = True)`` discards the real exception, leaving a bare ``TimeoutError``. That is
-how #8700's unguarded ``llama_backend.context_length`` read surfaced: four 20-second "flakes"
-hiding an ``AttributeError``. So if the driving task has failed, raise ITS exception.
-"""
+"""Wait for SSE frames; if the driving task failed first, raise its exception, not a bare timeout."""
 
 from __future__ import annotations
 
@@ -22,11 +15,7 @@ async def wait_for_frame(
     timeout: float = 20.0,
     what: str = "the expected SSE frame",
 ) -> None:
-    """Wait for *event*, surfacing *task*'s exception if it died first.
-
-    The timeout is a deadlock backstop, not a performance assertion: these tests take milliseconds
-    when they pass, so a timeout means "never happened", not "too slow".
-    """
+    """The timeout is a deadlock backstop only: a timeout means the event never happened, not slow."""
     waiter = asyncio.ensure_future(event.wait())
     try:
         done, _ = await asyncio.wait(

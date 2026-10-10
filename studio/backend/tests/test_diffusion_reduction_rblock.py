@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Diffusion compiles pin inductor's dynamic_scale_rblock off, so one seed renders one image in every server process.
-
-With it on, a register-heavy looped reduction (FLUX's LayerNorm + int8 activation-quant kernel) gets a second launcher
-with half the R0_BLOCK, benchmarked on first use in every process and never cached; the two block sizes give different
-bits, so FLUX.1-schnell renders differed between Studio servers on a B200 (4 of 15). The CUDA test reproduces that
-kernel and checks no runtime autotune is left once the knob is set."""
+"""Left on, dynamic_scale_rblock benchmarks a second launcher per process, changing the bits."""
 
 from __future__ import annotations
 
@@ -378,10 +373,7 @@ def _ltx_like_block_norm():
 
 
 def _qwen_like_text_norm():
-    """Qwen-Image block, text stream: LayerNorm (no affine, eps 1e-6, fp32 statistics) over the 3072 hidden of 64 bf16
-    text tokens, then the AdaLN modulation (shift / scale chunks of the timestep embedding, addcmul). With the int8
-    GEMM's bf16 producer on sm120 this reduction gets R0_BLOCK 4096 (one Welford pass) and 2048 (two, then combined).
-    The modulated output stays fp32 here so the two statistics orders show on every GPU."""
+    """The modulated output stays fp32 so the two statistics orders show on every GPU."""
 
     class Head(torch.nn.Module):
         def __init__(self):

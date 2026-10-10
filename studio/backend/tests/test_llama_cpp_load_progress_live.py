@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Live, no-mock integration test for ``LlamaCppBackend.load_progress()``.
-
-The companion mocked tests patch ``builtins.open`` for synthetic VmRSS values;
-this one uses real subprocesses, file sizes, and ``/proc`` so format drift the
-mocks can't see (kernel ``/proc`` layout, stat vs getsize) gets caught. Skipped
-on non-Linux (no ``/proc``).
-"""
+"""Uses real subprocesses and /proc, not mocks, so kernel /proc layout drift is caught; Linux only."""
 
 from __future__ import annotations
 

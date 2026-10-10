@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""POST /load resolves opaque ``ollama-manifest:`` inventory references.
-
-The read-only hub inventory scan returns Ollama rows whose load id is an
-``ollama-manifest:`` reference (hub/services/models/ollama.py); the load path
-owns the filesystem write that turns one into a loadable ``.gguf`` link. These
-tests pin that hand-off at ``_resolve_model_identifier_for_request``, which both
-the load and validate routes go through.
-"""
+"""Pins the ollama-manifest: load hand-off in _resolve_model_identifier_for_request."""
 
 from __future__ import annotations
 

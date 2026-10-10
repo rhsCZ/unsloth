@@ -38,12 +38,7 @@ SCOPE_B = "s=sess1:t=threadB"
 
 
 def _protocol_error(code: int, message: str) -> Exception:
-    """Build a JSON-RPC error exception for whichever mcp is installed.
-
-    single-env/constraints.txt allows mcp>=1.24,<2, where the class is McpError
-    and takes an ErrorData; mcp 2 renamed it MCPError and takes the fields
-    directly. Production code reads whichever of the two names exists, so the
-    tests have to be able to raise it under both."""
+    """JSON-RPC error helper; mcp 2 renamed McpError to MCPError."""
     import mcp.shared.exceptions as mcp_exceptions
     from mcp.types import ErrorData
 

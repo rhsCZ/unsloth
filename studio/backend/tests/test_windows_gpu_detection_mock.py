@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Windows GPU-detection regression test on a synthetic layout.
-
-Bug (#5106): on Windows without a system CUDA toolkit, the prebuilt
-llama-server.exe couldn't LoadLibrary cudart64_X / cublas64_X /
-cublasLt64_X, so ggml-cuda.dll's static import on cublas64_X.dll failed
-and the model fell back to CPU even when nvidia-smi reported the GPU.
-
-Fix:
-  * #5322 overlays upstream's paired cudart bundle into
-    install_dir/build/bin/Release/ next to llama-server.exe.
-  * #5324 prepends pip-installed nvidia/<pkg>/{bin,bin/x86_64,Library/
-    bin} and torch/lib to PATH when launching llama-server.exe.
-
-CI has no GPU so nvidia-smi is mocked; everything else (resolver, PATH
-builder, install layout) runs against a real filesystem.
-"""
+"""nvidia-smi is mocked (no GPU in CI); resolver, PATH builder and install layout run for real."""
 
 from __future__ import annotations
 

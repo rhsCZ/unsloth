@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A base quant published at several bit widths is several variants.
-
-``byteshape/Llama-3.1-8B-Instruct-GGUF`` ships 18 GGUFs at four base quants, telling
-them apart with a bits-per-weight modifier the loader's label has always kept and the
-hub's dropped (``Llama-3.1-8B-Instruct-IQ3_S-2.54bpw.gguf`` through ``-3.31bpw``).
-Every file sits in the repo root, so there is no directory to qualify the key by, and
-keying on the bare token folded 18 checkpoints into 4 rows: 14 of them unselectable,
-each row advertising one file's size while the download plan fetched a different one.
-
-The modifier therefore belongs to the key. Repos without one must key exactly as
-before, and a genuinely split GGUF must still collapse its shards into one row, so
-both are pinned here alongside.
-"""
+"""The bpw modifier must be part of the key, so same-quant files at different widths stay separate."""
 
 from __future__ import annotations
 

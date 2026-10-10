@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hosted pre-quantized DENOISER route for video families.
-
-Covers the family table + resolver, the repo-root checkpoint naming, and the
-``validate_load_request`` refusals that must fire BEFORE anything downloads. All network-free and
-torch-free: the refusals are deliberately placed ahead of the diffusers availability probe so they
-still run (and still get tested) in an environment where diffusers cannot be imported at all.
-"""
+"""Pre-quantized denoiser route; refusals sit before the diffusers check, so no diffusers needed."""
 
 from __future__ import annotations
 
@@ -33,10 +27,7 @@ def _shared_setup_1():
 
 @pytest.fixture(autouse = True)
 def _assume_the_restricted_load_is_available(monkeypatch):
-    """Policy/planning tests, not a check on whether this host's torchao imports.
-
-    Without this, a machine with no (or a skewed) torchao turns every hosted-prequant decision
-    below into "keep the dense weights". The capability is covered in test_diffusion_prequant.py."""
+    """Stubs torchao availability so planning tests do not depend on this host's torchao install."""
     import core.inference.diffusion_prequant as _pq
 
     monkeypatch.setattr(
@@ -508,10 +499,7 @@ def test_an_unset_denoiser_request_keeps_the_released_weights():
 
 
 def test_the_dense_denoiser_is_pinned_only_when_it_actually_fits():
-    """Pinning the released denoiser is what makes the regional compile possible (a module the
-    offload hooks move per forward cannot be compiled) and quantizing the conditioner is what makes
-    it affordable. Being an optimisation, the fit test stays conservative: the denoiser plus
-    everything that still has to run beside it."""
+    """Pin the dense denoiser only when it fits: an optimisation, so the fit check stays conservative."""
     import torch
 
     from core.inference.video import _h3_dense_denoiser_resident_bytes
@@ -577,10 +565,7 @@ def test_the_pin_decision_itself_refuses_a_card_that_cannot_hold_it():
 
 
 def test_the_released_conditioner_is_reachable_through_the_load_api():
-    """The new default makes an omitted ``text_encoder_quant`` select the hosted INT8 conditioner,
-    so ``none``/``off`` became the only way to ask for the released bfloat16 one. That request has
-    to survive both gates it passes through -- the request model and the cheap normaliser -- or the
-    bfloat16 reference configuration is unreachable and no comparison against it can be run."""
+    """none/off must survive both request gates, or the released bf16 conditioner is unreachable."""
     from pydantic import ValidationError
 
     from core.inference.diffusion_precision import normalize_te_quant
@@ -615,11 +600,7 @@ def test_the_opt_out_spellings_reach_the_h3_tri_state():
 
 
 def test_speed_off_declines_the_dense_pin_but_never_the_prequantized_one():
-    """The dense pin is a speed optimisation by its own reasoning, so an explicit ``speed=off``
-    has to decline it: taking the denoiser out of the rotation trades the ability to budget it
-    against the requested frame count for throughput. The pre-quantized pin is NOT the same
-    decision -- a torchao module does not survive the mid-block move -- so it stays unconditional.
-    """
+    """speed=off declines the dense pin but never the pre-quantized one, which torchao needs."""
     import ast
     import inspect
     import textwrap
@@ -651,11 +632,7 @@ def test_speed_off_declines_the_dense_pin_but_never_the_prequantized_one():
 
 
 def test_the_dense_placement_is_fenced_on_the_load_token():
-    """``load_components`` spends minutes building ~145 GB, and everything after it either moves
-    weights onto the card or mutates process-wide backend flags. A cancelled or superseded worker
-    that resumes there puts a 66.3 GB denoiser next to a model a replacement load already owns.
-    The conventional placement path fences for exactly that reason; this one has to as well, and
-    the fence has to sit BEFORE the placement rather than at the state commit after it."""
+    """Fence the dense placement on the load token before placing, so a superseded worker stops."""
     import ast
     import inspect
     import textwrap
@@ -688,13 +665,7 @@ def _h3_family():
 
 
 def test_the_planned_sizing_matches_the_measured_one_it_stands_in_for():
-    """The pre-load prediction and the post-load pin have to describe the same load.
-
-    They are separate functions for a real reason -- the seeding decision runs before any module
-    exists, the pin runs after -- but if their arithmetic drifts, auto can seed a checkpoint on a
-    card that would have held the released denoiser, or leave the released one on a card that
-    cannot. Only the DENOISER term may differ (table vs built module); everything else must agree
-    exactly."""
+    """Pre-load sizing and the post-load pin must agree exactly, except for the denoiser term."""
     import torch
 
     from core.inference.video import (
@@ -705,13 +676,7 @@ def test_the_planned_sizing_matches_the_measured_one_it_stands_in_for():
     fam = _h3_family()
 
     class _Weight:
-        """The released denoiser's size WITHOUT the 66.3 GB it would take to hold it.
-
-        The measurement reads numel(), element_size() and is_meta and nothing else, so a real
-        tensor buys no fidelity here and costs more RAM than a CI runner has: the allocation
-        raised, ``_h3_dense_denoiser_resident_bytes`` swallowed it as an unanswerable estimate,
-        and the test failed on a None that says nothing about the arithmetic under test.
-        """
+        """Fake weight reporting only numel, element_size and is_meta, so no real 66 GB tensor is built."""
 
         is_meta = False
 
@@ -743,17 +708,7 @@ def test_the_planned_sizing_matches_the_measured_one_it_stands_in_for():
 
 
 def test_auto_takes_the_hosted_denoiser_even_on_a_card_with_room_to_spare(monkeypatch):
-    """int8 is the DEFAULT, not a fallback, so having room for the released denoiser is not a
-    reason to load it.
-
-    It is not a tie broken on memory. Measured on an H200 and a B200, every component resident in
-    both rows, the hosted checkpoint is faster per generation AND 45 GB smaller:
-
-        released bf16   20.06 / 12.76 / 12.77 s   102.8 GB steady
-        hosted int8     23.08 / 11.74 / 11.84 s    57.8 GB steady
-
-    What it costs is the picture (mean SSIM 0.49 against the released weights), which is a choice
-    ``transformer_quant='none'`` reverses and which no amount of free VRAM changes."""
+    """int8 is the default, not a fallback: spare VRAM is no reason to pick bf16, which changes output."""
     fam, torch, vid = _shared_setup_1()
     monkeypatch.setattr(vid, "_h3_auto_precision_ok", lambda target = None: True, raising = False)
     monkeypatch.setattr(vid, "_h3_free_device_bytes", lambda device: 500 * 1000**3)
@@ -795,11 +750,7 @@ def test_auto_takes_the_hosted_denoiser_when_the_released_one_cannot_stay_reside
 
 
 def test_the_auto_fallback_is_declined_when_nothing_can_answer(monkeypatch):
-    """Every unanswerable question keeps the released weights. A missing reading is not evidence of
-    a shortfall, and guessing wrong here silently changes the picture a user gets.
-
-    The partition gate is the same rule the explicit path applies: a task with no hosted checkpoint
-    has no fallback, and serving the other partition's would generate the wrong thing."""
+    """Unanswerable questions keep the released weights; a missing reading is not a shortfall."""
     fam, torch, vid = _shared_setup_1()
 
     def ask(**over):
@@ -840,11 +791,7 @@ def test_the_auto_fallback_is_declined_when_nothing_can_answer(monkeypatch):
 
 
 def test_an_explicit_speed_off_keeps_the_released_denoiser(monkeypatch):
-    """speed_mode="off" is the bit-exact contract, and the hosted checkpoints re-roll the sample.
-
-    The conventional loader rewrites an unset precision to "off" under speed off for exactly this
-    reason; the modular workflow returns above that rewrite, so the fallback has to decline it
-    itself or "off" stops meaning bit-exact on precisely the cards this fallback targets."""
+    """speed_mode=off must stay bit-exact; hosted checkpoints re-roll the sample, so decline them."""
     fam, torch, vid = _shared_setup_1()
     monkeypatch.setattr(vid, "_h3_auto_precision_ok", lambda target = None: True, raising = False)
     monkeypatch.setattr(vid, "_h3_free_device_bytes", lambda device: 80 * 1000**3)
@@ -868,13 +815,7 @@ def test_an_explicit_speed_off_keeps_the_released_denoiser(monkeypatch):
 
 
 def test_the_automatic_substitution_needs_the_exact_base_model(monkeypatch):
-    """A derivative is not a precision choice.
-
-    ``video_family_prequant_repo`` falls back to the family default for any base it has no variant
-    row for, and the checkpoint validator's base compare accepts a matching final path segment, so
-    someone/MiniMax-H3 would take MiniMaxAI/MiniMax-H3's denoiser and silently generate from
-    someone else's weights -- for a user who never asked for a scheme at all. Same bar as the
-    conditioner's index gate: exact identity, mirrors folded, nothing else."""
+    """Auto substitution requires the exact base repo; a look-alike derivative must not lend weights."""
     fam, torch, vid = _shared_setup_1()
     monkeypatch.setattr(vid, "_h3_auto_precision_ok", lambda target = None: True, raising = False)
     monkeypatch.setattr(vid, "_h3_free_device_bytes", lambda device: 80 * 1000**3)
@@ -897,10 +838,7 @@ def test_the_automatic_substitution_needs_the_exact_base_model(monkeypatch):
 
 
 def test_auto_keeps_int8_on_every_card_size_and_lets_the_fit_pick_the_placement(monkeypatch):
-    """The fit decides the TIER, not the precision. A 32 GB card is exactly where the released
-    denoiser costs the most (it rides the CPU-offload rotation uncompiled and the generate-time
-    floor then refuses it outright), so a small card is never a reason to take bf16. The hosted
-    denoiser streams block by block through group offloading where it cannot be pinned."""
+    """The fit picks placement, not precision: a small card is no reason to take bf16."""
     fam, torch, vid = _shared_setup_1()
     monkeypatch.setattr(vid, "_h3_auto_precision_ok", lambda target = None: True, raising = False)
 
@@ -991,14 +929,7 @@ def test_a_pinned_denoiser_is_sized_beside_the_larger_rotating_component_not_the
 
 
 def test_the_fallback_is_resolved_before_the_download_is_planned(monkeypatch):
-    """Decided only inside the loader, the fallback is decided after the pull it exists to shrink.
-
-    ``_denoiser_prequant_covered`` answers False for an unset request, so the plan stages the
-    66.3 GB dense denoiser this load will never open and the 20.3 GB replacement then arrives
-    inline -- outside the progress plan, the cancel path and the disk preflight that just passed.
-    The planner resolves the same choice up front, against the card's CAPACITY: the free reading
-    is polluted at plan time (the previous pipeline is still resident) and capacity is an upper
-    bound on it, so a "does not fit" here still holds when the loader re-measures."""
+    """Plan the download after resolving the fallback, or the 66.3 GB dense denoiser is staged anyway."""
     import inspect
     import types
 
@@ -1068,10 +999,7 @@ def _h3_placement_probe(
 
 
 def test_a_card_that_holds_everything_does_not_install_the_offload_rotation(monkeypatch):
-    """``enable_auto_cpu_offload`` parks every component in HOST RAM and moves each one back inside
-    its own pre_forward. On a card that can hold the whole set that buys nothing and costs twice:
-    measured 42.2 GB peak host RSS on a 183 GB card with 103 GB of it in use, plus the conditioner
-    and VAEs crossing the bus on every generation."""
+    """No offload rotation on a card that holds everything: it only adds host-RAM and bus traffic."""
     assert _h3_placement_probe(monkeypatch, free_gb = 183, te_gb = 40, denoiser_gb = 66) is True
 
 

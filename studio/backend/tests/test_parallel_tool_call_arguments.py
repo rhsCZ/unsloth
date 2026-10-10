@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Parallel tool calls that share one delta index (issue #9807).
-
-A server that streams parallel calls as id-less, index-based deltas reuses one
-slot for several calls. Appending their arguments glues them into one
-unparseable string, which then rides into the next request verbatim and the
-provider answers 400. The fork on a differing call id cannot catch this one:
-there are no ids to differ.
-
-The boundary between two calls is the end of a top-level JSON object, not a
-change of function name -- the reported stream calls the same tool three times.
-"""
+"""Parallel calls sharing one delta index are split at the end of each top-level JSON object."""
 
 from __future__ import annotations
 
@@ -79,11 +69,7 @@ def _delta(
 
 
 def _reported(turn: _Turn):
-    """The calls the turn ends up making, which is what the loop executes.
-
-    Not every slot becomes one: a name that arrived with no arguments of its
-    own opened a slot mid-stream, and it is dropped here rather than run.
-    """
+    """Slots that arrived with a name but no arguments are dropped here, not run."""
     return [(call["function"]["name"], call["function"]["arguments"]) for call in turn.calls()]
 
 

@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Optional Hub file probes must not mutate the cache.
-
-Cached 404s can leave refs pointing to absent snapshots, causing cache scans to omit the repo.
-"""
+"""Optional Hub file probes must not mutate the cache: cached 404s can leave refs to absent snapshots."""
 
 from __future__ import annotations
 

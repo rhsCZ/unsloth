@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every launch flag is gated on the binary advertising it.
-
-The probe checks 17 optional flags with _is_real before emitting them, but
---flash-attn, --no-context-shift and --jinja were emitted unconditionally. That
-is fine for the pinned prebuilt, which has all three. It is not fine for a stale
-or user-supplied LLAMA_SERVER_PATH, which Unsloth explicitly supports: an unknown
-argument makes llama-server exit immediately rather than start degraded, and the
-user sees a generic startup failure.
-
-These three differ from the other 17 in one important way: they are part of
-today's command on every launch, so their gates FAIL OPEN. An unreadable or
-unparseable --help must keep emitting them; only a build whose help positively
-lacks one may drop it.
-"""
+"""Launch flags are gated on --help; the three always-emitted ones fail open on unreadable help."""
 
 from __future__ import annotations
 
@@ -95,11 +82,7 @@ def probe(
     returncode = 0,
     stream = "stdout",
 ):
-    """Run the real probe against a stubbed ``llama-server --help``.
-
-    ``subprocess`` is stubbed rather than a script dropped on disk so the test
-    means the same thing on Windows, where a shebang file is not executable.
-    """
+    """Stubs subprocess instead of writing a script, since a shebang file is not executable on Windows."""
     binary = tmp_path / "llama-server"
     binary.write_text("")
     completed = subprocess.CompletedProcess(
@@ -129,14 +112,7 @@ class TestTheGatesFailOpen:
     def test_a_nonzero_help_keeps_every_flag(
         self, tmp_path, monkeypatch, label, help_text, returncode, key
     ):
-        """A partial listing is still a FAILED probe.
-
-        The wrapper case that motivates this: it prints a few parseable options
-        and then exits nonzero. ``blocks`` is non-empty, but nothing in it is
-        authoritative, and reading it as "flag absent" would drop
-        ``--no-context-shift`` (context silently rotates again) or ``--jinja``
-        (no template rendering) on a launch the probe never understood.
-        """
+        """A partial listing from a failed probe is not evidence of absence, so no flag may be dropped."""
         assert probe(tmp_path, monkeypatch, help_text, returncode)[key] is True
 
     @pytest.mark.parametrize("key", GATED)
@@ -179,13 +155,8 @@ class TestASuccessfulProbeIsAuthoritative:
         assert caps["flash_attn_takes_value"] is False
 
     def test_a_build_without_flash_attention_drops_the_flag_itself(self, tmp_path, monkeypatch):
-        """The value form is not the only way -fa breaks a launch.
-
-        llama.cpp gained flash attention in b2775; anything older has no flag to
-        emit, and emitting it is an immediate "invalid argument" exit. Gating the
-        value alone would still send the flag. There is no speed to protect here:
-        the build the probe just read has no flash attention at all.
-        """
+        """Builds older than b2775 have no flash attention flag, and emitting -fa exits as invalid
+        argument."""
         caps = probe(tmp_path, monkeypatch, NO_FLASH_ATTN_HELP)
         assert caps["supports_flash_attn"] is False
         assert caps["supports_no_context_shift"] is True
@@ -238,13 +209,7 @@ class TestFlashAttentionValueForm:
 
 
 class TestTheCrashRecoveryMatchesTheEmittedForm:
-    """``_with_flash_attn_off`` has to speak the same dialect the launch does.
-
-    llama.cpp looks every argv token up verbatim (only ``_`` becomes ``-``); it
-    never splits on ``=``. So ``--flash-attn=off`` is "invalid argument" on every
-    build, and the bare form only exists on builds whose flag takes no value at
-    all. The retry therefore drops a bare flag instead of giving it a value.
-    """
+    """llama.cpp matches argv tokens verbatim and never splits on =, so the retry drops a bare flag."""
 
     @pytest.mark.parametrize("flag", ["--flash-attn", "-fa"])
     def test_a_bare_flag_is_dropped(self, flag):
@@ -320,14 +285,7 @@ def _flash_attn_env_scrub(*, known_off: bool) -> dict:
 
 
 class TestAFlaglessBuildIgnoresTheFlashAttentionEnv:
-    """A build with no --flash-attn never reads LLAMA_ARG_FLASH_ATTN either.
-
-    llama.cpp resolves each LLAMA_ARG_* variable through the common_arg that
-    declares it, so a binary predating the flag registers neither. Unsloth still
-    reads the inherited env when it records what the child is running, and a
-    recorded-on flash attention under-sizes the padded V cache the resume-slot
-    estimate is capped on.
-    """
+    """Without the flag llama.cpp ignores LLAMA_ARG_FLASH_ATTN; recording it on under-sizes the V cache."""
 
     CMD = ["llama-server", "-m", "m.gguf", "--no-context-shift", "-c", "8192"]
 
@@ -354,15 +312,7 @@ class TestAFlaglessBuildIgnoresTheFlashAttentionEnv:
 
 
 class _SelfShim:
-    """Stand-in for the backend instance the fixup block runs against.
-
-    The block reads instance state (``_kv_lora_rank``, ``_architecture``,
-    ``_mtp_draft_path``) as well as class methods, and binding the class itself
-    meant any new ``self.<attr>`` in that block raised AttributeError here rather
-    than failing on its merits. Anything not set on the shim falls through to the
-    class, and a plain function found there is bound to the shim so the block can
-    call ``self.<method>()`` the way the real backend does.
-    """
+    """Stand-in self for the fixup block; unset attributes fall through to the class; methods bind to it."""
 
     def __init__(
         self,
@@ -415,14 +365,7 @@ def _flagless_v_cache_fixup(
 
 
 class TestAFlaglessBuildCannotRunAQuantizedVCache:
-    """Dropping --flash-attn has to take the quantized V cache with it.
-
-    llama.cpp aborts init with "V cache quantization requires flash_attn", and
-    the KV type is emitted straight from the user's setting with no flash-attn
-    coupling. The crash-recovery rung resets V for exactly this abort, but
-    _with_flash_attn_off returns None when the argv has no flag to turn off, so
-    on a build that never had one nothing downstream would catch it.
-    """
+    """A quantized V cache also needs flash attention, so dropping the flag must reset V too."""
 
     CMD = [
         "llama-server",
@@ -473,11 +416,7 @@ class TestAFlaglessBuildCannotRunAQuantizedVCache:
 
 
 class TestTheFlaglessFixupKeepsMlaKAndVEqual:
-    """An MLA model rejects K != V outright, above the V-quantization check.
-
-    So the launch-site reset, which normally leaves K quantized on purpose,
-    has to bring K down with V there or it trades one abort for another.
-    """
+    """MLA rejects unequal K and V cache types, so the launch-site V reset must bring K down too."""
 
     CMD = [
         "llama-server",

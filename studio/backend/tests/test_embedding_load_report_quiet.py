@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The RAG embedder load must not write raw transformers output to the server log.
-
-transformers >= 5 prints a multi-line, ANSI-coloured "<Model> LOAD REPORT" table
-through logger.warning plus a "Loading weights" tqdm bar. bge-small-en-v1.5 always
-trips it (legacy embeddings.position_ids key), so every Unsloth boot emitted ~7
-unstructured lines into an otherwise JSON log. They are captured and re-emitted on
-our own logger instead: debug when benign, warning when the report mentions
-anything that could change the model.
-"""
+"""Re-log transformers' load report: debug when benign, warning if it could change the model."""
 
 from __future__ import annotations
 
@@ -47,11 +39,7 @@ _RESTORE: list = []
 
 
 def _attach_sink(name: str = _REPORT_LOGGER):
-    """Attach a sink to a process-global logger, remembering what to put back.
-
-    getLogger() is process-global, so leaving propagate = False behind would make
-    later tests in the same worker silently drop real records.
-    """
+    """Logger is process-global: restore propagate and level, or later tests silently lose records."""
     log = logging.getLogger(name)
     sink = _Sink()
     _RESTORE.append((log, sink, log.propagate, log.level))
@@ -183,11 +171,7 @@ def test_reports_are_re_emitted_when_the_load_fails():
 
 @pytest.fixture
 def _progress_bar_state():
-    """Snapshot and restore the two process-global progress-bar switches.
-
-    Both are global, so a test that leaves them enabled makes later tests in the same
-    worker order-dependent and can undo an environment-specific workaround.
-    """
+    """Restore the progress-bar switches, which are process-global and make tests order-dependent."""
     from huggingface_hub.utils import (
         are_progress_bars_disabled,
         disable_progress_bars,

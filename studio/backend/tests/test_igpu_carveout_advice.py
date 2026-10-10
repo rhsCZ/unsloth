@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Advice to enlarge an integrated GPU's dedicated memory.
-
-Measured on a Ryzen AI Max+ PRO 395 (gfx1151, 128 GB): the same 42.90 GiB model runs
-3-4x faster with the weights inside the GPU allocation than spilling out of it (decode
-11.58 -> 46.70 t/s, prefill 150.88 -> 579.68 t/s on ROCm). Worth telling the user, but
-only when raising the setting would help and only where the setting exists.
-"""
+"""Suggest a larger iGPU carve-out only where it helps and exists; weights inside it run 3-4x faster."""
 
 import ast
 import re
@@ -338,12 +332,7 @@ class TestTheRungTheUserIsAlreadyOn:
 
 
 class TestThePlacementItAdvisesAbout:
-    """Which device the advice is about, in the index space that device is named in.
-
-    A Vulkan launch numbers devices with VULKAN ORDINALS; the ROCm gate reads the same
-    integers as physical HIP ids. On a mixed APU/dGPU host that is how a dGPU load
-    earns advice to resize an integrated GPU it never touched.
-    """
+    """Vulkan ordinals and HIP ids differ, so the advice must name the device in its own index space."""
 
     @staticmethod
     def _backend(
@@ -498,12 +487,7 @@ class TestTheArchitectureGatedCpuLaunch:
 
 
 class TestEveryCallSitePricesThePlacementItRuns:
-    """The gate and the retry, pinned at the call sites rather than in prose.
-
-    Both are one keyword argument, and both were missing at first: a launch reaching
-    no GPU was advised to enlarge one, and a crash retry landing on a different GPU
-    said nothing about it.
-    """
+    """Launch and crash-retry call sites must both pass the placement keyword; each was once missing."""
 
     @staticmethod
     def _calls():
@@ -624,17 +608,7 @@ class TestWhichAdapterTheAllocationBelongsTo:
 
 
 class TestTheRoutingIsDeterministic:
-    """Every gate this advisory routes through, enumerated rather than sampled.
-
-    Seven interacting inputs: a Vulkan launch is classified by the planner's shared
-    set and a non-Vulkan one by the ROCm unified-memory ids, two gates decline before
-    any reading is taken, and the dismissal is asked last. Each was added for a defect
-    found one at a time, so the value is the whole product rather than the cases
-    anyone thought to write.
-
-    Nothing here touches the host -- both classifiers, the allocation reading and the
-    total memory are pinned -- so the table is the same everywhere.
-    """
+    """Every routing gate over seven inputs, with host readings pinned so the table holds everywhere."""
 
     _NEED = gb(42.90)
     _HOST_MIB = 95 * 1024
@@ -752,12 +726,7 @@ class TestTheRoutingIsDeterministic:
 
 
 class TestTheAdvisoryCannotReachTheLaunch:
-    """Static, because "it only sets a field" is a claim about every path at once.
-
-    A test can only show that the paths it drives change nothing. These read the
-    module instead: what the recorder may write, and what the launch may do with what
-    it returns.
-    """
+    """Read statically: tests drive only some paths, so the module is checked for every write and return."""
 
     @staticmethod
     def _module_tree():
@@ -836,14 +805,7 @@ class TestTheAdvisoryCannotReachTheLaunch:
 
 
 class TestTheIndexSpaceTheAllocationIsReadIn:
-    """The Linux fallback reads HIP ids, and a Vulkan launch does not name devices that way.
-
-    Two reasons it must not run there. `_rocm_selected_pool_mib` compares its argument
-    with physical HIP ids, so Vulkan ordinals would land on another device wherever
-    the enumerations differ. And the reading creates a HIP primary context in the
-    backend process -- about 800 MiB, out of the pool the advice would then call too
-    small. The Windows registry answer is unaffected: a few winreg queries, no ordinal.
-    """
+    """Vulkan launches skip the Linux HIP read: ordinals are not HIP ids, and it costs about 800 MiB."""
 
     @staticmethod
     def _readers(

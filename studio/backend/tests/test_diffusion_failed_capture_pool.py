@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A capture that fails must not break the captures after it.
-
-``capture_end`` raises in ``cudaStreamEndCapture`` before either caching allocator (device, and from torch 2.11 the
-pinned host one) leaves the capture's pool. Python can only take the device allocator off it, so the host allocator
-keeps "recording" to that pool for the rest of the process, with a filter that points at the failed CUDAGraph.
-Studio therefore retires the pool, records later captures into a fresh one, and keeps the failed graph alive.
-"""
+"""A failed capture_end leaves the host allocator recording to its pool, so Studio retires the pool."""
 
 from __future__ import annotations
 

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Who gets ``chat_template_kwargs.enable_thinking``, and who must never get it.
-
-"llama_cpp" had no branch, so the toggle survived only as a top-level field llama-server does not
-read: the Deep Research planner, asked for ``enable_thinking=False``, spent its whole 4096-token
-budget reasoning and returned no plan. Widening the branch to "custom" is the wrong fix, because
-"custom" is any base_url; a server opts in through its registry entry instead.
-"""
+"""chat_template_kwargs.enable_thinking is opt-in per registry entry, never per custom base_url."""
 
 from __future__ import annotations
 

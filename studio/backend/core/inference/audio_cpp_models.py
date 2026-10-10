@@ -943,12 +943,7 @@ def _family_from_spec_tasks(
     spec: Optional[dict],
     label: Optional[str] = None,
 ) -> AudioCppFamily:
-    """Policy for a family Studio does not list, from the tasks its spec declares.
-
-    The spec can be the one a GGUF embeds, newer than the installed runtime, so a family the
-    runtime does not load is refused here rather than failing at load with "unsupported model
-    family hint". ``label`` names the model in that refusal.
-    """
+    """Refuses unlisted families here: a GGUF's embedded spec can be newer than the installed runtime."""
     tasks = [str(t).lower() for t in (spec or {}).get("tasks") or [] if isinstance(t, str)]
     tokens = [_SPEC_TO_SERVER_TASK.get(t, t) for t in tasks]
     for token in ("tts", "vdes", "gen", "asr", "clon", "sep"):
@@ -995,11 +990,7 @@ def family_policy(
     names: Iterable[str] = (),
     label: Optional[str] = None,
 ) -> AudioCppFamily:
-    """What Studio does with ``family``: the table entry, else what its spec says it does.
-
-    ``names`` (repo, folder and file names) pick the Qwen3-TTS package kind, which the family
-    alone does not say: CustomVoice needs a speaker, VoiceDesign designs one, Base only clones.
-    """
+    """Qwen3-TTS package kind comes from names (CustomVoice, VoiceDesign, Base), not from family alone."""
     policy = FAMILIES.get(family) or _family_from_spec_tasks(family, spec, label)
     if family == "qwen3_tts":
         text = " ".join(names).lower()
@@ -1178,10 +1169,7 @@ class AudioCppHeader:
 
 
 def parse_header(stream: BinaryIO) -> Optional[AudioCppHeader]:
-    """The audio.cpp keys of a GGUF header, reading only up to the last one wanted.
-
-    Truncation-safe: a prefix that stops early answers with what it read and ``complete=False``.
-    """
+    """Truncation-safe: a prefix that ends early returns what was read, with complete=False."""
     try:
         head = stream.read(24)
         if len(head) < 24:
@@ -1315,12 +1303,7 @@ def read_remote_header(
     *,
     size: Optional[int] = None,
 ) -> Optional[AudioCppHeader]:
-    """The audio.cpp header keys of a Hub GGUF from a ranged read of its first bytes.
-
-    The architecture is the first key, so 64 KiB answers "is this audio.cpp". Some writers put the
-    spec after the embedded sidecar files, so an audio.cpp file whose prefix held no family is read
-    again further in.
-    """
+    """Some writers put the spec after embedded sidecars, so a prefix with no family is read further in."""
 
     def compute():
         from core.inference.diffusion_compat import _read_gguf_header
@@ -1620,12 +1603,7 @@ def match_variant(
     wanted: Optional[str],
     folder: str = "",
 ) -> Optional[AudioCppVariant]:
-    """The variant ``wanted`` names: its key, its file, or a quant that picks one row.
-
-    A bare quant shared by several rows (ACE-Step ``turbo/Q8_0`` and ``base/Q8_0``) picks the default
-    ordering's first, which is what the folder row loads by default. ``folder`` is the row's folder in
-    the repo, whose own name never counts as a scope word.
-    """
+    """A bare quant shared by rows picks the default order's first; a folder name never scopes."""
     text = (wanted or "").strip().replace("\\", "/")
     if not text:
         return None
@@ -1657,12 +1635,7 @@ def _match_by_words(
     low: str,
     folder: str = "",
 ) -> Optional[AudioCppVariant]:
-    """A key named by the words of its file (``tiny/Q8_0`` or ``tiny``), whatever the listing keyed it.
-
-    Which rows need a name beyond their quant depends on the listing: with only Moonshine tiny in
-    the cache it is simply ``Q8_0``, while the Hub listing (and /gguf-variants) calls it
-    ``tiny/Q8_0``. Matching the scope words against the file keeps both spellings loading it.
-    """
+    """Matches the key's words against the file, so bare Q8_0 and the listing's tiny/Q8_0 both load it."""
     parts = [part for part in low.split("/") if part]
     if not parts:
         return None
@@ -1777,13 +1750,7 @@ def runtime_spec(family: str) -> Optional[dict]:
 
 
 def runtime_knows_family(family: str) -> Optional[bool]:
-    """Whether the installed runtime loads ``family``; None when Studio cannot tell.
-
-    A runtime that ships ``model_specs/`` answers from it. The prebuilt bundles do not ship that
-    folder, so for the pinned prebuilt the families its source tree specs are listed in
-    ``audio_cpp_spec_families``. Any other runtime (no install, a custom build, another tag) is
-    unknown, and the spec's own tasks decide as before.
-    """
+    """Prebuilt bundles lack model_specs/, so the pinned build uses audio_cpp_spec_families; else None."""
     if not family or not re.fullmatch(r"[a-z0-9_]+", family):
         return None
     try:
@@ -1856,12 +1823,7 @@ def _clean_option(raw: Any) -> Optional[dict]:
 def option_schema(
     policy: AudioCppFamily, spec: Optional[dict], embedded: Optional[dict]
 ) -> tuple[dict, ...]:
-    """The request options Studio offers for this model, in the spec's order.
-
-    A family with a Studio-side list (MiniMax Music 3, YuE2) shows that list: their specs carry
-    dozens of planner and debugging knobs, and the published GGUFs embed a stale copy. Everyone
-    else gets the runtime's spec, else the one embedded in the GGUF.
-    """
+    """MiniMax Music 3 and YuE2 show a Studio-side list, as their specs carry dozens of knobs."""
     if policy.task == "sep":
         return ()
     if policy.options:
@@ -2176,14 +2138,7 @@ def resolve(
     tags: Sequence[str] = (),
     gguf_hint: Optional[str] = None,
 ) -> Optional[AudioCppModel]:
-    """The audio.cpp model ``identifier`` names at ``variant`` (default when None), else None.
-
-    None means "not an audio.cpp model". A model Studio cannot run (unsupported task, missing
-    variant) still resolves, with ``unsupported`` set, so callers can refuse it clearly.
-    ``network=False`` answers from the HF cache only. ``gguf_hint`` names a GGUF the caller
-    already found in the repo: its header alone rules out an ordinary llama.cpp repo, before
-    any listing.
-    """
+    """None for a non-audio.cpp identifier; unrunnable models still resolve, marked unsupported."""
     if identifier is None:
         return None
     base, ref_variant = split_variant_ref(str(identifier))
@@ -2460,12 +2415,7 @@ def download_target(
     variant: Optional[str],
     hf_token: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
-    """``(repo, variant key)`` the Hub GGUF downloader fetches for an umbrella folder row, else None.
-
-    The frontend names an umbrella model as ``audio-cpp/audio.cpp-gguf/<Folder>`` plus a quant, like
-    any GGUF repo; the downloader and its progress work on the real repo and the path-qualified key
-    its variant planner derives from the file.
-    """
+    """Maps an umbrella folder id to the real repo and path-qualified variant key the downloader uses."""
     if not is_umbrella_id(identifier):
         return None
     model = resolve(identifier, variant, hf_token, network = not hub_offline())
@@ -2536,11 +2486,7 @@ _DOWNLOADED_TTL_SECONDS = 10.0
 
 
 def downloaded_models(task: Optional[str] = None) -> list[AudioCppModel]:
-    """audio.cpp models with a variant fully in the HF cache, found by header.
-
-    Walks the active hub cache's repos, reading only GGUF headers (memoized). Umbrella folders
-    are listed per folder. Status polls call this, so the answer is kept for a few seconds.
-    """
+    """Found by reading only GGUF headers; status polls hit this, so results are cached a few seconds."""
     with _resolve_lock:
         hit = _downloaded_cache.get(task)
     if hit is not None and time.monotonic() - hit[0] < _DOWNLOADED_TTL_SECONDS:

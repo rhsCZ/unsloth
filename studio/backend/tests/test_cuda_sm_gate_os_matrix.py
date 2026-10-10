@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""OS x GPU-vendor matrix for the CUDA SM gate, the sibling of
-``test_gpu_arch_gate_os_matrix_7624.py`` for the ROCm arch gate.
-
-The gate refuses a launch only when every visible GPU is OLDER than the oldest
-arch the bundle was compiled for, and must be inert everywhere else. Output
-alone cannot show that: a gate that ran and passed returns None exactly like one
-that never ran, so the marker reader and the nvidia-smi probe are spied and
-asserted un-called on the cells that must not reach them.
-
-Matrix: [Windows, Linux, WSL, macOS] x [NVIDIA, AMD, CPU-only]. No NVIDIA GPU is
-needed; nvidia-smi, the marker and the masks are faked in the shapes the
-installer writes (digit-string ``supported_sms``, ``compute_cap`` as "8.6").
-"""
+"""The gate refuses only when every GPU predates the bundle's oldest arch and is inert elsewhere."""
 
 from __future__ import annotations
 

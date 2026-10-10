@@ -246,12 +246,7 @@ def test_attention_backend_unknown_still_rejected():
 
 
 def test_load_rejects_a_duplicate_lora_id_like_generate_does():
-    """The load path bakes adapters into the quantized build, so it needs generate's guard too.
-
-    _resolve_lora_set suffixes colliding adapter names, so a repeated id resolves the SAME adapter
-    twice and set_adapters stacks both copies past the per-adapter weight bound. On the generation
-    path that is one bad image; baked into a quantized build it rides every image until a reload.
-    """
+    """A repeated LoRA id stacks one adapter twice past the weight bound, so load must refuse it too."""
     dup = [{"id": "me/adapter", "weight": 0.8}, {"id": "me/adapter", "weight": 0.8}]
     with pytest.raises(ValidationError, match = "duplicate LoRA id"):
         _diff_load(loras = dup)

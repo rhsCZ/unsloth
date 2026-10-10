@@ -1020,15 +1020,7 @@ def test_a_failing_image_only_lookup_still_returns_a_string(monkeypatch):
 
 
 def test_an_unreadable_cache_dir_snapshots_as_clear_everything(monkeypatch, tmp_path):
-    """The OSError fallback has to be the full-clear sentinel, not an empty selection.
-
-    `registered_image_ids` bounds the reap that follows it. When it cannot enumerate
-    the cache its snapshot is incomplete, so the only safe answer is None -- which
-    `clear_cache` reads as "clear everything", the behaviour a clear had before the
-    snapshot existed. Returning `set()` instead reads as a selective reap of nothing:
-    "Clear all chats" would leave the registry populated and every thumbnail -- which
-    says what the user searched for -- still fetchable.
-    """
+    """The OSError fallback must be None (full-clear sentinel), not `set()`."""
 
     class _UnreadableDir(type(tmp_path)):
         def glob(self, _pattern):
@@ -1047,15 +1039,7 @@ def test_an_unreadable_cache_dir_snapshots_as_clear_everything(monkeypatch, tmp_
 
 
 def test_a_selective_clear_does_not_abort_a_fetch_for_an_image_it_spared(monkeypatch, tmp_path):
-    """The whole point of the snapshot is that a spared image keeps working.
-
-    `clear_cache` bumps the generation for a selective reap too, and the in-flight check used
-    to compare that bare number: a fetch already running for an id the clear went out of its
-    way to spare therefore aborted, thumbnail_bytes answered None and the endpoint 404ed. The
-    frontend does not recover from that -- SearchImageThumb sets `failed`, renders nothing,
-    and its effect depends only on (id, nearViewport), so nothing re-runs it. The card is gone
-    until the component remounts.
-    """
+    """A selective clear must not abort a fetch in flight for a spared image; the card never recovers."""
     spared = search_images.register_images(RAW_IMAGES)[0]
     doomed_id = "0123456789ab"
     search_images._registry[doomed_id] = dict(search_images._registry[spared["id"]])
@@ -1099,17 +1083,7 @@ def test_a_selective_clear_still_aborts_the_fetch_for_an_image_it_reaped(monkeyp
 
 
 def test_an_overflowing_reap_record_drops_the_oldest_not_everything(monkeypatch, tmp_path):
-    """The per-id record is bounded, and running out of room must not abort live fetches.
-
-    Clearing it and promoting the clear to a full-clear marker was the first attempt. That
-    aborts every fetch in flight, including ones for images the clear deliberately spared,
-    and an aborted fetch is not a cheap retry: thumbnail_bytes answers None, the endpoint
-    404s, and useSearchThumbnail records a permanent failure for that id.
-
-    Dropping the OLDEST records and raising a floor keeps every fetch that started at or
-    after the floor exactly answerable. The assertion is taken across the clear that
-    actually overflows, which is the only moment the two strategies differ.
-    """
+    """Overflow drops the oldest reap records, not all of them, so live fetches keep answering."""
     monkeypatch.setattr(search_images, "_REAPED_AT_MAX", 4)
     monkeypatch.setattr(search_images, "_reaped_at", {})
     monkeypatch.setattr(search_images, "_reaped_floor_generation", 0)
@@ -1155,15 +1129,7 @@ def test_a_full_clear_still_aborts_every_fetch_including_unknown_ids():
 
 
 def test_a_lookup_already_running_when_a_clear_starts_publishes_nothing(monkeypatch, tmp_path):
-    """Bounding the reap to a snapshot spares whatever registers after it. That is right for
-    a chat created since the clear, and wrong for a lookup the clear is deleting the answer
-    of -- `/search-images/lookup` carries no thread, so no cancellation reaches it, and it
-    samples the cache generation on entry.
-
-    Without a fence at the clear boundary its images register into the window between the
-    snapshot and the reap, the selective reap spares them, and Clear all leaves their
-    sidecars on disk saying what was searched for.
-    """
+    """A lookup running when a clear starts must publish nothing, or its sidecars survive Clear all."""
     monkeypatch.setattr(search_images, "_cache_dir", lambda: tmp_path)
 
     sampled = search_images.cache_generation()

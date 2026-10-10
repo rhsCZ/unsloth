@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A decoded Audio cell must be summarised, not serialised sample by sample.
-
-The dataset preview compressed the undecoded {"bytes", "path"} shape only. When
-torchcodec cannot load its FFmpeg libraries the soundfile fallback decodes instead,
-and the dataset formatter hands back {"path", "array", "sampling_rate"} with the
-waveform as a plain list. Ten preview rows of a few seconds each then serialised to
-tens of MB of floats, and the client died with "Maximum call stack size exceeded"
-before it could POST /api/train/start.
-"""
+"""Decoded Audio cells must be summarised; the soundfile fallback's waveform list crashed the client."""
 
 from __future__ import annotations
 

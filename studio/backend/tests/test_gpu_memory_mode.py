@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Backend contract for the GPU Memory mode dropdown.
-
-The dropdown threads a single ``gpu_memory_mode`` ("auto" | "manual") from the
-chat UI through the load request. "manual" lets the user own the offload: with
-``gpu_layers < 0`` (Auto, the default) it hands all memory management to
-llama.cpp's ``--fit on`` (no CUDA/HIP device masking, no context auto-reduce, no
-gpu-layer or tensor-split planning); with ``gpu_layers >= 0`` it pins the layers
-and MoE offload itself (``--fit off``). These tests pin:
-
-  * the pydantic request/response/status contract (snake_case key, default
-    "auto", unknown values rejected),
-  * the backend ``gpu_memory_mode`` property and its reset on unload,
-  * the ``_already_in_target_state`` reload-detection branch, and
-  * that the manual + Auto-layers branch in ``load_model`` empties the probed
-    GPU set and drops tensor parallelism so the selection below no-ops, while
-    the explicit-offload branch emits ``--gpu-layers`` / ``--fit off``.
-"""
+"""Manual mode with auto layers hands memory to --fit on; explicit layers pin with --fit off."""
 
 from __future__ import annotations
 
@@ -1290,12 +1274,8 @@ def test_zero_vram_chat_load_treats_an_absent_mode_as_auto(not_vulkan):
 
 
 def test_manual_auto_layers_never_emits_two_tensor_splits(tmp_path):
-    """Manual + Auto layers is the one cell where the route holds the ratio twice: the
-    strip is False at ``gpu_layers < 0`` while the promotion still fires (#11330).
-    llama.cpp reads the LAST ``--tensor-split``, so a launch path that kept either copy
-    would place by the wrong one; both die here, and that is the launcher's doing rather
-    than the route's, which is why it is pinned.
-    """
+    """Manual + Auto layers must emit one --tensor-split, since llama.cpp reads the last copy it is
+    given."""
     from test_llama_cpp_placement import _backend, _launch
 
     backend, gguf = _backend(

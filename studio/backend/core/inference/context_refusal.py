@@ -33,15 +33,7 @@ _TURN_DOMINATES = 0.66
 
 
 def open_slot() -> None:
-    """Install a slot here that a worker thread or child task can record into.
-
-    Call it in the request's own context, before spawning anything, on any path that
-    diagnoses the fit somewhere other than where the error is formatted. The
-    non-streaming GGUF drains are that case twice over: `asyncio.create_task` copies the
-    context and so does `asyncio.to_thread`, and on the path that matters the drain
-    records the refusal and then raises the oversize error it explains, so there is no
-    return value to carry it back in either.
-    """
+    """Call in the request's own context before spawning; create_task and to_thread copy that context."""
     _REFUSAL_SLOT.set({"refusal": None})
 
 
@@ -54,11 +46,7 @@ def _slot(*, create: bool = False) -> Optional[dict]:
 
 
 def record_fit(truncation) -> None:
-    """Remember a fit that refused, and forget one that succeeded.
-
-    Called on every `context_truncated` event, not just refusals, so a tool loop whose
-    later iteration fits does not leave a stale refusal behind to explain another error.
-    """
+    """Called on every fit, not only refusals, so a later fitting iteration clears a stale refusal."""
     if not isinstance(truncation, dict):
         return
     slot = _slot(create = True)
@@ -86,14 +74,7 @@ def _int(value) -> int:
 
 
 def _blame_latest_turn(context_tokens: int):
-    """`(role, fits_alone)` for the turn worth naming, or None if the history is to blame.
-
-    None also covers no diagnosis recorded, and a diagnosis describing a different
-    window than the one just refused: both fall back to generic advice rather than guess.
-
-    `fits_alone` is False only when the turn's own COUNTED rendered size is at or over
-    the CONTEXT WINDOW, which is the only evidence that it cannot be sent at all.
-    """
+    """None when no refusal was recorded for this window; fits_alone is False only at or over the window."""
     refusal = latest_refusal()
     if not refusal:
         return None
@@ -123,22 +104,7 @@ def _blame_latest_turn(context_tokens: int):
 
 
 def _history_cannot_help(context_tokens: int) -> bool:
-    """True when the prompt is over the window with every evictable turn already gone.
-
-    `irreducible_tokens` is not "the prompt": it is what the fit measured AFTER dropping
-    every group `truncate_oldest_messages` is willing to drop, and a refusal is only ever
-    recorded once that evictor returned zero (the fit's loop exits on `dropped == 0`, and
-    any other exit means the prompt fits). So it prices the floor eviction cannot go
-    below: the template wrapper, the tool catalogue, every system/developer turn, the
-    latest user turn and the final group. Deleting ordinary history changes none of those,
-    which is why this number is invariant under the one action the generic advice asks for.
-
-    Against the WINDOW for the same reason `_blame_latest_turn` uses it: llama-server
-    admits a prompt on size alone ("n_tokens() >= n_ctx"), so at or over it the request is
-    refused no matter how short the conversation gets. Below it, shortening really can
-    work -- the fit refuses at `prompt_target` but passes the untrimmed messages on, and
-    llama-server serves anything under `n_ctx` -- so that case keeps the generic advice.
-    """
+    """True when the prompt still exceeds the window after every evictable turn is dropped."""
     refusal = latest_refusal()
     if not refusal:
         return False

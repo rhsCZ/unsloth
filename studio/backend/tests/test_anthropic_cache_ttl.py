@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for prompt-cache request shaping on the Anthropic and OpenRouter paths.
-
-Anthropic's ``cache_control`` marker takes an optional ``ttl``: default 5m
-pool, ``ttl:"1h"`` the 1h pool. These tests pin the outbound body shape:
-"1h" puts ``ttl:"1h"`` on both markers; default omits the field; garbage
-values are silently dropped. OpenRouter carries one top-level marker for
-Claude models and a ``session_id`` that keeps a thread on its cached provider.
-"""
+"""Pins the cache_control ttl body shape: 1h on both markers, omitted by default, garbage dropped."""
 
 import asyncio
 import json

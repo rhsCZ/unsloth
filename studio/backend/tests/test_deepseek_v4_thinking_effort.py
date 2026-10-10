@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""DeepSeek-V4-Flash reasoning toggle: None / High / Max.
-
-The GGUF template gates thinking with ``enable_thinking`` and only branches
-``reasoning_effort`` on ``'max'`` (an escalation layered over plain thinking).
-Detection used to return the single level ``['max']``, so the UI collapsed to
-None / Max and the plain-thinking tier was unreachable. Detection now surfaces
-``'high'`` as that plain tier, giving None / High / Max. These tests pin the
-classifier, the GLM-style parity case, and the full request-kwargs -> rendered
-prompt path for each state (the model itself is too large to load here).
-"""
+"""Detection now surfaces 'high' as the plain thinking tier, so the UI offers None / High / Max."""
 
 from __future__ import annotations
 

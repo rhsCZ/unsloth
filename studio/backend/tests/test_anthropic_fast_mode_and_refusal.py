@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for Anthropic fast-mode wiring and streaming refusal handling.
-
-fast_mode=True on Opus 4.6/4.7 attaches the ``fast-mode-2026-02-01`` beta
-header and sets ``speed: "fast"``; unsupported models drop both. Streaming
-``stop_reason: "refusal"`` surfaces a user notice before the
-``content_filter`` finish chunk, and ``model_context_window_exceeded`` finishes
-as ``length`` with an out-of-band event; a reason missing from the map keeps the
-``stop`` default but is logged.
-https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/handle-streaming-refusals
-https://platform.claude.com/docs/en/api/handling-stop-reasons
-"""
+"""Fast mode is sent only to Opus 4.6 and 4.7, and a streamed refusal surfaces a notice first."""
 
 import asyncio
 import json
@@ -165,10 +155,7 @@ def test_refusal_emits_user_facing_notice_and_content_filter_finish(monkeypatch)
 
 
 def test_refusal_emits_tool_event_for_chat_adapter_drop(monkeypatch):
-    """Refused turns emit an out-of-band `_toolEvent` that the chat-adapter
-    latches into assistant `metadata.custom.anthropicRefusal`, driving the
-    next-request prune. Tool event (not text) prevents spoofing.
-    """
+    """Refusal is signalled by an out-of-band tool event, not visible text, so content cannot spoof it."""
     _, lines = _capture(monkeypatch, sse = _refusal_sse())
     body = "\n".join(lines)
     assert '"_toolEvent": {"type": "anthropic_refusal"}' in body, body

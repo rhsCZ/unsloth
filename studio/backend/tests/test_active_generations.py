@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Parallel chats: the active-generation registry and the model-swap gate.
-
-A load/unload has to know which streaming chats it would interrupt. Everything
-under test is a dict + threading.Lock, so this passes on every platform.
-"""
+"""Load and unload must see which streaming chats they would interrupt, via a dict under a lock."""
 
 import multiprocessing as _mp
 import os
@@ -554,11 +550,7 @@ def _run_unload(
     torn_down,
     unload_model = None,
 ):
-    """Drive POST /unload against a backend pair with ``loaded_gguf`` resident.
-
-    ``unload_model`` overrides the GGUF teardown so a caller can observe what the
-    world looked like at the moment of teardown, not just afterwards.
-    """
+    """Drive POST /unload; the stub unload_model observes the world at teardown, not after it."""
     import asyncio
     from types import SimpleNamespace
 
@@ -1536,10 +1528,7 @@ def test_load_and_unload_requests_default_to_not_cancelling():
 
 
 def _parallel_constants(path: str) -> dict:
-    """Read the _PARALLEL_* constants from a file's source.
-
-    Importing run.py would drag in the whole server to read three integers.
-    """
+    """Read _PARALLEL_* constants from source via ast; importing run.py would start the server."""
     import ast
 
     with open(path, encoding = "utf-8") as f:
@@ -1820,11 +1809,7 @@ class _ChatRequest(_NeverDisconnectedRequest):
 
 
 def _standard_chat_stubs(monkeypatch, backend):
-    """Point /v1/chat/completions at a standard (non-GGUF) backend.
-
-    ``supports_tools`` False keeps the request off the safetensors server-tool
-    loop, which registers on its own, so the plain default branch is exercised.
-    """
+    """supports_tools False keeps chat off the safetensors server-tool loop, the default branch."""
     from types import SimpleNamespace
 
     import routes.inference as inf_mod
@@ -2198,12 +2183,7 @@ def test_audio_generation_unregisters_when_it_fails(monkeypatch):
 
 
 def _stub_install_route(monkeypatch, *, in_flight_events):
-    """Point POST /install-latest-transformers at an in-memory sidecar install.
-
-    ``in_flight_events`` stands in for the middleware's in-flight count: a
-    request is counted until its stream observes the cancel event and unwinds,
-    which is the coupling the installer's guard actually reads.
-    """
+    """A request counts as in flight until its stream unwinds on cancel; the installer reads that count."""
     from types import SimpleNamespace
 
     import core.inference.llama_keepwarm as keepwarm
@@ -2378,11 +2358,7 @@ def test_confirmed_install_does_not_spend_its_cancel_on_an_install_that_will_ref
 
 
 def _drain_with_counts(monkeypatch, counts, **kwargs):
-    """Run _wait_for_model_switch_idle against a scripted in-flight count.
-
-    ``counts`` is consumed one entry per poll; the last value repeats, so a
-    trailing non-zero stands for a request that never unwinds.
-    """
+    """Scripted counts repeat their last value, so a trailing non-zero is a request that never unwinds."""
     _route_gate()
     import asyncio
 

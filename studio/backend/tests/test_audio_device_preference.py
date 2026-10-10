@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The user's choice of where an audio model's weights go.
-
-Audio loads pick an accelerator on their own. These cover the option that
-overrides that: CPU RAM must win over a working GPU, "auto" must still detect,
-and a resident model loaded under the other preference must be reloaded rather
-than reused where it is.
-"""
+"""Audio placement preference: CPU RAM beats a working GPU; a changed preference reloads the model."""
 
 import sys
 import threading
@@ -27,12 +21,7 @@ from core.inference.audio_device import (  # noqa: E402
 
 @pytest.fixture(autouse = True)
 def _neutral_audio_device_env(monkeypatch):
-    """A server-wide default must not decide the outcome of these tests.
-
-    Placement here is asserted against no opinion, so a host that sets
-    UNSLOTH_AUDIO_DEVICE would fail these on correct behaviour, and that host is
-    exactly the one most likely to run them.
-    """
+    """Clears UNSLOTH_AUDIO_DEVICE so a host-wide placement default cannot change these outcomes."""
     monkeypatch.delenv("UNSLOTH_AUDIO_DEVICE", raising = False)
 
 

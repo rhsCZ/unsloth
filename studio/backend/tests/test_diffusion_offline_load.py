@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An API-initiated IMAGE load downloads NOTHING.
-
-The video twin of this suite lives in ``test_video_offline_load.py``; this is the same promise on
-the diffusers image path, where ``local_files_only`` reached ``load_pipeline`` and nothing in the
-``_run_load`` staging phase that runs before it -- so the byte estimate and the base preflight still
-asked the Hub, and ``_prefetch_files`` (the one call on that path that moves multi-GB weights)
-fetched without the flag. Every network-capable helper the staging phase reaches is replaced with a
-sentinel that RAISES when it is asked to fetch, so a load that regains the network is a failing test
-rather than a multi-GB surprise on a user's connection. The mirror test proves the user-initiated
-(UI) path still calls exactly those helpers, which is the pre-PR behaviour nothing here changes.
-"""
+"""API-initiated image loads download nothing; sentinels raise on any network fetch in staging."""
 
 from __future__ import annotations
 
@@ -40,13 +30,7 @@ class _Calls:
 
 
 def _install_sentinels(monkeypatch, calls, tmp_path, *, offline):
-    """Replace every network helper the staging phase can reach.
-
-    ``offline`` is the assertion: a metadata probe is refused outright (there is no offline form of
-    ``model_info``), and a download is refused unless it carries ``local_files_only=True``, which is
-    what makes it a cache lookup rather than a fetch. Online they only record, so the same fake
-    serves both directions and the two tests differ by one flag.
-    """
+    """Replace each staging network helper: offline it raises on any fetch, online it only records."""
     import huggingface_hub
 
     def _model_info(self, repo_id, **_kwargs):
@@ -167,10 +151,7 @@ def test_the_estimate_and_the_pre_cast_plan_stand_down_offline(monkeypatch):
 
 
 def test_the_base_preflight_reads_the_cache_and_never_the_hub_offline(monkeypatch):
-    """The preflight exists to name the repo a DOWNLOAD is about to 401 on. Offline there is no
-    such download, so the Hub half stands down -- but the other-root escape it computes is a pure
-    cache read and still runs, since that is what lets a base staged under huggingface_hub's
-    import-time root load off disk."""
+    """Offline, the base preflight skips the Hub but still reads the cache for other-root snapshots."""
     import huggingface_hub
 
     def _boom(*_a, **_k):

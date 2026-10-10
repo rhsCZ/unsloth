@@ -68,11 +68,7 @@ CONVROT_ATTR = "_unsloth_activation_rotation"
 
 
 def is_power_of_four(size: Any) -> bool:
-    """True for 4, 16, 64, 256, ... -- the sizes a kron power of ``H4`` can produce.
-
-    A genuine ``int`` only. ``"256"`` is not accepted even though it would coerce: this also gates
-    the group recorded in a checkpoint, and a value whose TYPE is already wrong says the artifact
-    was not written by the builder in this tree, which is not something to guess about."""
+    """Only a real int: a string size in a checkpoint means a foreign artifact, not one to coerce."""
     if not isinstance(size, int) or isinstance(size, bool):
         return False
     n = size
@@ -134,11 +130,8 @@ def rotate_convrot_activation(x: Any, h: Any, group_size: int) -> Any:
 
 
 def rotate_convrot_weight_(module: Any, group_size: int) -> None:
-    """``W <- W @ blockdiag(H).T`` in place, accumulated in float32 and cast back.
-
-    float32 regardless of the stored dtype: each output element becomes a ``group_size``-term dot
-    product, and accumulating that in bfloat16 would spend a visible part of the error budget the
-    rotation exists to save. The offline half only runs once, so the upcast is free."""
+    """Accumulates in float32: a group-sized dot product in bfloat16 would spend the error rotation
+    saves."""
     import torch
 
     weight = module.weight.data
@@ -154,22 +147,7 @@ def rotate_convrot_weight_(module: Any, group_size: int) -> None:
 
 @lru_cache(maxsize = None)
 def convrot_linear_class() -> Any:
-    """The ``nn.Linear`` subclass that rotates its input, built lazily so importing this module
-    never imports torch, and built exactly ONCE.
-
-    The cache is not a micro-optimisation, it is the difference between one compiled graph and
-    dozens. A class defined inside a function is a NEW class object on every call, and
-    ``torch.compile`` guards each frame on ``___check_type_id`` of the modules it closes over. So
-    handing every rotated projection its own ConvRotLinear made each one look like a different
-    type and retraced the block it lives in: measured 23 recompiles against bfloat16's 1 on the
-    same job, 178 s of first-call compile against 14 s, on a denoiser with 350 rotated
-    projections. Sharing one class collapses that back to a single trace.
-
-    A CLASS SWAP rather than a wrapper module, and that is load-bearing twice over: the module
-    stays an ``nn.Linear``, so torchao's filter and ``quantize_`` treat it exactly as they treat
-    an unrotated one, and the state dict keys are unchanged, so the hosted checkpoint still loads
-    under ``strict = True`` with no rename. The rotation carries no parameters of its own, so
-    there is nothing to serialize."""
+    """Built once and cached: a fresh class per call makes torch.compile retrace every rotated block."""
     import torch
     import torch.nn.functional as F
     from torch import nn
@@ -215,20 +193,13 @@ def warm_rotation_cache(transformer: Any, device: Any, dtype: Any) -> int:
 
 
 def declares_rotation(metadata: Any) -> bool:
-    """True when ``metadata`` claims its weights were rotated offline.
-
-    Deliberately keyed on the KEY being populated, not on the value being one this module
-    understands: an unknown kind has to read as "a rotation is declared" so the validator can
-    refuse it, rather than as "no rotation" so the loader runs rotated weights unrotated."""
+    """Keyed on the key being present, so an unknown rotation kind is refused rather than run unrotated."""
     return isinstance(metadata, dict) and metadata.get(ROTATION_KEY) not in (None, "")
 
 
 def rotation_metadata_error(metadata: Any) -> Optional[str]:
-    """Why ``metadata``'s declared rotation is unusable, or None when it is well formed.
-
-    Pure and torch-free, so the prequant validator can call it before anything is built. Checks
-    the CONTRACT only (kind, group, fqn list shape); whether those fqns exist on this particular
-    model is ``apply_activation_rotation``'s question, since answering it needs the model."""
+    """Checks the metadata contract only; fqn existence on the model is apply_activation_rotation's
+    check."""
     if not declares_rotation(metadata):
         return None
     kind = metadata.get(ROTATION_KEY)
@@ -252,10 +223,7 @@ def rotation_metadata_error(metadata: Any) -> Optional[str]:
 
 
 def rotation_metadata(group_size: int, fqns: Iterable[str]) -> dict:
-    """The metadata fragment an offline builder merges in after rotating ``fqns``.
-
-    Sorted, so two builds of the same model produce identical metadata and a rebuilt artifact can
-    be diffed against the shipped one."""
+    """Sorts the fqns so two builds of one model produce identical metadata and can be diffed."""
     return {
         ROTATION_KEY: CONVROT_KIND,
         ROTATION_GROUP_KEY: int(group_size),
@@ -268,12 +236,7 @@ def rotatable_fqns(
     filter_fn: Any,
     group_size: int = DEFAULT_CONVROT_GROUPSIZE,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """``(rotatable, not_divisible)`` among the Linears ``filter_fn`` selects for quantization.
-
-    The second tuple is why the shipped set is recorded rather than derived: the Hadamard only
-    tiles an input axis the group divides, so some quantized Linears are always left plain, and
-    which ones is a property of the architecture rather than of a rule worth re-evaluating at
-    load time."""
+    """Linears the group cannot tile are left out, so the shipped set is recorded rather than re-derived."""
     from torch import nn
 
     rotatable: list[str] = []
@@ -290,11 +253,8 @@ def rotate_linears_(
     fqns: Iterable[str],
     group_size: int = DEFAULT_CONVROT_GROUPSIZE,
 ) -> tuple[str, ...]:
-    """OFFLINE half: rotate the weights of ``fqns`` and install the online rotation on each.
-
-    Call BEFORE ``quantize_``, on a dense model: the whole point is that the quantizer sees the
-    flatter distribution. Returns the fqns rotated, in the order given. Raises on anything it
-    cannot rotate, so a builder can never record a set larger than the one it actually applied."""
+    """Offline half: call before quantize_ on a dense model, so the quantizer sees the flatter
+    distribution."""
     from torch import nn
 
     if not is_power_of_four(group_size):
@@ -317,18 +277,8 @@ def apply_activation_rotation(
     *,
     logger: Any = None,
 ) -> tuple[str, ...]:
-    """ONLINE half: install the input rotation on exactly the fqns ``metadata`` records.
-
-    Returns the fqns rotated, or ``()`` when ``metadata`` declares no rotation -- the plain
-    artifacts, which have to be left exactly as they are. RAISES on any other outcome: an
-    unusable contract, an fqn this model does not have, a target that is not a Linear, an
-    ``in_features`` the recorded group does not divide, or a Linear already rotated. The prequant
-    loader turns a raise into a refused checkpoint and a dense fallback.
-
-    Call AFTER ``load_state_dict`` and BEFORE ``apply_small_m_padding``: after, because the meta
-    retry path rebuilds the module from the config and would discard an earlier swap; before,
-    because padding reparents the Linears under a wrapper while the recorded fqns name the
-    unwrapped tree."""
+    """Must run after load_state_dict and before apply_small_m_padding; raises rather than skip a
+    bad fqn."""
     if not declares_rotation(metadata):
         return ()
     problem = rotation_metadata_error(metadata)

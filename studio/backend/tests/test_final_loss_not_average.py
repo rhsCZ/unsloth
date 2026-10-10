@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The run's mean loss must not be reported as the final step's loss.
-
-HF logs the end-of-run summary as {"train_runtime": ..., "train_loss": <mean>}
-with no "loss" key. `logs.get("loss", logs.get("train_loss"))` therefore fell back
-to the mean and published it at the same global_step as the real last step, so:
-
-  - the loss chart gained points stacked on the final step, the last of them the
-    run average (a 30 step run charted 33 points, ending 0.3205, 0.3205, 0.3834),
-  - `final_loss` on /api/train/runs became the average while
-    /api/models/checkpoints reported the true last-step loss for the same run,
-  - the UI stat card showed the average, so loss appeared to jump on the last step.
-"""
+"""train_loss is the run mean, so it must not be published as the final step's loss."""
 
 from __future__ import annotations
 

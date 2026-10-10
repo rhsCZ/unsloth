@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""UNSLOTH_DIFFUSION_SD_CPP_DEVICE: native image generation on a card torch cannot see.
-
-The host these pin is a ROCm torch beside an NVIDIA card (R9700 + RTX 3080). Every hardware answer
-is stubbed: the torch backend, the physical inventory and the binaries, so no test asks the machine
-it runs on."""
+"""UNSLOTH_DIFFUSION_SD_CPP_DEVICE; R9700 + RTX 3080 host, all hardware answers stubbed."""
 
 from __future__ import annotations
 

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Data-recipe job pump resilience.
-
-The pump is the sole consumer of worker events and sole writer of the job
-snapshot the status/SSE endpoints read; a handler error must not kill it, or the
-job stays wedged "active" and the workflow key is never retired. Fakes only.
-"""
+"""A handler error must not kill the pump, or the job stays active and its workflow key never retires."""
 
 from __future__ import annotations
 

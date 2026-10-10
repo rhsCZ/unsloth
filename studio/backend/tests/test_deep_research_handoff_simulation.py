@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""End-to-end simulation of the Deep Research handoff, and of what it must not change.
-
-Arming research used to create a run before the model read the message, so "hi" spent the
-thread's one run on a greeting. Now the model is offered a `deep_research` tool and decides.
-These drive the real loop, the real tool catalog and the real supervisor with a scripted model,
-covering both halves: that the decision reaches the run, and that every path that existed
-before still behaves the way it did.
-"""
+"""Arming research no longer creates a run before the model reads the message; the model decides."""
 
 from __future__ import annotations
 
@@ -454,11 +447,7 @@ def test_the_tool_is_offered_only_when_research_is_armed(armed):
 
 
 def test_an_unarmed_request_is_byte_identical_to_before():
-    """The tool list a normal chat sends must not move because this feature exists.
-
-    Compared against the armed selection rather than a frozen catalog, which any unrelated
-    built-in would fail without saying anything about this feature.
-    """
+    """Compare unarmed tool lists to the live selection; a frozen catalog breaks on any new built-in."""
     from models.inference import ChatCompletionRequest
     from routes.inference import _select_request_tools
 

@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Studio's own credentials are not tool input.
-
-The CLI caches the raw API key at ``$STUDIO_HOME/auth/.cli_api_key_<stem>_<digest>`` so a relaunch
-reuses it instead of minting another. Tool subprocesses run as the backend's OS user, so that file's
-0600 mode is no boundary against them: a provider that emits ``cat <auth dir>/.cli_api_key_*`` would
-get a live bearer replayed into its next inference request, and that key authenticates the terminal
-and python tools in turn.
-
-Two independent guards, so neither one has to be complete:
-  - the executors refuse a call that names the auth directory, in every permission mode (Bypass
-    Permissions included, unlike the command blocklist);
-  - an API key or desktop secret that reaches a result by any other route is masked on the
-    model-bound copy only, leaving the tool card the user is looking at untouched. The remaining
-    credentials in that directory (bootstrap password, llama stream key, auth.db) have no
-    recognisable shape to mask, so for those the executor refusal is the guard.
-"""
+"""Subprocesses run as the backend's user, so 0600 is no boundary; executors refuse the auth dir."""
 
 from __future__ import annotations
 
@@ -36,10 +21,6 @@ _FAKE_KEY = "sk-unsloth-" + "a1b2c3d4" * 4
 
 @pytest.fixture
 def studio_home(monkeypatch, tmp_path):
-    """A studio home with `auth/` and this session's sandbox, and the marker cache reset around it.
-
-    Every guard test needs the same four lines of setup and the same teardown, so they live here.
-    """
     home = tmp_path / "studio-home"
     (home / "auth").mkdir(parents = True)
     (home / "sandbox" / _SESSION).mkdir(parents = True)

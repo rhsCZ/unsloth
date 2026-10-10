@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The status fields a client reads before declining the resident-model shortcut.
-
-``spec_binary_fallback_can_retry`` needs a different llama-server installed before an
-identical /load can repair a binary stand-down. The chat UI cannot see that, so it
-reloaded (and prompted to stop running chats) for every re-pick of a model whose drafter
-stood down, for a load the backend would have deduplicated.
-
-``_spec_fallback_binary_changed`` publishes it. It is answered ONLY for the two binary
-reasons: /api/inference/status is polled from first paint, and neither the binary lookup
-nor the capability probe has business running on every poll of a healthy runtime.
-
-Two more arms of ``_runtime_matches_intent`` reject an identical load while leaving
-``spec_fallback_reason`` null entirely, so a client reading only the reason adopts a
-degraded runtime and nothing ever retries it: a retryable DFlash sidecar fetch, and a
-capability probe that has started answering since a launch it degraded.
-``_spec_dflash_retry_pending`` and ``_spec_probe_retry_pending`` publish those.
-
-The ``drafter_not_found`` arm excludes the kinds whose absence is not transient, so
-``_spec_dspark_sidecar_absent`` publishes that too: retrying a DSpark drafter no repo but
-one publishes would relaunch an identical server forever.
-
-``_arch_gate_dropped_tensor_parallel`` is here for the same reason: the gate rewrites a
-tensor-parallel request to layer mode, so status reports the launched mode rather than
-the requested one, and the backend accepts the same request back against it.
-
-The helper is extracted from the route module's source rather than imported, so the test
-costs nothing and does not drag FastAPI in behind it.
-"""
+"""Status fields that tell a client an identical /load can repair a degraded speculative runtime."""
 
 from __future__ import annotations
 

@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Upgrade, downgrade and contract tests for the per-connection ``max_output_tokens``.
-
-Three things a happy-path test cannot reach:
-
-* an existing studio.db, written before this column existed, opened by this code;
-* the same database opened AGAIN by a build that has never heard of the column,
-  which is what a user who reverts to the previous release does;
-* the route contract, where an explicit null has to be accepted on every provider type:
-  the dialog sends null for a blank field rather than omitting it, so rejecting it broke
-  every unrelated edit of a row that carries no override.
-
-No network, no GPU, no server: the routes are driven as plain coroutines and every
-database is a per-test temporary file.
-"""
+"""max_output_tokens: upgrade old studio.db files, survive downgrade, accept explicit null."""
 
 from __future__ import annotations
 

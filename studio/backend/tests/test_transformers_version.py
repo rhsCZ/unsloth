@@ -98,12 +98,7 @@ def _write_config(directory: Path, cfg: dict) -> str:
 
 @pytest.fixture(autouse = True)
 def _no_ambient_proxy(monkeypatch):
-    """Module-wide: these tests patch urlopen, which a selected proxy opener bypasses.
-
-    Every remote read here goes through ``_hf_urlopen``, which calls ``opener.open`` when
-    a proxy applies. A runner with HTTPS_PROXY / ALL_PROXY set would then make a real
-    request instead of hitting the patch, so results would track ambient CI connectivity.
-    """
+    """These tests patch urlopen, which a configured proxy opener bypasses; clear the proxy env vars."""
     for key in (
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -119,18 +114,7 @@ def _no_ambient_proxy(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _capturable_logger(monkeypatch):
-    """Make the ``caplog`` assertions independent of test collection order.
-
-    The ``sys.modules.setdefault("loggers", ...)`` stub above only installs the
-    stdlib-logger stub when ``loggers`` has not been imported yet. In a full
-    backend pytest run another module (e.g. ``test_log_filter_no_truncation``,
-    collected earlier) imports the real ``loggers`` first, so the stub is a
-    no-op and ``transformers_version.logger`` ends up a structlog/stdout logger
-    that ``caplog`` cannot see -- the tier/activation/install log assertions
-    would then fail even though the line was emitted. Bind a real stdlib logger
-    for the duration of each test so the module logs through ``logging`` and
-    ``caplog`` captures them regardless of import order.
-    """
+    """Binds a real stdlib logger per test, so caplog captures output whatever the import order."""
     monkeypatch.setattr(
         "utils.transformers_version.logger",
         logging.getLogger("utils.transformers_version"),
@@ -1521,17 +1505,7 @@ class TestProbeGating:
     def test_a_model_type_the_default_lacks_never_reaches_the_version_field_probe(
         self, monkeypatch
     ):
-        """The mapping check answers first, and short-circuits the probe below it.
-
-        This ordering is what quietly invalidated the two tests above. They pinned
-        model_type "brandnew", which no mapping ships, so once #7043 landed the mapping
-        check answered before the version-field probe they were written for ever ran, and
-        they began asserting the wrong branch's answer. Nothing pinned the ordering, so
-        the only symptom was those two failing in a way that read like a probe bug.
-
-        Pinning it here means a future reshuffle that puts the probe first fails as
-        itself, and the two tests above keep testing the probe rather than this.
-        """
+        """The mapping check must answer first, so latest-only model types never reach the version probe."""
         import utils.transformers_version as tv
 
         _shared_setup_1(monkeypatch, self)
@@ -1985,15 +1959,7 @@ class TestVenvDirFileIntegrity:
         assert not _venv_dir_is_valid_and_undamaged(str(venv_dir), ("transformers==5.3.0",))
 
     def test_console_script_rows_are_ignored(self, tmp_path: Path):
-        """pip --target records scripts at a path that cannot resolve.
-
-        pip installs through a temporary normal-scheme prefix and writes RECORD
-        before flattening, so a healthy sidecar records ../../bin/hf while the
-        file lands in <target>/bin. Believing those rows fails CLOSED on a
-        healthy install, and since the repair reinstalls with the same pip it
-        would wipe and re-download several hundred MB on every activation,
-        forever.
-        """
+        """pip --target records unresolvable script rows; trusting them fails closed on healthy sidecars."""
         venv_dir = self._make_venv(
             tmp_path / "venv",
             record_extra = [
@@ -2052,10 +2018,7 @@ class TestVenvDirFileIntegrity:
         assert not _venv_dir_is_valid_and_undamaged(str(venv_dir), ("transformers==5.3.0",))
 
     def test_in_target_script_rows_are_ignored(self, tmp_path: Path):
-        """uv records bin/hf, which does resolve -- but pip --upgrade rmtree's a
-        colliding directory in the target, so a later install into the same
-        sidecar deletes an earlier package's scripts. Nothing imports from
-        there, so the row carries no signal either way."""
+        """pip --upgrade rmtrees colliding script dirs, so in-target bin rows carry no signal."""
         venv_dir = self._make_venv(
             tmp_path / "venv",
             record_extra = [
@@ -2171,11 +2134,7 @@ class TestVenvDirFileIntegrity:
     def test_ensure_venv_dir_repairs_a_symlinked_sidecar_in_place(
         self, tmp_path: Path, monkeypatch
     ):
-        """The Docker image keeps the sidecars under UNSLOTH_STUDIO_APP and links them into
-        the Studio home. rmtree refuses a symlink and ignore_errors hides that, so the
-        damaged tree used to survive the wipe and a version-satisfied install left it in
-        place. The repair has to reach the directory the link points at, and the link
-        itself must stay, since Studio keeps addressing the sidecar through the home."""
+        """Repair must reach the directory a symlinked sidecar points at, and keep the link itself."""
         monkeypatch.setenv("UNSLOTH_STUDIO_APP", str(tmp_path / "app"))
         real = self._make_venv(tmp_path / "app" / "venv")
         (real / "transformers" / "__init__.py").write_text("x")
@@ -2231,10 +2190,7 @@ class TestVenvDirFileIntegrity:
         assert (real / "keep.txt").exists(), "a link outside the app tree was followed"
 
     def test_ensure_venv_dir_restores_the_studio_owned_marker(self, tmp_path: Path, monkeypatch):
-        """The wipe takes setup.sh's ownership marker with the old directory. Without a
-        new one, the next `unsloth studio update` under a custom UNSLOTH_STUDIO_HOME
-        aborts on a sidecar we just repaired, and adoption cannot rescue it because that
-        needs a prebuilt-info file a venv never has."""
+        """Repair must restore .unsloth-studio-owned, or the next studio update aborts on the sidecar."""
         venv_dir = self._make_venv(tmp_path / "venv")
         (venv_dir / ".unsloth-studio-owned").touch()
         (venv_dir / "transformers" / "__init__.py").write_text("x")
@@ -2632,13 +2588,7 @@ class TestResolveBaseModelNameOrPathFallback:
         assert get_transformers_tier(str(d)) == "530"
 
     def test_local_config_tier_not_bypassed_by_private_name_or_path(self, tmp_path: Path):
-        """Full checkpoint with model_type: qwen3_5 must still route to 530 even
-        when _name_or_path is a private HF ID with no recognisable tier substring.
-
-        Regression guard: before the adapter-only pre-resolve fix,
-        activate_transformers_for_subprocess would resolve to the private HF ID
-        and then fail to probe it offline, returning default instead of 530.
-        """
+        """A full qwen3_5 checkpoint routes to 530 even under a private name_or_path with no tier name."""
         d = tmp_path / "my-finetuned-model"
         d.mkdir()
         (d / "config.json").write_text(
@@ -2693,10 +2643,7 @@ class TestAdapterModelOnlyLoRA:
         assert _resolve_base_model(str(d)) == "unsloth/Qwen3.5-7B"
 
     def test_activation_pre_resolves_adapter_only_lora(self, tmp_path: Path):
-        """Regression: activate_transformers_for_subprocess must pre-resolve an
-        adapter_model-only LoRA dir (weights present, adapter_config.json absent).
-        Before the gate used _is_lora_adapter_dir, the adapter_config-only check
-        skipped resolution and the worker tiered off the adapter folder itself."""
+        """An adapter_model-only LoRA dir must be pre-resolved, not tiered off the adapter folder itself."""
         d = tmp_path / "my-custom-lora"
         d.mkdir()
         (d / "adapter_model.safetensors").write_text("")
@@ -2927,10 +2874,7 @@ class TestHfEndpointUnreachable:
         assert hf_endpoint_unreachable(timeout = 2) is False
 
     def test_connection_reset_is_reachable(self, monkeypatch):
-        """A reset proves the path answered, exactly like the refusal above.
-
-        urllib wraps an OSError raised while sending, so this is the URLError form.
-        """
+        """A connection reset proves the path answered, so it is reachable; urllib wraps it as URLError."""
         import urllib.error
 
         def _reset(*a, **k):
@@ -3623,10 +3567,7 @@ class TestRaiseTierForNested:
 
 
 class TestDamagedLatestSidecarRepairHandoff:
-    """A worker child refuses to repair the sidecar, so damage it finds must reach the
-    parent's routing self-heal. The routing predicate is package-level and cannot see a
-    truncated file, so without a handoff every worker retry fails forever waiting for a
-    repair nothing ever triggers."""
+    """A worker child cannot repair the sidecar, so damage it finds must reach the parent's self-heal."""
 
     def _sidecar(
         self,
@@ -3698,18 +3639,8 @@ class TestDamagedLatestSidecarRepairHandoff:
     def test_every_sidecar_dir_is_redirected_away_from_the_real_studio_home(
         self, monkeypatch, tmp_path
     ):
-        """Adding a fifth tier must not silently start writing to the developer's home.
-
-        _fake_install writes a sidecar at whatever target it is handed, and _probe_tier
-        walks the tiers provisioning each one it tries. Redirecting only the latest dir
-        meant the other three targets were the real ones, and this file wrote a fake
-        transformers 5.99.0 into ~/.unsloth/studio, then failed its own next run.
-
-        So the assertion is over whatever tier constants the module defines, not over the
-        four that exist today: a new _VENV_T5_..._DIR that _patch does not redirect fails
-        here rather than in whichever unrelated test happens to read the tier mapping
-        next.
-        """
+        """Every _VENV_T5 tier dir must be redirected away from the real Studio home, not just the
+        latest."""
         import utils.transformers_version as tv
 
         tiers = [name for name in dir(tv) if name.startswith("_VENV_T5_") and name.endswith("_DIR")]
@@ -3761,14 +3692,7 @@ class TestDamagedLatestSidecarRepairHandoff:
         assert tv._latest_repair_requested(), "the child left no signal for the parent"
 
     def test_flagged_damage_breaks_the_worker_retry_deadlock(self, monkeypatch, tmp_path):
-        """The reported deadlock, end to end.
-
-        Damage that appears AFTER this process cached the latest mapping is invisible to
-        every parent-side predicate cheap enough to run per request, so the parent keeps
-        routing to 'latest' and the child keeps refusing. Pinned here is that the loop
-        terminates: the child's flag makes the next parent routing call repair, and the
-        retry after that activates.
-        """
+        """Flagged damage breaks the worker retry loop, since the next routing call repairs the sidecar."""
         live = self._sidecar(tmp_path / "venv_t5_latest")
         tv, installs = self._patch(monkeypatch, live)
 
@@ -3842,10 +3766,7 @@ class TestDamagedLatestSidecarRepairHandoff:
             tv._overlay_transformers_dir("latest")
 
     def test_backoff_window_keeps_the_damaged_sidecar_withheld(self, monkeypatch, tmp_path):
-        """Backing off from pip must not double as declaring the sidecar usable: the
-        cheap predicate cannot see a truncated file, so without the marker every
-        routing call in the window routes latest-only models straight back into a
-        sidecar whose worker activation is known to fail."""
+        """Backoff keeps the damaged sidecar withheld; the cheap predicate cannot see a truncated file."""
         _, live, tv = _shared_setup_3(monkeypatch, self, tmp_path)
 
         assert tv._overlay_transformers_dir("latest") is None

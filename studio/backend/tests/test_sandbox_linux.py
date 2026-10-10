@@ -1204,10 +1204,7 @@ def test_a_wedged_cache_path_is_not_re_scanned_by_every_later_launch(tmp_path, m
     session = str(tmp_path / "session")
     assert sandbox_linux._model_cache_binds(session) == {}
     assert sandbox_linux._model_cache_binds(session) == {}
-    # `started` is filled from the scan workers, which a loaded runner can schedule after
-    # the launch that started them has returned, so counting it between the two launches
-    # reads a slow first-launch worker as a second one. Wait until every worker either
-    # launch started has reached the scan, then compare workers to paths.
+    # Scan workers may run late, so wait for each launched worker to reach the scan before counting.
     workers = [
         t
         for t in threading.enumerate()

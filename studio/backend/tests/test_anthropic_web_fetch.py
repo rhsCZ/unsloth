@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for Anthropic's `web_fetch_20250910` / `web_fetch_20260209`
-translation in ``_stream_anthropic``. Covers request body emission
-(version from ``_anthropic_web_fetch_version``: ``_20260209`` for Opus
-4.6/4.7 + Sonnet 4.6, else ``_20250910``), combined tool requests,
-off-by-default behavior, and SSE translation of success and
-``url_not_accessible`` error paths into ``tool_start`` / ``tool_end``.
-"""
+"""The web_fetch version is _20260209 on Opus 4.6/4.7 and Sonnet 4.6, else _20250910."""
 
 import asyncio
 import json
@@ -324,10 +318,7 @@ def test_web_fetch_error_renders_error_code(monkeypatch):
 
 
 def _finish_reasons(lines: list[str]) -> list:
-    """Non-null finish_reason fields from each chat.completion.chunk.
-    Mid-stream content deltas carry ``finish_reason: None`` and are
-    skipped (refusal emits a notice delta before the content_filter
-    chunk)."""
+    """Collects non-null finish_reason values; mid-stream deltas carry None and are skipped."""
     out: list = []
     for line in lines:
         if not line.startswith("data:"):

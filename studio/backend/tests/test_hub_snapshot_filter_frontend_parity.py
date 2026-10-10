@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Guards that dataset-size.ts still mirrors snapshot_filters.py.
-
-The backend decides what snapshot_download fetches, the frontend is a hand-ported copy
-deciding the size shown and the progress denominator, and nothing is shared between them,
-so drift is silent: an advertised size that never matches disk, or a bar stuck below 100%.
-"""
+"""Keeps dataset-size.ts in step with snapshot_filters.py, which it hand-ports; drift is silent."""
 
 from __future__ import annotations
 

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Quieting third-party tqdm bars must not take anything real with it.
-
-The bars themselves carry no signal in a log with no terminal, but three things
-ride along with them and have to survive: the export dialog's live Hub upload
-progress, the "Applying chat template ... 42%" status the UI derives from the
-datasets bar's counter, and an operator's explicit choice.
-"""
+"""Quieting tqdm must keep Hub upload progress, the datasets bar the UI reads, and explicit opt-ins."""
 
 from __future__ import annotations
 
@@ -264,11 +258,7 @@ def test_evaluation_progress_survives_the_dropped_bar():
 
 
 def test_evaluation_progress_is_throttled_and_counts():
-    """The throttle from _ProgressCallback.on_prediction_step, in isolation.
-
-    Importing the trainer module pulls in unsloth and torch, so the rule is checked
-    the same way the throughput one is.
-    """
+    """Checks the on_prediction_step throttle in isolation, since importing the trainer pulls in torch."""
 
     def report(
         seen,

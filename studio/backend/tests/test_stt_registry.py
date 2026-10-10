@@ -194,11 +194,8 @@ def test_load_never_blocks_on_an_engine_that_is_serving_a_request(monkeypatch):
 
 
 def test_a_busy_sidecar_keeps_its_model_and_an_idle_one_releases_it():
-    """Against the real sidecars: `wait=False` must decline a live request, not block.
-
-    RLock.locked() is 3.14-only and the mtmd sidecar drops _lock before its HTTP call, so
-    the busy probe cannot be either.
-    """
+    """wait=False must decline a busy sidecar; RLock.locked() is 3.14-only and mtmd drops _lock over
+    HTTP."""
     from core.inference.stt_ggml_sidecar import get_ggml_stt_sidecar
     from core.inference.stt_mtmd_sidecar import get_mtmd_stt_sidecar
 
@@ -420,12 +417,7 @@ def test_a_blocking_unload_still_gives_up_after_the_drain_window(monkeypatch):
 
 
 def test_an_implicit_transcribe_load_releases_the_other_engines(monkeypatch):
-    """Each sidecar loads its own model, but only the registry frees the others.
-
-    An API client alternating between engines through /v1/audio/transcriptions never
-    calls /audio/stt/load, so without this both models stayed resident until their
-    independent idle timers fired, which OOMs a device that fits either alone.
-    """
+    """Transcribe loads must release the other engine's model, or alternating clients hold both."""
     import asyncio
 
     import routes.inference as ri

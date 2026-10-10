@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Pin Unsloth's behavior when a training event reports non-finite (NaN/Inf) loss.
-
-The training event handler used to filter NaN/Inf to None silently while
-leaving the previous finite loss in progress.loss — so the API kept reporting
-the stale value as if everything were fine. We now drop the stale value:
-clients see loss=None at the affected step and a one-shot warning is logged.
-Training continues; the run is not marked failed.
-"""
+"""A non-finite loss reports None for that step, not the stale finite value; the run is not failed."""
 
 from __future__ import annotations
 

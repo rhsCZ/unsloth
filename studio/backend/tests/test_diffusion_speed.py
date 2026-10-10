@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the opt-in diffusion speed layer (``diffusion_speed.py``).
-
-Hermetic: torch is stubbed via ``sys.modules`` only where a path needs it, so the
-gating logic and the best-effort applier run without a GPU or real diffusers.
-"""
+"""Hermetic tests for opt-in diffusion_speed: torch is stubbed in sys.modules where needed."""
 
 from __future__ import annotations
 
@@ -70,15 +66,7 @@ def _fresh_compile_knobs():
 
 @pytest.fixture(autouse = True)
 def _compile_runtime_independent_of_the_host(monkeypatch):
-    """Keep these tests off the HOST's toolchain, which is what "hermetic" above claims.
-
-    ``torch_compile_runtime_available`` asks whether THIS machine can run inductor, and on
-    Windows that means asking whether a Triton wheel is installed. Without this, every
-    compile-tier assertion in the file fails on a Windows checkout with no ``triton-windows``
-    for a reason that has nothing to do with tiering (measured: 15 failures on a
-    ``windows-latest`` runner, all green on Linux and macOS). Pin the non-Windows branch; the
-    tests that are *about* Windows set ``sys.platform`` themselves and a later setattr wins.
-    The lru_cache is dropped either side so one test's answer is never another test's."""
+    """Pins sys.platform to linux so compile-tier tests do not depend on a host Triton wheel."""
     ds_mod.torch_compile_runtime_available.cache_clear()
     monkeypatch.setattr(ds_mod.sys, "platform", "linux")
     yield
@@ -1488,10 +1476,7 @@ def _stub_cuda_graph(
     eligible = True,
     reason = "ok",
 ):
-    """Replace ``core.inference.diffusion_cuda_graph`` with a recorder that captures nothing.
-
-    Into BOTH sys.modules and the package attribute: ``from . import X`` reads the attribute when
-    an earlier import already bound it, and falls back to sys.modules only when it has not."""
+    """Stub goes in sys.modules and the package attribute; from . import reads the attribute first."""
     import core.inference as inference_pkg
 
     calls = {"eligible": [], "installs": 0}

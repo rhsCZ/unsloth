@@ -37,14 +37,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Register a stub module for a dep the CPU backend CI job does not install.
-
-    The pytest job has studio.txt + torch + transformers but not unsloth/trl,
-    which core.training.trainer imports at module scope. Stub the absent ones
-    (real installs are left alone) so importing it for the two pure helper
-    methods never breaks test collection. __spec__ = None keeps the trainer's
-    own _ensure_real_packages namespace-shadow guard a no-op on the stub.
-    """
+    """Stubs unsloth and trl when absent, since the backend CI job lacks them; real installs are kept."""
     if name in sys.modules:
         return
     try:
@@ -72,15 +65,7 @@ _STUB_SPECS = (
 
 @contextlib.contextmanager
 def _stubbed():
-    """Hold the stubs for the duration of an import of the trainer, then drop them again.
-
-    Leaving them in sys.modules outlives this module and the rest of the suite then runs against
-    them: utils.hardware.hardware._shared_policy branches on `"unsloth" in sys.modules` and then
-    reaches for unsloth.dataset_num_proc, which a spec-less non-package stub cannot provide, so it
-    returns None and every shared-policy case in test_dataset_map_num_proc.py skips instead of
-    running. _load_trainer_module re-imports the trainer per test, so scoping beats a one-shot
-    cleanup after the import below. A real install stubs nothing, so this is a no-op there.
-    """
+    """Scope the stubs to the trainer import: left in sys.modules, shared-policy dataset tests skip."""
     for name, attrs in _STUB_SPECS:
         _stub_if_missing(name, attrs)
     try:
@@ -721,13 +706,7 @@ def test_world_size_comes_from_the_launcher_env(monkeypatch):
 
 
 def test_world_size_comes_from_an_mlx_launch_hostfile(tmp_path, monkeypatch):
-    """An Apple silicon mlx.launch advertises its ranks as a file, not a number.
-
-    Of mlx.launch's four backends only NCCL (CUDA) exports MLX_WORLD_SIZE. Ring and
-    JACCL -- everything a Mac runs -- export a path to a JSON file with one entry per
-    rank, so reading only the numeric variables sizes a four-way launch as one process
-    and the run re-reads rows it has already trained on.
-    """
+    """mlx.launch on Apple exports ranks as a hostfile path, so numeric variables alone undercount."""
     from core.training.dataset_bounds import (
         MAX_STEPS_ROW_SLACK,
         max_steps_dataset_rows,
@@ -815,14 +794,7 @@ def test_world_size_comes_from_an_mlx_launch_hostfile(tmp_path, monkeypatch):
 
 
 def test_a_rank_file_read_is_capped_in_bytes_not_characters(tmp_path):
-    """The cap has to bound what comes off the disk, whatever the file holds.
-
-    A text-mode ``read(n)`` counts CHARACTERS, so a file of 4-byte codepoints
-    would pull four times ``MAX_WORLD_SIZE_FILE_BYTES`` into memory on a variable
-    that names an arbitrary path. Read in binary and the constant means what it
-    says; ``json.loads`` takes bytes, and non-UTF-8 raises ``UnicodeDecodeError``,
-    which is a ``ValueError`` and already discarded.
-    """
+    """Rank files are read as bytes, since a text-mode read(n) counts characters, not bytes."""
     from core.training.dataset_bounds import (
         MAX_WORLD_SIZE_FILE_BYTES,
         world_size_from_rank_files,
@@ -844,12 +816,7 @@ def test_a_rank_file_read_is_capped_in_bytes_not_characters(tmp_path):
 
 
 def test_the_launcher_env_report_names_the_variable_that_claimed_the_ranks():
-    """A stale size variable is otherwise invisible.
-
-    The report exists so a user whose single-machine run is told it makes several
-    passes can see which variable said so. It must never raise and never grow
-    without bound: MLX_HOSTFILE legitimately carries a whole JSON payload.
-    """
+    """The launcher report names the variable that claimed the ranks and stays bounded in size."""
     from core.training.dataset_bounds import world_size_env_report
 
     assert world_size_env_report({}) == "no launcher variable set"
@@ -1186,11 +1153,7 @@ def test_row_bound_marker_round_trips_a_world_size_scaled_bound(tmp_path, monkey
 
 
 def test_both_loaders_size_the_bound_for_the_world():
-    """The factor is only worth having if both loaders actually pass it.
-
-    Read from source for the same reason as the wiring test below: neither call
-    site is reachable without a GPU or Apple hardware.
-    """
+    """Both loaders must pass the world size into the row bound; checked from source, not run."""
     import ast
     from pathlib import Path
 
@@ -1268,11 +1231,7 @@ def test_data_parallel_world_size_counts_ranks_and_devices(monkeypatch):
 
 
 def test_both_loaders_apply_the_row_bound():
-    """Guards the wiring: the helpers are useless if a loader stops calling them.
-
-    Read from source: the CUDA worker needs a GPU and the MLX one Apple hardware,
-    so neither call site is otherwise reachable in CI.
-    """
+    """Both loaders must still call the row-bound helpers; checked from source, as CI cannot run them."""
     import ast
     from pathlib import Path
 

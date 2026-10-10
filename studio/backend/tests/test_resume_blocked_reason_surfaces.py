@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The provenance refusal has to reach the user, not just the start route.
-
-300fe6321 made ``POST /api/train/start`` report the real reason instead of blaming the
-checkpoint, but the History UI never gets that far: ``can_resume: false`` hides the
-Resume button outright, and ``resume-training-run.ts`` throws its own
-"Only stopped or errored runs with a saved checkpoint can be resumed" *before* issuing
-any request. For a run whose checkpoint is intact and whose pinned snapshot was evicted,
-that sentence is exactly the wrong diagnosis.
-
-So the summary carries the reason, and the client prefers it over its generic string.
-"""
+"""The resume blocker reason must reach the History UI, which otherwise shows a checkpoint message."""
 
 from models.training import TrainingRunSummary
 from routes import training_history
@@ -105,14 +95,7 @@ def test_a_missing_checkpoint_keeps_the_clients_own_wording(monkeypatch):
 
 
 def test_a_failure_computing_the_reason_is_not_fatal(monkeypatch):
-    """History must render even if the gate raises; the row simply carries no reason.
-
-    Narrower than it first appears: ``can_resume_run`` calls the same gate without a
-    guard one line earlier, so if the gate raises on a row that reaches it, History
-    fails there instead. What this ``except`` genuinely protects is the path where
-    ``can_resume_run`` short-circuits before touching the gate and
-    ``_resume_blocked_reason`` is its first caller.
-    """
+    """A raising reason gate must not break History; the except only covers the short-circuit path."""
     from core.training import resume as resume_mod
 
     monkeypatch.setattr(resume_mod, "has_resume_state", lambda output_dir: True)

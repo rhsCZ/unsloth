@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""FLUX.1, Z-Image and Qwen-Image pin inductor's reduction-config filter on sm120, sm80 and sm89, so one seed renders
-one image in every fresh server there.
-
-A few of their norm reductions get several configs that sum in different orders, and a cold-cache server benchmarks
-them in its own process on near-equal timings: fresh servers rendered 2-4 variants per seed on an RTX PRO 6000, A100
-and L4. B200 servers were already deterministic for these families, so the opt-in is per (family, compute
-capability)."""
+"""Near-equal reduction configs sum in different orders; the pin keeps one seed one image."""
 
 from __future__ import annotations
 

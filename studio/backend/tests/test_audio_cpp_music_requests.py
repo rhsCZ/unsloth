@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Music studio requests to audiocpp_server, per family and mode, against a recording fake server.
-
-Strict specs (schema_version) refuse undeclared options, so their bodies carry only declared keys:
-MiDashengLM and ControlFoley take ``duration_sec``, never ``duration_seconds`` (finding 7).
-"""
+"""Strict specs refuse undeclared keys, so MiDashengLM and ControlFoley take duration_sec only."""
 
 from __future__ import annotations
 

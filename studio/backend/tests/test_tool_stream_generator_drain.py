@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for generator-close cleanup in the tool-streaming routes.
-
-Tool streams run ``next(gen)`` in an ``asyncio.to_thread`` worker. Closing the
-generator while that worker is still inside ``next`` raises ``ValueError:
-generator already executing`` and skips the generator's ``finally`` (tool
-cleanup); the routes drain the pending task first (``_drain_pending_worker``),
-which these tests exercise.
-"""
+"""Closing a tool stream while its next() still runs raises ValueError and skips cleanup."""
 
 from __future__ import annotations
 

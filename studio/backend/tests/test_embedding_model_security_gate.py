@@ -601,10 +601,7 @@ def test_unload_is_offered_while_another_model_is_still_resident(client, monkeyp
 
 
 def test_the_resolved_repo_is_what_gets_verified_and_scanned(client, monkeypatch):
-    """A slashless alias resolves under sentence-transformers/, but the PUT ran
-    is_embedding_model and the malware scan against the literal name: a repo that
-    usually does not exist (fail-open, or a forceable 409) or, worse, a different
-    top-level repo that does."""
+    """The repo verified and scanned must be the resolved one, not the literal slashless alias."""
     from utils import utils as studio_utils
 
     monkeypatch.setattr(studio_utils, "hf_env_offline", lambda: False)
@@ -680,10 +677,7 @@ def test_a_llama_download_repo_is_not_used_as_the_scan_target(client, monkeypatc
 
 
 def test_offline_cached_acceptance_still_asks_who_is_asking(client, monkeypatch):
-    """The offline branch above accepts a cached transformers-native embedder that HF
-    metadata cannot verify. What makes that safe is the authorization check beside the
-    loadable check: without it, an API key that cannot reach the repo learns the operator
-    has it cached and gets it persisted as this deployment's embedder."""
+    """Offline acceptance still checks authorization, or any key could probe what is cached."""
     from hub.utils import hf_tokens
 
     c, saved = client

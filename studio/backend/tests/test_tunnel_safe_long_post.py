@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A load slower than a proxy's idle timer still reaches the client.
-
-Cloudflare quick tunnels (`--secure`) drop a request whose origin has sent no body
-bytes for ~100s, and a 600 GB GGUF load runs 100-330s, so the browser reported
-"Request failed" on loads the server completed with a 200. Measured on a real
-quick tunnel:
-
-  * no body for 150s                -> 524
-  * headers at t=0, no body         -> 524 (headers are NOT enough)
-  * one byte at t=90s, then silence -> killed ~125s later, client sees 200 with an
-                                       EMPTY body
-  * one space every 20s             -> survives, body intact
-
-So the padding must be continuous, and a failure found after the status commits
-can only travel in the body.
-
-Two consequences below: the padded reply is a StreamingResponse, so an in-process
-caller that drains no body awaits ``load_model_gated`` instead; and a client that
-treats any 200 as success has to learn the in-band failure key.
-"""
+"""Quick tunnels cut silent requests at ~100s, so the load pads its body continuously."""
 
 from __future__ import annotations
 
@@ -266,10 +247,7 @@ def test_preview_chat_waits_for_a_slow_checkpoint_load(route, slow_load, monkeyp
 
 
 class _SlowSyncTeardown:
-    """A synchronous GGUF teardown that returns only once the padding has flowed.
-
-    On the event loop it never sees a pad byte and falls out on ``cap_s`` with none.
-    """
+    """Sync GGUF teardown must run off the loop: on it, no pad byte is ever seen before cap_s."""
 
     def __init__(
         self,
@@ -524,12 +502,7 @@ def test_a_python_client_can_recognise_the_late_failure(route):
 
 
 def test_both_clients_reject_a_truncated_padded_body():
-    """A proxy killing a padded response after the 200 committed leaves the measured
-    200 with an EMPTY body. Both clients must call that a failure, else the same reply
-    means "loaded" to one and "failed" to the other. Behaviour is tested in their own
-    suites (test_inference_chat.py, padded-response.test.ts); this only pins that
-    neither side can drop the check.
-    """
+    """A padded 200 with a truncated body is a failure; both CLI and frontend clients must reject it."""
     cli = (_repo_root / "unsloth_cli" / "_inference.py").read_text(encoding = "utf-8")
     assert "def require_completed_padded_body(" in cli
     assert "require_completed_padded_body(url, raise_for_deferred_error(url, body))" in cli

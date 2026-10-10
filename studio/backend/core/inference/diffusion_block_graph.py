@@ -962,10 +962,7 @@ def compile_below_hooks_enabled() -> bool:
 
 
 def compile_below_offload_hooks(transformer: Any, logger: Any = None) -> int:
-    """Compile each offload-hooked block's own ``forward`` so the hooks stay eager outside the compiled region.
-
-    Traced through, the hooks graph-break the block and put residency state into the guards, so every release /
-    re-pin recompiles. Idempotent; returns the blocks moved."""
+    """Compiles each block's own forward, keeping hooks eager; traced hooks recompile on every release."""
     if not compile_below_hooks_enabled():
         return 0
     kwargs = getattr(transformer, "_unsloth_regional_compile_kwargs", None)

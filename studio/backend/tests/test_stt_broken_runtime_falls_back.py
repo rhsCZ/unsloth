@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A whisper.cpp build that starts but cannot infer must stop reporting as available.
-
-Reported on Windows with ROCm on gfx1200: rocBLAS was missing its TensileLibrary, so
-whisper-server started, answered GET /, and died on the first inference. The binary and
-every linked library were present, so slim_runtime_intact() was satisfied, is_available()
-said yes, and _resolve_serving_stt_engine never fell back. Every recording returned 501
-while the UI showed the model loaded. Only an actual inference can distinguish this case.
-"""
+"""A whisper.cpp build can start yet fail every inference, so availability needs a real inference."""
 
 from __future__ import annotations
 
@@ -92,11 +85,7 @@ def test_an_amd_box_does_not_report_its_dictation_device_as_cuda(monkeypatch):
 
 
 def test_the_fallback_fetches_the_transformers_snapshot_it_needs(monkeypatch):
-    """The GGUF pick downloaded one .bin, so Transformers has no snapshot to serve.
-
-    Without this the fallback swaps a 501 for a 409 "not downloaded" on every retry while
-    the Audio page still shows the selection as ready.
-    """
+    """The fallback must fetch the Transformers snapshot, or retries swap a 501 for a 409 not-downloaded."""
     from core.inference import stt_sidecar
     from routes import inference as inference_routes
 

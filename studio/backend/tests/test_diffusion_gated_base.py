@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic tests for the gated companion-base preflight.
-
-Hugging Face gates the BYTE endpoint only, so ``model_info`` answers anonymously and the download
-plan is built from a full file list before anything 401s. Stubbing ``HfApi`` /
-``get_hf_file_metadata`` pins both halves: the plan fails up front naming the repo and its licence
-page, and every non-access failure falls through so an offline host can still load.
-"""
+"""Gated base preflight names the repo up front; other errors fall through so offline loads work."""
 
 from __future__ import annotations
 
@@ -751,10 +745,7 @@ def _stub_shared_download(
     tmp_path,
     cached_elsewhere = (),
 ):
-    """Record the cache root each companion download resolves against.
-
-    ``cached_elsewhere`` names the files that exist ONLY under huggingface_hub's import-time root
-    (Unsloth's cache folder was changed mid-session), so the live root is a miss for them."""
+    """Records each download's cache root; the import-time root can differ from the live one."""
     import utils.hf_xet_fallback as X
 
     seen: list = []
@@ -812,10 +803,7 @@ def _stub_split_download(monkeypatch, per_file):
 
 
 def test_a_prefetch_split_across_roots_hands_back_no_snapshot(monkeypatch):
-    """Per-file root reuse can serve the manifest from the old root while the companions download
-    into the live one, so returning the manifest's snapshot would point from_pretrained at a tree
-    missing the VAE. Falling back to the hub id costs nothing: it resolves each file through its
-    own root, which is how the files got here."""
+    """A prefetch split across cache roots must return no snapshot, or from_pretrained misses the VAE."""
     old = "/old-hub/models--bfl--base/snapshots/" + "a" * 40
     live = "/live-hub/models--bfl--base/snapshots/" + "a" * 40
     _stub_split_download(
@@ -887,10 +875,7 @@ def test_an_unreadable_gguf_cache_probe_still_downloads(tmp_path, monkeypatch):
 
 
 def test_a_base_excused_by_the_other_root_is_loaded_from_that_snapshot(monkeypatch, tmp_path):
-    """The prefetch reuse above only covers a base the size estimate could list, and that estimate
-    comes from the very ``model_info`` call whose 401 earned the cache escape: ``base_files`` is
-    left empty, so nothing is staged and ``from_pretrained``, pinned to the live root, re-raises the
-    bare auth error over a base wholly on disk. The preflight carries the snapshot it accepted."""
+    """A base excused by the other cache root must load from the snapshot the preflight accepted."""
     from huggingface_hub.errors import RepositoryNotFoundError
 
     private = "unsloth/private-base"
@@ -990,10 +975,7 @@ def test_the_native_fetch_reuses_a_base_asset_cached_under_the_other_root(monkey
 
 
 def test_a_gated_base_with_a_live_mirror_is_not_refused(monkeypatch):
-    """The other side of every refusal above, and the reason the probe moved onto the fetch repo:
-    #7952 sends a gated base to its ungated unsloth mirror, so the bytes never touch the vendor id,
-    and a preflight still probing the upstream would turn those working loads into a 400 -- worse
-    than the bare token error this whole preflight replaced."""
+    """A gated base with a live mirror must not be refused, so probes must target the fetch repo."""
     mirror = "unsloth/FLUX.1-dev"
     probed: list = []
 

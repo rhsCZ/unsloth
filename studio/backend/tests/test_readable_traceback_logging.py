@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A traceback in the log file has to be readable as a traceback.
-
-~/.unsloth/studio/logs is a tee of stdout and stdout is JSON, so every stack trace reached
-the reader as one line with its newlines escaped to ``\\n`` -- as the reported Image
-Transform failure did. ``with_readable_traceback`` echoes the traceback under the record;
-the JSON line itself must survive byte-for-byte for anything parsing the file.
-"""
+"""The JSON log line must stay byte-for-byte; the readable traceback is echoed under the record."""
 
 from __future__ import annotations
 

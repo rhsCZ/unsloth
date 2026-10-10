@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for llama-server multimodal-projector startup recovery.
-
-A GGUF vision model launches with ``--mmproj <projector>``. When GPU memory
-cannot hold the projector, Unsloth first retries with ``--no-mmproj-offload``
-so image input remains available. Incompatible projectors, or startup crashes
-that also fail that CPU-projector retry, keep the existing text-only fallback.
-These tests pin the diagnostics, argv rewrites, fallback ordering, and runtime
-state exposed to the UI. Unrelated failures must not trigger a projector retry.
-"""
+"""A projector that cannot fit on GPU retries with --no-mmproj-offload before the text-only fallback."""
 
 from __future__ import annotations
 
@@ -344,13 +336,7 @@ _drop_env_v = LlamaCppBackend._drop_env_quantized_v_cache
 
 
 class TestFlashAttnOffQuantizedKvCache:
-    """Only the V cache requires flash attention in llama.cpp (init aborts with
-    "V cache quantization requires flash_attn"); a quantized K cache runs fine
-    without FA. Unsloth launches FA on, so a quantized --cache-type-v is legal at
-    launch but would make the FA-off crash-recovery retry crash on init. The
-    fallback must reset a quantized V cache (main and draft) to f16 while leaving
-    the K cache and non-quantized (f16/bf16/f32) types unchanged -- resetting K
-    would needlessly enlarge it and can OOM a memory-constrained config."""
+    """Only a quantized V cache needs flash attention, so the FA-off retry resets V alone to f16."""
 
     _QUANTIZED = ["q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "iq4_nl"]
     _NON_QUANTIZED = ["f16", "bf16", "f32"]
@@ -481,10 +467,7 @@ class TestFlashAttnOffQuantizedKvCache:
 
 
 class TestDropEnvQuantizedVCache:
-    """The argv rewrite can't reach a cache type set purely through the
-    environment (Unsloth deliberately lets an env-only type reach the child), so
-    the FA-off retry separately drops a quantized V-cache env var. Only V is
-    dropped: a quantized K cache is FA-independent and must survive."""
+    """The FA-off retry also drops a quantized V-cache env var, but never the K-cache one."""
 
     _QUANTIZED = ["q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "iq4_nl"]
 

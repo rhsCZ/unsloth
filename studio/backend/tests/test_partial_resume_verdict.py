@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A row may only offer Resume for a partial that can actually be reopened.
-
-The installed huggingface_hub cannot answer this alone. A cache shared with a newer
-environment holds ``<etag>.<nonce>.incomplete`` files that even a resuming writer will not
-reopen, and this repo's own pins produce exactly that mix: Python 3.10+ takes hub >= 1.23,
-older takes 0.36.2, one cache between them. Deriving the answer from transport plus installed
-version promised a resume there and then purged the bytes.
-"""
+"""Offer Resume only for partials that can be reopened; the installed hub version alone cannot tell."""
 
 from __future__ import annotations
 

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the ephemeral web-RAG used by deep research auto-read.
-
-These run the *real* Unsloth RAG store + hybrid retrieval + formatter against a temporary
-rag.db (so the ingest -> retrieve -> render reuse chain is exercised end to end) with a fake
-deterministic embedding so no model is downloaded. They also assert the ephemeral scope is
-deleted, i.e. an auto-read leaves nothing behind in the store."""
+"""Runs the real RAG store on a temporary rag.db with a fake embedding, so no model is downloaded."""
 
 import numpy as np
 import pytest

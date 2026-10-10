@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The alternative-layout import fallback must bind the same names as the primary.
-
-``routes/training.py`` imports its helpers in a ``try`` and repeats the whole block under
-``except ImportError`` for an alternative on-disk layout. The two lists are maintained by
-hand, so adding a name to one and not the other leaves it undefined on whichever path
-happens to run -- and the failure only shows up in the deployment that takes the
-fallback, at the moment the new call site is reached.
-
-That is exactly what happened when ``has_resume_state`` was added for the resume
-diagnosis fix: the primary branch got it, the fallback did not, so a resume request with
-intact checkpoint state and a failed provenance check would raise ``NameError`` and
-return a 500 instead of the refusal reason it was meant to explain.
-
-Comparing the two blocks catches the whole class rather than that one instance.
-"""
+"""Fallback import block must bind every name the primary binds; has_resume_state was missed once."""
 
 import ast
 import inspect

@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the sd-cli command builder (``sd_cpp_args.py``).
-
-Pure: no torch, no subprocess, no files. Just argv construction and the
-policy -> offload-flag / family -> text-encoder-flag mappings.
-"""
+"""Unit tests for the sd-cli command builder: argv construction and the policy-to-flag mappings only."""
 
 from __future__ import annotations
 
@@ -142,18 +138,7 @@ def test_offload_model_pushes_everything_to_cpu_and_tiles():
 
 
 def test_offload_can_keep_the_vae_off_the_cpu_path():
-    """H3's audio VAE aborts on the CPU path, so `low_vram` has to drop just that flag.
-
-    `ggml_conv_1d` hardcodes an F16 im2col destination and
-    `ggml_compute_forward_im2col_f16` then asserts the kernel is F16, while sd.cpp's
-    `audio_conv_weight_type` maps only BF16 to F16 and lets F32 through:
-    `GGML_ASSERT(src0->type == GGML_TYPE_F16) failed`, SIGABRT, exit 134. Converting the
-    checkpoint to fp16 does not help, since the type is imposed inside sd.cpp.
-
-    Everything else the policy asks for still applies. The denoiser dominates, so
-    `--offload-to-cpu` is where the saving is; dropping the mode entirely would cost far
-    more than dropping this one flag.
-    """
+    """H3 audio VAE asserts F16 on the CPU path, so only --vae-on-cpu is dropped under low_vram."""
     for policy in (OFFLOAD_MODEL, OFFLOAD_SEQUENTIAL):
         flags = offload_flags(policy, vae_on_cpu = False)
         assert "--vae-on-cpu" not in flags
@@ -583,12 +568,7 @@ def test_minimax_h3_video_command_has_all_joint_av_components():
 
 
 def test_video_build_appends_extra_args_verbatim_and_last():
-    """The video mirror of the image builder's last-wins contract.
-
-    Token-wise de-duplication cannot express an override: the builder already sets --rng cpu, so
-    extra_args ["--rng", "cuda"] dropped the --rng it matched and appended a bare "cuda" for the
-    parser to choke on. Every sibling builder in this module appends the list verbatim.
-    """
+    """Video build appends extra_args verbatim and last, so --rng cuda overrides the builder's default."""
     files = SdCppModelFiles(
         diffusion_model = "/m/minimax_h3_fl2va-Q4_K_M.gguf",
         vae = "/m/video.safetensors",

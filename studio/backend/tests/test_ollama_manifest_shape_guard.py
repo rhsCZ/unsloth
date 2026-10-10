@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A stray non-object JSON file under an Ollama ``manifests/`` tree must be skipped.
-
-``rglob("*")`` accepts every file below ``manifests/``, so an interrupted pull, an editor
-backup, or any unrelated JSON reaches the parser. Both readers used to call ``.get()`` on
-whatever ``json.loads`` returned; on a list or a string that raises ``AttributeError``, which
-neither reader's ``except OSError`` catches, so one such file 500'd ``GET /models/local`` and
-``GET /v1/models`` and emptied the whole model picker.
-"""
+"""A non-object JSON under manifests/ must be skipped: .get() raises AttributeError, not OSError."""
 
 import json
 

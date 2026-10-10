@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The same forwarding claims, but over a socket and through the real route.
-
-``test_external_provider_sampling_forwarding.py`` mocks the transport and AST-parses the
-route, which proves the source says the right words but cannot fail on the runtime hazard
-those words prevent: pydantic v2 records every ``setattr`` in ``model_fields_set``, so a
-write before those reads turns an omission into a request for the schema default.
-
-So this drives ``_proxy_to_external_provider`` itself against a loopback ``http.server``.
-Stdlib only, so it passes identically on the Linux, macOS and Windows runners.
-"""
+"""Real route over loopback: pydantic v2 marks setattr as set, so writes must follow the reads."""
 
 from __future__ import annotations
 
@@ -107,11 +98,7 @@ class _Server:
 
 
 def _run(coro) -> None:
-    """One loop per call, with a matching client, mirroring the sibling test file.
-
-    ``ep_mod._http_client`` is built at import time and its pool binds to whichever loop
-    first uses it, so the real client has to be replaced per loop rather than reused.
-    """
+    """Fresh client per loop: the module httpx pool binds to whichever loop uses it first."""
     loop = asyncio.new_event_loop()
     previous = ep_mod._http_client
     client = httpx.AsyncClient()

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A managed sd.cpp install made for an older pin is upgraded to the pin this Studio ships.
-
-Before this, ensure_sd_cpp_binary / ensure_sd_server_binary reinstalled only a missing, unrunnable or
-wrong-accelerator binary, so moving DEFAULT_TAG reached new installs only: a host that installed the
-2026-08-09 u13b9d92 bundle kept running it after the pin moved to u1d02858 (observed on a benchmark
-host whose Studio pinned u1d02858 while ~/.unsloth/stable-diffusion.cpp still held u13b9d92).
-"""
+"""An older-pin managed install is upgraded to the shipped pin."""
 
 from __future__ import annotations
 

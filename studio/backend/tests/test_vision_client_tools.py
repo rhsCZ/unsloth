@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Repros for the four defects in PR #10092 (client tools on a vision turn).
-
-Route-level tests stub ``generate_chat_response`` entirely, so these call
-``_generate_vision_response`` directly against a fake processor instead.
-"""
+"""Vision-turn client tool repros; calls _generate_vision_response on a fake processor directly."""
 
 import importlib
 import importlib.machinery
@@ -61,14 +57,7 @@ def _stub_if_missing(
     attrs = (),
     named_spec = False,
 ):
-    """Register a stub for a dep this job does not install. A real install is left alone.
-
-    Same helper and reason as test_audio_type_inconclusive.py: unstubbed, this module fails
-    COLLECTION under the studio-backend-ci.yml matrix and takes the whole job down.
-
-    ``named_spec`` gives the stub a real ModuleSpec, which only torchao needs: transformers
-    probes it with find_spec, which raises ValueError on ``__spec__ = None``.
-    """
+    """Stubs a missing dep so collection survives CI; torchao needs a real ModuleSpec for find_spec."""
     if name in sys.modules:
         return
     try:
@@ -1315,14 +1304,7 @@ def test_an_image_only_turn_without_a_fallback_is_unchanged(content, structured,
 
 
 def test_no_image_marker_on_the_plain_route_when_renders_image_is_false():
-    """``renders_image`` is the whole gate, and it is read with ``.get``, so a model whose
-    capability probe never reported one leaves the thread as strings.
-
-    Named for the key it actually varies. As "..._when_the_render_is_text_only", carrying a
-    ``processor_template``, it read as a claim about the render target and asserted nothing
-    about it: the same dict without ``renders_image`` passes identically on the commit
-    before this one, so it could not have caught the marker firing on a text render.
-    """
+    """renders_image is the whole gate, read with .get, so a missing key must mean no image marker."""
     sent = _plain_route_messages(
         {"template": _CHATML_WITH_TOOLS, "processor_template": _CHATML_WITH_TOOLS}
     )
@@ -1558,12 +1540,7 @@ def test_a_catalog_render_failure_does_not_drop_the_system_turn():
 
 
 def test_reasoning_is_not_rescued_from_the_tokenizer_body_on_an_image_turn():
-    """The reasoning search must not widen to the tokenizer body when the caller asked
-    about ONE body, or the image turn enables a channel its renderer never selected (#10092).
-
-    Deliberately does NOT stub _detect_safetensors_features: stubbing it made an earlier
-    version of this check pass with the fix reverted.
-    """
+    """Reasoning must not come from the tokenizer body on an image turn; that enables a stray channel."""
     import routes.inference as inf
 
     from core.inference.chat_template_helpers import _GEMMA_TEMPLATE_OPENERS
@@ -1628,10 +1605,7 @@ def test_the_nudge_retry_skips_the_image_marker_on_a_text_only_fallback():
 
 
 def test_an_earlier_attachment_keeps_its_own_turn_against_a_newer_replay():
-    """The attachment's turn can PRECEDE a tool's picture. The plain route used to
-    pre-add its marker, so this backend counted that marker as history's, the top-up
-    became a no-op, and pixels_in_marker_order could no longer tell the two apart --
-    the model was shown the screenshot where the user's own diagram belonged."""
+    """An earlier attachment keeps its own image turn; pre-added markers swapped the pictures."""
     from core.inference.mcp_images import placeholder_turn
 
     backend, seen = _vision_probe()

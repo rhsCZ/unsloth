@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A backend without a TTS path must say so, not "an internal error occurred".
-
-The MLX worker has no text-to-speech branch, so a safetensors Orpheus (what loads on
-Apple Silicon) always fails. ``safe_error_detail`` flattened the message, so the Audio
-page reported an internal error for a model that had loaded fine.
-"""
+"""The unsupported-backend reason must reach the client; safe_error_detail must not flatten it."""
 
 from __future__ import annotations
 

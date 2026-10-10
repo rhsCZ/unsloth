@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What a client gets back when it attaches a clip, by status code and wire shape.
-
-The other video tests assert a line is present in ``routes/inference.py``, which is how the
-non-GGUF regression went unnoticed: the source assertion passed while the request 400'd. These
-take the ``messages`` kwarg of ``generate_chat_completion`` as the JSON llama-server receives.
-
-Invariant, asserted per route: a ``video_url`` part and the legacy ``video_base64`` field behave
-identically, so picking a spelling cannot pick a different set of refusals.
-
-Wire shapes follow llama.cpp ``handle_media``: ``input_video`` is ``data`` else ``url``, remote
-downloads cap at 10 MB.
-"""
+"""Tests clip refusals on the wire, since video_url and video_base64 must refuse identically."""
 
 from __future__ import annotations
 
@@ -109,11 +98,7 @@ def _field_body(
 
 
 def _detail(response) -> str:
-    """The human message, from a bare detail or an OpenAI error body.
-
-    Falls back to raw text, since a request that gets past the refusals answers with SSE or an
-    empty body and a test asserting a refusal is *absent* must read those too.
-    """
+    """Extracts the message from a detail or error body; falls back to raw text, e.g. SSE."""
     try:
         body = response.json()
     except ValueError:
@@ -247,10 +232,7 @@ def test_a_gguf_without_a_video_projector_refuses_either_spelling(monkeypatch, b
 
 @pytest.mark.parametrize("body", [_part_body(_DATA_URI), _field_body()])
 def test_a_non_gguf_backend_is_offered_the_clip_rather_than_refused_outright(monkeypatch, body):
-    """The regression guard. A blanket 'not using_gguf' refusal ahead of _local_video_clip
-    refuses video on transformers and MLX for BOTH spellings, including the legacy field the
-    frontend sends, breaking working MLX video on macOS.
-    """
+    """A blanket not using_gguf refusal would break working MLX and transformers video on macOS."""
     reached: list[dict] = []
 
     def _gate(payload, model_info):
@@ -384,10 +366,7 @@ def test_a_remote_clip_is_refused_on_a_non_gguf_backend():
     ],
 )
 def test_an_unsupported_scheme_is_refused_by_name(monkeypatch, url):
-    """handle_media reads input_video as data-or-url and treats the one string it finds the
-    same way, honouring file:// under --media-path. Forwarding the clip as opaque payload does
-    not neutralise the scheme, so refuse it here.
-    """
+    """Refuse unsupported URL schemes here: handle_media honours file:// under --media-path."""
     with _client(monkeypatch, _VideoGguf()) as client:
         response = client.post("/v1/chat/completions", json = _part_body(url))
     assert response.status_code == 400

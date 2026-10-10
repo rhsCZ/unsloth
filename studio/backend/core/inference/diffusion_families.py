@@ -130,13 +130,8 @@ class DiffusionFamily:
     prequant_excluded_bases: tuple[str, ...] = field(default_factory = tuple)
     # Variant bases a repo id or GGUF name can select when no card ``base_model`` tag resolves one.
     named_variant_bases: tuple[str, ...] = field(default_factory = tuple)
-    # Preferred checkpoint FILENAME for a scheme, as (scheme, filename), overriding the ``<Model>-<SCHEME>.pt`` name
-    # ``prequant_repo_filename`` derives. The derived name stays on as the fallback, so a repo hosting BOTH an old and
-    # a new artifact serves the new one to a build that asks for it by name and the old one to every build that does
-    # not. That is what lets a rotated (v2) checkpoint ship without regressing an already-installed Unsloth, which
-    # would otherwise refuse the v2 tag and fall all the way back to the dense download. A row may also be (scheme,
-    # task, filename), which names the artifact for ONE task and beats the task-agnostic row; see
-    # ``family_prequant_filename``.
+    # Preferred filename rows; the derived name stays as fallback so older builds keep their
+    # artifact.
     prequant_filenames: tuple[tuple[str, ...], ...] = field(default_factory = tuple)
     te_prequant_repos: tuple[tuple[str, str, str], ...] = field(default_factory = tuple)
     # Opt-in per family: fp8 tolerance differs per encoder, so only after measuring the delta.
@@ -653,10 +648,7 @@ def _best_family_match(needle: str) -> Optional[DiffusionFamily]:
 
 
 def detect_family(repo_id: str, override: Optional[str] = None) -> Optional[DiffusionFamily]:
-    """Resolve a ``DiffusionFamily`` from a repo id, or an explicit override. ``override`` matches a
-    family ``name``/alias exactly; otherwise the most-specific family whose name/alias is a
-    substring of the repo id wins. Supported editing families match here; unsupported
-    editing/inpaint/layered checkpoints sharing only an arch keyword are rejected (None)."""
+    """Most-specific name/alias substring wins; unsupported editing/inpaint/layered variants return None."""
     if override:
         key = override.strip().lower()
         for fam in _FAMILIES:
@@ -689,18 +681,7 @@ def supported_family_names() -> tuple[str, ...]:
 
 
 def detect_family_by_pipeline_class(class_name: Optional[str]) -> Optional[DiffusionFamily]:
-    """The family a saved pipeline's ``model_index.json`` ``_class_name`` names, or None.
-
-    Evidence out of the checkpoint rather than out of its name, the counterpart of a GGUF's
-    ``general.architecture``: an HF cache snapshot's leaf is a commit hash, so the listing had no
-    name to match and hid a model the load path accepts (#8407).
-
-    Only the BASE class matches. The loader instantiates ``fam.pipeline_class``
-    (``diffusion.py:2946``), never the declared class, so tagging an inpaint or img2img checkpoint
-    would list it and then load it through the wrong pipeline (its UNet input shape differs), which
-    is the listing-versus-loader split this exists to close. A variant stays untagged, the answer it
-    got before the index was read at all.
-    """
+    """Matches only the base _class_name: a variant tagged here would load through the wrong pipeline."""
     key = (class_name or "").strip()
     if not key:
         return None
@@ -711,17 +692,7 @@ def detect_family_by_pipeline_class(class_name: Optional[str]) -> Optional[Diffu
 
 
 def pipeline_class_from_index(path: Optional[str]) -> Optional[str]:
-    """The ``_class_name`` the diffusers pipeline saved at ``path`` declares, or None.
-
-    Size-capped and schema-free: neither a listing nor a load may be held up by whatever a scan
-    folder contains. ``_class_name`` is a LIST for a remote-code community pipeline, which Unsloth
-    cannot load, so only a plain string answers.
-
-    ``utf-8-sig`` because PowerShell writes JSON with a BOM and a hand-authored index is ordinary
-    beside a converted checkpoint; read as ``utf-8`` it raises and the model stays hidden, #8407
-    again. ``RecursionError`` (a nesting bomb, not a ``ValueError``) is caught too: both callers
-    wrap this in a blanket except that reads a raise as detection having succeeded.
-    """
+    """Reads model_index.json as utf-8-sig, since PowerShell writes a BOM that plain utf-8 would fail on."""
     root = Path(path or "")
     if not str(root):
         return None
@@ -741,12 +712,8 @@ def pipeline_class_from_index(path: Optional[str]) -> Optional[str]:
 
 
 def detect_family_by_pipeline_index(path: Optional[str]) -> Optional[DiffusionFamily]:
-    """The family the pipeline saved at ``path`` declares in its ``model_index.json``, or None. The
-    path-shaped counterpart of ``detect_family_by_pipeline_class``, used by BOTH the listing and
-    the loader so the picker and ``validate_load_request`` answer off the same evidence (#8407).
-    Carries over ``detect_family``'s variant guard: a directory NAMED for a checkpoint the
-    matched family cannot run (``...-layered``) is still refused, so the index only adds models
-    whose name said nothing, never overrides a name that said no."""
+    """Shared by listing and loader so the picker and validate_load_request answer from the same
+    evidence."""
     fam = detect_family_by_pipeline_class(pipeline_class_from_index(path))
     if fam is None or _index_family_ruled_out(fam, path):
         return None
@@ -764,10 +731,7 @@ def _index_family_ruled_out(fam: DiffusionFamily, path: Optional[str]) -> bool:
 
 
 def pipeline_index_contradicts_name(path: Optional[str]) -> bool:
-    """True when a local pipeline's ``model_index.json`` declares a family its directory name rules out (a
-    ``qwen-image-layered`` folder holding a plain ``QwenImagePipeline``). The name-based fallback must not answer
-    for such a directory: the name would pick the variant's family and the loader would then build that pipeline
-    over a checkpoint saved as another. The listing and the loader both refuse it."""
+    """Index declares a family its directory name rules out (e.g. -layered), so the name must not answer."""
     fam = detect_family_by_pipeline_class(pipeline_class_from_index(path))
     return fam is not None and _index_family_ruled_out(fam, path)
 
@@ -777,16 +741,7 @@ def detect_family_for_pick(
     gguf_filename: Optional[str] = None,
     override: Optional[str] = None,
 ) -> Optional[DiffusionFamily]:
-    """``detect_family``, falling back to the combined path/filename for a local ``.gguf`` pick where
-    the family keyword lives only in the filename, and then to the saved pipeline class of a local
-    diffusers pipeline directory. Only fallbacks, so remote picks and overrides behave exactly as
-    ``detect_family``. Shared by both engines.
-
-    The index keeps the listing and the loader on one answer: the listing classifies a moved
-    pipeline from its ``model_index.json`` (its directory name is a commit hash), and the pick sent
-    back is that same opaque path with no family_override, so without this the model is shown as
-    text-to-image and then refused as an unsupported family (#8407).
-    """
+    """Falls back to the pipeline index for a moved local pipeline whose directory name is a commit hash."""
     fam = None
     if not override:
         # The checkpoint's own pipeline index outranks any guess from ancestor path segments.
@@ -929,10 +884,7 @@ def _cached_revisions(root: Path, repo_id: str) -> list[Path]:
 
 
 def _root_revision_coverage(root: Path, repo_id: str, wanted: Sequence[str]) -> set[frozenset[str]]:
-    """Which subsets of ``wanted`` ONE root can serve, one entry per revision it could resolve. A
-    fetch that lands in a root lands in a SINGLE revision of it, so a name may not be borrowed
-    from a superseded snapshot to complete a newer one. The empty set is always an option: a root
-    is allowed to contribute nothing."""
+    """One entry per revision a root could resolve; a name is never borrowed from a superseded snapshot."""
     covers: set[frozenset[str]] = {frozenset()}
     for rev in _cached_revisions(root, repo_id):
         covers.add(frozenset(name for name in wanted if (rev / name).exists()))
@@ -964,32 +916,8 @@ def _upstream_is_cached(
     *,
     other_root: bool = False,
 ) -> bool:
-    """Whether the upstream load is SATISFIABLE from the local cache.
-
-    Not "has any blob": one config left by an interrupted or previously-tokened pull would pin every
-    later load to the gated upstream and re-raise the 401 the mirror exists to avoid. So the
-    revision must hold ``files``, else a real weight file. ``.incomplete`` downloads have no
-    snapshot symlink, so they count as absent.
-
-    Only the revision ``refs/main`` names counts, the one a gated fetch falls back to: on a 401 the
-    HEAD fails and ``hf_hub_download`` resolves the ref to ONE commit, so a complete but superseded
-    revision would read as cached and hand the loader a repo it cannot fetch from. With no ref (a
-    commit-pinned download) any revision counts, as before.
-
-    Reads the LIVE cache root; huggingface_hub's import-time constant goes stale after a
-    cache-folder change. ``other_root`` adds that constant back, for the callers whose fetch passes
-    ``reuse_other_cache_root``: those resolve each file through whichever root holds it, so bytes
-    left in the pre-change root really do satisfy the load. OFF by default, because a
-    ``from_pretrained`` is pinned to the live root and cannot see the other one -- counting those
-    bytes there would send a gated base back to the 401 the mirror exists to avoid.
-
-    With BOTH roots the set is answered per FILE, because that is what those callers then do: a pair
-    split across a cache-folder change (one file fetched before it, one after) is held by neither
-    root alone, and asking each root for the whole set calls it absent and re-pulls bytes the two
-    roots already have between them. Split across ROOTS only: within a root a name still has to come
-    from the one revision that root's fetch resolves, so a superseded snapshot cannot complete a
-    newer one. Any single root answering the whole set is the case above unchanged.
-    """
+    """Needs one revision holding all files, else a stray config would pin the load to the gated
+    upstream."""
     try:
         from utils.hf_cache_settings import active_hf_hub_cache
 
@@ -1012,19 +940,7 @@ def _upstream_is_cached(
 
 
 def cache_holds_files(repo_id: str, files: Sequence[str]) -> bool:
-    """Whether ``repo_id``'s local cache holds EVERY name in ``files``.
-
-    The same revision rule ``_upstream_is_cached`` applies, exposed for callers that need to know a
-    component is complete rather than merely started: a partial pull leaves some shards resident,
-    and "some" is not a cache hit for anything that then decides not to download the rest.
-
-    The LIVE root only. It is tempting to count the import-time root as well, since
-    ``_prefetch_files`` passes ``reuse_other_cache_root`` and would not re-fetch from it, but the
-    prefetch is not the consumer that matters here: the dense fast path this verdict unlocks calls
-    ``from_pretrained(cache_dir = hub_cache_dir())``, which is pinned to the live root and cannot
-    see the other one. A hit there would widen the plan and then download the whole transformer
-    again after eviction, which is the exact outcome the check exists to prevent.
-    """
+    """Checks the live root only: from_pretrained is pinned there and cannot see the other root."""
     return bool(files) and _upstream_is_cached(repo_id, tuple(files))
 
 
@@ -1048,19 +964,7 @@ def legacy_source_repo(repo_id: Optional[str]) -> Optional[str]:
 
 
 def prefer_cached_legacy_source(repo_id: str, files: Optional[Sequence[str]] = None) -> str:
-    """``repo_id``, or the community repack it mirrors when THAT already satisfies ``files``.
-
-    The mirror stays the preferred source for a fresh install; this only spares an existing one from
-    re-fetching bytes it already has under the old repo key. Same ``_upstream_is_cached`` probe the
-    gated swap uses, so an interrupted or partial repack does not win.
-
-    Both cache roots count: the sd.cpp fetch passes ``reuse_other_cache_root``, so a repack left
-    behind by a cache-folder change is still reusable, and only the repo id can reach it -- once the
-    id has become the mirror those bytes are unreachable and the load re-pulls several GB (offline,
-    it fails outright).
-
-    PURE: table lookup + local stat, no network, so the staging plan and the fetch agree.
-    """
+    """Keeps an old repack whose bytes are cached in either root, since the mirror id cannot reach them."""
     legacy = _SD_CPP_LEGACY_SOURCES.get((repo_id or "").strip().lower())
     if not legacy:
         return repo_id
@@ -1068,10 +972,7 @@ def prefer_cached_legacy_source(repo_id: str, files: Optional[Sequence[str]] = N
 
 
 def _is_local_path(base: str) -> bool:
-    """Whether ``base`` exists on disk, i.e. a local dir rather than a Hub id. A user can clone a
-    base into a relative dir named exactly like the vendor id (``black-forest-labs/FLUX.1-dev``),
-    which the loaders deliberately treat as local. OSError from an id with invalid path
-    characters just means "not a local path"."""
+    """Local directory check: a relative dir named like a vendor id must be treated as a local path."""
     try:
         return Path(base or "").expanduser().exists()
     except OSError:
@@ -1084,26 +985,7 @@ def prefer_ungated_mirror(
     *,
     files: Optional[Sequence[str]] = None,
 ) -> str:
-    """``base``, or its ungated unsloth mirror when that is the better repo to FETCH from.
-
-    A GGUF/FP8 pick carries only the denoiser, so a gated base 401s on the companions; the mirrors
-    are byte identical, so this drops the gate without changing a weight. Fetch only: the upstream
-    id stays what the picker and status() show, what saved configs hold and what a trained LoRA's
-    base_model tag records. The one visible swap is the download manager row, which must name the
-    repo actually being pulled -- staging the gated id there is the 401 this exists to remove.
-
-    Declines to today's behaviour under ``UNSLOTH_DIFFUSION_NO_MIRROR``, for a local path, or when
-    the upstream already satisfies the load from cache and switching would re-pull tens of GiB.
-    Under that opt-out a mirror id picked directly maps back to its upstream, cached or not: even
-    a cached mirror is listed on the Hub before it loads.
-    ``files`` sharpens that last test to the names about to be fetched; without it any weight
-    counts.
-
-    PURE: table lookup, env read, local stat, NO network. This runs inside pipeline assembly, where
-    an earlier ``model_info`` probe of the mirror put a Hub round trip on the load path and broke
-    four download-plan tests. A missing mirror surfaces as the ordinary download error. ``hf_token``
-    is unused, kept so callers need not care.
-    """
+    """Fetch-only swap to the identical ungated mirror; the upstream id stays what is shown and saved."""
     del hf_token  # noqa: F841 -- signature stability only
     if os.environ.get("UNSLOTH_DIFFUSION_NO_MIRROR", "").strip():
         return base if _is_local_path(base) else canonical_base(base)
@@ -1245,13 +1127,7 @@ def family_prequant_repo(
     scheme: str,
     base_repo: Optional[str] = None,
 ) -> Optional[str]:
-    """The hosted pre-quantized transformer repo for ``scheme`` in this family, or None.
-    ``base_repo`` (when known) selects a variant-specific checkpoint first: a checkpoint is baked
-    from ONE base's weights and the loader refuses it for any other base, so a variant without
-    its own entry still returns the family default. That is harmless only while the default is
-    close enough that planning around it costs nothing, since the base_model_id validation
-    refuses the artifact well after the plan was made. A base whose weights really differ belongs
-    in ``prequant_excluded_bases``, which returns None here instead."""
+    """A variant checkpoint wins for its base; an excluded base gets None, since its weights differ."""
     if nvfp4_blocked(scheme):
         return None
     base = canonical_base(base_repo).lower()
@@ -1265,11 +1141,8 @@ def family_prequant_repo(
             return None
         base = named.lower()
     if base:
-        # getattr, because the video loader calls this with a VideoFamily, which has no such field. A plain attribute
-        # read raises AttributeError, resolve_prequant_source swallows it in its bare except and hands back None, and
-        # every video family silently loses its hosted prequant checkpoint to the dense path whenever a base_repo is
-        # passed.
-        # A variant row beats the exclusion: an excluded base may host its own checkpoints for some schemes.
+        # getattr, since video families have no such field; a plain read would silently drop their
+        # prequant.
         for entry_base, entry_scheme, repo_id in fam.prequant_variant_repos:
             if entry_base == base and entry_scheme == scheme:
                 return repo_id
@@ -1286,23 +1159,7 @@ def family_prequant_filename(
     scheme: str,
     task: Optional[str] = None,
 ) -> Optional[str]:
-    """The preferred checkpoint filename this family declares for ``scheme``, or None.
-
-    ``None`` means "use the derived ``<Model>-<SCHEME>.pt`` name", which is every family but the
-    ones shipping a second artifact under the same repo and scheme. Not variant-keyed: the filename
-    says WHICH artifact, the repo says which base.
-
-    Rows come in two shapes. ``(scheme, filename)`` is the historical one and is TASK-AGNOSTIC.
-    ``(scheme, task, filename)`` names an artifact for one task only and wins over the agnostic row
-    when ``task`` matches. That distinction exists because a family can hold several denoiser
-    PARTITIONS in one repo (MiniMax-H3: keyframe vs reference), whose checkpoints have identical key
-    sets and identical metadata and so cannot be told apart by any later check -- picking the wrong
-    one generates from the wrong partition rather than failing.
-
-    ``task = None`` therefore sees only the agnostic rows, and a scheme with no row for the task
-    asked for falls back to the agnostic one, i.e. exactly today's behaviour. Malformed rows are
-    skipped rather than raising: this runs on a refusal path where a table typo must not 500.
-    """
+    """Task rows win over agnostic ones, as sibling partitions are indistinguishable by any later check."""
     wanted = (task or "").strip().lower()
     agnostic: Optional[str] = None
     for entry in getattr(fam, "prequant_filenames", ()) or ():
@@ -1372,12 +1229,7 @@ def _version_tuple(v: str) -> tuple[int, ...]:
 
 
 def pipeline_class_requirement(pipeline_class: str) -> tuple[Optional[str], bool]:
-    """``(minimum diffusers version, whether that minimum also needs Python >= 3.10)``. ``None`` for
-    a class with no entry. That is deliberately not the packaging floor: an unlisted class is one
-    old enough that no release in play lacks it (StableDiffusionXLPipeline goes back past 0.29),
-    so naming 0.39 would send a supported Python 3.9 host to upgrade its interpreter for a class
-    every diffusers it can install already has. Without an entry the refusal says "a newer
-    diffusers" and stops there, which is true whatever the class."""
+    """Unlisted classes return None: every release in play has them, so no Python upgrade is implied."""
     minimum = _PIPELINE_MIN_DIFFUSERS.get(pipeline_class)
     if minimum is None:
         return None, False
@@ -1546,11 +1398,7 @@ def local_pipeline_components_are_complete(
     return declared
 
 
-# Minimums that name a release which does not EXIST yet. ``pip install -U 'diffusers>=0.41.0'`` has
-# no candidate today, so quoting it as the remedy sends someone to a command that cannot succeed.
-# Studio installs the pinned main build for exactly these classes (studio/backend/requirements/
-# diffusers-main.txt), so the remedy is to put that back, not to chase a release. Delete an entry
-# here the moment its version ships, which is the same moment diffusers-pin.txt moves to it.
+# Entries name releases not yet published; the remedy is diffusers-main.txt, not a pip upgrade.
 _UNRELEASED_MIN_DIFFUSERS: frozenset = frozenset()
 
 
@@ -1572,20 +1420,7 @@ DIFFUSERS_MAIN_RESTART_REMEDY = (
 
 
 def _diffusers_main_archive_remedy() -> str:
-    """A remedy line a reader can actually run, naming the commit this build wants.
-
-    The old text said "re-run the installer, or pip install -r diffusers-main.txt". Both resolve
-    the same ``git+https`` requirement, so both fail for the one cause that produces this refusal
-    most often, a host with no working git, and the reader is sent round the loop that put them
-    here. The installer now falls back to the zip for that case, so re-running is once again real
-    advice, and the zip is quoted beside it because it is the fix that needs no git and no
-    installer run at all.
-
-    Read out of the pin file rather than hardcoded, so the commit in the message cannot drift from
-    the commit that is installed. An unreadable or unrecognised pin file degrades to advice that is
-    still true, just less specific, because a refusal that says nothing is worse than one that
-    cannot name the SHA.
-    """
+    """Names the pinned commit and a zip install, since the git+https pin fails on hosts without git."""
     generic = (
         f"{DIFFUSERS_MAIN_RESTART_REMEDY} On a pip or server install, re-run the Unsloth installer "
         "(leaving UNSLOTH_DIFFUSERS_MAIN unset), which installs it from a zip archive when git is "
@@ -1647,19 +1482,7 @@ def _too_old_message(pipeline_class: str, family_name: str, installed: str) -> s
 
 
 def _dummy_required_backends(cls: object) -> tuple[str, ...]:
-    """The backends diffusers says ``cls`` REQUIRES, when ``cls`` is one of its placeholders.
-
-    Required, not missing: ``_backends`` is the class's full requirement list, so a placeholder
-    standing in because transformers is absent still lists torch beside it. Naming them all as
-    missing, and prescribing a reinstall, is how you tell someone with a working ROCm or CUDA build
-    of torch to replace it.
-
-    With a required backend absent (torch, transformers, ...), diffusers still EXPORTS every
-    pipeline name, as a ``DummyObject``-metaclassed stand-in from ``diffusers.utils.dummy_*`` whose
-    ``from_pretrained`` raises ``ImportError`` on the first call. ``hasattr`` therefore answers True
-    for a class that cannot be used, which is exactly the "importable" answer the strict gate must
-    not accept. Empty tuple for a real class.
-    """
+    """Backends a diffusers placeholder requires; hasattr wrongly answers True for these classes."""
     if not str(getattr(cls, "__module__", "")).startswith("diffusers.utils.dummy"):
         return ()
     backends = getattr(cls, "_backends", None) or ()
@@ -1672,29 +1495,7 @@ def assert_pipeline_class_available(
     *,
     strict: bool = False,
 ) -> None:
-    """Raise ``ValueError`` before any download when the installed diffusers has no ``pipeline_class``.
-
-    The newer families (Flux2Klein, Z-Image, Krea 2, LTX-2, HunyuanImage) only exist from a
-    diffusers newer than the 0.35 baseline, and the packaging leaves an older one installable on
-    Python 3.9 -- diffusers dropped 3.9 in 0.37 and this project still supports it, so the 0.39
-    floor has to be conditional or the whole extra becomes unresolvable. Which release a family
-    needs differs per class, so the refusal reads it from ``_PIPELINE_MIN_DIFFUSERS`` rather than
-    quoting the floor at everyone. Without this check the getattr chain died with a bare
-    AttributeError deep in the load, after the checkpoint had already been fetched.
-
-    ``strict`` decides what an *unimportable* diffusers means. Inference (the default) stays silent:
-    it only answers "is the installed diffusers new enough", and the native sd.cpp engine serves
-    GGUF picks on a CPU or Apple host that has no diffusers at all. Training passes ``strict =
-    True``, because its child is an ``mp.get_context("spawn")`` process in the SAME interpreter --
-    an import that fails here fails there too, only after the route has reserved the training slot
-    and freed the resident GPU models.
-
-    ``ValueError``, like every other unloadable-pick refusal ``validate_load_request`` raises, so
-    the routes map it to 400 with the message intact. A ``RuntimeError`` instead reached
-    ``/images/load``'s 409 (the code that otherwise means "a load is already in progress") and
-    escaped ``/images/download-plan``, which catches only (ValueError, FileNotFoundError), as a bare
-    500 with the message lost.
-    """
+    """Fails before any download with ValueError (maps to 400); RuntimeError leaked as a 409 or bare 500."""
     # Request threads may race the background torch warm; importing diffusers pulls torch._dynamo.
     try:
         from loggers import get_logger
@@ -1769,12 +1570,8 @@ def _installed_diffusers_version() -> Optional[str]:
 
 
 def _installed_at_least(installed: str, minimum: str) -> bool:
-    """Whether an INSTALLED version satisfies ``minimum``, judged on its release numbers. Not
-    ``_version_tuple``, which is for the clean constants in the table above: a vendor build
-    carries a PEP 440 local suffix (``0.40.0+dfsg``) that stops the numeric parse mid-version,
-    and a git install carries ``.dev0``, which strict PEP 440 sorts below its own release. Both
-    HAVE the class, so compare the release they were cut from. An unreadable version answers
-    OPEN."""
+    """Compares release numbers only: local suffixes like +dfsg and .dev0 git builds still have the
+    class."""
     try:
         from packaging.version import Version
         return Version(Version(installed).base_version) >= Version(minimum)
@@ -1783,13 +1580,7 @@ def _installed_at_least(installed: str, minimum: str) -> bool:
 
 
 def family_probe_class(fam: Any) -> str:
-    """The class whose presence in the installed diffusers actually proves ``fam`` is loadable.
-    Normally that is ``fam.pipeline_class``. ``ModularPipeline`` is the exception: it is the
-    generic entry point for every Modular Diffusers workflow, not a family, and it has existed
-    for several releases, so a diffusers that predates MiniMax-H3's own blocks still answers
-    hasattr for it. Probe the family's own transformer class there instead, which is the thing
-    the load actually needs. Shared by the listing probe and by both training gates so a family
-    cannot be hidden from the picker and simultaneously accepted by /diffusion/start."""
+    """ModularPipeline is generic and predates families, so probe the family's transformer class instead."""
     name = str(getattr(fam, "pipeline_class", "") or "")
     if name == "ModularPipeline":
         return str(getattr(fam, "transformer_class", None) or name)
@@ -1797,19 +1588,8 @@ def family_probe_class(fam: Any) -> str:
 
 
 def family_pipeline_available(fam: Optional[DiffusionFamily]) -> bool:
-    """True when the installed diffusers actually has this family's pipeline class.
-
-    The boolean twin of ``assert_pipeline_class_available``, for the listing routes: the newer
-    families exist only from diffusers 0.39, and the packaging leaves an older diffusers installable
-    on Python 3.9 (diffusers dropped 3.9 in 0.37, so the 0.39 floor has to be conditional or the
-    extra becomes unresolvable). Advertising Z-Image or Krea 2 in the picker on such an environment
-    offers a pick that can only fail, and no `pip install -U diffusers` can fix it without also
-    upgrading Python. Fails OPEN (True) when diffusers cannot be imported at all, so a listing never
-    hides a model over an unrelated import problem.
-
-    Uses installed-version metadata because probing diffusers' lazy attributes imports pipeline
-    dependencies. The load path remains the final availability check.
-    """
+    """Checks installed-version metadata, since probing lazy attributes imports pipeline deps; fails
+    open."""
     if fam is None:
         return False
     name = family_probe_class(fam)
@@ -1840,10 +1620,7 @@ def _family_override_resolved(family_override: Optional[str], fam) -> tuple:
 
 
 def family_selectable(fam) -> bool:
-    """Whether a Family selector may offer ``fam``: diffusers installed and new enough.
-
-    Import-free: a pipeline-class probe from a status poll raced the loader's own diffusers import;
-    the load path keeps the strict class gate."""
+    """Import-free: a status poll importing diffusers raced the loader's own diffusers import."""
     module = sys.modules.get("diffusers", False)
     if module is False:
         try:
@@ -1858,22 +1635,12 @@ def pipeline_available_family_names() -> tuple[str, ...]:
 
 
 def family_gguf_loadable(fam: DiffusionFamily) -> bool:
-    """True when a GGUF transformer can be assembled for this family. The two exclusions mirror the
-    ones ``DiffusionBackend.validate_load_request`` raises on (which keep their own specific
-    messages): a family whose single file IS the whole pipeline has no transformer-only GGUF, and
-    a multi-denoiser family has no single transformer to swap. Exposed so the model-listing
-    routes can classify a GGUF the same way the loader would, instead of keeping a second
-    hand-maintained list that drifts."""
+    """A single-file-pipeline family or a multi-denoiser family has no transformer-only GGUF to load."""
     return not fam.single_file_is_pipeline and not fam.pipeline_only
 
 
 def family_sd_cpp_supported(fam: DiffusionFamily) -> bool:
-    """True when the family has the single-file VAE + text-encoder mapping sd.cpp needs; without it
-    the no-GPU route falls back to diffusers.
-
-    Says nothing about the sd.cpp build on this disk. A family that also declares
-    ``sd_cpp_arch_marker`` needs ``sd_cpp_binary_runs_family`` on top of this before the native
-    route is really available."""
+    """Only the VAE and text-encoder mapping; sd_cpp_arch_marker families also need a runnable binary."""
     return bool(fam.sd_cpp_vae and fam.sd_cpp_text_encoders)
 
 
@@ -1887,19 +1654,8 @@ _FLUX2_KLEIN_9B_SD_CPP_TEXT_ENCODERS = (
 
 
 def sd_cpp_companion_only_repo_ids() -> frozenset[str]:
-    """Lowercased ids of repos that exist ONLY to hand sd.cpp a single-file VAE / text encoder.
-
-    They carry no DENOISER, so no diffusion pipeline loads from one. Third-party repacks never
-    cleared the cached-model trust gate, but their ``unsloth/*`` mirrors do, so they need excluding
-    by hand or each becomes an un-loadable On Device row. Derived from the tables, minus repos that
-    are also a real base: FLUX.1-schnell ships the FLUX.1 VAE and IS loadable.
-
-    Diffusion-only, and callers must keep it that way: the set includes
-    ``unsloth/Qwen2.5-VL-7B-Instruct-GGUF``, which is a perfectly good CHAT model that sd.cpp also
-    borrows as a text encoder. Hiding this set from a chat or GGUF listing would take a real model
-    away from a user who downloaded it to chat with. Today's only consumer is the non-GGUF
-    cached-model listing, which never sees a GGUF-only repo.
-    """
+    """Diffusion-only: repos with just sd.cpp's VAE or text encoder and no denoiser; not for chat
+    listings."""
     companions: set[str] = set()
     loadable: set[str] = set()
     for fam in _FAMILIES:
@@ -1966,12 +1722,7 @@ def prequant_repo_role(
 
 
 def sd_cpp_text_encoder_candidates(fam: DiffusionFamily) -> tuple[tuple[str, str, str], ...]:
-    """EVERY text-encoder set an sd.cpp load of *fam* could pick, unioned. For the guard, not for a
-    load: a load reads the GGUF header and picks one, while a guard reconstructing a checkpoint
-    it cannot open has no header, and for FLUX.2-klein a renamed 9B file carries no size token
-    either, so the string fallback answers 4B and the 9B encoder the load actually fetched is
-    left unprotected. Naming both costs a delete that is refused and saves one that strands an
-    installed model."""
+    """Every encoder set a load could pick, for the delete guard, since a renamed file has no size token."""
     sets = [fam.sd_cpp_text_encoders]
     if fam.name == "flux.2-klein":
         sets.append(_FLUX2_KLEIN_9B_SD_CPP_TEXT_ENCODERS)
@@ -1984,13 +1735,7 @@ def sd_cpp_text_encoders_for(
     gguf_filename: Optional[str] = None,
     inner_dim: Optional[int] = None,
 ) -> tuple[tuple[str, str, str], ...]:
-    """The sd.cpp text encoders for a specific load. FLUX.2-klein picks by variant (9B needs
-    Qwen3-8B, 4B the family default); every other family returns its static table. ``inner_dim``
-    is the checkpoint's own answer, read from the GGUF header (``gguf_flux2_inner_dim``): it
-    decides whenever the caller has it, because a renamed or hand-picked file makes the load
-    identity say nothing. The repo id + filename string match is the fallback for the callers
-    that have no header to read (the delete guard reconstructs a committed load; the plan runs
-    before a byte is fetched)."""
+    """FLUX.2-klein picks its encoder by GGUF inner_dim when known, not by a renamable filename."""
     if fam.name == "flux.2-klein":
         if inner_dim == _FLUX2_KLEIN_9B_INNER_DIM:
             return _FLUX2_KLEIN_9B_SD_CPP_TEXT_ENCODERS
@@ -2029,11 +1774,7 @@ class _HeaderTensor(NamedTuple):
 
 
 def flux2_base_inner_dim(base_repo: Optional[str]) -> Optional[int]:
-    """The ``inner_dim`` a FLUX.2 base config expects, or None when the repo is not one we map.
-    Keyed on UPSTREAM ids, reached through ``canonical_base``: a known ungated mirror is
-    byte-identical to what it copies, so it maps back and is checked exactly like its upstream.
-    Anything else -- a local path, a third-party repack, a base we do not ship -- misses, and
-    every caller fails OPEN on the None rather than guessing."""
+    """Keyed on upstream ids via canonical_base, so ungated mirrors match; None means fail open."""
     return _FLUX2_BASE_INNER_DIM.get(canonical_base(base_repo or "").lower())
 
 
@@ -2057,21 +1798,7 @@ def gguf_flux2_inner_dim(path) -> Optional[int]:
 
 
 def gguf_flux2_inner_dim_from_header(header: bytes) -> Optional[int]:
-    """``inner_dim`` read from the leading bytes of a FLUX.2 GGUF, or None.
-
-    Lets the selection-time preflight range-read a few hundred KiB over HTTP instead of pulling the
-    whole multi-GB checkpoint: the tensor table it needs sits in the first ~15 KiB. Same parser as
-    ``gguf_flux2_inner_dim``, with the two things a PREFIX changes. ``_build_tensors`` is skipped,
-    because the base class builds a numpy view over every tensor's DATA, which a prefix does not
-    carry, and satisfying those reads would allocate the whole declared checkpoint (tens of GiB);
-    only the name and shape from the table are wanted, and both are already parsed. And ``_get``
-    REFUSES a read past the end instead of returning short or zero-filled data, since the table is
-    read field by field and a prefix cutting between a tensor's name and its dims would otherwise
-    hand back a zero shape, a wrong answer rather than a missing one, which would refuse a perfectly
-    valid pick.
-
-    None on anything unreadable: too short a prefix, a non-GGUF file, an absent probe tensor.
-    """
+    """Parses a range-read prefix; reads past its end are refused, so a cut shape is never taken as zero."""
     if not header:
         return None
     tmp_path = None
@@ -2121,11 +1848,7 @@ def gguf_flux2_inner_dim_from_header(header: bytes) -> Optional[int]:
 def flux2_mismatch_reason(
     gguf_name: str, base_repo: str, got: Optional[int], want: Optional[int]
 ) -> Optional[str]:
-    """Why this FLUX.2 GGUF cannot load against this base, or None when they agree. One message for
-    all three checks on the pairing (the plan, the pre-eviction preflight and the loader's
-    backstop), so the user reads the same sentence wherever it is caught. ``gguf_name`` is a
-    display name the caller has already reduced to a basename. Returns None on any unknown -- an
-    unreadable header, an unmapped base -- so every caller fails open."""
+    """One message shared by the plan, preflight and loader checks, so the user sees the same reason."""
     if want is None or got is None or want == got:
         return None
     return (
@@ -2138,14 +1861,7 @@ def flux2_mismatch_reason(
 
 
 def assert_flux2_gguf_matches_base(fam, base_repo: str, gguf_path) -> None:
-    """Fail early, and legibly, when a FLUX.2 GGUF is paired with a different-size base config.
-    Without this the mismatch surfaces from inside the GGUF quantizer as a bare shape error
-    ("expected torch.Size([18432, 3072]), decodes to (24576, 4096)") that names neither the file
-    nor the repo. Fail-open by construction: any unreadable file, non-FLUX.2 tensor set, or
-    unmapped base leaves the load exactly as it was. The LAST of three checks on the same
-    pairing, and the only one that opens the downloaded file: ``diffusion_compat`` runs the same
-    comparison off a range-read header at plan time and again before the resident pipeline is
-    torn down, so a mismatch normally never reaches here."""
+    """Refuses a FLUX.2 GGUF paired with a mismatched base, before the quantizer's bare shape error."""
     if gguf_path is None or not str(getattr(fam, "name", "")).startswith("flux.2"):
         return
     want = flux2_base_inner_dim(base_repo)

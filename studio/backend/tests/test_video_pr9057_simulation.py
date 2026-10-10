@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""PR 9057 review simulation: every axis a video attachment can travel.
-
-Not part of the PR. Written during review to answer "does this break anything,
-and does the fix actually work", covering: the common no-video-capability model,
-a swap from a capable model to a non-capable one, the external-provider and
-non-GGUF passthroughs, an oversized clip, a data-URI wrapper, an llama.cpp build
-too old to declare modalities at all, and the shape of the runtime fields old
-clients read.
-"""
+"""Review-time simulation of every path a video attachment can travel; not part of the PR."""
 
 from __future__ import annotations
 

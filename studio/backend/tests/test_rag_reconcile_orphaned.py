@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Startup reconciliation must not strip chunks from already-completed docs.
-
-A crash can leave an ingestion_jobs row non-terminal after the worker already
-committed the document as ``completed`` with all its chunks. Reconciliation flips
-the orphaned job to ``failed`` but must touch the document (and its chunks) only
-when it actually transitions the document to ``failed`` -- otherwise a completed
-source loses every chunk yet still reports ``completed``, so retrieval finds
-nothing and dedup (``status != 'failed'``) blocks re-ingest.
-"""
+"""Reconciliation must touch a document and its chunks only when it actually moves it to failed."""
 
 import math
 

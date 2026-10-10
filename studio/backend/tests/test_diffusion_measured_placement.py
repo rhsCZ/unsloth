@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Measured-activation placement and partial denoiser residency (``diffusion_memory.py``), plus the Qwen-Image-2.1
-prefix K/V compaction (``diffusion_qwenimage21.py``).
-
-The planner cases use the estimates a real Qwen-Image-2.1 auto load logged (int8 DiT + fp8 text encoder): on a 24 GB
-card the flat plan read ``safe_device_budget_mib 21432, resident_required_mib 29870`` and streamed the text encoder
-on every prompt, although the loaded weights are 6922 + 8959 + 644 MiB. CPU-only; the loaded sizes and the torchao
-check are stubbed. The partial-residency mechanics need a CUDA device and real diffusers group offloading.
-"""
+"""Measured-activation placement planner tests from real Qwen-Image-2.1 load logs; CPU only."""
 
 from __future__ import annotations
 

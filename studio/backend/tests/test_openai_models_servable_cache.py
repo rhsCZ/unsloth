@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the servability scan cache behind GET /v1/models.
-
-A user's log showed /v1/models at 316-621ms while the internal /api/models/list,
-which touches no filesystem, ran in 13-34ms. The catalog scan was already cached
-for 30s, but the per-entry servability check (stat many files plus a config.json
-read for every model) was re-run on every request. It is now keyed on the catalog
-stamp, the same way _validated_media_picks is, so a catalog rescan is the only
-thing that invalidates it and nothing can go stale behind a second TTL.
-
-Residency must stay per request: it changes on every load/unload.
-"""
+"""The /v1/models servability cache is keyed on the catalog stamp; residency is never cached."""
 
 from types import SimpleNamespace
 

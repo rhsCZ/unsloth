@@ -79,12 +79,7 @@ def _transformer_shard_paths(
     token: Optional[str],
     check_cancelled: Optional[Callable[[], None]] = None,
 ) -> list[str]:
-    """The local safetensors shard paths for ``repo_id/subfolder``.
-
-    Prefers the sharded index; falls back to the single-file name when the subfolder
-    ships one file. Resolves through a local dir when ``repo_id`` is a path, else the
-    Hub cache.
-    """
+    """Safetensors shard paths from the index or single file; repo_id may be a local directory."""
     check_cancelled = check_cancelled or (lambda: None)
     check_cancelled()
     from huggingface_hub import hf_hub_download
@@ -132,12 +127,7 @@ def _convert_fp8_state_dict(
     dtype,
     check_cancelled: Optional[Callable[[], None]] = None,
 ) -> dict:
-    """Dequantize + rename the vendor fp8 shards into the diffusers split layout.
-
-    A ``*.weight`` with a companion ``*.weight_scale`` is float8 per-channel (real weight =
-    ``fp8.float() * weight_scale[:, None]``). Fused ``attention.qkv`` -> ``to_q``/``to_k``/``to_v``
-    (Q/K/V order), ``attention.o`` -> ``to_out.0``. Dense tensors pass through cast to ``dtype``.
-    """
+    """Dequantises fp8 weights by their per-channel scale and splits fused qkv into to_q/to_k/to_v."""
     check_cancelled = check_cancelled or (lambda: None)
     import torch
 
@@ -246,13 +236,7 @@ def load_ideogram4_text_encoder(
     hf_token: Optional[str] = None,
     check_cancelled: Optional[Callable[[], None]] = None,
 ):
-    """The Qwen3-VL text encoder for ``repo_id``.
-
-    The ``-fp8`` repo stores it in the same float8-plus-per-channel-scale layout as its DiTs, but
-    its keys already match transformers Qwen3-VL (no fused qkv rename needed), so only the float8
-    dequant is required. The ``-nf4`` and dense repos fall through to the shared krea shim (which
-    also applies the rope_parameters remap).
-    """
+    """The -fp8 encoder needs only the float8 dequant: its keys already match Qwen3-VL, so no qkv rename."""
     check_cancelled = check_cancelled or (lambda: None)
     check_cancelled()
     token = hf_token or None
@@ -318,13 +302,7 @@ def load_ideogram4_text_encoder(
 
 
 def ideogram4_repo_is_fp8(repo_id: str, hf_token: Optional[str] = None) -> bool:
-    """True when ``repo_id``'s transformer ships the vendor fp8 layout (a ``*.weight_scale`` key).
-
-    Those weights dequantize to a WIDER resident dtype, so on-disk bytes undershoot the bf16
-    footprint; memory planning uses this to reserve the real size for a LOCAL fp8 mirror (whose
-    path can't string-match ``base_repo``; ``-nf4`` mirrors have no marker and stay compressed).
-    Reads shard HEADERS only. Any failure resolves to False (caller uses the file-size estimate).
-    """
+    """Checks shard headers for a *.weight_scale key; such weights expand to a wider dtype in memory."""
     try:
         shard_paths = _transformer_shard_paths(repo_id, "transformer", hf_token or None)
         import safetensors
@@ -344,12 +322,7 @@ def load_ideogram4_transformer(
     hf_token: Optional[str] = None,
     check_cancelled: Optional[Callable[[], None]] = None,
 ):
-    """An ``Ideogram4Transformer2DModel`` for ``repo_id/subfolder`` (still on CPU).
-
-    If the shards carry the vendor fp8 layout, dequantizes + renames into the diffusers split
-    layout and loads into a config-constructed model. Already-split ``-nf4`` repos (with a
-    ``quantization_config``) delegate to stock ``from_pretrained`` so bnb re-applies the 4-bit weights.
-    """
+    """Vendor fp8 shards are dequantised and renamed; bnb -nf4 repos load via stock from_pretrained."""
     check_cancelled = check_cancelled or (lambda: None)
     check_cancelled()
     import diffusers

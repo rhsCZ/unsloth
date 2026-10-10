@@ -3,12 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Deactivation does not cancel media generations, so the owner must stay scoped.
-
-Deactivating the last managed account drops the ACTIVE count back to one, but its
-in-flight image generation keeps running: ownership tracking has to follow
-``account_scope()`` (any managed account exists), not the active-count login mode.
-"""
+"""Media ownership follows account_scope(), as deactivation leaves in-flight generations running."""
 
 from __future__ import annotations
 

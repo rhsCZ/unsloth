@@ -2035,12 +2035,7 @@ def test_a_resident_server_does_not_cost_the_reload_its_native_engine(fake_setti
 
 
 def test_the_router_counts_a_binary_it_rejects_for_not_launching(fake_settings, monkeypatch):
-    """Selection runs BEFORE the load, so the load's own recorders never see this build.
-
-    ONE strike, though the server and the CLI both failed: they are two executables out of a single
-    install, so the second record would say nothing new while carrying the bundle straight to the
-    two-strike diversion bar, condemning ROCm on one install event rather than on two independent
-    failures. The run still falls back to diffusers, which is the part that protects the request."""
+    """One strike for a server and CLI failure from one install; selection runs before load."""
     from core.inference import diffusion_engine_router as router
     from core.inference import sd_cpp_backend
 
@@ -2490,15 +2485,7 @@ def test_a_cancelled_workers_card_does_not_leak_into_the_replacement_load(fake_s
 
 
 class TestRocmRuntimePreflight:
-    """The ROCm prebuilt ships no HIP or BLAS runtime and takes all of it from the host, so a host
-    without one can be identified BEFORE the 244 MB download rather than after a failed load.
-
-    Both shapes this guards were measured, not imagined:
-      Linux, no ROCm    ``libggml-hip.so`` fails to dlopen with "libhipblas.so.3: cannot open shared
-                        object file", sd-cli catches it, loads the CPU backend, exits 0 and lists CPU
-                        only. No error text and no non-zero exit, so no marker can ever fire.
-      Windows, no DLLs  exit 0xC0000135, zero bytes, already decisive via the exit status.
-    """
+    """The ROCm prebuilt needs host HIP/BLAS; preflight runs before the 244 MB download."""
 
     @staticmethod
     def _sonames_that(fail: set) -> object:
@@ -2776,11 +2763,7 @@ class TestTheCommittedCardIsPublishedAtTheCommit:
 def test_an_ensure_that_hands_back_the_failed_build_is_not_a_working_fallback(
     h3_amd_host, fake_settings, monkeypatch
 ):
-    """When the Vulkan rung cannot be installed, ensure deliberately keeps the usable build it already
-    has, which is the ROCm one that just probed negative. If the second probe of that SAME executable
-    answers yes (the first was transient: a busy card, a masked card), accepting it would record ROCm
-    as failed and pin a preference to a rung that was never installed. The verdict has to be attributed
-    to the class that actually produced it."""
+    """A failed build is kept as fallback; the second probe is attributed to the verdict's class."""
     from core.inference import sd_cpp_backend
 
     devices = {"rocm": _DEVICES_ROCM, "cpu": _DEVICES_CPU_ONLY}
@@ -2812,14 +2795,7 @@ def test_an_ensure_that_hands_back_the_failed_build_is_not_a_working_fallback(
 
 
 class TestTheRouterRecordsTheBundleNotTheServer:
-    """sd-server and sd-cli ship in the same bundle. Only the server failing to launch says nothing
-    about the accelerator, and a strike for it on every otherwise successful one-shot load reaches the
-    two-strike threshold and diverts a working ROCm host to Vulkan for good.
-
-    These assert the ORDER of the three statements in the selection block rather than driving a load:
-    the behaviour is "the record happens after the CLI verdict, not before", and the surrounding
-    function activates a global engine, which a unit test should not be doing to reach one branch.
-    """
+    """The router records the bundle, not the server; the strike follows the CLI verdict."""
 
     @staticmethod
     def _selection_source():
@@ -2861,10 +2837,7 @@ def test_the_download_plan_predicts_for_the_card_the_load_will_select():
 
 
 def test_both_routes_predict_with_the_ordinal_they_already_resolved():
-    """The records are per card, so a host-wide prediction reads one card's failure as every card's.
-    Both routes resolve an ordinal for other reasons already, so the fix costs no second resolution --
-    and must not add one: ranking reads free VRAM per candidate and opens a CUDA context on each,
-    which the download plan defers until training is known idle."""
+    """Records are per card; predict with the ordinal already resolved, with no second resolution."""
     import inspect
 
     from routes import inference as routes
@@ -2915,10 +2888,7 @@ def test_an_unmasked_ordinal_still_counts_when_no_mapping_exists(monkeypatch):
 
 
 def test_the_loading_card_does_not_outlive_the_load_on_a_pooled_thread(monkeypatch):
-    """The card is the LOAD's, not the worker's. Load threads are pooled, so a thread-local left set
-    makes a later off-load resolution on the same worker -- one-shot generation re-resolving sd-cli
-    -- answer with a finished load's card instead of the committed one, and pick the fallback for a
-    card that never failed."""
+    """The loading card is per load, not per pooled thread."""
     from core.inference import sd_cpp_backend
 
     backend = sd_cpp_backend.SdCppDiffusionBackend.__new__(sd_cpp_backend.SdCppDiffusionBackend)
@@ -2987,10 +2957,7 @@ def test_the_server_probe_refuses_a_windows_loader_death(monkeypatch, returncode
 
 
 def test_a_damaged_cli_beside_a_healthy_server_is_not_a_strike(fake_settings, monkeypatch):
-    """The mirror of the held sd-server verdict. sd-cli losing its execute bit while the server runs
-    says nothing about the accelerator: the server is what this load uses and the load succeeds. A
-    strike there is a strike on a working host, and two of them divert a healthy ROCm bundle to
-    Vulkan for good."""
+    """A damaged CLI beside a healthy server is not a strike."""
     from core.inference import diffusion_engine_router as router
     from core.inference import sd_cpp_backend
 

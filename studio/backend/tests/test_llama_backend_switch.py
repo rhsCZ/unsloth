@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Switching the llama.cpp backend from the app.
-
-The picker in Settings > System reads utils.llama_cpp_update.get_backend_status
-and applies with start_backend_switch. Both run on the update job, so a switch and
-an update can never write to the same install at once.
-
-The installer subprocess is stubbed; no download or GPU needed.
-"""
+"""Switch and update both run on the update job, so they never write to the same install at once."""
 
 from __future__ import annotations
 
@@ -276,12 +269,7 @@ def test_an_up_to_date_install_with_no_drift_still_refuses(monkeypatch, tmp_path
 
 
 def test_a_switch_names_the_backend_and_keeps_the_installed_release(monkeypatch, tmp_path):
-    """A switch changes the backend and nothing else.
-
-    Pinned to the release already installed rather than the latest: bundling an
-    update into it would also break the paired whisper.cpp install, whose slim
-    bundle names the exact llama.cpp release it borrows ggml modules from.
-    """
+    """A switch keeps the installed release, because the paired whisper.cpp borrows its ggml modules."""
     install_dir = _install(monkeypatch, tmp_path)
     seen: dict = {}
 
@@ -373,10 +361,7 @@ def test_update_failure_names_the_environment_pinned_backend(
 
 
 def test_an_automatic_update_does_not_blame_a_backend_nobody_requested(monkeypatch, tmp_path):
-    """An update carries no backend_request, so failed_backend is None. The message
-    used to read "the requested llama.cpp build", which names a choice the user never
-    made: three consecutive failures in the field were reported that way, against a
-    log line that recorded only backend=null."""
+    """An automatic update has no backend_request, so its failure must not blame a requested backend."""
     install_dir = _install(monkeypatch, tmp_path)
     monkeypatch.setattr(
         upd,
@@ -442,14 +427,7 @@ def test_switching_to_the_recorded_choice_is_refused(monkeypatch, tmp_path):
 
 
 def test_a_failed_whisper_repair_can_be_retried_from_the_same_selection(monkeypatch):
-    """The one already-selected request that must still start a job.
-
-    The llama phase runs first and records the new backend, so a retryable whisper
-    failure (a dropped download, an install that was busy) ends with llama switched and
-    dictation still hardlinked to the old runtime. Retrying is then "already selected",
-    and refusing it leaves the reported failure unfixable except by switching llama.cpp
-    away and back.
-    """
+    """Retrying a failed whisper repair must start a job even though the backend is already selected."""
     monkeypatch.setattr(whisper_upd, "slim_pairing_is_stale", lambda: True)
     monkeypatch.setattr(whisper_upd, "repair_pairing_plan", lambda: {"phase": {"repair": True}})
 
@@ -459,11 +437,7 @@ def test_a_failed_whisper_repair_can_be_retried_from_the_same_selection(monkeypa
 
 
 def test_an_already_selected_request_with_a_healthy_pairing_stays_refused(monkeypatch):
-    """Staleness is what separates an owed repair from an ordinary no-op.
-
-    Without it every already-selected request would start a whisper job that finds
-    nothing to do and reports success, replacing a clear refusal with a false one.
-    """
+    """Only a stale pairing is an owed repair; a healthy re-selection must stay refused, not succeed."""
     planned = []
     monkeypatch.setattr(
         whisper_upd, "repair_pairing_plan", lambda: planned.append(1) or {"phase": {"repair": True}}
@@ -481,12 +455,7 @@ def test_an_already_selected_request_with_a_healthy_pairing_stays_refused(monkey
 
 
 def test_re_selecting_a_backend_is_refused_even_when_its_asset_moved(monkeypatch, tmp_path):
-    """The picker chooses a backend, not a bundle.
-
-    A newer per-architecture asset for the backend already selected is an update,
-    which the update flow offers on its own schedule. Making Apply mean "reinstall
-    too" would hand the same install to two jobs with two different triggers.
-    """
+    """Re-selecting the installed backend is refused even if its asset moved; updates own that."""
     _install(
         monkeypatch,
         tmp_path,
@@ -927,11 +896,7 @@ def test_backend_resolution_failures_are_not_cached(monkeypatch, tmp_path):
 
 
 def test_the_migration_resolver_replays_the_arch_the_marker_recorded(monkeypatch, tmp_path):
-    """A Windows host whose HIP probes are absent installs on ROCm because setup.ps1
-    inferred the arch from the GPU name and forwarded it. This resolver re-probes from
-    scratch, so without the replay it sees no ROCm GPU, resolves "auto" to CPU, and a
-    working GPU install reads as drifted -- offering, in the update banner, a migration
-    that replaces GPU inference with CPU."""
+    """Replay the marker's arch, or a working ROCm install reads as drifted and offers a CPU migration."""
     install_dir = _install(
         monkeypatch,
         tmp_path,
@@ -976,11 +941,7 @@ def test_a_marker_with_no_recorded_arch_passes_no_replay(monkeypatch, tmp_path):
 
 
 def test_the_picker_describes_the_same_host_the_update_check_does(monkeypatch, tmp_path):
-    """Settings and the update banner must not disagree about what this box is.
-
-    Without the recovery the picker's resolve sees no arch, reads an AMD host whose
-    probes name none as CPU-only, and offers an Automatic that installs a backend the
-    banner never advertised."""
+    """The picker's resolve must replay the recovered arch, or it reads an AMD host as CPU-only."""
     _install(
         monkeypatch,
         tmp_path,
@@ -1087,10 +1048,7 @@ def test_a_gpu_install_is_never_offered_a_migration_onto_cpu(monkeypatch, tmp_pa
 
 
 def test_applying_a_migration_replays_the_arch_the_offer_was_made_with(monkeypatch, tmp_path):
-    """The apply re-resolves before it installs, and that second resolve must see what
-    the first one saw. Without the replay it resolves "auto" back onto the installed
-    backend, reads as already applied, and refuses the migration the banner offered --
-    silently, since a refusal at that point is indistinguishable from nothing to do."""
+    """Apply must re-resolve with the offer's arch, or it reads as already applied and refuses silently."""
     install_dir = _install(
         monkeypatch,
         tmp_path,
@@ -1138,11 +1096,7 @@ def test_applying_a_migration_replays_the_arch_the_offer_was_made_with(monkeypat
 
 
 def test_applying_a_migration_replays_an_arch_only_the_bundle_names(monkeypatch, tmp_path):
-    """The offer is made through the recovered arch, so the apply has to use the same one.
-
-    Reading the marker field alone leaves this second resolve without an arch on exactly
-    the host the recovery exists for, and it then resolves "auto" back onto ROCm, reads as
-    already applied, and refuses the migration the banner is still showing."""
+    """Apply must use the same recovered arch as the offer, including one only the bundle names."""
     install_dir = _install(
         monkeypatch,
         tmp_path,

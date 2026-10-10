@@ -85,11 +85,7 @@ _CAPTURE_DEPTH = 0
 
 @contextlib.contextmanager
 def _capturing():
-    """Mark a capture as recording for the duration of the block.
-
-    The depth MUST be raised before ``torch.cuda.graph`` is entered, which is what makes the
-    ordering above hold; keep this the outermost of the two context managers.
-    """
+    """Raise the depth before torch.cuda.graph is entered; this must stay the outermost context manager."""
     global _CAPTURE_DEPTH
     with _CAPTURE_LOCK:
         _CAPTURE_DEPTH += 1
@@ -102,15 +98,7 @@ def _capturing():
 
 @contextlib.contextmanager
 def hold_off_capture():
-    """Yield True while it is safe to make a CUDA call a recording capture would prohibit.
-
-    While a True is held, no capture can ENTER ``torch.cuda.graph``: capture entry takes the same
-    lock. Yields False, having taken nothing, when a capture is already recording or is entering
-    right now -- the caller must then skip its CUDA call entirely.
-
-    The acquire is non-blocking on purpose. This is polled at 10 Hz for progress reporting, and a
-    render must never wait on a progress tick; a skipped poll costs a tenth of a second of bar.
-    """
+    """Non-blocking acquire: a poll during a recording capture yields False instead of waiting for it."""
     if not _CAPTURE_LOCK.acquire(blocking = False):
         yield False
         return
@@ -137,11 +125,7 @@ def step_recording() -> bool:
 
 
 def capture_in_progress() -> bool:
-    """Whether a capture is recording, as a snapshot for reporting.
-
-    NOT safe to gate a CUDA call on: by the time the caller acts the answer can have changed.
-    Use ``hold_off_capture`` for that.
-    """
+    """Snapshot for reporting only; it can be stale by the time the caller acts, so do not gate on it."""
     with _CAPTURE_LOCK:
         return _CAPTURE_DEPTH > 0
 
@@ -307,11 +291,7 @@ def retire_failed_capture(
     pool: Any,
     exc: Optional[BaseException] = None,
 ) -> None:
-    """Clean up after a capture into ``pool`` that raised. The caller must stop handing ``pool`` to captures.
-
-    "already recording" comes from ``capture_begin`` finding the pool in another capture: that recording is not ours
-    to end. A graph whose recording did end (the forward raised, instantiate failed) is reset, which releases its pool
-    reference and graph, and kept as an empty husk like the rest."""
+    """A recording begun elsewhere is not ours to end, so only a capture this call began is abandoned."""
     begun_elsewhere = exc is not None and "already recording" in str(exc)
     ended_here = False if begun_elsewhere else _abandon_capture_pool(pool)
     if not begun_elsewhere:
@@ -412,16 +392,7 @@ def _restore_stream(stream: Any) -> None:
 
 
 def _abandon_capture_pool(pool: Any) -> bool:
-    """After a capture that raised: take the allocator off the capture's pool if ``capture_end`` never did.
-
-    ``CUDAGraph::capture_end`` checks ``cudaStreamEndCapture`` before ``endAllocateToPool``, so an invalidated capture
-    can leave the pool in the allocator's ``captures_underway``: on torch 2.6 every later ``empty_cache`` then trips
-    ``INTERNAL ASSERT captures_underway.empty()`` and no later capture in the process records; later torch skips the
-    global release instead, so ``empty_cache`` frees nothing. That failed graph never releases the reference its
-    ``capture_begin`` took (its reset releases only once ``capture_end`` got past the pool), so it is released here,
-    and ONLY when this call ended the capture: had ``capture_end`` got that far (an error raised in the forward that
-    did not invalidate the stream, a failed instantiate) the graph owns the reference and releases it itself, and a
-    second release here would drop a shared pool under live graphs or abort the process. True when this call ended it."""
+    """Ends a pool capture left open by a failed capture, else torch 2.6 asserts on every empty_cache."""
     torch = _torch()
     end = getattr(torch._C, "_cuda_endAllocateToPool", None) or getattr(
         torch._C, "_cuda_endAllocateCurrentStreamToPool", None
@@ -441,13 +412,7 @@ def _abandon_capture_pool(pool: Any) -> bool:
 
 
 def _heal_generators() -> None:
-    """Take every CUDA default generator out of graph-capture mode after a FAILED capture.
-
-    ``CUDAGraph.capture_end`` ends the generators' capture only after ``cudaStreamEndCapture`` succeeds. When the
-    capture was invalidated (a host sync inside it, a kernel that may not be recorded) it raises first, and every later
-    eager draw from the generator (``torch.randn(device = "cuda")``, a pipeline's noise) fails with "Offset increment
-    outside graph capture encountered unexpectedly" for the rest of the process. A clone of the state keeps the seed
-    and the eager offset, so the eager sequence continues as if the capture had never run."""
+    """Clears capture mode on the CUDA generators after a failed capture, or later eager RNG draws fail."""
     try:
         torch = _torch()
         for gen in getattr(torch.cuda, "default_generators", ()) or ():
@@ -761,12 +726,7 @@ class GraphedForward:
         }
 
     def _judge_keys(self) -> None:
-        """Drop the graph of every key whose replays measured slower than its own eager steps.
-
-        A replay records the onload copies too, and how fast a recorded copy schedule runs depends on the machine and
-        on how it was recorded (an A100 VM: a Qwen-Image-2.1 prompt length recorded after the first replayed 16%
-        slower than eager while the first matched it; an L4 ran replayed copies 8% faster). Each key's first replays
-        are timed against its own eager steps with CUDA events, read only once they have completed (no host wait)."""
+        """Drops a key's graph if its timed replays run slower than its own eager steps on this machine."""
         for key, state in list(self._judge.items()):
             if state["verdict"] is not None or len(state["graph"]) < SPEED_SAMPLES:
                 continue
@@ -826,11 +786,8 @@ class GraphedForward:
                         self._release()
 
     def _timed_eager(self, call: Any, args: tuple, kwargs: dict, key: Any) -> Any:
-        """One of the caller's eager steps before ``key`` records (its eager reference).
-
-        ``call`` is the step the graph would record (the planned step under a plan), on fresh copies of the caller's
-        tensors. The first call of a key may still compile or autotune and is not timed (for a planned module it is
-        also the new prompt length's warm-up); the next SPEED_EAGER_SAMPLES are."""
+        """Eager reference step timed for the speed judge; a key's first call may autotune, so it is
+        not timed."""
         self.stats["eager_calls"] += 1
         self.stats["speed_eager"] += 1
         # Copies laid out like the capture statics: compiled code guards on strides and offsets.
@@ -1848,11 +1805,7 @@ def set_bypass(handles: Any, on: bool) -> None:
 
 
 def reset_all(handles: Any) -> None:
-    """Drop every captured graph, for every handle (the weights changed).
-
-    Drops the pool token with the last graph: a stale token dies on the allocator's
-    "use_count > 0 INTERNAL ASSERT FAILED", raised after ``torch.cuda.graph`` entered its side
-    stream, so the thread is left off the default stream too."""
+    """Drops the pool token with the last graph, since a stale token trips an allocator assert."""
     for handle in handles or ():
         try:
             handle.reset()
@@ -2030,14 +1983,8 @@ def arm_block_graphs(
     family_default: bool = True,
     logger: Any = None,
 ) -> tuple:
-    """After placement: keep a whole-forward recording where it holds, else record per block.
-
-    Per-block recording is the default only where every block stays on the device (``not hooked``, or ``pinned``
-    resident under its hooks); streamed and model-offloaded denoisers need ``UNSLOTH_DIFFUSION_BLOCK_GRAPHS=1``.
-
-    A whole forward cannot be recorded once an offload hook moves the denoiser (``hooked``) or when the forward is
-    not capture-safe (Qwen-Image-2.1's prefix K/V object); its repeated blocks still can, keyed by where their weights
-    sit. Updates ``applied["cuda_graph"]`` and the pipe's reason / handles; returns the handles now armed."""
+    """Records the whole forward if it can hold; else per block, since an offload hook moves the
+    denoiser."""
     handles = tuple(getattr(pipe, "_unsloth_cuda_graphs", ()) or ())
     whole = [h for h in handles if isinstance(h, GraphedForward)]
     prior = str(getattr(pipe, "_unsloth_cuda_graph_reason", None) or "")

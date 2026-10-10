@@ -1611,10 +1611,7 @@ class TestRebindingDropsStaleAliases:
 
 
 class TestDestinationWhereverTheCallCarriesIt:
-    """The destination is read from the argument that actually holds it. Reading only the first
-    positional made the fail-closed rule sidesteppable by one word: `requests.get(url = ...)`
-    walked past the same check that refuses `requests.get(...)`, so the screen cost legitimate
-    callers a refusal and stopped nobody who wrote the keyword."""
+    """Read the destination from whichever argument holds it, so keyword url= cannot evade the screen."""
 
     @pytest.mark.parametrize(
         "code",
@@ -1679,10 +1676,8 @@ class TestDestinationWhereverTheCallCarriesIt:
 
 
 class TestAliasResolutionOnlyEverAddsCandidates:
-    """A binding the code does not really execute must not be able to REPLACE what the screen
-    knows a name can be. Each case below runs the allowlisted-looking spelling at module level
-    while a nested, never-called binding of the same name used to overwrite the entry and resolve
-    the call to something the screen does not recognise."""
+    """Alias resolution only adds candidates; a nested never-called binding must not replace a known
+    name."""
 
     @pytest.mark.parametrize(
         "code",
@@ -2548,10 +2543,7 @@ class TestSandboxEnvIsolation:
         assert env["TMPDIR"] == str(tmp_path / _SANDBOX_TEMP_DIRNAME)
 
     def test_temp_dir_is_a_created_child_of_the_workdir(self, tmp_path):
-        """A temp var pointing AT the workdir made /tmp its shortest POSIX name
-        under msys2 ``usertemp``, so ``pwd`` printed /tmp (#8892). It must also
-        exist before the child starts, or every tempfile call fails.
-        """
+        """The temp dir must be a created child of the workdir, or /tmp resolves as msys2 usertemp."""
         from core.inference.tools import _sandbox_temp_dir
 
         temp_dir = _sandbox_temp_dir(str(tmp_path))
@@ -2588,10 +2580,7 @@ class TestSandboxEnvIsolation:
         assert _sandbox_temp_dir(str(workdir)) == str(workdir)
 
     def test_temp_dir_refuses_an_escape_islink_cannot_see(self, monkeypatch, tmp_path):
-        """A junction carries a different reparse tag, so os.path.islink is
-        False while os.path.isdir follows it. Blinding islink stands in for that:
-        containment is decided by the resolved path.
-        """
+        """Junctions escape islink, so temp-dir containment must be decided by the resolved path."""
         import core.inference.tools as tools_mod
         from core.inference.tools import _SANDBOX_TEMP_DIRNAME, _sandbox_temp_dir
 
@@ -2607,10 +2596,7 @@ class TestSandboxEnvIsolation:
         assert _sandbox_temp_dir(str(workdir)) == str(workdir)
 
     def test_temp_dir_refuses_a_link_even_inside_the_workdir(self, tmp_path):
-        """os.walk does not follow links, so `tmp -> .scratch` would send every
-        artifact where both walks skip. The test is being the real directory,
-        not containment.
-        """
+        """A link to the scratch dir would hide artifacts from os.walk, so the temp dir must be real."""
         from core.inference.tools import _SANDBOX_TEMP_DIRNAME, _sandbox_temp_dir
 
         workdir = tmp_path / "sandbox"
@@ -2624,10 +2610,7 @@ class TestSandboxEnvIsolation:
         assert _sandbox_temp_dir(str(workdir)) == str(workdir)
 
     def test_temp_dir_refuses_an_entry_stored_under_another_case(self, tmp_path):
-        """On a case-insensitive volume (default APFS, every NTFS) the lowercase
-        probe resolves onto a directory stored as another case, and realpath does
-        not canonicalise it, so os.walk reports a spelling the discount misses.
-        """
+        """Case-insensitive volumes can resolve a lowercase probe onto an upper-case entry; refuse it."""
         from core.inference.tools import _SANDBOX_TEMP_DIRNAME, _sandbox_temp_dir
 
         (tmp_path / _SANDBOX_TEMP_DIRNAME.upper()).mkdir()
@@ -2652,10 +2635,8 @@ class TestSandboxEnvIsolation:
             scratch.chmod(0o700)
 
     def test_the_scratch_dir_does_not_spend_a_path_segment(self, tmp_path):
-        """/tmp/a/b/c/result.csv was a four-segment path and downloadable.
-        Nesting TMPDIR a level deeper must not push it past
-        _MAX_SANDBOX_PATH_SEGMENTS and drop it from the card.
-        """
+        """The scratch dir must not spend a path segment, or a deeper result path drops off the
+        artifact card."""
         from core.inference.tools import (
             _SANDBOX_TEMP_DIRNAME,
             _sandbox_temp_dir,
@@ -2672,10 +2653,8 @@ class TestSandboxEnvIsolation:
         ]
 
     def test_scratch_files_are_still_offered_as_artifacts(self, tmp_path):
-        """On Windows this is what /tmp resolves to, so /tmp/report.csv must
-        still get a download card. A dot-named scratch dir would be skipped by
-        the snapshot walk and the file would vanish.
-        """
+        """Scratch files must still get artifact cards; a dot-named scratch dir would be skipped by
+        the walk."""
         from core.inference.tools import (
             _SANDBOX_TEMP_DIRNAME,
             _sandbox_temp_dir,
@@ -3870,10 +3849,7 @@ class TestBashBlocklistPosition:
 
 
 class TestEscapedNewlineIsNotACommandBoundary:
-    """The shell removes a backslash-newline before it reads a command, so the words either side
-    belong to one command. Treating that line break as a boundary refused `echo hi \\<newline>A=1 rm
-    -rf x`, which is one `echo`, while the join must not reach inside single quotes, where the shell
-    keeps both characters and a sed `e` payload really continues onto the next line."""
+    """A backslash-newline is removed before the shell reads a command, so it is not a command boundary."""
 
     @staticmethod
     def _find():
@@ -4822,12 +4798,7 @@ class TestTheFastPathChangesNothing:
 
 
 class TestADefaultRunsBeforeItsParameterExists:
-    """Decorators, defaults and annotations are evaluated where the def is written, not inside it.
-
-    A parameter named after an imported function shadows that name for the body, and only for the
-    body. The defaults are already running by the time the parameter exists, so a call there is
-    the imported one and has to be screened as such.
-    """
+    """Defaults run before a same-named parameter exists, so their calls must be screened as imports."""
 
     @pytest.mark.parametrize(
         "code",

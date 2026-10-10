@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every backend shape this accounting can be handed, and every old caller of it.
-
-Re-costing changes how a tool loop is admitted, so every install that does NOT get the new
-path must behave exactly as it did. Budget and slot count are both derived from the loaded
-backend, and that derivation differs per platform and per device:
-
-  * ``capacity`` is ``effective_parallel_slots``, reduced to fit VRAM and forced to 1 on a
-    CPU-only or small-VRAM load. A 1-slot backend must be untouched by this change.
-  * ``budget`` is ``_kv_cache_context_total``: ``n_ctx`` under ``--kv-unified``,
-    ``n_ctx * slots`` without it, None when the context length cannot be read back from
-    ``/props``. None means slot-only admission, the pre-#9392 behaviour.
-
-The matrix below is the real portability surface, not a stand-in for other operating
-systems: the code added here is stdlib threading and ``time.monotonic`` with no
-OS-specific branch, and what varies per platform is which of these numbers arrives.
-"""
+"""Installs off the new path must admit exactly as before; a None budget means slot-only admission."""
 
 from __future__ import annotations
 
@@ -293,16 +278,7 @@ class TestNoPersistentStateChanged:
 
 
 class TestTheInjectedToolCatalogueIsCharged:
-    """The regression that a live run caught and every unit test missed.
-
-    ``payload.tools`` is what the CLIENT sent. Unsloth's own tool loop resolves Web Search
-    and the rest server-side and renders them into the prompt AFTER admission has priced
-    the request, so pricing from the payload alone undercounts by the whole catalogue.
-    Measured on Qwen3.5-4B-MTP-GGUF, the same user turn is 1716 prompt tokens with tools
-    off and 2969 with them on. At ``-c 4096`` that gap is fatal: priced at an equal share
-    four tool chats were all admitted and llama.cpp answered every one with ``Context size
-    has been exceeded``.
-    """
+    """Price the server-injected tool catalogue, since payload.tools holds only what the client sent."""
 
     CATALOG = [
         {

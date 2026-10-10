@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A GGUF context fit on a DGX Spark must not lose the pool to the page cache.
-
-``cudaMemGetInfo``'s free half on an integrated SoC is the kernel's ``MemFree``, which
-counts the page cache as used. Measured on a GB10: writing a 60 GiB file took it from
-103.25 GiB to 41.52 GiB while ``MemAvailable`` never moved off 115.6 GiB. Downloading or
-mmap'ing a GGUF is that same write, so a model the machine can hold gets its context
-fitted against the bytes its own weights left in cache, and a 262k-native model comes up
-at ``_FIT_MIN_CTX`` (#9889).
-
-Hermetic: torch, nvidia-smi and host memory are stubbed, so these run anywhere.
-"""
+"""Page cache counts as used in a Spark's cudaMemGetInfo, so GGUF context fits shrink to the minimum."""
 
 from __future__ import annotations
 
@@ -149,14 +139,7 @@ def test_discrete_cuda_keeps_the_whole_free_reading(monkeypatch):
 
 
 def test_gguf_fit_is_bounded_by_an_enforcing_cgroup(monkeypatch):
-    """A container's limit is a ceiling, not a floor.
-
-    ``_available_system_memory_mib`` already caps host MemAvailable by the cgroup
-    remainder, but reading it only as a lower bound throws that away whenever the
-    driver's host-wide MemFree is larger, which is the normal case in a container.
-    Host-backed GPU allocations are charged to the cgroup here, so a fit sized above it
-    is killed at memory.max.
-    """
+    """A container's cgroup limit is a ceiling; host MemFree can exceed it, and fits above it are killed."""
     gpus = _spark_gpu_memory(
         monkeypatch, driver_free_mib = 102400, available_mib = 16384, cgroup_mib = 16384
     )
@@ -174,12 +157,7 @@ def test_an_unconstrained_host_is_not_capped(monkeypatch):
 
 
 def test_the_unified_preflight_reaches_an_integrated_cuda_soc(monkeypatch):
-    """The oversize-load guard was AMD-only, so a Spark's pool read as dedicated VRAM.
-
-    ``_shared_gpu_ids`` is populated for Vulkan alone, so without this the downstream
-    guard credits the SoC's reported pool against the weights, finds no spill, and the
-    unmapped oversize load that would have been remapped is not.
-    """
+    """Shared-pool detection must cover integrated CUDA SoCs, or their pool reads as dedicated VRAM."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     import sys as _sys
@@ -221,15 +199,8 @@ def test_a_discrete_cuda_host_reaches_no_unified_preflight(monkeypatch):
 
 
 def test_the_preflight_never_probes_a_device_itself(monkeypatch):
-    """An unprobed host answers "not free" rather than paying for a CUDA context.
-
-    _integrated_cuda_gpu_ids calls get_device_properties on every visible card, which
-    pins a primary context per device for the life of this process. The preflight runs
-    after the VRAM budget was taken, so a probe there can OOM a tightly fitted child
-    against a stale budget, on a host whose answer is False regardless. Covers an ARM
-    host with discrete cards and an x86 host that initialised CUDA on one GPU only:
-    neither is evidence that every per-device probe is already paid for.
-    """
+    """The preflight must never probe a device itself: get_device_properties pins a CUDA context per
+    card."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     monkeypatch.setattr(LlamaCppBackend, "_INTEGRATED_CUDA_IDS", {})
@@ -239,13 +210,7 @@ def test_the_preflight_never_probes_a_device_itself(monkeypatch):
 
 
 def test_the_memory_probe_pays_for_the_classification_up_front(monkeypatch):
-    """_get_gpu_memory's torch arm classifies BEFORE it reads any free figure.
-
-    That is the arm a Spark takes: nvidia-smi reports [N/A] for both memory columns
-    there, so the CLI probe parses nothing and falls through. Whatever the property
-    probe costs is therefore inside the snapshot that follows it, and the preflight
-    later reads the answer for nothing.
-    """
+    """Classify before reading free memory: on a Spark nvidia-smi reports [N/A], so torch pays the cost."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     monkeypatch.setattr(LlamaCppBackend, "_INTEGRATED_CUDA_IDS", {})
@@ -291,11 +256,7 @@ def test_a_failed_probe_is_not_remembered(monkeypatch):
 
 
 def test_repricing_keeps_the_soc_wording(monkeypatch):
-    """A text-only retry must not turn a Spark's notice into a .wslconfig hint.
-
-    The repriced message is rebuilt from scratch after the CPU-pinned projector is
-    dropped, so the hardware kind has to travel with it.
-    """
+    """The repriced message is rebuilt from scratch, so the SoC hardware kind must be passed along."""
     from core.inference.llama_cpp import LlamaCppBackend
 
     backend = LlamaCppBackend.__new__(LlamaCppBackend)
@@ -337,12 +298,7 @@ def test_repricing_still_says_apu_for_an_apu():
 
 
 def test_a_device_that_did_not_answer_is_not_settled(monkeypatch):
-    """An incomplete probe must not be remembered as a finished one.
-
-    If one ordinal raised, a later caller reading the answer as settled could retry the
-    query that failed; a retry that succeeds initialises that device after the budget
-    was taken, which is the allocation this guard exists to keep out of the launch.
-    """
+    """A probe that raised must not be cached as settled, or a retry initialises a GPU after budgeting."""
     import sys as _sys
 
     from core.inference.llama_cpp import LlamaCppBackend
@@ -391,10 +347,7 @@ def test_a_settled_answer_is_never_probed_again(monkeypatch):
 
 
 def test_a_cgroup_bound_row_publishes_no_total(monkeypatch):
-    """_vram_usable_mib reserves (1 - frac) * total, so a host-wide total against a
-    container's free reading reserves memory this process cannot reach: a 16 GiB cgroup
-    on a 121 GiB Spark loses most of its budget to a card it does not have. No total is
-    what the ROCm shared pool already publishes, and prices the fit off free alone."""
+    """A cgroup-bound row publishes no total; a host-wide total reserves memory the container cannot use."""
     gpus = _spark_gpu_memory(
         monkeypatch, driver_free_mib = 102400, available_mib = 16384, cgroup_mib = 16384
     )

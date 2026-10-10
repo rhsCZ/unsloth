@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""``GET /api/inference/status`` must answer with a GGUF loaded.
-
-The loaded-GGUF branch sits inside a ``try`` whose ``except`` reports 500, so an undefined
-name there is invisible until it runs -- which is how ``_native_grant_backed`` once lost its
-binding to a refactor while ``is_local_model`` kept reading it. The backend is a stub.
-"""
+"""The loaded-GGUF branch sits in a try that reports 500, so an undefined name shows only when run."""
 
 import asyncio
 import os
@@ -18,15 +13,7 @@ from models.inference import _InferenceRuntimeFields
 
 
 class _StatusBackend:
-    """A loaded GGUF with the shape ``get_status`` reads, not a full backend.
-
-    Unknown attributes answer None so a later Optional field needs no edit here; typed ones
-    are set explicitly so the response model validates for real, not against a mock.
-
-    Runtime fields are seeded from the response model's defaults: ``_llama_runtime_fields``
-    resolves them by ``hasattr``, which the None catch-all always satisfies, so without real
-    values every bool arrives as None and fails validation. New upstream fields land typed.
-    """
+    """Runtime fields come from the response model defaults, since a None fallback fails bool validation."""
 
     def __init__(
         self,

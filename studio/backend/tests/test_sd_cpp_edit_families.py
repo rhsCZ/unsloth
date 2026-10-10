@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Native (sd.cpp) routes for the edit-only families: Qwen-Image-Edit (the original, 2509 and
-2511 checkpoints) and FLUX.1-Kontext. The asset mapping, the guidance each one is sent, the
-readiness gate and advertised workflows, and the source image on both transports: a
-``--ref-image`` on the one-shot sd-cli argv and a ``ref_images`` entry in the sd-server body."""
+"""Native edit families (Qwen-Image-Edit, FLUX.1-Kontext): asset map, guidance and --ref-image wiring."""
 
 from __future__ import annotations
 

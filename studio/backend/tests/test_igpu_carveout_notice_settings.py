@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Dismissal of the integrated-GPU memory notice.
-
-Once dismissed it must stay dismissed, but only for the allocation it was dismissed
-at: a user who acts on the advice, raises the allocation and later runs short again
-is in a new situation and worth telling.
-"""
+"""A dismissed iGPU notice stays dismissed only for the allocation it was dismissed at."""
 
 import sys
 from pathlib import Path

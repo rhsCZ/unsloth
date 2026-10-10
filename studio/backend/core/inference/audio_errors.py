@@ -107,12 +107,7 @@ def _path_tail(match: "re.Match[str]") -> str:
 def audio_runtime_http_error(
     error: AudioRuntimeError, fallback: str = "An internal error occurred"
 ) -> tuple[int, str]:
-    """The HTTP status and client-safe ``detail`` for a runtime error.
-
-    A runtime 4xx (a refused input or option) is the request's fault and becomes 400, never a
-    401/403/404 the client would read as its own auth or routing; a busy runtime stays 503;
-    everything else is 500, as before, but with the runtime's reason instead of the fallback.
-    """
+    """A runtime 4xx is the request's fault, so it maps to 400 rather than an auth or routing code."""
     status = error.status
     if status == 503:
         code = 503

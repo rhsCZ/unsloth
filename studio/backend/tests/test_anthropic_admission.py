@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Admission-control wiring for the Anthropic /v1/messages endpoint.
-
-The FIFO queue itself is unit-tested in test_llama_admission.py; here we exercise
-how anthropic_messages reserves a slot, queues when the backend is saturated,
-streams keep-alives while waiting, releases on completion, and maps rejects to
-429/503. Slot occupancy is driven directly through the shared queue (keyed by the
-backend base_url) so generation stays fast and no thread has to block.
-"""
+"""Admission wiring for /v1/messages; the FIFO queue itself is tested in test_llama_admission.py."""
 
 from __future__ import annotations
 
@@ -122,11 +115,7 @@ def _payload(**fields) -> AnthropicMessagesRequest:
 
 
 def _record_admission_logs(monkeypatch):
-    """Capture _llama_admission_log output.
-
-    Through the logger rather than caplog: this one is a structlog bound logger,
-    so it never reaches the stdlib handlers caplog installs.
-    """
+    """Records via the logger, not caplog: this structlog logger never reaches the stdlib handlers."""
     records = []
 
     def _record(level):
@@ -441,12 +430,7 @@ def test_streaming_disconnect_while_queued_frees_slot(monkeypatch):
 
 
 def test_shares_queue_with_openai_by_base_url(monkeypatch):
-    """The two API surfaces must land on one pool of the same llama-server slots.
-
-    Reserves through the OpenAI helper the /v1/chat/completions path uses, rather
-    than poking the queue directly, so this fails if either side ever derives a
-    different key.
-    """
+    """Reserves through the OpenAI helper, so the test fails if either API derives a different queue key."""
     _install_backend(monkeypatch, slots = 1)
 
     async def _run():
@@ -597,12 +581,7 @@ def test_streaming_give_up_while_queued_finalizes_the_monitor(monkeypatch):
 
 
 def test_every_dispatch_site_goes_through_admission():
-    """All six generation returns in anthropic_messages are admission-wrapped.
-
-    The tool paths need a passthrough-capable backend and a tools payload to reach
-    at runtime, so guard them structurally instead: a new dispatch site added
-    without admission (or one reverted to _monitored_anthropic) fails here.
-    """
+    """Tool paths need a passthrough backend, so every dispatch site is checked by AST instead."""
     import ast
     import inspect
 
@@ -633,13 +612,7 @@ def test_every_dispatch_site_goes_through_admission():
 
 
 def test_queued_give_up_runs_the_response_pre_start_cleanup(monkeypatch):
-    """A stream abandoned while queued must run the builder's eager cleanup.
-
-    The passthrough enters a _TrackedCancel before returning its response and
-    relies on the stream's finally to exit it. That finally never runs for a
-    generator that never started, so the response carries a pre-start hook and
-    the admission wrapper has to chain to it instead of replacing it.
-    """
+    """A queued give-up must run the pre-start hook, since an unstarted stream's finally never runs."""
     monkeypatch.setenv(ADMISSION_KEEPALIVE_INTERVAL_ENV, "0.05")
     _install_backend(monkeypatch, slots = 1)
     ran = []
@@ -728,13 +701,7 @@ def _passthrough_payload(**fields):
 
 
 def test_response_pre_start_cleanup_leaves_no_passthrough_tracker(monkeypatch):
-    """A disconnect before the body starts must leave no tracker and no slot.
-
-    The passthrough registers from inside its body rather than eagerly, so a
-    generator that never runs registers nothing; the hook still has to hand the
-    admission slot back. Asserting through _CANCEL_REGISTRY and the pool rather
-    than the wiring, because the hook can be present and still be a no-op.
-    """
+    """A disconnect before the body starts must return the slot and register no tracker."""
     backend = _install_backend(monkeypatch, slots = 1)
     backend.supports_tool_passthrough = True
     monkeypatch.setattr(inf_mod, "_CANCEL_REGISTRY", {})

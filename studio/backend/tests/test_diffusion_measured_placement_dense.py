@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Measured-activation placement for DENSE denoisers on the eager tier (``diffusion_memory.py``).
-
-The planner inputs are the estimates a FLUX.2-klein-4B auto load logged on a 15 GB T4 (fp16, speed off, no
-transformer quant): ``safe_device_budget_mib 12758, model_dense_mib 15258, companion_dense_mib 7820,
-text_encoder_dense_mib 7629, runtime_headroom_mib 8192`` gave ``resident_transformer_floor_mib 17869`` and streamed
-the 7.4 GB DiT every step. Measured fp16 eager peak above the resident weights at 1024x1024: 2455 MiB. CPU-only; the
-loaded sizes and the torchao check are stubbed.
-"""
+"""Dense-denoiser placement planner tests from a FLUX.2-klein-4B 15 GB T4 load; CPU only."""
 
 from __future__ import annotations
 

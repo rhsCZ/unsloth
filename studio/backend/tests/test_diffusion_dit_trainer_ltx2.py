@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the LTX-2 (video) family of the flow-matching DiT LoRA trainer.
-
-CPU-only, and deliberately free of a ``diffusers`` import: the two places that need the
-pipeline's patchifier are isolated behind ``_ltx2_pack`` / ``_ltx2_unpack`` so the forward
-contract can be checked against a fake transformer. What matters here is everything a video
-family gets WRONG by default: the LoRA targets leaking into the audio stream, the audio
-placeholder being fed at the wrong scale, the timestep being divided by 1000 as the image
-families do, the cross-modality attention staying on, and a video base silently routing to
-the SDXL trainer. The training loop itself is exercised by the live GPU run."""
+"""LTX-2 video family, CPU only: LoRA must not leak into audio, timestep is not divided by 1000."""
 
 from __future__ import annotations
 
@@ -169,11 +161,7 @@ def test_ltx2_targets_are_fully_qualified():
 
 
 def _peft_selects(targets, module_name: str) -> bool:
-    """PEFT's own rule for a LIST of target_modules, from
-    ``peft.tuners.tuners_utils.check_target_module_exists``: a module is adapted when its
-    fully-qualified name equals a target or ends with "." + target. Reimplemented here
-    because importing peft pulls in transformers, which some environments cannot import;
-    ``test_our_peft_rule_matches_peft`` pins it to the real thing wherever peft loads."""
+    """PEFT's list-target rule reimplemented without importing peft; pinned to real peft where it loads."""
     return any(module_name == t or module_name.endswith("." + t) for t in targets)
 
 
@@ -684,10 +672,7 @@ def test_the_int8_trainer_path_passes_the_family_through(monkeypatch):
 
 
 def test_ltx23_is_refused_as_a_training_base_with_the_real_reason():
-    """Lightricks/LTX-2.3 ships single-file checkpoints and no diffusers layout (no
-    model_index.json, no transformer/ subfolder), so LTX2Pipeline.from_pretrained cannot open it.
-    The name still resolves to the ltx-2 family, so it has to be refused explicitly -- in preflight,
-    before the run evicts the user's resident models."""
+    """LTX-2.3 ships single-file checkpoints with no diffusers layout, so it must be refused as a base."""
     from core.training.diffusion_train_common import _assert_trusted_base_model
 
     _assert_trusted_base_model("Lightricks/LTX-2")
@@ -702,10 +687,7 @@ def test_ltx23_is_refused_as_a_training_base_with_the_real_reason():
 
 
 def test_the_connector_padding_side_is_read_after_encode_prompt():
-    """diffusers' own encode_prompt sets tokenizer.padding_side = "left" (Gemma wants left
-    padding), and the pipeline reads the value AFTER calling it. Reading it before baked in a
-    stale "right", and the connectors build the valid-token mask from it, so every caption
-    shorter than the 1024 pad length would have been masked on the wrong end."""
+    """The connector padding side must be read after encode_prompt, which sets it to left for Gemma."""
     seen: list = []
 
     class _Tok:
@@ -733,10 +715,7 @@ def test_the_connector_padding_side_is_read_after_encode_prompt():
 
 
 def test_family_train_infos_offers_the_video_family(dit_train_host):
-    """The gap this closes: everything below the API accepted ltx-2 -- the trainer, the preflight,
-    /diffusion/start -- but ``/api/train/diffusion/info`` is built from the IMAGE registry alone,
-    so the family never appeared in the Train tab and the whole path was unreachable from the UI.
-    """
+    """family_train_infos must include the video family, or it never reaches the Train tab."""
     from core.training.diffusion_train_common import family_train_infos
 
     infos = {i["name"]: i for i in family_train_infos()}
@@ -784,10 +763,7 @@ def test_the_strict_pipeline_gate_resolves_a_video_family_too(monkeypatch):
 
 
 def test_editing_the_connectors_invalidates_the_conditioning_cache(tmp_path):
-    """Only the connector OUTPUT is cached (the Gemma3 hidden states are per-layer stacked and
-    never reach the transformer), so replacing the connector weights in place changes what a warm
-    run should encode. The fingerprint scanned text_encoder*/tokenizer*/vae* only, so it did not
-    move and the warm run trained on embeddings from the old connectors."""
+    """Connector weights must be in the conditioning fingerprint, or warm runs reuse stale embeddings."""
     from core.training.diffusion_train_extras import source_revision
 
     root = tmp_path / "LTX-2"

@@ -209,13 +209,7 @@ def test_device_identity_change_invalidates_cache(monkeypatch, variable):
 
 
 def test_every_visibility_mask_hardware_honours_is_part_of_the_cache_key():
-    """The two lists have to move together, or a cached verdict outlives its device.
-
-    hardware.py decides whether a visibility mask is filtering the device set. Any variable
-    it counts there renames the silicon behind "cuda", so a verdict cached before the change
-    would describe a GPU that is no longer the one being asked about. Read out of the source
-    rather than imported, since that module reaches for torch.
-    """
+    """Every mask hardware.py honours must be in the probe cache key, or a verdict outlives its GPU."""
     source = Path(torch_device_probe.__file__).with_name("hardware") / "hardware.py"
     tree = ast.parse(source.read_text(encoding = "utf-8"))
     masks = {

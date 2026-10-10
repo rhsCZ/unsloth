@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Small-host route speed fixes: the streamed text encoder's prefetching copy and the fused int8 dequant.
-
-The prefetch order / budget / fallback logic runs on CPU with fake groups; the end-to-end check (diffusers leaf-level
-group offload + layerwise casting, the small-host encoder setup) needs CUDA and is skipped without it.
-"""
+"""Prefetch order, budget and fallback are CPU-tested with fake groups; end-to-end needs CUDA."""
 
 from __future__ import annotations
 

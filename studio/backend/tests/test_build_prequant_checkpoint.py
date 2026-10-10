@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The two decisions ``scripts/build_prequant_checkpoint.py`` makes that a bad answer to is
-silent: whether a ConvRot build is buildable at all, and what filename it publishes under.
-
-Both end in an artifact that costs GPU-hours and tens of gigabytes and then cannot be resolved
-or cannot be loaded, with nothing at build time saying so, which is why they are pulled out as
-pure functions and asserted here rather than left inline in ``main``."""
+"""ConvRot buildability and filename are checked early, as a wrong answer fails only after the build."""
 
 import importlib.util
 import sys
@@ -95,14 +90,7 @@ def test_a_safetensors_build_refuses_a_declared_name_that_reads_as_a_pickle():
 
 
 def test_a_rotated_pickle_build_refuses_a_declared_name_that_reads_as_safetensors():
-    """The mirror image, and the one a family reaches by MOVING to safetensors.
-
-    Once a family points prequant_filenames at a .safetensors artifact, a rotated pickle build for
-    that same family would publish torch.save bytes under a safetensors name. Every loader
-    dispatches on the extension, hands the file to safe_open and rejects it, so the artifact is
-    unopenable for a reason that says nothing about the real mistake. Guarding only the
-    safetensors-build direction left this one live.
-    """
+    """A pickle build must not take a declared safetensors name, since loaders dispatch on extension."""
     build = _script()
     fam = types.SimpleNamespace(
         name = "qwen-image-2.1",
@@ -113,13 +101,7 @@ def test_a_rotated_pickle_build_refuses_a_declared_name_that_reads_as_safetensor
 
 
 def test_an_override_still_has_to_match_the_container_it_is_naming():
-    """The escape hatch skips the family table, not the extension.
-
-    Every loader dispatches on the extension alone, so a safetensors build published as ``.pt`` is
-    read as a pickle and a pickle published as ``.safetensors`` is read from a header it does not
-    have. Both upload cleanly and neither can ever be opened, after the hours the quantization
-    took, which is why this is refused before the upload rather than reported after it.
-    """
+    """An override still has to match the container: a pickle published as .safetensors can never open."""
     build = _script()
     zimage = detect_family("Tongyi-MAI/Z-Image-Turbo", override = "z-image")
     assert zimage is not None
@@ -155,12 +137,7 @@ def test_an_override_still_has_to_match_the_container_it_is_naming():
 
 
 def test_a_plain_safetensors_build_derives_the_name_the_loader_now_asks_for_first():
-    """The refusal above predates the derived chain leading with safetensors.
-
-    ``derived_prequant_filenames`` puts ``<Model>-<SCHEME>.safetensors`` ahead of both .pt
-    spellings, so the reachability that refusal protects is exactly what the chain supplies, and a
-    family with no declared entry should not have to pass an override it could compute itself.
-    """
+    """Derived names lead with .safetensors, so a family without a declared entry needs no override."""
     build = _script()
     zimage = detect_family("Tongyi-MAI/Z-Image-Turbo", override = "z-image")
     assert zimage is not None
@@ -190,13 +167,7 @@ def test_a_plain_safetensors_build_derives_the_name_the_loader_now_asks_for_firs
 
 
 def test_the_recorded_base_must_be_the_canonical_id_not_just_the_same_tail(capsys, monkeypatch):
-    """``--base-model-id`` decides what a PUBLISHED file claims to be, so the loader's deliberately
-    tail-tolerant comparison is the wrong gate here: ``other/Qwen-Image-2.1`` passes it, and the
-    loader's equally tolerant check then accepts those weights as the official family base.
-
-    Driven through ``main`` so the refusal is the one a builder would actually hit, and it has to
-    land BEFORE the download: nothing below is stubbed, so reaching the load would fail differently.
-    """
+    """The recorded base must be the canonical id, not just the same tail; refuse before any download."""
     # Stub diffusers only when absent: the refusal happens before it is used.
     pytest.importorskip("torchao")
     if importlib.util.find_spec("diffusers") is None:

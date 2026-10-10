@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""CPU-only unit tests for the diffusion LoRA trainer's pure helpers.
-
-The training loop needs a GPU + weights, but dataset discovery, config normalisation,
-the SDXL add-time-ids, and the dict->config adapter are pure and tested here.
-"""
+"""CPU-only tests for the LoRA trainer's pure helpers; the training loop needs a GPU and weights."""
 
 from __future__ import annotations
 

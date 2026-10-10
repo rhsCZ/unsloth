@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""FastAPI round-trip tests for the OpenAI-compatible POST /v1/images/generations.
-
-The diffusion backend and image gallery are replaced with light fakes, so these
-exercise the route wiring, OpenAI param mapping, validation, error envelopes, and
-response shape without torch, diffusers, weights, or a GPU. The pure helpers
-(`_parse_openai_image_size`, `default_generation_params`) are unit-tested directly.
-"""
+"""Route tests for POST /v1/images/generations; diffusion backend and gallery are faked, so no GPU."""
 
 from __future__ import annotations
 

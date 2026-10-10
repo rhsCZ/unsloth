@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""studio.db must not turn one slow writer into a stream of "database is locked".
-
-A live Colab session logged six `research.supervisor_iteration_failed` tracebacks in 37
-seconds while a settings write and a multi-GB model download shared the disk. Each test
-here guards a distinct link in that chain, plus the upgrade and downgrade paths, since
-every existing install already carries the old schema.
-
-Nothing here needs a GPU or a network: the behaviour under test is SQLite pragmas, one
-poll query, and log levels.
-"""
+"""studio.db must not turn one slow writer into a stream of database-is-locked failures."""
 
 import asyncio
 import hashlib
@@ -106,12 +97,7 @@ def test_wal_database_drops_to_normal(db):
 
 @pytest.mark.parametrize("mode", ["delete", "truncate", "persist", "memory"])
 def test_non_wal_journal_keeps_full(db, monkeypatch, mode):
-    """PRAGMA journal_mode=WAL silently declines on filesystems without shared memory.
-
-    Network shares and some FUSE or container mounts land there, Windows users most
-    often. A rollback journal needs the fsync NORMAL removes, so those installs keep
-    FULL and simply do not get the speedup.
-    """
+    """WAL silently declines on mounts without shared memory; those keep synchronous FULL, not NORMAL."""
     setup = sqlite3.connect(str(db))
     try:
         setup.execute(f"PRAGMA journal_mode={mode}")
@@ -133,10 +119,7 @@ def test_non_wal_journal_keeps_full(db, monkeypatch, mode):
     [None, (None,), ("",), (123,), sqlite3.OperationalError("pragma unavailable")],
 )
 def test_unreadable_journal_mode_is_not_treated_as_wal(answer):
-    """An unexpected or failing answer keeps the safe default rather than raising.
-
-    sqlite3.Connection is a C type and cannot be monkeypatched, so this uses a double.
-    """
+    """sqlite3.Connection is a C type that cannot be monkeypatched, so a double stands in for it."""
 
     class Connection:
         def __init__(self):
@@ -284,10 +267,7 @@ def test_inventory_trigger_scope(db, sql, dirties, why):
 
 
 def test_upgrade_replaces_the_unscoped_trigger(tmp_path, monkeypatch):
-    """Every existing install already carries the unscoped trigger.
-
-    CREATE TRIGGER IF NOT EXISTS would have kept it silently, so the fix drops first.
-    """
+    """Existing installs carry the unscoped trigger, which IF NOT EXISTS would keep, so drop it first."""
     path = tmp_path / "studio.db"
     monkeypatch.setattr(studio_db, "studio_db_path", lambda: path)
     monkeypatch.setattr(studio_db, "_schema_ready", set())
@@ -354,14 +334,7 @@ def _legacy_unscoped_trigger(conn) -> None:
 
 
 def test_eight_processes_upgrading_at_once_all_succeed(db):
-    """Two Studio processes on one studio.db each carry their own `_schema_ready`.
-
-    DDL does not open a transaction under sqlite3's legacy transaction control -- only
-    INSERT/UPDATE/DELETE/REPLACE do -- so a bare DROP + CREATE pair runs in autocommit and
-    can interleave as drop/drop/create/create, where the second CREATE raises
-    "trigger already exists" straight out of get_connection. The forced sequence is in
-    test_a_lost_create_race_cannot_raise; this is the end-to-end shape of it.
-    """
+    """Legacy sqlite3 opens no transaction for DDL, so a DROP and CREATE pair can interleave and fail."""
     setup = studio_db.get_connection()
     try:
         _legacy_unscoped_trigger(setup)
@@ -421,11 +394,7 @@ def test_the_migration_is_skipped_once_the_scoped_trigger_is_installed(db):
 
 
 def test_a_lost_create_race_cannot_raise(db):
-    """The interleave itself, forced rather than raced for.
-
-    Racing two threads for it does not work: every DDL statement takes the writer lock, so
-    the window between the drop committing and the create is too narrow to sample.
-    """
+    """Racing threads cannot hit the drop/create window, since DDL takes the writer lock; force it."""
     setup = studio_db.get_connection()
     try:
         _legacy_unscoped_trigger(setup)
@@ -465,10 +434,7 @@ def test_a_lost_create_race_cannot_raise(db):
 
 
 def test_the_drop_and_the_create_share_one_writer_lock():
-    """Held across both, so no opener sees the table without its trigger.
-
-    sqlite3.Connection is a C type and cannot be monkeypatched, hence the double.
-    """
+    """The drop and create share one writer lock, so no opener sees the table without its trigger."""
 
     class Connection:
         in_transaction = False
@@ -668,11 +634,7 @@ def test_api_usage_db_shares_one_definition():
 
 
 class _Ladder:
-    """The supervisor's except-ladder without its dependencies.
-
-    Mirrors ResearchSupervisor._loop in core/research_runs.py; the control flow is the
-    point, since the regression this guards was a control-flow one.
-    """
+    """Mirrors ResearchSupervisor._loop's except ladder, since the regression was in its control flow."""
 
     def __init__(self, raises, logger):
         self._raises = list(raises)
@@ -876,11 +838,7 @@ def test_wal_keeper_declines_when_the_filesystem_refused_wal(db, caplog):
 
 
 def test_the_lifespan_holds_the_keeper_across_every_writer():
-    """A keeper nothing opens saves nothing, and one released early stops saving early.
-
-    Reads the source rather than running the lifespan, which imports the whole stack.
-    Anchored on the awaited call, since the bare name is also in a comment further up.
-    """
+    """Open the keeper before the lifespan yields; release it only at shutdown, covering every writer."""
     import main
 
     source = inspect.getsource(main.lifespan)

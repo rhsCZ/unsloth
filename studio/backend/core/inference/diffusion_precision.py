@@ -59,15 +59,7 @@ _TE_INT8_SKIP: dict[str, tuple[int, int]] = {
 
 
 def normalize_te_quant(value: Optional[str]) -> Optional[str]:
-    """Lower/strip a requested text-encoder quant; None / "" / "none" / "off" / "auto" -> None.
-
-    The three no-scheme spellings collapse here because no family quantises its encoder without
-    a named scheme. They stay distinct to the caller that cares: MiniMax-H3 reads the RAW request
-    as a tri-state (unset picks the hosted conditioner, "none"/"off" pin the released bf16 one)
-    BEFORE normalising, so folding them is what lets an opt-out reach that branch at all instead
-    of being rejected here.
-
-    Raises ValueError for an unsupported value so a bad request is rejected cheaply."""
+    """none, off and auto collapse to None here; the raw request is read first where they differ."""
     if value is None:
         return None
     normalized = str(value).strip().lower().replace("-", "_")
@@ -83,12 +75,7 @@ def normalize_te_quant(value: Optional[str]) -> Optional[str]:
 
 
 def te_quant_is_auto(value: Optional[str]) -> bool:
-    """Whether ``value`` is the UNSET side of the text-encoder tri-state (unset / "" / "auto").
-
-    ``normalize_te_quant`` folds "none" and "off" into the same None, which is right for every
-    caller that only needs a scheme, and wrong for the one that has to tell "choose for me" from
-    "leave it alone". Reads the raw request, so it must run before normalising.
-    """
+    """Unset, empty or auto means choose for me; none and off pin bf16 and need the raw value."""
     if value is None:
         return True
     normalized = str(value).strip().lower().replace("-", "_")
@@ -98,16 +85,7 @@ def te_quant_is_auto(value: Optional[str]) -> bool:
 def resolve_te_quant_request(
     value: Optional[str], auto_scheme: Optional[str]
 ) -> tuple[Optional[str], bool]:
-    """``(mode, auto_selected)`` for a raw text-encoder request on a family offering ``auto_scheme``.
-
-    The tri-state: unset / "auto" takes ``auto_scheme`` (the family's ``te_quant_auto``, None on a
-    family that has not opted in); "none" / "off" pins the released bf16 encoder; an explicit
-    scheme pins that scheme. ``auto_selected`` is what keeps an auto pick from being reported as a
-    request the caller made, and from REFUSING the load when it does not engage: nobody asked for
-    it, so falling back to dense is the correct outcome rather than an error.
-
-    Raises ValueError for an unsupported explicit value, via ``normalize_te_quant``.
-    """
+    """Unset or auto takes the family's auto scheme, but a miss falls back to dense instead of refusing."""
     if not te_quant_is_auto(value):
         return normalize_te_quant(value), False
     if auto_scheme is None or nvfp4_blocked(auto_scheme):
@@ -116,14 +94,7 @@ def resolve_te_quant_request(
 
 
 def effective_te_quant(mode: Optional[str], family: Optional[str]) -> Optional[str]:
-    """The text-encoder mode ``quantize_text_encoders`` will ACTUALLY attempt for ``family``.
-
-    An explicit int8 on a family with no keep-bf16 schedule is rewritten to layerwise fp8
-    before support is ever consulted -- a documented downgrade that reports ``fell_back`` and
-    needs no torchao. A caller that asks ``te_quant_supported`` about the raw request therefore
-    refuses loads the runtime would run: on Windows ROCm the torchao stub makes int8
-    unsupported while fp8 still works.
-    """
+    """An explicit int8 on a family with no keep-bf16 schedule becomes fp8 before support is checked."""
     normalized = normalize_te_quant(mode)
     if normalized == TE_QUANT_INT8 and _TE_INT8_SKIP.get((family or "").lower()) is None:
         return TE_QUANT_FP8
@@ -131,26 +102,14 @@ def effective_te_quant(mode: Optional[str], family: Optional[str]) -> Optional[s
 
 
 def te_quant_needs_resident_weights(mode: Optional[str]) -> bool:
-    """Whether ``mode`` is a torchao text-encoder cast, which CPU offload rules out.
-
-    Offload hooks move modules with ``Module.to()``, which torchao's tensor subclasses do not
-    survive, so ``quantize_text_encoders`` reports those modes unsupported once offload is
-    active. Plain layerwise fp8 is a dtype cast and is unaffected.
-    """
+    """torchao casts use subclasses that Module.to() cannot move, so they need resident weights."""
     return mode in _TE_TORCHAO_MODES
 
 
 @lru_cache(maxsize = 1)
 def torchao_quantize_importable() -> bool:
-    """Whether ``torchao.quantization.quantize_`` is really there and really torchao's.
-
-    The casters import it only after the pipeline has been downloaded and built, so a broken or
-    absent install failed through load-progress rather than the pre-load 409 the strict contract
-    promises. The pre-handoff gates ask this so the refusal arrives before the download.
-    ``is_stubbed`` covers the Windows-ROCm stub, whose quantize_ is a no-op that would otherwise
-    report the mode applied against an untouched bf16 encoder. Cached: the answer cannot change
-    inside a process, and the gate runs on every load.
-    """
+    """Rejects the Windows ROCm torchao stub, a no-op that would report a quant applied to a bf16
+    encoder."""
     try:
         from torchao.quantization import quantize_  # noqa: F401
     except Exception:  # noqa: BLE001 -- absent, broken build, missing native symbol
@@ -244,12 +203,7 @@ def quantize_text_encoders(
     offload_active: bool = False,
     logger: Any = None,
 ) -> TEQuantOutcome:
-    """Quantise each present text encoder in place with ``mode``. Returns a ``TEQuantOutcome``
-    carrying the mode applied (None when disabled, unsupported, or nothing was cast) plus WHY it
-    differs from the request. ``int8`` needs a per-family schedule (``_TE_INT8_SKIP``); without one
-    it falls back to ``fp8``. Under ``offload_active`` the torchao modes are skipped (their
-    subclasses reject ``Module.to()``); layerwise ``fp8`` still engages. Best-effort: any failure
-    leaves the encoder dense."""
+    """int8 without a per-family schedule falls back to fp8; torchao modes are skipped under offload."""
     mode = normalize_te_quant(mode)
     if mode is None:
         present = [a for a in _TEXT_ENCODER_ATTRS if getattr(pipe, a, None) is not None]
@@ -420,11 +374,7 @@ def _cast_int8_selective(encoder: Any, target: Any, skip_first: int, skip_last: 
 
 
 def _weight_has_zero_output_row(module: Any) -> bool:
-    """True when a Linear's weight has an all-zero OUTPUT row. torchao per-row fp8 derives a
-    per-channel scale from that row's amax, so a dead row gives scale 0 -> 0/0 = NaN through the
-    forward. Real checkpoints ship such rows: SDXL's text_encoder_2 (OpenCLIP ViT-bigG) has one in
-    ``text_model.encoder.layers.2.self_attn.out_proj`` -- B200: every fp8_dynamic SDXL render came
-    out black until this Linear is left dense. Cheap (one amax per Linear); False on any error."""
+    """A zero output row gives fp8 a zero scale and NaN; SDXL's text_encoder_2 has one and stays dense."""
     try:
         weight = getattr(module, "weight", None)
         if weight is None or weight.ndim != 2:

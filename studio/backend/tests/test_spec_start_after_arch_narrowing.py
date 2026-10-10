@@ -1,18 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The drafterless retry must survive the arch gate narrowing the argv (#7670).
-
-`_spec_start` is captured as a positional index just before the speculative
-flags are appended. The arch gate added in #7670 rebinds `cmd` with tokens
-REMOVED from the prefix (`--split-mode` / `--tensor-split`), which slides the
-spec block left and leaves the stored index pointing past it.
-
-Before the fix the fallback then kept `spec_flags[:N]`, re-running the drafter
-that had just failed, and sliced N tokens out of the middle of the tail. With
-the four-token narrowing that included `--api-key`, so the retry would have
-launched llama-server unauthenticated. There is no AMD hardware on any runner,
-so this drives the real helpers over a fabricated argv.
-"""
+"""The drafterless retry locates the spec block by content, since the arch gate shifts it left."""
 
 from core.inference.llama_cpp import _subsequence_index, LlamaCppBackend
 

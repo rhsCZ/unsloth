@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The MLX command loop must answer audio commands it cannot serve.
-
-MLXInferenceBackend implements neither TTS nor Whisper, and inference dispatch
-is by device rather than by modality, so a codec-TTS or Whisper checkpoint on
-Apple Silicon reaches this loop. A dropped command costs the caller its whole
-120s deadline (`InferenceOrchestrator.generate_audio_response`), so every
-command has to produce a reply.
-"""
+"""A dropped audio command costs the caller its full 120s deadline, so the MLX loop must always reply."""
 
 import queue as _queue
 from types import SimpleNamespace

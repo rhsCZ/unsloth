@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""/api/train/start must run backend.start_training off the event loop.
-
-start_training() runs the _free_vram_for_training before_spawn hook inline, and that
-hook's diffusion/video unload() blocks on the engines' generation locks until an
-in-flight denoise step reaches its cancel callback (seconds to tens of seconds for
-video). Executed inline in the async route it would freeze every concurrent
-status/cancel/UI request -- the same reason start_diffusion_training offloads
-_free_gpu_for_diffusion_training via asyncio.to_thread. The backend guards the
-overlapping-starts window this offload opens with a compare-and-set reservation.
-"""
+"""start_training runs off the event loop, since its before_spawn unload can block for seconds."""
 
 import asyncio
 import contextlib

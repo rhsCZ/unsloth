@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic tests for the FLUX.2 size-pairing preflight.
-
-A FLUX.2 GGUF only carries the transformer, so its ``inner_dim`` has to match the companion base
-repo the loader assembles around it. The loader's own guard opens the DOWNLOADED checkpoint, so it
-fires after the base shards were pulled and after the resident pipeline was torn down; these tests
-pin the cheap version that runs first, off a range-read header.
-
-Every synthetic checkpoint here is a real GGUF header written by ``gguf.GGUFWriter`` -- the tensor
-table and nothing else, which is exactly what the range request brings back. The HTTP layer is
-stubbed at ``huggingface_hub.utils.get_session``, so nothing in this module touches the network,
-and a stubbed ``hf_hub_download`` fails the test if anything tries to fetch a whole file.
-"""
+"""FLUX.2 GGUF inner_dim must be checked from a range-read header, before any base download."""
 
 from __future__ import annotations
 
@@ -47,11 +36,7 @@ def _gguf_header(
     siblings = 4,
     probe_last = False,
 ):
-    """A real GGUF header (magic + kv + tensor table, no tensor DATA) for a FLUX.2 of this size.
-
-    Written with the shipped writer rather than hand-rolled bytes, so a format change breaks the
-    test the same way it would break production. ``write_tensor_data`` is deliberately never
-    called: the bytes that come back are precisely the prefix a range request returns."""
+    """Real GGUF header with no tensor data, from the shipped writer, as a range request would return."""
     import numpy as np
     from gguf import GGMLQuantizationType, GGUFWriter
 
@@ -115,10 +100,7 @@ def _stub_range_reads(
     *,
     status = 206,
 ):
-    """Serve ``{filename: header_bytes}`` over the stubbed Hub session; returns the request log.
-
-    Also arms the negative assertions this whole module rests on: nothing may call
-    ``hf_hub_download`` (that is the multi-GB pull), and nothing may read the ambient cache."""
+    """Serves header bytes over a stubbed Hub session; any hf_hub_download call fails the test."""
     requests: list[tuple[str, str]] = []
 
     class _Session:
@@ -758,13 +740,7 @@ def test_an_unmapped_or_absent_inner_dim_keeps_the_filename_rule():
 
 
 def test_a_stalled_response_header_cannot_hold_the_picker_open(monkeypatch):
-    """requests' timeout is an INACTIVITY timeout, not a wall clock.
-
-    A peer that trickles response headers a byte at a time resets it forever, so a deadline
-    armed only once get() has returned never gets armed at all -- and this call sits on the
-    /images/load route thread and on the download-plan path, both of which promise to fail
-    open in seconds. The request itself has to be on the abandonable worker.
-    """
+    """requests' timeout is inactivity only, so the header call must run on an abandonable worker."""
     import threading
     import types
 
@@ -797,12 +773,7 @@ def test_a_stalled_response_header_cannot_hold_the_picker_open(monkeypatch):
 
 
 def test_the_offline_caller_still_gets_a_memoised_remote_answer(monkeypatch, tmp_path):
-    """begin_load probes with allow_network=False right after a plan-time probe answered.
-
-    Returning None there anyway sent it to the filename heuristic, which publishes the 4B
-    encoder repos for a renamed 9B checkpoint -- so the delete-cached guard did not cover the
-    companion repo the load was about to use.
-    """
+    """Offline begin_load must reuse a memoised remote answer, not fall back to the filename heuristic."""
     monkeypatch.setattr(diffusion_compat, "_INNER_DIM_CACHE", {})
     monkeypatch.setattr("huggingface_hub.try_to_load_from_cache", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -920,11 +891,7 @@ DENOISER_FILE = "flux1-dev-Q4_K_M.gguf"
 
 
 def _arch_header(architecture: str) -> bytes:
-    """A minimal GGUF prefix carrying just ``general.architecture``.
-
-    Hand-rolled rather than via ``GGUFWriter`` like the size-pairing fixtures: this probe reads a
-    single KV pair, and writing it by hand is what ``test_cached_gguf_routes.py`` does for the
-    listing-side gate, so both ends of this feature are pinned against the same bytes."""
+    """Minimal GGUF prefix with only general.architecture, read by hand to match the listing-side gate."""
     import struct
 
     def string(value: str) -> bytes:
@@ -1096,17 +1063,7 @@ def test_an_on_device_speech_checkpoint_is_never_revalidated(monkeypatch, tmp_pa
 
 
 def test_a_pick_that_names_the_checkpoint_outright_is_probed_like_the_loader_opens_it(tmp_path):
-    """A file-valued ``repo_id`` is a pick the video loader accepts, so the preflight must read it.
-
-    ``VideoBackend._resolve_checkpoint_path`` answers ``if root.is_file(): return root`` and
-    ignores ``gguf_filename``, and ``VideoBackend.validate_load_request`` admits exactly that
-    pick, so ``POST /video/load`` with ``model_path`` naming a .gguf reaches the loader today.
-
-    Resolving it as a repo ROOT instead appends the filename under the file, raising
-    ``FileNotFoundError`` -- an ``OSError``, hence swallowed as "remote id". The pick then has no
-    local path: an offline preflight allows it outright, an online one range-requests a
-    filesystem path off the Hub and fails open. Either way the csm checkpoint survives the gate,
-    the resident pipeline is evicted, and the file reaches the media loader."""
+    """A file-valued repo_id is accepted by the video loader, so the preflight must probe it as a file."""
     direct = tmp_path / "wan-models" / CSM_FILE
     direct.parent.mkdir(parents = True)
     direct.write_bytes(_arch_header("llama-csm"))
@@ -1281,10 +1238,7 @@ def test_a_snapshot_backed_verdict_keeps_its_entry_across_the_window(monkeypatch
 
 
 def test_both_media_routes_refuse_a_speech_pick_before_taking_the_gpu():
-    """The backends assert this too, but on the load worker, INSIDE acquire_for, so a refusal
-    there arrives having already evicted the chat model the gate exists to preserve -- and on the
-    image route after an engine switch unloaded the resident pipeline. Both routes must refuse
-    before they reach the arbiter."""
+    """Media routes refuse a speech pick before the GPU arbiter, or the resident model is evicted first."""
     import inspect
 
     from routes import inference as inference_route
@@ -1308,10 +1262,7 @@ def test_both_media_routes_refuse_a_speech_pick_before_taking_the_gpu():
 
 
 def test_an_automatic_image_load_keeps_the_pre_eviction_preflight_offline():
-    """The route's own speech check already honours user_initiated, but it then calls
-    preflight_base_access, which reaches the same assertion again. Left network-enabled that
-    second call spends a revision HEAD (or an uncached range request and its 15s bound) on the
-    one path that promised to stay off the Hub."""
+    """Automatic image loads keep the pre-eviction preflight offline, so no revision HEAD hits the Hub."""
     import inspect
 
     from core.inference import diffusion, sd_cpp_backend
@@ -1332,11 +1283,7 @@ _VOCODER_ARCH = "this model cannot be used as LLM, use it via --model-vocoder in
 
 
 class _HttpxLikeClient:
-    """An httpx.Client's surface, which is what ``get_session`` returns on huggingface_hub 1.x.
-
-    Deliberately NOT a mock of the requests API: `get` rejects `stream`, there is no
-    `iter_content`, and there is no `raw`. requirements/studio.txt floors 1.23 on python >= 3.10,
-    so this is the client every supported install has."""
+    """Fake httpx.Client surface matching get_session on huggingface_hub 1.x, not a requests mock."""
 
     def __init__(self, body):
         self.body = body
@@ -1491,13 +1438,7 @@ def test_every_published_csm_spelling_is_refused_by_the_media_preflight(monkeypa
 
 
 def test_one_pick_range_reads_the_header_once_for_both_probes(monkeypatch, tmp_path):
-    """The size pairing and the speech verdict read the SAME prefix of the SAME file.
-
-    `/images/download-plan` runs them back to back on every hub pick, and `or` only skips the
-    second when the first refuses -- so the ordinary case, a flux.2 GGUF that pairs correctly,
-    made two range requests. Each carries its own _HEADER_TIMEOUT_SECONDS, so a picker the user
-    is sitting in front of could wear twice the bound this module documents. One read now.
-    """
+    """Size pairing and the speech verdict must share one range read of the same GGUF prefix."""
     requests = _stub_range_reads(monkeypatch, {KLEIN_4B_FILE: _gguf_header(3072, tmp_path)})
 
     assert (
@@ -1514,12 +1455,7 @@ def test_one_pick_range_reads_the_header_once_for_both_probes(monkeypatch, tmp_p
 def test_a_revalidation_still_re_reads_rather_than_answering_from_the_shared_prefix(
     monkeypatch, tmp_path
 ):
-    """The shared read must not reach the paths whose whole job is to re-read.
-
-    A checkpoint republished at the same filename is caught by re-reading its header off the
-    Hub. Serving that from the prefix memo would hand the revalidation the very bytes it is
-    trying to get past, and a media GGUF republished as speech would load.
-    """
+    """Revalidation must re-read the header, never answer from the shared prefix memo."""
     source = inspect.getsource(diffusion_compat)
     for fn in ("_revalidated_inner_dim", "_revalidated_speech_arch"):
         body = source.split(f"def {fn}(", 1)[1].split("\ndef ", 1)[0]
@@ -1528,15 +1464,7 @@ def test_a_revalidation_still_re_reads_rather_than_answering_from_the_shared_pre
 
 
 def test_the_chat_backend_does_not_import_pyyaml_to_learn_the_speech_verdict():
-    """`core.inference.llama_cpp` must not drag the models package in at import time.
-
-    The speech verdict is shared, and reaching it through `utils.models.gguf_metadata` runs
-    `utils.models.__init__`, which imports `model_config`, which imports `yaml`. That made
-    PyYAML a hard import dependency of the chat backend and took the repo's own Source lint
-    job red, where `tests/studio/load_freeze/test_load_orchestrator.py` imports the backend
-    without PyYAML installed. The constants live in the leaf module `utils.gguf_archs`, and
-    every caller imports them from there.
-    """
+    """llama_cpp must not import the models package, or PyYAML becomes a hard chat-backend dependency."""
     import importlib
     import subprocess
     import sys
@@ -1573,10 +1501,7 @@ def test_the_chat_backend_does_not_import_pyyaml_to_learn_the_speech_verdict():
 
 
 def test_qwen_image_2_1_takes_the_dynamic_4bit_text_encoder():
-    """The no-GPU route's encoder is pinned by FILENAME, and a name that is not in the repo is
-    not an error anyone sees at config time: the fetch 404s mid-load, after the denoiser has
-    already been staged. Pin the Dynamic 2.0 rung by exact name so a rename or a drop to the
-    uniform quant has to break this rather than a user's load."""
+    """Pin the Qwen-Image-2.1 encoder filename exactly; a missing name 404s mid-load, after staging."""
     from core.inference.diffusion_families import detect_family
 
     fam = detect_family("Qwen/Qwen-Image-2.1")

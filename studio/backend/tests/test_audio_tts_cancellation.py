@@ -18,16 +18,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Register a stub for a dep the backend pytest job does not install.
-
-    Same helper and reason as test_safetensors_reasoning_stream.py and
-    test_audio_type_inconclusive.py: the peft-gated test below imports
-    ``core.inference.inference``, which imports ``unsloth`` at module scope, and this
-    job installs peft but not unsloth. That import used to be unreachable here because
-    the peft gate skipped; now that peft IS installed the gate opens, and the import
-    only worked because collection of test_safetensors_reasoning_stream.py had already
-    cached the module. Running this file on its own failed. A real install is left alone.
-    """
+    """Stub unsloth and deps the backend job lacks, since their module-scope import fails collection."""
     if name in sys.modules:
         return
     try:

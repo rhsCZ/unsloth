@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Async handlers must not build the inference singleton on the event loop.
-
-Construction runs get_default_models() -> hw.get_device(), so the first caller waits
-for the background warm. Inline, that holds the event-loop thread for the whole torch
-import, stalling login, liveness and the deadline-bound desktop health probe.
-
-The offload has to stay at the call site, passing the route module's own
-`get_inference_backend` to a thread. A helper in orchestrator.py would resolve that
-module's global instead, bypassing callers that patch `routes.inference.get_inference_backend`.
-"""
+"""Async handlers must not build the singleton on the event loop, which stalls the torch import."""
 
 from __future__ import annotations
 
@@ -125,10 +116,7 @@ def _calls_run_in_scope(roots: list[ast.AST]) -> list[ast.Call]:
 
 
 def _calls_inside_offloaded_lambdas(fn: ast.AST) -> set[int]:
-    """ids of the Call nodes in a lambda that asyncio.to_thread runs on its worker thread: the
-    lambda is to_thread's first argument, or a later argument to a worker listed in
-    _WORKERS_THAT_RUN_THEIR_CALLBACK. Any other lambda, stored or handed to a worker that might
-    return it, is not exempt."""
+    """Call nodes inside lambdas that to_thread runs on a worker; other lambdas get no exemption."""
     inside = set()
     for node in ast.walk(fn):
         if not (
@@ -212,11 +200,7 @@ def test_no_async_handler_reaches_the_singleton_through_a_sync_helper():
 
 
 def test_the_offload_stays_at_the_call_site():
-    """No orchestrator-level async helper: it would bypass patched route globals.
-
-    tests/test_orchestrator_unload_cancel.py patches routes.inference.get_inference_backend.
-    An accessor defined in orchestrator.py resolves orchestrator's own global, so the patch
-    would not take and the test hangs on a load gate that never opens."""
+    """An orchestrator async accessor resolves its own global, so patches of the route module miss it."""
     orch = (_BACKEND / "core/inference/orchestrator.py").read_text(encoding = "utf-8")
     assert "async def get_inference_backend_async" not in orch, (
         "an async accessor in orchestrator.py bypasses callers that patch the "

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Prompt/generation speed for the safetensors path.
-
-Transformers reports no timings, so the chat UI showed a prompt and generation speed
-for GGUF and MLX but nothing for safetensors. These tests pin the measurement: the
-prefill boundary is stamped once (at the first logits-processor call, not at every
-decode step), each stamp waits for the accelerator so it times compute rather than
-kernel dispatch, the emitted object matches llama-server's ``timings`` shape, and an
-unmeasurable rate is omitted rather than reported as zero.
-"""
+"""Safetensors timings: each stamp syncs the accelerator so it times compute, not kernel dispatch."""
 
 import pytest
 import torch

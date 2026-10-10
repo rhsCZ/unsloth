@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the single-GPU arbiter.
-
-The real evictors (which tear down live backends) are replaced with recorders, so
-these verify only the ownership/eviction sequencing — no torch, GPU, or subprocess.
-"""
+"""Single-GPU arbiter ownership and eviction order, with evictors replaced by recorders."""
 
 from __future__ import annotations
 

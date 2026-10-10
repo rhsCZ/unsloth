@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Invariant: /api/health does not publish a verdict the MLX self-heal is about to overturn.
-
-Detection settles before utils.mlx_repair gets its turn, so an Apple Silicon host whose MLX
-stack is missing or unreadable answers chat_only=true with reason "mlx_unavailable" first.
-The frontend reads that as measured, greys Train and Video and explains them with "run
-`unsloth studio update`"; the background reinstall then lands, chat_only flips false and the
-sidebar's recovery poll enables both rows. That is the reported "greyed out on launch, then
-they come out". Health keeps replying provisionally for that window instead, through the
-existing hardware_detecting shape, so the rows spin until there is a real answer.
-
-Everything a chat-only host relies on must be unchanged: an Intel Mac, a CPU-only Linux box,
-a Mac with the self-heal opted out, and a Mac whose repair has finished must all still get a
-settled verdict and the tooltip that goes with it.
-
-The hold is bounded in both halves. A live worker is waited on for as long as its install
-takes; a repair that has not started is only a promise, and a promise nothing ever keeps must
-expire, or the rows spin for the whole session instead of settling into the greyed state a
-broken MLX stack has genuinely earned.
-
-CPU-only, no network, no GPU, no weights.
-"""
+"""Health must not publish a chat_only verdict that the pending MLX self-heal is about to overturn."""
 
 from __future__ import annotations
 
@@ -213,11 +193,7 @@ def _superseded(monkeypatch, *, warming: bool) -> bool:
 
 
 def _spend_the_handoff_grace(monkeypatch, clock) -> None:
-    """Run the grace out the way a caller must: observe the warm stopped, then wait.
-
-    The grace opens on the first stopped reading, not on the clock, so advancing time
-    without asking spends nothing. Tests that want an expired window have to ask twice.
-    """
+    """The grace opens at the first stopped reading, not on the clock, so unasked time spends nothing."""
     import main as main_mod
 
     assert _superseded(monkeypatch, warming = False) is True
@@ -247,10 +223,7 @@ def test_the_handoff_grace_covers_the_gap_after_the_warm(apple_silicon, clock, m
 
 
 def test_a_repair_that_never_starts_stops_holding_the_verdict(apple_silicon, clock, monkeypatch):
-    """The risk this window exists for. The warm finished and the scheduler never claimed
-    the latch (its import raised and _post_warm_background_work swallowed it), so "not
-    started yet" would otherwise be a permanent answer and the rows would spin for the whole
-    session. Instead the Mac gets the greyed rows and the tooltip its stack has earned."""
+    """A warm that never gets its repair started must expire the hold, or the rows spin for the session."""
     assert _superseded(monkeypatch, warming = True) is True
     _spend_the_handoff_grace(monkeypatch, clock)
     assert _superseded(monkeypatch, warming = False) is False
@@ -259,15 +232,7 @@ def test_a_repair_that_never_starts_stops_holding_the_verdict(apple_silicon, clo
 def test_a_gap_in_polling_does_not_spend_the_grace_before_the_handoff(
     apple_silicon, clock, monkeypatch
 ):
-    """The grace has to start when the warm stops, not when a poll last saw it running.
-
-    The warm's final stages are C-extension imports that hold the GIL for seconds at a
-    time, so health requests queue behind them and the next one served can be the first in
-    minutes. Measured from the last observed poll the grace would already be spent by the
-    time anyone could ask, and the gate would publish the mlx_unavailable verdict during
-    the very handoff it exists to cover -- the frontend then stores that as final and greys
-    Train and Video until the repair flips them back, which is the reported bug.
-    """
+    """The grace starts at the warm's stop, not the last poll, as GIL-holding imports delay replies."""
     import main as main_mod
 
     assert _superseded(monkeypatch, warming = True) is True
@@ -314,11 +279,7 @@ def test_a_live_worker_holds_the_verdict_past_every_window(apple_silicon, clock,
 def test_a_worker_parked_past_its_budget_stops_holding_the_verdict(
     apple_silicon, clock, monkeypatch
 ):
-    """attempt_mlx_repair times the uv subprocess, but not the mlx_stack_available()
-    imports that verify the install nor the detect_hardware() pass after it. Those import
-    mlx.core, mlx_lm and mlx_vlm, which this module already assumes can park forever on a
-    broken stack, so an alive thread was an unbounded answer: the rows would spin for the
-    whole session rather than settle into the chat-only verdict the stack has earned."""
+    """A worker parked past its budget must stop holding the verdict, since MLX imports can park forever."""
     worker_clock = _Clock()
     monkeypatch.setattr(mlx_repair, "_repair_clock", worker_clock, raising = False)
     monkeypatch.setattr(mlx_repair, "_attempted", True, raising = False)

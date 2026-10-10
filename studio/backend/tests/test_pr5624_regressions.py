@@ -1,25 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Regression tests for PR #5624 (DeepSeek R1/V3.x, GLM 4.x, Kimi K2 tool
-parsing). Each test pins a specific edge case surfaced during the
-review:
-
-* GLM string-vs-JSON-encoded value coercion (template emits strings
-  raw and non-strings JSON-encoded; the parser must not coerce a
-  bare string ``"42"`` into ``42``).
-* GLM ``<arg_value>`` containing a literal ``<`` (e.g. ``if x < 10``).
-* Kimi K2 dotted name ``functions.my.tool:0`` keeps its full name
-  (``my.tool``) after stripping only the ``functions.`` prefix and
-  ``:idx`` suffix, while the full id is preserved on the call.
-* Kimi K2 bare-counter id (no ``functions.`` prefix, no ``:IDX``) is
-  dropped rather than surfaced under a numeric name.
-* DeepSeek V3.1 truncated mid-stream produces an empty result without
-  raising.
-* ``routes.inference._strip_tool_xml`` strips the DeepSeek envelope and
-  the Kimi section markers added by this PR.
-"""
+"""Tool-call parser edge cases for DeepSeek, GLM and Kimi: arg coercion, dotted names, truncation."""
 
 import json
 
@@ -227,10 +209,7 @@ def test_deepseek_r1_huge_fenceless_body_is_linear():
 
 
 def test_deepseek_r1_fenceless_body_with_one_distant_object_is_linear():
-    """The same body with a single ``{`` after it, which is the shape that survived the
-    first fix for #10507: seeking the next object per marker found one every time and
-    rescanned the tail to reach it, so the sweep stayed quadratic while the fence-less
-    case above had gone linear."""
+    """A fenceless DeepSeek R1 body with one distant object must parse in linear time, not quadratic."""
     build = lambda n: "<｜tool▁calls▁begin｜>" + "function<｜tool▁sep｜>a" * n + '{"a": 1}'
     assert_linear(parse_tool_calls_from_text, build, "R1 distant-object", 10_000)
 

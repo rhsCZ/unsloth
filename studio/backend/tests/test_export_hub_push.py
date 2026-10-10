@@ -797,11 +797,7 @@ def test_lora_export_push_uploads_when_the_repo_is_already_private(tmp_path, mon
 def test_lora_adapter_push_writes_the_card_the_delegated_push_can_no_longer_write(
     tmp_path, monkeypatch
 ):
-    """Opening the repo first makes Unsloth's wrapper skip its own card, so we write it.
-
-    `upload_to_huggingface` writes MODEL_CARD only when its `create_repo(exist_ok=False)`
-    finds the repo absent, which opening it here makes impossible.
-    """
+    """Opening the repo first makes the delegated push skip MODEL_CARD, so this path writes it."""
     calls: list[str] = []
     seen: dict = {}
     _module, backend, gguf, _uploads = _lora_backend(

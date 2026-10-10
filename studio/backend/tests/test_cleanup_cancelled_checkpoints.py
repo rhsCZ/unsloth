@@ -16,11 +16,7 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 @pytest.fixture
 def outputs_setup(tmp_path, monkeypatch):
-    """Point outputs_root() at a temp dir so cleanup may run on it.
-
-    training binds ``outputs_root`` at import time, so patch the symbol on
-    the importer module, not on storage_roots.
-    """
+    """training binds outputs_root at import time, so patch it on the importer module, not storage_roots."""
     from core.training import training as training_mod
 
     monkeypatch.setattr(training_mod, "outputs_root", lambda: tmp_path)

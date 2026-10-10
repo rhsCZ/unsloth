@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Main-content extraction and boilerplate stripping for the web fetch tool.
-
-The HTML fixtures below snapshot the relevant fragments of a real GitHub repo
-page (github.com/unslothai/unsloth, fetched 2026-07): the ``hidden``
-client-side error placeholders ("Uh oh! There was an error while loading."),
-the skip-link / nav / footer furniture, and the README rendered inside
-``<article class="markdown-body">``. No network access is required.
-"""
+"""Offline tests: HTML fixtures are snapshots of a real GitHub page, so no network is needed."""
 
 from __future__ import annotations
 

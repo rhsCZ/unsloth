@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Qwen-Image-Layered on the diffusers engine: detection of the GGUF and full repos, the GGUF
-transformer's config source, the decomposition call (layers, resolution bucket, true CFG, RGBA
-input) and the flattening of the returned RGBA layers into output images, against the real
-generate() with a pipeline double whose signature matches QwenImageLayeredPipeline's."""
+"""Qwen-Image-Layered on diffusers: repo detection, decomposition call and RGBA layer flattening."""
 
 from __future__ import annotations
 

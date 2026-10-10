@@ -362,10 +362,7 @@ def test_the_union_still_gates_when_neither_half_is_there(tmp_path, monkeypatch)
 
 
 def test_a_compiler_that_actually_works_overrules_the_header_heuristic(tmp_path, monkeypatch):
-    """The heuristic reads directories; clang-cl locates MSVC through its own search and can
-    compile from an -internal-isystem we see no trace of (measured on an R9700 with INCLUDE,
-    VCINSTALLDIR and WindowsSdkDir cleared). So a compile that succeeds has to win, or a
-    working machine loses torch.compile on the strength of a guess."""
+    """A compile that succeeds overrules the header heuristic, or a working machine loses torch.compile."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delenv("INCLUDE", raising = False)
     _fake_triton(monkeypatch, [str(tmp_path)])
@@ -392,10 +389,7 @@ def test_an_unrunnable_probe_keeps_the_header_verdict(tmp_path, monkeypatch):
 
 
 def test_marker_positive_dirs_are_still_probed(tmp_path, monkeypatch):
-    """stdlib.h and vcruntime.h are entry points, not the whole toolchain: vcruntime.h includes
-    sal.h, which lives in the SDK's `shared` directory rather than beside either marker, so a
-    mismatched SDK can carry both markers and still fail to compile. The markers must not
-    short-circuit the compiler."""
+    """Marker headers do not prove the toolchain: vcruntime.h needs sal.h from the SDK, so still compile."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delenv("INCLUDE", raising = False)
     dirs = _sdk_dirs(tmp_path, with_toolset = True)
@@ -416,10 +410,7 @@ def test_marker_positive_dirs_survive_an_unrunnable_probe(tmp_path, monkeypatch)
 
 
 def test_the_probe_really_compiles_and_really_reports_failure(tmp_path):
-    """The probe itself, against a real compiler on whatever platform runs this. cc accepts the
-    MSVC-style flags clang and clang-cl do; if none is installed the probe must say None, never
-    guess. Left as a live check because a probe that silently stopped compiling would report
-    False on every host and disable torch.compile everywhere."""
+    """Live check: a probe that stopped compiling would say False everywhere and disable torch.compile."""
     import shutil
 
     cc = shutil.which("clang-cl") or shutil.which("clang") or shutil.which("cc")

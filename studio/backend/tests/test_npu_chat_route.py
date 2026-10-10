@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Test NPU chat through the route and proxy against a local HTTP server.
-
-Replay FastFlowLM 1.0.3 stream shapes and record outgoing request bodies.
-"""
+"""Replays FastFlowLM 1.0.3 stream shapes and records outgoing request bodies through a local server."""
 
 from __future__ import annotations
 

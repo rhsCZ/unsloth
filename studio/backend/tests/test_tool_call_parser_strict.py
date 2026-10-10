@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Strict-mode (Auto-Heal disabled) tool-call parsing.
-
-With ``allow_incomplete=False`` the parser must accept a well-formed
-``<function=...>...</function>`` call even when the model appends prose
-after the closing tag -- matching the JSON-style ``<tool_call>...`` path,
-which already tolerates trailing text -- while still rejecting genuinely
-truncated calls that never close.
-"""
+"""Strict mode accepts a closed function call followed by prose, but still rejects truncated calls."""
 
 from __future__ import annotations
 
@@ -265,10 +258,7 @@ class TestHealingPathUnaffected:
 
 
 class TestEnabledToolNameGate:
-    """``enabled_tool_names`` disambiguates the ambiguous bare-rehearsal
-    ``NAME[ARGS]{json}`` form (#5704): NAME is a call only when it is an active tool,
-    otherwise it is prose. ``None`` (the default) keeps the legacy unrestricted parse
-    so existing callers are unaffected."""
+    """A bare NAME[ARGS]{json} is a call only if NAME is an active tool; None keeps the legacy parse."""
 
     def _names(self, calls):
         return [c["function"]["name"] for c in calls]
@@ -804,10 +794,7 @@ class TestMistralOuterOverXmlLiteral:
 
 
 class TestHealerSignalAlignment:
-    """The healer buffers only formats its shared parser can promote. Mistral's
-    ``[TOOL_CALLS]`` is promotable (rescued), so it is a heal signal; the loop-only
-    text-call markers (Llama ``<|python_tag|>``, bare ``[ARGS]``) are not, so they
-    stream through instead of stalling as prose that never yields a call."""
+    """Only promotable formats are heal signals; loop-only markers like <|python_tag|> stream through."""
 
     def test_heal_signals_subset_of_promotable_formats(self):
         from core.inference.passthrough_healing import _HEAL_SIGNALS
@@ -834,12 +821,7 @@ class TestHealerSignalAlignment:
 
 
 class TestGemmaWrapperlessLiteralMarkers:
-    """Wrapper-less Gemma calls whose ARGUMENTS mention Gemma's own markup.
-
-    The tool_healing deferral must key on an actual wrapped opener
-    (``<|tool_call>call:...``), not the wrapper literal anywhere in content:
-    a query about the marker has nothing tool_healing can parse, and deferring
-    it loses the call entirely (not executed AND stripped from display)."""
+    """Defer to tool_healing only on a wrapped opener; a marker literal in an argument loses the call."""
 
     def test_marker_literal_in_argument_still_parses(self):
         text = 'call:web_search{query:"what does <|tool_call> mean"}'
@@ -874,10 +856,7 @@ class TestGemmaWrapperlessLiteralMarkers:
 
 
 class TestGlmEmbeddedClosePair:
-    """A GLM value whose string literal embeds the full close-tag pair
-    ``</arg_value></tool_call>`` (code documenting the GLM format) must not be
-    truncated at the embedded pair: a structural close sits at balanced quote
-    state, an embedded one is inside an open string literal."""
+    """An embedded close pair inside a quoted GLM value is data, not the structural close."""
 
     def test_embedded_pair_inside_quoted_value_not_structural(self):
         text = (
@@ -934,10 +913,7 @@ class TestPythonTagLiteralInsideMistralArgs:
 
 
 class TestPythonTagOuterOverXmlLiteral:
-    """A leading Llama-3 ``<|python_tag|>`` call owns the turn: tool XML/Mistral
-    markup quoted in a ``.call(...)`` string argument (or in trailing prose) is
-    data, so the outer call executes -- parity with the bare-JSON / Mistral /
-    attribute-form leading-ownership rules. XML before the tag keeps normal order."""
+    """A leading <|python_tag|> call owns the turn, so tool markup quoted inside its arguments is data."""
 
     @pytest.mark.parametrize(
         "text, expected_name, expected_key, expected",
@@ -1206,10 +1182,7 @@ class TestGemmaWrappedWhitespace:
 
 
 class TestDisabledJsonBeforeDeepSeekCall:
-    """A disabled leading bare-JSON object whose strings mention a
-    DeepSeek/Kimi marker is dropped and the tail parsed, so a REAL
-    DeepSeek/Kimi call after the object still executes instead of the whole
-    message skipping the pre-pass."""
+    """A leading disabled JSON object with a DeepSeek/Kimi marker must not hide a real call after it."""
 
     _DS = (
         "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>web_search\n"
@@ -1239,10 +1212,7 @@ class TestGemmaDottedArgumentKeys:
 
 
 class TestLeadingWrapperlessGemmaOverEmbeddedMarkers:
-    """A leading wrapper-less Gemma call to an enabled tool owns the turn: a
-    quoted foreign literal inside its argument (a query citing another tool
-    syntax) is data, and tool_healing must not promote it before the Gemma
-    fallback runs. Foreign markup leading keeps the normal order."""
+    """A leading Gemma call owns the turn; a quoted foreign literal in its argument is data, not a call."""
 
     def test_leading_gemma_wins_over_quoted_xml_literal(self):
         text = (

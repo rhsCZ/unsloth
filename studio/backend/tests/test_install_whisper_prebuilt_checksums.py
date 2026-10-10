@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Trust-anchor tests for install_whisper_prebuilt.py.
-
-Whisper verifies each download against the release's own
-whisper-prebuilt-sha256.json checksum index (the same model as
-install_llama_prebuilt.py), not a committed pins file. These pin the index
-parser, the fail-closed behaviour when an asset is not covered, the
-tampered-manifest guard, and the newest-release resolution.
-"""
+"""Downloads verify against the release checksum index, not committed pins; uncovered assets fail."""
 
 from __future__ import annotations
 

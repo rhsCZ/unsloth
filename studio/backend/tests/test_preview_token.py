@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit + rotation coverage for `/p` preview capability tokens.
-
-The token turns a guessable preview ref into an unguessable bearer capability:
-it must round-trip for the ref it was signed for, reject tampering / wrong refs,
-and stop verifying once the signing secret is rotated (link revocation).
-"""
+"""A /p preview token must stop verifying after the signing secret rotates, which revokes the link."""
 
 from pathlib import Path
 import sys

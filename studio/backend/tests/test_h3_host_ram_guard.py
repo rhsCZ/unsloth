@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""MiniMax-H3 host-RAM guard and the streamed denoiser's host footprint. CPU only, no weights.
-
-The reported failure: on a 94 GB host the Diffusers INT8 path rendered once and then refused the second
-render ("needs about 85 GB available system RAM ... 82.5 GB is available"). Measured on a 48 GB tier:
-the streamed int8 denoiser's 19.45 GB of weights held 33.8 GB of pinned host memory (torch's host
-allocator rounds every pin up to a power of two), and the guard priced the denoiser twice."""
+"""MiniMax-H3 host-RAM guard must price the streamed denoiser once, not twice."""
 
 import types
 

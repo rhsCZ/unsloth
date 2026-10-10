@@ -164,13 +164,7 @@ def test_provider_create_preserve_replace_clear_and_delete(monkeypatch):
 
 
 def test_endpoint_and_saved_key_update_is_atomic_for_independent_readers(monkeypatch):
-    """A reader on another connection sees one complete provider bundle.
-
-    The writer is paused after changing the endpoint but before replacing the
-    encrypted key.  This is the inverse interleaving that previously exposed the
-    new route with the old key.  The reader uses normal storage calls, each with
-    its own SQLite connection, so process-local route locks cannot make it pass.
-    """
+    """A reader on another connection must never pair the new endpoint with the old saved key."""
     provider_id = "atomic-provider"
     old_base_url = "http://127.0.0.1:7770/v1"
     new_base_url = "http://127.0.0.1:8880/v1"
@@ -357,12 +351,7 @@ def test_chatgpt_subscription_rejects_a_non_null_max_output_override():
 
 
 def test_known_and_custom_preset_providers_accept_an_explicit_null_max_output_override():
-    """A blank Max Tokens limit field serialises as null, not as an omission.
-
-    So every provider type has to accept the null, ChatGPT subscriptions included: an
-    unrelated edit -- a rename, a model change, a key rotation -- carries the blank field
-    along. Only a non-null value on a subscription is refused.
-    """
+    """A blank Max Tokens override saves as null; every provider type must accept it, subscriptions too."""
     for provider_type in ("openai", "vllm", "ollama", "llama_cpp"):
         created = asyncio.run(
             providers_route.create_provider_config(
@@ -734,11 +723,7 @@ def test_hugging_face_secret_routes_reject_api_key_authentication():
 
 
 def test_codex_update_refreshes_the_plan_catalog_before_validating(monkeypatch):
-    """A save must not reject a slug the plan lists just because this process forgot it.
-
-    The catalog lives in memory, so a restart between the picker's fetch and this save
-    leaves it empty; the update path refreshes it on the same terms as the chat gate.
-    """
+    """Update refreshes the plan catalog first, so a restart cannot reject a slug the plan still lists."""
     from core.inference import openai_codex_client as codex_client
 
     created = asyncio.run(
@@ -821,12 +806,7 @@ def test_codex_update_of_seed_models_never_reaches_upstream(monkeypatch):
 
 
 def test_codex_unrelated_edit_survives_an_unreachable_catalog(monkeypatch):
-    """Renaming a connection must not need ChatGPT to be reachable.
-
-    The saved selection was proven when it was first accepted, and the picker
-    deliberately preserves it through a curated fallback, so refusing the save during an
-    outage would strand the row.
-    """
+    """An unrelated edit must not need ChatGPT reachable; the selection was proven when first saved."""
     from core.inference import openai_codex_client as codex_client
 
     listed = "gpt-5.7-nova"
@@ -891,11 +871,7 @@ def test_codex_unrelated_edit_survives_an_unreachable_catalog(monkeypatch):
 
 
 def test_codex_save_refuses_a_seed_the_plan_catalog_omits(monkeypatch):
-    """Save and chat must judge on the same evidence.
-
-    The inference route treats a known plan catalog as authoritative, so accepting a
-    seed it omits here would persist a model that every send then refuses.
-    """
+    """Save must reject a seed the known plan catalog omits, since chat refuses it on every send."""
     from core.inference import openai_codex_client as codex_client
 
     created = asyncio.run(
@@ -940,12 +916,7 @@ def test_codex_save_refuses_a_seed_the_plan_catalog_omits(monkeypatch):
 
 
 def test_codex_save_refuses_a_row_the_account_cannot_vouch_for(monkeypatch):
-    """A cold worker must not save account A's slugs under account B.
-
-    The form submits the whole selection with any edit, so an ordinary rename carries the
-    saved slugs with it. The inference route already refuses them, so accepting here
-    would persist exactly what every send then rejects.
-    """
+    """Save must refuse slugs the account cannot vouch for; chat would refuse them on every send."""
     from core.inference import openai_codex_client as codex_client
 
     listed = "gpt-5.7-nova"
@@ -1066,16 +1037,7 @@ def test_codex_save_records_the_account_it_validated_against(monkeypatch):
 
 
 def test_codex_save_that_cannot_record_its_proof_keeps_nothing(monkeypatch):
-    """A save is the row and the proof together, so half of it must not survive.
-
-    provider_oauth_write_guard is a 30s flock and _token_request's httpx timeout is
-    per-phase, not a total budget, so a refresh holding the guard across a stalled token
-    request makes remember_catalog_account raise after update_provider has already
-    committed. Without a rollback the row keeps models nothing on disk says were ever
-    validated, and that outlives the process: with the plan catalog gone after a restart
-    and upstream unreachable, saved_models_proven_for answers False, so chat falls back to
-    the seed and even an ordinary rename is refused.
-    """
+    """If the proof cannot be recorded, roll back the row; else it keeps models no record validates."""
     import json
 
     from core.inference import openai_codex_auth as codex_auth
@@ -1164,11 +1126,7 @@ def test_codex_save_that_cannot_record_its_proof_keeps_nothing(monkeypatch):
 
 
 def test_codex_save_records_only_the_account_it_actually_validated(monkeypatch):
-    """A rebind between validating and recording must not stamp the new account.
-
-    remember_catalog_account writes only when the bundle still names the account handed
-    to it, so passing the one validation used is what makes the record honest.
-    """
+    """Record the account that was validated, so a rebind during the save cannot stamp the new one."""
     from core.inference import openai_codex_client as codex_client
 
     recorded = []
@@ -1209,14 +1167,7 @@ def test_codex_save_records_only_the_account_it_actually_validated(monkeypatch):
 
 
 def test_deleting_a_codex_connection_releases_its_plan_catalog():
-    """The catalog is per connection and per process, so the delete has to release it.
-
-    Disconnecting the OAuth bundle goes through forget_subscription_models; deleting the
-    whole connection took a different path and left the catalog, the account marker and
-    the request ticket behind for the life of the process. Provider ids come from uuid4,
-    so nothing stale was ever consulted again, but nothing reclaimed it either and a user
-    who adds and removes connections grew the maps without bound.
-    """
+    """Deleting a connection must release its plan catalog, or the per-process maps grow without bound."""
     from core.inference import openai_codex_client as codex_client
 
     created = asyncio.run(
@@ -1254,13 +1205,7 @@ def test_deleting_a_codex_connection_releases_its_plan_catalog():
 
 
 def test_a_released_connection_leaves_no_ticket_but_still_retires_its_read():
-    """forget_subscription_models drops the ticket rather than bumping it.
-
-    The counter is shared by every connection, so a number is never reissued and an
-    outstanding read cannot be matched by whatever starts next. Keeping a per-connection
-    entry alive purely to hold the high-water mark was the last thing the release path
-    could not reclaim.
-    """
+    """forget_subscription_models drops the ticket, not bumps it; the global counter never reissues."""
     from core.inference import openai_codex_client as codex_client
 
     ticket = codex_client._begin_catalog_request("released-connection")
@@ -1274,22 +1219,7 @@ def test_a_released_connection_leaves_no_ticket_but_still_retires_its_read():
 
 
 def test_codex_proof_rollback_leaves_a_concurrent_save_alone(monkeypatch):
-    """The undo takes back this request's write, not whatever the row says by then.
-
-    update_provider_config suspends between committing the row and recording the proof:
-    remember_catalog_account awaits a 30s file lock, and the failure the rollback exists
-    for is exactly the one where that lock was contended. Another write to the row lands
-    in between. Restoring the whole pre-request snapshot would put the row back to before
-    *both* writes and erase the second one's successful edit.
-
-    The interleaved write goes at providers_db directly rather than through a second
-    update_provider_config call. serialize_provider_config holds a per-provider
-    asyncio.Lock across the whole handler, so a second call on the same provider cannot
-    run while this one is parked -- awaiting one from inside this test deadlocks the
-    event loop, since the await that would release the gate sits behind it. What the
-    rollback actually defends against is the row moving under the handler, which any
-    writer can do, so the row write is both the reachable shape and the one under test.
-    """
+    """Rollback must undo only this request's write: a concurrent write lands during the proof await."""
     import json
 
     from core.inference import openai_codex_auth as codex_auth

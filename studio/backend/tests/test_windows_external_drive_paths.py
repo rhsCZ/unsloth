@@ -37,10 +37,7 @@ def _extract_routes_function(name: str, ns_extra: Optional[dict] = None) -> dict
 
 
 def _stub_windows(monkeypatch, existing_drives):
-    """Simulate Windows exposing only *existing_drives* (e.g. {"C", "D"}) as readable roots, independent of the host FS.
-
-    Overriding _active_windows_drive_bitmask keeps it deterministic even on a
-    real Windows host, where live GetLogicalDrives would return the actual layout."""
+    """Stub _active_windows_drive_bitmask so drive layout is deterministic even on a real Windows host."""
     monkeypatch.setattr(external_media.platform, "system", lambda: "Windows")
     mask = sum(1 << (ord(d.upper()) - ord("A")) for d in existing_drives)
     monkeypatch.setattr(external_media, "_active_windows_drive_bitmask", lambda: mask)

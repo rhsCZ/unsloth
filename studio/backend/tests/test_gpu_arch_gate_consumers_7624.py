@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Consumer-side pins for the #7624 / #7669 ROCm arch gate.
-
-``test_gpu_arch_gate_7624.py`` pins the gate itself; this file pins the routing
-around it. Three load-bearing claims, none obvious from the call sites: the gate is
-INERT on a Vulkan build, which is what lets the Vulkan-ordinal preflight and the
-route-level checks stay unfiltered; placement opts in for AUTOMATIC selection only,
-so an explicit pin still reaches its device and its own crash message; and
-``_wait_for_vram_settle`` stays unfiltered, since it measures driver reclaim.
-
-Mock-based throughout: there is no AMD hardware or ROCm CI here.
-"""
+"""Gate is inert on Vulkan, applies only to automatic placement, and never to the VRAM settle poll."""
 
 from __future__ import annotations
 
@@ -214,10 +204,7 @@ class TestPlacementOptsInForAutoOnly:
 
 
 class TestWaitForVramSettleStaysUnfiltered:
-    """The settle poll measures the driver reclaiming a dead child's allocations.
-    It places nothing, so it must not pay for a marker read and an arch enumeration
-    per sample -- and narrowing its device list would change the
-    ``len(curr) != len(prev)`` short-circuit it relies on."""
+    """The VRAM settle poll must not read the marker per sample or narrow its device list."""
 
     def test_probe_is_never_gated(self, monkeypatch):
         import time as _time
@@ -368,10 +355,8 @@ class TestArchCrashRetryEdgeCases:
         ), f"retry would respawn the identical selection {sorted(set(selected))}"
 
     def test_the_decision_is_stateless_and_so_must_not_be_looped(self, monkeypatch):
-        """A hazard note, not a bug: ``_arch_crash_retry_gpu_ids`` has no memory of
-        what failed, so on a two-GPU host [0] maps to [1] and [1] back to [0]. Safe
-        only because the launch path applies it exactly once; a retry loop that did
-        not thread the already-tried set through would ping-pong forever."""
+        """Arch-crash retry GPU mapping is stateless and swaps 0 and 1, so it must be applied
+        exactly once."""
         _unified(monkeypatch, set())
         assert LlamaCppBackend._arch_crash_retry_gpu_ids([0], [0, 1]) == [1]
         assert LlamaCppBackend._arch_crash_retry_gpu_ids([1], [0, 1]) == [0]
@@ -704,11 +689,7 @@ class TestEmbedLlamaServerPinsTheGatedGpus:
         assert calls == [], f"an unnarrowed host was masked anyway: {calls}"
 
     def test_a_uuid_mask_leaves_the_inherited_mask_in_place(self, monkeypatch):
-        """A ROCr mask may name UUIDs rather than indices
-        (ROCR_VISIBLE_DEVICES="0,GPU-DEADBEEF..."). The gate's ids are then torch
-        ordinals with no physical mapping, and pinning them would replace the mask
-        with numbers ROCr resolves against the whole host, exposing cards the parent
-        hid -- the dropped one included."""
+        """A UUID ROCR mask must stay in place; pinning torch ordinals would expose cards the parent hid."""
         self._probes(monkeypatch, gated = [(1, 24000)], everything = [(0, 60000), (1, 24000)])
         calls = self._spy_visibility(monkeypatch)
         # torch must be importable: _active_gpu_visibility_mask reads the ROCr mask only inside `import torch`.
@@ -725,10 +706,8 @@ class TestEmbedLlamaServerPinsTheGatedGpus:
         assert env["ROCR_VISIBLE_DEVICES"] == "GPU-DEADBEEFDEADBEEF"
 
     def test_the_cpu_path_hides_devices_at_both_layers(self, monkeypatch):
-        """CPU has to mean CPU on ROCm too. HIP consults CUDA_VISIBLE_DEVICES only
-        when HIP_VISIBLE_DEVICES is unset, so a blank CUDA mask alone leaves an
-        inherited HIP pin in charge and the child keeps a device, and the VRAM its
-        context costs, on a load that chose the CPU."""
+        """CPU on ROCm must blank HIP_VISIBLE_DEVICES too; HIP ignores CUDA_VISIBLE_DEVICES when it
+        is set."""
         self._probes(monkeypatch, gated = [(1, 24000)], everything = [(0, 60000), (1, 24000)])
         calls = self._spy_visibility(monkeypatch)
         monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
@@ -811,10 +790,7 @@ class TestTheGateNeverRewritesAnUnmappableMask:
 
 
 class TestCpuSentinelDropsAnInheritedDevicePick:
-    """LLAMA_ARG_DEVICE / LLAMA_ARG_MAIN_GPU are the env spelling of --device /
-    --main-gpu, which neither CPU launch passes. Masking every device away while
-    leaving an inherited pick in place is the one combination llama.cpp cannot serve:
-    it rejects a device that no longer enumerates and exits."""
+    """Masking all devices but keeping an inherited LLAMA_ARG_DEVICE pick makes llama.cpp exit; clear it."""
 
     def test_the_cpu_sentinel_clears_the_pick(self):
         env = {"LLAMA_ARG_DEVICE": "HIP0", "LLAMA_ARG_MAIN_GPU": "1", "PATH": "/usr/bin"}
@@ -995,13 +971,7 @@ class TestGatedTensorModeStillDeduplicates:
 
 
 class TestArchRetryAsksResidencyTheSameWayTheLaunchDid:
-    """The rung's residency question has to be the launch's question.
-
-    An unprobed device answers the conservative "host resident", and
-    `_mem_should_mlock` is always False under no-reserve, so gating the rung's probe
-    on it alone contradicted the launch's own verdict for the same devices. Not
-    cosmetic: the rung re-records the placement.
-    """
+    """Arch retry must ask residency as the launch does, or it re-records a contradicting placement."""
 
     def _load_model_source(self):
         import inspect
@@ -1020,10 +990,8 @@ class TestArchRetryAsksResidencyTheSameWayTheLaunchDid:
         assert all("_mem_probe_for_dio" in gate for gate in gates), gates
 
     def test_the_residency_arm_records_from_the_argv(self):
-        """`cmd` may carry the managed DirectIO pair, which `_mem_extras +
-        _retry_managed` does not add up to. Rebuilding from the parts records a mapped
-        load for a streaming child, and the comparator then asks for a reload that
-        relaunching reproduces."""
+        """The residency arm must record from the argv, since rebuilding from parts misses the
+        DirectIO flags."""
         src = self._load_model_source()
         marker = "Arch-crash retry changed where the weights live"
         assert marker in src

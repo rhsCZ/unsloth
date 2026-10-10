@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A mid-stream llama-server error must reach the user with its cause intact.
-
-The two failures these cover were both observed live against a model loaded at a 2048
-token context:
-
-- Two chats generating at once starved the shared unified KV cache. llama.cpp killed both
-  tasks with "Context size has been exceeded". The chat loop ignored the error chunk (it
-  carries no ``choices``) and the reply ended mid-code with no finish_reason, so no
-  continue bar rendered and auto-continue never fired.
-- Deep Research sent a 2358 token request into that 2048 token window. The server said so
-  precisely, naming both counts, and ``research_runs`` replaced it with "Local model
-  stream failed".
-"""
+"""A mid-stream llama-server error must reach the user with its cause intact."""
 
 import pytest
 
@@ -105,16 +93,7 @@ class TestDescribeStreamError:
 
 
 class TestSurvivesTheRouteLayer:
-    """Raising the right message is not enough: `routes/inference.py` rewrites it.
-
-    Both defects here were live. `_friendly_error` ends with a catch-all that
-    replaced any unrecognised exception with "An internal error occurred", so the
-    cause survived the stream loop and then died one layer up. And
-    `_classify_llama_generation_error` flags an overflow by finding "context" beside
-    "window", which the starvation text says while explaining that the window is
-    SHARED, so it was labelled `context_length_exceeded` and set the client
-    compacting a conversation that was never too long.
-    """
+    """The route's catch-all hid the cause, and context beside window misread starvation as overflow."""
 
     @staticmethod
     def _routes():
@@ -317,14 +296,7 @@ class TestSurvivesTheRouteLayer:
 
 
 class TestTheNonStreamingPathAlsoReportsTheCause:
-    """`stream=false` routes the same exception through `safe_error_detail`.
-
-    That helper exists to stop raw `str(error)` leaking paths, so it returns a fixed
-    fallback for anything it does not recognise. A curated `friendly` is written to be
-    shown, so it is exempt: without that, streaming clients got the cause and
-    non-streaming clients got "An internal error occurred", which is the same defect
-    this PR fixes, one layer further out.
-    """
+    """Non-streaming errors keep curated messages; safe_error_detail's fixed fallback hides the cause."""
 
     def _error(self, message):
         return stream_error_from_chunk({"error": {"message": message}})
@@ -355,20 +327,7 @@ class TestTheNonStreamingPathAlsoReportsTheCause:
 
 
 class TestTheStarvationTextDoesNotReadAsAContextLimitOnTheClient:
-    """The chat client re-classifies by substring, so the wording is load bearing.
-
-    `studio/frontend/src/features/chat/api/chat-adapter.ts::isContextLimitError` decides
-    which toast a failed generation gets from the error message alone: the backend's
-    `code` never reaches it, because `chat-api.ts` turns an in-band error chunk into
-    `new Error(parsed.error.message)` and throws only the text. Any of the substrings
-    below wins the "Context limit reached" toast, whose advice is "The conversation has
-    filled the model's context window ... or start a new chat".
-
-    That is the wrong remedy for starvation, and it is the exact claim this message was
-    written to deny: nothing about the conversation was too long, so starting a new chat
-    fails identically while the other generation is still running. Asserted here rather
-    than in the frontend because the message lives here and the wording is what breaks.
-    """
+    """The chat client's isContextLimitError matches substrings, so starvation text must avoid them."""
 
     # Mirrors isContextLimitError. Keep in step with chat-adapter.ts.
     CLIENT_CONTEXT_LIMIT_MARKERS = (

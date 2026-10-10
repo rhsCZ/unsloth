@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The log viewer reads the file the access logger writes to.
-
-That is a feedback loop, and it is the one failure mode this feature can create
-on its own: if a poll logs a line, the next poll reads that line back and logs
-another, and the log the user opened the viewer to read fills with the viewer.
-So this exercises the real middleware over a real file rather than asserting on
-the contents of a set.
-"""
+"""The viewer must not read back its own access-log lines: each poll would log another line."""
 
 from __future__ import annotations
 
@@ -33,12 +26,7 @@ POLL_PATHS = ("/api/settings/debug/logs", "/api/settings/debug/logs/sources")
 
 @pytest.fixture
 def session_log(tmp_path, monkeypatch):
-    """A studio home whose server log is also where structlog writes.
-
-    run.py tees stdout into that file, so a record the middleware emits lands in
-    the file the viewer is reading. Reproduced here by pointing the logger
-    factory straight at it.
-    """
+    """run.py tees stdout into the server log, so the middleware's records land in the file being read."""
     monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path))
     directory = tmp_path / "logs" / "server"
     directory.mkdir(parents = True)

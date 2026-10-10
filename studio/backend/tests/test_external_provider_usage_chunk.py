@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the prompt-cache accounting chunk from the external-provider proxy.
-
-The streaming Anthropic + OpenAI Responses paths emit one extra include_usage
-SSE chunk (``choices: []`` with a ``usage`` block) before ``[DONE]`` so clients
-see cache savings. Covers the helper directly plus the Anthropic stream and the
-OpenAI Responses completed/incomplete streams.
-"""
+"""Usage-only chunk (choices empty) before [DONE] carries prompt-cache savings to clients."""
 
 import asyncio
 import json
@@ -206,15 +200,7 @@ def _usage_chunks(lines: list[str]) -> list[dict]:
 
 
 def test_custom_provider_registry_is_hidden():
-    """Hidden entries stay filtered by default and are opt-in via include_hidden.
-
-    They used to be dropped from /registry unconditionally, which is why the UI
-    could never learn that the self-hosted presets run Unsloth tools. Exposing
-    them by default would instead make a cached pre-change bundle render them as
-    duplicate dropdown rows, since that bundle filters on a hardcoded name set
-    rather than on ``hidden``. So the default is unchanged and the current UI
-    asks for them, then filters the dropdown on the flag.
-    """
+    """Hidden providers are opt-in via include_hidden, so old cached bundles avoid duplicate rows."""
     from core.inference.providers import get_provider_info, list_available_providers
 
     info = get_provider_info("custom")

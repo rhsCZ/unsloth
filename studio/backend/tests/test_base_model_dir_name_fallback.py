@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The ``unsloth_<model>_<timestamp>`` directory-name fallback for base model detection.
-
-The last resort in ``get_base_model_from_checkpoint`` / ``get_base_model_from_lora`` and in the
-two resolvers in ``utils.transformers_version``. It used to slice a two-segment
-``unsloth_<model>`` name down to nothing and return the bogus repo id ``unsloth/``.
-
-The round-trip tests are the real specification: a name we write must parse back to the model
-it was written from.
-"""
+"""Folder-name fallback for base model detection; a two-segment name must not yield unsloth/."""
 
 import importlib.util
 import json
@@ -145,11 +137,7 @@ def test_the_bare_org_is_never_returned():
     ],
 )
 def test_a_folder_name_that_cannot_be_a_repo_id_is_refused(dir_name):
-    """A folder name is user input. Only trust the parse if the Hub would accept the result.
-
-    ``build_default_output_dir_name`` sanitises everything here, so these shapes only arise
-    from a hand-made folder -- which is exactly the case the fallback exists to serve.
-    """
+    """A hand-made folder name is user input; refuse any parse the Hub would not accept as a repo id."""
     assert base_model_from_run_dir_name(dir_name) is None
 
 
@@ -201,13 +189,7 @@ def test_the_transcribed_repo_id_rule_is_never_looser_than_the_hubs():
 
 
 def test_no_non_ascii_letter_or_digit_can_reach_a_repo_id():
-    """The charset rule, asked of the charset rather than of a list of names.
-
-    A list only ever covers the scripts somebody thought to write down. This sweeps one
-    character from each block that `\\w` accepts and ASCII does not, so a rule that goes
-    back to being Unicode aware fails here whichever script it lets through -- including
-    for a reader with no huggingface_hub installed, where the comparison above skips.
-    """
+    """Non-ASCII letters or digits must never reach a repo id; sweeps one character from each block."""
     escaped = [
         name
         for name in _NON_ASCII_NAMES
@@ -225,11 +207,7 @@ def test_no_non_ascii_letter_or_digit_can_reach_a_repo_id():
     ],
 )
 def test_a_non_ascii_digit_run_is_not_a_timestamp(stamp):
-    """`\\d` and `str.isdigit()` are both Unicode aware; the writer emits `str(int(...))`.
-
-    Without the ASCII pins these folders read as ones we wrote, so a hand-made directory
-    got a base model attached to it on the strength of digits no run ever produced.
-    """
+    """Non-ASCII digits must not count as a timestamp; the regex and isdigit() are Unicode aware."""
     assert stamp.isdigit(), "the case is only meaningful if str.isdigit() accepts it"
     assert base_model_from_run_dir_name(f"unsloth_Qwen3-8B_{stamp}") is None
     assert model_segment_from_default_output_dir_name(f"unsloth_Qwen3-8B_{stamp}") is None

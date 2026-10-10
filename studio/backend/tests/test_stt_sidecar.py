@@ -85,12 +85,7 @@ def _shared_setup_6(sidecar, workers):
 
 @pytest.fixture(autouse = True)
 def _neutral_audio_device_env(monkeypatch):
-    """A server-wide default must not decide the outcome of these tests.
-
-    Placement here is asserted against no opinion, so a host that sets
-    UNSLOTH_AUDIO_DEVICE would fail these on correct behaviour, and that host is
-    exactly the one most likely to run them.
-    """
+    """Placement is asserted with UNSLOTH_AUDIO_DEVICE unset, or a host that sets it fails these."""
     monkeypatch.delenv("UNSLOTH_AUDIO_DEVICE", raising = False)
 
 
@@ -955,11 +950,7 @@ def test_a_worker_wedged_by_a_cancelled_transcription_is_not_handed_to_the_next_
 
 
 def _install_worker_that_survives_its_own_start(monkeypatch, error):
-    """A worker whose start() fails over a child that outlived its own kill.
-
-    start() ends its child on every failure, so a handle still reporting a live
-    process is one holding memory nothing else knows about.
-    """
+    """If start() fails but the child survives kill, keep the handle: that process still holds memory."""
     workers = []
 
     class SurvivingStartWorker:

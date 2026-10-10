@@ -2479,16 +2479,7 @@ class TestEstimateFp16ModelSizeBytesPrefersLocalWeights(unittest.TestCase):
 
 
 class TestDeviceMapAcrossPlatformsAndAccelerators(_GpuCacheResetMixin, unittest.TestCase):
-    """The full [Windows, Linux, WSL, Mac] x [NVIDIA, AMD, Intel, Apple, CPU] product.
-
-    Two claims: the answer is something the loader can read, and it does not vary by
-    operating system. An OS-dependent answer would move a user's placement when they
-    moved the same box between Linux and WSL.
-
-    The AMD row is the one to read carefully. Studio reports a ROCm card as
-    DeviceType.CUDA, and unsloth maps its "hip" device type to DEVICE_TYPE_TORCH
-    "cuda", so AMD takes the NVIDIA branch and the planner runs there.
-    """
+    """Device map must be readable by the loader and OS-independent; AMD takes the CUDA branch via hip."""
 
     # sys.platform, os.name, platform.system(), platform.release()
     OSES = {
@@ -2544,21 +2535,7 @@ class TestDeviceMapAcrossPlatformsAndAccelerators(_GpuCacheResetMixin, unittest.
 
 
 class TestTheCudaMapNamesItsFallback(_GpuCacheResetMixin, unittest.TestCase):
-    """CUDA asks for `"unsloth_balanced"`, not `"unsloth"`.
-
-    The planner declines several shapes -- a full finetune, an explicit `auto_model` with
-    no `_model_mapping`, a Falcon-H1 checkpoint missing the mamba exclusions -- and plain
-    `"unsloth"` falls back to `"sequential"`, which is not a shard: `get_max_memory` gives
-    cuda:0 its whole free budget, so `infer_auto_device_map` fills it first. On
-    `unsloth/Qwen2.5-7B-Instruct` in bf16 across two cards:
-
-        8 GiB each   sequential {'0': 14, '1': 18}   balanced {'0': 13, '1': 19}
-        16 GiB each  sequential {'0': 1}             balanced {'0': 13, '1': 19}
-
-    At 16 GiB the weights fit on one card, so sequential puts them all there with nothing
-    left for optimizer state. Naming the fallback covers every declined shape, including
-    ones Studio cannot detect and ones unsloth adds later.
-    """
+    """CUDA must request unsloth_balanced, as sequential fills cuda:0 first on a planner fallback."""
 
     def test_multi_gpu_cuda_names_the_balanced_fallback(self):
         with patch("utils.hardware.hardware.get_device", return_value = DeviceType.CUDA):
@@ -2579,16 +2556,7 @@ class TestTheCudaMapNamesItsFallback(_GpuCacheResetMixin, unittest.TestCase):
 
 
 class TestTheFallbackNameIsOneUnslothResolves(unittest.TestCase):
-    """The string Studio emits has to be one unsloth's resolver knows.
-
-    A typo, or a rename on the unsloth side, would reach transformers as an unrecognised
-    device_map and raise "the value needs to be a device name ... but found X". Read from
-    the loader rather than repeated here, so the two cannot drift apart.
-
-    Parsed rather than imported: `import unsloth` needs unsloth_zoo, which the backend
-    test environment does not install, and skipping there would leave the one place the
-    two sides are compared unrun in CI.
-    """
+    """The device_map string must be one unsloth resolves; checked by parsing its source, not importing."""
 
     def _planned_device_maps(self):
         import ast

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The GGUF converter pin is Unsloth's own routing, so it is scoped to one conversion.
-
-Setting UNSLOTH_LLAMA_CPP_SCRIPTS_DIR and leaving it there cost two controls that live
-in unsloth_zoo: the variable outranks UNSLOTH_LLAMA_CPP_CONVERTER_TAG, so the escape
-hatch the unsupported-architecture message names did nothing for a Studio export, and
-trust is read off the variable, so a converter Studio had just downloaded looked
-user-pinned and UNSLOTH_CONVERTER_SCAN_STRICT stopped failing exports."""
+"""Set UNSLOTH_LLAMA_CPP_SCRIPTS_DIR for one conversion only: it outranks the converter tag."""
 
 from __future__ import annotations
 

@@ -290,10 +290,7 @@ def _compat_inventory_sources(tmp_path):
 
 
 def test_compat_local_inventory_classifies_inside_the_shared_scan(monkeypatch, tmp_path):
-    """Classification belongs to the coalesced flight, and runs off the event loop.
-
-    Producing classified rows inside the flight is what lets overlapping callers reuse one
-    result instead of each repeating the GGUF header reads on the shared executor."""
+    """Classify inside the shared scan so overlapping callers reuse one result, not repeat GGUF reads."""
     from hub.utils import inventory_scan as hf_cache_scan
 
     classifier_threads: list[int] = []
@@ -546,12 +543,7 @@ def test_list_cached_gguf_load_id_follows_snapshot_dir_mtime(monkeypatch, tmp_pa
 def test_list_cached_gguf_load_id_breaks_mtime_ties_like_variant_discovery(
     reverse, monkeypatch, tmp_path
 ):
-    """Equal snapshot mtimes must not leave the load id to iteration order.
-
-    ``repo_info.revisions`` is a ``frozenset``, so on a coarse-timestamp filesystem this route
-    published whichever snapshot the hash seed reached first while ``/api/models/gguf-variants``
-    named the one ``snapshot_selection_key`` picks. Both revision orders are driven for that reason.
-    """
+    """Equal snapshot mtimes must tie-break as variant discovery does, not by frozenset iteration order."""
     import os
 
     from hub.utils.gguf import iter_hf_cache_snapshots
@@ -1408,10 +1400,7 @@ def test_list_cached_gguf_matches_extension_case_insensitively(monkeypatch, tmp_
 
 
 def test_is_hidden_model_hides_validation_probe_everywhere():
-    """Every picker (model list, local, cached GGUF, cached models) gates on
-    _is_hidden_model, so hiding the probe here hides it in the search menu too.
-    Cover both forms callers pass: the reconstructed repo id and the on-disk
-    snapshot path."""
+    """Every picker gates on _is_hidden_model; the probe must hide by repo id and by snapshot path."""
     assert models_route._is_hidden_model("ggml-org/models")
     assert models_route._is_hidden_model("ggml-org/models/tinyllamas/stories260K.gguf")
     assert models_route._is_hidden_model(
@@ -1486,10 +1475,7 @@ def test_list_cached_models_hides_custom_whisper_by_config(monkeypatch, tmp_path
 
 
 def test_is_hidden_model_matches_repo_ids_exactly(monkeypatch):
-    """A custom embedder with a generic basename is hidden by EXACT repo-id
-    match only, so unrelated cached repos that merely contain the basename stay
-    visible. Regression: substring basename matching hid real chat models like
-    ``user/model-chat`` from the On Device inventory."""
+    """Hide the custom embedder by exact repo id only; substring basename matching hid real chat models."""
     from core.rag import config as rag_config
 
     monkeypatch.setattr(rag_config, "effective_embedding_model", lambda: "org/model")
@@ -1567,11 +1553,7 @@ def test_is_hidden_model_keeps_env_default_hidden_after_override(monkeypatch):
 
 
 def test_hidden_models_importable_without_heavy_model_stack():
-    """The hub cache scanner imports ``is_hidden_model`` at module scope, so it
-    must not drag in ``utils/models/__init__`` (the model-config + checkpoint
-    stack). Verify in a clean interpreter that importing the helper touches
-    neither ``utils.models`` nor those heavy submodules, and still classifies
-    the probe."""
+    """is_hidden_model must import without utils.models, since the hub scanner imports it eagerly."""
     import os
     import subprocess
     import textwrap
@@ -1615,10 +1597,7 @@ def test_hidden_models_importable_without_heavy_model_stack():
 
 
 def test_list_cached_gguf_hides_llama_validation_probe(monkeypatch, tmp_path):
-    """The ggml-org/models / stories260K install validation probe can land in
-    the HF cache as a side effect of installing the prebuilt llama-server.
-    It is not a chat model (it sorts smallest and would be auto-selected), so
-    pickers must hide it while keeping real cached models."""
+    """llama-server stories260K probe sorts smallest and would be auto-selected; pickers must hide it."""
     probe = _repo(
         "ggml-org/models",
         [_file("tinyllamas/stories260K.gguf", 1_000)],
@@ -3236,11 +3215,7 @@ def test_cached_repo_task_gates_an_image_pipeline_on_the_load_path_trust_rule(tm
 
 
 def test_cached_repo_task_never_offers_an_sd_cpp_companion_repo_as_a_model(tmp_path):
-    """The single-file VAE / text-encoder repos hold no denoiser, so none of them is a pick.
-
-    Their unsloth mirrors clear the trust gate the old third-party ids never did, and the ids
-    resolve to a family, so without the companion check each would list an unloadable Images row.
-    """
+    """Companion VAE and text-encoder mirrors hold no denoiser, so no picker may offer them."""
     from core.inference.diffusion_families import sd_cpp_companion_only_repo_ids
 
     for repo_id in (
@@ -3262,10 +3237,7 @@ def test_cached_repo_task_never_offers_an_sd_cpp_companion_repo_as_a_model(tmp_p
 
 
 def test_a_companion_mirror_is_listed_but_flagged_so_no_picker_offers_it(monkeypatch, tmp_path):
-    """A task of None does NOT drop the row: it is exactly what an unclassified CHAT repo carries,
-    so the chat picker showed the companion as loadable. Deleting the row instead would hide tens
-    of GB the user can then never find or remove, so the row stays and carries a flag the pickers
-    filter on."""
+    """Keep a companion row with task None but flag it; deleting it hides GBs the user can never remove."""
     companion = _repo(
         "unsloth/Z-Image-Turbo-ComfyUI",
         [_file("split_files/vae/ae.safetensors", 300_000)],
@@ -3291,10 +3263,7 @@ def test_a_companion_mirror_is_listed_but_flagged_so_no_picker_offers_it(monkeyp
 
 
 def test_the_companion_set_never_hides_a_repo_that_is_a_real_chat_model(tmp_path):
-    """sd.cpp borrows unsloth/Qwen2.5-VL-7B-Instruct-GGUF as a text encoder, but it is a genuine
-    chat model. It is in the companion set, so the only thing keeping it safe is that the listing
-    this set feeds never sees a GGUF-only repo. Pin that, or a future caller takes a downloaded
-    model away from the user."""
+    """Real chat model borrowed as an sd.cpp encoder; companion set must never hide a GGUF-only repo."""
     from core.inference.diffusion_families import sd_cpp_companion_only_repo_ids
 
     assert "unsloth/qwen2.5-vl-7b-instruct-gguf" in sd_cpp_companion_only_repo_ids()
@@ -3583,13 +3552,7 @@ def test_family_pipeline_available_fails_open_without_diffusers(monkeypatch):
 
 
 def _pretend_old_diffusers(monkeypatch, *, engine):
-    """An environment whose diffusers has none of the newer pipeline classes, on a host whose GGUF
-    loads route to ``engine``.
-
-    0.36.0 is the real ceiling for a Python 3.9 host (0.37.0 already declares requires-python
-    >=3.10), and it ships no Flux2KleinPipeline. Only the diffusers module and the engine prediction
-    are substituted: the availability check, the picker and validate_load_request are the real code.
-    """
+    """Stubs diffusers at 0.36.0, the Python 3.9 ceiling with no Flux2KleinPipeline; checks stay real."""
     import core.inference.diffusion_engine_router as router
 
     monkeypatch.setitem(sys.modules, "diffusers", types.SimpleNamespace(__version__ = "0.36.0"))
@@ -3791,10 +3754,7 @@ def test_a_cancelled_siblings_marker_shows_on_the_repo_row(monkeypatch, tmp_path
 
 
 def test_identical_variant_scans_in_flight_run_once(monkeypatch):
-    """Aborting the HTTP request cannot stop the scan already running in its thread, so the
-    picker's Retry would start another against a filesystem that is not answering. Measured
-    before this: 23 retries filled all 20 default-executor workers and starved unrelated
-    offloaded work."""
+    """Identical scans in flight run once, since an aborted request cannot stop the scan already running."""
     scans = []
     release = threading.Event()
 
@@ -4133,11 +4093,7 @@ def _unreachable_hub(monkeypatch) -> None:
 
 
 def test_failed_hub_lists_the_selected_cache_not_another_one(monkeypatch, tmp_path):
-    """A request pinned to one cache must list that cache's quants.
-
-    ``list_gguf_variants`` read the cache repo-wide on an unreachable Hub, so the active
-    copy's quants answered for a request pinned elsewhere.
-    """
+    """A pinned cache must list its own quants when the Hub is unreachable, not the active copy's."""
     active = tmp_path / "active" / "hub"
     selected = tmp_path / "selected" / "hub"
     active.mkdir(parents = True)
@@ -4162,11 +4118,7 @@ def test_failed_hub_lists_the_selected_cache_not_another_one(monkeypatch, tmp_pa
 
 
 def test_an_unreadable_cache_root_is_skipped_not_fatal(tmp_path):
-    """One unreadable cache must not take down a walk the other roots can answer.
-
-    A bare ``is_dir()`` on ``<repo>/snapshots`` let EACCES escape (up to 3.13) and turned a
-    usable listing into a 500. Asserted on the walk, so it pins the guard, not the fallback.
-    """
+    """An unreadable cache root must be skipped, not raise, so the other roots still answer the walk."""
     from hub.utils.gguf import iter_hf_cache_snapshots, list_gguf_variants_from_hf_cache
 
     blocked_root = tmp_path / "blocked" / "hub"
@@ -4198,11 +4150,7 @@ def test_an_unreadable_cache_root_is_skipped_not_fatal(tmp_path):
 
 
 def test_another_caches_quant_is_offered_as_a_download_not_as_downloaded(monkeypatch, tmp_path):
-    """Readiness is counted against the cache the request names, never against another one.
-
-    The pinned cache holds the repo but no GGUF, so the lister answers repo-wide. Those
-    variants must stay download targets, or the row offers a load that cannot resolve.
-    """
+    """Another cache's quant stays a download target, not downloaded, for the request's pinned cache."""
     pinned_root = tmp_path / "pinned" / "hub"
     other_root = tmp_path / "other" / "hub"
     pinned_root.mkdir(parents = True)
@@ -4224,10 +4172,7 @@ def test_another_caches_quant_is_offered_as_a_download_not_as_downloaded(monkeyp
 
 
 def test_context_follows_the_answering_revision_not_a_sibling(monkeypatch, tmp_path):
-    """The context read is pinned to the snapshot that answered, not the repo dir.
-
-    The read walks the whole dir, so naming the dir let a skipped revision supply the length.
-    """
+    """Context length comes from the answering snapshot; a repo-dir walk may pick a skipped revision."""
     hub_cache = tmp_path / "hub"
     hub_cache.mkdir(parents = True)
     repo_dir = _write_cached_gguf(
@@ -4519,11 +4464,7 @@ def test_a_row_pinned_to_one_revision_gains_no_siblings(monkeypatch, tmp_path):
 
 
 def test_a_case_variant_repo_dir_still_names_its_snapshot(monkeypatch, tmp_path):
-    """Provenance survives a repo_id whose case differs from the cached dir's.
-
-    The lister folds case, but the repo dir was rebuilt from repo_id, so it failed ``is_dir()``
-    on a case-sensitive filesystem and the length fell back to a repo-wide walk.
-    """
+    """A repo_id with different case from the cached dir must still name its snapshot."""
     hub_cache = tmp_path / "hub"
     hub_cache.mkdir(parents = True)
     repo_dir = _write_cached_gguf(hub_cache, "org/repo", "m-Q8_0.gguf")
@@ -4551,10 +4492,7 @@ def test_a_case_variant_repo_dir_still_names_its_snapshot(monkeypatch, tmp_path)
 
 
 def test_a_download_scope_is_not_listed_as_a_quant(monkeypatch, tmp_path):
-    """A scoped job ("@diffusion") rides the variant slot, so its manifest names the
-    same .gguf the real quant does: rebuilding from download state listed one file
-    twice, the second permanently partial, costing the picker its single-quant
-    collapse. A real cancelled quant must still survive, or it loses its resume."""
+    """A scoped job must not list as a quant, or its .gguf appears twice; real cancelled quants stay."""
     repo_dir = tmp_path / "models--org--repo"
     (repo_dir / "snapshots" / "rev").mkdir(parents = True)
 
@@ -4681,11 +4619,7 @@ def test_a_cancelled_quant_beside_a_scope_still_answers_from_state(monkeypatch, 
 
 
 def test_a_standalone_h3_denoiser_gguf_is_recognised_by_its_filename():
-    """H3's GGUFs carry no metadata keys at all (kv_count 0), so ``general.architecture`` is
-    absent and the NAME is the only evidence there is. Keying only on the two bundle repo ids
-    meant a denoiser copied into a custom local directory returned a null task and was dropped
-    from the Video On Device picker, even though the loader validates exactly these prefixes.
-    """
+    """H3 GGUFs have no metadata keys, so a standalone denoiser is recognised by its filename prefix."""
     for name in (
         "minimax_h3_fl2va-Q4_K_M.gguf",
         "minimax_h3_ref2va-Q8_0.gguf",
@@ -4713,14 +4647,7 @@ def _arch_gguf(path: Path, architecture: str) -> Path:
 
 
 def _both_walk_orders(root: Path, monkeypatch, classify):
-    """*classify* under both possible ``_iter_gguf_paths`` orders.
-
-    The real walk is ``rglob``, raw directory order, which differs between filesystems and between
-    a folder and a fresh copy of it. Order is the input being varied, so it is forced.
-
-    Patched on ``_classification``, not on ``models_route``: ``_gguf_folder_task`` lives in
-    catalog_classification and resolves ``_iter_gguf_paths`` in THAT namespace, so patching the
-    routes alias leaves the real walk running and the order is never varied at all."""
+    """Forces both rglob orders; patch _classification, as a routes alias leaves the real walk running."""
     paths = sorted(root.rglob("*.gguf"))
     answers = []
     for order in (paths, list(reversed(paths))):
@@ -4732,10 +4659,7 @@ def _both_walk_orders(root: Path, monkeypatch, classify):
 
 
 def test_a_mixed_gguf_repo_classifies_the_same_in_either_walk_order(tmp_path, monkeypatch):
-    """#8406 / #8407. Community bundles ship the text encoder beside the denoiser
-    (``BlackStone-Yu/Z-Image-Turbo-GGUF`` puts a ``qwen3`` conditioner next to its ``lumina2``
-    DiT), so the repo held both answers and returned whichever the unordered walk yielded first.
-    Ordering alone would still hand it to whichever name sorts first, so the media task wins."""
+    """A mixed repo classifies the same in either walk order: the media task wins over the text encoder."""
     repo_dir = tmp_path / "models--BlackStone-Yu--Z-Image-Turbo-GGUF"
     _arch_gguf(repo_dir / "Qwen3-4B-UD-Q6_K_XL.gguf", "qwen3")
     _arch_gguf(repo_dir / "z_image_turbo-Q6_K.gguf", "lumina2")
@@ -4837,11 +4761,7 @@ def _saved_pipeline(root: Path, class_name: str) -> Path:
 
 
 def test_a_moved_image_pipeline_is_classified_from_its_saved_pipeline_class(tmp_path):
-    """#8407. The reporter moved the Models folder and image models were then not found, while chat
-    models still were. The asymmetry is structural: a GGUF is classified from
-    ``general.architecture`` read out of the file, but a diffusers pipeline was classified from
-    names, and an HF snapshot directory is named for a commit hash, so a model the listing had just
-    PROVEN to be a pipeline came back task=null. The index is evidence out of the checkpoint."""
+    """Pipelines classify from model_index.json, since a commit-hash snapshot name carries no family."""
     snapshot = _saved_pipeline(
         tmp_path / "N-AI-Models" / "0f3d1a2b4c5d6e7f8091a2b3c4d5e6f708192a3b", "FluxPipeline"
     )
@@ -4872,12 +4792,7 @@ def test_a_moved_pipeline_that_names_no_known_family_is_still_not_tagged(tmp_pat
 
 
 def test_a_moved_image_pipeline_the_picker_shows_is_one_the_loader_accepts(tmp_path):
-    """The other half of #8407: the picker and the loader must read the SAME evidence.
-
-    The Images page sends the row's id as ``model_path`` and no ``family_override``
-    (``images-page.tsx`` handleLoad), so the loader gets nothing but the opaque path. Classifying
-    from ``model_index.json`` in the listing alone would turn a hidden model into a visible one
-    that ``validate_load_request`` -> ``detect_family_for_pick`` then refuses with a 400."""
+    """Picker and loader must read the same evidence, since the loader gets only an opaque path."""
     from core.inference.diffusion import DiffusionBackend
 
     backend = DiffusionBackend.__new__(DiffusionBackend)
@@ -4918,10 +4833,7 @@ def test_a_moved_image_pipeline_the_picker_shows_is_one_the_loader_accepts(tmp_p
 
 
 def test_family_needles_recover_the_repo_id_from_the_hf_cache_directory(tmp_path):
-    """#8407, the second half of the same loss. A folder still in cache layout carries its repo id
-    in the ``models--org--name`` directory, while every other needle equals the commit hash. The
-    decode is a strict read of a real ``models--*/snapshots/*`` path, so no arbitrary parent
-    directory token can match this way."""
+    """Repo id comes from models--org--name only on a strict snapshot path, not any parent directory."""
     snapshot = (
         tmp_path
         / "N-AI-Models"
@@ -4981,10 +4893,7 @@ def test_only_the_first_shard_of_a_split_gguf_is_read_to_classify_a_repo(tmp_pat
 
 
 def test_a_gguf_folder_walk_stops_on_its_budget_instead_of_holding_the_listing(tmp_path):
-    """Ordering the walk means it can no longer stop at the first GGUF, so a folder is read to the
-    end, and a scan folder is arbitrary: a network mount, or weights beside a huge unrelated
-    subtree whose every entry ``rglob`` counts (the hazard ``_dir_has_downloaded_model`` already
-    caps). This runs once per listed row, so the walk takes a deadline and gives up on it."""
+    """Walk gets a deadline: a scan folder may be a slow mount or a huge unrelated subtree."""
     folder = tmp_path / "bundle"
     _arch_gguf(folder / "model-Q4_K_M.gguf", "qwen3")
 
@@ -5018,11 +4927,7 @@ def test_a_slow_walk_cannot_hand_back_the_encoder_this_function_exists_to_avoid(
 
 
 def test_the_classify_order_is_the_same_wherever_the_folder_lives(tmp_path):
-    """Ordering exists so the answer stops depending on the filesystem, so the key is the path
-    RELATIVE to the folder in posix form. An absolute-path key carries the mount point, which is
-    what moving a Models folder changes (#8407), and the separator: ``\\`` sorts against ``-`` and
-    ``.`` differently than ``/``, so the same two files could order one way on Windows and the
-    other on Linux."""
+    """Sort key is the posix path relative to the folder, so a moved folder or OS sorts the same."""
     key = models_route._task_classify_sort_key
     assert key(Path("/srv/models/Repo"), Path("/srv/models/Repo/a/b.gguf")) == key(
         Path("/mnt/elsewhere/Repo"), Path("/mnt/elsewhere/Repo/a/b.gguf")
@@ -5074,10 +4979,7 @@ def test_a_runnable_chat_checkpoint_outranks_a_speech_gguf(tmp_path):
 
 
 def test_a_truncated_classification_never_answers_speech(tmp_path, monkeypatch):
-    """Speech is the one verdict that HIDES a row, so it may only be given after the whole folder
-    was seen. Each of the three ways this walk gives up early -- the walk deadline, the 64-file
-    cap, and the read budget -- could otherwise stop right after the csm quant that sorts first and
-    hide the runnable sibling it never reached, which is worse than the mis-filing it prevents."""
+    """Speech hides a row, so it is answered only after the whole folder was walked, never truncated."""
     folder = tmp_path / "mixed-chat-speech"
     _arch_gguf(folder / "csm-1b-Q4_0.gguf", "llama-csm")
     _arch_gguf(folder / "qwen3-8b-Q4_K_M.gguf", "llama")
@@ -5110,17 +5012,7 @@ def test_a_truncated_classification_never_answers_speech(tmp_path, monkeypatch):
 
 
 def test_a_folder_trimmed_exactly_back_to_the_cap_never_answers_speech(tmp_path):
-    """The overflow that leaves the candidate list looking untouched still hides a sibling.
-
-    Candidates are trimmed only once the list passes twice the cap, and the trim cuts it back to
-    the cap exactly. A folder whose walk ENDS on that trim therefore finishes holding precisely
-    ``_MAX_TASK_CLASSIFY_GGUFS`` entries -- the same length a folder that fit would leave -- so
-    completeness read off that length says the whole folder was seen when 65 files were thrown
-    away. Speech is the one verdict that hides the row, so the folder answers text-to-speech off
-    its first 64 csm quants and the runnable qwen3 sorted into the discarded tail becomes
-    unreachable in every picker.
-
-    The boundary repeats: each later trim lands on the same length, hence the second size."""
+    """A trim landing exactly on the cap looks like a complete folder, so speech must not be answered."""
     cap = _classification._MAX_TASK_CLASSIFY_GGUFS
     # 2*cap+1 trips the trim on its final candidate; the second size confirms it recurs.
     for total in (2 * cap + 1, 3 * cap + 2):
@@ -5132,14 +5024,7 @@ def test_a_folder_trimmed_exactly_back_to_the_cap_never_answers_speech(tmp_path)
 
 
 def test_a_sibling_whose_header_will_not_read_keeps_speech_off_the_folder(tmp_path):
-    """A candidate that never got classified might have been the runnable one.
-
-    ``_gguf_architecture`` answers None on a truncated or unreadable header and ``_arch_to_task``
-    answers None rather than guessing, while a read that raises is skipped outright. Neither used
-    to clear ``complete``, so a folder holding a readable csm quant beside a sibling it could not
-    classify answered text-to-speech with full confidence, and the arch-task gate then hid the row
-    the unread sibling was on. The scan saw the file; it just never learned what it was, which is
-    the same standing as a file the walk never reached."""
+    """An unclassifiable candidate might be the runnable one, so the folder cannot be called complete."""
     for label, write_sibling in (
         ("truncated", lambda p: p.write_bytes(b"GGUF\x03\x00\x00\x00")),
         ("empty", lambda p: p.write_bytes(b"")),
@@ -5207,11 +5092,7 @@ def test_a_buildable_denoiser_outranks_an_arch_the_backend_cannot_assemble(tmp_p
 
 
 def test_a_pipeline_index_this_listing_cannot_read_leaves_the_model_untagged(tmp_path):
-    """The Images load path 400s AFTER evicting the chat model when no family is supported, so a
-    model is tagged only when detection SUCCEEDS. The caller wraps the whole block in
-    ``except Exception`` and answers ``text-to-image``, so both ways an index can refuse to parse
-    are answered here rather than upward: a nesting bomb (``RecursionError``, not a ``ValueError``,
-    so it escaped the original tuple) and a BOM, which PowerShell puts on hand-written JSON."""
+    """Tag a model only when detection succeeds; a failed Images load evicts the chat model first."""
     from core.inference.diffusion_families import pipeline_class_from_index
 
     def read(directory):
@@ -5239,11 +5120,7 @@ def test_a_pipeline_index_this_listing_cannot_read_leaves_the_model_untagged(tmp
 
 
 def test_a_remote_code_pipeline_class_is_not_read_out_of_its_list_form(tmp_path):
-    """A community pipeline whose code ships in its own repo writes
-    ``["<module stem>", "<ClassName>"]`` here, which diffusers treats as remote code (it resolves
-    the class with ``getattr`` only ``if isinstance(cls_name, str)``). Unsloth declines models that
-    need ``trust_remote_code``, so tagging one would advertise a model the load path refuses, after
-    the chat model has been evicted."""
+    """A list-form pipeline class is remote code and is not read; those models are declined anyway."""
     from core.inference.diffusion_families import pipeline_class_from_index
 
     root = tmp_path / "9f3c1a2b"
@@ -5277,12 +5154,7 @@ def test_a_trailing_shard_check_that_cannot_read_the_pattern_keeps_every_file(mo
 
 
 def test_a_pipelines_component_dirs_do_not_inherit_the_repo_id(tmp_path):
-    """The repo-id needle is for the row that LOST its name, and only that row. A pipeline's
-    component directories carry a ``config.json`` and weights, so a scan folder registers them as
-    rows of their own, and they sit UNDER ``models--org--name/snapshots/<sha>``, which
-    ``hf_cache_repo_id`` answers for as readily as the snapshot. Letting them inherit it makes each
-    detect the family, satisfy ``_local_is_diffusers`` and enter the Images picker as a checkpoint
-    that cannot load: three dead rows per cached pipeline."""
+    """Pipeline component dirs must not inherit the repo id, or each shows as a dead Images row."""
     snapshot = tmp_path / "hub" / "models--black-forest-labs--FLUX.1-dev" / "snapshots" / ("a" * 40)
     _saved_pipeline(snapshot, "FluxPipeline")
 
@@ -5319,14 +5191,7 @@ def _hf_cache_snapshot_repo_id_ok(snapshot) -> bool:
 
 
 def test_a_pipeline_index_outranks_a_family_keyword_in_an_ancestor_directory(tmp_path):
-    """A local pipeline whose path contains another family's keyword must still load as the family
-    its own ``model_index.json`` declares.
-
-    ``detect_family_for_pick`` used to try the path name first and consult the index only when that
-    answered nothing, so a keyword in ANY ancestor segment shadowed the index. The listing reads the
-    index, so the two named different families for one directory and the model was shown as one and
-    instantiated as another, the same listing-versus-loader split #8407 is about. Reported against a
-    ``QwenImagePipeline`` saved under a ``flux.1`` parent, the shape used here."""
+    """A pipeline's model_index.json outranks family keywords in ancestor directory names."""
     from core.inference import diffusion_families as families
 
     checkpoint = tmp_path / "flux.1" / "checkpoint"
@@ -5362,13 +5227,7 @@ def test_reading_the_index_first_leaves_remote_picks_and_overrides_alone(tmp_pat
 
 
 def test_a_saved_inpaint_pipeline_is_not_tagged_as_its_base_family():
-    """Reading the index must not expose a checkpoint the loader would then mis-instantiate.
-
-    The loader picks ``fam.pipeline_class`` (``diffusion.py:2946``), never the declared class, so
-    answering SDXL for a ``StableDiffusionXLInpaintPipeline`` would list it as text-to-image and
-    load it through the four-channel base pipeline. An inpaint checkpoint has its own UNet input
-    shape, so that fails after selection, the split this helper exists to close. A variant stays
-    untagged, as before the index was consulted at all."""
+    """An inpaint pipeline must not be tagged as its base family, or it loads through the wrong pipeline."""
     from core.inference import diffusion_families as families
 
     for base in ("FluxPipeline", "QwenImagePipeline", "StableDiffusionXLPipeline"):
@@ -5616,11 +5475,7 @@ def test_the_listing_probe_hides_a_class_the_installed_diffusers_predates(monkey
 
 
 def test_cached_model_rows_pins_snapshot_load_id_for_inactive_cache(monkeypatch, tmp_path):
-    """A non-GGUF copy outside the active cache must carry its snapshot path.
-
-    Without the pin the row falls back to the bare repo id, which ModelConfig resolves
-    through the ACTIVE cache: offline the pick cannot load, online it re-downloads.
-    """
+    """An inactive-cache copy must keep its snapshot path; a bare id resolves via the active cache."""
     active = tmp_path / "active"
     active.mkdir()
     snapshot = tmp_path / "legacy" / "models--Org--Away" / "snapshots" / "rev"
@@ -5736,12 +5591,7 @@ def test_cached_model_rows_marks_encoder_only_repos_unchattable(monkeypatch, tmp
 
 
 def test_cached_model_rows_pins_the_snapshot_that_holds_the_weights(monkeypatch, tmp_path):
-    """A metadata-only commit must not win the pin just for being newest.
-
-    huggingface_hub stores one snapshot per commit, so reading a config or tokenizer at a
-    newer revision leaves a weightless dir beside the complete one. Pinning it advertises
-    a Downloaded model whose load raises "no file named model.safetensors" offline.
-    """
+    """Pin the snapshot holding weights; a newer metadata-only commit fails to load offline."""
     active = tmp_path / "active"
     active.mkdir()
     repo_dir = tmp_path / "legacy" / "models--Org--Chatty"
@@ -5809,12 +5659,7 @@ def test_repo_model_can_chat_still_reads_a_metadata_only_snapshot(tmp_path):
 
 
 def test_cached_model_rows_skips_a_weights_only_snapshot(monkeypatch, tmp_path):
-    """Weights without metadata are as unloadable as metadata without weights.
-
-    Unsloth's base-model pre-warm fetches the shards plus index and no config.json, so a
-    weights-only commit lands beside the complete snapshot and sorts first. Pinning it
-    raises "Unrecognized model ... should have a model_type key".
-    """
+    """A weights-only snapshot must not be pinned; without config.json the load fails on model_type."""
     active = tmp_path / "active"
     active.mkdir()
     repo_dir = tmp_path / "legacy" / "models--Org--Chatty"
@@ -5863,11 +5708,7 @@ def test_cached_model_rows_skips_a_weights_only_snapshot(monkeypatch, tmp_path):
 def test_cached_model_rows_pins_when_the_active_ref_cannot_serve_a_load(
     monkeypatch, tmp_path, ref_files
 ):
-    """An active-cache row is only safe as a bare id while refs/main can serve the load.
-
-    repo_id_will_not_resolve only catches a ref naming no directory; a ref naming an
-    EXISTING half-fetched snapshot resolves fine and then fails, so the id must give way.
-    """
+    """Keep a bare id only while refs/main serves a complete snapshot; a half-fetched one must pin."""
     active = tmp_path / "active"
     active.mkdir()
     repo_dir = active / "models--Org--Chatty"
@@ -6011,12 +5852,7 @@ def test_active_cache_repo_with_a_serving_ref_keeps_its_bare_id(tmp_path):
 
 
 def test_cached_model_rows_ignores_a_training_args_bin_when_pinning(monkeypatch, tmp_path):
-    """A ``.bin`` is only weights when its name says so.
-
-    Trainer writes ``training_args.bin`` beside every fine-tune. Counting any ``.bin`` as
-    a payload let that decoy shadow the complete snapshot and pin a directory whose load
-    raises "no file named model.safetensors"; ``_WEIGHT_BIN_PREFIXES`` is the shared rule.
-    """
+    """Only .bin files with a weight prefix count; training_args.bin beside a fine-tune must not pin it."""
     active = tmp_path / "active"
     active.mkdir()
     repo_dir = tmp_path / "legacy" / "models--Org--Tuned"
@@ -6260,13 +6096,7 @@ def test_cached_model_rows_flag_a_diffusion_repo_this_backend_cannot_load(monkey
 
 
 def test_cached_model_rows_pins_a_commit_pinned_repo_with_no_default_ref(monkeypatch, tmp_path):
-    """A commit-pinned fetch writes no refs/main, so the bare id resolves nowhere.
-
-    huggingface_hub writes refs/<revision> only when revision != commit_hash, so pinning a
-    revision leaves the repo with snapshots and no ref at all. repo_id_will_not_resolve
-    reads that as fine (it only catches a ref naming a missing dir), so the row has to be
-    pinned on the absence of the ref rather than on its contents.
-    """
+    """A commit-pinned fetch writes no refs/main, so pin the row on the absent ref, not its contents."""
     active = tmp_path / "active"
     active.mkdir()
     repo_dir = active / "models--Org--Pinned"
@@ -6287,13 +6117,7 @@ def test_cached_model_rows_pins_a_commit_pinned_repo_with_no_default_ref(monkeyp
 
 
 def test_cached_model_rows_keeps_a_recovered_repo_that_can_serve_a_load(monkeypatch, tmp_path):
-    """A recovery holding a self-contained snapshot is listed, pinned to it.
-
-    recovered_repo_is_unusable_by_repo_id withheld these because this schema could describe
-    neither a partial nor a path. It carries load_id now, so the row can say honestly which
-    copy to load. A recovery whose only snapshot is metadata-only stays dropped: there is
-    nothing to pin it to.
-    """
+    """A recovery with a self-contained snapshot is listed and pinned; metadata-only ones stay dropped."""
     active = tmp_path / "active"
     active.mkdir()
 
@@ -6402,12 +6226,7 @@ MOVED_OUT_OF_ROUTES_MODELS = (
 
 @pytest.mark.parametrize("name", MOVED_OUT_OF_ROUTES_MODELS)
 def test_a_name_that_moved_out_of_routes_models_still_resolves_there(name):
-    """Extracting a helper must not retire the name it was reachable by.
-
-    Not style. ``llama_cpp._video_arch_is_pickable`` imports ``_video_family_buildable`` from
-    here inside a ``try`` returning True on any exception, so losing the name raised nothing:
-    the probe just started saying yes, promising the Video page GGUFs it will not offer.
-    """
+    """Keep old names importable after a move; a probe importing a lost name silently returns True."""
     assert hasattr(models_route, name)
 
 

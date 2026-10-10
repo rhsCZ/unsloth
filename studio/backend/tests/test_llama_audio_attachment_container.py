@@ -116,10 +116,7 @@ def test_wma_and_amr_decode_with_no_librosa(monkeypatch):
 
 
 def test_pyav_output_is_not_held_twice(monkeypatch):
-    """np.concatenate keeps the block list and its result live at once, so a
-    30-minute upload at the sample ceiling held two 346 MB arrays. Each block is
-    written into the output as it arrives, in decode order, and nothing joins a
-    list at the end."""
+    """Blocks are written into one output as decoded, since np.concatenate would hold two full copies."""
     raw = _encode_amr()
     monkeypatch.setitem(sys.modules, "soundfile", None)
     monkeypatch.setitem(sys.modules, "librosa", None)
@@ -758,13 +755,7 @@ def test_junk_between_frames_cannot_shorten_a_forwarded_mp3(monkeypatch):
 
 
 def test_a_compressed_wav_is_not_measured_with_pcm_arithmetic(monkeypatch):
-    """Only WAVE_FORMAT_PCM fixes nBlockAlign as one sample frame.
-
-    An IMA ADPCM block holds around 505 frames, so rate * blockAlign overstates
-    its byte rate 505-fold and made three hours of audio read as twenty-one
-    seconds, which is short enough to forward. Nothing here can read a codec's
-    own header, so a non-PCM tag reports no duration and is decoded instead.
-    """
+    """Only WAVE_FORMAT_PCM makes nBlockAlign one sample frame; other WAV codecs are decoded instead."""
     rate, block_align, samples_per_block = 8_000, 256, 505
     byte_rate = round(rate / samples_per_block * block_align)
     payload = b"\x00" * (byte_rate * 120)
@@ -797,10 +788,7 @@ def test_an_extensible_wav_is_measured_by_its_sub_format():
 
 
 def test_the_last_resort_decoder_reads_a_bounded_range(monkeypatch):
-    """torchaudio 2.9's load() is load_with_torchcodec, which calls
-    get_all_samples() and only then slices to num_frames, so the argument bounds
-    the return value and not the allocation. The fallback asks torchcodec for
-    the metadata and reads a range instead."""
+    """torchaudio 2.9 load() decodes all samples before slicing, so the fallback reads a bounded range."""
     torch = pytest.importorskip("torch")
 
     ranges: list = []
@@ -1115,11 +1103,7 @@ def test_a_header_claiming_more_than_it_holds_buys_no_buffer(monkeypatch):
 
 
 def test_a_header_that_undercounts_still_returns_every_sample(monkeypatch):
-    """The buffer grows past a short header rather than spilling into a list.
-
-    Collecting the overflow and joining it at the end allocated a second copy of
-    the whole recording, which is what the growing buffer exists to avoid, so a
-    short header must cost a resize and never a final join."""
+    """A header that undercounts makes the buffer grow, never a second copy joined at the end."""
     arr, _rate, joins = _decode_with(
         monkeypatch, blocks_yielded = 5, declared_frames = 3, block_len = 1_000
     )
@@ -1129,11 +1113,7 @@ def test_a_header_that_undercounts_still_returns_every_sample(monkeypatch):
 
 
 def test_a_header_past_the_duration_cap_is_not_preallocated(monkeypatch):
-    """The cap refuses the audio anyway; it must not buy that much array first.
-
-    The buffer still grows with what has actually been decoded, so the guarantee
-    is not that nothing is allocated but that nothing the header claims is: every
-    allocation stays inside the ceiling the decode is about to refuse at."""
+    """Allocations must stay inside the duration cap the decode enforces, not what the header claims."""
     monkeypatch.setattr(inference_route, "_MAX_AUDIO_SECONDS", 1)
     sizes = []
     real_empty = np.empty
@@ -1157,13 +1137,7 @@ def test_a_header_past_the_duration_cap_is_not_preallocated(monkeypatch):
 
 
 def test_a_header_that_undercounts_keeps_the_samples_in_order(monkeypatch):
-    """The buffer is closed by the first block that does not fit it.
-
-    Re-testing the fit for every block let a short final block drop back into
-    the unused tail and be emitted ahead of the blocks that overflowed before
-    it. The length stayed right, so nothing downstream noticed, and what
-    reached the model was the same audio with a piece of it moved.
-    """
+    """The first block that does not fit closes the buffer, so later short blocks cannot reorder audio."""
 
     class _VaryingSoundFile:
         samplerate = 8_000
@@ -1194,15 +1168,7 @@ def test_a_header_that_undercounts_keeps_the_samples_in_order(monkeypatch):
 
 
 def test_torchaudio_alone_can_still_decode_audio(monkeypatch):
-    """Backwards compatibility for an install that predates PyAV.
-
-    Before the bounded readers existed this path called torchaudio.load()
-    outright, so torchaudio on its own was enough. torchaudio 2.9 removed
-    info(), which is what sends such an install to the streaming chain, and
-    that chain needs libsndfile, PyAV or librosa. Losing audio on upgrade is
-    not an acceptable way to gain a memory bound, so it falls back to the
-    bounded torchcodec reader that 2.9's own load() decodes through.
-    """
+    """torchaudio 2.9 removed info(), so decoding falls back to the bounded torchcodec reader."""
     torch = pytest.importorskip("torch")
 
     class _Metadata:
@@ -1241,15 +1207,7 @@ def test_torchaudio_alone_can_still_decode_audio(monkeypatch):
 
 
 def test_a_tag_in_the_middle_cannot_shorten_a_concatenated_mp3(monkeypatch):
-    """`cat one.mp3 two.mp3 > both.mp3` is how people join MP3s, and it leaves
-    the first file's 128-byte ID3v1 tag sitting between the two streams.
-
-    Matching a trailer by its magic alone accepted that tag as the end of the
-    recording, so an hour of audio behind it reported the first file's few
-    seconds and was forwarded untouched. A trailer now has to account for its
-    own length and reach EOF, and one that does not means the walk never read
-    the whole file.
-    """
+    """An ID3v1 trailer only ends the recording if it reaches EOF, not a tag between concatenated MP3s."""
     monkeypatch.setattr(inference_route, "_MAX_AUDIO_SECONDS", 60)
     joined = _mp3_frames(5) + b"TAG" + bytes(125) + _mp3_frames(300)
     assert inference_route._mp3_seconds(joined, 60.0) is None
@@ -1280,14 +1238,7 @@ def test_a_trailer_that_reaches_eof_still_ends_the_count():
 
 
 def test_pyav_writes_into_one_buffer_rather_than_collecting_blocks(monkeypatch):
-    """Dropping each block after copying it does not bound anything.
-
-    The blocks are small, so freeing them returns them to the allocator's free
-    lists and not to the OS: resident memory for a 30-minute 48 kHz upload
-    measured 2.0x the waveform whether the join was np.concatenate or a fill
-    loop. Only writing each block into the output as it arrives holds one copy,
-    so the decoder must never build a list of the whole decode.
-    """
+    """Write each block into one output as it arrives; freed blocks return to the allocator, not the OS."""
     raw = _encode_amr()
     monkeypatch.setitem(sys.modules, "soundfile", None)
     monkeypatch.setitem(sys.modules, "librosa", None)
@@ -1322,15 +1273,7 @@ def test_a_forged_container_duration_cannot_ask_for_a_huge_buffer(monkeypatch):
 
 
 def test_no_allocation_outgrows_the_limit_the_decode_enforces(monkeypatch):
-    """Both limits bind at once, and the smaller one is where the decode stops.
-
-    Sizing an allocation by only one of them let an 8 kHz file declaring three
-    hours reserve 86.4M floats (330 MB) on the way to being refused at 14.4M
-    (55 MB), and the doubling that covers an under-reported duration had no
-    ceiling at all: a 48 kHz file declaring twenty minutes and holding
-    twenty-one grew to 115.2M against an 86.4M limit, with the old buffer still
-    live for the copy.
-    """
+    """Allocations must respect both the sample and duration limits; the smaller one ends the decode."""
 
     class _Stream:
         duration = None

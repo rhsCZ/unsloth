@@ -231,10 +231,7 @@ def test_a_burst_larger_than_one_response_is_delivered_not_dropped(tmp_path):
 
 
 def test_a_record_larger_than_the_window_shows_its_tail_not_an_empty_pane(tmp_path):
-    """A single record bigger than the bounded read (a native dump, a \\r-only
-    progress run, a giant JSON line) filled the whole window, so dropping the
-    partial head left nothing: the viewer rendered an EMPTY pane on a log that
-    was megabytes long, and the cursor advanced past the record anyway."""
+    """A record larger than the read window must still show its tail, not an empty pane."""
     path = tmp_path / "a.log"
     body = "Z" * (MAX_TAIL_BYTES + 100_000)
     path.write_text("older line\n" + body + " END\n", encoding = "utf-8")

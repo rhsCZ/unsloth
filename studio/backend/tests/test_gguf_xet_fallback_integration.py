@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Integration: GGUF Chat-Mode downloads route through the Xet->HTTP helper,
-preserving cancellation and the best-effort companion contract. No GPU, no
-network, no real subprocess (the helper is patched).
-"""
+"""GGUF chat downloads go through the Xet-to-HTTP helper; companions stay best-effort."""
 
 from __future__ import annotations
 

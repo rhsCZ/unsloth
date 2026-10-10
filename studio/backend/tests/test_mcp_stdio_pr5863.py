@@ -1,11 +1,4 @@
-"""Verification tests for PR #5863 (stdio MCP server support).
-
-Covers the pure helpers, the route-level _validate_url gate, and that the
-UNSLOTH_STUDIO_ALLOW_STDIO_MCP gate blocks the stdio transport at every
-enforcement point (create/update/test/refresh/discovery/execute) when disabled
-and reaches it when enabled. The transport is stubbed so no subprocess spawns;
-a recorder asserts whether it was reached.
-"""
+"""Verification tests for stdio MCP server support."""
 
 import os
 import sys

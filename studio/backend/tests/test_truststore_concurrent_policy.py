@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The vendored truststore keeps verification on when handshakes overlap (upstream issue #209).
-
-macOS and Windows switch OpenSSL verification off on the shared context during a wrap and
-verify against the OS store afterwards. The flag flipping is reproduced here on any platform,
-so the race is exercised without a network or a real handshake.
-"""
+"""Vendored truststore keeps verification on when TLS handshakes overlap on the shared context."""
 
 from __future__ import annotations
 

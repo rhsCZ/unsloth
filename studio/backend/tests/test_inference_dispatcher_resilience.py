@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Inference dispatcher resilience.
-
-The dispatcher thread is the sole consumer of the response queue; if a malformed
-response killed it, every in-flight generation would hang forever. A bad response
-must be logged and skipped, not fatal. Fakes only.
-"""
+"""A malformed response must be skipped, not fatal, since the dispatcher is the sole queue consumer."""
 
 from __future__ import annotations
 

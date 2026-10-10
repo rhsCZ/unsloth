@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""/api/models/kv-cache-estimate answers for a named attention plan, not for the defaults.
-
-The route took the estimator's signature defaults while the loader resolved the same three
-knobs differently, so one model at one cache type put three numbers on screen (#10489).
-The arithmetic itself is covered by tests/test_kv_cache_estimation.py.
-"""
+"""KV estimate route must use the loaded attention plan, not the estimator signature defaults."""
 
 from __future__ import annotations
 

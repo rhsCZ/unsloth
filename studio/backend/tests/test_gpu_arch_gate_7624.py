@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for #7624 / #7669: multi-GPU auto-selection on ROCm must not
-pick a device the installed llama.cpp prebuilt has no kernels for.
-
-Covers _installed_llama_gfx_archs (mapped_targets from the install marker),
-_rocm_arch_by_physical_id, the opt-in per-device gate in _get_gpu_memory's torch
-fallback, the crash marker, and the retry set. Also pins the two things the gate
-must NOT do: filter the probe for torch callers, and displace the unified-memory
-APU accounting that shares this loop.
-"""
+"""On ROCm, auto GPU selection must not pick a device the llama.cpp prebuilt has no kernels for."""
 
 import json
 import subprocess
@@ -157,10 +149,7 @@ class TestInstalledLlamaGfxArchsCorpus:
 
 
 class TestForwardsCompatibleArchTokens:
-    """A future manifest may record a non-concrete target: ROCm 6.3+ generic code
-    objects, or the umbrella labels this repo already carries in gfx_target. Devices
-    still report the CONCRETE arch, so exact-set membership against a generic token
-    matches nothing and would drop every GPU. Fail open on anything uninterpretable."""
+    """Generic targets must fail open: devices report concrete archs, so exact matching drops every GPU."""
 
     @pytest.mark.parametrize(
         "token",
@@ -358,10 +347,7 @@ class TestGpuArchGate:
 
 
 class TestTorchCallersStayUnfiltered:
-    """The gate answers "what can llama-server run on", not "what GPUs exist".
-    _get_gpu_memory also backs the RAG pick, which resolves to sentence-transformers,
-    where such a device is usually still fine, so gating it would move embeddings to
-    the CPU: a working path broken by the fix."""
+    """The gate answers what llama-server can run; torch callers like RAG embeddings stay unfiltered."""
 
     def test_probe_is_unfiltered_by_default(self, tmp_path, monkeypatch, rocm_probe_env):
         _binary_with_marker(tmp_path, {"mapped_targets": ["gfx1101"]})
@@ -451,10 +437,7 @@ class TestArchCrashRetrySet:
         assert LlamaCppBackend._arch_crash_retry_gpu_ids([0, 1], [0, 1]) == []
 
     def test_single_gpu_host_has_no_retry(self, monkeypatch):
-        """#7624: the one selected GPU IS the whole host, so the narrowing must be
-        skipped outright. The spy counts rather than raises: the branch runs under
-        ``except Exception: return []``, which would swallow an AssertionError and
-        return the very [] the guard should produce, passing either way."""
+        """A single-GPU host skips the arch narrowing retry entirely; the spy counts calls, not raises."""
         calls = []
 
         def _spy():

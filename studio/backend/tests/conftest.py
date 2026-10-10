@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Shared pytest configuration for the backend test suite.
-
-Puts the backend root on sys.path (mirrors app launch) and provides a hybrid
-``studio_server`` session fixture for end-to-end tests with two modes:
-external server (``UNSLOTH_E2E_BASE_URL``/``UNSLOTH_E2E_API_KEY``) for fast
-iteration, or a fixture-managed server started/torn down per session for CI.
-Model/variant for the managed mode resolve from ``--unsloth-model`` /
-``--unsloth-gguf-variant``, then env vars, then ``test_studio_api.py`` defaults.
-"""
+"""Puts the backend root on sys.path; studio_server uses UNSLOTH_E2E_BASE_URL or a managed server."""
 
 # Must run before torch is imported; see tests/_shared/compile_cache_isolation.py.
 import importlib.util as _ilu  # noqa: E402
@@ -75,12 +67,7 @@ os.environ.setdefault("UNSLOTH_SETTLE_DELAY_S", "0")
 
 @pytest.fixture(scope = "session")
 def _studio_home_root(tmp_path_factory):
-    """One parent directory for every per-test studio home.
-
-    ``tmp_path_factory.mktemp`` scans the whole basetemp on every call to pick
-    the next number, so calling it once per test is quadratic in the number of
-    tests. Paid once per session here, the per-test cost below is a bare mkdir.
-    """
+    """Created once per session: mktemp rescans basetemp on every call, so a per-test call is quadratic."""
     return tmp_path_factory.mktemp("studio_homes")
 
 
@@ -152,12 +139,8 @@ def _isolate_agent_skills(_skills_home_root, monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _contain_installer_venv_root(tmp_path_factory, monkeypatch):
-    """Mechanism: tests/_shared/installer_venv_root.py.
-
-    A separate pytest root, so it cannot poison the AMD fast-path probe (another job), but
-    it has the same defect: test_torchao_select.py drives install_python_stack() in process,
-    so it deletes and rewrites the manifest of the venv running the tests.
-    """
+    """test_torchao_select runs install_python_stack in process, so it would rewrite this venv's
+    manifest."""
     for _up in _iso.parents:
         _shared = _up / "tests" / "_shared"
         if (_shared / "installer_venv_root.py").is_file():
@@ -270,12 +253,7 @@ def pytest_addoption(parser):
 
 @pytest.fixture(scope = "session", autouse = True)
 def _isolate_xet_health_home(tmp_path_factory):
-    """Point HF_HOME at a temp dir for the whole session, before any server is spawned.
-
-    Session scope is load-bearing: pytest builds higher-scoped fixtures first, so setting HF_HOME
-    function-scoped landed AFTER ``studio_server`` snapshotted os.environ, leaving that server
-    rewriting the developer's real unsloth_xet_health.json.
-    """
+    """Session scope: a function-scoped HF_HOME would land after studio_server snapshots os.environ."""
     from _pytest.monkeypatch import MonkeyPatch
 
     from huggingface_hub import constants as hf_constants
@@ -295,13 +273,8 @@ def _isolate_xet_health_home(tmp_path_factory):
 
 @pytest.fixture(autouse = True)
 def _isolate_xet_health_state():
-    """Keep the persisted Xet health verdict out of the developer's real HF home.
-
-    The verdict is sticky across sessions (two consecutive failures pin a machine to HTTP for 24h),
-    so a machine that has genuinely stalled starts the ladder on HTTP inside a test expecting Xet.
-    That reproduced: `test_shim_injects_studio_prepare_on_http_retry` saw the fallback without the
-    Xet attempt it asserts. Clean CI runners hide it, developer machines do not.
-    """
+    """Keep the persisted Xet health verdict out of the real HF home, or a stalled machine starts on
+    HTTP."""
     # Load like the shim: a bare unsloth_zoo import raises on CPU-only hosts.
     from utils.hf_xet_fallback import _load_optional
 
@@ -316,22 +289,7 @@ def _isolate_xet_health_state():
 
 @pytest.fixture(autouse = True)
 def _confine_prequant_registration_memo():
-    """Keep one test's answer about the pre-quant allowlist from becoming every later test's.
-
-    ``diffusion_prequant`` asks once whether this torch can register the constructor allowlist and
-    memoises the answer, INCLUDING the failure, in a module global. That is right in a process
-    where torch never changes. It is wrong in this suite, where several files put a fake torch in
-    ``sys.modules``: the question gets asked while the fake is installed, the answer is False, and
-    ``monkeypatch`` restores ``sys.modules`` but not the memo. Every later real load then refuses.
-
-    Measured on main: after ``test_diffusion_backend.py`` the memo reads False, where it reads None
-    when that file runs alone. In a full-suite run that turned 20 tests across
-    ``test_diffusion_prequant.py`` and ``test_diffusion_convrot.py`` red, all with the same
-    ``assert None is not None``, while every one of them passed when its file ran by itself.
-
-    Restored rather than cleared, so nothing re-registers 22k times and a test that sets the memo
-    deliberately still sees its own value.
-    """
+    """Restore diffusion_prequant's memo after each test: a fake torch can cache a False answer."""
     from core.inference import diffusion_prequant
 
     registered = diffusion_prequant._SAFE_GLOBALS_REGISTERED
@@ -344,25 +302,7 @@ def _confine_prequant_registration_memo():
 
 @pytest.fixture(autouse = True)
 def _isolate_generation_state():
-    """Keep one test's account fences and active generations out of the next test.
-
-    ``state.active_generations`` keeps ``_ACTIVE`` and ``_FENCED`` on the module, so they are
-    process-global and survive a test. Retiring or deactivating an account fences it, and
-    staying fenced is the CORRECT end state for those tests, so none of them is at fault: what
-    was missing is the isolation, the same way a tmp dir is isolated rather than every test
-    being asked to clean up after itself.
-
-    Measured, not guessed: 15 tests across test_job_accounts.py, test_account_storage.py,
-    test_account_integration_wiring.py and test_account_retired_workspace_recreated.py end
-    with a fenced account. Whichever of them landed in an xdist worker ahead of
-    tests/multi_account/test_routing_invariance.py made its
-    ``assert active_generations._FENCED == set()`` fail with somebody else's account id, which
-    is why that test failed in CI and passed whenever it was run on its own.
-
-    Here, not per-suite, so no test can leak. Several files already call reset_for_tests()
-    around themselves; this makes that universal, and those stay as they are since resetting
-    twice costs nothing and the local call documents the intent at its own site.
-    """
+    """Reset active_generations per test: fenced accounts from one test otherwise leak into the next."""
     from state import active_generations
 
     active_generations.reset_for_tests()
@@ -372,15 +312,7 @@ def _isolate_generation_state():
 
 @pytest.fixture(autouse = True)
 def _forget_the_managed_provider_url_setting():
-    """Drop the managed-account private provider URL setting's cached answer around each test.
-
-    ``managed_provider_url_settings`` holds the owner's switch for a second so every managed
-    outbound request does not open SQLite. Each test points ``UNSLOTH_STUDIO_HOME`` at a fresh
-    store, but the held answer outlives it: a test that turned the switch on left ``True`` cached,
-    and the next test in the same xdist worker to run inside that second read it instead of its own
-    store's default, so test_managed_account_cannot_list_models_from_a_loopback_provider got a 200
-    with the loopback provider's models where it expected a 400.
-    """
+    """Forget the cached managed-provider URL setting per test, or a stale True answers the next test."""
     settings = sys.modules.get("utils.managed_provider_url_settings")
     if settings is not None:
         settings.forget_cached_setting()
@@ -392,15 +324,7 @@ def _forget_the_managed_provider_url_setting():
 
 @pytest.fixture(autouse = True)
 def _forget_the_cached_owner_identity():
-    """Drop ``process_lifetime``'s cached owner identity after each test.
-
-    ``_own_identity`` reads this process's identity once and keeps it, which is right in a server,
-    where it cannot change. A test that patches ``_pid_identity`` and then adopts a pid caches the
-    fake instead: test_concurrent_adopts_all_survive left ``id-<pid>`` behind, and the next test in
-    the same xdist worker to write a record wrote that, so the reaper read its own live owner as
-    gone and killed the child test_a_live_owner_is_never_reaped had just adopted. The cache is
-    recomputed on demand, so clearing it costs one ``ps`` at most.
-    """
+    """Clear process_lifetime's cached owner identity per test, or a fake pid identity leaks onward."""
     yield
     lifetime = sys.modules.get("utils.process_lifetime")
     if lifetime is not None:
@@ -409,19 +333,8 @@ def _forget_the_cached_owner_identity():
 
 @pytest.fixture(autouse = True)
 def _isolate_wal_keepers():
-    """Close the WAL keepers a test opened, so the next test starts without them.
-
-    ``storage.studio_db`` holds one keeper connection per database in a module global, and
-    ``get_connection`` opens one on its own for any managed account, which is the correct
-    behaviour in a server and the reason nothing else closes them in a test. So every test that
-    touched a managed account's studio.db, tests/multi_account/test_alice_bob_matrix.py among
-    them, handed its keepers to whatever ran next in the same xdist worker, and
-    test_wal_keeper_declines_when_the_filesystem_refused_wal's ``assert not _wal_keepers``
-    failed with somebody else's account databases. Reproduced by running the matrix ahead of it.
-
-    Only what the test itself added is closed, and through ``close_wal_keeper_for`` so the
-    close listeners run exactly as they would in the product.
-    """
+    """Close the WAL keepers a test opened, so a later test's assertion on _wal_keepers sees only
+    its own."""
     from storage import studio_db
 
     before = set(studio_db._wal_keepers)
@@ -434,12 +347,7 @@ def _isolate_wal_keepers():
 
 @pytest.fixture(autouse = True)
 def _isolate_audio_gallery(monkeypatch, tmp_path):
-    """Keep generated-clip persistence out of the developer's real gallery.
-
-    /audio/generate persists every clip, so a route test with a fake TTS core left silent
-    wavs in ``studio_root()/audio`` for the Audio page to list. Here, not per-suite, so
-    no test can leak.
-    """
+    """Point audio_gallery's studio_root at tmp_path so generated clips never reach the real gallery."""
     from core.inference import audio_gallery
 
     monkeypatch.setattr(audio_gallery, "studio_root", lambda: tmp_path)
@@ -448,12 +356,7 @@ def _isolate_audio_gallery(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse = True)
 def _no_background_model_scan(monkeypatch):
-    """Keep the /v1 admission hook from scanning the real HF cache during tests.
-
-    The hook warms the local-model index on a background thread: right in a server,
-    wrong here, since it walks the developer's actual caches and the I/O starves the
-    loop under timing-sensitive streaming tests. Warm tests patch it back.
-    """
+    """Patch out the /v1 admission hook's background index warm so tests never walk real HF caches."""
     import time
 
     from core.inference import local_model_resolver
@@ -472,13 +375,7 @@ def _empty_hf_hub_cache(tmp_path_factory):
 
 @pytest.fixture(autouse = True)
 def _hf_cache_is_empty(_empty_hf_hub_cache, monkeypatch):
-    """Point BOTH hub-cache roots at an empty dir, so the suite is host independent.
-
-    Unsloth pins its live setting out of this env snapshot; huggingface_hub falls back to
-    ``constants.HF_HUB_CACHE``. A dev holding FLUX.1-dev otherwise watches its files leave a
-    download plan AND the mirror swap decline. Pinned at the ROOT, not by stubbing a probe: that
-    reaches only one of the four cache reads, and ``_upstream_is_cached`` walks the tree itself.
-    Tests that own the cache setting replace the whole dict, so they still win."""
+    """Pin HF_HUB_CACHE at the root so every cache read sees an empty hub, not just one probe."""
     from utils import hf_cache_settings
 
     monkeypatch.setitem(hf_cache_settings._EXPLICIT_CACHE_ENV, "HF_HUB_CACHE", _empty_hf_hub_cache)
@@ -501,16 +398,7 @@ def _no_live_metal_wired_ceiling(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _no_leftover_generation_account(monkeypatch):
-    """Clear the media-generation owner, which is a process global no route ever resets.
-
-    ``routes.video._note_generation_account()`` records who started a generation and
-    nothing writes it back to ``None``, so any test that POSTs a generate leaves the
-    next test's poll looking like a foreign account's job -- the progress route then
-    answers the hidden shape, and an unrelated test dies on ``KeyError: 'active'``
-    somewhere else in the run. Six files already reset this by hand; doing it here
-    covers the rest, and the six keep their explicit version because there it IS the
-    thing under test.
-    """
+    """Reset routes.video's _generation_account per test, since no route ever clears it."""
     routes_video = sys.modules.get("routes.video")
     if routes_video is None:
         return
@@ -519,13 +407,8 @@ def _no_leftover_generation_account(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _assume_bare_metal(monkeypatch):
-    """Pin the virtualised-Metal detector off so the suite is host independent.
-
-    The dedupe comparators consult real hardware, so on a Mac (and on GitHub's macos
-    runners, which are paravirtual) every test of them would normalize the incoming
-    request and mismatch fixture state that was never normalized. Tests that want the
-    fallback patch it back on.
-    """
+    """Force the Metal paravirtual detector False: on a Mac or macOS runner, fixture state would
+    mismatch."""
     from core.inference import llama_cpp
 
     monkeypatch.setattr(llama_cpp, "_metal_device_is_paravirtual", lambda: False)
@@ -555,13 +438,7 @@ _PROXY_ENV_VARS = (
 
 
 def no_proxy_with_test_servers(*existing) -> str:
-    """Every *existing* NO_PROXY value, plus the servers this suite must reach directly.
-
-    Takes all the spellings at once rather than one at a time. A host that exports only
-    ``NO_PROXY`` would otherwise have its entries read for that variable and dropped
-    from the ``no_proxy`` written beside it, and most clients read the lowercase one
-    first -- so a bypass the developer had configured would quietly stop applying.
-    """
+    """Merge every existing NO_PROXY spelling, so a configured bypass is not lost to lowercase."""
     bypass = list(_LOOPBACK_PROXY_BYPASS) + sorted(_configured_server_hosts())
     parts = [
         part.strip() for value in existing for part in (value or "").split(",") if part.strip()
@@ -600,13 +477,7 @@ _outbound_permitted = False
 
 @contextlib.contextmanager
 def allow_outbound():
-    """Permit real outbound traffic for the duration of the block.
-
-    For a session- or module-scoped fixture that has to fetch something for real. Those
-    are built before the per-test fixtures, so ``@pytest.mark.allow_network`` on the
-    test that happens to trigger one cannot reach back and lift the guard in time; the
-    fixture has to say so itself. A test body should still use the marker.
-    """
+    """Session or module fixtures must call this; an allow_network marker is applied too late for them."""
     global _outbound_permitted
 
     previous = _outbound_permitted
@@ -618,12 +489,7 @@ def allow_outbound():
 
 
 def _decoded_host(host):
-    """*host* as a comparable string, or None when it is not a name these rules can read.
-
-    The socket API takes a hostname as ``str`` or ``bytes``. Comparing the bytes form
-    against a set of strings matches nothing, so it has to be decoded before the rules
-    see it, or every rule below silently says no and the caller-facing default decides.
-    """
+    """Decode bytes hostnames to str first; comparing bytes to strings matches no rule."""
     if isinstance(host, (bytes, bytearray)):
         try:
             return bytes(host).decode("ascii")
@@ -635,13 +501,7 @@ def _decoded_host(host):
 
 
 def _host_is_allowed(host) -> bool:
-    """True for loopback and for any host the suite was explicitly pointed at.
-
-    Anything that is not a readable hostname is refused rather than allowed. Defaulting
-    the other way made ``getaddrinfo(b"huggingface.co", 443)`` a complete way around the
-    guard: the byte string missed every rule, the non-string default let it through to
-    the real resolver, and the address it returned was then dialable.
-    """
+    """Unreadable hosts are refused, since a permissive default let byte-string hosts bypass the guard."""
     if host is None:
         return True
     decoded = _decoded_host(host)
@@ -671,12 +531,7 @@ def _is_ip_literal(host) -> bool:
 
 
 def _is_local_endpoint(sock, address) -> bool:
-    """True for anything the suite may dial: local IPC and loopback addresses.
-
-    Family first, because AF_UNIX carries a filesystem path rather than a host and
-    multiprocessing's pools connect over exactly that -- reading ``address[0]`` there
-    yields a directory name that matches no host rule and blocks process pools.
-    """
+    """Check the family first: AF_UNIX addresses are paths, not hosts, so address[0] matches no rule."""
     import socket as _socket
 
     if getattr(sock, "family", None) not in (_socket.AF_INET, _socket.AF_INET6):
@@ -699,34 +554,7 @@ class _RealSocketCalls:
 
 @pytest.fixture(scope = "session", autouse = True)
 def _outbound_network_guard():
-    """Refuse every non-loopback connect, so no test depends on a live Hub.
-
-    Several routes probe huggingface.co on paths these tests exercise, and every one
-    of them fails open, so the traffic never showed up as a failure -- it only showed
-    up as time. When the Hub answers slowly rather than refusing (a rate-limited CI
-    egress IP is the usual way), huggingface_hub retries with backoff and a file that
-    normally runs in six seconds sits there for minutes, until the job hits its cap
-    and is killed having reported nothing.
-
-    Blocking the socket keeps the online code path intact -- unlike HF_HUB_OFFLINE,
-    which flips the branch and changes what is under test -- while making the call
-    fail immediately instead of hanging. Mark a test ``allow_network`` if it genuinely
-    needs to dial out; the e2e ``studio_server`` tests reach their server on loopback
-    and are unaffected.
-
-    Installed for the session rather than per test. pytest builds a test's fixtures
-    widest scope first, so a function-scoped guard is not in place yet while session-
-    and module-scoped fixtures are setting up, and those are as able to dial out as any
-    test body. A fixture that wants out says so with ``allow_outbound()``, since by then
-    it is too late for a marker on the test to reach back and lift anything.
-
-    Reaches this interpreter only. A test that spawns a Python process gets a child with
-    ordinary sockets, which is deliberate for the one fixture that does it: ``studio_server``
-    starts a real server in managed mode, and that server is supposed to fetch the GGUF
-    it serves. Blocking the child would break the e2e tests this suite runs on rather
-    than remove a dependency they do not want. Those tests live in ``test_studio_api.py``,
-    which CI skips, and are the only place a child is spawned.
-    """
+    """Block non-loopback sockets so a slow Hub cannot stall a test; the allow_network marker lifts it."""
     import socket
 
     real = _RealSocketCalls(socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo)
@@ -823,11 +651,7 @@ def allow_outbound_network(_outbound_network_guard):
 
 @pytest.fixture(autouse = True)
 def _no_outbound_network(request, monkeypatch, _outbound_network_guard):
-    """Per-test half of the guard: reset what the last test was allowed to reach.
-
-    Also lifts the guard for the whole of an ``allow_network`` test, which is where a
-    marker can still do the job: the test body has not started yet.
-    """
+    """Per-test: clear names the last test pointed at, and lift the guard for allow_network tests."""
     # Per test, so names a test pointed env vars at do not stay dialable.
     _RESOLVED_SERVER_ADDRESSES.clear()
 
@@ -842,28 +666,7 @@ def _no_outbound_network(request, monkeypatch, _outbound_network_guard):
 
 @pytest.fixture(autouse = True)
 def _hub_reachable_without_probing(monkeypatch):
-    """Report the Hub as reachable without dialling it.
-
-    The reachability probes are themselves network calls, so with outbound traffic
-    blocked they would report the Hub down and send every caller into its offline
-    branch -- which is a different code path from the one these tests mean to cover.
-    Pinning them to "reachable" keeps the online path selected; the individual
-    request that follows is still blocked, and the callers already fail open on it.
-    Tests about offline behaviour patch these back.
-
-    Seeded through the memo rather than by patching ``hf_dns_dead`` /
-    ``hf_unreachable``: callers ``from utils.utils import`` those names, so patching
-    the source module leaves already-imported bindings pointing at the real probes.
-    Every caller reaches the memo through a function that reads the module global at
-    call time, so seeding it covers them all regardless of import style.
-
-    The verdict is also pinned fresh for the whole test. The memo expires after
-    ``_HF_REACHABILITY_TTL_S`` (five seconds), so a seed stamped now would lapse in any
-    test that reaches a Hub-guarded operation later than that, and the real probe would
-    run into the blocked socket and select the offline branch this fixture exists to
-    avoid. The stamp is dated far ahead instead, which keeps it fresh under the real
-    freshness rule rather than disabling that rule for every test.
-    """
+    """Seed the reachability memo as reachable: patching hf_dns_dead misses bindings already imported."""
     import time
 
     from utils import utils as utils_utils
@@ -876,12 +679,7 @@ def _hub_reachable_without_probing(monkeypatch):
 
 @pytest.fixture(scope = "session")
 def studio_server(request):
-    """Yield ``(base_url, api_key)`` for e2e tests.
-
-    Uses ``UNSLOTH_E2E_BASE_URL`` (requires ``UNSLOTH_E2E_API_KEY``) if set,
-    else starts/tears down a fresh server via ``_start_server``. Session-scoped
-    and lazy so the GGUF load happens at most once and only when requested.
-    """
+    """Yields (base_url, api_key): UNSLOTH_E2E_BASE_URL if set, else a managed server started lazily."""
     external_url = os.environ.get("UNSLOTH_E2E_BASE_URL")
     if external_url:
         api_key = os.environ.get("UNSLOTH_E2E_API_KEY")
@@ -928,13 +726,7 @@ def api_key(studio_server):
 
 @pytest.fixture(scope = "session")
 def linkable_temp_base(tmp_path_factory):
-    """Session scratch root for tests whose paths must satisfy the linked-folder policy.
-
-    macOS puts the pytest temp root under /private/var/folders, which the shared denylist
-    rejects as a system directory. The directory is unique per session so concurrent runs
-    cannot delete each other's databases, and session scope keeps its removal after every
-    function-scoped monkeypatch has been undone, so teardown sees a real os.scandir.
-    """
+    """Scratch under the home dir: macOS temp paths under /private/var are denied as system dirs."""
     basetemp = tmp_path_factory.getbasetemp()
     root = Path.home() / ".unsloth-test-tmp"
     base = root / basetemp.name
@@ -950,11 +742,8 @@ def linkable_temp_base(tmp_path_factory):
 
 @pytest.fixture
 def rag_home(tmp_path, monkeypatch, linkable_temp_base):
-    """Isolate the RAG database under a fresh UNSLOTH_STUDIO_HOME per test.
-
-    Points the storage root at a linkable directory and resets the lazy schema flag so
-    each test starts from an empty rag.db. Yields the temp home path.
-    """
+    """Give each test a fresh UNSLOTH_STUDIO_HOME and reset the lazy rag.db schema flag so it starts
+    empty."""
     from hub.storage.scan_folders import is_denied_system_path
     from storage import rag_db
 
@@ -981,11 +770,7 @@ def rag_conn(rag_home):
 
 @pytest.fixture
 def stub_embeddings(monkeypatch):
-    """Stub ``core.rag.embeddings`` with deterministic hash-based vectors.
-
-    Lets store / retrieval / ingestion tests run fast without downloading a
-    sentence-transformers model. Returns the fixed embedding dimension.
-    """
+    """Stub core.rag.embeddings with hash vectors, so tests never download a sentence-transformers model."""
     import hashlib
     import math
 
@@ -1022,14 +807,7 @@ def stub_embeddings(monkeypatch):
 
 @pytest.fixture
 def dit_train_host(monkeypatch):
-    """Pretend this host can train the DiT families.
-
-    ``family_train_infos()`` and the start preflight both gate on the accelerator / bf16 probes, so
-    on a GPU-less runner every DiT family reports no precision modes, ``supports_compile`` False,
-    and a "needs a GPU" note that replaces any other preflight message. Tests about family metadata
-    or about a different preflight pin the probes here so they assert the same thing on every host;
-    the gate itself is covered by its own tests in test_diffusion_base_precision.py.
-    """
+    """Pin the accelerator and bf16 probes so DiT family metadata does not vary by runner's GPU."""
     import core.training.diffusion_train_common as dtc
 
     monkeypatch.setattr(dtc, "dit_accelerator_missing_reason", lambda *_a, **_k: None)
@@ -1039,11 +817,7 @@ def dit_train_host(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _reset_optional_module_memo():
-    """Forget the shim's memoised optional-module results between tests.
-
-    ``_load_optional`` caches per module name including failures, so without this one test's fake
-    module would answer the next test's question.
-    """
+    """_load_optional caches failures too, so one test's fake module would answer the next question."""
     import utils.hf_xet_fallback as _shim
 
     _shim._reset_optional_module_cache()
@@ -1053,16 +827,7 @@ def _reset_optional_module_memo():
 
 @pytest.fixture
 def healthy_diffusers(monkeypatch):
-    """A diffusers that answers any pipeline class, for tests about a route rather than a cast.
-
-    The training route asserts the family's pipeline class strictly before it frees the resident
-    GPU models, so a runner whose diffusers cannot import (a transformers/huggingface-hub pin skew
-    is the common one: the lazy top level then raises RuntimeError instead of answering hasattr)
-    would turn every routing and config test into a 400 about diffusers. This is a PROXY, not a
-    replacement: everything the real module can still serve is delegated, including ``__path__`` so
-    ``from diffusers.optimization import ...`` keeps working, and only a pipeline class it cannot
-    produce is answered here. Tests that DO exercise the gate replace ``sys.modules["diffusers"]``
-    themselves, which runs after this and wins."""
+    """Proxy diffusers to answer any pipeline class, since a pin-skewed import raises RuntimeError."""
     import types
 
     try:
@@ -1092,23 +857,7 @@ def healthy_diffusers(monkeypatch):
 
 @pytest.fixture
 def real_prequant_safe_globals(monkeypatch):
-    """Stand in for the allowlist entries this host cannot import, and hand back the real resolver.
-
-    The file header promises these tests run without torchao, and the Backend CI image keeps that
-    promise literally: it installs torch and transformers and no torchao at all. Production then
-    resolves not one entry of ``_PREQUANT_SAFE_GLOBALS``, the registration floor ("TorchVersion
-    plus at least one real torchao class") is not met, every load refuses, and 19 tests in here
-    fail on ``assert None is not None`` -- saying nothing whatever about the loader they are
-    about. ``test_diffusion_convrot.py`` loads through the same registration and needs it too,
-    which is why this lives here rather than in one of the two files. The tests also swap ``sys.modules["torch"]`` for a bare module while a load runs, so
-    even ``torch.torch_version`` is unimportable at that moment, torchao or no torchao.
-
-    Standing in only for the names that did NOT resolve keeps a host that has torchao testing the
-    real classes. Which names a given release actually ships is asked separately, by
-    ``test_the_registration_floor_needs_a_real_torchao``, which skips rather than pretends -- and
-    ``test_the_registration_refuses_when_nothing_resolves`` pins the refusal itself, so the gate
-    that the CI image trips is still under test rather than merely worked around.
-    """
+    """Stand in only for allowlist names that do not resolve, so torchao hosts still test real classes."""
     import core.inference.diffusion_prequant as pq
 
     resolver = pq._prequant_safe_globals
@@ -1126,13 +875,8 @@ def real_prequant_safe_globals(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _no_carried_over_hardware_measurements():
-    """Both hardware caches start empty for every test, as they do in a fresh process.
-
-    The torch build snapshot and the physical GPU inventory are module globals with a
-    60 second TTL, so one test's host -- a suite that makes `import torch` fail, say --
-    would otherwise answer for every test that ran within a minute of it. Cleared
-    afterwards as well, so a test that warms one deliberately does not leak either.
-    """
+    """Clear the torch build and GPU inventory caches per test, since their 60 second TTL outlives a
+    test."""
     from utils.hardware import hardware as _hw
 
     def _clear():
@@ -1148,14 +892,7 @@ def _no_carried_over_hardware_measurements():
 
 @pytest.fixture(autouse = True)
 def _process_shutdown_latch_is_clear():
-    """Clear the process-wide shutdown latch around every test.
-
-    The latch is deliberately sticky in production: quitting is terminal, and only an
-    embedded host calling run_server again clears it. In a suite that makes it a
-    global one test can leave set for the rest of the file, and any test that tears a
-    backend down sets it, so a later spawn test sees a stale "quitting" and fails in
-    whatever order pytest happens to pick.
-    """
+    """Reopen the shutdown latch per test: it is sticky in production, so one test would leak it."""
     from utils import process_lifetime
 
     def _reopen():
@@ -1178,12 +915,8 @@ def _process_shutdown_latch_is_clear():
 
 @pytest.fixture(autouse = True)
 def _no_leaked_inventory_handles():
-    """Start every test with an empty per-request handle table.
-
-    The ContextVar a REQUEST owns is never reset between tests, so one test that resolves a
-    handle leaves the table populated for every test after it in the same worker, and a route
-    that answers a response MODEL then answers a restored dict instead.
-    """
+    """Empty the per-request handle table per test: its ContextVar is never reset, so handles leak
+    onward."""
     try:
         from hub.utils import host_paths
     except Exception:  # optional deps absent on some CI legs
@@ -1198,18 +931,7 @@ def _no_leaked_inventory_handles():
 
 @pytest.fixture(autouse = True)
 def _drop_the_settings_memo_between_tests():
-    """Stop one test's app settings answering another test's read.
-
-    utils.openai_auto_switch_settings memoizes every setting it reads for _CACHE_TTL_S
-    (2 seconds) in a module-level dict, which is right on a request hot path and wrong
-    across tests: suites run far faster than the TTL, so a test that reads a setting hands
-    its value to whatever runs next, and only to the tests that happen to run inside the
-    window. That is not an ordering bug a fixed test order would catch; it is a clock.
-
-    It cost a day of #11241: a leaked auto-download flag turned the withheld-model tests'
-    404 into a fetch-and-load, which then died on their own backend double and surfaced as
-    `assert 500 == 404` in the l-r shard and nowhere else.
-    """
+    """Clear the openai_auto_switch_settings memo per test; its 2 second TTL lets values leak onward."""
     from utils import openai_auto_switch_settings as _settings
 
     _settings._cache.clear()
@@ -1221,35 +943,7 @@ def _drop_the_settings_memo_between_tests():
 
 @pytest.fixture(autouse = True)
 def _drop_the_idle_reload_stash_between_tests():
-    """Stop one test's idle-unloaded model being resurrected by another test's request.
-
-    core.inference.llama_keepwarm keeps what the idle loop freed in a module-level
-    ``_last_unloaded_model`` (with its KV manifest in ``_kv_resume``) so the next request
-    can reload exactly that. The idle tests set it through a real unload and clear it only
-    on the way IN, via their own _reset_keepwarm, so whichever of them runs last in a
-    worker leaves the stash standing for every test after it, in any module.
-
-    The chat route reads that stash before it refuses anything (routes/inference.py, "Idle
-    unload may have freed the model; reload exactly what it freed"). A later test whose
-    backends are doubles then reloads a model it never mentioned: the withheld-alias test
-    went looking for unsloth/Idle-GGUF on the Hub and died on
-    ``'_B' object has no attribute 'load_model'``, reported as ``assert 500 == 404``.
-
-    That is the same symptom the settings memo above produced and a different cause, which
-    is why this clears the stash rather than widening that fixture: both hand a later test
-    an input it never set, and under xdist --dist loadgroup which tests share a worker
-    changes between runs, so it fails in one shard and nowhere else.
-
-    The two stash fields only. The counters beside them (_inflight, _pending, _last_active)
-    are live-traffic bookkeeping, and zeroing those around every test would hide exactly the
-    leak this is here to prevent.
-
-    Through _set_last_unloaded rather than by assigning the globals: the manifest names KV
-    slot files on disk, and llama_keepwarm makes whoever takes it responsible for deleting
-    them. Assigning None drops the only reference to a real snapshot and leaves the files
-    behind, so a suite that saves KV would accumulate them run after run. That call clears
-    both fields under the module lock and unlinks the slots on its way out.
-    """
+    """Clear keepwarm's stash via _set_last_unloaded per test, so no later test reloads another's model."""
     from core.inference import llama_keepwarm as _keepwarm
 
     _keepwarm._set_last_unloaded(None)

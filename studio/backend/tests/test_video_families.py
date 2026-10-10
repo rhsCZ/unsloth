@@ -307,13 +307,7 @@ def test_hv15_generation_defaults():
 
 
 def test_hv15_720p_checkpoints_never_route_to_the_480p_family():
-    """Every 720p repack must land on the 720p family, not just the aliased t2v path.
-
-    The tier is baked into the weights: the two repacks ship transformer target_size 640 vs 960
-    and scheduler shift 5.0 vs 9.0, and their bucket lists are disjoint. The 480p family also
-    supplies the base repo the VAE and text encoder come from, so a 720p checkpoint routed there
-    runs the whole pipeline off-tier.
-    """
+    """720p checkpoints must not route to the 480p family, since the tier is baked into the weights."""
     for repo_id in (
         "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v",
         "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v",
@@ -331,12 +325,7 @@ def test_hv15_720p_checkpoints_never_route_to_the_480p_family():
 
 
 def test_video_resolution_presets_are_upstream_sanctioned():
-    """No preset may be a size its checkpoint was never trained for.
-
-    HV15 presets must be real buckets of their own tier (generate_crop_size_list(base_size=640)
-    for 480p, 960 for 720p); Wan2.2 TI2V-5B must offer only the two shapes upstream's
-    SUPPORTED_SIZES asserts on.
-    """
+    """Presets must be trained sizes: HV15 uses its own tier's buckets; Wan2.2 uses SUPPORTED_SIZES."""
 
     def buckets(base_size, patch_size = 16):
         num_patches = round((base_size / patch_size) ** 2)
@@ -361,11 +350,7 @@ def test_video_resolution_presets_are_upstream_sanctioned():
 
 
 def test_curated_gguf_repos_are_unsloth_mirrors():
-    """No curated video GGUF pick may point at a community repack.
-
-    ``gguf_repo`` is a one-click download, so its availability is Unsloth's problem: a rename or
-    takedown upstream turns the pick into a 404 no client can fix.
-    """
+    """Curated video GGUF picks must be Unsloth mirrors, since a takedown upstream would 404 them."""
     from core.inference.video_families import _FAMILIES
 
     curated = {fam.name: fam.gguf_repo for fam in _FAMILIES if fam.gguf_repo}

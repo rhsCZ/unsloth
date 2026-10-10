@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Deep Research's internal hop must never enter the local tool loop.
-
-Its prompts carry gathered web and document text and go back through /v1/chat/completions,
-where --enable-tools overrides a per-request enable_tools and an omitted enabled_tools
-resolves to every built-in, python and terminal included. These tests pin the opt-out at the
-route, where the decision is made, and pin that it costs an ordinary run nothing.
-"""
+"""Deep Research's internal hop must opt out of the tool loop; omitted enabled_tools enables all."""
 
 import json
 

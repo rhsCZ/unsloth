@@ -168,11 +168,7 @@ _SCHEME_REQUIRED_GLOBALS: dict = {
 
 
 def _tuple_safe_globals_supported() -> bool:
-    """Whether this torch's ``add_safe_globals`` understands ``(object, name)`` pairs (2.6+). Asked
-    by VERSION rather than by trying it: 2.4/2.5 accept the pairs silently and only fail later,
-    in ``_get_user_allowed_globals``, which reads ``f.__module__`` off every entry of a
-    PROCESS-WIDE list, so a tuple left there breaks every other weights_only load in Unsloth.
-    Nothing is registered unless the answer here is yes."""
+    """Checked by version: below torch 2.6, tuple pairs are accepted then break every weights_only load."""
     try:
         import torch
         parts = str(torch.__version__).split("+")[0].split(".")
@@ -182,24 +178,7 @@ def _tuple_safe_globals_supported() -> bool:
 
 
 def _register_prequant_safe_globals() -> bool:
-    """Register the allowlist ONCE, process-wide and permanently. True when the load can run.
-
-    Not the ``safe_globals`` context manager, deliberately: it adds on entry and REMOVES on exit
-    against a process-wide table, so two overlapping reads (a download-plan probe beside a load;
-    both arrive on the route's thread pool) let whichever finishes first strip the allowlist out
-    from under the other's ``torch.load``, failing a good checkpoint and dropping it to dense.
-    Adding once and never removing has no such window.
-
-    The widening this costs is small and bounded: other ``weights_only`` loads in the process also
-    accept these torch/torchao tensor constructors, which build tensors and nothing else. A pickle
-    naming ANY global is still refused.
-
-    Registration takes ``(object, name)`` pairs so a re-exported class is registered under the name
-    the pickle records, and that form is version-checked BEFORE anything is registered (see
-    ``_tuple_safe_globals_supported``). Below 2.6 nothing is registered and
-    ``restricted_prequant_load_supported`` tells planning to stop offering pre-quant sources at all.
-    Answered once and memoised, including the failure.
-    """
+    """Adds the allowlist once, never removes it: overlapping loads would race a context manager's exit."""
     global _SAFE_GLOBALS_REGISTERED
 
     if _SAFE_GLOBALS_REGISTERED is not None:
@@ -237,27 +216,7 @@ def _register_prequant_safe_globals() -> bool:
 def restricted_prequant_load_supported(
     scheme: Optional[str] = None, filename: Optional[str] = None
 ) -> bool:
-    """Whether this install can read a pre-quant checkpoint, for ``scheme`` when one is named.
-
-    Without the allowlist there is no safe way to open a pre-quant pickle and the loader refuses.
-    Planning has to ask the same question BEFORE it sizes the load: a plan that counts on a 6 GB
-    artifact, drops the dense shards and evicts the resident pipeline has nothing left when the
-    refusal arrives. ``usable_prequant_source`` therefore answers None here, hosted and local alike,
-    which is the same answer the loader will give.
-
-    PER SCHEME, because the schemes do not share constructors and torchao does not retire them
-    together: ``AffineQuantizedTensor`` and its layout carry every int8 checkpoint and are already
-    deprecated upstream (pytorch/ao#2752), so a release that drops them while keeping
-    ``Float8Tensor`` leaves fp8 loadable and int8 not. An unknown or unnamed scheme gets the floor
-    answer the registration itself already checked.
-
-    ``filename`` is the artifact the question is actually about, when the caller knows it. A
-    safetensors checkpoint names no constructors, so there is nothing to allowlist and none of the
-    above applies: it needs torchao's flatten/unflatten helpers and nothing else. Answering the
-    pickle's question for a safetensors artifact would refuse a perfectly loadable file on exactly
-    the installs the new container exists to unblock (a torch too old for ``add_safe_globals``, a
-    torchao missing a scheme's constructors, the stubbed torchao on Windows ROCm).
-    """
+    """Per scheme, since torchao retires int8 constructors ahead of fp8; safetensors needs no allowlist."""
     from .prequant_safetensors import is_safetensors_checkpoint, safetensors_prequant_supported
 
     if is_safetensors_checkpoint(filename):
@@ -276,12 +235,7 @@ def restricted_prequant_load_supported(
 
 
 def _torch_load_prequant(path: str, **kwargs: Any) -> Any:
-    """``torch.load`` a pre-quant checkpoint under the allowlist above. ``weights_only = True`` is
-    the whole point: a pickle that may name any global is remote code execution the moment the
-    artifact is not the one that was published. Everything the format legitimately needs is
-    allowlisted, so the restriction costs nothing and a mutated artifact raises
-    ``UnpicklingError`` into the caller's dense fallback instead of running. A torch that cannot
-    express the allowlist is refused outright, never reopened unrestricted."""
+    """Always weights_only=True: a pickle naming any global would run code, so a mutated file must fail."""
     import torch
 
     if not _register_prequant_safe_globals():
@@ -308,13 +262,7 @@ def _torch_load_prequant(path: str, **kwargs: Any) -> Any:
 
 
 def _load_prequant_checkpoint(path: str, **kwargs: Any) -> Any:
-    """Read a pre-quant checkpoint of EITHER container, as the same ``{"format", "state_dict",
-    "metadata"}`` dict.
-
-    Dispatched on the file extension rather than on content sniffing: the extension is what the
-    resolver asked the Hub for, so a repo hosting both containers cannot serve one and be parsed as
-    the other. ``kwargs`` are the pickle path's (``map_location``, ``mmap``); safetensors reads to
-    CPU, which is where the pickle path maps too, and honours ``mmap`` the same way."""
+    """Dispatches on file extension, not content, so a repo hosting both containers is never misparsed."""
     from .prequant_safetensors import is_safetensors_checkpoint, load_prequant_safetensors
 
     if is_safetensors_checkpoint(path):
@@ -395,10 +343,8 @@ def _local_prequant_path_allowed(path: str) -> bool:
 
 
 def local_prequant_path_ready(path: str) -> bool:
-    """True only when a local pre-quant path would actually load: inside an allowlisted root AND the
-    file is present. The auto-policy planner checks this before budgeting the small prequant
-    plan, so it never skips the dense shards for a path the loader will refuse (which would evict
-    the resident pipeline then rebuild dense under an undersized plan -> OOM)."""
+    """True only if the path is allowlisted and present, so planning never drops dense for a refused
+    file."""
     import os
 
     if not _local_prequant_path_allowed(path):
@@ -415,12 +361,7 @@ def prequant_mirror_path(
     name: Optional[str],
     readable: Any = None,
 ) -> Optional[str]:
-    """``<mirror>/<repo_id>/<name>`` when a configured mirror holds that file, else None. Never raises.
-
-    A converted safetensors copy of a requested pickle wins over the pickle itself (same weights, no
-    constructor allowlist), but only when ``readable(<sibling name>)`` says this install can open it:
-    otherwise a host without torchao's flatten helpers would be handed a file it then refuses, after
-    planning had already counted it as cached. ``readable`` defaults to "yes"."""
+    """A safetensors twin wins over a pickle only if this install can open it, else the file is refused."""
     import os
 
     raw = (os.environ.get(PREQUANT_MIRROR_ENV) or "").strip()
@@ -522,10 +463,8 @@ COMFY_TWIN_LEADS = frozenset({"int8"})
 
 
 def with_comfy_twins(names: Sequence[str], *, lead: bool = True) -> list:
-    """``names`` with each artifact's ComfyUI-format twin added. ``lead``: right ahead of the artifact's first name,
-    so the one file ComfyUI also loads is the default download and the containers older builds request stay behind
-    it as the fallback when the repo does not host the twin; otherwise right behind the artifact's last name.
-    Order-preserving, no duplicates."""
+    """Adds each name's ComfyUI-format twin; with lead the twin comes first, older names stay as
+    fallback."""
     names = [n for n in names if n]
     out: list = []
     for index, name in enumerate(names):
@@ -633,12 +572,7 @@ def prefer_cached_pickle_twins(
     log: bool = True,
     roots: Optional[Sequence[Optional[str]]] = None,
 ) -> list:
-    """``names`` with a cached, readable ``<stem>.pt``/``.pth`` moved ahead of its uncached
-    ``<stem>.safetensors`` twin, so an existing user does not re-download the same weights.
-
-    Same stem only: a different artifact never jumps the queue. The safetensors name stays right
-    behind, so a twin since removed from the Hub 404s onto it. ``PREFER_SAFETENSORS_ENV`` disables.
-    Pure cache lookups, never raises."""
+    """A cached .pt or .pth moves ahead of its uncached safetensors twin, so users do not re-download."""
     import os
 
     out = [n for n in names if n]
@@ -791,12 +725,7 @@ def first_cached_as_resolved(
     online: Optional[bool] = None,
     cache_dir: Optional[str] = None,
 ) -> Optional[str]:
-    """The first cached name in ``names`` (resolver order) the load opens without downloading anything
-    first, else None. Offline that is the first cached name. Online an uncached name ahead of it blocks
-    (the resolver would fetch it) unless the cache recorded its 404; otherwise a cached INT8 ``.pt``
-    reads as free while the load fetches an uncached INT8-ConvRot. A twin still ahead of the hit was
-    not reordered (kill switch, unreadable pickle), so the load fetches it too.
-    ``online=None`` reads huggingface_hub's offline switch and the load's ``local_files_only``. Never raises."""
+    """First cached name in resolver order; online, an uncached name ahead of it would block the load."""
     try:
         if online is None:
             online = not hub_offline() and not _LOCAL_FILES_ONLY.get()
@@ -845,12 +774,7 @@ class PrequantSource:
 
 
 def candidate_filenames_of(source: Any) -> tuple[str, ...]:
-    """``source``'s names, best first, for anything SHAPED like a source.
-
-    Planning passes lightweight stand-ins that carry ``filename`` / ``fallback_filename`` and
-    nothing else, so reading the property directly turns one of those into an AttributeError that
-    is swallowed into "no prequant plan" and a silent dense fallback. Falling back to the two older
-    attributes keeps every such caller working while the real dataclass answers the full chain."""
+    """Stand-ins without candidate_filenames fall back to the filename attributes instead of raising."""
     names = getattr(source, "candidate_filenames", None)
     if names is None:
         names = (
@@ -872,11 +796,7 @@ def prequant_repo_filename(
     *,
     component: Optional[str] = None,
 ) -> str:
-    """Filename for ``scheme`` in ``repo_id``; a non-default ``component`` inserts -<component>-.
-
-    ``suffix`` picks the container. It defaults to ``.pt`` so every existing caller keeps naming the
-    artifact it already names; ``derived_prequant_filenames`` is what puts the safetensors spelling
-    of the same name ahead of it."""
+    """Derives the name from repo and scheme; suffix defaults to .pt, so existing callers are unchanged."""
     model = repo_id.rsplit("/", 1)[-1]
     for drop in ("-fp8", "-int8", "-nvfp4", "-mxfp8", "-quantized"):
         if model.lower().endswith(drop):
@@ -894,15 +814,7 @@ def derived_prequant_filenames(
     *,
     component: Optional[str] = None,
 ) -> tuple[str, ...]:
-    """The names to try for ``(repo_id, scheme)``, best first, safetensors AHEAD of the pickle.
-
-    Preferring safetensors is a policy decision rather than a detail: it needs no constructor
-    allowlist (so it loads on installs where the pickle is refused outright), it validates from its
-    header before a weight is read, and it cannot carry pickle opcodes at all. Deriving the
-    preference here rather than per family means a repo that gains a ``.safetensors`` sibling is
-    picked up with no code change, and a repo that never does keeps resolving exactly what it
-    resolves today, because the ``.pt`` names stay in the chain behind it.
-    """
+    """Safetensors name first: needs no pickle allowlist and validates from its header; .pt stays behind."""
     names = (
         prequant_repo_filename(repo_id, scheme, ".safetensors", component = component),
         prequant_repo_filename(repo_id, scheme, ".pt", component = component),
@@ -921,21 +833,7 @@ def resolve_prequant_source(
     base_repo: Optional[str] = None,
     task: Optional[str] = None,
 ) -> Optional[PrequantSource]:
-    """Resolve where the checkpoint for ``(fam, scheme)`` comes from.
-
-    Priority: an explicit local ``path_override``; then the family's hosted repo for ``scheme``
-    (variant-specific when ``base_repo`` names a base with its own baked checkpoint); then None,
-    meaning no pre-quant and the caller quantises dense. Pure: no IO, no torch.
-
-    ``task`` names the workflow / denoiser PARTITION the load is bringing up, for the families that
-    host more than one under a single repo and scheme (MiniMax-H3's keyframe and reference
-    denoisers). It only ever selects a more specific filename: unset, or set to a task the family
-    declares nothing for, resolves exactly what it resolved before.
-
-    Both names are repo-ROOT names. Every hosted prequant repo, image and video alike, keeps its
-    checkpoints at the root, so there is no directory to prepend; a repo that nested them would 404
-    on the primary AND on the fallback and the load would silently fall back to dense.
-    """
+    """Local override first, then the hosted repo for scheme, else None so the caller quantises dense."""
     if nvfp4_blocked(scheme):
         return None
     override = (path_override or "").strip()
@@ -1044,24 +942,8 @@ _LOCAL_PREQUANT_SCHEME: dict[tuple[str, int, int], Optional[str]] = {}
 
 
 def local_prequant_scheme(path: str) -> Optional[str]:
-    """The scheme a local pre-quant checkpoint records, or None when it cannot be read.
-
-    ``resolve_prequant_source`` hands back a ``path`` source for ANY override, whatever scheme was
-    asked for: the file is never inspected. That is fine when the caller named the scheme, but under
-    ``auto`` the ladder picks one and an override baked for a different scheme then reads as an
-    available pre-quant. Planning skips staging the dense transformer, the loader reaches the same
-    ``metadata.scheme`` check that runs at load time, refuses the file, and with no dense fallback
-    the pick silently drops to GGUF.
-
-    Cheap despite the file size: ``mmap`` plus ``map_location = "meta"`` maps the storages instead
-    of reading them, so only the pickle structure is parsed (~1s on a 34 GB checkpoint). Cached on
-    (path, mtime, size) because the auto ladder asks once per candidate scheme. Read under the same
-    allowlisted ``weights_only`` load the loader uses, so probing a file that turns out not to be a
-    checkpoint cannot execute anything either.
-
-    A safetensors artifact answers from its HEADER, so the probe reads a few KB of JSON and no
-    tensor at all, and needs neither the allowlist nor a torchao that can rebuild the subclasses.
-    """
+    """Reads the recorded scheme of a local checkpoint, so auto never accepts an override baked for
+    another."""
     import os
 
     try:
@@ -1374,10 +1256,7 @@ def _verify_packed_fingerprint(
     logger: Any = None,
     path: Any = None,
 ) -> bool:
-    """Check the artifact's packed fingerprint: a mismatch drops to dense, a missing or uncomputable block passes.
-
-    A full pass is remembered per file (real path, size, mtime, recorded fingerprint) in the Studio cache, so later
-    loads of the same unchanged file skip the md5 of every weight; any change to the file checks in full again."""
+    """A mismatched fingerprint drops to dense, while a missing block passes; clean results are cached."""
     block = (metadata or {}).get("fingerprint")
     expected = (block or {}).get("modules") if isinstance(block, dict) else None
     if not expected:
@@ -1452,25 +1331,7 @@ def usable_prequant_source(
     path_override: Optional[str] = None,
     base_repo: Optional[str] = None,
 ) -> Optional[PrequantSource]:
-    """``resolve_prequant_source``, but a local path counts only when the loader would accept it:
-    inside the allowlist AND present on disk AND baked for THIS scheme. Otherwise resolves to None
-    so memory planning falls back to dense-fit checks up front, instead of the loader refusing the
-    path only after the resident pipeline was evicted and dense bf16 materialises under a plan that
-    never budgeted for it (evict-then-OOM). Hosted-repo sources are unaffected.
-
-    The scheme check matters most under ``auto``, which picks a scheme the user never named: an int8
-    override must not read as an available fp8 pre-quant just because the file exists. A checkpoint
-    whose scheme cannot be read is treated as not usable, matching every other unknown here, since
-    the loader would reject it too.
-
-    An install that cannot restrict the load has no usable source AT ALL, hosted included: the
-    loader refuses every checkpoint there, and a plan that had already dropped the dense shards for
-    one would find that out after the eviction. That question is asked of the RESOLVED names rather
-    than of the scheme alone, because it has different answers for the two containers: a repo whose
-    primary artifact is safetensors is usable on an install that could not open a pickle at all, and
-    resolving first is what lets the source say so. Any one loadable name is enough, since the
-    resolver tries them in order and the first that exists wins.
-    """
+    """Local paths count only if allowlisted, present and baked for this scheme; otherwise plan dense."""
     src = resolve_prequant_source(fam, scheme, path_override = path_override, base_repo = base_repo)
     if src is None:
         return None
@@ -1517,31 +1378,7 @@ def cached_checkpoint_path(
     names: Optional[Sequence[str]] = None,
     online: Optional[bool] = None,
 ) -> Optional[str]:
-    """The path of a hosted (``kind == "repo"``) checkpoint ALREADY in the local Hub cache. A pure
-    lookup (a refs read plus a stat, no network), so memory planning can ask on every pick.
-
-    Every candidate name counts, IN PREFERENCE ORDER, not just the primary. Primary-only was right
-    while the primary was the only name a repo could realistically host; it is wrong the moment the
-    chain leads with a safetensors name that most repos do not have yet, because then every existing
-    ``.pt`` repo reads as "this would have to download several GB" and loses to the GGUF even though
-    its checkpoint is sitting in the cache. Walking the chain in order keeps the anti-staleness
-    property that motivated primary-only: the better name still wins whenever it is present.
-
-    A name this install cannot OPEN is never a hit, in either direction. The obvious direction is a
-    cached ``.pt`` on a host whose torch or torchao cannot restrict that load; the inverse is a
-    cached ``.safetensors`` on a host without torchao's flatten helpers, which reads the pickle
-    perfectly well. Both end the same way if this answers yes: the planner commits to the prequant,
-    drops the dense shards, and ``_resolve_checkpoint_path`` then filters out the very file the
-    cache hit was about and finds the other name uncached. Asked per NAME rather than per scheme,
-    because the container is what decides it.
-
-    Online the answer is the file the load opens (``first_cached_as_resolved``); ``online=False`` asks
-    whether ANY readable name is cached.
-
-    ``names`` narrows the chain further, to a caller's own subset.
-
-    Both cache roots are searched: Unsloth pins the LIVE cache setting while an unpinned
-    ``hf_hub_download`` falls back to huggingface_hub's import-time constant. Never raises."""
+    """Searches every candidate name in preference order; a name this install cannot open is never a hit."""
     roots = (cache_dir, None) if cache_dir else (None,)
     wanted = set(names) if names is not None else None
 
@@ -1624,21 +1461,7 @@ def prequant_checkpoint_cached(
 
 
 def _pin_kernel_preference(state_dict: Any, logger: Any = None) -> int:
-    """Force every loaded fp8 weight onto the plain-torch kernel, matching the local path.
-
-    ``_fp8_config`` pins ``KernelPreference.TORCH`` when it BUILDS a config, because AUTO silently
-    switches to the MSLK kernel wherever an mslk package is importable (sm90+). A hosted checkpoint
-    escapes that pin entirely: the preference is serialized on each Float8Tensor, and every
-    published one carries AUTO. Restoring it re-arms the exact kernel the pin exists to avoid, and
-    ``mslk.f8f8bf16_rowwise`` has no fake impl, so the first COMPILED generate dies with "Operator
-    does not support running with fake tensors" -- an HTTP 500 on the default speed mode, reachable
-    the moment the pre-quant repos are readable.
-
-    Safe to rewrite in place: the preference selects a matmul kernel, it is not weight data, so the
-    tensors stay bit-identical and the checkpoint's own sha256 still describes them. The plain-torch
-    path is also the faster one compiled (an opaque extern call blocks inductor quantize fusion), so
-    this costs nothing.
-    """
+    """Rewrites loaded fp8 weights to the plain-torch kernel; AUTO picks mslk, which lacks a fake impl."""
     try:
         from torchao.quantization.quantize_.common.kernel_preference import KernelPreference
     except Exception:  # noqa: BLE001 -- enum moved or absent: leave the checkpoint as saved

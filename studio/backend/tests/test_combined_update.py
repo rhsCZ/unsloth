@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic tests for the combined llama+whisper update item.
-
-llama.cpp is the single main update item; whisper.cpp piggybacks on it. These
-pin the union status (update_available = llama behind OR whisper behind), the
-chained apply (llama phase first, whisper phase only when behind), the failure
-policy (llama failure aborts; whisper failure keeps the llama partial success),
-the silent whisper skips, and the backward-compatible payload shape.
-"""
+"""whisper.cpp rides on the llama update: a llama failure aborts, a whisper failure does not."""
 
 from __future__ import annotations
 
@@ -926,12 +919,7 @@ def test_a_workable_pairing_still_installs(monkeypatch):
 
 
 def test_a_legacy_fat_install_is_pre_flighted_too(monkeypatch):
-    """The pre-flight asks about the TARGET release, not the installed one.
-
-    A fat marker omits install_kind by design ("fat markers keep the legacy payload
-    exactly"), and releases are slim-only now, so gating on the installed marker would
-    skip exactly the host about to be handed its first slim bundle.
-    """
+    """The pre-flight checks the target release, since a fat marker omits install_kind by design."""
     monkeypatch.setattr(
         wupd,
         "_resolve_prebuilt_for_host",

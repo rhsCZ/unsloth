@@ -1,11 +1,4 @@
-"""Tests for the proposed PR #5863 improvements.
-
-Covers: _client() self-gating + keep_alive, OAuth normalised off for stdio
-(create + update), env/header dropped on a transport-type switch, and rejecting
-a command whose first token is a URL scheme.
-
-Run from studio/backend:  python -m pytest tests/test_mcp_stdio_improvements.py -q
-"""
+"""Tests for proposed stdio MCP server improvements."""
 
 import asyncio
 

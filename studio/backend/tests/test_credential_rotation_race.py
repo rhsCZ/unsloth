@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A password rotation must not leave a session minted from the replaced credential.
-
-`unsloth studio reset-password` rotates in place against a live server, so a login
-can verify the old password, have the rotation land, and only then mint its tokens.
-Issuance is bound to the credential version that was verified, so such a login gets
-tokens that are already dead rather than a session that outlives the reset.
-"""
+"""Tokens are bound to the verified credential version, so a login racing a rotation gets dead ones."""
 
 import secrets
 from datetime import datetime, timedelta, timezone

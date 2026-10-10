@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A curated registry alias must be resolved before asking whether it is an audio model.
-
-"Spark-TTS-0.5B/LLM" names a load subdirectory, not a repository. Probing it fetched a
-repo that does not exist, got a 404 on every candidate path, and read that as a
-DEFINITIVE "not an audio model" rather than "not a repo id". Spark-TTS then presented as
-a text model, so choosing it with an audio dataset hit the modality gate and Start
-Training stayed disabled (reported on Windows against PR 7984).
-"""
+"""Resolve Spark-TTS-0.5B/LLM to its repo first; probing the alias 404s and reads as not audio."""
 
 from __future__ import annotations
 
@@ -37,10 +30,7 @@ def test_an_unresolvable_name_falls_through_rather_than_failing():
 
 
 def test_the_merged_export_load_path_resolves_the_alias_the_same_way():
-    """One resolver, not two. The BiCodec export path used to carry its own copy of the
-    "Spark-TTS-0.5B/LLM" -> "unsloth/Spark-TTS-0.5B" mapping; it now shares load_scan_target
-    with the capability probe here and with the trainer preflight in routes/training.py, so
-    the three cannot drift."""
+    """Export, probe and preflight share load_scan_target so the alias mapping cannot drift."""
     # Read rather than import: the codec module pulls optional audio deps in.
     from pathlib import Path
 

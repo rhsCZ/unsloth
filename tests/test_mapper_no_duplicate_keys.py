@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Guard against duplicate keys in the ``__INT_TO_FLOAT_MAPPER`` registry.
-
-Duplicate keys in the dict literal silently overwrite earlier entries.
-We inspect the source with ``ast`` to ensure there are no duplicates.
-"""
+"""Duplicate keys in the __INT_TO_FLOAT_MAPPER dict literal silently overwrite earlier entries."""
 
 import ast
 import os

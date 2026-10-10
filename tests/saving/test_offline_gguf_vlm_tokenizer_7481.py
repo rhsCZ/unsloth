@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Offline GGUF export must not probe the Hub for VLM tokenizer metadata (issue #7481).
-
-Regression for ``PreTrainedTokenizerFast.from_pretrained`` on a repo id calling
-``is_base_mistral()`` -> ``model_info()`` even with ``TRANSFORMERS_OFFLINE=1``.
-Pure CPU, no network, no GPU.
-"""
+"""Offline GGUF export must not hit the Hub; from_pretrained calls model_info() even when offline."""
 
 import json
 import os
@@ -202,13 +197,7 @@ def test_has_tokenizer_model_probes_cache_before_model_info(tmp_path, monkeypatc
 
 
 def test_offline_aware_load_persists_local_only_for_saving(tmp_path, monkeypatch):
-    """An explicit ``local_files_only = True`` load must still be local-only at save time.
-
-    ``transformers`` takes ``local_files_only`` as an explicit ``from_pretrained``
-    parameter, so it never reaches ``tokenizer.init_kwargs``, and
-    ``_offline_aware_load`` restores the offline env vars once the load returns.
-    Without the stamp the request is invisible by the time we save.
-    """
+    """local_files_only never reaches tokenizer.init_kwargs, so _offline_aware_load must stamp it."""
     from unsloth.save import _TOKENIZER_MODEL_CACHE, _has_tokenizer_model
 
     # No tokenizer.model, so the cache probe misses and only the local-only stamp stops the Hub request.
@@ -303,10 +292,7 @@ def test_has_tokenizer_model_local_files_only_skips_model_info(tmp_path, monkeyp
 
 
 def test_custom_cache_dir_survives_to_saving(tmp_path, monkeypatch):
-    """A local-only load with a caller-supplied cache_dir that no env var points
-    at. Saving derives its cache from HF_HUB_CACHE / HF_HOME, so without the
-    stamp it probes the wrong place, and the local-only marker then stops it
-    falling back to the Hub, silently dropping tokenizer.model."""
+    """Stamp a custom cache_dir for saving, or saving probes HF_HOME and drops tokenizer.model."""
     from unsloth.save import _TOKENIZER_MODEL_CACHE, _has_tokenizer_model
 
     custom_cache = tmp_path / "caller_cache"

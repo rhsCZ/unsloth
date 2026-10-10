@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Model-picker per-model-config Playwright regression test (GPU-free, CPU gemma).
-
-Guards, end to end against the real frontend, the exact regressions that got the
-predecessor PR reverted:
-
-  - Context Length persists: set a distinctive per-model Context Length + tick
-    "Remember for this model" + Load; the value reaches the /api/inference/load
-    request (max_seq_length) AND lands in localStorage (unsloth_model_configs),
-    and survives a full browser reload (HARD).
-  - Reset clears: after customizing, Reset must clear the stored override, never
-    pin the context to a fixed number (the "Reset pins context" regression) (HARD).
-  - Hidden infra models absent: the RAG embedder (bge-small-en-v1.5) and the
-    llama.cpp validation probe (stories260K) never appear in the picker. The
-    probe GGUF is primed into the HF cache by the CI job, so "absent" proves
-    "hidden", not "not downloaded" (HARD).
-  - Legacy migration is idempotent: a pre-feature unsloth_load_settings store
-    migrates once into the versioned unsloth_model_configs map with the value
-    preserved, and a second reload with a fresh legacy seed present does not
-    re-migrate, duplicate, or clobber (gates under STUDIO_UI_STRICT via soft_fail).
-  - Advanced settings persist: KV cache dtype / tensor-parallel toggled under
-    Advanced + Remember land in unsloth_model_configs (best-effort).
-
-Runs as a plain script (not via pytest), mirroring tests/studio/playwright_extra_ui.py:
-accumulate failures in `_failed`, exit non-zero if any HARD gate failed. With
-STUDIO_UI_STRICT=1 (as CI sets), soft_fail also gates; genuinely-optional checks
-use runtime_warn so they never flake the merge gate.
-"""
+"""GPU-free model-picker config checks, run as a plain script rather than under pytest."""
 
 import json
 import re
@@ -108,14 +82,7 @@ def _normalize_case_insensitive_path(path: str, min_length: int) -> str:
 
 
 def _normalize_model_identity(model_id: str) -> str:
-    """Mirror of normalizeModelIdentity in features/hub/lib/model-identity.ts.
-
-    Case folding is not unconditional there: a plain POSIX path keeps its case,
-    because /models/Foo.gguf and /models/foo.gguf are different files. Only a hub
-    id and the case-insensitive roots -- a Windows drive, a UNC share, a WSL mount
-    -- fold. Lowercasing everything here merged paths the app keeps apart, so an
-    entry belonging to one could satisfy a check that the other had saved.
-    """
+    """Folds case only for hub ids and case-insensitive roots; a plain POSIX path keeps its case."""
     trimmed = model_id.strip()
     if not (trimmed and _LOCAL_PATH_PREFIX_RE.match(trimmed)):
         return trimmed.lower()
@@ -158,13 +125,7 @@ def runtime_warn(m: str) -> None:
 
 
 def _count(loc) -> int:
-    """Number of matches, or 0.
-
-    A raise here is not the same as no match: a closed page or a lost execution
-    context also throws, and reporting that as "selector missing" sends the reader
-    after the markup instead of the crash. Say so, then still return 0 so callers
-    that only branch on emptiness keep working.
-    """
+    """Returns 0 on error too, but logs it as a crash: a raise is not the same as no match."""
     try:
         return loc.count()
     except Exception as exc:
@@ -290,15 +251,7 @@ with sync_playwright() as p:
     ctx.on("requestfailed", _commit_ended)
 
     def click_and_wait_for_commit(btn, what: str) -> None:
-        """Click a Load/Save button and return once what it sent has been answered.
-
-        Replaces a fixed 1.5-2.5 s pause. The click writes localStorage synchronously, then
-        mirrors the override to the server and (for Load/Reload) loads the model; this waits
-        for those requests to start and for none to be in flight for three polls in a row
-        (a staged VRAM budget PUT runs before the load, so one quiet poll is not enough).
-        Never raises: a click that sends nothing is logged after 10 s and the assertions after
-        it decide, as they did after the fixed pause.
-        """
+        """Click, then wait for its requests to start and stay quiet for three polls; never raises."""
         # A Load/Reload click is answered only by its /load; a flow stopping short goes quiet for 3 s.
         label = " ".join((btn.text_content() or "").split())
         expects_load = label in ("Load model", "Reload model")
@@ -381,12 +334,7 @@ with sync_playwright() as p:
             info(f"WARN: screenshot {name} failed: {_shoot_err}")
 
     def read_configs() -> dict:
-        """Return the parsed unsloth_model_configs map (or {} if absent/invalid).
-
-        Absent and unreadable are not the same: "no entry" is what several assertions
-        below treat as success, so storage that failed to read must be said out loud
-        rather than passed off as a clean slate.
-        """
+        """Parsed unsloth_model_configs map, or {}; unreadable storage must not look like an empty one."""
         raw = robust_evaluate(page, "() => localStorage.getItem('unsloth_model_configs')")
         if not raw:
             return {}
@@ -405,15 +353,8 @@ with sync_playwright() as p:
         return [v for v in cfg.values() if isinstance(v, dict)]
 
     def entries_for_model(cfg: dict) -> list[dict]:
-        """Only the entries keyed to the model under test.
-
-        The keys embed the repo id and quant (`v2:["<repo>","<quant>"]`), so scanning
-        every entry lets a value belonging to a different model -- or to another quant
-        of this one -- satisfy a persistence, reset or migration assertion. Both halves
-        have to match. Falls back to all entries only when no key has the versioned
-        shape, so a schema change degrades to the old behaviour rather than silently
-        asserting nothing.
-        """
+        """Only entries keyed to this model and quant; all entries only if no key has the versioned
+        shape."""
         want = (_normalize_model_identity(GGUF_REPO), GGUF_VARIANT.strip().lower())
         recognised = [k for k in cfg if re.match(r"^v\d+:\[", str(k))]
         if not recognised:
@@ -568,12 +509,8 @@ with sync_playwright() as p:
     GEAR_ANY = 'button[aria-label^="Inference settings for" i]'
 
     def diagnose(name, selector):
-        """Screenshot + JSON sidecar (URL, body, storage) for a selector that missed.
-
-        Without this a miss reaches the log as one line naming a selector, and the
-        artifact holds no record of what the picker was actually showing -- which is
-        how a picker that had closed itself read as a missing gear.
-        """
+        """Capture a screenshot and JSON state on a miss, since a log line alone hides what was on
+        screen."""
         rows = []
         try:
             opts = page.locator("[data-model-picker-option]")
@@ -613,12 +550,7 @@ with sync_playwright() as p:
             pass
 
     def reveal_on_device_row(popover, hint):
-        """Bring the row into view without clicking it.
-
-        Since single-quant rows collapse (#7736) the row loads its quant in one
-        click and the picker closes, so selecting first would dismiss the gear
-        this is about to press.
-        """
+        """Scroll the row into view only: clicking a single-quant row loads it and closes the picker."""
         od = page.get_by_role("tab", name = "On Device").first
         if _count(od):
             od.click()
@@ -1058,31 +990,8 @@ with sync_playwright() as p:
     _seed_marks = [0]
 
     def seed_legacy_for_next_document(seed: dict, *, wipe_migrated: bool) -> None:
-        """Put the legacy store in place for the NEXT document, before any app code runs.
-
-        Not `evaluate` on the live page, which is what this used to do. Writing the
-        seed into the document that is about to be discarded makes the assertion race
-        that document's own in-flight work: `savePerModelConfig` in
-        model-config-page.tsx runs from the `.then()` of a GET
-        /api/settings/openai-auto-switch/overrides, so a response that arrives in the
-        window between `removeItem('unsloth_model_configs')` and the navigation
-        RE-CREATES the key from the server row. The reloaded page then finds that key
-        already present, `mergeLegacyEntries` skips the legacy entry it was seeded to
-        migrate (`Object.hasOwn(map, key)`), and `migrateLegacyLoadSettingsOnce`
-        latches `unsloth_model_configs_migrated` anyway -- so the step reported the
-        migration dropping a value when nothing had migrated at all.
-
-        That window is roughly 20ms wide and only opens when the previous step's Load
-        outruns its own wait, which is why this failed intermittently rather than
-        every time: three reds in fourteen main runs, with the commit that introduced
-        the write-back itself green.
-
-        An init script runs at document start on the new page, after every write from
-        the old document has gone with it, so the store the migration reads is the one
-        this step asked for. The sessionStorage mark keeps it to a single document:
-        init scripts cannot be removed, and re-seeding on the reload below would
-        re-arm the very legacy entry the idempotency half needs to stay absent.
-        """
+        """Seed via an init script on the next document; seeding the live page races its server
+        write-back."""
         _seed_marks[0] += 1
         mark = f"__ui_modelcfg_seed_{_seed_marks[0]}"
         page.add_init_script(
@@ -1103,22 +1012,8 @@ with sync_playwright() as p:
         )
 
     def clear_server_overrides_for_model() -> None:
-        """Drop the server-side override rows for the model under test.
-
-        This step clears localStorage and nothing else, which was fine while local
-        storage was the only thing feeding the panel. It is not any more: the shared
-        override row now outranks the local record, and opening the panel writes the
-        row back down into `unsloth_model_configs`. Steps 2 to 4 above each mirror a
-        save to the server and nothing removes it, so what this step actually measured
-        was the migration racing that write-back -- and the migrated value lost
-        whenever the row carried a context of its own.
-
-        Seen on main as two different-looking failures from the same cause: an entry
-        with nothing from the legacy seed in it (row written over a wiped map), and an
-        entry carrying the seed's kvCacheDtype but step 3b's context (row written over
-        the migrated map). Removing the row leaves the legacy import as the only thing
-        that can put a value in this key, which is what the step is about.
-        """
+        """Also delete the server override rows: opening the panel writes them back over the
+        migrated value."""
         # Normalise model and quant separately: normalizeModelIdentity keeps a POSIX path's case.
         want_model = _normalize_model_identity(GGUF_REPO)
         want_quant = GGUF_VARIANT.strip().lower()
@@ -1133,14 +1028,8 @@ with sync_playwright() as p:
             )
 
         def rows_for_model() -> list[str] | None:
-            """The override rows for this model, or None if the inventory could not be READ.
-
-            None is not the empty list. `evaluate_fetch` reports a timeout or an HTTP error by
-            returning `status == 0` / a non-None `error` rather than raising, so a request that
-            never landed used to come back as "there are no override rows" -- the cleanup did
-            nothing, its own post-delete verification passed on the same silence, and stale rows
-            went on to contaminate the migration check with no line of output saying so.
-            """
+            """Override rows for this model, or None when the read failed; a failed fetch is not an
+            empty list."""
             resp = evaluate_fetch(
                 page,
                 f"{BASE}/api/settings/openai-auto-switch/overrides",
@@ -1202,16 +1091,7 @@ with sync_playwright() as p:
             info(f"cleared {len(stale)} server override row(s) left by the earlier steps")
 
     def wait_for_migration_settled(timeout_ms: int = 15_000) -> str | None:
-        """Block until the legacy import has actually run, and return its flag.
-
-        The condition, not a sleep. `migrateLegacyLoadSettingsOnce` sets
-        `unsloth_model_configs_migrated` as its last act on every path it takes --
-        imported, nothing to import, legacy store unreadable -- so the flag appearing
-        is exactly "the import has been and gone", which is what the assertions below
-        need to be true before they read anything. A fixed wait either reads too early
-        on a slow runner, which is how this step reported a value missing that was
-        about to be written, or pads every green run with time it does not need.
-        """
+        """Wait for the migrated flag, which the import sets last on every path, rather than sleeping."""
         deadline = time.monotonic() + timeout_ms / 1000
         flag = None
         while time.monotonic() < deadline:

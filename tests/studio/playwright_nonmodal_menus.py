@@ -2,18 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Browser checks for NonModalDropdownMenu, driven against smoke-nonmodal-menus.html.
-
-The AST tests pin which menus use the wrapper; only a browser answers what it then does to a
-scroll behind an open menu, to the dismissing click and to focus. Each has regressed once
-already (#9243, #9772, and twice inside the change that added the wrapper).
-
-The page also mounts one UNCONVERTED modal menu, the shape every converted one had before, so
-a case behaving the same on both is Radix and not this wrapper, and the lock it still writes
-to <body> proves the probe can see a lock at all.
-
-    PW_ENGINE=webkit python3 tests/studio/playwright_nonmodal_menus.py
-"""
+"""Browser checks for NonModalDropdownMenu scroll, dismiss and focus, which AST tests cannot reach."""
 
 from __future__ import annotations
 
@@ -79,11 +68,7 @@ def open_control(page) -> None:
 
 
 def raw_click(page, selector: str) -> None:
-    """A real pointer press at the element's centre, with no actionability wait.
-
-    A modal menu puts `pointer-events: none` on <body>, so Playwright's own click refuses to act
-    there; the control arm has to bypass that to be measurable at all.
-    """
+    """Mouse press at the centre; Playwright's click refuses under a modal body's pointer-events: none."""
     box = page.locator(selector).bounding_box()
     if box is None:
         raise RuntimeError(f"{selector} has no box")

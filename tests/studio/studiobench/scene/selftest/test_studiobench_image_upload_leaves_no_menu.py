@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`image_upload` must not leave behind a menu it opened when it gives up.
-
-The composer's "Tools and attachments" menu is a modal Radix dropdown, which sets
-`pointer-events: none` on everything outside itself while it is open, and Radix opens it on
-pointerdown, so a click can open it and still time out. On 2026-09-25 that happened on #11887's
-studiobench run: `image_upload` reported "the attachments button could not be clicked:
-TimeoutError" and returned, the parity digest showed `[role="menu"]` open from that action on, and
-the next action failed with "button[aria-label="New chat"] was not clickable ... no point on the
-control hit-tests to it". CI passes `--allow-not-run image_upload`, so the failure it was excused
-for turned into one it was not: thread_reopen NOT RUN, and the job red.
-"""
+"""image_upload must close the composer menu it opened before giving up, or the next click is blocked."""
 
 from __future__ import annotations
 
@@ -58,10 +48,7 @@ class _Locator:
 
 
 class _Page:
-    """The page calls `image_upload` makes up to and including a click that times out.
-
-    Open menus are a stack of identities, so a menu that replaced another is a different one.
-    """
+    """Stub page; open menus are a stack of identities, so a replaced menu counts as a different one."""
 
     def __init__(
         self,

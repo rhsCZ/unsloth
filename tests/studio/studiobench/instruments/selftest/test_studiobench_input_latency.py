@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The keystroke instrument measures keystroke-to-paint, including the wait before the handler.
-
-THE GATE THIS ENFORCES IS THE HARNESS'S OWN. `instruments/selfcheck.py` injects a 400 ms blocking
-`keydown` listener and requires that it move keystroke p95 by at least 350 ms. `input.js` used to
-start its clock inside the `input` handler, which is dispatched as the default action of that same
-keydown -- so the stall had already finished, the wait was subtracted out of every sample, and the
-measured p95 moved by -14.8 ms while the user waited 400 ms. The highest-weight metric in the
-scoring table read clean exactly when typing was at its worst.
-
-This drives a real engine because the defect only exists in a real input pipeline: a synthetic
-`input` event dispatched from a script cannot show the queueing delay at all, which is the reason
-the driver types with `page.keyboard` in the first place.
-
-Skips cleanly with no engine installed, because the selftest job runs on a machine with none.
-
-    python -m pytest tests/studio/studiobench/instruments/selftest/test_studiobench_input_latency.py
-"""
+"""Keystroke timing starts before the handler, so a blocking keydown stall is counted, not subtracted."""
 
 from __future__ import annotations
 

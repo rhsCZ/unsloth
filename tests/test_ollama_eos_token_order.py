@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""get_ollama_eos_tokens must not depend on set iteration order.
-
-Its prefix collapse rewrites `joined_text` as it walks the token list, so a family member
-has to be seen before any shorter token sharing its prefix; a Gemma-shaped vocabulary gave
-`["<eos>", "<unk>", "<unused"]` or `["<eos>", "<un"]` depending on PYTHONHASHSEED.
-chat_templates.py needs a GPU to import, so the function is ast-extracted (the way
-tests/test_bad_mappings_redirect.py extracts its own).
-"""
+"""The prefix collapse depends on order, so the result must not vary with PYTHONHASHSEED."""
 
 import ast
 import json

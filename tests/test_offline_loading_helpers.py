@@ -731,10 +731,7 @@ def test_a_wrapped_online_error_does_not_pin_the_failed_attempt(monkeypatch):
 
 
 def test_an_implicitly_chained_network_error_stays_recognisable(monkeypatch):
-    """Loaders also chain implicitly (`raise RuntimeError(...)` inside an except, no
-    `from`), so the network error is in `__context__`. A raise inside the retry's
-    except block overwrites `__context__`, so the surfacing raise has to happen
-    outside it."""
+    """Raise the surfaced error outside the retry's except block, which would overwrite __context__."""
     monkeypatch.delenv("HF_HUB_OFFLINE", raising = False)
     monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising = False)
     calls = []
@@ -858,11 +855,7 @@ def test_the_same_wording_about_a_real_path_is_not_a_cache_miss():
 
 
 def test_the_vlm_tokenizer_fallback_does_not_pin_the_built_model(monkeypatch):
-    """The real path this matters on (vision.py:1683-1708): the model is already built,
-    `patch_tokenizer` fails, the AutoTokenizer fallback then hits the network, and the
-    network error is re-raised with the patch failure implicitly chained onto it. The
-    patch failure's traceback is the frame holding the model, so clearing only the
-    network error's own traceback leaves the whole model allocated for the retry."""
+    """Also clear the chained patch failure's traceback, or its frame keeps the whole built model alive."""
     import gc
     import weakref
 
@@ -907,10 +900,7 @@ def test_the_vlm_tokenizer_fallback_does_not_pin_the_built_model(monkeypatch):
 
 
 def test_the_surfaced_online_error_still_names_where_it_failed(monkeypatch):
-    """Freeing the failed attempt's memory must not cost the user the origin of the
-    network failure: with the traceback detached, the report says only that the
-    decorator re-raised something, which is useless for a failure raised deep inside
-    `trust_remote_code`."""
+    """Keep the network error's traceback when freeing memory, so the report still shows where it failed."""
     monkeypatch.delenv("HF_HUB_OFFLINE", raising = False)
     monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising = False)
     calls = []
@@ -934,10 +924,7 @@ def test_the_surfaced_online_error_still_names_where_it_failed(monkeypatch):
 
 
 def test_the_retrys_own_frames_do_not_pin_the_cached_model(monkeypatch):
-    """The retry can load the whole model from the cache and only then trip over a
-    missing tokenizer file. That error is kept on the surfaced one, so its frames hold
-    the cached model for as long as the caller holds the error, and nothing collects
-    after this point."""
+    """A tokenizer error raised after the cached model loads must not keep that model's frames alive."""
     import gc
     import weakref
 

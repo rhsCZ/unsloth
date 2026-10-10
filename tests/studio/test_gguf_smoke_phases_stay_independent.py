@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The three GGUF smoke phases share a runner without sharing anything else.
-
-Unsloth GGUF CI used to be three ubuntu-latest jobs. It is now one job with three
-sequential phases, matching what Windows and macOS already do. Three jobs gave a few
-properties for free that a single job has to reproduce by hand, and each of them fails
-silently rather than loudly:
-
-  * A phase-1 failure must not skip phases 2 and 3. A step with no `if:` rides the
-    implicit `success()`, which is exactly that skip -- and the run stays green-looking
-    because skipped steps are not failures.
-  * Two phases must not share a port, an HF_HOME, a server log or an artifact name. The
-    symptom of a shared port is phase 2 asserting against phase 1's still-running server;
-    the symptom of a shared log is an artifact that describes the wrong phase.
-  * A step that can block must carry its own `timeout-minutes`. The job cap is not a
-    substitute: `hf-download-with-retry.sh` retries forever by design and names the
-    enclosing step's timeout as its only bound, so one stalled download would eat the
-    whole job and take the other two phases' results with it.
-
-Every assertion below reads the workflow rather than a list kept here, so adding a fourth
-phase is caught by the same checks that guard the three.
-"""
+"""Phases sharing one job must keep separate ports, logs and artifacts, or they test each other."""
 
 import re
 from pathlib import Path
@@ -167,12 +147,7 @@ def test_every_step_that_can_block_carries_its_own_timeout():
 
 
 def test_the_cross_os_gemma_cache_entry_is_left_alone():
-    """Phase 1's cache is byte-shared with the macOS and Windows gemma phases.
-
-    actions/cache identifies an entry by key AND a hash of `path`, so renaming the
-    directory on Linux alone would give a permanent restore miss on all three platforms
-    without any of them failing -- they would just quietly re-download every run.
-    """
+    """Renaming this cache path on Linux alone misses the restore on all three platforms, silently."""
     steps = _steps()
     entries = {
         str(s["with"]["path"]): str(s["with"]["key"])

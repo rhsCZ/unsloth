@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A vLLM server that never starts must stop SyntheticDataKit, not be ignored.
-
-`Meta_Synthetic_Data_Llama3_2_(3B).ipynb` on a Colab T4 lost its vLLM server at
-import time:
-
-    ImportError: cannot import name 'ProcessorMixin' from 'transformers'
-
-`SyntheticDataKit.__init__` printed the tails and `return`ed, so the notebook
-received a fully constructed object with no server behind it. `ingest`,
-`create` and `save-as` then each printed "VLLM server not available", wrote
-nothing, and still exited 0, because a `!` shell line does not raise on a
-non-zero status. The first thing that actually stopped the notebook was, five
-cells and fourteen error messages later:
-
-    FileNotFoundError: File data/final/arxiv_org_0_qa_pairs_ft.json does not
-    exist
-
-which names a file no step had ever been in a position to write, and points at
-`pd.read_json` rather than at the server.
-
-These drive the readiness path directly with fakes: no GPU, no vLLM, no
-network. `chunk_data` is covered separately in test_synthetic_chunk_data.py.
-"""
+"""A vLLM server that never starts must stop SyntheticDataKit, not leave a kit without one."""
 
 import re
 import threading
@@ -104,20 +82,7 @@ def _kit(stdout_capture, stderr_capture, process):
 
 @pytest.fixture(autouse = True)
 def _retire_kits_without_reaping_a_server():
-    """Stop `__del__` running a real server teardown against a fake process.
-
-    `SyntheticDataKit.__del__` calls `cleanup()`, which ends in
-    `for _ in range(10): torch.cuda.empty_cache(); gc.collect()`. Ten full
-    collections cost about 3s per test when this file runs alone, but scale with
-    the live heap: inside the whole repo suite they cost about 40s per test, which
-    is why 15 of the 16 slowest tests in the suite are in this file.
-
-    None of these tests have a server to reap, and none of them assert on
-    `cleanup()`. `cleanup()` returns immediately when `vllm_process` is absent, so
-    dropping the attribute retires the kit without the collections. The teardown
-    the tests do care about, `terminate_tree` on the failure path, is asserted
-    inside the tests themselves and is untouched.
-    """
+    """Drops vllm_process so __del__ skips cleanup()'s slow gc loops; no test here has a server to reap."""
     yield
     while _LIVE_KITS:
         kit = _LIVE_KITS.pop()
@@ -370,11 +335,7 @@ def test_the_metrics_wait_is_bounded_by_time_not_by_attempts(monkeypatch):
 
 
 def test_an_unbounded_timeout_is_a_wait_not_a_type_error():
-    """`timeout = None` is a legal call meaning wait as long as it takes.
-
-    Deadline arithmetic on `None` raised `TypeError` seconds after vLLM was
-    spawned, losing both the wait asked for and the child started.
-    """
+    """timeout=None must mean wait without limit, not a TypeError from deadline arithmetic after spawn."""
     kit = _kit(
         _FakeCapture(ready = False, ready_after = 0.05),
         _FakeCapture(),

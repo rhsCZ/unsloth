@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the studiobench analysis layer, against a REAL captured trace.
-
-The fixture in `testdata/` is a genuine Chrome trace captured through
-`instruments/tracing.py`, trimmed to the renderer main thread plus the V8
-profiler events. The page it was captured from does three things with known
-counts, which is what makes the assertions below meaningful rather than
-self-referential:
-
-  * a `setInterval` loop, so there are timer tasks;
-  * a `MessageChannel` ping-pong of exactly 120 round trips, which is the shape
-    the React scheduler uses and the class this tool most needs to get right;
-  * a `requestAnimationFrame` loop, so there are frame tasks;
-  * real `page.keyboard` typing, so there are input tasks with `latencyInfo`.
-
-Run with `python -m pytest tests/studio/studiobench/analysis/test_analysis.py`,
-or standalone with `python tests/studio/studiobench/analysis/test_analysis.py`.
-No browser and no network required.
-"""
+"""Assertions run on a real captured Chrome trace with known counts, not on self-generated data."""
 
 from __future__ import annotations
 
@@ -349,16 +332,7 @@ class _Snap:
 
 
 def _arms(dev_counts, prod_counts, anchor_dev, anchor_prod):
-    """Two arms shaped like a REAL dev/prod pair.
-
-    The two sides deliberately differ in script URL and byte offset, because
-    that is what two different builds look like: a Vite dev server serves
-    `/node_modules/.vite/deps/react-dom_client.js` while a production build
-    inlines react-dom into a hashed app chunk at entirely different offsets. An
-    earlier version of this helper gave both sides identical URLs and offsets,
-    which is indistinguishable from pointing both arms at the same server, and
-    the same-build guard now correctly refuses it.
-    """
+    """Dev and prod arms differ in script URL and offset, as real builds do; identical arms are refused."""
     dev = [
         _Snap(
             [

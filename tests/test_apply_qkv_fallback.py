@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""apply_qkv / apply_o must resolve even when the instance attribute is absent.
-
-unsloth#1713 and unsloth#2587. pre_patch() replaces LlamaAttention.forward (and the six
-sibling architectures) CLASS-WIDE, but apply_qkv and apply_o are attached PER INSTANCE
-afterwards, in unsloth/models/llama.py. Two consequences, both reported:
-
-  * unsloth#1713: a plain transformers model of the same architecture, built in the same
-    process after FastLanguageModel.from_pretrained, runs unsloth's forward on instances
-    that never got the attributes, and dies with
-    AttributeError: 'LlamaAttention' object has no attribute 'apply_qkv'.
-  * unsloth#2587: the fast_inference path loads vLLM before the attributes are attached,
-    so vLLM's Transformers backend fallback runs the patched forward during profile_run
-    and dies the same way.
-
-The module level original_apply_qkv / original_apply_o are exactly what the loader would
-have attached, so the call sites resolve through them as a default. The instance attribute
-still wins, which is what keeps the fused LoRA kernels (apply_lora_qkv / apply_lora_o)
-selected after get_peft_model.
-
-The forward itself needs a real accelerator (triton rope, attention dispatch), so the CPU
-tests here pin the resolution and the source contract; test_apply_qkv_fallback_end_to_end
-below carries the executed half and is marked gpu.
-"""
+"""apply_qkv/apply_o fall back to module-level originals when the per-instance attribute is absent."""
 
 from __future__ import annotations
 
@@ -210,13 +188,7 @@ def test_instance_attribute_still_wins_over_the_fallback():
 
 
 def _plain_model_dtype() -> "torch.dtype":
-    """The dtype to build the plain transformers model at.
-
-    sm_75 cards such as the T4 have no bfloat16, and triton rejects a bfloat16 kernel
-    for them (`.bf16 requires .target sm_80`) before the code under test is reached.
-    `UNSLOTH_TEST_PLAIN_DTYPE` forces one of the two branches so both can be covered on
-    a card that supports both.
-    """
+    """sm_75 cards like the T4 lack bfloat16; UNSLOTH_TEST_PLAIN_DTYPE forces either dtype branch."""
     forced = os.environ.get("UNSLOTH_TEST_PLAIN_DTYPE", "auto")
     if forced == "float16":
         return torch.float16

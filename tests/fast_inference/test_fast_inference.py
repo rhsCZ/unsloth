@@ -2,21 +2,7 @@
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
 # ruff: noqa
-"""GRPO smoke test for the ``fast_inference=True`` vLLM rollout path.
-
-Exercises the vLLM LoRA activation path (`WorkerLoRAManager`) that regressed on
-vLLM >= 0.25.0 (unsloth#7283): the stacked `WeightsMapper` collapsed q/k/v and
-gate/up LoRA weights onto one key, crashing adapter activation with
-`IndexError`. All seven attention and MLP projections are LoRA targets so both
-the fused `qkv_proj` and `gate_up_proj` families are covered.
-
-Kept deliberately tiny so it finishes in well under a minute: a 0.6B model,
-`enforce_eager`, no torch.compile, three short training steps, and short
-prompts/completions. Seeded, so the asserted metrics are reproducible.
-
-Run directly (`python tests/fast_inference/test_fast_inference.py`) or via
-pytest; it skips automatically when no GPU device is present.
-"""
+"""GRPO smoke test for fast_inference=True; guards vLLM LoRA activation, broken on vLLM >= 0.25.0."""
 
 import math
 import sys

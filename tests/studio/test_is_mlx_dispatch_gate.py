@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Regression tests for the CUDA-vs-MLX dispatch gates Unsloth relies on.
-
-Two gates: (1) ``unsloth._IS_MLX`` (import-time, delegates to the zoo MLX
-runtime gate behind a local precheck barrier); (2)
-``utils.hardware.detect_hardware()`` (runtime, CUDA->XPU->MLX->CPU). These
-are the canaries against "MLX support accidentally hijacks CUDA/AMD/Intel
-users": we check the _IS_MLX helper structure, flip both gates True under a
-spoofed Darwin+arm64 with a fake mlx module, and confirm both stay CUDA-side
-on the real host. No real MLX install needed.
-"""
+"""Canaries that MLX support never hijacks CUDA, AMD or Intel users via _IS_MLX or detect_hardware."""
 
 import ast
 import importlib

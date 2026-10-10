@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""End-to-end routing proof for #7897, run on Linux.
-
-save.py's module-global ``os`` is swapped for a shim whose pure path functions come
-from ``ntpath``, so ``save_to_gguf`` does the exact join arithmetic a Windows host
-would. The assertion is on the ``output_gguf`` reaching ``quantize_gguf``, which is
-where the GGUF escaped the export directory.
-"""
+"""Runs save_to_gguf with ntpath standing in for os, so the Windows join arithmetic runs on Linux."""
 
 from __future__ import annotations
 

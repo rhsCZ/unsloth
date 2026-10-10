@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The value type that makes a bare zero unrepresentable.
-
-Every number this benchmark prints is one of three things and they are not interchangeable:
-
-    * a reading            -- the instrument ran and saw this
-    * a reading below the  -- the instrument ran and saw nothing it can distinguish from
-      detection floor         nothing, which is NOT the same as seeing nothing
-    * not attempted        -- the instrument did not run here at all
-
-A day of measurement was lost to the third being printed as `0.00`. `LayoutDuration` read as a
-flat `0.105 -> 0.134` across a 300x range in thread size, which is exactly what a harness prints
-when the mechanism it is charging never executed; a React stage read `0.00` because `<Profiler>`
-is stripped from a production build, and the run was quoted as "React costs nothing". Both are
-the same defect: a slot that was never filled rendered as a measurement of zero.
-
-So `Measure` carries `attempted` next to `value`, always, in memory and in the JSON, and
-`display()` refuses to emit a naked `0`:
-
-    Measure(0.04, attempted=True, unit="ms/update", floor=0.12)
-        -> "< 0.12 ms/update (instrument floor)"
-    Measure.not_attempted("ms", "profiling alias not verified")
-        -> "not attempted (profiling alias not verified)"
-
-`validate_payload()` is the enforcement arm: it walks an assembled payload and fails on any
-numeric zero that is not inside a measure object or explicitly exempted by key. That check runs
-in the unit tests over synthetic payloads AND over the real payload before the report renders,
-so the ban is a property of the schema rather than a rule contributors are asked to remember.
-"""
+"""Three distinct states: reading, below floor, not attempted; a bare zero is never printed."""
 
 from __future__ import annotations
 
@@ -133,13 +106,7 @@ class PayloadSchemaError(AssertionError):
 
 @dataclass(frozen = True)
 class Measure:
-    """One number, plus everything needed to know whether it means anything.
-
-    `value` is `None` whenever there is no reading: either the instrument was never attempted
-    (`attempted is False`) or it was attempted and failed (`attempted is True`, `note` says how).
-    `floor` is the instrument's detection floor in `unit`; a magnitude under it renders as a
-    bound, never as a value and never as zero.
-    """
+    """value is None without a reading; a below-floor value renders as a bound, never as zero."""
 
     value: float | None
     attempted: bool
@@ -225,14 +192,8 @@ class Measure:
         unit: str = "ms",
         floor: float | None = None,
     ) -> "Measure":
-        """Build a Measure from the harness layer's sibling-key convention.
-
-        Layer 1 emits JSON-safe scalars, so it cannot emit a Measure object. Its contract is the
-        same idea in flat form: a numeric key that can legitimately be zero carries
-        `<key>_attempted: bool`, and a quantity that could not be measured is `None` with
-        `<key>_reason: str`. This is the one place the two representations meet, so that the ban
-        on bare zeros survives the boundary instead of being re-argued on the other side of it.
-        """
+        """Reads the harness's flat <key>_attempted and <key>_reason siblings, so the bare-zero ban
+        holds."""
 
         value = row.get(key)
         reason = row.get(f"{key}_reason")
@@ -280,12 +241,7 @@ def _fmt(value: float | None) -> str:
 
 @dataclass
 class ExcludedCell:
-    """One cell that did not make it into scoring, and why.
-
-    `excluded_cells` is mandatory and non-null in every payload. An empty list is a claim ("we
-    excluded nothing"); a missing key is an unanswered question, and the two used to print the
-    same way.
-    """
+    """Empty excluded_cells claims nothing was excluded; a missing key is an unanswered question."""
 
     cell_id: str
     reason: str
@@ -332,14 +288,8 @@ def _is_measure(node: Any) -> bool:
 
 
 def validate_payload(payload: Mapping[str, Any]) -> None:
-    """Fail loudly on the two schema violations that made earlier reports unreadable.
-
-    1. a numeric zero outside a measure object and outside the declared exemptions, which is
-       indistinguishable from "we never ran that";
-    2. a missing or null `excluded_cells`.
-
-    Raises `PayloadSchemaError`. Callers run this before rendering anything.
-    """
+    """Raises PayloadSchemaError on a bare numeric zero outside a measure, or a missing
+    excluded_cells key."""
 
     if "excluded_cells" not in payload:
         raise PayloadSchemaError("payload is missing the mandatory `excluded_cells` key")

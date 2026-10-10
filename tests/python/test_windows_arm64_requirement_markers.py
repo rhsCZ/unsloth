@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Windows on ARM is pinned by splitting rows, so the split must be a true partition.
-
-Every package that needs a different version on win_arm64 is written as two rows:
-
-    X==old ; sys_platform != "win32" or platform_machine != "ARM64"
-    X>=new ; sys_platform == "win32" and platform_machine == "ARM64"
-
-The second marker is the exact complement of the first, so in every environment exactly one
-row is live. Getting that wrong is silent either way: an OVERLAP makes pip intersect two
-specifiers and can render the row unsatisfiable, a GAP drops the package on some platform
-nobody tested. The compare is case-sensitive, which is what isolates Windows on ARM (macOS
-reports ``arm64`` and Linux ``aarch64``), so that is asserted here too.
-"""
+"""Platform-split marker rows must be exact complements, since an overlap or gap fails silently."""
 
 from __future__ import annotations
 
@@ -97,11 +85,8 @@ def _by_name(reqs: list[Requirement]) -> dict[str, list[Requirement]]:
 
 
 def _multi_row_groups(reqs):
-    """Packages stated more than once, minus the ones that are different targets.
-
-    unsloth[a] and unsloth[b] may legitimately co-exist, so a group whose rows differ in
-    their extras is not a platform split at all.
-    """
+    """Multi-row groups of one package, skipping groups whose rows differ in extras, which are not
+    splits."""
     for name, group in _by_name(reqs).items():
         if len(group) < 2 or len({tuple(sorted(r.extras)) for r in group}) > 1:
             continue

@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression tests for the "Publishing path uploads the wheel only" guard.
-
-The guard text is extracted from .github/workflows/wheel-smoke.yml rather than
-copied, then run against synthetic build.sh files.
-"""
+"""Reads the guard text from .github/workflows/wheel-smoke.yml rather than copying it."""
 
 import subprocess
 import sys

@@ -1,7 +1,4 @@
-"""Tests for the ``repo:variant`` shorthand parser used by ``unsloth studio run``.
-
-Loads studio.py via importlib with a minimal typer stub to avoid importing the unsloth training stack.
-"""
+"""Loads studio.py with a typer stub, avoiding the unsloth training stack import."""
 
 from __future__ import annotations
 

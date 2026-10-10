@@ -1,48 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""One `pwsh` runner for every test that shells out to PowerShell, so an interpreter
-that dies is reported as an interpreter that died.
-
-Backend CI run 32341628757 on `1c3dde199` finished `284 failed, 8498 passed` and every
-one of the 284 was a `pwsh` subprocess ending `died with <Signals.SIGABRT: 6>`, spread
-over 19 files that all read as Windows-installer regressions. They were not. The three
-tests in that run that assert on `returncode` instead of passing `check = True` kept
-pwsh's own stderr, and it says:
-
-    AssertionError: "cd '/tmp/.../me'" failed: 'Stack overflow.\\n'
-
-`Stack overflow.` is the .NET runtime's failfast: the CLR cannot unwind a blown stack, so
-it prints that one line and calls `abort()`, which is the SIGABRT. It is a crash *of the
-interpreter at startup*, matching PowerShell/PowerShell#24461 ("Stack overflow error when
-starting pwsh with -Command"), and it is independent of what we asked pwsh to run -- the
-script that produced the line above is a bare `cd`, while its neighbours in the same run
-are 60-line installer excerpts.
-
-The reason this is worth a shared module rather than 19 private copies is attribution, not
-tidiness. `subprocess.run(..., check = True)` renders a dead interpreter as
-`CalledProcessError` carrying the whole script, which reads exactly like the script having
-failed, so a runner-level crash costs a full log download and a per-file triage before
-anyone can see it was never our code. The crash is also not rare enough to ignore: of the
-1409 tests in those 19 files roughly 20% died, interleaved with passes throughout the
-12-minute run, which is a per-process coin flip rather than one bad moment.
-
-Two rules, both load-bearing:
-
-  * **A signal is not a verdict.** A shell killed by a signal did not finish its script, so
-    it returned no answer either way. That is what makes retrying it honest -- there is no
-    failure being papered over yet -- and it is why the crash test is the signal itself
-    rather than a message: it needs no per-call-site marker and cannot misread output.
-  * **A normal exit is returned untouched, first time, whatever its code.** A pwsh that runs
-    to completion and gives the WRONG answer is a real regression and must fail with its own
-    message. Nothing here retries it, and nothing here rewrites it.
-
-Generalised from `_run_pwsh` in tests/studio/test_install_phase_timing.py, which handles a
-second, signal-free shape: pwsh printing its "The PowerShell process will exit" banner and
-exiting normally with nothing on stdout. That one cannot be spotted from the exit status, so
-it stays a text match, and a caller that can name a marker its script prints on success can
-pass `verdict = ` to say "this run reached a conclusion" without relying on either.
-"""
+"""pwsh can crash at startup with SIGABRT; retry only signal deaths, and never a normal exit."""
 
 from __future__ import annotations
 
@@ -65,12 +24,7 @@ _CACHE_ROOT = None
 
 
 def _pwsh_cache_dir() -> str:
-    """A cache directory private to this xdist worker, fresh for this pytest session.
-
-    Fresh rather than a stable path under TMPDIR: a cache torn by a previous run would
-    otherwise persist and poison every later session on the same box, which is the failure
-    this whole module exists to remove.
-    """
+    """Fresh per-worker cache dir for this pytest session, so a torn cache cannot poison later sessions."""
     global _CACHE_ROOT
     if _CACHE_ROOT is None:
         worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
@@ -80,25 +34,7 @@ def _pwsh_cache_dir() -> str:
 
 
 def pwsh_env(env: dict | None = None) -> dict:
-    """`env` (default: this process's) with XDG_CACHE_HOME pointed at the private cache.
-
-    The half of `run_pwsh` that a call site can take on its own. `run_pwsh` is a
-    `subprocess.run` wrapper, so it does not fit three shapes this suite really has:
-
-      * a long-lived `subprocess.Popen` holder that is written to over its stdin while a
-        second shell races it (tests/python/test_windows_installer_concurrency_guard.py);
-      * a deliberate control that must invoke pwsh the OLD way to show a fix changes
-        something (tests/python/test_pwsh_runner_encoding.py);
-      * a call site with its own crash policy that needs the crashed CompletedProcess
-        back rather than an exception (tests/studio/test_installer_av_shapes.py).
-
-    Rewriting those around `run_pwsh` would change what they test. Handing them the
-    cache directory instead removes them from the startup-cache race -- the only thing
-    they needed from this module -- and leaves their control flow alone.
-
-    `env = None` means "inherit", matching subprocess: the result is os.environ plus the
-    override. A dict is copied, never mutated, so a caller that reuses it is unaffected.
-    """
+    """Copy of env (default os.environ) with XDG_CACHE_HOME set to the private pwsh cache."""
     env = dict(os.environ if env is None else env)
     env["XDG_CACHE_HOME"] = _pwsh_cache_dir()
     return env
@@ -139,32 +75,7 @@ _UTF8_ALIASES = frozenset({"utf-8", "utf8", "u8", "utf", "u-8", "cp65001"})
 
 
 def _agree_on_utf8(argv: list[str], kwargs: dict) -> list[str]:
-    """Make both ends of the pipe use UTF-8. Returns the argv to run; `kwargs` is updated.
-
-    Nobody was setting the WRITING end, so the answer depended on the host's code pages.
-    Windows PowerShell 5.1 writes a redirected pipe in the OEM code page (cp437 on a US box,
-    where U+00E4 leaves as one 0x84 byte) while pwsh 7 writes UTF-8. `text = True` alone then
-    decodes with the ANSI code page, which round-trips neither: 5.1 gives U+FFFD and pwsh
-    gives mojibake. That is what test_a_non_ascii_marker_survives_the_rollback fails on in
-    parity CI, on both shells.
-
-    Naming `encoding = "utf-8"` at the call site, which is what that test already does, fixes
-    pwsh 7 and makes 5.1 worse: 0x84 is not valid UTF-8, so the decode raises inside
-    subprocess's reader thread, where the exception is swallowed and the attribute is left as
-    None. The caller gets `returncode == 0` and `stdout is None`, so the run reads as a script
-    that printed nothing rather than as a pipe nobody agreed on.
-
-    Hence both halves, always together. The prologue makes the shell write UTF-8 whatever the
-    console is set to, and the decode reads it back. The pair is exact for every code point on
-    both shells, and a no-op where the output was already UTF-8 or pure ASCII.
-
-    Left alone: byte-mode callers, who asked for bytes and can decode as they like, and a
-    caller that named some OTHER encoding, who has chosen. `-File` has no script string to
-    prepend to, so it gets the decode half only, which is the one available to it.
-
-    The call site's own list is never written to: a caller that reuses its argv, or reads it
-    after the call, sees exactly what it built.
-    """
+    """Make pwsh write UTF-8 and decode it as UTF-8, both halves together; the list is never mutated."""
     if not (kwargs.get("text") or kwargs.get("universal_newlines")):
         return argv
     named = kwargs.get("encoding")
@@ -189,24 +100,7 @@ def run_pwsh(
     check: bool = False,
     **kwargs,
 ) -> subprocess.CompletedProcess:
-    """`subprocess.run(argv)`, retrying only a run that crashed without answering.
-
-    `argv` is the complete command the call site already built, pwsh path included, so
-    migrating a test is a one-word change and no invocation flags move.
-
-    `attempts` defaults to 3 because the observed crash is an independent per-process event
-    at roughly p = 0.2: one retry leaves 4% of invocations still red, two leaves 0.8%, which
-    across ~1400 tests is the difference between a red run most days and one every few
-    months. Retries are consecutive and unslept -- the trigger is process startup, not a
-    resource that frees up over time.
-
-    `verdict`, when given, is a marker the script prints once it has reached a conclusion.
-    Its presence in stdout ends the loop immediately even if the run also looks crashy,
-    which keeps a script that legitimately mentions the banner from being retried.
-
-    `check` is honoured after the loop, not passed down, because `subprocess.run` would
-    raise `CalledProcessError` on the crashing attempt and lose the retry.
-    """
+    """Retry a pwsh run killed by a signal, up to attempts times; any normal exit is returned at once."""
     if attempts < 1:
         raise ValueError(f"attempts must be >= 1, got {attempts}")
 

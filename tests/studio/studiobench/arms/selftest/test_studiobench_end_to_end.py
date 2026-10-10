@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""End to end over synthetic data: plan a batch, judge it, render it, read it back.
-
-The unit tests check each rule in isolation. This file checks that the rules still hold once
-they are composed, which is where they usually stop holding: a `VOIDED` arm that gets rendered
-anyway because the renderer walks a different list, a not-quotable batch whose numbers appear in
-a summary assembled by a different function, a payload that validates on its own and fails once
-the harness layer's rows are in it.
-
-It also runs the two renderers for real and asserts on their OUTPUT, because a renderer that
-raises is a bug anyone finds and a renderer that prints the wrong thing is a bug nobody does.
-"""
+"""Rules that pass alone can fail composed, so this asserts on what the renderers actually print."""
 
 from __future__ import annotations
 

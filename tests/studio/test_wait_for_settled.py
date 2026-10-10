@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""`wait_for_settled` replaces "sleep N ms, then measure" in the Playwright smokes.
-
-The fixed sleep is wrong in both directions: on a fast box it waits long after the
-transition ended, and on a loaded runner it measures a box mid-flight. The helper has to
-return once the element is still, keep waiting while it moves, and time out on an
-element that never stops. Run against a real headless Chromium; skipped where there is
-no Playwright or no browser build.
-"""
+"""Fixed sleeps are wrong both ways, so wait_for_settled is tested against real headless Chromium."""
 
 from __future__ import annotations
 

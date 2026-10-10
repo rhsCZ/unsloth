@@ -2,14 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Cross-platform validation of the Unsloth Docker JupyterLab/notebook features.
-
-Runs WITHOUT Docker or a GPU, so it executes on every CI lane, and it exercises the
-real notebook-helper logic rather than py_compile.
-
-Usage:  python tests/validate_studio_features.py
-Exit 0 = all checks pass; non-zero = at least one failed.
-"""
+"""Runs without Docker or a GPU, exercising the real notebook helpers rather than py_compile."""
 
 from __future__ import annotations
 

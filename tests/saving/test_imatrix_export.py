@@ -1,10 +1,4 @@
-"""CPU-only tests for the GGUF imatrix export option.
-
-Cover imatrix_file resolution (path / *.gguf_file rename / True auto-download with mocked Hub),
-the upstream unsloth/<base>-GGUF repo derivation, the conditional IQ-quant gate in save_to_gguf,
-and that quantize_gguf / _quantize_q2_k_l actually emit --imatrix. No GPU, no real weights, no
-real Hub or llama.cpp - the heavy bits are monkeypatched.
-"""
+"""CPU-only imatrix tests: file resolution, IQ-quant gating, and that quantize emits --imatrix."""
 
 from __future__ import annotations
 

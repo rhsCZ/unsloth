@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Determinism and metric-capture primitives for the Kaggle T4 smoke test.
-
-Self-contained on purpose: the payload ships to a Kaggle kernel as an inlined
-notebook with no repo checkout and no network fetch of our sources, so it
-cannot import a helper that exists only on the machine that built it.
-
-``enable_full_determinism`` is separate from ``set_all_seeds_fast`` because it
-MUST run before ``import torch`` for the cuBLAS workspace setting to take
-effect. ``StatisticsCallback`` requires ``logging_steps=1``.
-``RepeatingSequentialSampler`` makes the sample sequence a pure function of the
-step index.
-
-What these can buy, since ``run_t4_smoke.py``'s assertions depend on it:
-run-to-run inside ONE process is bitwise reproducible and is asserted exactly;
-across GPU architectures, drivers or library versions it is not, since
-reduction order, kernel selection and fp16 vs bf16 all move the low bits, so
-those checks are tolerance bands, never equality.
-"""
+"""Self-contained on purpose: the Kaggle payload is inlined with no repo checkout to import from."""
 
 from __future__ import annotations
 
@@ -33,10 +16,7 @@ CUBLAS_WORKSPACE_CONFIG = ":4096:8"
 
 
 def enable_full_determinism() -> None:
-    """Set the env vars that only take effect before torch initialises CUDA.
-
-    Call this at the very top of the entry point, before any torch import.
-    """
+    """Sets env vars that only take effect before torch initialises CUDA; call before any torch import."""
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = CUBLAS_WORKSPACE_CONFIG
     os.environ["PYTHONHASHSEED"] = "0"
     # A tokenizers worker pool can make dataset .map ordering nondeterministic.
@@ -57,15 +37,7 @@ def set_all_seeds_fast(seed: int = 3407) -> None:
 
 
 def set_deterministic_algorithms(warn_only: bool = True) -> dict:
-    """Ask torch for deterministic kernels. Returns what actually took.
-
-    ``warn_only=True`` is deliberate. Unsloth's 4-bit path runs through
-    bitsandbytes and fused Triton kernels, some of which register no
-    deterministic implementation, so ``warn_only=False`` raises and the smoke
-    test dies having proved nothing. Warning instead uses the deterministic
-    kernel wherever one exists, and the run-to-run equality assertion is what
-    actually verifies the result.
-    """
+    """warn_only stays True because some bitsandbytes and Triton kernels have no deterministic version."""
     import torch
 
     state: dict[str, Any] = {"requested": True, "warn_only": warn_only}
@@ -91,16 +63,7 @@ def _trainer_callback_base():
 
 
 class StatisticsCallback(_trainer_callback_base()):  # type: ignore[misc]
-    """Accumulate per-step loss / grad_norm / lr into ``.logs``.
-
-    Reads what the Trainer logs rather than recomputing a grad norm from the
-    parameters: recomputing measures AFTER the optimizer step and after
-    gradients were zeroed, giving a different quantity or zero depending on the
-    transformers version. The logged value is the pre-clip norm the trainer
-    used.
-
-    Only fires on logged steps, so the caller must set ``logging_steps=1``.
-    """
+    """Only fires on logged steps, so the caller must set logging_steps=1; reads the Trainer's grad_norm."""
 
     def __init__(self) -> None:
         self.logs: list[dict] = []
@@ -133,13 +96,7 @@ def _sampler_base():
 
 
 class RepeatingSequentialSampler(_sampler_base()):  # type: ignore[misc]
-    """Deterministic, shuffle-free index order.
-
-    Step *i* yields row ``i % dataset_length``, repeated
-    ``batch_size * gradient_accumulation_steps`` times: a pure function of the
-    step index, independent of RNG state, of dataset length modulo batch size,
-    and of which epoch boundary the run lands near.
-    """
+    """Step i yields row i % dataset_length; a pure function of the step index, with no shuffle or RNG."""
 
     def __init__(
         self,
@@ -176,22 +133,7 @@ def compare_metrics(
     b: list[dict],
     fields: tuple[str, ...] = ("loss", "grad_norm"),
 ) -> dict:
-    """Max absolute deviation between two metric lists, per field.
-
-    ``identical`` is bitwise equality of every compared field, not equality
-    within a tolerance: the caller decides what tolerance means.
-
-    Two non-numeric differences count too, both being this comparison's own
-    subject matter:
-
-    * A field logged by one run and not the other. Same-length lists carrying
-      different keys are two different traces, which ``check_reference`` already
-      calls "a change in the SHAPE of what the trainer logged"; the exact
-      comparator cannot be laxer than the tolerance band beside it.
-    * A moved ``step`` coordinate. The lists are zipped positionally, so a
-      shifted, duplicated or reordered step makes every later pairing
-      meaningless AND is itself the trainer nondeterminism this exists to catch.
-    """
+    """identical is bitwise equality; a field logged by one run only, or a moved step, is a difference."""
     result: dict[str, Any] = {
         "identical": True,
         "length_a": len(a),

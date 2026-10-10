@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""TRL 0.29+ moved ORPO, CPO, GKD, PPO, Online DPO, Nash-MD, XPO, BCO and PRM from trl.trainer to trl.experimental.
-
-Each check imports unsloth in a fresh CPU-spoofed interpreter, since trainer patching is process-wide and import-order
-sensitive.
-"""
+"""Fresh interpreter per check: trainer patching is process-wide and import-order sensitive."""
 
 from __future__ import annotations
 

@@ -1,17 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Behaviour of the ctypes NVIDIA probe embedded in install.ps1 and studio/setup.ps1.
-
-The probe recovers the CUDA version AND the per-device compute capabilities on hosts where the
-installer cannot emit a P/Invoke type (Constrained Language Mode, WDAC, Dynamic Code Security).
-Capabilities are the part WMI cannot supply: they feed ``$CudaArch`` into
-``-DCMAKE_CUDA_ARCHITECTURES`` for the llama.cpp source build (#5854) and the pre-Turing cap.
-
-``tests/studio/test_nvidia_python_probe_parity.ps1`` pins the probe's TEXT against
-``studio/nvidia_probe.py`` and against the other copy. This file pins its BEHAVIOUR, by running
-it against a fake NVML / CUDA library. The two are complementary: a defect edited identically
-into both copies is invisible to a parity check and caught here.
-"""
+"""Runs the embedded NVIDIA probe against a fake NVML/CUDA library; text parity misses shared defects."""
 
 from __future__ import annotations
 

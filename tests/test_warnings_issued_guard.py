@@ -1,31 +1,4 @@
-"""transformers 5.1 dropped `warnings_issued`; eight trl trainers still write it.
-
-`PreTrainedModel.__init__` set `self.warnings_issued = {}` up to and including
-transformers 5.0.0. From 5.1.0 the name does not appear in modeling_utils.py at
-all. trl did not follow, and does this unconditionally at the top of
-`__init__` in grpo, dpo, online_dpo, kto, orpo, cpo, rloo and experimental bco:
-
-    model.warnings_issued["estimate_tokens"] = True
-
-With the attribute gone, nn.Module.__getattr__ raises before the trainer is
-built:
-
-    AttributeError: 'Qwen2ForCausalLM' object has no attribute 'warnings_issued'
-
-Measured on Colab at transformers 5.13.1 + trl 0.25.1 running NeMo-Gym-Sudoku.
-
-unsloth already guards it, but only inside the source it GENERATES for the
-compiled trainer (`models/rl.py`), so the guard exists exactly when that
-generation succeeds. When it fails, unsloth falls back to trl's own class and
-the write is unguarded again, which is the gap the `trainer.py` wrapper closes.
-
-Not UNSLOTH_COMPILE_DISABLE=1, despite the obvious guess: measured with a fresh
-cache, that mode still writes `unsloth_compiled_cache/UnslothGRPOTrainer.py`
-with the guard in it, and `trl.GRPOTrainer` is still the generated class.
-
-trainer.py is loaded by AST here, not imported: importing `unsloth.trainer`
-drags in GPU init, and none of this logic needs a GPU.
-"""
+"""transformers 5.1 dropped warnings_issued but trl still writes it unguarded; trainer.py wraps it."""
 
 import ast
 import dataclasses
@@ -273,12 +246,7 @@ def test_the_generated_compiled_guard_is_still_there():
 
 
 def test_trl_still_writes_the_attribute_unconditionally():
-    """If trl ever guards it themselves, the guard becomes a no-op.
-
-    trl 1.x already did: the main trainers dropped the write, and the three
-    experimental ones that kept it wrap it in `if hasattr(model, ...)`. So this
-    is a signal, not a requirement -- asserting it would fail the whole file on
-    every supported trl >= 1.0."""
+    """A signal, not a requirement: asserting trl still writes it would fail the file on trl >= 1.0."""
     trl = pytest.importorskip("trl")
     grpo = Path(trl.__file__).parent / "trainer" / "grpo_trainer.py"
     if not grpo.exists():
@@ -304,15 +272,7 @@ def test_the_installed_transformers_tells_us_which_side_of_5_1_we_are_on():
 
 
 def test_every_trl_trainer_that_writes_it_goes_through_the_wrapper():
-    """The guard only helps trainers `_patch_trl_trainer` actually wraps, and
-    that loop's rule is "XTrainer and XConfig both exist in trl.trainer" -- not
-    an explicit list. Eight trainers write the attribute; measured on trl
-    0.25.1 all eight satisfy the rule. A future trl that ships a writer without
-    a matching Config would slip through silently.
-
-    Only UNGUARDED writers outside trl.experimental count: trl 1.x's sdft / ssd
-    / sdpo trainers already test `hasattr(model, "warnings_issued")` first and
-    are not exported from `trl.trainer`, so they need no wrapper."""
+    """Wrapper rule is XTrainer and XConfig in trl.trainer; a writer without a Config would slip through."""
     trl = pytest.importorskip("trl")
     import trl.trainer
 

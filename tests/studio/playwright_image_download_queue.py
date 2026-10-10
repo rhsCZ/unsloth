@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Keep a download-only plan when another selection arrives mid-checkpoint.
-
-Uses the rendered UI with deterministic API responses; no model bytes or GPU.
-PW_LOAD_SECOND=1 also checks loading the same model after its queued download.
-PW_HOLD_FIRST_PLAN=1 delays the first plan until the second selection has staged.
-PW_RESOLVE_FIRST=1 delays the first selection's GGUF filename lookup.
-PW_DIFFERENT_QUANT=1 selects another quant with PW_LOAD_SECOND=1.
-"""
+"""Download-only plan kept when a second selection arrives mid-checkpoint; PW_* flags pick variants."""
 
 import json
 import os

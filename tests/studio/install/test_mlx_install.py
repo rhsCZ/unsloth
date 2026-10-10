@@ -317,10 +317,7 @@ def test_pin_floor_is_revisited_whenever_the_pins_move():
 def test_unsupported_apple_silicon_skips_mlx_without_failing_the_install(
     monkeypatch, skip_base, shared_base
 ):
-    """macOS 13 / Python 3.9 Apple Silicon still installs; it just stays chat-only.
-
-    Fresh never ran this step and update was unpinned, so neither could exit here before.
-    """
+    """Unsupported Apple Silicon skips MLX without failing the install; it stays chat-only."""
     calls = _run_to_extras(
         monkeypatch,
         platform = "macos_arm",

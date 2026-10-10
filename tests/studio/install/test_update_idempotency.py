@@ -1,65 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""End to end: a second `unsloth studio update` must do no network work and change
-nothing on disk.
-
-The unit half of this lives in test_dependency_pass_skips.py and in the prebuilt
-installers' own suites. It cannot answer the question this file asks, because every skip
-is conditional on evidence that only a real install produces: a manifest written by a
-real dependency pass, sidecar trees with real RECORD files, prebuilt markers whose
-hashes describe binaries that are really on disk.
-
-Two things make the claim measurable rather than plausible:
-
-  * The child's ONLY route out is a logging proxy (idempotency_proxy.py). Every
-    connection attempt is recorded whether it succeeds, so "did no network work" is a
-    byte count per host, not an impression of speed. A warm uv cache also finishes fast.
-  * The install is snapshotted before and after. "Nothing changed" means a sorted
-    distribution list, the manifest minus its timestamp, the prebuilt markers byte for
-    byte, the uv cache marker, the no-torch marker, each sidecar's file count and mtime,
-    and the mtime of every runtime binary.
-
-Opt in, because it needs a real install:
-
-    UNSLOTH_IDEMPOTENCY_E2E=1 pytest tests/studio/install/test_update_idempotency.py
-
-By default it exercises the install under $HOME. UNSLOTH_IDEMPOTENCY_HOME points it at
-an isolated one instead, which is how it is run locally against a scratch install:
-
-    UNSLOTH_IDEMPOTENCY_E2E=1 UNSLOTH_IDEMPOTENCY_HOME=/path/to/fake/home pytest ...
-
-Two update modes are measured, because they take different paths and only one of them
-is the flow a desktop user gets:
-
-  * `studio update` (no --local) is the desktop flow. When the installed version equals
-    PyPI's latest it takes setup.sh's fast path, skips the dependency pass entirely, and
-    the prebuilt pre-checks answer from their markers. This is where the byte counts are
-    asserted. It only runs when the two versions do agree; otherwise a "no-op" update
-    would legitimately be an upgrade, so those cases skip themselves rather than measure
-    an upgrade and call it idempotency.
-  * `studio update --local` reinstalls from the checkout, so the dependency pass always
-    runs, and it runs WITHOUT last run's evidence: a checkout is a development install
-    shape, and the pass refuses to skip steps on a manifest that may not describe the
-    tree (install_python_stack._plan_pass). What it demonstrates is the rest: the pip
-    bootstrap skip, the sidecars answering "current", the prebuilts answering from their
-    markers, and that a full pass over a settled venv still downloads nothing. It is
-    asserted from the LOG as well as from bytes: with a warm uv cache a full pass also
-    downloads nothing, so bytes cannot tell a skip from a re-resolve there. A full pass
-    has some churn of its own, named in FULL_PASS_CHURN; everything else must hold still.
-
-The fault-injection cases DAMAGE that install and expect the update to repair exactly
-the damaged part. They restore what they broke, but a failure mid-case can leave the
-install in the damaged state, so never point this at an install you care about.
-
-Reading a CI failure: run 1 is the SETTLE run and is deliberately not measured. The
-first update performed by new installer code legitimately rewrites the manifest --
-`step_results` and `pass_inputs` are recorded by the pass that introduces them, so an
-install laid down by an older build has neither -- and it may repair torchao, which an
-earlier release installed from the wrong index. Only runs 2 and later are asserted on.
-A staging run confirmed the third (offline) run changed nothing at all, which is the
-claim this branch makes; a diff reported against `run1-settle` is not that claim.
-"""
+"""Second update must make no network calls and change nothing; needs UNSLOTH_IDEMPOTENCY_E2E=1."""
 
 from __future__ import annotations
 
@@ -362,19 +304,7 @@ def _settle_journal(
     quiet: float = 0.25,
     active_grace: float = 75.0,
 ) -> bool:
-    """Wait for the proxy's journal to stop growing, before the proxy is terminated.
-
-    Returns False when a worker was still between accept and its record after
-    `active_grace` seconds, longer than the proxy's 60 s upstream connect timeout: the
-    journal is then incomplete and the caller must not read it as a zero-connection proof.
-
-    A worker appends its record once the connection it describes has closed, so the child
-    can exit -- or a client can see its response -- with records still in flight, and
-    terminating the proxy at that moment drops them. A dropped record is a connection this
-    harness would then report as never having happened, which is precisely the claim it
-    exists to make. Waits for quiescence rather than for a count, because how many
-    connections a run makes is the thing being measured.
-    """
+    """Wait for the proxy journal to go quiet before terminating it, or in-flight records are dropped."""
     active_path = log_path.with_name(log_path.name + ".active")
 
     def _workers_active() -> bool:
@@ -625,12 +555,7 @@ def diff(before: dict, after: dict) -> list[str]:
 
 
 def expected_prebuilt_answers(log: str) -> int:
-    """How many prebuilts must answer "prebuilt up to date": llama.cpp always, and whisper.cpp
-    unless this run reported its release unpaired. Read from the run, not the disk: an install
-    that had a paired whisper.cpp keeps its binary when llama.cpp moves ahead, and the pairing
-    gate rejects it all the same. Without the unpaired line a whisper.cpp that re-validated or
-    silently went missing leaves one answer short of two, and the count fails. audio.cpp adds one
-    whenever its step line shows its installer ran: "prebuilt installed" there is a re-download."""
+    """Prebuilt answers expected: llama.cpp, whisper.cpp unless unpaired, audio.cpp if its installer ran."""
     return (1 if WHISPER_UNPAIRED.search(log) else 2) + (1 if AUDIO_CPP_STEP.search(log) else 0)
 
 
@@ -680,11 +605,7 @@ def test_a_second_update_downloads_no_payload(install, settled):
 
 
 def test_a_second_local_update_reuses_everything_it_can(install, settled):
-    """--local is the CI and developer path. It always runs the dependency pass, without
-    last run's evidence (a checkout is a development install shape, and a checkout can
-    change in ways no requirements digest sees), so what it demonstrates is the rest:
-    the pip bootstrap skip, all three sidecars answering "current" without a rebuild,
-    and both prebuilts answering from their markers."""
+    """--local always reruns the dependency pass, so it shows the bootstrap, sidecar and prebuilt skips."""
     directory, _ = settled
     run = run_update(directory, "run4-local", local = True)
     assert run.rc == 0, run.log[-8000:]
@@ -713,18 +634,7 @@ def test_a_second_local_update_reuses_everything_it_can(install, settled):
 
 
 def test_the_desktop_update_path_keeps_a_verified_install_offline(install, settled):
-    """UV_OFFLINE plus a proxy that 403s everything. Every attempt is still recorded, so
-    this asserts zero SUCCESSFUL connections, not merely zero bytes.
-
-    Non-local only, and not because --local is uninteresting: --local re-overlays
-    `unsloth-zoo @ git+main` on every run by design, so it cannot complete without a
-    network on any branch of this code, and a run that fails mid-pass leaves no manifest
-    behind. The flow a user is in on a plane is this one.
-
-    Without the rule this PR adds, an unreachable PyPI means "update to be safe", which
-    offline can only fail: the pass starts, the first git requirement 403s, and the
-    update exits non-zero on an install that was already complete.
-    """
+    """Offline update with UV_OFFLINE and a 403ing proxy must succeed with zero successful connections."""
     directory, before = settled
     run = run_update(directory, "run6-offline", local = False, offline = True, refuse = True)
     assert run.rc == 0, (
@@ -823,21 +733,7 @@ def test_a_deleted_manifest_re_runs_the_pass_and_changes_nothing(install, settle
 
 
 def test_a_missing_llama_binary_makes_the_marker_check_decline(install, settled):
-    """A runtime binary the install no longer has sends the update back to the release it
-    was skipping.
-
-    MISSING, not corrupt, and that distinction is the whole test. The pre-check is
-    `[ -x .../llama-server ]` (setup.sh:2932) plus the marker fingerprint: it asks whether
-    the file is there, never what is in it. Truncating it, which this case used to do on
-    POSIX, leaves the log and the traffic byte-identical, so only the Windows branch (which
-    unlinked) ever damaged anything the check could see. Both halves of the symlink pair now
-    go on every platform. That a CORRUPT binary survives unnoticed is a real gap in the
-    product's damage detection, left unasserted here rather than blessed as intended.
-
-    Measured on the network, because setup.sh reprints the same line either way, and by SIZE,
-    because every update reads that release's metadata from the same host: an archive coming
-    back is the decline.
-    """
+    """A missing llama-server must fail the marker check: the pre-check tests existence, not content."""
     directory, before = settled
     candidates = sorted(_unsloth_home().glob("llama.cpp/**/llama-server*"))
     victim = next((p for p in candidates if p.is_file() and p.stat().st_size > 1024), None)
@@ -876,15 +772,7 @@ def test_a_missing_llama_binary_makes_the_marker_check_decline(install, settled)
 
 
 def test_the_manifest_records_the_evidence_the_next_run_needs(install, settled):
-    """Every skip is conditional on this. A pass that finished but recorded nothing is
-    not a bug anyone would notice until the NEXT update quietly redoes everything -- or,
-    worse, skips on a key it happens to find and cannot check.
-
-    Not a test that an edited requirements file re-runs its step: --local, which is what
-    this harness and CI install with, never skips anything (a checkout can change in ways
-    no requirements digest sees), so there would be nothing to observe. That gate is
-    covered by tests/studio/install/test_dependency_pass_skips.py.
-    """
+    """Every skip depends on the manifest holding evidence; a pass recording none makes updates redo all."""
     _directory, _before = settled
     manifest_path = install.parent.parent / "unsloth_install_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding = "utf-8"))
@@ -900,12 +788,7 @@ def test_the_manifest_records_the_evidence_the_next_run_needs(install, settled):
 
 
 def _known_unmet_names(state: dict) -> set[str]:
-    """Distributions the manifest records as unmet in some audited step's closure.
-
-    closure_unmet_requirements reports a missing distribution by name and a version outside its
-    specifier as "name version"; a "<...>" entry means the audit could not run and names nothing.
-    Only a record whose known_unmet_index matches the installed set it is read against counts.
-    """
+    """Unmet names recorded for this exact installed set; a record for another set is ignored."""
     manifest = state.get("manifest") or {}
     # A record written against a different installed set says nothing about this one.
     digest = state.get("installed_index_digest")
@@ -926,15 +809,7 @@ def _dist_name(name: str) -> str:
 
 
 def _assert_same_distributions(before: dict, after: dict, message: str) -> None:
-    """Every distribution installed on both sides, and every version equal, except one that BOTH
-    manifests record as known_unmet.
-
-    Such a distribution is caught between two pins no version meets (click: sqlfluff<4 wants
-    <=8.3.0, huggingface-hub 1.23+ wants >=8.4.2), so which side it lands on is decided by the last
-    step that resolved it, not by whether a skip was equivalent. A full pass reinstalls Diffusers
-    main from a direct reference after the data-designer deps, re-resolving hub's closure, and a
-    pass that skips that step leaves the data-designer answer. Nothing else is set aside.
-    """
+    """A known_unmet dist may legitimately differ, since the last step resolving it decides its version."""
     torn = _known_unmet_names(before) & _known_unmet_names(after)
     # Counter, not set: a duplicate dist-info for an exempted name must not be hidden.
     before_names = collections.Counter(_dist_name(n) for n, _ in before["distributions"])
@@ -987,14 +862,7 @@ def _assert_install_working(
     *,
     same_distributions: bool = True,
 ) -> None:
-    """The same packages as *before* are installed, and the CLI reports the install
-    complete. Shared by the last ordered case and the desktop case's restore, which is
-    the last product operation of the run and is otherwise judged by exit code alone.
-
-    After a real upgrade to PyPI's release the restore reinstalls the checkout only where
-    needed, and a transitive dependency the release moved that the checkout's ranges
-    still admit legitimately stays: then only the checkout's own packages are held to
-    *before*."""
+    """After an upgrade only the checkout's own packages must match; transitive moves may stay."""
     after = snapshot(install)
     if same_distributions:
         _assert_same_distributions(before, after, "the install's packages changed")
@@ -1018,10 +886,7 @@ def _assert_install_working(
 
 
 def test_the_harness_measures_a_real_proxy(tmp_path):
-    """A proxy that silently failed to start would make every assertion above pass, and
-    so would one that relays a tunnel without counting its bytes: the byte ceilings are
-    the only bound on hosts that are allowed through. So both halves are exercised: a
-    refused CONNECT, and an allowed one carrying a response of known size."""
+    """Exercises a refused CONNECT and an allowed one, since a silent proxy would pass every assertion."""
     import http.server
     import socket
     import threading
@@ -1099,18 +964,7 @@ def test_the_harness_measures_a_real_proxy(tmp_path):
 
 
 def test_the_desktop_update_path_does_no_network_work(install, settled):
-    """No --local: the flow the desktop app and the Repair button run. Its whole cost on
-    a settled install should be one version check and the prebuilt HEADs.
-
-    Judged only when the version check short-circuited, read off the measured run's own
-    log rather than a separate request to PyPI made earlier (which can fail or see another
-    release than the one the update saw). With a version
-    mismatch this run IS an upgrade to PyPI's release, whose Node, sidecar, llama.cpp and
-    whisper.cpp pins can differ from the checkout's, and an upgrade that rebuilds or
-    downloads those is behaving correctly; a version bump would otherwise fail this
-    smoke test for doing its job. The run still has to succeed on that branch, and the
-    checkout is put back for the workflow steps after this harness.
-    """
+    """Desktop update is judged only when its version check short-circuited; a real upgrade may fetch."""
     directory, _ = settled
     before = snapshot(install)
     # Read BEFORE the run: after it the installed version may already be PyPI's.

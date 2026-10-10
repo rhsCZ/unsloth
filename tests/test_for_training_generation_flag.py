@@ -21,12 +21,7 @@ class _Namespace(dict):
 
 
 def _helpers_used_by(method, tree):
-    """Module-level functions the lifted method calls, so they run for real.
-
-    Without this they fall to `_Namespace.__missing__` and become None, and the
-    first call raises `TypeError: 'NoneType' object is not callable`: the test
-    then fails for a reason that has nothing to do with what it asserts.
-    """
+    """Real module-level helpers the lifted method calls; missing ones resolve to None and raise."""
     defined = {
         node.name: node
         for node in tree.body

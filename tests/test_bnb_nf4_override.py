@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
-"""bitsandbytes NF4 Linear4bit.forward on Unsloth's NF4 kernels (unsloth/kernels/bnb_override.py).
-
-Training (dequantize + F.linear, and dX) must equal bitsandbytes bit for bit, eager and compiled;
-single-row decode uses the GEMV, judged against fp64 like bitsandbytes' own GEMV; every unsupported
-case must run the original forward.
-"""
+"""NF4 Linear4bit.forward must equal bitsandbytes bit for bit; other cases fall back to the original."""
 
 import os
 import subprocess

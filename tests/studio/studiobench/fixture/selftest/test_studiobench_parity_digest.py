@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The UI-parity digest, tested in both directions without a browser.
-
-A digest is a claim with two failure modes and they pull in opposite directions:
-
-    FALSE POSITIVE  something volatile survives normalisation, two runs of ONE build disagree, and
-                    within a day nobody opens the report. The live proof is the null control; what
-                    is testable here is that each normalisation rule does what it says.
-    FALSE NEGATIVE  something that matters is normalised away or never walked, the check passes
-                    and the UI changed anyway. This is the worse one because it is silent, and it
-                    is what most of this file is about: every KEPT property gets a test that the
-                    signature moves when it moves.
-
-WHY THE REAL JAVASCRIPT AND NOT A PYTHON PORT. The normaliser that ships is `scene/parity.js`. A
-Python re-implementation tested here would pass forever while the shipped regexes drifted away
-from it, and the test would be measuring itself. So the fixtures are Python, the evaluator is
-node running the actual file, and if node is missing the test SKIPS with that reason stated rather
-than passing on a substitute. A skip says "not measured"; a pass would say "measured, fine".
-"""
+"""Runs the shipped scene/parity.js under node, not a Python port, and skips if node is missing."""
 
 from __future__ import annotations
 
@@ -229,15 +212,7 @@ def test_a_volatile_attribute_keeps_its_presence_even_though_its_value_is_droppe
 
 
 def test_the_shared_signature_still_sees_virtualization_bookkeeping():
-    """WHERE THE `aria-posinset` EXCLUSION LIVES, and where it does not.
-
-    The VISIBLE-region digest drops `aria-posinset` and `aria-setsize`, because readiness.py lets a
-    windowed arm publish them on the message itself and the fully mounted arm publishes neither --
-    so comparing them reports every message as changed while the content is identical. That
-    exclusion is passed in by that one caller. The shared `signature`, which the whole-thread
-    digest, the per-message rows and the overlays all use, keeps them: those pairs are scored only
-    when NEITHER arm is windowing, and there an ordinal that appears or moves is a real difference.
-    """
+    """Visible-region digest drops aria-posinset and aria-setsize; the shared signature keeps them."""
     plain, numbered = sigs(
         {"tag": "div", "attrs": {}}, {"tag": "div", "attrs": {"aria-posinset": "3"}}
     )

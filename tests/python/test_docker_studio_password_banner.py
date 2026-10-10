@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""`docker logs` must show how to sign in to Studio, and a preset password must
-survive restarts.
-
-Studio writes its generated first-boot password to a file and prints only the
-path, so a launcher banner saying "password below" left users with nothing to
-type. The one-shot `studio-password` supervisord program prints the credential
-once the file exists, or says why there is none, then a ready block once both
-services answer. `unsloth studio` exits 1 when handed an initial password after
-one is stored, so `unsloth-studio-run` applies UNSLOTH_STUDIO_PASSWORD only while
-nothing is stored and the launcher keeps it out of supervisord's environment.
-These run the shipped scripts against a fake Studio home.
-"""
+"""Studio prints only the password file path, so studio-password prints the credential itself."""
 
 from __future__ import annotations
 

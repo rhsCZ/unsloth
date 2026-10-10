@@ -121,13 +121,7 @@ def apply_cpu_throttle(ctx, page):
 
 
 def new_throttled_page(ctx):
-    """Every page this driver opens, with the settings common to all of them.
-
-    The throttle is scoped to the page TARGET, so a page opened directly runs
-    at full speed and the steps after it pass under exactly the conditions the
-    throttle exists to reproduce. The 60s default rides along for the reason it
-    always did: macos-14 renders, webfonts and lazy routes crowd 30s.
-    """
+    """CPU throttle is scoped to the page target, so every page must come from here to stay throttled."""
     page = ctx.new_page()
     page.set_default_timeout(60_000)
     apply_cpu_throttle(ctx, page)
@@ -135,14 +129,7 @@ def new_throttled_page(ctx):
 
 
 def recover_or_replace_page(page, ctx, **kwargs):
-    """The shared recovery, with the throttle carried onto a replacement page.
-
-    `Emulation.setCPUThrottlingRate` is scoped to the PAGE TARGET, so a page
-    from `ctx.new_page()` runs at full speed however the option was set, and
-    every remaining step would pass under exactly the conditions the throttle
-    exists to reproduce. Wrapping the import rather than each call site means a
-    fourth recovery point cannot forget it.
-    """
+    """Emulation.setCPUThrottlingRate is per page target, so a replacement page must be throttled again."""
     replacement = _robust_recover_or_replace_page(page, ctx, **kwargs)
     if replacement is not page:
         apply_cpu_throttle(ctx, replacement)
@@ -251,14 +238,7 @@ def exercise_permission_mode_controls(page, shoot):
         expect(picker).to_be_visible()
         picker.get_by_role("menuitem", name = re.compile(rf"^{target}")).click()
 
-    # Every caller reloads straight after this, and the page being left can still write the level
-    # back in between: a hydrating GET of its own lands after the clear and caches the installation's
-    # level locally. On WebKit that page stayed alive about a second after the clear and its GET came
-    # back 200 (Unsloth UI CI on main at 2c1830830 and 6c19cf007: the fresh profile opened on "Run
-    # automatically", the level the previous engine's run left on the install). So the storage is
-    # set again by an init script at the start of the next document, after the old page is gone
-    # and before the app reads it. sessionStorage carries the instruction across the reload and
-    # the script consumes it, so later navigations are untouched.
+    # The old page can write the level back after the clear, so an init script re-sets it.
     page.add_init_script(
         """(() => {
             const pending = sessionStorage.getItem("__pw_permission_storage");
@@ -337,19 +317,8 @@ def exercise_permission_mode_controls(page, shoot):
             "WARN the app did not boot on the first reload and did on the second; see the state above"
         )
 
-    # choose() only drives THIS tab.
-    # The mirror to /api/chat/settings is a 400ms trailing-edge debounce (SETTINGS_DEBOUNCE_MS, chat-runtime-store.ts)
-    # whose only early flush is the beforeunload keepalive, so the pill turning over proves the click landed locally,
-    # not that the installation stored it.
-    # Measured on webkit, timed from the choose() below: choose returns at t+238ms, set_legacy_confirm at t+248ms, and
-    # the reload starts there.
-    # The debounce would not have fired until ~t+630ms, so the only PUT that goes out at all is the beforeunload
-    # keepalive at t+252ms, and the reloaded page's hydrating GET arrives at t+697ms.
-    # The assertion after the reload was therefore never testing the level this step chose. It was betting that an
-    # unload-time keepalive beats a hydrating GET by 445ms of loopback, on every engine, every run.
-    #
-    # So: wait for the level to actually be ON the installation before reloading and asserting on it. Assert what was
-    # achieved, not what was commanded.
+    # The pill only proves the click landed locally; wait until the level is stored before
+    # reloading.
     def expect_server_mode(
         expected,
         timeout_ms = 15_000,
@@ -565,23 +534,7 @@ def open_recent_thread_with_our_prompts(
     shoot,
     our_thread_id = "",
 ):
-    """Click this run's chat in Recents and prove it opens with the turns it sent.
-
-    The entry is chosen by title, since a chat's title is its first prompt: the most recent row
-    is not necessarily ours. Then the check waits for the thread to render rather than reading
-    once: turns only appear once the history loader has finished.
-
-    *our_thread_id*, read while this run's chat was open, is the identity when known: the prompts
-    are fixed, so on a reused Studio home an earlier run's chat can carry the same title and turns.
-    That row is opened and must show our turns.
-
-    Without it, a row whose title is one of our prompts is ours, so it must show our turns or the
-    step fails.
-    When no title matches (auto-titling renames a chat), the rows are tried in listed order until
-    one opens with our turns: a row that loads someone else's turns, or none, is not ours, and
-    the next is tried. Only a click error or a row that is not ours moves on; the step fails if
-    none of the candidates is.
-    """
+    """Opens this run's Recents chat by id or title, and requires it to show our turns, not another's."""
     wanted = [" ".join(p.lower().split()) for p in sent_prompts]
     threads = page.locator('[data-testid="recent-thread"]')
     try:
@@ -615,13 +568,8 @@ def open_recent_thread_with_our_prompts(
         )
 
     def landed(thread_id, before, before_thread):
-        """ "ours" once the thread shows one of our prompts, "other" once it has loaded user
-        turns and none is ours, None if neither within the timeout.
-
-        *before* is what the page showed before the click. The chat keeps one runtime while the
-        next thread loads, so the previous thread's turns stay on screen after the URL changes:
-        turns identical to *before* are not this thread's yet, whether or not they are ours, unless
-        the row clicked is the thread that was already open (*before_thread*)."""
+        """Returns ours, other or None; turns identical to before are stale unless the row was
+        already open."""
         try:
             handle = page.wait_for_function(
                 """([threadId, wanted, before, beforeThread]) => {

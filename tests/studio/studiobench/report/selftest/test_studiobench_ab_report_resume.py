@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A resumed A/B that ran nothing may not destroy the table the run that measured wrote.
-
-`--resume` against a finished output is a SUCCESS on purpose: every cell is found rather than
-run and the command exits 0 without paying for the measurement twice. But the A/B ratio is scoped
-to one session, and a resumed run has a new session id, so re-rendering `ab.md` at the end of a
-run that measured nothing replaced a real verdict with NO READING -- and exited 0 while doing it,
-so nothing pointed at the loss.
-"""
+"""A resumed A/B that measured nothing must not overwrite the ab.md table the measuring run wrote."""
 
 from __future__ import annotations
 
@@ -118,15 +111,7 @@ def _probe_rows(session: str, probe: str) -> list:
 
 
 def test_a_resumed_probe_replaces_the_clean_table_it_inherited(tmp_path):
-    """The sequence that put a clean verdict over an unscorable payload.
-
-    A clean A/B leaves `ab.md`. A FRESH probe run reuses that `--out`, and `archive_payload` moves
-    `payload.jsonl` and nothing else, so the clean table stays where every reader opens it. Every
-    cell is fsynced as it is recorded, then the run dies before it renders -- the wall-clock
-    watchdog is `os._exit(2)` and is only cancelled after the last cell. The `--resume` that
-    follows finds every cell complete and records none of its own, so the no-cell early return
-    used to keep the inherited table: a clean verdict standing over a probed payload.
-    """
+    """A resumed probe must replace the clean ab.md it inherited rather than keep it over a bad payload."""
 
     paths = _payload(tmp_path / "run", MEASURED)
     _render_ab(paths, SIDES, MEASURED, "c0ffee")

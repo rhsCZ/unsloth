@@ -276,10 +276,7 @@ def test_clean_text_drops_invisible_characters():
 
 
 def test_clean_text_decision_cannot_drift_between_interpreters():
-    """unicodedata ships with the interpreter (3.9 has Unicode 13.0, 3.14 has 16.0), and
-    Unicode freezes only Cc, Co and Cs. Keying on any other category would clean the same
-    corpus differently per Python. https://www.unicode.org/policies/property_value_stability_table.html
-    """
+    """Only Cc, Co and Cs are frozen by Unicode; other categories differ across Python versions."""
     immutable = {"Cc", "Co", "Cs"}
     assert set(raw_text_module._TextCharTable._DROP_CATEGORIES) <= immutable, (
         "clean_text may only key on the General_Category values Unicode has frozen "
@@ -478,11 +475,7 @@ def test_smart_chunk_text_empty_input_returns_no_chunks():
 
 
 def test_negative_stride_is_rejected():
-    """chunk_size > 0 and stride < chunk_size both pass for a negative stride, but
-    `start_idx += chunk_size - stride` then advances by MORE than chunk_size, so the
-    tokens between one chunk's end and the next chunk's start are never emitted.
-    Nothing raises and nothing is logged, so the caller trains on a corpus with holes
-    in it: chunk_size = 10 with stride = -5 emits 70 of a 100 token document."""
+    """A negative stride passes both checks yet silently drops tokens between chunks; reject it."""
 
     class CharTokenizer:
         def __init__(self):
@@ -571,13 +564,7 @@ def test_load_from_files_all_empty_raises():
 
 
 def test_validate_dataset_handles_tokenized_and_text_columns():
-    """validate_dataset() must work for both dataset shapes:
-    - text-column datasets (return_tokenized=False), no tokenizer needed
-    - input_ids-column datasets (return_tokenized=True, the default), which
-      require a tokenizer to decode back to text for validation
-    Also asserts the clear ValueError when input_ids is present but no
-    tokenizer was passed, and when neither column exists.
-    """
+    """input_ids datasets need a tokenizer to decode for validation; without one it raises ValueError."""
 
     class MockTokenizer:
         def __init__(self):
@@ -665,11 +652,7 @@ def test_validate_dataset_handles_tokenized_and_text_columns():
 
 
 def test_validate_dataset_accepts_objects_without_column_names():
-    """Dispatching on `column_names` must not narrow the accepted input types.
-
-    validate_dataset() read dataset["text"] directly, so it worked for any
-    mapping-like object: DataFrames, plain dicts, custom __getitem__ wrappers.
-    """
+    """Do not dispatch on column_names: it would reject mapping-like inputs that dataset['text'] accepts."""
 
     preprocessor = TextPreprocessor()
     texts = ["first sample with enough characters", "second sample with enough characters"]
@@ -709,11 +692,7 @@ def test_validate_dataset_accepts_objects_without_column_names():
 
 
 def test_validate_dataset_streams_instead_of_materialising_columns():
-    """Columns must be streamed via Dataset.iter(), not copied whole.
-
-    dataset[column] pulls every row into Python objects at once, which for token
-    ids is the bulk of peak memory and grows with the dataset.
-    """
+    """Stream via Dataset.iter(); dataset[column] materialises every row, which dominates peak memory."""
 
     class BatchedDataset:
         column_names = ["input_ids"]
@@ -753,18 +732,7 @@ def test_validate_dataset_streams_instead_of_materialising_columns():
 
 
 def test_validate_dataset_reports_zero_min_length_when_nothing_has_content():
-    """`min_length` must not come back as infinity.
-
-    It is seeded with float("inf") and only ever lowered inside the loop, on exactly
-    the iterations that also append to `text_lengths`. The inf->0 normalisation sat
-    inside `if text_lengths:`, so within that guard it could never see inf: the branch
-    was dead, and the case it existed for, a dataset where no sample has content,
-    skipped the line entirely and returned min_length = inf to the caller.
-
-    The warning guard has to move with it. With the normalisation hoisted, min_length
-    becomes 0 for an empty dataset, and `0 < 10` would newly claim "some samples are
-    very short" about zero measured samples.
-    """
+    """min_length must be 0, not inf, when no sample has content, so normalise it outside the guard."""
 
     preprocessor = TextPreprocessor()
 

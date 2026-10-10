@@ -501,14 +501,7 @@ def test_the_default_sockets_are_accepted(tmp_path: Path):
 
 
 def test_docker_desktop_is_still_seen_when_the_daemon_answers_in_pieces(tmp_path: Path):
-    """The guard must not depend on winning a race with its own consumer.
-
-    `grep -q` exits on the first match and closes the pipe, and under `set -o pipefail` the
-    producer's SIGPIPE (141) becomes the status of the pipeline, so the match reads as a miss.
-    Whether that happens depends only on whether `docker info` still had output to write, which
-    is why it showed up as an intermittent CI failure (the script printed "Re-running with sudo."
-    and exited 0 where the test expected the Docker Desktop refusal) rather than a steady one.
-    """
+    """grep -q closes the pipe on first match, so under pipefail its SIGPIPE reads a match as a miss."""
     _, log, env = _setup(tmp_path, desktop = True, driver = False, uid = 1000, chunked = True)
     res = _run(env)
     assert res.returncode == 2, res.stdout + res.stderr
@@ -526,11 +519,7 @@ def test_a_chunked_daemon_does_not_hide_the_nvidia_runtime(tmp_path: Path):
 
 
 def test_the_driver_version_survives_a_multi_gpu_host(tmp_path: Path):
-    """`head -1` closes the pipe after one line and nvidia-smi prints one per GPU.
-
-    Inside a command substitution that SIGPIPE becomes the assignment's status, and `set -e`
-    then ends the script where it stands, with nothing printed for the user to act on.
-    """
+    """A SIGPIPE from head -1 in a command substitution under set -e ends the script silently."""
     _, _, env = _setup(tmp_path, chunked = True, gpus = 8)
     res = _run(env)
     assert res.returncode == 0, f"rc={res.returncode} out={res.stdout!r} err={res.stderr!r}"

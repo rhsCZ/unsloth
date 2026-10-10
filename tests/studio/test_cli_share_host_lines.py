@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression for #8868: CLI URLs use the LAN host, not the public IP.
-
-The command bodies are checked structurally because they bind, load, and block.
-"""
+"""CLI URLs must show the LAN host, not the public IP; command bodies are checked from source."""
 
 from __future__ import annotations
 

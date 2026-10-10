@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for the IPython pre_run_cell hook in docker/unsloth_nb_compat.py.
-
-The hook only read the pip shim's marker file, which is a record of a PREVIOUS cell.
-The notebooks pin a new model by installing and importing in ONE cell, and the shim
-writes that marker from a child process partway through it, so the hook had already
-returned: the cell ran the base transformers and every later cell was answered with
-"already imported; cannot switch". The hook had no test coverage at all.
-"""
+"""The pre_run_cell hook must honour a pin installed in the cell about to run, not only the marker."""
 
 from __future__ import annotations
 
@@ -39,11 +32,7 @@ def sidecar_root(tmp_path):
 
 @pytest.fixture()
 def compat(sidecar_root, tmp_path, monkeypatch):
-    """Fresh compat over fake sidecars, with sys.path and PYTHONPATH restored.
-
-    activate() mutates both, so without the teardown one test's sidecar leaks into the
-    next and a later assertion passes for the wrong reason.
-    """
+    """Fresh compat per test; activate() mutates sys.path and PYTHONPATH, so they must be restored after."""
     monkeypatch.setenv("UNSLOTH_TF_SIDECAR_ROOT", str(sidecar_root))
     monkeypatch.delenv("UNSLOTH_TF_SIDECAR_MIN", raising = False)
     monkeypatch.setenv("UNSLOTH_NB_TF_MARKER", str(tmp_path / "marker" / "requested"))
@@ -99,10 +88,7 @@ def test_the_marker_is_used_when_the_cell_pins_nothing_itself(compat, tmp_path):
 
 
 def test_the_cell_pin_outranks_a_stale_marker(compat, sidecar_root, tmp_path):
-    """The marker records an install that has ALREADY run. An earlier cell in the same
-    notebook can have pinned something else, and the marker path falls back to
-    pid-<pid> when the connection file cannot be read, so a recycled pid inherits a
-    stranger's pin. The cell about to run is the better authority either way."""
+    """The cell about to run outranks the marker, which may belong to an earlier cell or a recycled pid."""
     marker = Path(os.environ["UNSLOTH_NB_TF_MARKER"])
     marker.parent.mkdir(parents = True, exist_ok = True)
     marker.write_text("5.5.0", encoding = "utf-8")

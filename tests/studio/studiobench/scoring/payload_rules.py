@@ -1,35 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The rules every reader of a payload has to apply, in one place so nobody reimplements them.
-
-Four numbers were published from this harness and acted on before being withdrawn. All four came
-from the same mistake in different clothes: MEASURING AT A MOMENT WHOSE MEANING IS NOT STABLE
-ACROSS THE THINGS BEING COMPARED.
-
-    census_peak                     an action chosen by max(), racing its own teardown, so a
-                                    different action on each arm
-    orphaned window rows            windows outlive their cell, so an unfinished film contributes
-                                    whichever phase it reached
-    highlight_spans_while_open      read on the frame a state attribute flipped, which is a
-                                    different distance from "mounted" on each arm
-    reasoning_toggle.open_ms        terminated on that same attribute flip, quantised to a paint
-                                    and censored at a timeout
-
-`floor_table.cell_metrics` already applied the completed-cell rule; nothing else did, and the one
-consumer that did not apply it produced a headline regression that did not exist. Hence this
-module: the rules are importable, not folklore.
-
-THE COMPANION RULE TO THE NULL CONTROL, which is what makes three of these survivable.
-
-    A null control cannot detect a bias it shares.
-
-A null runs one build against itself. Any skew that is symmetric between the two sides cancels
-exactly, so the null reads flat and certifies the metric. `highlight_spans_while_open` has a null
-of 0.0% at 100K and 500K, exact to the span -- and was still 41% wrong across two real arms,
-because the timing skew it carried was symmetric within the null and asymmetric between the arms.
-A flat null says "this measure is repeatable", never "this measure is comparable".
-"""
+"""Rules every payload reader must apply; a flat null shows repeatability, never comparability."""
 
 from __future__ import annotations
 
@@ -45,12 +17,7 @@ UNCOMPARABLE_ACROSS_ARMS: dict[str, str] = {
 
 
 def completed_cell_ids(records: Iterable[dict]) -> set[str]:
-    """Cell ids whose film ran to the end.
-
-    A `window` row is written while the film runs; the `cell` row is written when it ends. So an
-    in-flight or aborted cell leaves a complete-looking set of window rows with no completed cell
-    owning them. Any analysis that reads window rows directly must intersect with this set.
-    """
+    """Window rows exist for unfinished cells too, so window readers must intersect with this set."""
     return {
         r.get("cell_id")
         for r in records
@@ -68,25 +35,7 @@ def aborted_cell_ids(records: Iterable[dict]) -> set[str]:
 
 
 def windows_of_completed_cells(records: list[dict]) -> list[dict]:
-    """Every `window` row that belongs to a cell that finished. The only windows worth pooling.
-
-    REDUCED TO THE LATEST ATTEMPT FIRST, because a cell id is not unique across attempts. `--resume`
-    re-runs a cell that died under the SAME deterministic id in the SAME file under a new session,
-    so a completed retry puts that id in `done` and matching on the id alone hands back the dead
-    attempt's windows as well -- precisely the unfinished film this helper exists to exclude.
-
-    Measured on a payload written through the real Recorder, one aborted attempt at 28.7 fps and
-    its completed retry at 46.7 fps: the helper returned all 13 windows, and pushing its own output
-    through `_frame_measures` gave `max_frame_ms` 34.84 against the truth of 21.41, and a
-    `jank_index` of 2.719 against 0.000 -- a jank score invented entirely by the run that crashed.
-    `floor_table.cell_metrics` got this right on the same records, so the importable rule was wrong
-    where the older ad-hoc guard was right, which is the wrong way round for a module whose claim is
-    that the rules are not folklore.
-
-    `aborted_cell_ids` IS NOT A MITIGATION FOR THIS, and must not be subtracted from `done`: on that
-    payload the same cell id is in both sets, so `done - aborted` is empty and a reader who tries it
-    loses the good reading instead of the bad one.
-    """
+    """Reduces to the latest attempt first, since a resumed retry reuses the cell id of the dead attempt."""
     from .from_payload import latest_attempt_rows
 
     records = list(latest_attempt_rows(records))
@@ -95,24 +44,7 @@ def windows_of_completed_cells(records: list[dict]) -> list[dict]:
 
 
 def censored_metrics(records: Iterable[dict]) -> dict[str, set[str]]:
-    """{metric: {cell_id, ...}} for timings that were censored rather than measured.
-
-    A censored timing is ABSENT from `timings`, and absence is invisible once the values are
-    pooled: the cells that survive are the fast ones, and their mean is survivorship bias wearing
-    a number. `reasoning_toggle.open_ms` is censored on every cell above the 100K rung, so a row
-    labelled `open_ms` on a 100K/500K/1M ladder is silently a 100K-only figure.
-
-    A TIMING IS ALSO UNAVAILABLE WHEN ITS ACTION WAS DISCARDED, which is the case that reaches
-    furthest. `_action_timings` drops every timing of an action whose `expect_ok` is False, so a
-    measurement that succeeded on its own terms still contributes nothing -- and nothing marked it.
-
-    `reasoning_toggle` is where this bites. `ok` is one conjunction over four clauses, so a
-    censored `open_ms` above 100K makes the whole action fail, and `close_ms` is thrown away with
-    it while `close_censored` stays False. On a 100K/500K ladder the close row was then pooled from
-    the 100K cells alone and printed under a bare metric name with no refusal, exactly the
-    survivorship bias the open row is marked for. The rule is not specific to that pair: an action
-    that was discarded contributes nothing, so every timing it carries is censored at that cell.
-    """
+    """Censored and discarded-action timings are absent, and pooling the rest is survivorship bias."""
     out: dict[str, set[str]] = {}
     for r in records:
         if r.get("row_type") != "action":
@@ -131,12 +63,7 @@ def censored_metrics(records: Iterable[dict]) -> dict[str, set[str]]:
 
 
 def measured_cells(records: Iterable[dict], metric: str) -> set[str]:
-    """Completed cells on which `metric` actually produced a number.
-
-    Resolved the way `floor_table._action_timings` resolves it -- the action ran, its own assertion
-    did not fail, and the timing is a real number -- so this is the set the pooled mean is actually
-    built from rather than a second opinion about it.
-    """
+    """Completed cells where the action ran, its own assertion did not fail, and the timing is real."""
     action, _, key = metric.partition(".")
     done = completed_cell_ids(records)
     out: set[str] = set()
@@ -152,23 +79,7 @@ def measured_cells(records: Iterable[dict], metric: str) -> set[str]:
 
 
 def refuse_partial_censoring(records: list[dict], metric: str) -> str | None:
-    """Why `metric` must not be pooled across this payload, or None if it is safe.
-
-    PER CELL, NOT PER RUNG NAME. Censoring is decided cell by cell against a fixed budget, on a
-    metric whose own spread is 33 to 42%, so a rung sitting near that budget censors SOME of its
-    repetitions and not others -- which is the expected shape near the boundary, not a contrived
-    one. Comparing sets of rung names cannot see it: every rung appears in both sets, the refusal
-    stays silent, and `paired()` quietly keeps only the repetitions where both arms answered.
-
-    Measured on one rung with three of four treatment repetitions censored, the surviving pair
-    reported +10.0% on n=1 with a full SLOWER verdict, counted as a metric that cleared all three
-    gates. The true paired delta over all four repetitions was +35.7%. The censored repetitions
-    were the slow ones, which is exactly why they were censored, so what survives is not a sample
-    of the effect but a selection against it.
-
-    This module's own docstring already stated the rule in cell terms -- "the cells that survive
-    are the fast ones" -- and only the implementation reduced it to rung names.
-    """
+    """Checked per cell, not per rung name, since the surviving repetitions select against the effect."""
     censored = censored_metrics(records).get(metric, set())
     done = completed_cell_ids(records)
     censored = {c for c in censored if c in done}
@@ -205,18 +116,7 @@ def settled(action_row: dict) -> bool:
 
 
 def comparability_key(run_meta: dict) -> str:
-    """A short token over everything that must match for two payloads to be comparable.
-
-    KEYED ON THE COMPUTED CORPUS HASH, NOT ON THE HARNESS COMMIT. Two trees can both call
-    themselves studiobench and generate different corpora: one tree here ran a corpus hash that
-    was neither the branch's pre-fix hash nor its post-fix one, silently and self-consistently,
-    and the only reason anyone noticed is that the hash was printed and compared. A commit is a
-    claim about provenance; the computed hash is the thing itself.
-
-    `floor_table.load` already refuses to POOL across tiers and corpora. This exists for the case
-    that guard cannot reach: a comparison made in prose between two separately published runs.
-    Quote the token beside any number and the comparison becomes checkable after the fact.
-    """
+    """Keyed on the computed corpus hash, not the harness commit: a commit only claims provenance."""
     import hashlib
     import json
 
@@ -231,26 +131,7 @@ def run_metas(records: Iterable[dict]) -> list[dict]:
 
 
 def merged_run_meta(records: Iterable[dict]) -> tuple[dict | None, list[str]]:
-    """One `run_meta` describing the WHOLE payload, plus the disagreements that forbid one.
-
-    A payload is append-only and `--resume` writes a SECOND header behind the first, so reading
-    only the first describes the run that started the file rather than the cells now in it.
-    `floor_table` has been bitten by this twice and says so where it was fixed: "Reading only the
-    first is what let a fast-tier film and a standard-tier film sit in one file and pass the
-    refusal below." This is the same mistake in the one reader that was not converted.
-
-    `rungs` is UNIONED rather than compared, because extending the ladder is explicitly legitimate.
-    `IDENTITY_AXES` leaves `rungs` and `reps` out on purpose: "Resuming with more repetitions or
-    another rung is a legitimate continuation -- it ADDS cells rather than reinterpreting the ones
-    already recorded." A resumed payload really does describe the union, so the union is what a
-    later reader has to compare against.
-
-    Every OTHER key field is a conflict when the headers disagree, and three of them can differ
-    without `--resume` objecting: `engine` (`--engine` is free on resume), `tool_version` (a module
-    constant, so pulling a harness upgrade mid-campaign changes it), and anything the identity
-    check does not cover. A file whose own headers disagree on those is not one measurement, and no
-    single key can honestly stand for it.
-    """
+    """Merges all run_meta headers, since --resume appends one; disagreeing fields mean no single key."""
     metas = run_metas(records)
     if not metas:
         return None, []

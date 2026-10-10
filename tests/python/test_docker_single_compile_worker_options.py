@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guard for the pinned-device single-compile-worker block.
-
-The trap: that block runs AFTER `import unsloth_zoo`, which has already built its
-module-level Inductor options dicts from the original thread count. Those snapshots go
-to torch.compile as `options`, which Inductor applies as a config patch outranking
-both TORCHINDUCTOR_COMPILE_THREADS and config.compile_threads, so replacing
-determine_compile_threads alone leaves every already-decorated compile site unguarded.
-
-The guard block is extracted from the shipped source and run against a synthetic
-unsloth_zoo module graph, so this exercises the real code rather than a copy.
-"""
+"""unsloth_zoo's Inductor options snapshot the thread count at import and outrank the thread env var."""
 
 from __future__ import annotations
 

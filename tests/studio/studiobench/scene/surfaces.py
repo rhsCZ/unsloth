@@ -1,38 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The registry of Unsloth's UI SURFACES, for the parity sweep.
-
-WHY THIS EXISTS. The film drives eighteen actions against the chat thread plus a handful of
-overlays, and the parity digest taken at the close of each one is what licenses the claim "this
-change does not alter the UI". That claim is far wider than the evidence: Unsloth has fifteen
-routes, a settings dialog with twelve lazily loaded panels, a sidebar with six menus, a model
-picker with three section tabs, and the media pages. None of them is on the film's path, so a
-change that repainted every one of them would pass eighteen out of eighteen parity checks.
-
-WHAT A SURFACE IS. A named, reachable state of the app, with:
-
-    reach     the steps that get there FROM THE KNOWN STATE, never from wherever the last
-              surface happened to leave things
-    settle    the observation that says it has actually arrived. Never a sleep: a sleep cannot
-              tell a surface that rendered from one that never did, and a digest of a surface that
-              never rendered is the exact defect this tool is about
-    restore   the steps back to the known state, so surface N+1 starts where surface N started
-    root      the element the digest is scoped to. Ordered candidates, first visible one wins
-
-THE TRAP THAT SHAPES THE ROOTS. ChatPage, ImagesPage, VideoPage and AudioPage are mounted
-PERSISTENTLY by the root layout so an in-flight generation survives leaving the tab; off-route
-they are `hidden` and `inert` but still in the document. A digest taken with parity.js's default
-root therefore reads the hidden chat thread on every non-chat route, and forty surfaces report one
-identical digest that every one of them passes. `@route` resolves the ACTIVE route container by
-the property the layout actually sets -- the off-route siblings carry `inert` -- rather than by a
-class name that a refactor would quietly change.
-
-WHAT IS DELIBERATELY NOT HERE is listed in `KNOWN_UNCOVERED` at the bottom, with the mechanism
-that puts it out of reach. A surface missing from a coverage report because nobody thought of it
-and a surface missing because it cannot be reached without destroying the session look identical
-in a manifest that only lists what it swept, so the second kind is enumerated.
-"""
+"""UI surface registry for the parity sweep; roots must target the active route, not hidden pages."""
 
 from __future__ import annotations
 
@@ -788,12 +757,7 @@ VERBS = {"goto": 1, "click": 1, "click_if": 1, "hover": 1, "press": 1, "fill": 2
 
 
 def validate_registry(entries: Optional[list[Surface]] = None) -> None:
-    """Fail loudly on a registry that cannot be executed.
-
-    Run by the unit tests AND by the sweep before it opens a browser. A malformed entry that is
-    only discovered halfway through a sweep costs the surfaces after it, and the run reports them
-    as unreached for a reason that has nothing to do with the app.
-    """
+    """Run before any browser opens, so a malformed entry cannot cost the surfaces after it."""
     entries = surfaces() if entries is None else entries
     seen: set[str] = set()
     for s in entries:

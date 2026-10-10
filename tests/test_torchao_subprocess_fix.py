@@ -12,23 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The torchao fix has to reach processes unsloth does not launch.
-
-`fix_torchao_torch_symbol_skew` patches `torch.nn.functional` in the current
-interpreter, but vLLM inspects model architectures in a SEPARATE process that
-imports torch and torchao itself, so `fast_inference = True` still dies with
-the same ImportError, shown only as "Model architectures [...] failed to be
-inspected". Observed on Colab AFTER the in-process fix reported success.
-
-`sitecustomize` is the hook that reaches such a process: `site` imports it at
-interpreter startup off PYTHONPATH, which subprocesses inherit. A `.pth` would
-work too, but only inside a real site directory, which a library should not be
-writing into.
-
-The hazard dominating these tests is shadowing: `sitecustomize` is a single
-global name that other things legitimately install (this machine has one at
-/etc/unslothai/python/), so replacing it would silently disable them.
-"""
+"""Reaches child processes via sitecustomize, but must not shadow another installed sitecustomize."""
 
 import os
 import subprocess
@@ -291,12 +275,7 @@ def staged(tmp_path):
 
 @pytest.fixture(scope = "session")
 def bare_interpreter(tmp_path_factory):
-    """An interpreter whose site-packages is empty.
-
-    PYTHONPATH can shadow a module but cannot un-install one: the child still
-    finds the real torchao's dist-info, which is what the hook reads. On a
-    machine that has torchao, "absent" is only expressible as a bare venv.
-    """
+    """PYTHONPATH cannot hide an installed package, so an absent torchao needs a bare venv."""
     venv = tmp_path_factory.mktemp("bare") / "venv"
     try:
         subprocess.run(
@@ -488,10 +467,7 @@ if __name__ == "__main__":
 
 
 def test_the_in_process_fix_does_not_disable_the_subprocess_fix(monkeypatch, tmp_path):
-    """_gpu_init.py runs fix_torchao_torch_symbol_skew() before
-    this one, so a gate asking only `hasattr` would read its placeholders as a
-    healthy torch and stage nothing, in exactly the environments vLLM's
-    inspector child needs it."""
+    """The gate must not trust hasattr, because the in-process fix installs placeholders that pass it."""
     import torch.nn.functional as F
 
     if all(IF._torch_really_has(F, n) for n in IF._TORCHAO_TORCH_SYMBOLS):

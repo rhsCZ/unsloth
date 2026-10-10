@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
-"""Tests for the Unsloth Docker Studio branding / AGPLv3 integrity guard.
-
-verify_branding() runs against a staged temp tree mirroring the installed image
-layout, so no container or built labextension is required.
-"""
+"""verify_branding runs on a staged temp tree mirroring the installed image; no container needed."""
 
 import json
 import os

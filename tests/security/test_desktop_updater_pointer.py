@@ -1,16 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Desktop discovery must stay on a release with one complete asset set.
-
-Clients poll the repo-wide `/releases/latest/download/latest.json`, so whichever
-release holds GitHub's Latest label is the release that serves both the updater
-manifest and the `Unsloth-Desktop-*` download links. Publishing anything without
-Desktop bundles takes that label, so the repair moves it back.
-
-Every test here runs the workflow's real `run:` text through bash against a
-stateful fake `gh`. The fake refuses to answer an invocation it does not model,
-because a shim that quietly succeeds turns a broken step into a passing test.
-"""
+"""The Latest release must hold a complete Desktop asset set; clients poll latest.json there."""
 
 import json
 import os
@@ -449,11 +439,7 @@ def test_incomplete_draft_and_prerelease_releases_are_never_restored(tmp_path):
 
 
 def test_a_prebuilt_release_holding_the_pointer_is_repaired(tmp_path):
-    """llama.cpp prebuilts (b8475) are normal releases in this same repository.
-
-    They take the repo-wide pointer exactly as a bundleless v... release does, and
-    with it the stable download links, so they have to be repairable too.
-    """
+    """A prebuilt llama.cpp release can hold the repo-wide pointer too, so it must be repairable."""
     result, commands = _run(
         tmp_path,
         release_tag = "b8475",

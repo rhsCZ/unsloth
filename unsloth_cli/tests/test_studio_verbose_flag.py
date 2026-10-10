@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the `--verbose/-v` Unsloth flag: option registration on both the
-plain callback and the `run` subcommand, re-exec forwarding, the access-log
-env override, and rejection before a subcommand. Modeled on
-test_studio_secure_flag.py."""
+"""Tests the --verbose/-v flag's forwarding to re-exec, its access-log env override and rejections."""
 
 from __future__ import annotations
 

@@ -1,8 +1,4 @@
-"""Tests for check_dataset_for_missing_videos (issue #5085).
-
-Fixtures AST-extract the function from vision.py so logic tests run without
-the full unsloth import chain (triton/CUDA kernels).
-"""
+"""AST-extracts the function from vision.py so tests avoid the triton/CUDA-heavy unsloth import."""
 
 import ast
 import os

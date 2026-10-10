@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Pinned-symbol compat check across all TRL PyPI minors unsloth + unsloth-zoo target.
-
-Catches RL-surface API drift (DataCollatorForPreference relocation,
-gated openenv/vllm_generation modules, unwrap_model_for_generation
-moves, top-level GRPO exports). Fetches TRL source per tag straight from
-github (no pip install) and asserts every depended-on symbol is present,
-covering the pyproject window plus several releases above the cap for
-early warning.
-"""
+"""Checks each TRL tag's GitHub source for every RL symbol unsloth depends on, with no pip install."""
 
 from __future__ import annotations
 
@@ -346,10 +338,7 @@ def test_trl_grpo_source_inference_mode_unwrap(tag: str):
 
 
 def test_trl_kto_get_batch_logps_signature(tag: str):
-    """KTO log-prob computation must stay patchable. Older TRL exposed
-    KTOTrainer.get_batch_logps; TRL 1.x moved the math into
-    _compute_logps/compute_ref_log_probs via selective_log_softmax.
-    rl_replacements.py patches both shapes, so require EITHER form."""
+    """KTO must expose either get_batch_logps or the TRL 1.x _compute_logps form, since both are patched."""
     candidates = [
         "trl/trainer/kto_trainer.py",
         "trl/experimental/kto/kto_trainer.py",
@@ -390,10 +379,7 @@ def test_trl_sft_trainer_class(tag: str):
 
 
 def test_trl_dpo_trainer_methods(tag: str):
-    """DPOTrainer methods unsloth's rewriters key on (rl_replacements.py
-    :222-394). All version-windowed and non-required (the rewriter
-    cleanly no-ops when absent); presence/absence is logged as
-    informational so a silent regression stays visible."""
+    """DPO methods are optional and version-windowed; absence is logged so regressions stay visible."""
     src = fetch_text("huggingface/trl", tag, "trl/trainer/dpo_trainer.py")
     assert src is not None
     assert has_def(src, "DPOTrainer", "class"), f"{tag}: class DPOTrainer missing in dpo_trainer.py"
@@ -409,10 +395,8 @@ def test_trl_dpo_trainer_methods(tag: str):
 
 
 def test_trl_grpo_internal_helpers_in_scope(tag: str):
-    """Chat-template kwargs must propagate via legacy
-    `maybe_apply_chat_template` (TRL <=0.24, rewritten by unsloth) or
-    successor `apply_chat_template(... **chat_template_kwargs)` (TRL
-    >=0.25, native). Either pattern wires the path."""
+    """Chat-template kwargs need maybe_apply_chat_template (TRL<=0.24) or apply_chat_template
+    (TRL>=0.25)."""
     src = fetch_text("huggingface/trl", tag, "trl/trainer/grpo_trainer.py")
     assert src is not None
     legacy = "maybe_apply_chat_template" in src
@@ -438,13 +422,7 @@ def test_trl_truncate_with_protected_tokens_optional(tag: str):
 
 # These pin exact source strings rl.py transforms for TRL >= 1.7.0; a restructure silently no-ops.
 def test_trl_grpo_peft_ref_adapter_block_contract(tag: str):
-    """rl.py (trl>=1.4.0) strips TRL's PEFT ref-adapter init with a re.DOTALL
-    regex anchored on `elif is_peft_model(model) and args.beta != 0.0:` ...
-    `ref_param.data.copy_(param.data)`. Both anchors must exist (else the
-    regex no-ops and the ref adapter is created under Unsloth), and the
-    following `enable_input_require_grads` gradient-checkpointing block must
-    remain present -- the tightened regex must NOT swallow it (PR #6904). The
-    `elif` block shape appeared in TRL 1.4.0, so this contract runs from there."""
+    """Both anchors must exist or the ref adapter gets created; enable_input_require_grads must survive."""
     if not _tag_ge(tag, "1.4.0"):
         pytest.skip(
             f"{tag}: pre-1.4.0 uses the `if is_peft_available()...` form (rl.py 0.27 branch)"
@@ -480,12 +458,7 @@ def test_trl_grpo_quantized_model_cast_contract(tag: str):
 
 
 def test_trl_grpo_aux_loss_enabled_contract(tag: str):
-    """rl.py (trl>=1.7.0) appends a fail-fast after GRPOTrainer's one
-    `self.aux_loss_enabled = ...` assignment, so an MoE router-aux opt-in errors
-    instead of silently training without the penalty (the optimized forward
-    cannot compute it; PR #6904). It anchors on the assignment, not its
-    expression: TRL #7248 rewrote the expression to read the coefficient from
-    the model config, and the exact-text anchor then no-oped on TRL main."""
+    """Fail-fast anchors on self.aux_loss_enabled assignment, not its expression, which TRL rewrote."""
     if not _tag_ge(tag, "1.7.0"):
         pytest.skip(f"{tag}: aux_loss_enabled / router_aux_loss_coef added in TRL 1.7.0")
     src = fetch_text("huggingface/trl", tag, "trl/trainer/grpo_trainer.py")
@@ -505,12 +478,7 @@ def test_trl_grpo_aux_loss_enabled_contract(tag: str):
 
 
 def test_trl_grpo_per_token_logps_aux_arity_contract(tag: str):
-    """TRL 1.7.0 added `compute_aux_loss` to
-    _get_per_token_logps_and_entropies and made every call site unpack a
-    3-tuple. rl_replacements.py version-gates its injected replacement to emit
-    a 3-tuple for trl>=1.7.0 (2-tuple below). This is the exact change the
-    has_def existence checks miss: the method still exists, only its arity
-    changed. If TRL drops/renames the aux return, the gate needs revisiting."""
+    """Pins the aux arity: 3-tuple from TRL 1.7.0, 2-tuple before; has_def checks cannot see the change."""
     if not _tag_ge(tag, "0.20.0"):
         pytest.skip(f"{tag}: pre-0.20 uses legacy _get_per_token_logps (2-tuple, no aux)")
     src = fetch_text("huggingface/trl", tag, "trl/trainer/grpo_trainer.py")

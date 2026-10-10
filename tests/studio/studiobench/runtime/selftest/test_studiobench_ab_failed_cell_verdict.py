@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A FAILED CELL MUST NOT PRODUCE A VERDICT OVER THE PAIRS THAT SURVIVED IT.
-
-`skippable_cells` argues this for an interrupted resume; a failed cell is the same hazard by the
-other road. `CellRunner.run` catches the exception, records an incomplete row and returns, so the
-loop continues and `_render_ab` is reached with a hole in the plan. `readings_by_arm` drops the
-incomplete cell and `compare_arms` intersects the two arms' keys, which takes the failed cell's
-HEALTHY PARTNER out of the table with it -- the loss is a whole rung, chosen by which cell died.
-
-Measured on the payload below: a 10K base cell that died published `VERDICT: IMPROVED (20.0%
-faster)` off the 100K pair alone, with nothing in `ab.md` naming 10K, while the 10K pair that had
-in fact been measured on the treatment side was a 26.5% regression -- a FAIL. The run exits
-nonzero either way, and that is not the same thing: the exit code is gone when the shell scrolls
-and `ab.md` is the artifact that gets pasted.
-"""
+"""A failed cell must not yield a verdict over surviving pairs; its healthy partner is dropped too."""
 
 from __future__ import annotations
 
@@ -116,14 +103,7 @@ def test_the_same_payload_complete_is_the_fail_the_omission_erased(tmp_path):
 
 
 def test_the_unguarded_render_is_the_wrong_verdict(tmp_path):
-    """What the guard is for, through the same path: without the plan, the surviving 100K pair
-    stands in for a payload whose measured 10K pair is a 100% regression.
-
-    The 20% win this used to publish is now withheld on its own, because one pair carries no
-    bootstrap CI and no direction is claimed without one. The guard is still what this test is
-    about: unguarded, nothing names the failed cell and the regression is simply absent, whereas
-    the guarded render VOIDs the run and says which cell died.
-    """
+    """Unguarded, the failed cell is never named and its regression vanishes; the guard voids the run."""
 
     table = _table(tmp_path, failed = "r10K.base.rep0", planned_known = False)
 
@@ -134,10 +114,7 @@ def test_the_unguarded_render_is_the_wrong_verdict(tmp_path):
 
 
 def test_a_gate_failed_cell_is_a_hole_in_the_plan_too(tmp_path):
-    """`readings_by_arm` drops a COMPLETED cell that failed `thread_complete` or
-    `follows_the_stream` -- the timings of a thread that lost its middle are not a reading of the
-    build -- and the arm intersection takes its healthy partner with it. So the plan has the same
-    hole a dead cell leaves, by a road that reads `completed: True`."""
+    """A completed cell that failed thread_complete or follows_the_stream is also a hole in the plan."""
 
     records = [
         {

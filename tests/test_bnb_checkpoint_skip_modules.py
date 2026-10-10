@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Pins the two rules a pre-quantized bitsandbytes load depends on. No GPU needed.
-
-Rule one: a pre-quantized checkpoint's own ``llm_int8_skip_modules`` is the authority and
-Unsloth must not add to it. The list describes how the tensors were actually packed, so
-adding a name makes transformers build a dense ``Linear`` for packed weights and the load
-dies in ``load_state_dict``:
-
-    size mismatch for weight: copying a param with shape torch.Size([15728640, 1])
-    from checkpoint, the shape in current model is torch.Size([4096, 7680])
-
-A real failure, observed on ``unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit``, whose
-config ships ``llm_int8_skip_modules: null`` because it quantized everything. ``None``
-there is an instruction ("skip nothing"), not an absence, and replacing it with Unsloth's
-generic list broke the two ``test_save_merged_*`` cases for that model.
-
-Rule two: what the load used is what gets saved. ``loader.py`` used to stamp ``None`` over
-the real list, which for a dynamic-quant repo like ``unsloth/Qwen3-0.6B-unsloth-bnb-4bit``
-threw away every per-layer entry and saved a config describing a layout that never existed.
-
-Extracted with ast so nothing in loader.py has to import.
-"""
+"""A pre-quantized checkpoint's llm_int8_skip_modules is authoritative; Unsloth must not add to it."""
 
 import ast
 import os
@@ -63,13 +43,8 @@ class _Config:
 
 
 def test_the_vision_loader_does_not_touch_the_checkpoint_skip_list():
-    """The regression this file exists for.
-
-    Transformers already prefers a pre-quantized checkpoint's `quantization_config` over
-    the runtime one, so there is nothing for the loader to fix. Writing into that config is
-    the only way to get it wrong, and it did: on Llama-3.2-11B-Vision-bnb-4bit it turned a
-    `null` skip list into Unsloth's generic one and broke the load outright.
-    """
+    """Never write into the checkpoint's quantization_config: replacing its null skip list broke the
+    load."""
     source = open(VISION, encoding = "utf-8").read()
     assert "merge_checkpoint_skip_modules" not in source
     # It may build its own runtime list, but must never assign into the checkpoint's config.

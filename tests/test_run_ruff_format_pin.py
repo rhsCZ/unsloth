@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The formatter must run the ruff the repo is formatted with, or refuse.
-
-ruff's output is not stable across releases: 0.9 changed which half of an
-`assert cond, "msg"` gets wrapped. So a contributor whose environment has a newer
-ruff than `.pre-commit-config.yaml` pins produces files the hook reformats back,
-and pre-commit.ci fails the PR on files nobody broke -- which is how four files
-reached main in that state, and how two PRs went red without a code defect
-between them.
-"""
+"""Use the ruff .pre-commit-config.yaml pins or refuse; ruff output changes between releases."""
 
 from __future__ import annotations
 
@@ -76,18 +68,7 @@ class TestTheMismatchRule:
 
 
 class TestRuffHasToBeRunnableFirst:
-    """No ruff means no run at all, decided before the first file is rewritten.
-
-    The version gate already refused before touching anything, but only when it
-    could read a version. With ruff missing or broken the script used to fall
-    through: the pre-pass stripped every magic comma it was given, `ruff format`
-    then died, and the post-pass never ran. What is left is neither the original
-    nor the formatted result, and the magic commas the pre-pass removes are ones
-    a full run puts back, so the files come out in the exact shape the hook
-    rejects. Observed on a `uv run --with ruff==...` whose ruff wheel carried no
-    binary: three signatures in one kernel lost their trailing commas and had to
-    be restored by hand.
-    """
+    """A missing or broken ruff must refuse before the pre-pass strips magic commas from any file."""
 
     def test_a_binary_that_is_not_there_is_reported_not_raised(self, tmp_path):
         reason = run_ruff_format.ruff_unavailable_reason(str(tmp_path / "no-such-python"))
@@ -210,13 +191,8 @@ class TestRefusing:
 
 
 class TestArgumentsAreTakenSeriously:
-    """Every argument is a file to rewrite, so anything else has to be an error.
-
-    The old handling kept `[arg for arg in argv if Path(arg).exists()]` and
-    dropped the rest without a word, which had three faces: no arguments exited
-    0 having formatted nothing, a typo'd path formatted nothing just as quietly,
-    and `--check FILE` lost the flag, kept the file, and wrote to it.
-    """
+    """Every argument must be a file to rewrite; an unknown flag or missing path is an error, not
+    dropped."""
 
     def test_an_unknown_flag_is_refused_and_nothing_is_written(self, tmp_path, monkeypatch):
         target = tmp_path / "sample.py"
@@ -267,12 +243,7 @@ class TestArgumentsAreTakenSeriously:
 
 
 class TestTheScriptStaysRunnable:
-    """The shebang and the mode bit are kept so it still runs as a program.
-
-    The hook no longer depends on them -- its entry is `python scripts/...` now,
-    because an autofix commit dropping the bit broke main twice -- but people do
-    run it directly, and a wholesale rewrite drops the bit invisibly.
-    """
+    """Keeps the shebang and executable bit, since people still run the script directly."""
 
     @pytest.mark.skipif(sys.platform.startswith("win"), reason = "no POSIX mode bits")
     def test_the_formatter_is_executable(self):

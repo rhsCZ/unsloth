@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Padding-free is auto-enabled, and it hands the model `packed_seq_lengths`.
-
-A forward declaring neither that nor `**kwargs` raises TypeError on the first step
-(Phi4ForCausalLMV). The gate asks the signature, and only ever turns padding-free OFF
-where the signature positively shows it cannot work.
-"""
+"""Turn padding-free off only where the forward signature shows it cannot accept packed_seq_lengths."""
 
 import pytest
 
@@ -25,11 +20,7 @@ except ImportError:
 
 @pytest.fixture(autouse = True)
 def _return_logits_unset(monkeypatch):
-    """UNSLOTH_RETURN_LOGITS=1 blocks packing and padding-free outright, so with it set the
-    gate never runs and these tests see neither the refusal nor the metadata hook. Product
-    paths set it process-wide (for_inference, the eval prediction_step, zoo's compiler), and
-    an earlier test in the same xdist worker leaving it at "1" failed a different subset of
-    this file on each run. Tests that want it set still say so with monkeypatch.setenv."""
+    """Unset UNSLOTH_RETURN_LOGITS: when set to 1 it blocks padding-free and the gate never runs."""
     monkeypatch.delenv("UNSLOTH_RETURN_LOGITS", raising = False)
 
 
@@ -145,15 +136,7 @@ def test_the_accepted_shape_really_accepts_it():
 
 
 def test_the_blocker_names_itself_in_the_warning(monkeypatch, caplog):
-    """The chain must not fall through to UNSLOTH_RETURN_LOGITS=1, a flag the user never set.
-
-    Asserted by running the chain with the env var ALSO set, which is the only
-    arrangement where the fall-through is observable: the blocker and the catch-all
-    are both live, and the message has to name the one that is actually the cause.
-    This used to `inspect.getsource` and compare the offsets of two literals, which
-    pins one spelling of the branch rather than the behaviour, and went red on a
-    branch that merely widened the condition to `forward_rejects_packing or ...`.
-    """
+    """Run with UNSLOTH_RETURN_LOGITS also set, so the warning must name the real blocker, not the flag."""
     import logging
     from types import SimpleNamespace
 
@@ -190,13 +173,7 @@ def test_the_blocker_names_itself_in_the_warning(monkeypatch, caplog):
 
 
 def test_the_signature_probe_runs_once_per_call():
-    """Kept from the source-offset version of the test above.
-
-    The probe walks a forward signature and, for a string `model=`, can reach the
-    remote-code resolution behind it, so calling it again per warning is not free.
-    This is a property of the code rather than of a run, so it is still read off the
-    source, but on its own instead of riding along with a behavioural claim.
-    """
+    """The signature probe can reach remote-code resolution, so it must run once per call."""
     import inspect as _inspect
 
     from unsloth import trainer as trainer_module
@@ -207,11 +184,7 @@ def test_the_signature_probe_runs_once_per_call():
 
 @pytest.mark.parametrize("packing", [False, True])
 def test_a_string_model_is_rechecked_once_trl_has_built_it(monkeypatch, packing):
-    """A string the class could not be resolved for is rechecked after init, and REFUSED.
-
-    Clearing the flags there would leave batches flattened with nothing naming the
-    boundaries; re-running `__init__` would materialize the checkpoint twice.
-    """
+    """Unresolved string models are rechecked after init and refused, since flags alone lose boundaries."""
     from types import SimpleNamespace
 
     import unsloth.trainer as trainer_module
@@ -307,11 +280,7 @@ def test_the_class_behind_a_string_is_resolved_without_downloading_weights():
 
 
 def test_a_native_architecture_is_answered_without_touching_remote_code():
-    """Native `architectures` wins over a remote `auto_map`, so the loader is never called.
-
-    TRL resolves `getattr(transformers, config.architectures[0])` and never reads
-    `auto_map`, so reaching for it first would run code nothing else would.
-    """
+    """Native config.architectures wins over auto_map, as TRL resolves it, so the loader is never called."""
     from types import SimpleNamespace
 
     import transformers
@@ -382,12 +351,7 @@ def test_the_remote_code_grant_is_read_by_membership(init_kwargs, top_level, may
 
 
 def test_the_same_auth_keys_reach_both_fetches():
-    """The config fetch and the class fetch must authenticate identically.
-
-    transformers honours `use_auth_token` as a deprecated alias for `token` across the
-    supported range, so dropping it would authenticate one fetch and not the other.
-    Asserted against the sibling's own key list so the two cannot drift apart.
-    """
+    """Config and class fetches must send the same auth keys, incl. the deprecated use_auth_token alias."""
     import inspect as _inspect
     from types import SimpleNamespace
 
@@ -559,10 +523,7 @@ def test_the_warning_names_the_resolved_class_not_str(monkeypatch, caplog):
 
 
 def test_a_class_that_disagrees_with_the_built_model_is_still_caught(monkeypatch):
-    """`auto_map` can name several classes, so a resolved "yes" is not proof about the
-    instance. The post-init check stays armed; a correct block already turns both flags
-    off, which is the condition it skips on.
-    """
+    """A resolved class is not proof about the built instance, so the post-init check stays armed."""
     from types import SimpleNamespace
 
     import unsloth.trainer as trainer_module
@@ -627,11 +588,7 @@ def test_a_resolver_that_explodes_falls_back_to_the_backstop(monkeypatch):
 
 
 def test_a_mixed_adapter_wrapper_is_unwrapped_to_the_checkpoint():
-    """`PeftMixedModel` has no `get_base_model`, and its variadic forward only delegates.
-
-    Driven through real PEFT rather than a stand-in, because the point is which
-    attribute the real wrapper exposes.
-    """
+    """PeftMixedModel has no get_base_model, so the gate must unwrap it to the checkpoint."""
     peft = pytest.importorskip("peft")
     transformers = pytest.importorskip("transformers")
 

@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The PyPI-first wheelhouse guard, executed rather than read.
-
-test_woa_wheelhouse_prefers_pypi.py pins the SHAPE of the guard against install.ps1's
-source, which cannot catch a helper that is wired correctly and answers wrongly. The three
-bugs covered here, all found reviewing the guard's first version:
-
-1. A wheel the guard skipped stopped counting as available. $WoaWheelNames is rebuilt by
-   scanning the staging directory, and a $WoaDropCandidates name missing from it is emitted
-   as `name ; platform_machine == "AMD64"`, which EXCLUDES the package on ARM64. So the day
-   PyPI published a win_arm64 hf_transfer or brotli, the guard turned "installed from our
-   wheelhouse" into "not installed at all", firing on the event it exists for.
-
-2. abi3 was treated as universally compatible. It is forward compatible from the version it
-   was built against, so a cp314-abi3 wheel does not import on cp313, and calling ours
-   redundant against one would leave the package uninstallable.
-
-3. PyPI publishing a wheel is only availability if the resolve will look at PyPI. Offline,
-   or pointed at an exclusive mirror, dropping our copy leaves it obtainable from nowhere.
-
-Hermetic: no network. The live-PyPI leg of the guard is exercised on hardware, not here.
-"""
+"""Runs the PyPI-first wheelhouse guard: skipped names, abi3 compatibility and offline PyPI reach."""
 
 from __future__ import annotations
 
@@ -130,11 +110,7 @@ def _run(script: str, *, cwd: str | pathlib.Path | None = None) -> str:
 
 
 def _dropped_names(provided: str) -> set[str]:
-    """Which $WoaDropCandidates get excluded on ARM64, given what PyPI supplies.
-
-    The staging directory is empty on purpose: the only thing standing between a name and
-    the AMD64 drop line is the $WoaPyPIProvided bookkeeping this exercises.
-    """
+    """Which drop candidates ARM64 excludes, given only what PyPI provides; the staging dir is empty."""
     out = _run(f"""
 $dir = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -175,14 +151,7 @@ def test_a_wheel_is_usable_only_where_it_actually_imports(wheel, py_tag, abi_tag
 
 @pytest.fixture
 def no_uv_config_dir(tmp_path):
-    """A working directory with no uv config anywhere above it.
-
-    Get-WoaUvConfigIndexPolicy walks from the current directory to the filesystem root, so
-    running from the repo (or from under a checkout that grows a `[tool.uv]` table) would
-    let a file decide an answer these rows attribute to their env dict. Asserted rather than
-    assumed: if such a file does appear above the tmp dir, this names it instead of turning
-    one parametrisation into an inexplicable False.
-    """
+    """Fails if any uv.toml sits above the temp dir, since uv walks parent directories for config."""
     work = tmp_path / "neutral"
     work.mkdir()
     for parent in [work, *work.parents]:
@@ -198,13 +167,7 @@ def no_uv_config_dir(tmp_path):
 
 @pytest.mark.parametrize("spelling", ["ProgramData", "PROGRAMDATA", "programdata"])
 def test_the_scrub_drops_program_data_however_the_platform_spelled_it(spelling):
-    """The scrub has to survive Windows re-casing the name on the way in.
-
-    Runs everywhere because it is the Windows spelling that is untestable on Windows here:
-    a Linux session has no ProgramData to leak, so a literal-match scrub passes this suite
-    green on CI and quietly stops working on the only platform install.ps1 ships to. Feeding
-    the three spellings a real environment block can carry states the requirement directly.
-    """
+    """The ProgramData scrub must accept each Windows spelling, which Linux runs cannot produce."""
     scrubbed = _scrubbed_environ({spelling: r"C:\ProgramData", "PATH": "/usr/bin"})
     assert scrubbed == {"PATH": "/usr/bin"}, f"{spelling} survived the scrub: {scrubbed}"
 

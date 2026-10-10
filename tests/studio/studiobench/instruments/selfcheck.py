@@ -1,49 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Integrity gates. These run BEFORE any cell counts, and a failure ABORTS instead of reporting.
-
-Every gate here exists because the corresponding defect was live, produced a plausible table, and
-was believed for a while.
-
-  120 ms STALL, SEEN WITHIN +/-20 ms
-      A frame recorder that cannot see a stall the harness injected itself cannot see a stall the
-      app produced. The failure this catches is a recorder that is running but attributing its
-      samples to the wrong window, which reads as a clean run rather than as a broken one.
-
-  400 ms INPUT DELAY, MOVING KEYSTROKE p95 BY AT LEAST 350 ms
-      The input path is measured through `page.keyboard` so `latencyInfo` is real. A harness that
-      writes the textarea value directly and dispatches a synthetic `input` event measures the
-      DOM setter and nothing else, and that measurement does not move when the app gets slower.
-
-  A HEAVY SCENE AND A TRIVIAL SCENE DIFFERING BY MORE THAN 20%
-      If the instrument cannot separate a deliberately heavy page from a deliberately trivial
-      one, it is BLIND, and every "no significant difference" it produces is meaningless. This is
-      the gate that would have caught a fixture rendering a fifth of the content it claimed.
-
-  longtask READ FROM supportedEntryTypes, NEVER FROM WHETHER observe() THROWS
-      `PerformanceObserver.observe({type:"longtask"})` does not throw on WebKit or Firefox. It is
-      accepted and then never fires. A try/catch gate therefore reports both engines as supported
-      and then reports zero long tasks, which is a fabricated number, not a missing one.
-
-  THE _clock_pair CONTROL RATIO WITHIN 10%
-      The page's wall clock against the driver's monotonic clock. It must be flat across a ladder
-      by construction, so when it moves, the measurement moved and not the page. The driver half
-      is the MIDPOINT of two readings taken either side of the round trip: a single post-evaluate
-      reading charges the whole blocked main thread to the driver and produced 2.5% of pure skew
-      at the top of a ladder, in a quantity whose entire job is to be flat.
-
-  THREE-CLOCK AGREEMENT, >20% DISAGREEMENT EXCLUDES THE WINDOW
-      rAF callbacks, CDP `Page.startScreencast` presented frames, and a 1 ms timer, each
-      independently measuring the same window's elapsed time. This gate exists for one specific
-      reason: rAF STOPS BEING SCHEDULED when the compositor decides nothing is visible. A window
-      in that state reports no dropped frames, because it reports no frames, and "no dropped
-      frames" is how a completely unmeasured window looks in every table. A window whose clocks
-      disagree is marked `clock_disagreement` and EXCLUDED from scoring rather than believed.
-
-The pure evaluators below take numbers and return verdicts, so they are unit-testable without a
-browser. The driver functions underneath them are the thin part that talks to Playwright.
-"""
+"""Integrity gates abort the run; each guards a defect that once gave a plausible but wrong table."""
 
 from __future__ import annotations
 
@@ -349,19 +307,7 @@ def evaluate_tri_clock(
     raf_frames: int | None = None,
     tolerance_pct: float = TRI_CLOCK_TOLERANCE_PCT,
 ) -> TriClockVerdict:
-    """Compare each clock's own measurement of the window against wall time.
-
-    Each of the three clocks independently spans the window: the rAF loop by summing its frame
-    gaps, the screencast by the interval between its first and last presented frame, the 1 ms
-    timer by summing its tick gaps. All three should equal the wall duration, and a clock that
-    covers materially less than the window did not observe part of it.
-
-    THE CASE THIS IS FOR. When the compositor decides nothing is visible it stops scheduling rAF
-    callbacks entirely. The frame recorder then reports very few frames and no dropped ones, and
-    a report reads that as a smooth window. Here it shows up as an rAF span far short of wall
-    time while the timer clock covers the whole window, which is the correct conclusion: the
-    window was not measured.
-    """
+    """A clock spanning materially less than wall time missed part of the window, which is unmeasured."""
 
     spans: dict[str, float | None] = {
         "raf": None if raf_span_ms is None else float(raf_span_ms),
@@ -485,14 +431,7 @@ def evaluate_stream_cost_recovery_gate(
     *,
     min_recovery: float = MIN_STREAM_COST_RECOVERY,
 ) -> Gate:
-    """`stream_cost` must read back a cost this harness injected into the stream itself.
-
-    A metric that cannot see a known cost cannot see an unknown one, and this is the only check
-    that separates "the change did nothing" from "the metric is not watching". The RECOVERY
-    FRACTION is the output that matters and it is reported whether or not the gate passes: a
-    metric recovering 40% of what was injected is not broken, but every number it produces is
-    four tenths of the truth and a reader has to be told the multiplier.
-    """
+    """A metric blind to an injected cost cannot be trusted on real ones; report the recovery fraction."""
     missing = [
         name
         for name, value in (
@@ -566,13 +505,7 @@ def input_delay_init_script(delay_ms: float = INJECTED_INPUT_DELAY_MS) -> str:
 
 
 def clock_pair(page: Any) -> tuple[float, float]:
-    """The page's wall clock and the driver's monotonic clock, read around one round trip.
-
-    The driver half is the MIDPOINT of readings taken either side of the evaluate. The page can
-    only answer while its main thread is free, so a single reading taken after the call charges
-    the entire blocked main thread to the driver's clock. That mistake produced 2.5% of pure
-    round-trip skew at the top of a ladder, in the one quantity whose job is to be flat.
-    """
+    """Driver time is the midpoint around evaluate; a post-call reading charges the page's stall to it."""
 
     before = time.monotonic()
     page_ms = page.evaluate("() => Date.now()")
@@ -600,12 +533,8 @@ def run_gates(
     injected_stall_ms: float = INJECTED_STALL_MS,
     injected_input_delay_ms: float = INJECTED_INPUT_DELAY_MS,
 ) -> SelfCheckReport:
-    """Assemble every gate from already-collected readings.
-
-    Pure: the caller does the driving, this does the judging. That split is what lets the whole
-    gate set be unit-tested, including the cases where it must FAIL, which is the half that never
-    gets exercised when the checks live inline in the driver.
-    """
+    """Judges already-collected readings without driving the browser, so failing cases can be unit-
+    tested."""
 
     report = SelfCheckReport()
     report.gates.append(evaluate_stall_gate(stall_observed_ms, injected_ms = injected_stall_ms))

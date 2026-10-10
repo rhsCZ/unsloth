@@ -1,13 +1,4 @@
-"""Config arguments the installed TRL retired must not crash trainer construction.
-
-The `**kwargs` catch-all in the generated `Unsloth<X>Config.__init__` used to be
-splatted raw into `super().__init__()`, so a pinned notebook setting
-`GRPOConfig.max_prompt_length` (removed in TRL 0.28.0) died with a `TypeError`
-on upgrade. `filter_config_init_kwargs` is what absorbs that.
-
-The module is loaded by file spec because `import unsloth.models.rl_config_compat`
-would run `unsloth/__init__.py` first and drag in torch, numpy and unsloth_zoo.
-"""
+"""Retired TRL config args must not crash construction; filter_config_init_kwargs absorbs them."""
 
 import ast
 import dataclasses
@@ -202,14 +193,8 @@ def test_the_transformers_tables_do_not_overlap_or_contradict_the_trl_ones():
 
 
 def test_a_field_the_installed_version_still_declares_is_never_migrated():
-    """The invariant that makes a table entry safe to write ahead of its removal.
-
-    The 28 arguments did not all go in 5.0.0: `group_by_length` survived to 5.1.0,
-    `warmup_ratio` and `logging_dir` to 5.14.1. An entry is consulted only after
-    the config rejects the name, so on a version that still has it the entry must
-    be inert. Asserted per entry, and per installed version, rather than assuming
-    one cutoff.
-    """
+    """Entries are consulted only once the config rejects the name, so they must be inert while it
+    exists."""
     transformers = pytest.importorskip("transformers")
     fields = {f.name for f in dataclasses.fields(transformers.TrainingArguments)}
 
@@ -258,11 +243,7 @@ def test_a_transformers_5_removal_is_carried_across_on_a_real_config():
 
 
 def test_a_rename_survives_a_default_unsloth_overrode_on_the_generated_config():
-    """The bug this guards: `rl.py` mirrors the base parameter under its OWN
-    default (`warmup_steps = 0.1`, `per_device_train_batch_size = 4`), so
-    comparing against TRL's declared default reads Unsloth's injected value as
-    caller intent and silently trains at the injected number instead.
-    """
+    """rl.py's injected default would read as caller intent if compared to TRL's declared default."""
 
     @dataclasses.dataclass
     class ModernSFTConfig:
@@ -316,14 +297,7 @@ def test_a_value_the_caller_really_set_still_beats_the_rename():
 
 
 def test_the_renames_rl_py_overrides_the_default_of_are_the_known_ones():
-    """The systemic check behind the `mirrored_from` fix.
-
-    A rename whose target `rl.py` also assigns a default is only correct because
-    the config path passes `mirrored_from`; without it the injected default reads
-    as caller intent and the rename is dropped. Three are in that position today.
-    A fourth appearing means someone added an `rl.py` default or a rename without
-    checking the interaction, so it should fail here rather than in training.
-    """
+    """Renames whose target rl.py also sets a default need mirrored_from, or the rename is dropped."""
     overridden = _rl_py_overridden_defaults()
     # Pin the entries the audit found, so a matcher that silently stops working fails.
     assert {"warmup_steps", "per_device_train_batch_size", "include_num_input_tokens_seen"} <= (
@@ -341,15 +315,7 @@ def test_the_renames_rl_py_overrides_the_default_of_are_the_known_ones():
 
 
 def test_setting_the_new_name_to_its_own_default_is_reported_as_ambiguous():
-    """The one case a value comparison cannot decide, so it is stated not hidden.
-
-    `UnslothSFTConfig(warmup_steps = 0.1, warmup_ratio = 0.03)` passes the new
-    name at exactly the default `rl.py` injects. Nothing in a mirrored parameter
-    records whether it was supplied, so the legacy value wins and the message has
-    to say so. Sentinel defaults would resolve it, at the cost of the signature
-    that `HfArgumentParser` and users read. The trainer path is unaffected: it
-    knows which names actually arrived.
-    """
+    """Setting the new name to rl.py's injected default is ambiguous by value, so the legacy value wins."""
 
     @dataclasses.dataclass
     class ModernSFTConfig:
@@ -384,10 +350,7 @@ def test_setting_the_new_name_to_its_own_default_is_reported_as_ambiguous():
 
 
 def test_a_legacy_optional_forwarded_at_none_does_not_erase_the_target():
-    """`per_gpu_train_batch_size` really did default to `None` in transformers 4.x
-    (checked against 4.57.6), so a wrapper mirroring that signature forwards a
-    `None` nobody asked for. Writing it onto `per_device_train_batch_size` leaves
-    the trainer doing arithmetic on `None`."""
+    """per_gpu_train_batch_size's None default must not overwrite per_device_train_batch_size."""
 
     @dataclasses.dataclass
     class ModernSFTConfig:
@@ -413,11 +376,7 @@ def test_none_still_migrates_when_the_target_itself_defaults_to_none():
 
 
 def test_an_alias_whose_target_is_read_during_post_init_is_not_a_rename():
-    """`use_cpu` is consumed by `__post_init__`, which resolves `device` (a
-    cached_property) and `_n_gpu` from it. Measured on transformers 5.16.1: after
-    `setattr(args, "use_cpu", True)` the device stays `cuda:0`, so routing
-    `no_cuda` through the trainer path would report a change that never happened.
-    """
+    """Its target is read in __post_init__, so setting use_cpu afterwards changes nothing; not a rename."""
     assert "no_cuda" in TRANSFORMERS_REMOVED_FIELD_ADVICE
     assert "no_cuda" not in TRANSFORMERS_CONFIG_RENAMES
 
@@ -447,11 +406,7 @@ RL_SOURCE = (REPO_ROOT / "unsloth" / "models" / "rl.py").read_text(encoding = "u
 
 
 def _rl_py_overridden_defaults():
-    """Config parameters whose default `rl.py` rewrites in the generated `__init__`.
-
-    Both spellings it uses: the `replacements = {...}` literals and the later
-    `replacements["warmup_steps"] = 0.1` version-conditional assignments.
-    """
+    """Names whose default rl.py rewrites, via `replacements` literals or later subscript assignments."""
     names = set()
     for node in ast.walk(ast.parse(RL_SOURCE)):
         if not isinstance(node, ast.Assign):

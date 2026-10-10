@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression tests for full finetuning precision on no-bf16 GPUs (V100/T4).
-
-Full finetuning upcasts trainable weights to float32, so the model dtype is
-float32 (not bfloat16). The SFTTrainer mixed-precision template in
-unsloth/models/rl.py must then:
-  - run the forward pass under float16 autocast for normal models,
-  - keep FORCE_FLOAT32 models (Gemma3, gpt_oss, ...) in pure float32,
-  - never select bf16 on hardware without bf16.
-
-We execute the REAL template block extracted from rl.py source (no heavy unsloth
-import) against mocked inputs. See issue #4082.
-"""
+"""On no-bf16 GPUs, full finetunes use float16 autocast, or pure float32 for FORCE_FLOAT32 models."""
 
 from __future__ import annotations
 
@@ -54,11 +43,7 @@ def _restore(mapping, saved):
 
 
 def _decide(dtype, *, bf16_supported, force_float32, full_finetuning, mixed_precision, fp16, bf16):
-    """Run the template block; return (args.fp16, args.bf16, ACCELERATE_MP, raised).
-
-    Stubs (sys.modules, env vars, torch.cuda.is_bf16_supported) are restored on
-    exit so a decision can't leak into later tests in the same process.
-    """
+    """Runs the real template block; stubs are restored on exit so no decision leaks into later tests."""
     uzu = types.ModuleType("unsloth_zoo.utils")
     uzu._get_dtype = lambda x: x
     uzd = types.ModuleType("unsloth_zoo.device_type")

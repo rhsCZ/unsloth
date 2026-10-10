@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""JupyterLab must not be started on Studio's port.
-
-Studio's port is 8000 unless `UNSLOTH_STUDIO_PORT` says otherwise, so with `JUPYTER_PORT=8000`
-JupyterLab wins the bind and Studio falls back to an unpublished 8001. Both report
-RUNNING and the summary still points at 8000, where Jupyter answers 404.
-"""
+"""JupyterLab must not take Studio's port: JUPYTER_PORT=8000 leaves Studio on an unpublished 8001."""
 
 from __future__ import annotations
 

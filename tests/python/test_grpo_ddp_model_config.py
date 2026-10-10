@@ -32,26 +32,15 @@ def test_grpo_logit_scaling_uses_model_config_helper():
 
 
 def test_detect_logit_transforms_reads_the_unwrapped_config():
-    """The shared helper must be handed model_config, never the bare model.
-
-    A DDP/Accelerate wrapper does not forward .config, so passing the model makes
-    the helper report zeros, silently dropping Gemma softcapping and
-    Cohere/Granite/Falcon-H1 scaling on multi-GPU runs.
-    """
+    """Pass model_config, not the model: DDP wrappers do not forward .config, so transforms read as
+    zeros."""
     src = _read_source()
     assert "detect_logit_transforms(model)" not in src
     assert src.count("detect_logit_transforms(model_config)") >= 2
 
 
 def test_detect_logit_transforms_zeroes_out_on_a_wrapped_model():
-    """Behavioural counterpart: the resolved config must yield the transforms.
-
-    Deliberately does not assert what the helper does with the *bare* wrapper: older
-    unsloth_zoo reported nothing, newer versions unwrap ``.module`` / ``._orig_mod``
-    themselves, and pinning either would make this test track the zoo's internals.
-    What holds on every version is that the config we resolve is the one the
-    transforms come back from, which is why the call sites pass model_config.
-    """
+    """Checks the resolved config yields the transforms, not what the helper returns for a bare wrapper."""
     torch = __import__("importlib").import_module("torch")
     transformers = __import__("importlib").import_module("transformers")
     planner = __import__("importlib").import_module("unsloth_zoo.device_map_planner")

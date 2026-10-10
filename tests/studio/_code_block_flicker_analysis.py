@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Turning a frame log into "did a code block flicker", separated so it can be tested.
-
-`playwright_code_block_flicker.py` records per frame the rendered height and document-space top of
-every `[data-streamdown="code-block"]`. Every pass/fail decision is computed here from those
-numbers alone, so it can be exercised against hand-written frame logs without a browser --
-including the logs that must NOT be read as a flicker.
-
-Kept out of the harness because that imports playwright, while the contract test has to run
-wherever the repo's CPU suite runs.
-"""
+"""Computes flicker verdicts from frame logs without playwright, so the CPU contract test can run."""
 
 from __future__ import annotations
 
@@ -24,14 +15,7 @@ SHIFT_PX = 8
 
 
 def analyse_stream(frames: list[dict]) -> dict:
-    """Collapse-and-recover events over a frame log, per code block.
-
-    Block indices are stable across frames: blocks are only ever APPENDED while a reply streams.
-
-    A collapse is a block at least TALL_PX tall rendering at half that or less and then coming
-    back. The recovery is required, so a block legitimately replaced by something shorter, or a
-    thread being torn down, is not reported as a flicker.
-    """
+    """A flicker is a block at least TALL_PX tall that drops to half TALL_PX or less, then recovers."""
     collapses = 0
     placeholder_frames = 0
     detail: list[dict] = []
@@ -134,12 +118,7 @@ def analyse_stream(frames: list[dict]) -> dict:
 
 
 def analyse_sweep(frames: list[dict]) -> dict:
-    """Layout shift under a scroll gesture, from the same frame log.
-
-    `tops` is measured from the top of the THREAD'S CONTENT, not the viewport, so scrolling does
-    not move it. Anything that does is a block above changing size, which the user sees as the
-    page moving under their finger.
-    """
+    """Tops are measured from thread content, so a scroll cannot move them; only a resize above can."""
     shift_frames = 0
     worst_shift = 0.0
     for i in range(1, len(frames)):

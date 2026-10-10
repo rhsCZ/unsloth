@@ -29,10 +29,7 @@ def _install_id_helpers() -> str:
 
 
 def _extract_create_studio_shortcuts() -> str:
-    """The shipped helpers plus the whole create_studio_shortcuts body.
-
-    Heredocs carry their own `}` at column 0, so `sh -n` picks the real one.
-    """
+    """Heredocs carry their own column-0 brace, so sh -n is what picks the real closing brace."""
     src = INSTALL_SH.read_text(encoding = "utf-8")
     lines = src.splitlines()
     start = next(i for i, l in enumerate(lines) if l.startswith("_css_install_id_is_valid() "))
@@ -248,11 +245,7 @@ def test_install_ps1_sentinel_uses_pathtype_leaf():
 
 
 def test_setup_ps1_stale_venv_has_env_mode_guard():
-    """setup.ps1 stale-venv branch must gate the venv replacement on a custom-root Unsloth sentinel.
-
-    The predicate is computed once, above the sweep, because both destructive operations in this
-    region ask the same question: the rebuild before it renames the venv, and the sweep before it
-    deletes anything beside it."""
+    """One custom-root sentinel gates both the venv rebuild and the sweep, since both are destructive."""
     src = SETUP_PS1.read_text(encoding = "utf-8")
     guard = src[src.index("$_studioRootIsOurs = (") : src.index("Stale venv detected")]
     assert (
@@ -282,10 +275,7 @@ def test_setup_ps1_stale_venv_has_env_mode_guard():
 
 
 def test_setup_ps1_stale_venv_is_moved_aside_not_deleted_in_place():
-    """A rename takes the whole tree or fails and leaves it intact. Remove-Item -Recurse deletes up
-    to the first locked file, and a venv locked by its own running python.exe came out of it with
-    Lib\\ emptied, no unsloth_cli, and Scripts\\python.exe still there: nothing could start or
-    update it afterwards."""
+    """Rename the venv aside; Remove-Item -Recurse stops at the first locked file and leaves it broken."""
     src = SETUP_PS1.read_text(encoding = "utf-8")
     idx = src.index("Stale venv detected")
     block = src[idx : src.index("if (-not (Test-Path -LiteralPath $VenvDir))", idx)]
@@ -317,10 +307,7 @@ def test_setup_ps1_direct_update_from_inside_the_venv_repairs_in_place():
 
 
 def test_setup_ps1_direct_update_in_place_route_is_the_last_escape():
-    """The in-place route holds for EVERY stale direct update, so it must be tested last or it
-    consumes $shouldRebuild before the narrower escapes run. Ahead of the nvidia-smi guard it also
-    leaves $script:PreservedInstallerTorchTag unset, which force-installs a CPU wheel over the
-    working cu* venv that guard protects (#9857)."""
+    """The in-place route must be last, or it consumes $shouldRebuild before the narrower escapes run."""
     src = SETUP_PS1.read_text(encoding = "utf-8")
     in_place = src.index(
         "if ($shouldRebuild -and -not $InstallerManagedSetup) {\n"
@@ -930,11 +917,7 @@ _ROOT_CHOOSING_RESOLVERS = (
 
 
 def _root_moving_env_names() -> set[str]:
-    """The env vars storage_roots.py picks a root from, read out of the shipped source.
-
-    Derived rather than written down, so a fourth root variable fails this test on the commit
-    that adds it instead of on the bug report that follows it.
-    """
+    """Root-moving env vars, read from storage_roots.py, so a new one fails on the commit that adds it."""
     source = (REPO_ROOT / "studio" / "backend" / "utils" / "paths" / "storage_roots.py").read_text(
         encoding = "utf-8"
     )
@@ -960,12 +943,7 @@ def _rust_string_list(source: str, const_name: str) -> list[str]:
 
 
 def test_tauri_managed_children_scrub_every_root_moving_env():
-    """A shell-level Unsloth root must not reach the packaged desktop's Python children.
-
-    The desktop pins the legacy ~/.unsloth root and hardcodes it in Rust, so any variable
-    storage_roots.py would resolve a different root from has to be removed before the spawn,
-    or the databases, assets and caches move while the Rust half keeps reading the old place.
-    """
+    """Tauri children must scrub root-moving env vars, else Rust reads the legacy ~/.unsloth root."""
     src_root = REPO_ROOT / "studio" / "src-tauri" / "src"
     process = (src_root / "process.rs").read_text(encoding = "utf-8")
     install = (src_root / "install.rs").read_text(encoding = "utf-8")
@@ -1084,13 +1062,7 @@ def test_install_sh_publishes_the_id_without_clobbering():
 
 
 def test_install_sh_bakes_the_id_that_is_actually_on_disk(tmp_path):
-    """The launcher must hold what the id file holds, not what we tried to write.
-
-    The backend reports the file's content, so every path where publication did
-    something else (a directory destination, so `ln` links the temp inside it;
-    a lost race; an unwritable share dir) must resolve to the on-disk value or
-    to no launcher at all.
-    """
+    """The launcher must bake the id actually on disk, not the one it tried to write."""
     src = INSTALL_SH.read_text(encoding = "utf-8")
     fn_start = src.index('_css_id_dir="$STUDIO_HOME/share"')
     block = src[fn_start : fn_start + 4200]
@@ -1147,11 +1119,7 @@ def test_install_sh_id_publish_adopts_the_winner_of_a_race(tmp_path):
 
 
 def test_install_sh_id_publish_replaces_a_blank_incumbent(tmp_path):
-    """A zero-length id is an interrupted write: it must be replaced, never adopted.
-
-    Adopting it would bake an empty $_ExpectedStudioRootId into the launcher, which
-    permanently skips the ownership comparison in Test-StudioHealth.
-    """
+    """A blank id is an interrupted write; replace it, since adopting it skips the ownership check."""
     studio_home = tmp_path / "studio"
     (studio_home / "share").mkdir(parents = True)
     id_file = studio_home / "share" / "studio_install_id"
@@ -1178,12 +1146,7 @@ def test_install_sh_id_publish_replaces_a_blank_incumbent(tmp_path):
 
 
 def test_install_sh_trims_only_surrounding_whitespace_in_an_existing_id(tmp_path):
-    """Interior whitespace must fail the check, not be deleted into a valid id.
-
-    The backend strips then regex-matches, so `<32 hex>\\n<32 hex>` is not an id
-    to it. Deleting the newline would bake a token the backend never reports,
-    leaving the launcher rejecting its own backend forever.
-    """
+    """Interior whitespace must fail the check, not be deleted into an id the backend never reports."""
     src = INSTALL_SH.read_text(encoding = "utf-8")
     assert (
         "tr -d ' \\t\\r\\n'" not in src
@@ -1215,11 +1178,7 @@ def test_install_sh_trims_only_surrounding_whitespace_in_an_existing_id(tmp_path
 
 
 def test_install_sh_rejects_an_id_holding_a_nul_byte(tmp_path):
-    """A NUL must be caught before the shell silently drops it.
-
-    Command substitution cannot carry one, so `<32 hex>\\0<32 hex>` reads back
-    valid while the backend keeps the byte and reports "".
-    """
+    """A NUL byte must be detected before the shell silently drops it during command substitution."""
     src = INSTALL_SH.read_text(encoding = "utf-8")
     assert (
         """tr -dc '\\000' < "$1" | tr '\\000' 'N'""" in src
@@ -1584,12 +1543,7 @@ def test_install_ps1_launcher_restores_a_missing_or_malformed_install_id(tmp_pat
 
 
 def test_install_sh_never_bakes_a_planted_id_into_the_launcher(tmp_path):
-    """A pre-planted studio_install_id must be regenerated, not embedded.
-
-    The launcher holds the id in a single-quoted assignment, so a quote in it
-    runs as launcher code on every Studio start. Custom roots can live in
-    shared directories, so the file is not trusted for merely being there.
-    """
+    """A planted id file is untrusted: a quote in it would run as launcher code, so regenerate it."""
     studio_home = tmp_path / "studio"
     (studio_home / "share").mkdir(parents = True)
     id_file = studio_home / "share" / "studio_install_id"
@@ -1622,11 +1576,7 @@ def test_install_sh_never_bakes_a_planted_id_into_the_launcher(tmp_path):
 
 
 def test_install_ps1_validates_an_existing_id_before_embedding_it():
-    """install.ps1 must reject a non-hex existing id instead of interpolating it.
-
-    -cnotmatch, not -notmatch: -match is case insensitive and would accept an
-    uppercase id the backend's regex rejects.
-    """
+    """Use -cnotmatch: -match is case-insensitive and would accept an uppercase id the backend rejects."""
     src = INSTALL_PS1.read_text(encoding = "utf-8")
     idx = src.index('$_studioIdFile = Join-Path $_studioIdDir "studio_install_id"')
     block = src[idx : idx + 1200]
@@ -1795,10 +1745,7 @@ def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(tmp_pa
 
 
 def test_llama_cpp_search_roots_handles_studio_root_oserror():
-    """Root resolution must catch (ImportError, OSError, ValueError) from studio_root().
-    Discovery (_find_llama_server_binary) and cleanup (_kill_orphaned_servers) both
-    delegate to the shared _resolved_studio_root_and_is_legacy() classifier, which
-    holds the handler so the two never disagree on which root is legacy."""
+    """The shared _resolved_studio_root_and_is_legacy() handles studio_root() failures for both callers."""
     llama_cpp = (
         REPO_ROOT / "studio" / "backend" / "core" / "inference" / "llama_cpp.py"
     ).read_text(encoding = "utf-8")
@@ -2003,11 +1950,7 @@ def test_install_ps1_replacement_branch_covers_an_occupied_venv_dir():
 
 
 def _extract_install_sh_venv_chain() -> str:
-    """Extract the venv if/elif chain past the legacy migration to its closing `fi`.
-
-    _extract_install_sh_guard_block stops at the first elif, so it cannot see the two
-    interacting.
-    """
+    """Reads the venv if/elif chain to its closing fi; the guard extractor stops at the first elif."""
     src = INSTALL_SH.read_text(encoding = "utf-8")
     m = re.search(
         r'^(if \[ -x "\$VENV_DIR/bin/python" \] \|\| _dir_has_entries "\$VENV_DIR"; then\n.*?^fi$)',
@@ -2186,10 +2129,7 @@ def test_dir_has_entries_restores_the_callers_noglob_setting(tmp_path):
 
 @pytest.mark.parametrize("mode", [0o000, 0o111, 0o444])
 def test_dir_has_entries_treats_an_unenumerable_directory_as_occupied(tmp_path, mode):
-    """uv refuses these targets, so reporting them empty would wedge the repair.
-
-    0o444 is readable but not searchable, 0o111 the mirror; both must answer as 0o000.
-    """
+    """An unenumerable directory counts as occupied: uv refuses it, so reporting it empty wedges repair."""
     if os.geteuid() == 0:
         pytest.skip("root ignores directory permissions")
     blocked = tmp_path / f"blocked{mode:o}"
@@ -2327,11 +2267,7 @@ def _run_rollback_lifecycle(studio_home, shape):
 
 @pytest.mark.parametrize("shape", ["realdir", "regularfile", "danglinglink"])
 def test_rollback_restores_every_shape_the_predicate_moves_aside(tmp_path, shape):
-    """Whatever _dir_has_entries calls occupied has to be restorable on failure.
-
-    Testing with -d dropped a regular file and a dangling link: the rollback
-    deactivated itself and the half-built venv stayed at $VENV_DIR.
-    """
+    """Rollback must restore every shape _dir_has_entries moves aside, not just directories."""
     studio_home = tmp_path / "ws"
     studio_home.mkdir()
     res = _run_rollback_lifecycle(studio_home, shape)

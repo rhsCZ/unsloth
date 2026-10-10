@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The wheelhouse is for wheels PyPI does not build, and only for those.
-
-The Windows on ARM wheelhouse exists because PyPI publishes no win_arm64 build of pyarrow,
-tiktoken, grpcio, brotli, hf_transfer or sqlite-vec. regex is different: PyPI has shipped
-win_arm64 regex since 2025.7.29, and the staging directory is first in UV_FIND_LINKS, so a
-user asking for regex got our binary rather than the one the project released.
-
-So staging asks PyPI first and skips the copy when PyPI publishes the same project at or
-above the version that would have been staged. The version half matters as much as the
-check: an upstream BEHIND the wheelhouse has to leave ours in place, or the guard turns
-into a downgrade.
-
-Text-level tests, like the rest of the installer suite: install.ps1 is PowerShell, so the
-shape is asserted against its source rather than by running it.
-"""
+"""Skip staging when PyPI has the same project at or above our version; a lower one keeps ours."""
 
 from __future__ import annotations
 
@@ -126,10 +112,7 @@ def test_the_default_wheelhouse_url_is_exactly_this(source):
 
 
 def test_the_default_is_a_release_download_url_on_this_repo(source):
-    """`releases/download/<tag>` serves the asset bytes; a `releases/tag/<tag>` URL serves an
-    HTML page, which the staging code would happily save as a .whl. It must point at this
-    repository: the wheels are built, signed and published by a workflow that lives here, so
-    anywhere else is a host whose contents nothing in this tree controls."""
+    """Default wheelhouse must be a releases/download URL on this repo; releases/tag serves HTML."""
     assert DEFAULT_WHEELHOUSE.startswith("https://github.com/unslothai/unsloth/releases/download/")
     assert "/releases/tag/" not in DEFAULT_WHEELHOUSE, "that URL is the HTML page, not the asset"
     assert not DEFAULT_WHEELHOUSE.endswith("/"), "Join-UrlPath adds the slash"

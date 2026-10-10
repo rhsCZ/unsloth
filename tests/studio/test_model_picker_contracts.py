@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Source-contract guards for the model-picker per-model-config feature.
-
-These are cheap, CPU-only, no-browser checks that read the frontend source and
-assert the specific fixes that got the predecessor PR reverted stay in place. If
-a future edit reverts one of them (e.g. rounds the context ceiling up again, or
-puts the HF token back in the URL), the matching assertion reddens. They pair
-with the runtime Playwright checks (which prove the behavior end to end) and the
-backend pytest checks (which prove the backend logic).
-"""
+"""Source-contract guards that keep the fixes which got the predecessor PR reverted from regressing."""
 
 from __future__ import annotations
 
@@ -47,23 +39,14 @@ def _split_args(captured: str) -> list[str]:
 
 
 def _code_only(source: str) -> str:
-    """``source`` with comments removed and whitespace collapsed.
-
-    A name discussed in prose is not a call. This file's own comments name the
-    functions they explain, so a scan that skipped this would match the sentence.
-    """
+    """Comments are stripped so a function named in a comment does not count as a call."""
     source = re.sub(r"/\*.*?\*/", " ", source, flags = re.S)
     source = re.sub(r"//[^\n]*", " ", source)
     return " ".join(source.split())
 
 
 def _call_arguments(text: str, callee: str) -> list[str]:
-    """The argument text of each ``callee(...)`` call in ``text``, parens balanced.
-
-    Per call, so a contract about what every call passes cannot be satisfied by a
-    matching property somewhere else in the file, nor broken by one. An optional
-    generic parameter list is skipped, since ``f<string>(...)`` is the same call.
-    """
+    """Per call rather than whole-file, so a property elsewhere in the file cannot satisfy the contract."""
     calls = []
     for match in re.finditer(rf"\b{re.escape(callee)}\s*(?:<[^>]*>)?\s*\(", text):
         depth, start = 0, match.end() - 1
@@ -110,11 +93,7 @@ def _backend_class(rel: str, name: str) -> ast.ClassDef:
 
 
 def _model_dump_exclusions(rel: str, function: str) -> set[str]:
-    """The names the one ``model_dump(exclude = {...})`` inside ``function`` leaves out.
-
-    Exactly one such call, or the answer would be a union across calls and dropping a
-    name from the one that matters could hide behind another.
-    """
+    """Demands exactly one model_dump(exclude=...) call, since a union could hide a dropped name."""
     excluded: list[set[str]] = []
     for node in ast.walk(_backend_function(rel, function)):
         if not isinstance(node, ast.Call):
@@ -155,11 +134,7 @@ def _annotated_field(rel: str, class_name: str, field: str) -> tuple[str, object
 
 
 def _forwarded_keywords(rel: str, function: str, obj: str) -> set[str]:
-    """Keyword arguments passed as ``name = <obj>.name`` anywhere inside ``function``.
-
-    Same name on both sides, so this says the value reached the callee unmodified and
-    under its own name, which is the part a caller downstream depends on.
-    """
+    """Keywords passed as name=obj.name under the same name, so the callee receives the value unchanged."""
     forwarded = set()
     for node in ast.walk(_backend_function(rel, function)):
         if not isinstance(node, ast.Call):
@@ -178,12 +153,7 @@ def _forwarded_keywords(rel: str, function: str, obj: str) -> set[str]:
 
 
 def _brace_matched_body(text: str, declaration: str) -> str:
-    """The body of `declaration`, ending at ITS closing brace rather than at end of file.
-
-    Splitting on a declaration and keeping the remainder looks like scoping but is not: the slice
-    runs to EOF, so an ordering assertion inside it is still satisfied by code that has been moved
-    out of the callback entirely. Match braces from the `{` that opens the body.
-    """
+    """Stops at the body's own closing brace; a slice to end of file lets moved code pass ordering."""
     start = text.index(declaration)
     open_brace = text.index("{", text.index("=>", start))
     depth = 0
@@ -198,12 +168,7 @@ def _brace_matched_body(text: str, declaration: str) -> str:
 
 
 def _braced_block(text: str, declaration: str) -> str:
-    """The ``{...}`` block for a declaration that is not an arrow function.
-
-    Same reason as ``_brace_matched_body``: splitting on the declaration and keeping the
-    remainder runs to end of file, so an ordering assertion inside it stays satisfied by code
-    that has been moved out of the block entirely.
-    """
+    """Bounded to the block's own braces; a slice to end of file lets moved code still pass."""
     start = text.index(declaration)
     open_brace = text.index("{", start)
     depth = 0
@@ -279,14 +244,7 @@ def test_auto_offload_context_matches_picker_custom_seed():
 
 
 def test_ui_safe_zone_anchor_tracks_the_auto_offload_context():
-    """The published ceiling and the context Auto runs must come from one constant.
-
-    ``max_context_length`` is the threshold the chat settings sheet warns above.
-    When no GPU subset fits, Auto runs at ``_AUTO_OFFLOAD_CTX`` and the ceiling is
-    anchored in the same branch. A literal there drifts the moment the constant
-    moves, and the symptom is every Auto load warning about a context Auto chose
-    for itself, so pin the reference rather than the value.
-    """
+    """Ceiling and Auto's offload context must share one constant, else every Auto load warns."""
     backend = _read_backend("core/inference/llama_cpp.py")
     anchor = re.search(
         r"max_available_ctx\s*=\s*min\(\s*([A-Za-z_0-9]+)\s*,\s*native_ctx_for_cap",
@@ -601,12 +559,7 @@ def test_diffusion_load_paths_disable_tensor_parallel():
 
 
 def test_diffusion_load_keeps_the_standing_gpu_memory_mode():
-    """A diffusion config is sanitized to gpuMemoryMode "auto" because the mode does
-    not apply to it, not because the user picked Auto. Applying that sanitized value
-    to the runtime store would strand the session on Auto: persistGpuMemoryModeOnLoad
-    deliberately skips diffusion responses, so nothing writes the standing preference
-    back, and the next ordinary GGUF loaded without its own config sends the stale
-    "auto" and persists it over the user's Manual."""
+    """A sanitized diffusion auto must not reach the store, or a Manual preference is overwritten."""
     apply = " ".join(_read("features/model-picker/model-config/apply-per-model-config.ts").split())
     assert (
         "gpuMemoryMode: options.isDiffusion ? readPersistedGpuMemoryMode() : "
@@ -649,10 +602,7 @@ def test_variant_expander_refreshes_after_delete():
 
 
 def test_gguf_vision_capability_is_threaded_through_deferred_chat_load():
-    """Variant metadata is more authoritative than the parent catalog row for GGUF
-    vision support. Both the direct pick and the settings action must carry the hint,
-    the pinned-quant row must forward its validated verdict, and the collapsed
-    sole-quant row must not drop the mmproj answer it already read."""
+    """Variant metadata outranks the parent catalog row for GGUF vision, so each load path must carry it."""
     picker = _read("features/model-picker/components/model-selector/pickers.tsx")
     assert "const variantVisionHint = hasVision === false ? false : undefined;" in picker
     assert "hasVision: normalizeGgufVisionCapability(res?.has_vision)," in picker
@@ -786,10 +736,7 @@ def test_model_picker_toolbar_reflows_before_crossing_picker_edge():
 
 
 def test_native_picked_gguf_template_read_through_lease():
-    """A native (picked / drag-drop) GGUF's path lives only in its signed lease, and the
-    picker chat-template GET has no lease plumbing, so the default template must be read
-    through the lease-aware validate probe: mint a validate-model lease and post
-    include_chat_template."""
+    """A native GGUF's path lives only in its lease, so its template is read via the validate probe."""
     api = _read("features/model-picker/api/templates.ts")
     assert 'consumeNativePathToken(nativePathToken, "validate-model")' in api
     assert "include_chat_template: true" in api
@@ -812,12 +759,7 @@ _LOCAL_PATH_TEST = r"/^([/\\~.]|[A-Za-z]:)/.test(repoId)"
 
 
 def _menu_guard_truth(src):
-    """The JSX guard in front of `<QuantOptionsMenu`, as a function of its boolean inputs.
-
-    Evaluated rather than matched: regrouping, a widened `isPartial`, or a new condition
-    anywhere in the guard all change or keep the answer exactly as the browser would.
-    Comments are blanked first, so a commented-out alternative cannot count.
-    """
+    """Evaluates the JSX guard as the browser would, so a regrouped or widened guard shows in the answer."""
     blanked = blank_literals_and_comments(src)
     before_menu = blanked.split("<QuantOptionsMenu", 1)[0]
     guard = before_menu[before_menu.rindex("{") + 1 :].strip()
@@ -960,10 +902,7 @@ def test_downloaded_list_offsets_virtual_rows():
 
 
 def test_local_gguf_diagnostics_gate_on_broad_is_gguf():
-    """The MTP fallback note and the context/VRAM warning must gate on the broad
-    isGguf (variant, loaded gguf context, or .gguf suffix), not the variant-only
-    isLoadedGguf, so direct-file and custom-folder GGUF loads keep those
-    diagnostics."""
+    """Warnings gate on broad isGguf, not isLoadedGguf, so direct-file and custom-folder loads keep them."""
     src = _read("features/chat/chat-settings-sheet.tsx")
     spec = re.search(r"const showSpecFallback =.*?;", src, re.S)
     vram = re.search(r"const showContextVramWarning =.*?;", src, re.S)
@@ -1054,10 +993,7 @@ def test_blur_cache_cleared_on_every_settled_render():
 
 
 def test_auto_defaults_not_persisted_as_overrides():
-    """Auto GPU memory mode and a GGUF model's Auto/default speculative type are
-    follow-global defaults; they must not persist as per-model overrides, else a
-    model stops following later changes to the global preference. An MLX model
-    keeps its explicit Auto, which beats a standing "off"."""
+    """Auto defaults must not persist as overrides, or a model stops following later global changes."""
     src = _read("features/model-picker/model-config/per-model-config.ts")
     assert 'if (partial.gpuMemoryMode === "manual") {' in src
     assert 'partial.gpuMemoryMode === "auto" || partial.gpuMemoryMode === "manual"' not in src
@@ -1204,10 +1140,7 @@ def test_compare_pane_non_gguf_falls_back_to_app_default():
 
 
 def test_every_load_path_asks_the_backend_before_it_asks_for_a_window():
-    """Which backend serves and what window it reported decide the request and the Max
-    Tokens ceiling. A literal for the first makes an interactive MLX load ask for the app
-    default again; a raw context field for the second raises Max Tokens to meet a length
-    nobody measured."""
+    """Load paths take the serving backend and its reported window, never a literal or raw context field."""
     load_paths = ("chat/hooks/use-chat-model-runtime.ts", "chat/api/chat-adapter.ts")
     derived_backend = r"isMlx: isServedByMlx\(\s*[\w.=\" ]+,\s*platform\.deviceType,\s*platform\.chatOnlyReason,?\s*\)"
     # A name bound to that same call counts; the binding is checked below.
@@ -1358,12 +1291,7 @@ def test_model_config_prepares_hf_token_before_gguf_metadata_preflight():
 
 
 def test_chat_load_prepares_hf_token_before_gguf_metadata_preflight():
-    """The single-model load path classifies a GGUF via fetchGgufStagedMetadata
-    before validateModel/loadModel run. The Hub rejects an invalid Authorization
-    header with 401 even for a PUBLIC repo, so that preflight must prepare the
-    token like every other caller; otherwise a stale saved token aborts the whole
-    load instead of offering the "continue anonymously / replace token" recovery.
-    """
+    """The Hub returns 401 for an invalid token even on public repos; prepare the token before preflight."""
     runtime = _read("features/chat/hooks/use-chat-model-runtime.ts")
     prepare = runtime.index("prepareHfTokenForUse(")
     metadata = runtime.index("fetchGgufStagedMetadata({", prepare)
@@ -1510,10 +1438,7 @@ def test_save_settings_reflects_the_context_it_pinned():
 
 
 def test_legacy_migration_is_idempotent_and_non_destructive():
-    """The v1->v2 localStorage migration (unsloth_load_settings -> unsloth_model_configs)
-    is invoked on every store read, so it must be idempotent: repeated reads, browser
-    reloads, and Unsloth restarts must never re-migrate, duplicate records, or overwrite
-    a newer per-model config."""
+    """Migration runs on every read, so it must be idempotent and never overwrite a newer config."""
     raw = _read("features/model-picker/model-config/per-model-config.ts")
     src = " ".join(raw.split())
     # Migration runs on every readMap, so it must be safe to repeat.
@@ -1546,10 +1471,7 @@ def test_variant_expander_forwards_the_gguf_filename():
 
 
 def test_a_routed_local_single_file_pick_keeps_its_load_kind():
-    """A pick routed from the chat picker arrives as ?model=&quant= with no picker metadata,
-    so a bare local .gguf / .safetensors has to be recognised from the path. Loading one as a
-    pipeline evicts the resident model and then fails on the missing model_index.json, because
-    an explicit model_kind wins over the backend's filename sniffing."""
+    """Routed picks lack metadata, so local .gguf and .safetensors files must be recognised from path."""
     helper = _read("lib/diffusion-route-pick.ts")
     assert '"gguf"' in helper and '"single_file"' in helper
     assert 'lower.endsWith(".gguf")' in helper
@@ -1573,10 +1495,7 @@ def test_video_reapply_recovers_a_resident_pipeline_target_after_remount():
 
 
 def test_a_routed_curated_pick_uses_the_same_load_spec_as_a_direct_one():
-    """The chat picker can only forward a GGUF filename (ggufFilename is GGUF-specific), so a
-    curated single-file artifact -- an LTX-2.3 checkpoint, an FP8 transformer -- arrives with no
-    quant. Classifying it by shape alone made it a pipeline load, which calls from_pretrained on a
-    repo that has no model_index.json. The catalog spec the page's own picker consults has to win."""
+    """Routed curated picks take the catalog spec's load kind; shape alone would load a pipeline."""
     helper = _read("lib/diffusion-route-pick.ts")
     assert re.search(r"spec\?:\s*\{\s*kind:", helper), "the helper takes no catalog spec"
     assert (
@@ -1708,14 +1627,7 @@ def test_a_hidden_diffusion_page_does_not_load_when_its_download_lands():
 
 
 def test_a_staged_download_that_ends_rolls_back_the_optimistic_quant():
-    """A quant pick sets its label optimistically and hands the rollback to whoever learns the
-    load did not take: the `.then` when the load never STARTS, the progress poll when it fails
-    after starting. A staged pick has neither -- staging starts no load, so nothing polls, and
-    `loadOrStage` returns true when it stages, so the `.then` treats it as started.
-
-    So the label has to come back where the plan dies (cancelled, failed, or never started), or
-    the selector goes on describing the still-resident model with a quant nothing ever loaded --
-    and images-page writes that label into the gallery cache, so it survives a remount too."""
+    """Staged downloads start no load, so the quant label must roll back where the plan dies."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         cancelled = re.search(r"onCancelled: \(\) => \{.*?\n    \},", src, re.S)
@@ -1731,14 +1643,7 @@ def test_a_staged_download_that_ends_rolls_back_the_optimistic_quant():
 
 
 def test_a_dying_staged_download_only_rolls_back_its_own_pick():
-    """Staging leaves `busy` null on purpose, so a second Hub pick can be made while the first
-    job is still alive. `quantRevert` is a single ref, so by the time the first job dies it can
-    already hold the SECOND pick's entry: rolling back then reverts a label the newer, still-live
-    pick owns, and nothing restores it when that pick goes on to stage and load.
-
-    So the rollback has to be bound to the pick that staged the job. `loadOrStage` reads the
-    entry BEFORE awaiting its plan (the await is the window in which a newer pick lands) and
-    records it when it stages; the cancel path reverts only on an identity match."""
+    """Cancel reverts only its own pick, since quantRevert is one ref a newer pick may overwrite."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         # Captured before the plan await, or the newer pick's entry is stored.
@@ -1770,15 +1675,7 @@ def test_a_dying_staged_download_only_rolls_back_its_own_pick():
 
 
 def test_a_plan_that_lands_after_a_newer_pick_is_dropped():
-    """Staging never sets `busy`, so a second Hub pick passes handleModelSelect's guard while the
-    first plan is still in flight. Plans then resolve in RESPONSE order, not pick order: the older
-    one would restage over the newer queue, or fall through and load the model the user left.
-
-    Each load pick takes a sequence number and gives up if a newer one has been made since. It must
-    report started, not failed: returning false would send this pick's `.then` rollback at a label
-    the newer pick now owns. Every exit that acts on the pick is covered, not just the one after a
-    successful plan -- a rejected plan falls through to the load, and a pick that never asks for a
-    plan at all (local, exported) must still invalidate one already in flight."""
+    """A stale plan reports started, not failed, so its rollback does not hit the newer pick's label."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         body = re.search(r"const loadOrStage = useCallback\(\n(.*?)\n  \);", src, re.S)
@@ -1824,15 +1721,7 @@ def test_a_plan_that_lands_after_a_newer_pick_is_dropped():
 
 
 def test_a_pick_that_never_loads_restores_its_generation_recipe():
-    """A pick applies its model's step/guidance recipe at the same moment it sets the quant label,
-    optimistically. If the load never takes, the previous pipeline stays resident: restoring only
-    the label leaves a distilled model's low-step, guidance-0 recipe pointed at a non-distilled
-    model, and the next generation silently runs with the wrong settings.
-
-    So the rollback token carries the recipe and every rollback path puts all of it back.
-
-    The token may carry more than the recipe (a preset claim, what the pick applied), so the
-    fields are matched inside the declaration rather than against one exact line."""
+    """Rollback restores the recipe with the quant label, or a distilled low-step recipe lingers."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         token = re.search(r"type PickRevert = \{(.*?)\n\};", src, re.S) or re.search(
@@ -1855,11 +1744,7 @@ def test_a_pick_that_never_loads_restores_its_generation_recipe():
 
 
 def test_every_pick_replaces_the_rollback_it_leaves_behind():
-    """`quantRevert` is one ref and the staged cancel path reverts on identity. A branch that
-    changes the quant or the recipe WITHOUT writing a new entry leaves the previous pick's entry
-    in place, so an older staged download cancelling later still matches, and reverts to state
-    from before a selection this pick already replaced -- while this pick keeps no rollback of
-    its own. Every branch that moves the selection registers its own entry."""
+    """A pick that moves the selection must write its own rollback, or an older cancel matches it."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         select = re.search(r"const handleModelSelect = useCallback\(\n(.*?)\n  \);", src, re.S)
@@ -1875,11 +1760,7 @@ def test_every_pick_replaces_the_rollback_it_leaves_behind():
 
 
 def test_every_pick_route_invalidates_the_staged_intent():
-    """Clearing inside `loadOrStage` is not enough: the direct-local GGUF and safetensors branches
-    call `handleLoad` themselves and never go through it, so a staged Hub download kept its intent
-    and its `onReady` could load the abandoned Hub model over the local one just picked.
-
-    So the invalidation sits in one helper fired at the top of every pick, before any branch."""
+    """Local picks skip loadOrStage, so one helper clears the staged intent at the top of every pick."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         helper = re.search(r"const beginPick = useCallback\(\(\) => \{(.*?)\}, \[\]\);", src, re.S)
@@ -1908,11 +1789,7 @@ def test_every_pick_route_invalidates_the_staged_intent():
 
 
 def test_a_rejected_pick_hands_the_resident_state_back():
-    """`beginPick` retires the staged pick before the new row is validated, so a pick that is then
-    REJECTED (a bare repo with no quant, a non-unsloth pipeline) loads nothing and has nothing left
-    to restore it: the selector would show the abandoned pick's quant and recipe indefinitely.
-
-    Every rejecting early return therefore hands the carried rollback back."""
+    """Rejected picks must return the carried rollback, since beginPick already retired the staged one."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         helper = re.search(r"const abandonPick = useCallback\(\(\) => \{(.*?)\}, \[", src, re.S)
@@ -1933,14 +1810,7 @@ def test_a_rejected_pick_hands_the_resident_state_back():
 
 
 def test_a_new_pick_drops_the_previous_staged_intent():
-    """A staged download outlives the pick that made it. If the next pick stages nothing of its
-    own -- fully cached, local, or no plan at all -- it never calls `stage()`, so the hook's queue
-    keeps running the OLDER job and its `onReady` loads the model the user moved away from,
-    evicting the one they actually chose. The pick sequence alone does not cover this: the older
-    job already staged, so there is no pending response left to invalidate.
-
-    So the intent is dropped at the start of every pick, before any early return, and a pick that
-    does stage simply writes a fresh one."""
+    """Drop the previous staged intent at the start of every pick, or its older job still loads."""
     for rel in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(rel)
         body = re.search(r"const loadOrStage = useCallback\(\n(.*?)\n  \);", src, re.S)
@@ -1961,14 +1831,7 @@ def test_a_new_pick_drops_the_previous_staged_intent():
 
 
 def test_a_local_gguf_still_shows_its_remote_companion_footprint():
-    """Only the CHECKPOINT is on disk for a local GGUF directory. Its text encoder, VAE, tokenizer
-    and configs still come from the remote base, and both diffusion planners size them, so
-    suppressing the footprint request understated a local row by the larger half of the download.
-
-    The arithmetic differs though: a local checkpoint is not part of `required_bytes` at all, so
-    nothing may be subtracted for it, where a hub pick carries its checkpoint inside that total.
-    "On disk" is the listing's verdict, not the spelling of the id, so the gate is
-    `checkpointIsLocal` rather than the path prefix test alone."""
+    """Only the checkpoint is local, so companions keep their remote footprint and nothing is subtracted."""
     src = _read("features/model-picker/components/model-selector/pickers.tsx")
     effect = re.search(r"setCompanionBytesByKey\(new Map\(\)\);(.*?)\n  \}, \[", src, re.S)
     assert effect, "footprint resolution effect not found"
@@ -1984,10 +1847,7 @@ def test_a_local_gguf_still_shows_its_remote_companion_footprint():
 
 
 def test_staged_downloads_always_scope_their_files():
-    """Every staged entry must go out as a scoped job carrying its file list, GGUF
-    checkpoints included. A plain snapshot job drops *.gguf via the Hub's ignore list, so
-    it would finish instantly having fetched everything except the weights and leave the
-    repo on device unloadable."""
+    """Staged entries need scoped file lists: a plain snapshot drops *.gguf and is unloadable."""
     src = _read("features/hub/download-manager/use-staged-download.ts")
     # A GGUF quant entry uses the standard variant download; every other is scoped.
     start = re.search(r"downloadManager\.requestStart\(.*?\n      \);", src, re.S)
@@ -2020,13 +1880,7 @@ def test_staged_downloads_use_one_actionable_download_surface():
 
 
 def test_staged_plans_label_the_checkpoint_without_guessing_from_the_extension():
-    """The panel's "Model file" vs "Required assets" suffix must come from the plan, not
-    from a filename. A checkpoint is not always a GGUF (the curated LTX single-file
-    artifact is one ~90GB .safetensors) and companion repos carry .safetensors too, so an
-    extension test mislabelled the model itself as "Required assets". The staging page is
-    the only place that knows: the entry carrying the picked checkpoint file. Repo identity
-    alone is not enough -- a checkpoint sharing its repo with the companions, and already
-    cached, leaves an entry of companion files that would still claim to be the model."""
+    """Label by the plan entry holding the checkpoint file; a .safetensors extension proves nothing."""
     for page in ("images/images-page.tsx", "video/video-page.tsx"):
         assert "diffusionStagingEntries(plan.entries" in _read(
             f"features/{page}"
@@ -2064,10 +1918,7 @@ def test_staged_plans_label_the_checkpoint_without_guessing_from_the_extension()
 
 
 def test_local_model_sections_respect_the_task_filter():
-    """LM Studio / ./models / custom-folder rows must honour the picker's task filter.
-    The backend tags every local model with a task for exactly this; without the gate the
-    Images picker listed chat GGUFs (which 400 on a diffusion load) and buried the
-    diffusion models the page can actually run."""
+    """Local model sections must honour the picker's task filter, or chat GGUFs get listed under Images."""
     src = _read("features/model-picker/components/model-selector/pickers.tsx")
     for memo in ("sortedLmStudio", "sortedLocalDir", "sortedCustomFolderModels"):
         block = re.search(rf"const {memo} = useMemo\(.*?\n  \);", src, re.S)
@@ -2092,11 +1943,7 @@ def test_chat_picker_routes_diffusion_picks_to_their_page():
 
 
 def test_staged_download_callbacks_only_answer_their_own_variant():
-    """subscribeJobListeners is per repo, not per job, so a staged entry hears every job on
-    that repo (the Models tab fetching a chat quant of the same repo, say). Each callback
-    carries the variant it fired for: without comparing it, a sibling job's completion advanced
-    the staged queue and started a load whose scoped files were still downloading, and its
-    failure wiped a queue that was still running."""
+    """Listeners fire per repo, so each must check its variant, or a sibling job advances the queue."""
     src = _read("features/hub/download-manager/use-staged-download.ts")
     assert "(variant ?? null) === activeVariant &&" in src
     for callback in ("onComplete", "onError", "onCancelled"):
@@ -2106,10 +1953,7 @@ def test_staged_download_callbacks_only_answer_their_own_variant():
 
 
 def test_video_gallery_fetches_clips_as_their_cards_come_into_view():
-    """A card was a <video> pointed at a signed MP4 link, so a whole page of them made WebKit build
-    a demux and decode pipeline per clip, for cards the user may never scroll to. Cards now draw a
-    still poster fetched as they near the viewport, and only the selected clip mints a playback
-    link, since that is the one the preview player plays."""
+    """Cards show stills; only the selected clip mints a playback link, avoiding a pipeline per clip."""
     src = _read("features/video/video-page.tsx")
     assert "new IntersectionObserver(" in src
     assert "ref={stripRef}" in src and "data-clip-id={video.id}" in src
@@ -2133,10 +1977,7 @@ def test_video_gallery_fetches_clips_as_their_cards_come_into_view():
 
 
 def test_on_device_rows_carry_the_task_the_pickers_filter_on():
-    """The picker's On Device rows come from the /api/hub inventory, not the models API, and the
-    task-scoped pickers drop every row whose task is unset. Without the task threaded through the
-    hub inventory and its adapter, the Images and Video pickers listed nothing on device and the
-    chat picker never routed a diffusion pick, since diffusionTaskById reads the same field."""
+    """On Device rows must carry task through the hub inventory, or task-scoped pickers drop them all."""
     api = _read("features/hub/inventory/api.ts")
     assert api.count("task?: string | null;") >= 3, "the hub row response types carry no task"
     rows = _read("features/hub/inventory/types.ts")
@@ -2164,13 +2005,7 @@ def test_local_diffusion_routing_is_keyed_by_the_id_the_row_selects():
 
 
 def test_a_staged_download_that_never_starts_clears_the_queue():
-    """requestStart can answer "error" (network failure, rejected scoped request, worker refused),
-    "conflict" or "busy". Nothing completes after any of them, so leaving the head in place strands
-    the pick: the effect never re-runs and onReady never fires. The consumer's pending auto-load
-    has to go with it, or a later completion loads a model nobody asked for.
-
-    Asserted over the whole non-started region rather than a fixed window after the first branch,
-    so one shared clean-up for all three outcomes passes and three copies would too."""
+    """A refused requestStart (error, conflict, busy) must clear the queue and its pending auto-load."""
     src = _read("features/hub/download-manager/use-staged-download.ts")
     assert 'if (outcome === "started") return;' in src
     region = src[src.index('if (outcome === "started") return;') : src.index("return () => {")]
@@ -2231,10 +2066,7 @@ def test_a_lost_generate_post_must_prove_it_reached_the_backend():
 
 
 def test_parallel_slots_setting_wired_end_to_end():
-    """The per-load Parallel Slots knob (llama-server --parallel) must flow from the
-    run-settings form through persistence, every /load builder, the validate preflight
-    and the cross-model reset; a lost hop silently reverts the model to the server-wide
-    slot default."""
+    """Parallel slots (llama-server --parallel) must flow through every hop, or the server default wins."""
     config = _read("features/model-picker/model-config/per-model-config.ts")
     # null (server default) counts as default, so blank configs are not stored.
     assert '"nParallel",' in config
@@ -2336,25 +2168,7 @@ def test_hydration_clears_the_slot_baseline_for_a_slotless_model():
 
 
 def test_adopting_a_resident_model_reseeds_the_slot_and_batch_controls():
-    """The controls in the store belong to the model that just LEFT, so adoption reseeds them.
-
-    This test used to assert the opposite, through a `readoptingSameModel` option that
-    suppressed the reseed on re-adoption. #8943 removed the option deliberately and said
-    why: the adopt path rolls the outgoing model's config back into the store before it
-    hydrates, so the slot and batch controls sitting there describe the model the tab
-    just left. Suppressing the reseed left a resident model running 4 slots showing the
-    outgoing count, and the next Apply saved that over it.
-
-    So `slotsModelChanged` is `hydratingExistingModel` with nothing subtracted, which is
-    how every other load param at this call site already treats a changed checkpoint or
-    variant.
-
-    Reseeding is only safe because the same flag gates the remembered lookup: it does
-    not blank the control, it re-reads THIS model's own saved config through
-    resolveResidentInitialConfig. That is what makes #8943 right rather than merely
-    different, so it is asserted here too -- a future change that reseeds without
-    re-reading would take the user's saved slot count away for real.
-    """
+    """Adopting a resident model reseeds slot and batch controls, which still hold the model just left."""
     status = " ".join(_read("features/chat/lib/apply-inference-status-to-store.ts").split())
     assert "const slotsModelChanged = hydratingExistingModel;" in status
     assert "readoptingSameModel" not in status
@@ -2435,12 +2249,7 @@ def test_hydration_restores_a_remembered_slot_override():
 
 
 def test_remembered_slots_are_read_through_the_cached_repo_alias():
-    """An API auto-switch loads a cached repo by its concrete snapshot path, so
-    ``status.model_identifier`` (what ``resolveInferenceCheckpointId`` returns) is that
-    path while the settings are keyed by the repo id ``modelConfigIdentity`` writes. Read
-    only the raw identifier and the resident model looks unremembered: the slot control
-    blanks on the model change and the next Save writes the blank over the saved
-    ``n_parallel``, locally and through the server mirror."""
+    """Look up saved slots by the repo alias too, since an auto-switch reports a snapshot path."""
     config = " ".join(_read("features/model-picker/model-config/per-model-config.ts").split())
     # The raw identifier still wins, so a path-keyed record is never shadowed.
     assert (
@@ -2470,11 +2279,7 @@ def test_remembered_slots_are_read_through_the_cached_repo_alias():
 
 
 def test_failed_switch_rollback_restores_the_slot_intent_not_the_resolved_count():
-    """`loadedNParallel` holds a RESOLVED count even for a load that sent no slots (the
-    echo falls back to the server-wide default), so it is the right value to re-send
-    when recreating the previous server and the wrong one to put back in the control: it
-    turns "follow the server default" into an explicit override that a later Save or
-    preset capture pins."""
+    """Roll back the slot intent, not loadedNParallel, which would pin the server default as an override."""
     runtime = " ".join(_read("features/chat/hooks/use-chat-model-runtime.ts").split())
     assert (
         # The inherited replacement's config: a superseded load's previousConfig is transient.
@@ -2591,10 +2396,7 @@ def test_batch_sizes_reach_an_api_load_through_the_server_mirror():
 
 
 def test_hydration_clears_the_batch_baselines_for_a_batchless_model():
-    """Like the slot baseline: a model whose load never sent the batch sizes must not
-    inherit the previous GGUF's values into the rollback baseline. The null-echo,
-    clean-control-follow and pending-edit rules live in resolveBatchSizeSeed and are
-    behavior-tested in resolve-batch-size-seed.test.ts; here only the wiring is pinned."""
+    """A batchless model must not inherit the previous GGUF's batch sizes into its rollback baseline."""
     seed = " ".join(_read("features/chat/lib/resolve-batch-size-seed.ts").split())
     # An absent field on a gguf is an older backend saying nothing; a swap still drops the pair.
     assert "const effective = isGguf ? incoming : null;" in seed
@@ -2658,10 +2460,7 @@ def test_vulkan_inference_devices_are_the_pickable_set():
 
 
 def test_chat_autoload_records_every_validation_failure():
-    """canAutoLoad runs validateModel, which prepares the token, so a dismissed dialog, a dead
-    backend or a model-specific rejection throws there rather than from loadModel. The sweep's
-    catches are bare, so an unrecorded one reads as an empty device and fetches the Hub default.
-    Only a declined dialog ends the sweep."""
+    """Auto-load must record every validation failure, or a bare catch reads as an empty device."""
     adapter = _read("features/chat/api/chat-adapter.ts")
     recorder = adapter.split("function recordCandidateFailure", 1)[1]
     recorder = recorder.split("async function canAutoLoadRecordingFailures", 1)[0]
@@ -2720,15 +2519,7 @@ def test_auth_retries_tag_transport_failures_like_the_first_attempt():
 
 
 def test_adoption_takes_its_own_pin_before_moving_the_checkpoint():
-    """Status polling skips its own pin clearing while an external provider is selected, so the
-    adoption branch can adopt a resident the pin was never taken for and Apply would reload the
-    old model. The branch has to write the pin itself.
-
-    It used to clear the pin to null. #8943 replaced that with adopting THIS pick's pin by
-    the rule a completed load writes it -- the load path, or null where that is just the id
-    -- which drops a stale pin the same way and additionally keeps a pinned cached row
-    loadable. The ordering requirement is unchanged and is what this still pins.
-    """
+    """Adoption writes its own pin before moving the checkpoint, as status polling skips pin clearing."""
     src = _read("features/chat/hooks/use-chat-model-runtime.ts")
     branch = src[src.index("const confirmedStatus = await readPickStatus()") :]
     branch = branch[: branch.index("void refreshContextUsage(")]
@@ -2979,10 +2770,7 @@ def test_model_config_keeps_storage_and_load_identities_separate():
 
 
 def test_backfill_splits_a_quant_suffix_the_way_the_backend_does():
-    """The backfill compared server keys under an identity taken by splitting on the last
-    colon, so a Windows drive letter and an ordinary colon inside a POSIX filename were
-    read as quant separators: `/models/foo:Bar.gguf` and `/models/foo:bar.gguf` folded
-    to one key, and whichever was already on the server made the other look migrated."""
+    """Split quant suffixes the way the backend does: a colon in a path is not a quant separator."""
     identity = " ".join(_read("features/model-picker/model-config/model-identity.ts").split())
     assert "export function splitQuantSuffix(" in identity
     assert 'if (tail.includes("/") || tail.includes("\\\\"))' in identity
@@ -3178,14 +2966,7 @@ def test_a_standalone_gguf_has_one_settings_identity_in_the_picker():
 
 
 def test_monitor_unload_clears_only_the_model_it_freed():
-    """Unload targets the resident local model from /status, but the store may hold either
-    spelling: status reports the concrete load path while the store can hold the
-    advertised repo id.
-
-    The read/unload/recheck sequence itself is pinned behaviourally by
-    studio/frontend/tests/api-monitor-unload-resident.test.ts; this only holds the page to
-    delegating it, since a single-pass unload reports success over a model an API
-    auto-switch loaded under the click."""
+    """Delegate unload to the tested sequence: one pass reports success over a model auto-switched in."""
     page = " ".join(_read("features/api-monitor/api-monitor-page.tsx").split())
     assert (
         "aliases: [checkpoint, status.active_model].filter( (alias): alias is string "
@@ -3220,10 +3001,7 @@ def test_a_repo_id_ending_in_gguf_keeps_its_quant():
 
 
 def test_a_gpu_pin_is_mirrored_to_the_server_with_its_index_space():
-    """The same integers are Vulkan ordinals under Vulkan and device indices elsewhere, so
-    a pin mirrored without its namespace would, after a backend change, address a different
-    device with ids that validate. The namespace travels with it and the server drops the
-    pin on a mismatch instead."""
+    """A GPU pin travels with its index space, since the same integers name different devices."""
     mirror = " ".join(_read("features/model-picker/api/model-overrides.ts").split())
     assert 'const gpuIndexKind = config.selectedGpuIndexKind ?? "physical";' in mirror
     assert "payload.gpu_ids = config.selectedGpuIds;" in mirror
@@ -3279,10 +3057,7 @@ def test_picker_rows_keep_their_automation_attributes():
 
 
 def test_picker_popover_and_trigger_keep_their_tour_hooks():
-    """Both props by name. The trigger's value is a prefix of the popover's, so any
-    assertion that falls back to the bare substring is satisfied by the popover alone
-    and would pass with the trigger hook deleted -- while the driver's very first
-    click, page.locator(TRIGGER), would be the thing that fails."""
+    """Match tour props exactly: the trigger's value is a prefix of the popover's, so substrings mislead."""
     chat = _read("features/chat/chat-page.tsx")
     assert 'triggerDataTour="chat-model-selector"' in chat
     assert 'contentDataTour="chat-model-selector-popover"' in chat
@@ -3350,11 +3125,7 @@ def test_the_primary_action_keeps_its_four_labels():
 
 
 def test_the_micro_batch_advisory_compares_against_the_emitted_batch():
-    """The loader raises --batch-size to max(slots, 2), so the micro-batch advisory has to
-    judge the RAISED value. Against the typed one, batch 4 / slots 8 / ubatch 8 rendered
-    two advisories that contradict each other: "will raise it to 8" beside "llama.cpp will
-    run at 4", when the launch runs at 8. Both the predicate and the number shown come
-    from the emitted batch now."""
+    """The micro-batch advisory judges the emitted batch, which the loader raises to max(slots, 2)."""
     src = _read("features/model-picker/components/model-config-page.tsx")
     page = " ".join(src.split())
     assert "const batchFloor = Math.max(2, config.nParallel ?? 2);" in page
@@ -3365,11 +3136,7 @@ def test_the_micro_batch_advisory_compares_against_the_emitted_batch():
 
 
 def test_a_blank_batch_still_caps_the_micro_batch_at_the_llama_default():
-    """Blank does not mean unbounded: no flag is emitted, so llama.cpp runs its own 2048
-    and caps the micro-batch against THAT. Treating blank as null suppressed the advisory
-    entirely, so a micro-batch of 4096 with the batch left blank looked usable while the
-    server ran 2048. Shared constant rather than a literal, since the backend already
-    names the same number."""
+    """A blank batch still caps the micro-batch at llama.cpp's default, since no flag is emitted."""
     src = _read("features/model-picker/components/model-config-page.tsx")
     page = " ".join(src.split())
     assert "N_BATCH_LLAMA_DEFAULT," in page
@@ -3483,10 +3250,7 @@ def test_indexed_local_loads_are_remembered_without_bypassing_leases():
 
 
 def test_autoload_skips_rows_chat_cannot_answer():
-    """The backend tags a row with a task only for the models that own another page,
-    and the picker routes those away on click. A background load has no routing step.
-    The audio tasks are here because the chat route answers a turn on a speech model by
-    synthesizing the prompt rather than refusing it, so nothing downstream catches it."""
+    """Audio tasks too: chat speaks the prompt through a speech model instead of refusing the turn."""
     src = _read("features/chat/api/chat-adapter.ts")
     tasks = src.split("const NON_CHAT_TASKS", 1)[1].split("]", 1)[0]
     assert '"text-to-image"' in tasks
@@ -3568,11 +3332,7 @@ def test_local_safetensors_chat_capability_is_classified_not_assumed():
 
 
 def test_sources_dedupe_on_the_load_target_alone():
-    """A repo holding both GGUF and safetensors yields a row in each cached list,
-    but the backend resolves one target to one model, so keeping both spends a
-    second attempt on the same files. Skipped in the cascade rather than dropped
-    while ordering, because dropping the twin lost a loadable safetensors row
-    whenever its GGUF twin resolved no quant."""
+    """Dedupe on load target alone, since a GGUF/safetensors twin retries the same files."""
     src = _read("features/chat/api/chat-adapter.ts")
     key = src.split("function autoLoadSourceKey", 1)[1].split("\n}", 1)[0]
     assert "return normalizeTarget(source.loadId);" in key
@@ -3599,10 +3359,7 @@ def test_variant_scans_take_the_run_signal():
 
 
 def test_cached_rows_classify_chat_capability_too():
-    """The same encoder gate the scan-folder rows get; cached rows built their
-    capabilities from file format alone. Both halves are pinned separately, since
-    the gate is now nested rather than one `and`, and the call must read the
-    snapshot the load resolves to rather than any other revision."""
+    """Cached rows need the scan-folder encoder gate, read from the snapshot the load resolves to."""
     src = _read_backend("hub/services/models/cache_inventory.py")
     assert "_local_transformers_can_chat" in src
     fields = src.split("def _cache_inventory_fields", 1)[1].split("\ndef ", 1)[0]
@@ -3743,13 +3500,7 @@ def test_bare_vision_and_audio_backbones_are_classified_non_chat():
 
 
 def test_the_gguf_footprint_is_resolved_per_dependency_group_not_per_repo():
-    """The companion set a diffusion GGUF needs (text encoder, VAE, tokenizer,
-    configs) is not repository-wide: `detect_family_for_pick` falls back to
-    `repo_id/filename`, so one neutral repo can hold GGUFs of two families with
-    different base repos, and `sd_cpp_text_encoders_for` hands FLUX.2-klein-9B a
-    different text encoder than klein-4B in the same repo. Sampling ONE
-    representative and pasting its companionBytes onto every row therefore
-    advertised a GB-wrong "Full required size" on the rows it did not sample."""
+    """Companion footprint is per dependency group, so one representative row cannot stand in for a repo."""
     src = _read("features/model-picker/components/model-selector/pickers.tsx")
     assert "const [companionBytes, setCompanionBytes] = useState" not in src
     assert (
@@ -3792,13 +3543,7 @@ def test_every_footprint_group_gets_its_own_resolve_call():
 
 
 def test_the_footprint_asks_the_listing_whether_the_checkpoint_is_on_disk():
-    """Whether the checkpoint sits inside `required_bytes` is a question about the
-    disk, and the prefix regex cannot answer it: the backend resolves identifiers
-    existence-first, so a marker-less relative directory like "models/my-image-model"
-    is a local model with no path marker to match. Gating the subtraction on the
-    regex alone subtracted a checkpoint the plan had never counted, driving the
-    figure to zero and hiding a multi-GB companion set behind the checkpoint size.
-    The listing already reports the backend's own verdict as `resolved_locally`."""
+    """Use the listing's resolved_locally, since a marker-less relative dir slips past a path regex."""
     src = _read("features/model-picker/components/model-selector/pickers.tsx")
     assert "resolved_locally?: unknown;" in src
     assert "resolvedLocally: res?.resolved_locally === true," in src
@@ -3812,15 +3557,7 @@ def test_the_footprint_asks_the_listing_whether_the_checkpoint_is_on_disk():
 
 
 def test_a_refused_load_after_staging_rolls_the_pick_back():
-    """Staging reports the pick STARTED as soon as the download is queued, so the caller's own
-    `if (!started) revert` has already been skipped. The load only runs minutes later and can
-    still be refused: a training run or another load can claim the backend while the download
-    is going. Nothing polls for a staged pick, so the poll's rollback never runs either, and the
-    selector would keep advertising a quant that was never loaded.
-
-    BOTH deferred paths have to roll back. onReady hands off to the `active` effect when the
-    page is off-tab, so leaving the tab during the download otherwise walks straight back into
-    the same bug."""
+    """A refused staged load must roll back on both deferred paths, as staging already reported started."""
     for page in ("features/images/images-page.tsx", "features/video/video-page.tsx"):
         src = _read(page)
         helper = src.split("const runStagedLoad = useCallback(", 1)[1].split("\n  );", 1)[0]
@@ -3894,13 +3631,7 @@ def test_the_backend_keys_the_footprint_on_family_and_text_encoders():
 
 
 def test_the_diffusion_gpu_choices_are_memoized():
-    """An unstable array here reaches the GGUF picker as a new footprint resolver on every render.
-
-    ImagesPage feeds the choices into its load-advanced snapshot, that snapshot into
-    resolveDownloadFootprint, and the picker's effect depends on the resolver: a fresh identity per
-    render clears the companion sizes it had resolved and re-POSTs /images/download-plan for every
-    variant, on every status poll, discarding the in-flight answers.
-    """
+    """A new array each render changes the footprint resolver, re-POSTing download plans on every poll."""
     src = " ".join(_read("hooks/use-gpu-info.ts").split())
     choices = src[src.index("export function useDiffusionGpuChoices") :]
     choices = choices[: choices.index("export function gpuDeviceCacheReady(")]
@@ -3910,10 +3641,7 @@ def test_the_diffusion_gpu_choices_are_memoized():
 
 
 def test_the_media_gpu_pick_survives_a_reload():
-    """Every other Advanced select is reseeded from the loaded build; this one cannot be, because
-    the status reports the device a pipeline is on and not which physical card. Without persistence
-    a refresh silently reset the pick to Auto while the model stayed put, and the next Reapply
-    moved it to the default GPU -- on a mixed box, potentially onto the card that cannot hold it."""
+    """Media GPU pick must persist: status reports a device, not the card, so it cannot reseed it."""
     for page, key in (
         ("features/images/images-page.tsx", "unsloth_image_gpu_choice"),
         ("features/video/video-page.tsx", "unsloth_video_gpu_choice"),
@@ -3927,15 +3655,7 @@ def test_the_media_gpu_pick_survives_a_reload():
 
 
 def test_a_download_only_pick_does_not_strand_a_staged_load():
-    """Download only fetches files. It must not take the page from a load that is already staging.
-
-    Both pick routes used to retire the staged intent unconditionally: `handleModelSelect` called
-    `beginPick()` plus `pickGuard.claim()` before it looked at the mode, and `loadGgufRepoPick` did
-    the same, so picking a second model in Download only mode left the first one downloaded in full
-    and never loaded, with no toast and nothing to retry from. `loadOrStage` cleared the same refs a
-    second time on its way in.
-
-    So: the mode is read first, and a download-only pick claims nothing and clears nothing."""
+    """Download-only picks must claim and clear nothing, or they strand a staged load."""
     src = _read("features/images/images-page.tsx")
     select = re.search(r"const handleModelSelect = useCallback\(\n(.*?)\n  \);", src, re.S)
     assert select, "handleModelSelect not found"
@@ -4000,10 +3720,7 @@ def test_a_repeated_download_only_pick_queues_one_download():
 
 
 def test_a_download_only_pick_does_not_retire_the_pick_sequence():
-    """`pickSeq` is how a load pick tells a NEWER load pick from itself. A Download only pick is
-    neither: it fetches files and takes over nothing. Advancing the sequence for one made the
-    ordinary selection that was still awaiting its plan fail its own stale check and return
-    silently, leaving that model neither staged nor loaded and nothing on screen to say so."""
+    """Download-only picks must not advance pickSeq, or an in-flight load pick is silently dropped."""
     src = _read("features/images/images-page.tsx")
     body = re.search(r"const loadOrStage = useCallback\(\n(.*?)\n  \);", src, re.S)
     assert body, "loadOrStage not found"
@@ -4013,11 +3730,7 @@ def test_a_download_only_pick_does_not_retire_the_pick_sequence():
 
 
 def test_a_download_only_pick_claims_no_label_rollback():
-    """`quantRevert` is ONE slot and a staged load in flight owns what is in it: that entry is the
-    baseline it restores on failure and commits on success. A Download only pick used to take the
-    slot for an optimistic label it then reverted, which restored the PREVIOUS resident's quant and
-    recipe underneath a load that was still coming and left it nothing to commit. So it installs no
-    label at all, and reads no rollback out of the slot."""
+    """Download-only picks must not touch quantRevert, the in-flight staged load's baseline."""
     src = _read("features/images/images-page.tsx")
     start = src.index("const handleModelSelect = useCallback(")
     pick = src[start : src.index("const handleDeployAdapter", start)]
@@ -4043,19 +3756,13 @@ def test_a_routed_download_only_arrival_claims_nothing():
 
 
 def test_a_refused_download_only_pick_leaves_the_staged_rollback_alone():
-    """abandonPick() reverts and clears quantRevert. A Download only pick refused for being an
-    unsupported repo never claimed the page, so what it would clear is the staged load's own
-    baseline: that load would then resume with the previous resident's steps and guidance and have
-    nothing left to commit."""
+    """Refused download-only picks must skip abandonPick, or they clear the staged load's baseline."""
     src = " ".join(_read("features/images/images-page.tsx").split())
     assert "if (!downloadOnlyPick) abandonPick();" in src
 
 
 def test_an_unresolvable_download_only_gguf_hands_nothing_back():
-    """A GGUF repo whose filename cannot be resolved (several quants and no hint, or a failed
-    listing) reaches onNotStarted. Under Download only nothing was applied, so what sits in
-    quantRevert is the staged load's own baseline: reverting it would load that model with the
-    previous resident's steps and guidance and leave it nothing to commit."""
+    """Download-only GGUF picks that cannot resolve must not revert the staged load's baseline."""
     src = _read("features/images/images-page.tsx")
     body = re.search(r"onNotStarted: \(\) => \{\n(.*?)\n        \},", src, re.S)
     assert body, "the not-started callback was not found; this guard has gone stale"

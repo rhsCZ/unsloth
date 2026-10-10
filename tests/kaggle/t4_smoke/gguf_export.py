@@ -1,42 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Export a trained model to GGUF, and prove the file exists and is usable.
-
-Shared by the payloads, in the shape the rest of this directory uses: nothing
-here raises, everything returns a record, and a separate pure function turns
-that record into failures. A diagnostic that kills the payload it diagnoses
-leaves the leg reporting nothing at all.
-
-Every constant below is a measurement, not a guess. The two that a natural
-implementation gets WRONG, both learned by getting them wrong:
-
-**1. The GGUF is not in the directory you passed.** On kernel
-unsloth-probe-gguf-q8-peft-920e3e, `save_pretrained_gguf("/tmp/q8p", ...)` put
-the merged `model.safetensors` (1136.9 MB) in `/tmp/q8p` and the actual
-`qwen3-0.6b.Q8_0.gguf` (609.8 MB) in the SIBLING `/tmp/q8p_gguf`. Code that
-globs the directory it passed finds no `.gguf`, raises nothing, and reports a
-successful export. So this searches both and records which one held the file.
-
-**2. `install_llama_cpp()` returns a TUPLE**, `(llama-quantize,
-convert_hf_to_gguf.py)`, not a path to a bin directory. An earlier probe
-treated it as a directory, found nothing in it, and reported "0 binaries" --
-which was the probe being wrong rather than the bundle being empty.
-
-Two more facts worth having here rather than rediscovering:
-
-* llama.cpp installs PREBUILT on Kaggle, about 10-46s, logging "Installing
-  prebuilt llama.cpp ... - skipping compilation". A source build is silent,
-  correct, and costs many minutes on 4 vCPUs, so "it worked" is not the
-  interesting assertion -- "it did not compile" is.
-* The bundle is the `-cpu` one, so GGUF inference runs on CPU. Fine for a 0.6B
-  or a 2B; a reason not to lean on GGUF inference for a 20B.
-
-A model that REFUSES the requested quantization is not a failure. gpt-oss
-answers q8_0 with "GPT-OSS does not support GGUF quantization (requested:
-q8_0). Overriding to MXFP4 format", by design, so the caller says what it will
-accept rather than this module assuming q8_0 is universal.
-"""
+"""save_pretrained_gguf can put the .gguf in a sibling <dir>_gguf, not the directory passed in."""
 
 from __future__ import annotations
 
@@ -106,15 +71,7 @@ def run_gguf(
     max_tokens: int = 16,
     timeout: int = 240,
 ) -> dict:
-    """Run the exported file, because an existing GGUF is not a working one.
-
-    NOT via `llama-cli`. It hung for its entire budget twice on Kaggle -- 600s
-    on kernel unsloth-probe-gguf-q8-peft-920e3e and 180s on -gguf-infer-50a98a,
-    the second with stdin closed AND `-no-cnv` -- while 16 tokens from a 610 MB
-    Q8_0 on CPU is seconds of work. Whatever it waits for is not stdin, so this
-    uses binaries that cannot be interactive at all: `llama-bench` runs a fixed
-    workload and exits, `llama-completion` is one-shot.
-    """
+    """Uses llama-bench and llama-completion, which cannot block on input; llama-cli hung on Kaggle."""
     record = {"gguf": gguf_path}
     for name, argv in (
         ("bench", ["llama-bench", "-m", gguf_path, "-p", "8", "-n", str(max_tokens), "-r", "1"]),
@@ -163,13 +120,7 @@ def run_gguf(
 
 
 def export_failures(record: dict, *, accept_quantizations = None) -> list:
-    """The pass rule, as a pure function of the record.
-
-    `accept_quantizations` is the set of quantization names the caller will
-    accept in the filename. Callers pass more than one where the model is
-    allowed to override the request -- gpt-oss answers q8_0 with MXFP4 by
-    design, and failing on that would be failing on documented behaviour.
-    """
+    """Callers list every quantization they accept, since gpt-oss overrides q8_0 to MXFP4 by design."""
     if not record:
         return ["GGUF export was never run"]
 
@@ -233,13 +184,7 @@ def run_failures(record: dict) -> list:
 
 
 def llama_cpp_facts(install_output: str, returned) -> dict:
-    """Was the PREBUILT branch taken, and what did the installer hand back?
-
-    `returned` is whatever `install_llama_cpp()` returned -- a TUPLE of
-    (llama-quantize, convert_hf_to_gguf.py) as measured, not a directory. The
-    directory is derived from it rather than assumed, so a release that changes
-    the layout shows up as a missing binary instead of a wrong path.
-    """
+    """install_llama_cpp returns a tuple of binary paths, not a directory, so the directory is derived."""
     paths = list(returned) if isinstance(returned, (tuple, list)) else [returned]
     paths = [str(p) for p in paths]
     return {

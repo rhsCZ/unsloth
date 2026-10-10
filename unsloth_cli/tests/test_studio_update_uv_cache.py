@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth studio update` must reuse the cache the install filled, not uv's default.
-
-The installers set UV_CACHE_DIR (#10204) and storage_roots._setup_cache_env sets it
-for the server; an update ran setup.sh/setup.ps1 from the CLI process and reached
-neither, so it re-downloaded into uv's own default what the install had just fetched.
-
-It must not overcorrect either: a shared-mode install leaves the wheels in uv's own
-cache, and pointing the update at the empty Studio one costs a download online and
-fails outright when uv may read only what is cached.
-"""
+"""Update reuses the install's cache, but shared-mode installs keep wheels in uv's default cache."""
 
 from __future__ import annotations
 
@@ -54,11 +45,7 @@ def _fill(
 
 @pytest.fixture
 def caches(monkeypatch, tmp_path):
-    """Both caches, cold, and uv's default answered without spawning uv.
-
-    Every test states the state it needs; leaving the real machine's cache in play would
-    make the outcome depend on whoever ran the suite.
-    """
+    """Both caches start cold and uv's default is stubbed, so results never depend on the real machine."""
     studio = _studio()
     monkeypatch.delenv("UV_CACHE_DIR", raising = False)
     studio_home = tmp_path / "StudioHome"
@@ -248,10 +235,7 @@ def test_the_seeding_does_not_leak_into_this_process(monkeypatch, tmp_path, cach
 def test_a_shared_mode_install_keeps_the_cache_that_actually_has_the_wheels(
     monkeypatch, tmp_path, caches
 ):
-    """install.sh picks uv's own cache when it is already populated, and
-    _setup_cache_env mkdirs an empty Studio cache on every server start. Redirecting
-    here would re-download online and, under UV_OFFLINE / `offline = true`, fail:
-    uv reads only what is cached, and nothing is."""
+    """An empty Studio cache would force a re-download, or fail offline; uv reads only what is cached."""
     _studio_cache, default_cache = caches
     _fill(default_cache)
     seen = _run_posix(monkeypatch, tmp_path)
@@ -300,14 +284,7 @@ def test_a_studio_mode_install_wins_over_a_cold_default(monkeypatch, tmp_path, c
 
 
 def test_two_warm_caches_and_no_marker_keep_uv_s_default(monkeypatch, tmp_path, caches):
-    """An install with no marker cannot say which cache it used, and content cannot either.
-
-    The marker arrived in b66d2a4c8 and the installer's early UV_CACHE_DIR block only in
-    e12963071 the day after, so an install old enough to have no marker is old enough that
-    `shared` was reachable, and there the launch repoint leaves backend wheels in the Studio
-    cache while Torch and CUDA sit in uv's default. So the default keeps its priority when both
-    are warm, and the installers order the same three candidates the same way.
-    """
+    """With no marker and both caches warm, uv's default wins: a shared install may have split wheels."""
     studio_cache, default_cache = caches
     _fill(studio_cache)
     _fill(default_cache)
@@ -724,10 +701,7 @@ def _probe_kwargs(
 
 
 def test_the_probe_asks_from_the_directory_setup_will_ask_from(monkeypatch, tmp_path):
-    """uv discovers uv.toml and pyproject.toml from its working directory, and both setup
-    scripts change into their own before the dependency pass (studio/setup.sh:1788). Asked
-    in the caller's directory instead, the probe answers for whatever project the user
-    happens to be standing in, and that answer is then forced on the child."""
+    """The cache probe must run from the directory setup will use, since uv reads uv.toml from its cwd."""
     seen = _probe_kwargs(monkeypatch, stdout = "relcache\n", cwd = tmp_path / "studio")
 
     assert seen["cwd"] == str(tmp_path / "studio")
@@ -807,10 +781,7 @@ def test_a_relative_uv_working_dir_anchors_to_the_probe_directory(monkeypatch, t
 
 
 def test_the_probe_decodes_utf8_whatever_the_console_codec_is(monkeypatch):
-    """text=True alone decodes with the locale codec and strict errors, so a non-ASCII
-    cache path raises UnicodeDecodeError. That is a ValueError, so the OSError /
-    SubprocessError handler does not catch it and the update dies. Same reason the
-    profile probe above already pins the codec."""
+    """Probe output must decode as UTF-8 with errors=replace, since text=True fails on non-ASCII paths."""
     seen = _probe_kwargs(monkeypatch)
 
     assert seen["encoding"] == "utf-8", seen.get("encoding")
@@ -883,10 +854,7 @@ def test_a_probe_that_blows_up_costs_a_preference_not_the_update(monkeypatch, tm
 
 
 def test_a_malformed_uv_toml_beside_the_caller_does_not_hide_the_cache(monkeypatch, tmp_path):
-    """uv discovers config from the CURRENT directory, so a broken uv.toml where the user
-    happens to be makes `uv cache dir` exit nonzero even though setup.sh changes directory
-    before it runs uv. install.sh falls back to the platform default rather than calling
-    the cache cold, and so must this."""
+    """A broken uv.toml in the caller's cwd must not hide the cache; fall back to the platform default."""
     studio = _studio()
     monkeypatch.setattr(studio.shutil, "which", lambda name: "/usr/bin/uv")
     monkeypatch.setattr(studio.platform, "system", lambda: "Linux")
@@ -1175,13 +1143,7 @@ def test_a_store_pip_install_does_write_still_condemns_it(tmp_path, store):
 
 
 def _simulate_case_folding(monkeypatch):
-    """Make lookups fold, as APFS and NTFS do, without a folding filesystem to hand.
-
-    A symlink will NOT do: on a folding filesystem there is ONE directory entry, and adding a
-    lowercase link creates a second one that the case-SENSITIVE code path matches directly. A
-    test built that way passes with the fold removed, which is how the first version of this
-    got through its own mutation check.
-    """
+    """Patch samefile to fold case; a symlink would not work, since a folding filesystem has one entry."""
     real = Path.samefile
 
     def folding_samefile(self, other):
@@ -1223,10 +1185,7 @@ def test_a_folded_lookalike_is_still_not_a_bucket(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("blank", ["", "   ", "\t"])
 def test_no_cache_mode_removes_a_blank_inherited_cache_dir(monkeypatch, tmp_path, caches, blank):
-    """uv parses an exported EMPTY UV_CACHE_DIR as `--cache-dir ''` even under --no-cache, and
-    exits 2 with "a value is required for '--cache-dir'" (measured on uv 0.10.7, both `uv cache
-    dir` and `uv pip install`). setup.sh unsets it in its own no-cache branch; setup.ps1 has no
-    cache handling at all, so on Windows the blank reached uv and failed the update."""
+    """An empty UV_CACHE_DIR makes uv exit 2 even under --no-cache, so no-cache mode must unset it."""
     studio = _studio()
     monkeypatch.setenv("UV_CACHE_DIR", blank)
     monkeypatch.setenv("UV_NO_CACHE", "1")

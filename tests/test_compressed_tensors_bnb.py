@@ -11,14 +11,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Loading a compressed-tensors packed INT4 / INT8 checkpoint straight into bitsandbytes 4-bit.
-
-Offline tests cover the checkpoint classifier, the storage-dtype plan for the packed tensors,
-the config stripping (root and sub-configs) and the loader hand-off. The GPU tests build a
-tiny packed Llama with compressed-tensors' own compressor, load it through
-`FastLanguageModel.from_pretrained(load_in_4bit = True)` and compare every Linear4bit bit for
-bit against the same checkpoint decompressed to bf16 on disk first.
-"""
+"""Packed INT4/INT8 checkpoints load into bnb 4-bit; GPU tests match a bf16 decompress bit for bit."""
 
 import json
 import os
@@ -290,11 +283,7 @@ def test_prepared_config_is_the_armed_config_and_nothing_else():
 
 
 def test_planner_gets_the_prepared_config_instead_of_rebuilding_it(monkeypatch):
-    """The planner rebuilds the repo's config from the model name. For a re-quantized packed
-    checkpoint that config still carries compressed-tensors, and `merge_quantization_configs`
-    then refuses the bitsandbytes flags, so Kimi-K2.7-Code lost its plan and fell back to
-    `sequential`, which spilled to CPU and bitsandbytes refused the load. The armed config
-    object is what the planner has to size; the loaders hand it over as `planner_config`."""
+    """Planner must size the armed config, not one rebuilt from the name, which keeps compressed-tensors."""
     import sys
     import types
     from unsloth.models import loader_utils

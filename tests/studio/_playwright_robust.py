@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Shared CI-runner workarounds for the Unsloth Playwright tests (Chromium flags,
-view-transition killer, page recovery, post-action response wait). Imported
-directly by the standalone scripts; does NOT depend on pytest.
-"""
+"""Shared Playwright CI workarounds for standalone scripts; must not depend on pytest."""
 
 from __future__ import annotations
 
@@ -43,15 +40,7 @@ _BASE_CHROMIUM_ARGS = (
 
 
 def usable_sync_api() -> Any | None:
-    """The installed `playwright.sync_api`, or None when only a stand-in answers to the name.
-
-    `pytest.importorskip("playwright.sync_api")` is not enough in the CPU jobs, where Playwright
-    is not installed: test_heavy_thread_measurement_integrity.py puts a stub module in
-    `sys.modules` at collection time so its harness imports, and every xdist worker collects
-    that file, so any module collected after it imports the stub and calls straight into a
-    RuntimeError. A partial install resolves the name as a namespace package instead. Neither
-    has a file behind it; the real module does.
-    """
+    """Returns the real playwright.sync_api or None; a stub or namespace package has no file behind it."""
     try:
         import playwright.sync_api as sync_api
     except ImportError:
@@ -158,19 +147,7 @@ def _arm_teardown_signals() -> None:
 
 
 def _require_frontend_toolchain() -> None:
-    """Fail with the cause when the frontend dev dependencies are not installed.
-
-    `npm run dev` on a tree with no `node_modules` exits 127 with `sh: 1: vite: not found`,
-    and the readiness poll then reports "vite exited with code 127", which reads as a vite
-    crash. It is not: the toolchain was never installed, and no amount of retrying or
-    port-shuffling will help. A missing toolchain and a broken one are different failures
-    and must not look the same.
-
-    This is not hypothetical. A job that installs Unsloth from a warm frontend-dist cache
-    never builds the frontend, so `studio/setup.sh` skips its `npm install` and there is no
-    `node_modules` for this harness to use, while the same job on a cold cache builds and
-    passes. That makes the failure look like flake instead of a missing setup step.
-    """
+    """Fails with the cause when node_modules is missing, not as a vite crash exiting 127."""
     if not FRONTEND.is_dir():
         raise RuntimeError(f"no frontend at {FRONTEND}; this harness must run from the repo")
     binaries = FRONTEND / "node_modules" / ".bin"
@@ -187,11 +164,7 @@ def _require_frontend_toolchain() -> None:
 
 
 def start_vite(port: int, *, host: str = "127.0.0.1") -> subprocess.Popen[str]:
-    """Start `vite dev` on `port` in its own process group, with stdout drained.
-
-    Refuses an occupied port. --strictPort would make vite exit anyway, and then the
-    readiness poll would be talking to whatever else is listening, not to us.
-    """
+    """Refuses an occupied port, so the readiness poll cannot be answered by another server."""
     if _port_is_taken(port, host):
         raise RuntimeError(
             f"{host}:{port} is already serving. Stop it, or move this harness with SMOKE_PORT."
@@ -272,13 +245,7 @@ def open_session_with_retry(
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
 ) -> Any:
-    """Open a browser session, retrying only the failure to open one.
-
-    On hosted macOS runners safaridriver sometimes times out "finding or launching a compatible
-    local Safari", which fails the whole leg before a page is loaded. That is the runner, not
-    the change under test, so creating the session gets a bounded retry. Nothing after it
-    does: every assertion still runs once, against the session that did open.
-    """
+    """Retries only session creation, since safaridriver flakes on macOS runners; assertions run once."""
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     for attempt in range(1, attempts + 1):
@@ -300,11 +267,7 @@ def wait_for_smoke_page(
     timeout_s: float = 120.0,
     info: Callable[[str], None] | None = None,
 ) -> None:
-    """Block until `url` serves a page that really references `entry`.
-
-    Vite's SPA fallback answers 200 with index.html for any path it cannot resolve, so a
-    deleted smoke page still looks healthy. Match the module specifier, not the status.
-    """
+    """Waits for a page that references the entry module; SPA fallback answers 200 to unknown paths."""
     deadline = time.monotonic() + timeout_s
     last = "no response"
     while time.monotonic() < deadline:
@@ -482,25 +445,7 @@ def goto_with_socket_backoff(
 
 
 def wait_for_first(locator: Any, *, timeout_ms: int = 10_000) -> Any | None:
-    """The first match once it exists, or None once the wait expires.
-
-    `Locator.count()` does not wait. It answers about this instant, so every
-    `if locator.count() > 0:` gate is a race with rendering that reads as "the
-    feature is missing" the moment anything delays it -- and reports that as a
-    product failure rather than as a timeout.
-
-    #9251 is what this is written from. Its reload snapshot paints a cloned
-    overlay over the app and takes it down on hydration (or after 5s), which
-    opens a window where the composer is on screen but not yet in the
-    accessibility tree. The Compare step read `count() == 0` **six milliseconds**
-    after it began and reported "Compare nav not found", which is a true
-    statement about that instant and a false one about the app.
-
-    Playwright's auto-waiting covers actions and expectations, not `count()`, so
-    the wait has to be asked for. Returning None rather than raising keeps the
-    caller's existing "is this control present at all" branch, including the
-    fallbacks that legitimately expect a miss.
-    """
+    """Waits for a match: Locator.count() does not wait, so a render gap reads as a missing control."""
     # Lazy import: contract tests import this module on runners without playwright.
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
@@ -520,20 +465,7 @@ def is_benign_console_error(msg: str) -> bool:
 
 
 def echo_browser_errors(page: Any, info: Callable[[str], None]) -> list[str]:
-    """Print what the browser knows, live, as it happens.
-
-    A harness that only asserts on the DOM cannot tell an entry module that threw
-    from one that is merely slow: both end as an `expect(...)` timeout on a locator
-    that was never created, under an empty CI log. The smokes each own a throwaway
-    page, so printing straight through beats collecting for a caller to forward.
-
-    The uncaught errors are also RETURNED, because printing alone still leaves the
-    failure itself unreadable. A React root that throws renders nothing, so every
-    locator misses and the smoke fails 15 seconds later as "element(s) not found"
-    with the real cause sitting further up an otherwise green-looking log. A caller
-    that checks this list can say what actually happened instead. Returning is
-    additive: callers that ignore it behave exactly as before.
-    """
+    """Prints browser errors live and returns the uncaught ones, so a failure names its real cause."""
     thrown: list[str] = []
 
     def record(error: Any) -> None:
@@ -674,20 +606,7 @@ def evaluate_fetch(
     transport_backoff_ms: int = 250,
     retry_on_context_loss: bool | None = None,
 ) -> dict[str, Any]:
-    """Run `fetch(url, opts)` in the page with an AbortSignal deadline; returns
-    `{"status", "body", "error"}` (status==0 + AbortError on timeout). Treat
-    status==0 or non-None error as transport failure. `body` may be str (verbatim)
-    or dict/list (JSON-encoded); pass headers explicitly for Content-Type/Auth.
-
-    `retry_on_context_loss` controls whether a navigation that destroys the JS
-    context mid-call replays the in-page fetch. The request may have already
-    reached the backend before the context died, so replaying a mutating call is
-    unsafe: a spent single-use POST /api/auth/refresh comes back 401, and a
-    duplicate POST /api/inference/load that lands while the first is still in
-    `loading_models` is rejected (the backend returns False -> 500) even though
-    the original load succeeds. Default (None) therefore retries only idempotent
-    reads (GET/HEAD/OPTIONS) and never replays a mutating method; pass an explicit
-    bool to override per call. Context loss on a non-retried call propagates."""
+    """Replays context-lost fetches only for GET, HEAD and OPTIONS, since mutating calls may have run."""
     body_arg: str | None
     if body is None:
         body_arg = None
@@ -827,13 +746,7 @@ class _WallClockWatchdog:
         name: str,
         budget_s: float | None = None,
     ) -> None:
-        """Step `name` starts now: a kick that also records what is running.
-
-        With `budget_s`, the step gets its own ceiling, which kicks inside the step cannot
-        move: a step that keeps reporting progress but never finishes still ends at
-        start + budget_s, and the exit names it. Without one, only the inactivity budget
-        applies, as before. The next begin_step() replaces both.
-        """
+        """budget_s gives the step a ceiling kicks cannot extend; without it only inactivity applies."""
         with self._lock:
             now = time.monotonic()
             self.kicked = True
@@ -923,13 +836,7 @@ def step_budget_s(seconds: float) -> float:
 
 
 def report_failing_step(watchdog: _WallClockWatchdog, *, label: str = "playwright") -> None:
-    """On an uncaught exception, end the output with the step it happened in.
-
-    A step that times out raises, and the run stops there: nothing after it waits out its
-    own timeout. But the traceback names a line, and the reader wants the step. This adds
-    one line after it, `[label] FAIL in step 'X' after 12.3s: TimeoutError: ...`, taken
-    from the watchdog's begin_step() record. No step begun, nothing added.
-    """
+    """On an uncaught exception, prints one line naming the step it happened in, from begin_step()."""
     previous = sys.excepthook
 
     def _hook(exc_type, exc, tb) -> None:
@@ -959,16 +866,7 @@ def wait_until(
     interval_s: float = 0.1,
     page: Any = None,
 ) -> Any:
-    """Poll `predicate` until it returns something truthy, and return that.
-
-    Raises TimeoutError naming `what` and the last value seen once `timeout_s` passes, so
-    a wait that never comes true fails where it waited instead of at a later assertion.
-
-    Pass `page` whenever the predicate reads state that Playwright event handlers fill in
-    (`page.on("request", ...)` lists and the like). The sync API only dispatches events
-    while it is inside a Playwright call, so the pause between polls has to be
-    `page.wait_for_timeout`, not `time.sleep`, or the list never grows.
-    """
+    """Pass page when the predicate reads event-filled state, so the pause is page.wait_for_timeout."""
     deadline = time.monotonic() + float(timeout_s)
     while True:
         value = predicate()
@@ -1009,15 +907,7 @@ def wait_for_settled(
     frames: int = 3,
     timeout_ms: int = 10_000,
 ) -> None:
-    """Wait for `locator.first` to stop moving: same box, nothing animating, `frames` frames running.
-
-    The condition behind "wait N ms for the transition / reflow to finish": a resize, an
-    expand, a slide-in. It returns as soon as the element is still, and on a runner slow
-    enough that N was not enough it keeps waiting instead of measuring mid-flight. If a
-    re-render replaces the node mid-wait, the locator is resolved again and the count
-    restarts on the new node. Raises Playwright's TimeoutError if nothing settles within
-    `timeout_ms`.
-    """
+    """Waits until locator.first stops moving for several frames; a replaced node restarts the count."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     target = locator.first
@@ -1050,28 +940,7 @@ def click_forced(
     timeout_ms: int = 5_000,
     **click_kwargs: Any,
 ) -> None:
-    """Scroll into view, then click with actionability checks off.
-
-    `click(force = True)` skips Playwright's actionability checks, which is what you
-    want against a menu whose overlay would otherwise intercept the click. It also
-    skips the part that scrolls the element into view, and Playwright will not click
-    a point it cannot reach:
-
-        playwright._impl._errors.Error: Locator.click: Element is outside of the viewport
-
-    That is what took down `Compare tab: send to two panes` on macOS. The menu item
-    existed, was found, and was off-screen, because a Mac runner's window is shorter
-    than a Linux one and the item sits at the bottom of a long menu. On Linux the same
-    code has always worked, which is why three forced clicks sat here unnoticed since
-    the composer redesign.
-
-    Scrolling first keeps the reason force was used -- the overlay is still ignored --
-    and removes the assumption that the element happens to be on screen.
-
-    The scroll is best-effort: an element that cannot be scrolled (fixed position, zero
-    size) should still reach the click, and fail there with Playwright's own message
-    rather than here with a scrolling one.
-    """
+    """Scrolls into view before a forced click, since force=True skips the scroll Playwright needs."""
     try:
         locator.scroll_into_view_if_needed(timeout = timeout_ms)
     except Exception:

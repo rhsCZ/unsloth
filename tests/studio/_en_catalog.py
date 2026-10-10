@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The shipped English UI strings, read by dotted key out of studio/frontend's en.ts.
-
-Browser drivers find controls by their accessible name, and contract tests check that a label
-lives in the catalog. Both used to retype the English, so a wording change that is correct by
-construction (#11924 dropped the leading "Show" from eight settings labels) turned every Composer
-leg and a Repo-tests contract red at once. Reading the catalog keeps them pinned to the key the
-component renders, not to its current wording.
-
-A small tokenizer rather than a TypeScript parse: the catalog is a nested object literal of
-string values, and the alternative is a Node dependency for suites that are otherwise pure
-Python. It tracks nesting, so `settings.chat.showResponseModel` is not confused with another
-section's `showResponseModel`, and it accepts a value wrapped onto the line after its key.
-"""
+"""Reads English UI strings by dotted key from en.ts, so tests track the key, not retyped wording."""
 
 from __future__ import annotations
 
@@ -65,12 +53,7 @@ class _Expression(str):
 
 
 def _decode(literal: str) -> str:
-    """The value of a JavaScript string literal, in any of its three quote styles.
-
-    Single-quoted values are how the catalog writes English that itself contains double quotes
-    (`'Are you sure you want to delete "{name}"?'`); reading only double-quoted ones handed back
-    the inner `{name}` as the label.
-    """
+    """Decodes a JS string literal in any quote style, since English with double quotes uses single."""
     body = literal[1:-1]
     out = []
     interpolated = False
@@ -171,11 +154,7 @@ def _catalog(path: str) -> dict[str, str]:
 
 
 def en_string(key: str, catalog: Path = EN_LOCALE_TS) -> str:
-    """The English for `key` (for example `composerSettings.showContext`), or fail naming the key.
-
-    A missing key raises rather than returning "": an empty string is a substring of everything,
-    and a locator built from it matches the wrong control instead of failing.
-    """
+    """Returns English for a dotted key; a missing key raises, as an empty string matches any locator."""
     strings = _catalog(str(catalog))
     if key not in strings:
         raise KeyError(f"the en catalog no longer defines {key!r} ({catalog})")
@@ -190,12 +169,7 @@ def en_string(key: str, catalog: Path = EN_LOCALE_TS) -> str:
 
 
 def aria_label_selector(label: str) -> str:
-    """A CSS selector for `[aria-label="<label>"]`, with the label quoted as a CSS string.
-
-    Catalog text is data: English that holds a `"`, a `\\` or a control character such as CR or FF
-    would otherwise end the string early or read as an escape, and the selector would be invalid or
-    match something else.
-    """
+    """Quotes the label as a CSS string so catalog text cannot end it early or match another control."""
     if any("\ud800" <= char <= "\udfff" for char in label):
         raise ValueError(f"a CSS selector cannot match a label with a lone surrogate: {label!r}")
     if "\0" in label:

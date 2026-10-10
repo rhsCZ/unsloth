@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""The :latest cutover: unsloth/unsloth:latest is the Studio image, so a plain
-`docker run unsloth/unsloth` has to survive a host with no NVIDIA GPU.
-
-Two independent failure points, one per class below:
-  * the DAEMON rejects `--gpus` before the container exists (exit 125), so
-    entrypoint.sh never runs -- docker/run.sh has to stop asking for it;
-  * entrypoint.sh itself exits 1 without UNSLOTH_ALLOW_CPU, so the Studio image
-    has to default it on.
-"""
+"""docker/run.sh must not pass --gpus, and the Studio image defaults UNSLOTH_ALLOW_CPU on."""
 
 import os
 import re
@@ -49,10 +41,7 @@ def _invoke_run_sh(
     image = None,
     extra_env = None,
 ):
-    """Run docker/run.sh with a recording `docker` stub and a staged /dev tree.
-
-    Returns the argv docker/run.sh would have handed to `docker run`.
-    """
+    """Returns the argv docker/run.sh passes to docker run, via a recording docker stub."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     argv_log = tmp_path / "argv"
@@ -164,10 +153,8 @@ class TestRunShDegradesWithoutNvidia:
 
     @pytest.mark.parametrize("groups", ["none", "video_only"])
     def test_a_missing_group_record_does_not_abort_the_run(self, tmp_path, groups):
-        """getent exits nonzero for a name that is not in NSS. Under `set -o pipefail`
-        that propagates out of the command substitution and `set -e` kills run.sh
-        before docker run, so the AMD fallback could never start on a host without a
-        render group. Degrade to whatever gids exist instead."""
+        """getent failing for a missing group must not abort run.sh under pipefail; use the gids
+        that exist."""
         argv, _ = _invoke_run_sh(tmp_path, nvidia = False, amd = True, groups = groups)
         assert "/dev/kfd" in argv and "/dev/dri" in argv
         assert "--gpus" not in argv

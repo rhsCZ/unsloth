@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A cell that dies after `--click-probe` ran still reports what the probe measured.
-
-THE PROBE HAS NOWHERE ELSE TO LIVE. `composer_click_ms` is taken inside a `setup:composer_click`
-window, and that window's row is emitted by the session whatever happens next, so the click
-timing survives a cell that fails later. The attribution block has no window of its own: it runs
-before the window opens, it is not noted on one, and the only copy of it is the field the cell row
-is built from.
-
-AND THE CELL CAN STILL DIE AFTER IT. `_press_send` sets the 90 s bound on the composer click
-alone. Everything after it -- the `page.fill`, the send-button lookup and its click -- still runs
-under the 8 s default action timeout installed in `runtime/browser.py`, which is the timeout a
-large rung was already observed to blow through: that is why the click needed a bound of its own.
-So the exact run that pays for the probe, at the rung the probe exists for, is the one that loses
-it. Assigned on the way out of `_run_inner`, the whole block went missing from the failure cell.
-
-`CellRunner.run` is driven, with the browser stubbed at the boundary it crosses. The row that gets
-asserted is read back out of the payload the REAL recorder wrote.
-"""
+"""Probe readings must survive a later failure in the cell, so they cannot rely on a window row."""
 
 from __future__ import annotations
 
@@ -39,12 +22,7 @@ CENSUS = {"messages": 4, "elements": 31_637, "highlight_spans": 1_485}
 
 
 class _Page:
-    """Everything `_run_inner` touches before the send, and a `fill` that fails like the real one.
-
-    Playwright raises `TimeoutError` out of `page.fill` when the composer cannot be filled inside
-    the default action timeout. Raised from `fill` rather than from the send click because it is
-    the first unbounded step after the probe.
-    """
+    """Stub page whose fill raises TimeoutError, as Playwright does past the default action timeout."""
 
     def __init__(self, fail_on: str = "fill") -> None:
         self.fail_on = fail_on
@@ -214,13 +192,7 @@ def test_a_cell_that_dies_after_the_probe_still_reports_the_attribution(tmp_path
 
 
 def test_the_attribution_of_one_cell_never_lands_on_the_next(tmp_path):
-    """CONTROL. A cell that dies BEFORE its own probe has no attribution to report.
-
-    The reading is filed from the cell's `finally`, so the field has to be cleared per cell rather
-    than beside the click that sets it. A stale block re-filed under the next cell id would be
-    worse than the loss this test's neighbour is about: a measurement of one rung reported as
-    another's.
-    """
+    """A cell dying before its probe must not inherit the previous cell's attribution; clear it per cell."""
 
     runner, paths, recorder = _runner(tmp_path, click_probe = True)
     runner.run(_cell(), _plan())

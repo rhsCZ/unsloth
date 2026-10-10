@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The docker publish workflow must never forward an unfrozen ref.
-
-`git ls-remote` exits 0 whether or not a ref matched, so a non-zero exit means the
-remote was never reached -- and that exit is lost twice over: it heads a pipeline, and
-a `run:` step with no explicit `shell:` runs under `bash -e` WITHOUT pipefail. The
-step then publishes `ref=main`, each build resolves it independently, and the
-stable-tag gates still move `:latest` onto the result.
-"""
+"""A failed git ls-remote is lost in a pipe under bash -e, so ref=main gets published unfrozen."""
 
 from __future__ import annotations
 

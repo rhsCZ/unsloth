@@ -1,74 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""gpt-oss-20b LoRA on a single T4: does the compile-and-offload path hold?
-
-The payload behind the `gptoss` leg, written first as a FEASIBILITY PROBE. The
-question is not "is the loss right" but "can a 20B checkpoint be loaded,
-LoRA-trained and generated from at all on 16GB of sm_75, on the compiled float32
-path this card forces".
-
-What the probe found, so the report can be read against it: kernels
-`unsloth-t4-ci-8161ceb9` and `unsloth-t4-ci-7ab727f1`, 2026-08-11, Tesla T4 /
-sm_75 / 14.56 GB. It works, and three of the four things likeliest to break are
-not in the path at all.
-
-* **MXFP4 is never reached.** `unsloth/gpt-oss-20b` is an MXFP4 checkpoint and
-  MXFP4 has no backward pass in unsloth_zoo, but `load_in_4bit=True` makes
-  Unsloth's FLOAT_TO_INT_MAPPER redirect the load to the NF4
-  `unsloth/gpt-oss-20b-unsloth-bnb-4bit`. The probe confirmed the redirect from
-  `model.config._name_or_path`, recorded on every run: a change to that mapping
-  would move this leg onto a checkpoint that cannot train unnoticed.
-* **No bf16, and Unsloth already knows.** gpt-oss is in `FORCE_FLOAT32`. The
-  probe saw `UNSLOTH_FORCE_FLOAT32=1`, `fp16=False`, `bf16=False`, and
-  `UNSLOTH_FORCE_CUSTOM_DTYPE` pinning `down_projs` and `mlp.router` to float32.
-  That path exists for this card and nothing else in CI exercises it.
-* **One deliberate offload, and nothing else.** 12.7 GB reserved of 14.56, no
-  `hf_device_map`, every parameter on `cuda:0` EXCEPT `model.embed_tokens.weight`,
-  which unsloth puts in RAM on purpose -- `Unsloth: Offloading embeddings to RAM
-  to save 1.08 GB`, with forward hooks carrying ids down and vectors back up.
-  That was read as a spill twice before anyone looked at the name; 579133440 is
-  exactly 201088 x 2880, this checkpoint's vocab by its hidden size. Placement is
-  counted on every run rather than assumed, and the embedding is excused only
-  when its hook flag is set, because an embedding that reached the CPU without
-  them is a real bug that looks identical in a device count.
-* **torch.compile engages**: 32 unique graphs, 779 calls captured, 2 graph
-  breaks, both `_warnings.warn`. A silent fall back to eager leaves every other
-  number healthy while the leg's coverage goes unexercised, so this is asserted.
-
-What it asserts:
-
-1. The model loads, in a recorded dtype, with every parameter on the one
-   visible T4. Offload to CPU, disk or meta is a FAILURE rather than a slow
-   pass: it is the documented result of this leg (a 20B checkpoint fitting and
-   training on 16GB, with about 1.8GB to spare) ceasing to hold, and every other
-   number in the report survives it.
-2. Training runs the requested steps, every logged loss is finite, and the
-   optimizer applied something -- a run with all-zero gradients looks healthy
-   everywhere else and trained nothing. Decided on the ADAPTER, fingerprinted
-   before and after training, with `grad_norm` as fallback rather than source:
-   this leg saves and reloads no adapter, so a trainer that stops logging that
-   field would otherwise take the only evidence with it. See
-   training_evidence.py. There is no committed reference band, the run being too
-   short and the model too large for a per-step trace to be worth capturing, and
-   a band nobody can recapture cheaply gets disabled the first time it is
-   inconvenient.
-2a. The forced-float32 path was taken: on a card without bf16, `fp16`/`bf16`
-   must both be off and `UNSLOTH_FORCE_FLOAT32` must be set. This is the
-   coverage the leg uniquely claims, and it was recorded on every run and
-   asserted on none.
-3. `torch.compile` captured at least one graph DURING TRAINING
-   (`--require-compile`, on by default). The Dynamo counters are process-global
-   and loading a 20B checkpoint fills them, so the assertion is on the delta
-   across `trainer.train()`, not the total.
-4. Generation after training returns non-empty text without raising, catching a
-   training run that "succeeds" and leaves the model unusable, which on a
-   quantised offloaded path is a real outcome.
-
-`--probe` records all of those and fails on none, for the one-off feasibility
-runs: a probe must come back with evidence, not a nonzero exit and a truncated
-report.
-"""
+"""gpt-oss-20b feasibility probe on one T4; load_in_4bit redirects to an NF4 checkpoint, not MXFP4."""
 
 from __future__ import annotations
 
@@ -109,20 +42,7 @@ def _log(msg: str) -> None:
 
 
 def compile_counters(before: dict | None = None) -> dict:
-    """What `torch.compile` actually did, from Dynamo's own bookkeeping.
-
-    `unique_graphs` decides whether compilation engaged: zero means every region
-    fell back to eager, whatever the banner said. `graph_breaks` sits beside it
-    because capturing graphs and breaking a hundred times is a different,
-    reportable state, and on a card with no bf16 a break is often the first
-    symptom of a dtype the compiled path refused.
-
-    The counters are process-global and never reset, and loading a model through
-    Unsloth compiles plenty before `trainer.train()`, so the absolute number
-    cannot answer "did TRAINING compile": an entirely eager training path still
-    leaves the loader's graphs standing. Pass the pre-training reading as
-    ``before`` and the delta is the answer; `failures_for` asserts on the delta.
-    """
+    """Dynamo counters are process-global, so pass the pre-training reading as before to get the delta."""
     state: dict = {"available": False}
     try:
         import torch._dynamo.utils as dynamo_utils
@@ -149,14 +69,7 @@ def compile_counters(before: dict | None = None) -> dict:
 
 
 def placement(model) -> dict:
-    """Where the weights ended up, counted rather than trusted.
-
-    A 20B checkpoint on a 16GB card either offloads or does not fit, and "did it
-    offload" is answerable only by looking. `hf_device_map` is the
-    accelerate-side answer and is absent when nothing dispatched; the parameter
-    walk is always available and is what distinguishes a model that quietly
-    landed on the CPU (correct, slow) from one on meta (loaded nothing).
-    """
+    """Walks parameters: hf_device_map is absent when nothing dispatched; the walk tells CPU from meta."""
     counts: dict = {}
     off_gpu: list = []
     try:
@@ -215,12 +128,7 @@ def memory() -> dict:
 
 
 def build_dataset(tokenizer, rows: list[dict]):
-    """The canary rows as chat turns, through the model's own template.
-
-    Through `apply_chat_template` rather than a hand-rolled prompt: gpt-oss has
-    a template with channels and a reasoning-effort knob, and bypassing it would
-    exercise a text format no user of this notebook ever produces.
-    """
+    """Uses apply_chat_template, not a hand-rolled prompt, so gpt-oss's channel template is what runs."""
     from datasets import Dataset
 
     texts = []
@@ -239,21 +147,7 @@ def build_dataset(tokenizer, rows: list[dict]):
 
 
 def build_completion_dataset(tokenizer, rows: list[dict]):
-    """The same rows as a PROMPT/COMPLETION pair, so the loss covers only the
-    answer.
-
-    Two columns rather than a collator: TRL treats a dataset with `prompt` and
-    `completion` columns as prompt-completion and masks the prompt itself
-    (`completion_only_loss` defaults to True for that shape). The older
-    `DataCollatorForCompletionOnlyLM` route needs a response template string
-    that has to match the chat template exactly, and a template change turns it
-    silently into "mask nothing" -- which trains on everything and passes every
-    assertion about losses.
-
-    The prompt ends with the generation prompt, so the boundary is exactly where
-    the model would start generating. That is what makes the mask meaningful
-    rather than approximately right.
-    """
+    """Prompt/completion columns let TRL mask the prompt; a response template can silently mask nothing."""
     from datasets import Dataset
 
     prompts, completions = [], []
@@ -270,15 +164,7 @@ def build_completion_dataset(tokenizer, rows: list[dict]):
 
 
 def masking_evidence(trainer) -> dict:
-    """Whether the prompt tokens are ACTUALLY masked out of the loss.
-
-    This is the whole point of the feature and the one thing a loss curve
-    cannot show: a run that masks nothing trains on prompt and answer alike,
-    converges perfectly well, and reports numbers indistinguishable from a
-    correct one. So the labels are read off a real collated batch.
-
-    Never raises: a diagnostic that kills the leg is worse than a missing one.
-    """
+    """Reads labels off a real collated batch, since a run that masks nothing still converges normally."""
     record: dict = {}
     try:
         batch = next(iter(trainer.get_train_dataloader()))
@@ -542,19 +428,7 @@ def train_and_infer(args) -> dict:
 
 
 def _placement_failures(placement: dict | None) -> list[str]:
-    """Every parameter on the one visible GPU, or this leg measured something else.
-
-    The driver gives each payload a single CUDA device
-    (``CUDA_VISIBLE_DEVICES``), so on a healthy run every parameter reports
-    ``cuda:0`` and ``hf_device_map`` is absent entirely. Anything else is one of
-    the three ways a 20B checkpoint stops fitting: ``cpu``/``disk`` through
-    accelerate's dispatch, ``meta`` for a shard that was never materialised, or
-    a device the payload cannot see.
-
-    Unreadable is a failure, not a skip, for the same reason it is one for the
-    bf16 reading and the dynamo counters: the check that switches itself off
-    when its instrument breaks is the one that never fires.
-    """
+    """Every parameter must sit on the one visible GPU; unreadable placement is a failure, not a skip."""
     if not isinstance(placement, dict):
         return [
             "where the weights landed was never recorded, so whether the "
@@ -614,11 +488,7 @@ def _placement_failures(placement: dict | None) -> list[str]:
 
 
 def failures_for(result: dict, args) -> list[str]:
-    """The assertions, separated from the run so they can be unit-tested.
-
-    Nothing here needs a GPU, which is the point: the pass/fail rule for a leg
-    that costs a Kaggle session has to be checkable without one.
-    """
+    """The pass/fail rule for a costly Kaggle leg, kept GPU-free so it can be unit-tested on CPU."""
     failures: list[str] = []
     if getattr(args, "export_gguf", False):
         from gguf_export import export_failures

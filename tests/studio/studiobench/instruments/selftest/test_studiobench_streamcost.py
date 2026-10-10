@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The streaming-cost accumulator, on both sides of the page boundary.
-
-WHY THE REAL JAVASCRIPT AND NOT A PYTHON PORT, same reason `test_studiobench_parity_digest.py`
-gives: the file that ships is `instruments/streamcost.js`, and a re-implementation tested here
-would pass forever while the shipped file drifted. So node runs the actual file against a shim of
-the four globals it touches, and if node is missing the test SKIPS rather than passing on a
-substitute.
-
-The one thing that cannot be shimmed is the thing being tested: a real blocked main thread. The
-stall below is a synchronous busy wait, so the 1 ms timer inside the instrument really is unable
-to run for its duration, exactly as it would be during a long task in the app.
-"""
+"""Runs the shipped streamcost.js under node, since a Python port would drift; skips without node."""
 
 from __future__ import annotations
 
@@ -234,28 +223,7 @@ BURST_CHAIN_MS = 40.0
 
 
 def test_a_burst_still_in_flight_at_the_window_close_is_charged_to_that_window():
-    """REGRESSION. `read()` snapshotted `deltaTaskMs` and then `reset()` zeroed it while the chain
-    the last chunk started was still open, so the MessageChannel callback charged that burst to a
-    fresh accumulator that nobody ever reads: `StreamCostInstrument.close` discards everything but
-    `overhead_ms` from its tail `read(0)`, and `open()` resets before the next window in any case.
-    The burst's characters stayed in the denominator and its targeted cost left the numerator.
-
-    `delta_task_ms` is the TARGETED numerator -- the one quantity that separates stream cost from
-    the action windows around it, and the one the `--inject-stream-cost-ms` recovery fraction is
-    computed from -- so it may not lose a burst it counted.
-
-    HOW OFTEN, MEASURED, because the answer is small and the reader should have it: driving the
-    shipped file in real chromium against a real SSE response read through a fetch reader at field
-    cadence, a driver-side `read()` found a chain still open 10 to 21 times in 2,600 to 5,500
-    reads, or 0.4 to 0.65 per cent. A cell opens about eight windows over its streaming phase, so
-    what this costs a real run is a fraction of one burst chain. It is pinned here rather than left
-    because the file's own contract is that a burst is charged once, from the first chunk to the
-    loop draining, and a burst that is charged to nothing breaks it in the direction that reads
-    cheaper.
-
-    The same-task close below is the deterministic way to put the accumulator in the state chromium
-    reaches by racing; the invariant it pins is the production one.
-    """
+    """A burst still in flight at window close must be charged to that window, not dropped by reset()."""
     out = burst_across_a_window_close(BURST_CHAIN_MS, read_while_pending = True)
 
     assert out["first"]["delta_task_ms"] >= BURST_CHAIN_MS * 0.9, (
@@ -283,17 +251,8 @@ MAX_SSE_CHUNK_CHARS = 65536
 
 
 def test_a_batched_sse_read_above_the_decoder_scan_bound_is_still_detected():
-    """REGRESSION. The detector read `out.length <= MAX_SSE_CHUNK_CHARS` and skipped anything
-    longer, on the premise that a decode that large is not relay traffic.
-
-    A read does not carry one cadence gap of the stream, it carries everything the browser buffered
-    since the last one, so its size is the arrival rate times the stall in front of it. Measured
-    against real chromium reading the real pacer through the app's own `getReader()` loop, the
-    largest read of a stream is 32.5 characters per millisecond of stall at fast cadence: a 3,000 ms
-    stall lands one well-formed 97,500 character read of 470 `data:` frames, and the guard dropped
-    it entirely -- `sseChunks`, `sseBursts`, `lastSseAt` and the `deltaTaskMs` numerator all missed
-    the largest burst of the stream, at the moment a stall makes it largest.
-    """
+    """Batched SSE reads above MAX_SSE_CHUNK_CHARS must still be detected, since stalls make them
+    largest."""
     out = one_decoded_batch("batch-over", BURST_CHAIN_MS)
 
     assert out["decoded_chars"] > MAX_SSE_CHUNK_CHARS, out
@@ -317,13 +276,7 @@ def test_a_batched_sse_read_below_the_decoder_scan_bound_is_detected_too():
 
 
 def test_a_decoded_blob_above_the_scan_bound_is_still_kept_out_of_the_detector():
-    """THE OTHER CONTROL, and it also passes with or without the fix: the bound still has a job.
-
-    A bundle, a blob or a paste reaches the same wrapper, and counting one as a stream would set
-    `lastSseAt`, open a chain and charge that chain's cost to a window with no stream in it -- an
-    error in the other direction, which the bound exists to prevent. Widening the guard from a
-    rejection to a bounded scan may not turn it into no guard at all.
-    """
+    """A decoded blob above the scan bound must stay out of the detector, or it is charged as a stream."""
     out = one_decoded_batch("blob", BURST_CHAIN_MS)
 
     assert out["decoded_chars"] > MAX_SSE_CHUNK_CHARS, out
@@ -334,13 +287,7 @@ def test_a_decoded_blob_above_the_scan_bound_is_still_kept_out_of_the_detector()
 
 
 def test_a_stall_longer_than_the_idle_gap_is_still_charged_to_the_stream():
-    """The worst stall in a window is the one the timer sees last, and it must not be dropped.
-
-    A stall that outlasts `IDLE_GAP_MS` is only observed after it has ended, and by then the last
-    SSE chunk is older than the idle threshold. Deciding the interval's attribution from the state
-    at its END therefore threw away the whole stall, so a streaming regression read CHEAPER once
-    it crossed 1.5 s -- the metric moving the wrong way as the defect got worse.
-    """
+    """A stall longer than IDLE_GAP_MS is charged to the stream, not judged by the idle state at its end."""
     stall_ms = IDLE_GAP_MS + 400
     out = drain_after_stall(stall_ms)
     assert out["streaming_observed"] is True
@@ -361,12 +308,7 @@ class _FakeCell:
 
 
 def test_overhead_is_reported_per_cell_and_not_accumulated_across_them():
-    """One instrument instance serves the whole session, and the rungs run in ascending order.
-
-    An overhead accumulator that is never cleared reports cell k as the sum of cells 1..k, which
-    climbs with the rung ladder however flat the instrument actually is. That is the exact shape
-    `overhead_growth_with_length` exists to catch, manufactured by the instrument declaring it.
-    """
+    """Overhead must reset per cell; a running total would climb with the rung and look like growth."""
     inst = StreamCostInstrument()
 
     inst.start_cell(_FakeCell())
@@ -385,13 +327,7 @@ class _FakeWindow:
 
 
 class _FakeStreamCostPage:
-    """The page-side accumulator, on exactly the contract `streamcost.js` implements.
-
-    `read()` snapshots `overheadMs` into its result and THEN resets it; `replyChars()` adds the
-    cost of its own `querySelectorAll` to whatever the accumulator currently holds; `reset()`
-    zeroes it. Those three facts are the whole of the defect below, and re-stating them here rather
-    than driving node keeps the test about the DRIVER's ordering, which is where the defect lives.
-    """
+    """Mirrors streamcost.js: read() snapshots then resets overheadMs, so driver call order matters."""
 
     # querySelectorAll scans the whole document, so this is the cost that grows with rung.
     SCAN_MS = 3.9
@@ -420,17 +356,7 @@ class _FakeStreamCostPage:
 
 
 def test_the_close_side_reply_scan_is_counted_in_the_declared_overhead():
-    """REGRESSION. Half of every window's boundary scans were missing from `overhead_ms`.
-
-    `close()` calls `read(ms)` first, which snapshots the page's overhead total and then resets it,
-    and only afterwards calls `replyChars(force)` -- the FORCED, whole-document scan that is the
-    one part of this instrument whose cost tracks the rung. That scan accumulated into a fresh
-    page-side total which the next `open()` began by resetting, so it was never read by anyone.
-
-    The number this corrupts is the only evidence for the level 0 claim: `end_cell` declares it
-    precisely so the claim is checkable from the payload rather than from a docstring, and it was
-    reporting about half of the rung-dependent cost it exists to expose.
-    """
+    """The close-side forced reply scan must be counted in overhead_ms, not lost to the next reset."""
     inst = StreamCostInstrument()
     page = _FakeStreamCostPage()
     inst.start_cell(_FakeCell())

@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A save that fails because the model was offloaded should say so.
-
-Offloaded parameters sit on the meta device, and saving then dies inside
-accelerate with an error that names neither the model nor the offload. The
-hint is appended to that error, never substituted for it, and stays empty
-unless a meta parameter is really present.
-"""
+"""Append the offload hint to the save error, never replace it; only when a meta parameter exists."""
 
 import sys
 from pathlib import Path
@@ -130,12 +124,7 @@ def test_both_save_failure_paths_use_it():
 
 
 def test_the_original_error_is_still_reported():
-    """The hint is added TO the error, never instead of it.
-
-    Anchored on the message text alone, not on a whole string literal: the
-    repo's ruff hook may merge the hint into the same f-string or split it out
-    again, and either shape satisfies what this is actually checking.
-    """
+    """The original save error must still be reported; match the message text, not whole string literals."""
     for anchor in ("Failed to save/merge model: ", "Failed to save model: "):
         # All occurrences: a docstring also quotes these messages.
         windows = []

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""run.py writes the Unsloth PID files; `unsloth studio stop` globs for them.
-
-Nothing else ties the writer's filename to the reader's glob, and each side's own
-tests hardcode the names they expect, so a rename on either side alone leaves both
-suites green while `stop` silently finds nothing. `unsloth_cli/tests/` also runs
-in no workflow, so this lives here, where the repo CPU job discovers it.
-
-AST + exec of the writer, so no backend dependency stack is imported.
-"""
+"""Ties the PID file names run.py writes to the glob that unsloth studio stop searches for."""
 
 import ast
 import os

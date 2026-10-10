@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression tests for `unsloth studio stop` on Windows (PR #5940).
-
-`stop` once used `os.kill(pid, 0)`, which raises WinError 87 on Windows before
-reaching taskkill; the fix adds cross-platform `_pid_alive` (tasklist on Windows,
-signal-0 elsewhere). AST + mock-only, except the two code-page tests, which run a real
-Python child in place of the Windows command they read. The second of those covers
-`unsloth start`: #10173 is one defect across both helpers.
-"""
+"""stop used os.kill(pid, 0), which raises WinError 87 on Windows; _pid_alive uses tasklist there."""
 
 import ast
 import os

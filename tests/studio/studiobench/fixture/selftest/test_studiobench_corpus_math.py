@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Math in the corpus, and the two properties adding it had to preserve.
-
-Corpus v1 held not one dollar sign across 519,859 characters. That is why `preprocessLaTeX`
-measured as a real cost in isolation and as an exact NULL in the browser: the film gave it nothing
-to do, and a benchmark that cannot see a cost is not evidence the cost is absent.
-
-Adding content to a calibrated fixture is the easy way to invalidate it, so two things are pinned
-here rather than argued in a comment: the fence share, which is what the Shiki span density rests
-on, and the preamble, which is the film's only span-free stretch and therefore the only place the
-onset of cost can be seen against.
-"""
+"""Math must not change the fence share or span-free preamble; Shiki's span density rests on both."""
 
 from __future__ import annotations
 
@@ -100,18 +90,7 @@ def test_prose_without_the_math_flag_has_none():
 
 
 def test_every_expression_is_balanced():
-    """Structural check for the failure that would make this corpus measure the wrong thing.
-
-    KaTeX renders an expression it cannot parse as an ERROR NODE rather than failing, so a corpus
-    of malformed LaTeX would run, look busy, and measure the cost of drawing error messages. That
-    would be worse than having no math at all, because it would come with numbers.
-
-    A full parse needs KaTeX itself, which this test cannot import. All 430 expressions in the
-    shipped corpus were checked against `katex.renderToString(..., {throwOnError: true})` and all
-    430 parsed; that run is quoted in the pull request rather than repeated here. What IS repeated
-    here is the check that catches every way the generator could break on a later edit: brace
-    balance, and no empty group, which is what a missing interpolation would leave behind.
-    """
+    """Brace balance and empty groups only: KaTeX draws malformed LaTeX as error nodes, not failures."""
     joined = "\n".join(_texts())
     bodies = [m.group(1) for p in DISPLAY for m in p.finditer(joined)]
     bodies += [m.group(1) for p in INLINE for m in p.finditer(joined)]

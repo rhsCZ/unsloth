@@ -1,63 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Deterministic Unsloth training smoke test, sized for a single Tesla T4.
-
-Runs the whole notebook shape end to end -- 4-bit load, LoRA attach, a handful
-of training steps, adapter save, reload-free inference -- against a tiny model
-on ONE GPU, and asserts on what came out.
-
-Every other GPU test in this repo runs on hardware nobody's Colab session has.
-T4 is the card the notebooks are written for: no bf16, no flash-attention 2,
-16GB, sm_75, so a regression that only shows up there is invisible to the rest
-of CI. Driven from ``.github/workflows/kaggle-t4-notebook-ci.yml`` on real
-Kaggle T4s.
-
-What it asserts, in descending order of confidence:
-
-1. **Run-to-run bitwise equality** (``--repeat 2``). Two full runs in one
-   session must produce identical per-step loss and grad_norm to the last bit.
-   The only exact assertion, and it catches uninitialised memory, unseeded RNG,
-   iteration over a set, a nondeterministic kernel new to the backward pass.
-2. **The canary string.** The training data maps a question to the literal
-   target ``__UNSLOTH__!!!``, and after overfitting, greedy decoding of a
-   training prompt must emit that and nothing else. An exact match modulo
-   surrounding whitespace, not a substring: the completion trained on is
-   ``CANARY + eos_token``, so ``'__UNSLOTH__!!!<more text>'`` is a stopping
-   regression rather than a pass. The written adapter is also read back off disk
-   and checked for tensors present, finite and not all zero, since inference
-   runs on the in-memory model and would not notice. This is a binary,
-   tolerance-free check that forward, backward, optimizer step, adapter save and
-   inference are wired together, and it fails loudly if LoRA weights never reach
-   the generate call, which no loss-value assertion would catch.
-3. **Loss and grad_norm inside a band around a committed reference**, a
-   tolerance and never an equality. See ``references/README.md``: the reference
-   was captured on a specific T4 with a specific library set, and a different
-   driver or a transformers bump moves the low bits, so the band is wide enough
-   not to fire on that and narrow enough to catch a real change in the
-   optimisation.
-
-   A reference is only comparable to a run of the SAME EXPERIMENT. The step
-   count is part of what the trace encodes -- step 4 of a 10-step run and of a
-   3-step run are the same iterate only by coincidence, and the fp16 scaler's
-   skip pattern lives at the front where a short run spends all its steps -- and
-   so are the learning rate, the optimizer, the LoRA shape, the model and the
-   commit of the model repository read. The reference records all of them, and
-   comparing against one captured with any of them different is a hard failure,
-   never a quiet pass. See ``check_reference`` and
-   ``REFERENCE_DEFINING_SETTINGS``.
-
-Determinism caveats, stated rather than assumed:
-``torch.use_deterministic_algorithms(True, warn_only=True)`` is warn_only
-because parts of the bitsandbytes 4-bit path register no deterministic kernel,
-and raising would abort the test having proved nothing; assertion 1 is what
-verifies the outcome. Bitwise equality is asserted WITHIN one session only, and
-is not achievable or claimed across GPU architectures, fp16 reduction order
-alone moving the result.
-
-Usage:
-    python run_t4_smoke.py --outdir /kaggle/working/smoke0
-"""
+"""Run-to-run bitwise equality within one session is the exact numeric check; loss is banded."""
 
 from __future__ import annotations
 
@@ -126,26 +70,7 @@ def load_canary_rows(path: Path) -> list[dict]:
 
 
 def dataset_digest(path: Path) -> str:
-    """A digest of the rows this run trains on, for the reference identity.
-
-    The reference is a trace of one experiment and the training data is part of
-    which experiment it is: change a question in canary_dataset.jsonl and the
-    loss curve moves for reasons that have nothing to do with the code, with a
-    small change passing the band and a larger one reported as a regression.
-    That file is inside this workflow's paths filter, so editing it is a
-    supported way to trigger the run that would be compared against a trace it
-    has nothing to do with.
-
-    Over the PARSED rows in order rather than the file's bytes: reformatting the
-    JSON or reordering the keys within a row changes neither what trains nor the
-    order it trains in, and forcing a session-costing recapture for whitespace
-    is how a check gets switched off. Row order is kept, being the order the
-    sampler walks.
-
-    Never raises and never returns None: an unreadable dataset yields a value
-    that cannot match any reference, so it lands as a refusal to compare rather
-    than as an unchecked key that reads like a comparison that passed.
-    """
+    """Digest of the parsed rows in order, not file bytes, so reformatting does not force a recapture."""
     try:
         rows = load_canary_rows(path)
     except Exception as exc:  # noqa: BLE001
@@ -155,15 +80,7 @@ def dataset_digest(path: Path) -> str:
 
 
 def build_dataset(rows: list[dict], eos_token: str):
-    """Prompt / completion columns, so the loss lands only on the answer.
-
-    A single ``text`` column would spread the loss across the question tokens,
-    which the model already predicts well. With the prompt masked out, every one
-    of the few steps this test can afford goes on the canary itself, which is
-    what makes an exact string assertion reachable in a run this short. TRL
-    applies the masking when it sees these two columns
-    (``completion_only_loss``).
-    """
+    """Prompt and completion columns, so TRL masks the prompt and the loss lands on the canary alone."""
     from datasets import Dataset
     return Dataset.from_dict(
         {
@@ -174,11 +91,7 @@ def build_dataset(rows: list[dict], eos_token: str):
 
 
 def _make_trainer_class(sft_trainer_cls, sampler):
-    """SFTTrainer with the sampling order pinned.
-
-    ``_get_train_sampler``'s signature moved between TRL versions (it gained a
-    dataset parameter), so absorb whatever is passed.
-    """
+    """Absorbs *args and **kwargs because _get_train_sampler's signature changed across TRL versions."""
 
     class _FixedOrderSFTTrainer(sft_trainer_cls):  # type: ignore[misc,valid-type]
         def _get_train_sampler(self, *args, **kwargs):  # noqa: ANN002, ANN003
@@ -188,25 +101,7 @@ def _make_trainer_class(sft_trainer_cls, sampler):
 
 
 def pin_initial_loss_scale(trainer, value: float) -> dict:
-    """Lower the fp16 gradient scaler's starting scale before training.
-
-    Why, in one measurement: the T4 has no bf16, so the run is fp16 with a
-    dynamic ``GradScaler`` that starts at 65536, halves on every overflow and
-    SKIPS the step it overflowed on. On this model the first three steps
-    overflow every time -- the committed reference has ``grad_norm: NaN`` at
-    steps 1, 2 and 3 and a finite one from step 4, which is 65536 -> 8192 in
-    three halvings -- so a three-step run applies ZERO optimizer updates.
-
-    Starting the scaler low enough not to overflow buys a short run its updates
-    back. It changes the numeric path (a different scale is a different rounding
-    of the same gradients), so a reference captured before this does not apply,
-    which the step-count guard in ``check_reference`` already refuses to ignore.
-
-    Never fatal. ``trainer.accelerator.scaler`` is where transformers keeps it
-    but is not public API, so a version that moved it degrades to "the run is as
-    it was" rather than losing the session. What happened is recorded either
-    way, so whether the pin took is visible when a reference is captured.
-    """
+    """Lowers the fp16 GradScaler start so a short run does not skip every step on overflow."""
     state: dict = {"requested": value}
     if not value:
         state["applied"] = False
@@ -533,31 +428,7 @@ def train_once(args, run_index: int) -> dict:
 
 
 def _reconstruct_adapter_config(adapter_dir, expected: dict | None) -> dict:
-    """Ask PEFT to rebuild the saved config, and check it describes THIS run.
-
-    ``json.loads`` succeeding is not the question anyone has about this file.
-    ``{}`` is valid JSON, so a save that wrote no LoRA fields at all read as
-    "config_readable" and the leg passed on an adapter nothing can load -- the
-    same shape as the tensor count that a randomly initialised ``lora_A``
-    satisfied. What is actually being asserted is "PEFT can reconstruct the
-    adapter", so it is asked of PEFT, on the path a reload takes.
-
-    That path is the mapping dispatch, not the base class:
-    ``PeftModel.from_pretrained`` does
-    ``PEFT_TYPE_TO_CONFIG_MAPPING[peft_type].from_pretrained(...)``, while
-    ``PeftConfig.from_pretrained`` alone returns a bare ``PeftConfig`` with
-    ``peft_type=None`` for ``{}`` and reports nothing wrong. Checked against
-    peft 0.20.0: only the dispatch raises, which is why it is what runs here.
-
-    ``expected`` is DERIVED, not restated: the caller passes the very arguments
-    it handed ``get_peft_model``, so a save that writes a well-formed config for
-    a DIFFERENT adapter than the one trained (a dropped ``target_modules``, a
-    rank that did not survive the round trip) is a difference rather than a
-    field list this function had to guess at.
-
-    Never raises; every outcome is a recorded key that ``saved_adapter_failures``
-    turns into a verdict.
-    """
+    """Rebuilds via PEFT_TYPE_TO_CONFIG_MAPPING, the reload path; PeftConfig alone passes {} silently."""
     out: dict = {}
     try:
         from peft import PEFT_TYPE_TO_CONFIG_MAPPING, PeftConfig
@@ -610,29 +481,7 @@ BATCH_SIZES = (2, 4, 8)
 
 
 def batched_generation(model, tokenizer, prompts, *, max_new_tokens) -> dict:
-    """Greedy generation one-at-a-time, then batched, and whether they agree.
-
-    WHAT THIS IS FOR. Batched generation with left padding has broken here
-    before, repeatedly and in ways that pass every other check in this file:
-
-    * #3699 batched generation with left-padding and caching produced incorrect
-      output,
-    * #1066 batch inference produced gibberish,
-    * #1456 batch inference was inconsistent for a self-trained model,
-    * #2138 a release silently FORCED the tokenizer padding side to right during
-      inference, which is why the side is recorded as OBSERVED after generating
-      rather than as the value this function set.
-
-    Greedy decoding makes the comparison meaningful: the output is then a
-    function of the weights and the attention mask alone, so any difference
-    between batch sizes is padding or cache handling rather than sampling.
-
-    THE VACUITY TRAP, and it is the whole reason this returns the token lengths:
-    padding only happens when the prompts in a batch have DIFFERENT lengths.
-    A batch of equal-length prompts pads nothing, agrees trivially, and reports
-    a green left-padding check that never once left-padded. The caller asserts
-    the spread; this function measures it.
-    """
+    """Equal-length prompts pad nothing, so the token lengths are returned to prove padding happened."""
     # Local import: this module can load before unsloth (and torch) is installed.
     import torch
 
@@ -756,26 +605,7 @@ _LAST_MULTI_GPU_FACTS: dict | None = None
 
 
 def multi_gpu_facts(model) -> dict:
-    """What unsloth BOUND, given how many cards this process can see.
-
-    The point of the multi_gpu leg is a branch no pinned payload can reach.
-    `unsloth/kernels/utils.py:170`:
-
-        if DEVICE_COUNT > 1:
-            torch_gpu_device = torch.cuda.device      # a real device switch
-        else:
-            def torch_gpu_device(device): return nullcontext()
-
-    `build_kernel.py` pins every ordinary payload with CUDA_VISIBLE_DEVICES, so
-    every unsloth kernel this CI has run took the nullcontext branch, and so did
-    the DEVICE_COUNT-sized CUDA_STREAMS / WEIGHT_BUFFERS / ABSMAX_BUFFERS arrays
-    and the per-device rotary caches in unsloth/models/llama.py.
-
-    Read off the IMPORTED MODULE, not recomputed from `device_count()`. The
-    binding is made once at import time, so asking torch how many cards there
-    are answers a different question -- and answers it the way the check wants,
-    which is the shape of a rule that cannot fail.
-    """
+    """Reads unsloth's DEVICE_COUNT from the imported module, since it is bound once at import."""
     import torch
 
     global _LAST_MULTI_GPU_FACTS
@@ -816,13 +646,7 @@ def multi_gpu_facts(model) -> dict:
 
 
 def multi_gpu_failures(facts: dict | None, *, expected_cards: int) -> list[str]:
-    """The rules, separated from the reading so they can be driven on CPU.
-
-    Deliberately NOT asserting that the parameters are spread across both
-    cards. Whether unsloth shards them or pins them to cuda:0 is exactly what
-    this leg is being run to find out, and a rule written before the answer is
-    a rule written to match whatever happens.
-    """
+    """Does not assert the parameters are spread across cards; that is what the leg is run to find out."""
     if not facts:
         return [
             "the multi-GPU facts are missing, so nothing about the "
@@ -877,23 +701,7 @@ def multi_gpu_failures(facts: dict | None, *, expected_cards: int) -> list[str]:
 
 
 def peft_adapter_keys(model) -> dict:
-    """The names PEFT itself gives this adapter's tensors, off the live model.
-
-    ``PeftModel.save_pretrained`` writes exactly
-    ``get_peft_model_state_dict(self, ...)`` (peft 0.20.0, peft_model.py), so
-    calling the same function on the model that was just saved reproduces the
-    key set the file is SUPPOSED to hold. That is the oracle a raw tensor read
-    is missing: safetensors deserializes any well-formed file, whatever the keys
-    are called, and PEFT's loader then matches by name.
-
-    Derived rather than restated: no key list, no prefix, no target-module names
-    appear here, so a legitimate peft renaming moves both sides at once and only
-    a save that disagrees with the running peft is a difference.
-
-    Returns ``{"keys": [...]}`` or ``{"error": "..."}``; never raises, because
-    every outcome has to reach ``saved_adapter_failures`` as a verdict rather
-    than as a traceback out of the payload.
-    """
+    """Key names come from get_peft_model_state_dict, the function save_pretrained itself writes with."""
     try:
         from peft import get_peft_model_state_dict
         return {"keys": sorted(get_peft_model_state_dict(model))}
@@ -902,28 +710,7 @@ def peft_adapter_keys(model) -> dict:
 
 
 def _compare_adapter_keys(saved: set, peft_keys: dict | None) -> dict:
-    """Saved tensor names against the ones PEFT names for the live model.
-
-    Three answers, and they are not the same failure:
-
-    * MISSING -- PEFT names a tensor the file does not carry. On reload peft
-      warns ("Found missing adapter keys while loading the checkpoint",
-      peft_model.py) and leaves that module's adapter at its initial value, so
-      the weight is silently dropped.
-    * UNEXPECTED -- the file carries a LoRA tensor under a name PEFT does not
-      use. ``set_peft_model_state_dict`` ends in
-      ``model.load_state_dict(..., strict=False)`` and nothing reads the
-      returned ``unexpected_keys``, so those tensors are ignored without a word.
-      Measured on peft 0.20.0: stripping ``base_model.model.`` from a valid
-      adapter, or leaving the adapter name in (``lora_B.default.weight``, what
-      filtering ``model.state_dict()`` by hand produces instead of using
-      ``get_peft_model_state_dict``), reloads with every lora_B back at zero and
-      raises nothing. The file still holds two nonzero tensors called lora_B, so
-      the count this function exists to reinforce reads green on it.
-    * EXTRA, non-LoRA -- recorded and NOT failed. ``save_pretrained`` may write
-      more than the adapter (an embedding, a modules_to_save copy) and that is
-      not a name PEFT would have to match.
-    """
+    """Unexpected LoRA names fail: PEFT loads with strict=False and silently ignores them."""
     if not peft_keys or not peft_keys.get("keys"):
         return {
             "keys_checked": False,
@@ -945,30 +732,7 @@ def verify_saved_adapter(
     expected: dict | None = None,
     peft_keys: dict | None = None,
 ) -> dict:
-    """Read the serialized adapter back and say what is in it.
-
-    Everything downstream of the save runs on the in-memory model, so the only
-    thing that ever looked at the file was a filename test. A tensor read rather
-    than a PEFT reload, because it runs on a card already holding a 4-bit model
-    and the failure modes worth naming (unreadable, empty, non-finite, all zero)
-    are visible in the tensors themselves.
-
-    What is NOT visible in the tensors is whether PEFT would consume them, since
-    it matches by NAME and ignores what it does not recognise. ``peft_keys`` is
-    ``peft_adapter_keys(model)`` for the model that was just saved, and
-    comparing the two key sets is what turns "these bytes deserialize" into
-    "these weights land". See ``_compare_adapter_keys``.
-
-    ``nonzero_b_tensors`` is the load-bearing one, counted over the B matrices
-    SPECIFICALLY: ``lora_B`` is zero at initialisation and only becomes non-zero
-    once an update has been applied and saved, while ``lora_A`` is randomly
-    initialised and nonzero before a single step. Counting every tensor
-    therefore passed an adapter whose B matrices were all zero or dropped, whose
-    output is still zero through B, so reloading it restores the base model.
-
-    Returns a dict; never raises. ``saved_adapter_failures`` turns it into a
-    verdict, so the pass/fail rule stays testable without a GPU.
-    """
+    """Counts non-zero lora_B tensors: lora_A starts random, so counting all tensors passes zero B."""
     adapter_dir = Path(adapter_dir)
     state: dict[str, Any] = {"dir": str(adapter_dir)}
     try:
@@ -1110,18 +874,7 @@ def saved_adapter_failures(state: dict) -> list[str]:
 
 
 def canary_failures(run: dict, *, require: bool) -> list[str]:
-    """The canary assertion, as an EXACT match rather than a substring.
-
-    The completion trained on is ``CANARY + eos_token`` and decoding strips the
-    special tokens, so a healthy greedy decode returns the canary and nothing
-    else. ``CANARY in generated`` also accepts ``'__UNSLOTH__!!!<anything>'``,
-    which is what a stopping or EOS regression produces -- the model learned the
-    target and no longer knows where to stop -- reporting green on a broken
-    inference path.
-
-    Surrounding whitespace is the one normalisation allowed, being a decoder
-    artefact rather than a change in what the model emitted.
-    """
+    """Exact match: a substring check would pass a model that no longer knows where to stop."""
     generated = run.get("generated") or ""
     if generated.strip() == CANARY:
         return []
@@ -1179,12 +932,7 @@ def environment_fingerprint() -> dict:
 
 
 def reference_step_count(ref: dict):
-    """The ``max_steps`` a reference file says it was captured at.
-
-    ``None`` means the file does not say, which is not "it matches": a trace
-    with no declared length cannot be shown to describe the run in hand, and the
-    caller treats it as such.
-    """
+    """None means no declared step count, which the caller must treat as a mismatch, not a match."""
     config = ref.get("config")
     if not isinstance(config, dict):
         return None
@@ -1240,43 +988,7 @@ def check_reference(
     resolved_revision: str | None = None,
     environment: dict | None = None,
 ) -> dict:
-    """Compare against a committed reference. Never an equality check.
-
-    ``max_steps``, the step count of the run being judged, is mandatory. A
-    reference is a trace of one specific run, and a run of a different length is
-    a different run: the fp16 scaler burns its first few steps on overflows, the
-    learning-rate schedule is constant only because the run is short, and step N
-    of a 3-step run is not the step N the 10-step trace recorded. Comparing
-    across counts is arithmetic that succeeds and means nothing, so the mismatch
-    gets its own status and the numbers are never touched. ``reference_failures``
-    turns it into a failure; nothing here can turn it into a pass.
-
-    ``max_steps`` used to be the only setting checked and is not the only one
-    with that property: the reference records the whole ``config`` block, and
-    README names the learning rate, the optimizer and the model as things that
-    invalidate the file, so ``config``, ``model`` and the resolved checkpoint
-    are compared under the same refuse-before-comparing rule.
-
-    ``environment`` is the same rule applied to the HARDWARE, which is the one
-    thing the reference records about itself that nothing compared. The file
-    carries ``environment.gpu_name`` and ``gpu_capability`` -- "Tesla T4",
-    "sm_75" -- because a loss trace belongs to the card it was captured on: the
-    T4 has no bf16 and resolves attention to xformers, so the same code on
-    another card produces a different curve, and band-checking across them
-    reports a hardware difference as a code regression. The requirement is
-    DERIVED from the reference's own environment block rather than restated as
-    "must be a T4", so a reference recaptured on other hardware moves the gate
-    with it. A reference that DOES name its card and a run that cannot name its
-    own is ``hardware_unverified`` rather than a skip, because the alternative
-    is a gate that switches itself off exactly when the probe fails.
-
-    The settings are optional and default to not-compared, so an older caller
-    and an older reference both keep working: a key the reference does not carry
-    is listed in ``config_unchecked`` rather than treated as a mismatch. "It
-    does not say" is neither "it differs" nor "it matches" -- but that is what
-    the REFERENCE does not say. What the run does not say about hardware the
-    reference does name is a refusal.
-    """
+    """Refuses rather than compares a reference whose steps, config, model or GPU differ from this run."""
     if not reference_path.exists():
         return {"status": "absent", "path": str(reference_path)}
     ref = json.loads(reference_path.read_text(encoding = "utf-8"))
@@ -1505,10 +1217,7 @@ def check_reference(
 
 
 def reference_failures(verdict: dict, rel_tol: float) -> list[str]:
-    """Turn a reference verdict into failure strings. Separate so the path from
-    "out of band" to "the job goes red" is testable without a GPU: a band check
-    never observed to fail is not yet a check.
-    """
+    """Kept apart so the path from out-of-band to a failing job can be unit-tested without a GPU."""
     if verdict["status"] == "out_of_band":
         return [f"metrics outside +/-{rel_tol:.0%} of the reference: " f"{verdict['deviations']}"]
     if verdict["status"] == "length_mismatch":
@@ -1539,15 +1248,7 @@ def _is_finite(value) -> bool:
 
 
 def optimisation_failures(metrics: list[dict]) -> list[str]:
-    """Did this run optimise anything at all? Cheap checks, loud answers.
-
-    The last of the three is the one a short run needs. Under fp16 the gradient
-    scaler logs ``grad_norm: NaN`` on a skipped step, and a run whose every step
-    was skipped applied no optimizer update at all: the weights at the end are
-    the weights at the start, while the loss is finite, the adapter saves and
-    generation produces text, so the run reports as a training test having done
-    no training. That is exactly what a step count trimmed too far produces.
-    """
+    """A run whose every fp16 step was skipped applied no update, yet still reports healthy otherwise."""
     failures: list[str] = []
     losses = [m["loss"] for m in metrics]
     if any(l != l or l in (float("inf"), float("-inf")) for l in losses):

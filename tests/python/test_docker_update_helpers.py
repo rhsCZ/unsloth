@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Behavioural guards for the two in-container update helpers of the Docker image.
-
-* `unsloth-studio-update` only WARNED when the new backend failed to import, so a
-  release missing a `--no-deps` dependency replaced the healthy process with one that
-  cannot start; supervisord then lands in FATAL and never leaves it.
-* `unsloth-llama-update --check` reported "up to date" when it could not reach the
-  release feed, and its in-place rollback left new-release-only shared objects beside
-  the restored files, which ggml dlopen()s.
-"""
+"""studio-update only warned on a failed import; llama-update --check said current when unreachable."""
 
 from __future__ import annotations
 
@@ -542,10 +534,7 @@ def test_a_signal_during_the_health_wait_puts_the_service_back_too(tmp_path: Pat
 
 
 def test_a_health_wait_that_expires_before_its_first_check_still_asks_once(tmp_path: Path):
-    """The deadline is whole seconds. With a short wait the clock can step past it before
-    the loop first reads it, and a loop that checked the deadline first then rolled back a
-    Studio it had never probed. Here every read of the clock is 5s after the last, so the
-    deadline has always passed by the first check."""
+    """The deadline check must run at least once, or a Studio that was never probed gets rolled back."""
     env = _studio_env(tmp_path)
     env["UNSLOTH_STUDIO_UPDATE_HEALTH_WAIT"] = "1"
     clock = tmp_path / "clock"
@@ -655,10 +644,7 @@ def test_studio_update_recovers_a_source_tree_a_killed_run_moved_aside(tmp_path:
 
 
 def test_studio_update_puts_back_a_previous_tree_a_killed_run_never_committed(tmp_path: Path):
-    """SIGKILL after the swap but before the health check committed it leaves the new
-    tree in src and the previous one beside it. The new tree was never proven to serve,
-    so the previous one goes back; treating it as stale would delete the only known-good
-    tree."""
+    """A killed update leaves the previous tree beside src; restoring it keeps the only known-good tree."""
     env = _studio_env(tmp_path)
     home = Path(env["UNSLOTH_STUDIO_HOME"])
     (home / "src").rename(home / ".src-prev.abc123")
@@ -751,10 +737,7 @@ def test_studio_update_finishes_the_package_restore_a_killed_run_left(tmp_path: 
 def test_studio_update_recovery_puts_the_service_on_the_restored_install(
     tmp_path: Path, status_exit, verb
 ):
-    """The killed run may have restarted Studio on the unverified code, or left it
-    FATAL. After the packages are back the service is restarted on the restored
-    install before this run does anything else, so a run that stops early (the ref
-    cannot be fetched) still leaves Studio in a known state."""
+    """A killed run may have left Studio FATAL, so recovery restarts it on the restored install first."""
     env = _studio_env(tmp_path, status_exit = status_exit, git_ls_exit = 1)
     home = Path(env["UNSLOTH_STUDIO_HOME"])
     (home / ".src-update.rollback").write_text("-e file:///opt/prev-src\n")

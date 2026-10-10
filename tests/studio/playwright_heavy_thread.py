@@ -1,116 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Where a HEAVY thread stalls, as a curve over how much content the thread holds.
-
-Users report Unsloth and Desktop going sluggish "after long generations with any code cells
-and/or text": typing, scrolling, opening a message menu, deleting and re-opening the thread all
-lag once a session has accumulated a few very long replies. That report is about CONTENT VOLUME,
-not message count, so the axis here is characters of thread content, not messages, and the
-fixture is the mix the report names rather than one paragraph repeated:
-
-    long prose, several large code fences, tool calls with collapsible output, an HTML artifact,
-    a code-execution result pane, an HTML canvas artifact and inline images.
-
-studio/frontend/smoke-heavy-thread.html mounts the REAL Thread with that content, so what is
-timed is the app's own renderer.
-
-WHAT IS MEASURED, AND WHY THESE METRICS
-
-Every primary number here is DOM-observable and wall-clock, because the interesting engines are
-not Chromium. Unsloth Desktop is Tauri: WebView2 on Windows, WKWebView on macOS, WebKitGTK on
-Linux. The Long Tasks API does not exist on JavaScriptCore, so a `longtask` PerformanceObserver
-silently reports NOTHING on Desktop macOS and Desktop Linux. Measured here: on WebKit 26.5 and
-Firefox 153 the `observe({ type: "longtask" })` call does not even throw. It is accepted and then
-never fires, which reads as "no jank" instead of "no measurement", so support is read from
-`PerformanceObserver.supportedEntryTypes` instead. `Performance.getMetrics` and
-`Emulation.setCPUThrottlingRate` are CDP, so they do not exist off Chromium either.
-
-So the primary four, all portable:
-
-    longest stall ms   the largest gap between consecutive ticks of a 1ms setTimeout loop. This
-                       is the portable stand-in for a long task: the main thread cannot answer
-                       the timer while it is busy, so the gap IS the block. Accurate to the
-                       timer clamp (~4ms), which is far below anything a user notices.
-    worst frame ms     the largest gap between consecutive requestAnimationFrame callbacks.
-    frames over 33ms   how many frames in the action missed two vsyncs at 60Hz. A single worst
-                       frame can be an outlier; a count says how much of the gesture was rough.
-    wall ms            how long the action took end to end, and for the gestures that keep
-                       working after the input stops, a separate settle time.
-
-A MessageChannel ping-pong is the usual way to build the stall detector and it was measured and
-rejected here: it spins ~150k times a second, and on Firefox that HALVED the frame rate of the
-page under test (38 frames -> 14, median frame 17ms -> 34ms) before any Unsloth code ran. The
-1ms setTimeout loop ticks ~150 times a second, costs nothing measurable on any of the three
-engines, and reported the same 120ms synthetic stall on all three.
-
-CDP counters (LayoutCount, RecalcStyleCount, LayoutDuration, RecalcStyleDuration, TaskDuration)
-and the longtask observer are ALSO recorded, and every one of them is labelled CHROMIUM-ONLY in
-the table. They attribute cost to layout versus script, which nothing portable does. They are
-never the headline.
-
-ENGINES
-
-    chromium   proxy for WebView2, i.e. Unsloth Desktop on Windows.
-    webkit     proxy for WKWebView and WebKitGTK, i.e. Unsloth Desktop on macOS and Linux.
-    firefox    control. Not shipped by anything here; it is in the table so that a number which
-               moves on one engine only can be told apart from a number that moves everywhere.
-
-Playwright's WebKit is a PROXY, not the webview Desktop embeds. It is Apple's WebKit built for
-Playwright, driven headless, with no Tauri IPC layer and no WebKitGTK compositor. Read it as
-"JavaScriptCore plus WebKit layout", not as "Unsloth Desktop on macOS".
-
-Desktop Linux is WORSE than any number this file can produce, and not by a little:
-studio/src-tauri/src/linux_webkit.rs drops the webview off the hardware DMA-BUF transport on
-Wayland and on NVIDIA under either display server. It forces the shared-memory transport with
-WEBKIT_DMABUF_RENDERER_FORCE_SHM=1, or, on Wayland and on old WebKitGTK, disables the renderer
-outright with WEBKIT_DISABLE_DMABUF_RENDERER=1, which turns accelerated compositing off for the
-whole process. Everything below runs on a normal compositor path.
-
-THIS HARNESS MEASURES, IT DOES NOT GATE. It prints the table and exits 0 on any timing. It exits
-non-zero only when the harness itself is broken: the seed did not land, an element it drives went
-missing, or the curve did not rise with content -- which would mean it is measuring nothing.
-Budgets belong in a later change, set from numbers taken on real hardware.
-
-Run:
-    python tests/studio/playwright_heavy_thread.py
-    SMOKE_HEAVY_CHARS=100000,300000 SMOKE_HEAVY_ENGINES=chromium python tests/studio/playwright_heavy_thread.py
-
-It starts and stops its own vite dev server. Point it at one you already have with
-SMOKE_BASE_URL, or move the port it picks with SMOKE_PORT.
-
-RUN ONE ENGINE PER INVOCATION IN CI, UNDER AN EXTERNAL TIMEOUT. Measured on a macos-14 runner:
-Chromium finished all three sizes in 90 seconds, and then Playwright's WebKit wedged at the
-smallest size and never came back. `page.evaluate` and `browser.new_page` have no timeout of
-their own, and a SIGALRM does not help, because Playwright's sync API blocks the main thread
-inside a greenlet and the exception lands in the driver rather than in the caller. The only
-bound that works is the process one, so drive the engines as separate invocations:
-
-    bounded() {                       # not `timeout`: macOS runners do not ship coreutils, and
-      local secs=$1; shift            # `timeout: command not found` fails the step instantly
-      "$@" & local pid=$!
-      ( sleep "$secs"; kill -TERM $pid 2>/dev/null; sleep 15; kill -KILL $pid 2>/dev/null ) &
-      local watcher=$!
-      wait $pid; local rc=$?
-      kill -TERM $watcher 2>/dev/null
-      return $rc
-    }
-    port=5215
-    for engine in chromium webkit firefox; do
-      SMOKE_HEAVY_ENGINES=$engine SMOKE_PORT=$port SMOKE_LABEL=run-$engine \\
-        bounded 1800 python -u tests/studio/playwright_heavy_thread.py \\
-        || echo "$engine did not finish"
-      port=$((port + 1))
-    done
-
-One wedged engine then costs one engine's column instead of the whole matrix. Each invocation
-needs its own port: a killed run can leave its vite dev server holding the previous one.
-
-The dev server is deliberate and is a limitation to read the numbers against: React runs in
-development mode, nothing is minified, and vite serves unbundled modules. Absolute milliseconds
-are therefore higher than a packaged Unsloth's. The curve across sizes and the ranking across
-actions are what this file is for.
-"""
+"""Stall and frame-time curves over thread content size; measures only and never gates on timing."""
 
 from __future__ import annotations
 
@@ -565,11 +456,7 @@ async (timeoutMs) => {
 }
 """
 
-# Delete is the last item of the reply's More menu (#12735 took it off the action bar). The menu is
-# opened and the item found BEFORE the clock starts, so the window still holds only what selecting
-# Delete costs: Radix closing the menu, and the message leaving the thread. Opening the menu is the
-# `menu` action's number already. The trigger opens on `pointerdown`, as MENU_JS explains; an item
-# selects on `click`.
+# Open the More menu and find Delete before the clock starts, so only the selection itself is timed.
 DELETE_JS = """
 async (timeoutMs) => {
   const api = window.__heavyThread;
@@ -701,16 +588,7 @@ async (samples) => {
 
 
 def median(values: list[float | None]) -> float | None:
-    """Median across the repetitions, or None if any repetition did not produce a number.
-
-    A None here is not a missing reading, it is a repetition in which the thing being timed never
-    happened: the menu that never opened inside SETTLE_TIMEOUT_MS, the delete whose message never
-    left the DOM, the action that never reached a settled state. Dropping those and taking the
-    median of what is left changes the sample population and reports a partially broken action as
-    a clean three-repetition measurement -- and it hides it from harness_failures(), whose
-    `openMs is None` / `ms is None` checks then read the median of the repetitions that did work.
-    So one bad repetition poisons the aggregate, and the run says so.
-    """
+    """A missing repetition makes the median None; dropping it would hide a broken action."""
     if not values or any(v is None for v in values):
         return None
     ordered = sorted(values)
@@ -775,14 +653,7 @@ def reset_long_tasks(page) -> None:
 
 
 def wait_for_highlighting_settled(page, timeout_ms: int) -> None:
-    """Block until Shiki has stopped adding tokens.
-
-    FIVE stable reads a quarter of a second apart, not two consecutive ones. Two adjacent
-    rAF-polled reads land inside the lull between two async highlight batches all the time:
-    measured on WebKit, a two-read version released the gate at 577 highlighted tokens where the
-    finished thread has 3216, so the whole engine column was measured against a thread that was
-    still building itself.
-    """
+    """Requires five stable reads: two adjacent reads land in a lull between async Shiki batches."""
     page.evaluate("() => { window.__hvTokens = undefined; }")
     page.wait_for_function(
         """() => {
@@ -820,15 +691,7 @@ EXPANDED_PANES_GATE_JS = "(n) => window.__heavyThread.counts().codeExecutionPane
 
 
 def build_fixture(page) -> None:
-    """Bring the page back to the fixture every column claims to have been measured on, untimed.
-
-    Order matters and it is the reason this is one function rather than three call sites. Radix
-    unmounts collapsed content, so the tool result panes -- which are CODE, two of the seven fences
-    a content cycle produces -- do not exist until expandTools() has run. Waiting for the
-    highlighter BEFORE expanding therefore gates on the fences that were already there and then
-    mounts a fresh batch of unhighlighted ones, whose Shiki work lands in whatever is timed next.
-    Expand first, then wait for the highlighter, which is the order measure_cell() seeds in.
-    """
+    """Expand tool panes before waiting on the highlighter; expanding mounts new unhighlighted code."""
     expanded = page.evaluate("() => window.__heavyThread.expandTools()")
     if expanded:
         page.wait_for_function(
@@ -1270,33 +1133,14 @@ CONSOLE_WARNING_ALLOWANCE = int(os.environ.get("SMOKE_CONSOLE_WARNING_ALLOWANCE"
 
 
 def resolve_floor(floored, row: dict) -> float:
-    """The floor count for one row, as an INT.
-
-    `floored` may be a callable, and the growth report is written to JSON at the end of the run.
-    Putting the callable itself in the report made `json.dumps` raise `Object of type function is
-    not JSON serializable`, which failed every complete run AFTER all the measurements were taken.
-    Nothing in the unit tests caught it because none of them serialise the report.
-    """
+    """Resolves a callable floor to a number, since a function in the JSON report breaks json.dumps."""
     # NOT int(): a median over even repetitions can be 1.5 waits.
     value = floored(row) if callable(floored) else floored
     return value if isinstance(value, (int, float)) else 0
 
 
 def growth(cells: dict, pick, floored, sizes: list[int]) -> tuple[float | None, float | None]:
-    """`floored` is a COUNT of double-rAF waits inside the metric, not a flag.
-
-    It may be an int, declared once for an axis, or a callable taking the row, for an axis whose
-    window crosses a different number of waits per action. The generated `wall ms` axes are the
-    second kind: they were declared 0 for every action, which left roughly `paint_waits *
-    paint_floor_ms` in both ends of those ratios.
-
-    Each `await __nextPaint()` a metric is clocked across contributes its own ~33ms vsync floor,
-    and a metric that contains two of them carries two. `menu open+close ms` is the case: settle()
-    reads the pre-MutationObserver state on entry, both times, so opening and closing each wait
-    out a full double rAF before their first true comparison. Subtracting one floor from a sum of
-    two left ~33ms of constant baseline in the number, which drags the ratio towards 1 in exactly
-    the way the floor is subtracted to prevent.
-    """
+    """floored counts the double-rAF waits in each metric; each adds a ~33ms vsync floor to subtract."""
     try:
         rows = (cells[str(sizes[0])], cells[str(sizes[-1])])
         values = []
@@ -1429,12 +1273,7 @@ FLOOR_COUNTERS = {"reopen ms": ("reopen", "paintWaits")}
 
 
 def declared_floor(axis_name: str) -> int | None:
-    """The `floored` column of GROWTH_AXES for one axis, by exact name.
-
-    Exact rather than prefix-matched: `reopen ms` and a later `reopen settle ms` would both match
-    a prefix, and the check would silently compare one axis's waits against another's declaration.
-    A name that is not an axis returns None, which the caller reports rather than skips.
-    """
+    """Matches the axis name exactly: a prefix would let reopen ms pick up reopen settle ms's floor."""
     for name, _pick, floored in GROWTH_AXES:
         if name == axis_name:
             return floored

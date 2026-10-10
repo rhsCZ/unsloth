@@ -1,72 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Does a code block flicker through a placeholder height when a stream finalizes?
-
-Streamdown puts `content-visibility: auto` with `contain-intrinsic-size: auto 200px` inline on
-every code-block wrapper. Such an element has no LAST REMEMBERED SIZE until it has rendered once,
-so until then it lays out at the 200px fallback rather than at its content height. The re-render
-at the end of a stream REPLACES the code-block node, and a replaced node is new, so it can lay out
-at 200px for a frame and then snap to its real height. That one-frame change is the "reload"
-flicker studio/frontend/src/index.css describes, and why the override there exists.
-
-WHAT IS MEASURED
-
-Not a timing. Per frame, for every `[data-streamdown="code-block"]`:
-
-    collapses          a block at least 400px tall rendering at half that or less and coming
-                       back. This is the flicker, and one is too many.
-    placeholder frames how many of those landed in the 150-300px band, i.e. on the
-                       `contain-intrinsic-size` fallback, so a collapse can be attributed.
-    scroll height dips the thread's scrollHeight falling 300px or more and recovering: a
-                       collapsing block takes the whole column with it.
-    anchor shift       DOCUMENT-space movement of the last message that existed BEFORE the
-                       stream. Nothing about it changes while the stream runs, so any movement is
-                       settled content relaid out under the user. Document space is the point:
-                       viewport-relative would count every scroll as a shift.
-
-Then a second phase on the thread the stream left behind: scroll bottom to top and record whether
-the content moved.
-
-    sweep shift        frames in which some block's DOCUMENT-space top moved. A never-rendered
-                       block is skipped at the 200px fallback, not at its real height, which
-                       shows only on the way back up as each block expands when reached and
-                       pushes what is below it down.
-    scrollHeight grew  change in the thread's own height over the gesture. Zero means it was
-                       already the right height before the sweep.
-
-VARIANTS, AND WHY THE RUN DRIVES MORE THAN ONE
-
-A check that only runs against the tree cannot tell "no flicker" from "the fixture reproduces
-nothing". So the fixture is driven under stylesheets appended after the tree's own, and the run
-asserts on the SHAPE of the whole set:
-
-    streamdown   streamdown's inline defaults, the tree before any override. Positive control:
-                 this MUST flicker, or the fixture measured nothing and the run fails whatever
-                 the tree scored.
-    released     the override released for every block at all times, streaming included: the
-                 mistake scoping avoids. Second positive control, so it MUST flicker too.
-    legacy       the override as first written: `content-visibility: visible`,
-                 `contain-intrinsic-size: none`. Must not flicker.
-    tree         whatever src/index.css ships now. Must not flicker.
-    statusonly   held only while the part is running. The obvious CSS-only scoping, measured
-                 rather than assumed: node replacement at fence close can land in the same commit
-                 as the status flip, so it still flickers -- hence the tree's settle window.
-    lastmessage  held only for the last message. Survives finalization but cannot give an earlier
-                 message's blocks their first render, so it pays in the sweep phase instead.
-
-Neither of the last two decides the exit code; they are here because "the simpler thing does not
-work" needs a number next to it.
-
-Run:
-    python tests/studio/playwright_code_block_flicker.py
-    SMOKE_FLICKER_ENGINES=chromium,webkit python tests/studio/playwright_code_block_flicker.py
-    SMOKE_FLICKER_VARIANTS=tree,streamdown python tests/studio/playwright_code_block_flicker.py
-
-It starts and stops its own vite dev server; SMOKE_BASE_URL points it at an existing one and
-SMOKE_PORT moves the one it starts. Exits non-zero when a variant that must not flicker did, one
-that must flicker did not, or the fixture failed to build the thread it claims to.
-"""
+"""Code-block flicker when a stream finalizes, from the 200px contain-intrinsic-size fallback."""
 
 from __future__ import annotations
 
@@ -161,11 +96,7 @@ def info(message: str) -> None:
 
 
 def settle_highlighting(page) -> int:
-    """Five stable reads a quarter second apart, the gate PR 9016 had to fix twice.
-
-    Two adjacent reads can land in the lull between async Shiki batches and release the gate on a
-    thread that is still building.
-    """
+    """Five stable reads: two adjacent reads can fall in a lull between async Shiki batches."""
     stable = 0
     last = -1
     for _ in range(200):

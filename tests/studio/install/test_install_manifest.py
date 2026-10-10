@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Coverage for studio/install_manifest.py.
-
-The manifest separates "the install finished" from "the installer was killed
-part-way and the venv only looks fine". The CLI, setup.sh's fast path and the
-Tauri preflight all read it, so a wrong answer either crashes the backend on
-launch or forces needless reinstalls for everyone.
-"""
+"""The manifest separates a finished install from one killed part-way; the CLI and Tauri read it."""
 
 from __future__ import annotations
 
@@ -212,10 +206,7 @@ def test_malformed_matching_metadata_invalidates_the_manifest(
 
 
 def test_a_metadata_record_added_since_the_last_scan_is_seen(tmp_path, monkeypatch):
-    """The test above, made filesystem-independent: the cache is keyed on the directory's st_mtime,
-    which creating a dist-info normally moves by itself. Restoring it reproduces the staleness
-    everywhere, not just on exFAT (2s) and HFS+ (1s).
-    """
+    """A metadata record added after a scan is seen even when the directory st_mtime is unchanged."""
     site = tmp_path / "site-packages"
     site.mkdir()
     _write_dist_metadata(site, "demo", "1.0")
@@ -539,14 +530,7 @@ def test_set_no_torch_marker_clears_itself_and_never_raises(install_root):
 
 
 def test_scan_paths_dedupes_a_lib64_symlink(tmp_path, monkeypatch):
-    """purelib hardcodes `lib`, platlib follows sys.platlibdir.
-
-    On a lib64 build (Fedora, SuSE) venv creates lib64 as a symlink to lib, so
-    the two schemes name ONE directory by two paths. Scanning both reported
-    every installed package twice, which made metadata_conflict() true for a
-    perfectly healthy environment and sent the installer into a repair it could
-    never finish.
-    """
+    """purelib and platlib name one dir via a lib64 symlink; scanning both double-counts packages."""
     real = tmp_path / "lib" / "python3.13" / "site-packages"
     real.mkdir(parents = True)
     (tmp_path / "lib64").symlink_to("lib")
@@ -574,12 +558,7 @@ def test_scan_paths_keeps_genuinely_separate_roots(tmp_path, monkeypatch):
 
 
 def test_a_record_outside_this_interpreters_scheme_is_not_installed(tmp_path, monkeypatch):
-    """The scan is purelib/platlib only, so a user site or an inherited
-    PYTHONPATH entry is invisible. _installed_version used to answer from all of
-    sys.path, so this narrows it deliberately: every caller runs against the
-    managed venv, where those trees are either disabled or someone else's. A
-    duplicate the venv does not own must not make the venv look damaged.
-    """
+    """Only the venv's purelib/platlib is scanned; a user-site or PYTHONPATH copy must not look damaged."""
     scheme = tmp_path / "site-packages"
     scheme.mkdir()
     elsewhere = tmp_path / "user-site"
@@ -610,19 +589,7 @@ def _fake_venv(root, files):
 
 
 def test_the_manifest_records_the_venvs_own_requirements_not_the_installers(install_root, req_root):
-    """
-    The regression that broke every fresh desktop install on 2026-08-19.
-
-    A desktop bundle carries its own `studio/install_python_stack.py`, so the
-    digests used to come from whatever that bundle shipped. Verification reads
-    the *installed* package's copy. v0.1.800-beta (2026-08-14) installed unsloth
-    2026.8.18, #9148 had pinned openai in extras.txt in between, and the two
-    trees disagreed: every install came up `studio_install_requirements_changed`
-    and repaired itself before it would run.
-
-    So the two roots are made deliberately different here, and the manifest must
-    describe the one the verifier will read.
-    """
+    """Hash the installed package's requirement files, not the bundle's: the verifier reads those."""
     installed = _fake_venv(
         install_root, {"studio.txt": "pytest\n", "extras.txt": "openai==3.2.0\n"}
     )
@@ -643,11 +610,7 @@ def test_the_manifest_records_the_venvs_own_requirements_not_the_installers(inst
 
 
 def test_a_source_install_still_uses_the_root_it_was_given(install_root, req_root):
-    """
-    An editable / `--local` install has no copy under site-packages, and there the
-    caller's root is already the tree both sides read. Falling back to it is what
-    keeps test_edited_requirements_invalidate_the_manifest meaningful.
-    """
+    """Editable installs have no site-packages copy, so the caller's root is the tree both sides read."""
     assert im.installed_requirements_root(install_root) is None
     im.write_manifest(root = install_root, req_root = req_root, package_name = "pytest")
     recorded = json.loads((install_root / im.MANIFEST_NAME).read_text(encoding = "utf-8"))

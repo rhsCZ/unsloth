@@ -1,36 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Studio smoke workflows trigger on what they can observe, and nothing else.
-
-Every Studio smoke in this repo installs with `--local --no-torch`: the venv under test
-cannot import the training library, so an edit under `unsloth/**` cannot change what the
-job sees. Seven of the nine smokes nonetheless listed `unsloth/**` in their `pull_request`
-filter, and all nine listed `studio/**`, which also matches `studio/src-tauri` (never built
-by a smoke) and `studio/docs`. Measured over the last 20 PRs, a push that touched only
-`studio/backend` fired 19 to 25 workflows and 50 to 90 jobs against an account that runs
-about 30 to 35 jobs at once, and a training-only PR paid every Studio runner, macOS
-included, for nothing. The queue waits that produced (p50 128 minutes on ubuntu-latest,
-213 on macos-15) were the whole cost of the CI, the tests themselves finish in minutes.
-
-Three rules, each cheap to break silently and expensive to leave broken:
-
-1. No Studio smoke lists `unsloth/**` or a bare `studio/**`. The narrow set is spelled out
-   per workflow (`studio/backend/**`, `studio/frontend/**` where Playwright drives the
-   bundle, the installer entry points) and the comment above each list says why.
-2. A filter lists every `.github/scripts` and `.github/actions` path the workflow executes,
-   and nothing under those directories that it does not. The second half is what retired
-   the `frontend-dist-*` entries from six workflows that never `uses:` them: a listed
-   action the job never runs is a trigger for nothing, and it hid the fact that the list
-   was copied rather than derived.
-3. `local-agent-guides-ci.yml` names the route modules that serve the endpoints its
-   preflight curls, not `studio/backend/routes/**`. Its connection matrix is nine
-   ubuntu-latest cells of up to 16 minutes, and it fired for every edit to the training,
-   export and dataset routes it never requests.
-
-`tests/studio/test_macos_slots_per_commit.py` already pins `push.paths == pull_request.paths`
-for the macOS workflows; this module does not repeat that.
-"""
+"""Studio smoke filters list only paths they can observe; no unsloth/** and no bare studio/**."""
 
 import re
 from pathlib import Path
@@ -107,15 +78,7 @@ SIBLING = re.compile(
 
 
 def _executed_github_paths(doc) -> set[str]:
-    """The .github/scripts and .github/actions files the steps reach.
-
-    Indirection is followed: run-studio-ui-lane.sh boots Studio and drives the
-    permission and indicator browsers through sibling scripts, agent-guides-drive.sh
-    reads its prompts from sibling text files, and install-unsloth-local `uses:` the
-    dist and uv cache actions. An edit to any of those changes what the job runs just
-    as surely as an edit to the script or action the step names, so the filter has to
-    list them too.
-    """
+    """Follows indirection: a sibling script or prompt file the step reads changes what the job runs."""
     found = set()
     for match in EXECUTED.findall(_step_text(doc)):
         path = _normalise(match)

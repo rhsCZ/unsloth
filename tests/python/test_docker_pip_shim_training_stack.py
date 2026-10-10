@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guard for what the Docker pip shim protects.
-
-The shim protected torch/vLLM/unsloth and stopped there, so every notebook run
-silently mutated the training stack the image was validated with -- while printing
-that it was keeping the baked versions.
-
-The criterion for _KEEP is "replacing this invalidates the tested stack or breaks
-unsloth", not "any package a notebook mentions".
-"""
+"""_KEEP is for packages whose replacement breaks the tested stack or unsloth, not any notebook dep."""
 
 from __future__ import annotations
 
@@ -33,11 +25,7 @@ class _Exec(Exception):
 
 
 class _BakedImage:
-    """Stands in for _installed_names() on an image where every bake succeeded.
-
-    Only `in` is asked of the return value, so answering the prefix rule here keeps
-    nvidia-* wheels present too, which a plain set of _KEEP cannot express.
-    """
+    """Only membership is asked, so the prefix rule keeps nvidia-* wheels present; a _KEEP set cannot."""
 
     def __init__(self, mod):
         self._mod = mod

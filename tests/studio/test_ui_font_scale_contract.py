@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""UI font size scaling contracts (Settings > Appearance).
-
-The preference must scale typography through the --ui-font-scale tokens,
-never by mutating the root font size, so rem-based layout stays put. These
-contracts also act as the guard against reintroducing raw pixel typography
-that would silently ignore the preference.
-"""
+"""Typography scales via the --ui-font-scale tokens, never the root font size, so rem layout holds."""
 
 import re
 from pathlib import Path
@@ -38,13 +32,7 @@ def _frontend_sources():
 
 
 def _rel(path):
-    """Source-relative path with forward slashes on every OS.
-
-    The allowlists above are written with "/", so a plain str(relative_to(SRC))
-    silently stops matching on Windows and every allowlisted file reports as an
-    offender. Keeping the separator normalised here also keeps failure messages
-    identical across platforms.
-    """
+    """Forward-slash path relative to the source root, so allowlist entries also match on Windows."""
     return path.relative_to(SRC).as_posix()
 
 
@@ -56,10 +44,7 @@ def test_preference_writes_a_scale_not_the_root_font_size():
 
 
 def test_css_default_scale_matches_the_store_default():
-    """index.css carries the default as a scale, the store carries it as a px
-    size, and the applier only drops data-ui-font-size at the store's value.
-    Derive the scale so the two cannot drift: when they did, everything
-    rendered at one size while the preference control called it another."""
+    """Derives the CSS default scale from the store's px default so the two cannot drift apart."""
     rng = re.search(r"UI_FONT_SIZE_RANGE = \{ min: (\d+), max: (\d+), default: (\d+) \}", STORE)
     assert rng is not None
     base = re.search(r"const UI_FONT_SIZE_CSS_BASE = (\d+);", STORE)
@@ -131,12 +116,7 @@ def test_cn_knows_the_ui_typography_tokens():
 
 
 def test_icons_follow_the_ui_font_size_itself():
-    """Standard glyphs render at --ui-icon-size, which follows the UI font
-    size itself. Since #11648 icons scale linearly with --ui-font-scale, the
-    same factor as the text (setting 20 gives 20px icons), where they used to
-    grow at half the rate above the 16px base. Sub 16px and oversized glyphs
-    keep their proportions through the same factor. Sonner toast text and
-    action labels are text, so they follow at full rate everywhere."""
+    """Icons scale at the same linear rate as text via --ui-icon-size, not at half rate above 16px."""
     assert "--ui-icon-size: calc(1rem * var(--ui-font-scale, 1));" in INDEX_CSS
     assert "--icon-size: var(--ui-icon-size);" in INDEX_CSS
     assert "& svg.size-4 { width: var(--ui-icon-size); height: var(--ui-icon-size); }" in INDEX_CSS

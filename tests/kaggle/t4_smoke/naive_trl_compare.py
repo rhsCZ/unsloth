@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Train the same rows with PLAIN TRL, so an Unsloth trace has something to sit
-next to.
-
-**What this can say, and what it deliberately does not.** It does NOT assert
-that the two paths produce the same losses, and the temptation to is the whole
-reason this docstring is long. The `frontier` leg already showed transformers
-5.5.0 and 5.15.1 producing different step-1 losses on identical weights, data
-and seed (10.3222 against 6.4367), so the loss function itself moves between
-library versions. Two DIFFERENT stacks agreeing to a tolerance would be a
-coincidence, and a check built on one would go red on ordinary drift, which is
-the kind of red that gets a check switched off the week before it is right.
-
-What it asserts is the pair of claims that are version-independent: the plain
-path **runs at all** on this model and this trl, and it **converges** rather
-than sitting flat or going non-finite. Everything else is reported side by side
-for a human.
-
-**Why a separate file and a separate process.** Unsloth patches transformers,
-trl and peft at import time. Anything that has imported it is no longer a
-control, and an in-process "comparison" would be Unsloth against itself with
-extra steps. This module must never import unsloth, and the guard in
-tests/kaggle/test_t4_smoke_harness.py asserts that from the source rather than
-trusting the convention.
-"""
+"""Must never import unsloth: it patches transformers, trl and peft at import, ending the control."""
 
 from __future__ import annotations
 
@@ -190,14 +167,7 @@ def comparison_failures(
     *,
     allow_oom: bool = False,
 ) -> list[str]:
-    """The two claims this comparison is entitled to make.
-
-    Kept as a pure function of two dicts so the rules are testable on CPU
-    without a GPU or a model, and separated from `run` so a guard cannot pass by
-    exercising the rule against a hand-written dict alone -- see the Default
-    leg, where seven such guards all passed while the code that produces the
-    dict raised NameError on hardware.
-    """
+    """Separate from run so the rule is testable on CPU; guards must also exercise run, which can raise."""
     if naive is None:
         return ["the plain-TRL arm produced no report at all"]
     if naive.get("error"):

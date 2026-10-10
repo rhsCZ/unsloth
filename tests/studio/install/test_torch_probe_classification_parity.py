@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The shared torch probe must classify exactly as the five probes it replaced.
-
-Consolidating those probes moved their classification out of a subprocess `-c` string
-and into ordinary Python in the repair paths. That is meant to be a translation and
-nothing more, but a translation is precisely the kind of change that can be subtly
-wrong while every existing test still passes, because the existing tests feed the
-repair paths a *mocked* probe answer and therefore exercise the new derivation only,
-never the old one.
-
-So this compares the two directly. The old expressions are reproduced verbatim from
-the merge base as reference implementations, cited by line. The new derivations are
-pulled out of the live module with `ast` rather than copied, so they cannot drift from
-what actually ships: if someone edits the derivation, this test reads the edit. If
-someone renames the locals it asserts on, extraction fails loudly, which is the right
-outcome, because a rename means the equivalence needs re-checking rather than assuming.
-
-Both sides then run over the same matrix of torch states and must agree on every one.
-
-Scope, stated honestly. This proves the classification is a faithful translation. It
-does not prove the memoisation is safe, which is a separate property resting on
-`pip_install` / `pip_install_try` being the only things that change the installed
-torch, and it does not exercise real AMD, Intel or Windows hosts.
-"""
+"""The shared torch probe must classify exactly as the five probes it replaced, checked side by side."""
 
 from __future__ import annotations
 
@@ -90,11 +68,7 @@ def _fn(name):
 
 
 def _run_assignments(fn_name, wanted, env):
-    """Execute the live assignments for `wanted`, in source order, against `env`.
-
-    Straight-line derivations over the probe's outputs, so running them outside their
-    guards is faithful as long as the guard variables are bound in env.
-    """
+    """Runs live assignments outside their guards; only faithful if env binds the guard variables."""
     found = set()
     for node in ast.walk(_fn(fn_name)):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -246,12 +220,7 @@ def test_the_extraction_actually_reads_the_live_source():
 
 
 def test_probe_survives_undecodable_import_chatter():
-    """errors="replace" is invisible to a mock, so this runs a real subprocess.
-
-    text=True alone decodes strictly and UnicodeDecodeError is a ValueError, so it
-    escapes the except below the call and takes the installer down instead of falling
-    back to the on-disk classifier.
-    """
+    """Undecodable chatter must not escape: text=True decodes strictly, so pass errors="replace"."""
     emit = (
         "import sys\n"
         "sys.stdout.buffer.write(b'chatter \\xff\\xfe\\n')\n"

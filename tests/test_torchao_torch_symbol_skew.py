@@ -12,20 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""torchao 0.18 must not be able to kill `import unsloth`.
-
-torchao 0.17 guarded `from torch.nn.functional import ScalingType, SwizzleType`
-behind `torch_version_at_least("2.10.0")`; 0.18.0 left it unguarded at module
-level, so torch below 2.10 raises ImportError. It surfaces while importing
-transformers, where unsloth_zoo's import guard re-raises a bare Exception
-naming neither torchao nor torch. Seen on Colab in Gemma3_(4B)-Vision-GRPO,
-Qwen3_5_(4B)_Vision and Qwen3_8B_FP8_GRPO.
-
-The placeholder refuses to be used: 0.17 left these names undefined on old
-torch anyway, and a stub impersonating a real enum could hand a float8 path a
-meaningless value, which is worse than the crash. Checked against the 0.18.0
-source: neither symbol is evaluated at import time, so being strict is safe.
-"""
+"""Placeholders for torchao's unguarded torch imports must refuse use, not impersonate real symbols."""
 
 import importlib.util
 import sys
@@ -149,12 +136,7 @@ def test_it_is_imported_and_cleaned_up():
 
 
 def test_the_symbol_list_matches_what_torchao_imports():
-    """Taken from the whole installed package, not one file.
-
-    Reading only mx_formats/mx_tensor.py misses scaled_grouped_mm, which
-    float8_tensor.py imports on the path of a plain `import torchao`, so a list
-    without it leaves the import exactly as dead.
-    """
+    """Symbols come from all of torchao: float8_tensor imports scaled_grouped_mm on a plain import."""
     assert set(_TORCHAO_TORCH_SYMBOLS) == {
         "ScalingType",
         "SwizzleType",
@@ -235,10 +217,7 @@ def test_the_mlx_path_applies_the_fix_too():
 
 
 def test_the_mlx_call_is_inside_the_mlx_branch():
-    """_gpu_init already owns the GPU path, and calling it outside the branch
-    would touch torch before the Apple Silicon detection wants it. Checked
-    structurally: string offsets cannot tell "inside the if" from "after it".
-    """
+    """The MLX call must sit inside the MLX branch, because torch must not be touched before detection."""
     import ast as _ast
 
     tree = _ast.parse(INIT.read_text(encoding = "utf-8"))

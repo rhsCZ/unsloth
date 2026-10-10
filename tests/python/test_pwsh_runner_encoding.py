@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""run_pwsh has to round-trip text, and until now that depended on the host's code pages.
-
-Nobody set the WRITING end. Windows PowerShell 5.1 writes a redirected pipe in the OEM code
-page and pwsh 7 writes UTF-8, while `text = True` decodes with the ANSI one, so a non-ASCII
-character survived only where those happened to agree. On a cp437/cp1252 box 5.1 gives
-U+FFFD, and on a runner whose console is UTF-8 both shells give mojibake. That is what
-test_a_non_ascii_marker_survives_the_rollback fails on in parity CI.
-
-Naming `encoding = "utf-8"` at the call site, which that test already does, is the half-fix:
-it corrects pwsh 7 and makes 5.1 worse, because 0x84 is not valid UTF-8 and the decode raises
-inside subprocess's reader thread, where the exception is swallowed and stdout is left None.
-
-The behavioural tests below are the point: they run a real shell and compare the string that
-comes back with the string that went in. The rest pin the shape of the decision, most of
-whose branches are about NOT interfering with a caller.
-"""
+"""run_pwsh must round-trip text: PowerShell 5.1 writes OEM code page, pwsh 7 writes UTF-8."""
 
 from __future__ import annotations
 

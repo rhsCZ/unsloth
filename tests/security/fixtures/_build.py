@@ -94,26 +94,7 @@ def _build_wheel(out_path: Path, *, name: str, payload_files: dict[str, bytes]) 
 
 
 def _publish(out_path: Path, data: bytes) -> None:
-    """Put `data` at `out_path` so a concurrent reader never sees a partial file.
-
-    `write_bytes` truncates and then writes, and these archives live at fixed paths in the source
-    tree. `.github/workflows/workflow-trigger-lint.yml` runs `pytest -q -n 4` over `tests/security`
-    with the default `--dist load`, which scatters tests from ONE file across all four workers -- so
-    every worker runs the session-scoped autouse fixture and rewrites these paths while the others
-    are reading them. A reader that catches the truncated window does not see a corrupt-file error;
-    it sees a short member list and fails asserting scanner semantics, which is close to
-    untraceable.
-
-    Two guards, because either alone leaves a hole:
-      * skip the write entirely when the bytes on disk are already right, so in the normal case only
-        the first worker writes at all. The build is deterministic (SOURCE_DATE_EPOCH, 1980 DOS
-        times), which is what makes that comparison sound;
-      * otherwise write to a pid-unique temp name and `os.replace`, which is atomic on POSIX and on
-        Windows. Without the pid the workers would simply collide on the temp file instead.
-
-    A reader therefore always sees either the complete old file or the complete new one, and those
-    are byte-identical.
-    """
+    """Concurrent xdist workers rewrite these paths, so skip identical bytes and os.replace a temp file."""
     try:
         if out_path.read_bytes() == data:
             return

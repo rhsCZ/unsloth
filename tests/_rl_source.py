@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Load the GRPO hidden-states forward wrapper out of ``unsloth/models/rl.py``.
-
-Same trick as ``_grpo_dispatch_source``: lift the module-level defs with ``ast``
-rather than importing ``unsloth``, so the tests stay CPU-only and import-free
-while still tracking the shipped code.
-"""
+"""Lift the GRPO hidden-states forward wrapper from unsloth/models/rl.py via ast; tests stay CPU-only."""
 
 from __future__ import annotations
 

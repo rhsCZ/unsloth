@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The whisper.cpp payload record: can an update keep an install whose bytes rotted?
-
-Before this, a whisper marker recorded nothing about the files it installed. The reuse
-predicate (``existing_install_matches``) and the no-network fast path
-(``_existing_install_is_intact``) both ask ``installed_tree_is_intact``, and all it could
-establish was that ``whisper-server`` was a non-empty file and (off Windows) executable.
-So a server truncated by a full disk, or a hardlinked ``libggml-base.so`` left as a stub,
-was reported "already matches" and the user met the failure when they pressed the
-dictation key. llama.cpp had no such gap: it records ``runtime_files`` (size + sha256 per
-runtime file) and compares them in ``_runtime_files_match``.
-
-whisper now records the same key in the same shape. The tests here are the boundary:
-
-  * PART 1 -- what is recorded, and that it is legible beside the llama marker.
-  * PART 2 -- the four corruptions that must now be REJECTED, each asserted healthy
-    first so a rejection cannot pass for the wrong reason.
-  * PART 3 -- backwards compatibility, which is the hard requirement. Every marker
-    already on a user's disk lacks the key. It must be KEPT (a re-download is 200-400 MB
-    for a tree that is fine), backfilled once under the install lock, and fast after.
-  * PART 4 -- the deliberate non-rejections: ``mtime_ns`` moves on a restore from backup
-    or a container layer without a byte changing, so it is recorded and never compared.
-  * PART 5 -- forward compatibility, proved against a real released module
-    (``v0.1.808-beta``), which must ignore a key it has never heard of.
-
-No network, no GPU: the install trees are written under ``tmp_path`` and the only
-subprocess reads files extracted from a local git tag. POSIX-only cases skip on Windows
-rather than being weakened, and the permission case skips under root.
-"""
+"""Whisper marker records runtime_files sha256 and size; older markers are kept and backfilled once."""
 
 from __future__ import annotations
 
@@ -183,11 +156,8 @@ def test_the_record_has_the_same_shape_as_the_llama_one(tmp_path, monkeypatch):
 
 
 def test_a_truncated_server_is_rejected(tmp_path, monkeypatch):
-    """A whisper-server left half-written by a full disk or an interrupted extract.
-
-    It is still a non-empty executable file, so every shape check passes it; before the
-    record this install was kept and dictation failed at the user's next keypress.
-    """
+    """A half-written whisper-server passes every shape check; only the recorded size and digest
+    reject it."""
     install_dir = _install(tmp_path, monkeypatch)
     assert _intact(install_dir) is True and _reuse(install_dir) is True
     server = WHISPER.installed_server_path(install_dir, LINUX)
@@ -200,11 +170,7 @@ def test_a_truncated_server_is_rejected(tmp_path, monkeypatch):
 
 
 def test_whisper_a_same_size_byte_flip_is_caught_only_by_the_digest(tmp_path, monkeypatch):
-    """Bit rot, a bad cable or a partial overwrite: the file is exactly as long as it was.
-
-    This is the one corruption the size tier cannot see, and the reason whisper-server is
-    hashed rather than statted like the ggml libraries beside it.
-    """
+    """Same-size corruption is caught only by the digest, so whisper-server is hashed, not statted."""
     install_dir = _install(tmp_path, monkeypatch)
     assert _intact(install_dir) is True
     server = WHISPER.installed_server_path(install_dir, LINUX)
@@ -247,11 +213,7 @@ def test_a_corrupt_wired_library_is_rejected(tmp_path, monkeypatch):
 
 
 def test_a_same_size_flip_in_a_ggml_library_is_deliberately_not_caught(tmp_path, monkeypatch):
-    """The honest limit of the size tier, asserted so nobody reads the test above as more
-    than it is: the libraries are statted, not hashed, because on a CUDA pairing they are
-    hundreds of MB and this check runs on every update. Truncation and deletion -- what a
-    full disk, an interrupted extract or a half-removed llama install actually produce --
-    are what it is built to catch."""
+    """ggml libraries are statted, not hashed, so a same-size flip there is deliberately not caught."""
     install_dir = _install(tmp_path, monkeypatch, slim = True)
     library = WHISPER.runtime_bin_dir(install_dir, LINUX) / "libggml.so.0"
     data = bytearray(library.read_bytes())
@@ -300,13 +262,7 @@ def _legacy(install_dir: Path) -> dict:
 
 
 def test_a_marker_written_before_the_record_is_kept_not_re_downloaded(tmp_path, monkeypatch):
-    """A user upgrading Unsloth Studio over an install made by an older one.
-
-    Nothing is wrong with their tree; it simply predates the key. The reuse predicate is
-    what decides whether the update downloads 200-400 MB again, so it must say yes. The
-    no-network fast path is allowed to decline -- that costs one release lookup, once --
-    and that is what settles the record.
-    """
+    """A pre-record whisper marker must be kept, not re-downloaded; the fast path may decline it once."""
     install_dir = _install(tmp_path, monkeypatch)
     _legacy(install_dir)
     assert _intact(install_dir) is True
@@ -384,14 +340,7 @@ def test_the_backfill_replaces_the_marker_atomically(tmp_path, monkeypatch):
 
 
 def test_an_upgrade_does_not_re_download_and_settles_under_the_lock(tmp_path, monkeypatch):
-    """End to end over the real keep path: an older Studio's install, one `studio update`.
-
-    install_selected_prebuilt is where a keep becomes a download, so this is the test
-    that actually proves the upgrade is free. The backfill is a read-modify-write of a
-    live marker, so it must happen under the install lock -- outside it, a concurrent
-    installer swapping in a new release has its fresh marker overwritten with the old
-    release's fields.
-    """
+    """The marker backfill is a read-modify-write, so it must run under the install lock, not outside it."""
     install_dir = _install(tmp_path, monkeypatch)
     _legacy(install_dir)
     selection = _selection()
@@ -482,10 +431,7 @@ def test_a_backfill_that_cannot_hash_writes_nothing(tmp_path, monkeypatch):
 
 
 def test_a_changed_mtime_alone_does_not_reject(tmp_path, monkeypatch):
-    """A restore from backup, an rsync, a container layer or a `tar -x` without
-    --touch: the timestamps move, not a byte changes. mtime_ns is recorded (it is what
-    makes the size tier cheap to reason about) and never compared, because the answer to
-    a mismatch here is a 200-400 MB re-download."""
+    """mtime_ns is recorded but never compared; a changed mtime alone must not trigger a re-download."""
     install_dir = _install(tmp_path, monkeypatch, slim = True)
     recorded = _marker(install_dir)["runtime_files"]
     for relative in recorded:
@@ -554,14 +500,7 @@ def _extract_released_studio(tmp_path: Path) -> Path:
 
 
 def test_a_released_older_studio_ignores_the_new_key(tmp_path, monkeypatch):
-    """Two Unsloth Studios can share one UNSLOTH_HOME -- an older one pinned in a venv, a
-    rollback, a second checkout. The older one must read a marker carrying a key it has
-    never heard of and keep the install, not refuse it and re-download 200-400 MB.
-
-    Only ADDING a key makes this true, so it is asserted against the module v0.1.808-beta
-    actually shipped rather than argued from the diff. A subprocess, so the old module's
-    sys.path insert and its instance of prebuilt_core cannot leak into this process.
-    """
+    """Older released Studio must ignore the new marker key and keep the install, not re-download."""
     install_dir = _install(tmp_path, monkeypatch)
     assert "runtime_files" in _marker(install_dir), "nothing forward-compatible to test"
     old_dir = _extract_released_studio(tmp_path)
@@ -644,11 +583,7 @@ def test_the_rocm_catalog_files_are_recorded(tmp_path: Path, monkeypatch):
 
 
 def test_a_catalog_blob_removed_beside_a_sibling_is_rejected(tmp_path: Path, monkeypatch):
-    """A full disk or an interrupted extract takes SOME of rocblas/, not all of it.
-
-    The directory stays non-empty, so the existence check passed and an offline update
-    kept a tree whose kernel catalog no longer loads.
-    """
+    """Existence checks miss a removed rocblas catalog blob; the directory stays non-empty."""
     install_dir = _rocm_install(tmp_path, monkeypatch)
     assert _intact(install_dir) is True
     bin_dir = WHISPER.runtime_bin_dir(install_dir, LINUX)

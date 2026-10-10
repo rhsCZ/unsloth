@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Layout contract for the Images -> Train "Training settings" grid.
-
-The panel is a fraction of the window, so a viewport breakpoint put three columns
-in a ~280px pane; and each cell was a bare `grid`, whose implicit column is
-auto-sized and froze at its widest child's min-content, so the cell painted over
-its neighbour instead of shrinking. Both fixes have to stay: the container query
-keeps cells wide enough, grid-cols-1 keeps a cell inside its column if it ever
-is not.
-"""
+"""Uses a container query, not a viewport breakpoint, since the panel is a fraction of the window."""
 
 from pathlib import Path
 

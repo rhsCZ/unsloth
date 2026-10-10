@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The settle loop inside `REASONING_JS`, executed rather than described.
-
-WHY THIS FILE EXISTS. The settling fix is a change to a piece of JAVASCRIPT, and the Python tests
-beside it drive `reasoning_toggle` through a stubbed `evaluate` that returns a canned reply. Those
-tests pin how the Python wrapper reads a reply; they cannot see the loop that produces one. So the
-loop shipped with a defect that inverted the entire fix, and every test still passed:
-
-    `quiet` counted consecutive frames on which the span census had not moved, starting from the
-    FIRST frame of the wait. Whenever the panes needed `quietFrames` or more frames to reach the
-    open state -- with the census necessarily static through them, because the content it would
-    count has not been revealed yet -- the streak was already satisfied on the very frame the state
-    flipped, and the census was read exactly where the unfixed code read it.
-
-That is not a corner. It is the normal shape at the rungs this was written for: the catalogue's own
-500K reading is "the open count reached 16 after 10440ms", which is hundreds of static frames. Run
-against a page whose state flips at frame 6 and whose spans keep mounting to frame 40, the shipped
-loop returned 44,075 with `censored: false` -- the withdrawn number, reported confidently, out of
-the code whose purpose is to stop it.
-
-WHAT IS AND IS NOT COVERED HERE. `reasoningTriggers` and `reasoningOpenCount` are shimmed, so this
-does not test that `dom.js` finds the right elements. What it tests is the part that decides WHEN
-to read, which is the whole of the fix and the whole of the defect. The clock and the paint pump
-are shimmed too, so a frame here is a step rather than 16 ms of wall time; the loop's own budget
-arithmetic runs unmodified against them.
-
-If node is missing the tests SKIP rather than passing on a Python re-implementation, which would be
-a second copy of the instrument to get wrong.
-"""
+"""Runs the REASONING_JS settle loop in node, because it decides when the span census is read."""
 
 from __future__ import annotations
 
@@ -193,13 +166,7 @@ def run_settle(
 
 
 def test_a_slow_state_flip_does_not_bank_quiet_frames_before_it():
-    """THE REGRESSION. The census must not be read on the frame the state flips.
-
-    The panes take six frames to reach the open state and the census is static through all of
-    them, so a streak counted from frame one is already satisfied when the state arrives. Reading
-    there gives 44,075 -- the number this whole change exists to retract -- and gives it with
-    `censored: false`, which is worse than giving nothing.
-    """
+    """The span census must not be read on the frame the open state flips, before its spans have mounted."""
     out = run_settle(flip_frame = 6, mount_done_frame = 40)
     assert out["spansOpen"] != SPANS_BEFORE, (
         "the span census was read on the frame the state flipped, before the content it counts "
@@ -238,12 +205,7 @@ def test_a_state_that_is_never_reached_says_so_instead():
 
 
 def test_a_page_that_is_already_settled_still_returns_promptly():
-    """The refusal must not swallow the easy case, or every fast reading disappears.
-
-    A page whose panes flip on the first frame and whose census never moves is the cheapest
-    possible reading. It has to come back quickly and uncensored, or the fix has traded a wrong
-    number for no number at all.
-    """
+    """An already-settled page must still return promptly and uncensored, not be refused."""
     out = run_settle(flip_frame = 1, mount_done_frame = 2, spans_static = True)
     assert out["openCensored"] is False
     assert out["spansOpen"] == SPANS_BEFORE
@@ -251,11 +213,7 @@ def test_a_page_that_is_already_settled_still_returns_promptly():
 
 
 def test_losing_the_state_restarts_the_streak():
-    """A count that oscillates around the target must not bank the frames it did not hold.
-
-    Without this the loop could reach `want`, drop below it while the DOM churned, and still
-    return on a streak accumulated across the gap -- reading a document that was mid-change.
-    """
+    """Dropping below the target restarts the quiet streak, so frames it did not hold are not banked."""
     out = run_settle(
         flip_frame = 2,
         mount_done_frame = 3,
@@ -268,17 +226,8 @@ def test_losing_the_state_restarts_the_streak():
 
 
 def test_the_timing_includes_the_click_dispatch_it_names():
-    """`open_ms` must cover the clicks, not just the wait that follows them.
-
-    `t.click()` runs the app's own handler synchronously, and on a long thread that is React state
-    plus layout, once per pane. It is the first half of opening the panes. A timing that starts
-    after the whole loop has returned is a smaller number for the same action, and it moves for a
-    reason a reader cannot see: an arm that makes the handler slower and the settle faster would
-    look unchanged, or better.
-
-    With a 40 ms handler on 16 panes the settle alone reads 96 ms against 640 ms of dispatch it had
-    just performed.
-    """
+    """open_ms must include the click dispatch as well as the settle wait, or slower handlers look
+    faster."""
     out = run_settle(flip_frame = 2, mount_done_frame = 3, spans_static = True, click_ms = 40.0)
     dispatch = PANES * 40.0
     assert out["openDispatchMs"] == dispatch
@@ -306,13 +255,7 @@ def test_the_state_reached_mark_shares_the_timing_origin():
 
 
 def test_a_collapse_is_not_settled_while_its_panes_are_still_mounted():
-    """THE REGRESSION. `close_ms` must not name the state flip plus four frames.
-
-    Twelve frames of exit animation is 192 ms at this shim's 16 ms paint, which is the duration
-    both arms actually run. Four quiet frames fit inside it with room to spare, so the unfixed loop
-    returns while every span it would have counted is still in the document -- a pre-settled point,
-    reported as a measurement of the collapse.
-    """
+    """A collapse is not settled while its panes are still mounted, so close_ms waits for the unmount."""
     out = run_settle(flip_frame = 1, mount_done_frame = 2, close_unmount_frame = 12)
     assert out["closeCensored"] is False
     assert out["closeFrames"] >= 12 + SETTLE_QUIET_FRAMES, (
@@ -323,14 +266,7 @@ def test_a_collapse_is_not_settled_while_its_panes_are_still_mounted():
 
 
 def test_the_close_bias_does_not_depend_on_the_paint_interval():
-    """WHY IT IS A COMPARISON PROBLEM RATHER THAN AN OFFSET.
-
-    Whether the old streak ended before or after the teardown depended on the paint interval
-    against the animation duration -- and the paint interval is exactly what differs between the
-    arms and the rungs this instrument compares. A slow page whose teardown lands inside the streak
-    was measured to the unmount; a fast one was not. Both must now be measured to the unmount, so
-    the two readings mean the same thing.
-    """
+    """Close timing reaches the unmount at any paint interval, so slow and fast pages are comparable."""
     fast_page = run_settle(flip_frame = 1, mount_done_frame = 2, close_unmount_frame = 20)
     slow_page = run_settle(flip_frame = 1, mount_done_frame = 2, close_unmount_frame = 2)
     assert fast_page["closeFrames"] >= 20 + SETTLE_QUIET_FRAMES
@@ -339,12 +275,7 @@ def test_the_close_bias_does_not_depend_on_the_paint_interval():
 
 
 def test_a_collapse_that_never_tears_down_is_censored_and_says_which_half_failed():
-    """Silence beats a confident wrong answer here too, and the reason has to be usable.
-
-    A pane that reports closed and never unmounts is a different finding from one that never
-    closed. Reported as "the open count never reached 0" it would send a reader to the wrong half
-    of the app.
-    """
+    """A collapse that never tears down is censored, and the reason names the still-mounted panes."""
     out = run_settle(flip_frame = 1, mount_done_frame = 2, close_unmount_frame = 100_000)
     assert out["closeCensored"] is True
     assert out["closeMs"] is None

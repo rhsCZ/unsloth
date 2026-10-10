@@ -1,44 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every third-party action must be referenced by commit SHA, never by a tag.
-
-A tag is a pointer the upstream owner can move whenever they like. `uses: foo/bar@v3` is
-therefore not a dependency on reviewed code, it is an agreement to run whatever that
-repository contains on the day CI happens to run, decided by someone outside this
-project. The decision is theirs, the credentials are ours: the action runs inside our
-job, with whatever secrets and token permissions that job holds. `tj-actions/changed-files`
-(GHSA-mrrh-fwg8-l2gq, March 2025) is the case everybody cites, where retagging one action
-exfiltrated secrets out of tens of thousands of repositories, and it needed nothing more
-exotic than a moved tag.
-
-This repository already got this right nearly everywhere, which is exactly why a guard is
-worth having: 53 of ~400 `uses:` references had drifted onto mutable tags, all of them in
-the `docker-*` and `woa-wheelhouse` family, while every other workflow pinned properly.
-That is the shape a convention with no test develops. Nothing asserted it before this
-module -- `scripts/lint_workflow_triggers.py` checks triggers and cache keys, and no test
-under `tests/` mentioned SHA pinning at all.
-
-The 53 were pinned at the SHAs their tags already resolved to, which changed no versions.
-Worth recording how that was confirmed, because it is the reassuring part: the resolved
-SHAs were byte-identical to what the same actions were already pinned to elsewhere in this
-repo, e.g. `actions/checkout` at 3d3c42e5 and `actions/upload-artifact` at 043fb46d. So
-the docker family had simply been written in a different style, not held at a different
-version.
-
-Scope, and why it is drawn here. First-party `uses: ./...` references are exempt: they
-resolve inside this checkout at the commit under test, so there is no third party and no
-mutable pointer. Everything else is in, including `actions/*` and `docker/*`. Those are
-reputable publishers, but reputable is not the property that matters. The property that
-matters is whether the bytes can change without a commit here, and for a tag they can. A
-compromised upstream account moves the tag either way.
-
-Docker image references in `container:` and `services:` are deliberately NOT covered.
-They are a real instance of the same problem, and pinning them by digest is worth doing,
-but a `:tag` image reference and a `uses:` action reference have different syntax and
-different failure modes, and a guard that tried to cover both would assert neither
-clearly. Recorded here so the gap is known rather than mistaken for coverage.
-"""
+"""Third-party actions must be pinned by commit SHA: a moved tag would run new code with our secrets."""
 
 import re
 from pathlib import Path
@@ -64,15 +27,7 @@ DELIBERATELY_SPLIT: dict[str, str] = {
 
 
 def _owner_repo(ref_repo: str) -> str:
-    """`actions/cache/save` and `actions/cache` are one repository, pinned once.
-
-    A sub-action lives in its parent repository and a `uses:` SHA names a commit of that
-    repository, so `actions/cache@<a>`, `actions/cache/restore@<b>` and
-    `actions/cache/save@<c>` are three different commits of ONE action. Grouping by the
-    full path put each under its own key, every group held a single SHA, and the
-    one-commit rule passed while three versions of `actions/cache` ran side by side --
-    exactly the half-finished upgrade it exists to catch.
-    """
+    """Sub-actions share their parent repository's SHA, so group by owner and repo, not the full path."""
     parts = ref_repo.split("/")
     return "/".join(parts[:2]) if len(parts) > 2 else ref_repo
 
@@ -111,15 +66,7 @@ def _split_ref(value: str):
 
 
 def _uses_values(node):
-    """Every `uses` value anywhere in a parsed document, at any depth.
-
-    Walking the parsed structure rather than the source text, because enumerating
-    spellings of the key does not converge. The lexical scan started on `uses:`, then
-    needed `"uses":` and `uses :`, and flow style `- {uses: actions/checkout@v4}` is
-    another valid step mapping again -- each one a reference the guard simply could not
-    see, in a module whose entire job is to refuse mutable tags. PyYAML resolves all of
-    them to the same mapping key, so asking it ends the sequence instead of extending it.
-    """
+    """Walks the parsed document, since enumerating spellings of the `uses` key does not converge."""
     if isinstance(node, dict):
         for key, value in node.items():
             if str(key).strip() == "uses" and isinstance(value, str):
@@ -182,15 +129,7 @@ def test_the_sha_predicate_reads_the_revision():
 
 
 def test_the_scan_reads_every_spelling_of_a_step_mapping():
-    """A guard that recognises one spelling of its own key is a guard with a keyhole.
-
-    The scan began as a regex on `uses:`, which missed `"uses":` and `uses :`, and then
-    missed flow style `- {uses: actions/checkout@v4}` after those were added. Each miss
-    was a reference absent from the scan entirely, so a mutable tag written that way
-    passed a test whose whole purpose is to refuse mutable tags, and the cost of the
-    bypass was a pair of quotes or a pair of braces. Enumerating spellings does not
-    converge; the parser resolves all of them to the same mapping key.
-    """
+    """Each spelling of a step's `uses` key must be read; enumerating spellings does not converge."""
     spellings = [
         "steps:\n  - uses: actions/checkout@v4\n",
         'steps:\n  - "uses": actions/checkout@v4\n',
@@ -266,11 +205,7 @@ def test_every_exemption_still_exists_and_still_needs_one():
     sorted({_owner_repo(r) for _, _, _, r, _ in _references()}),
 )
 def test_an_action_is_pinned_to_one_sha_everywhere_it_is_used(repo):
-    """Two SHAs for one action means two versions of it run, which is nearly always a slip.
-
-    Not a security property on its own, but it is how a half-finished upgrade shows up,
-    and a stale copy is the one that keeps an already-fixed bug alive.
-    """
+    """Two SHAs for one action means two versions run, usually a half-finished upgrade, so it is flagged."""
     revs = {rev for _, _, _, r, rev in _references() if _owner_repo(r) == repo and _SHA.match(rev)}
     if len(revs) <= 1:
         return
@@ -331,15 +266,7 @@ def test_the_reference_predicate_accepts_valid_git_ref_punctuation():
 
 
 def test_a_sub_action_is_pinned_with_its_repository():
-    """`actions/cache/save` is a path inside `actions/cache`, not a separate repository.
-
-    A `uses:` SHA names a commit of the repository the action lives in, so
-    `actions/cache@<a>`, `actions/cache/restore@<b>` and `actions/cache/save@<c>` are
-    three commits of ONE action. Grouping by the full path gave each its own group,
-    every group held exactly one SHA, and the one-commit rule passed while three
-    versions of `actions/cache` ran side by side -- the precise half-finished upgrade it
-    exists to report.
-    """
+    """A sub-action path such as actions/cache/save is pinned with its parent repository, not on its own."""
     assert _owner_repo("actions/cache/save") == "actions/cache"
     assert _owner_repo("actions/cache/restore") == "actions/cache"
     assert _owner_repo("actions/cache") == "actions/cache"

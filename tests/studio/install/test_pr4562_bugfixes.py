@@ -653,10 +653,8 @@ class TestSourceCodePatterns:
         assert "ggml-org/llama.cpp/releases/latest" not in content
 
     def test_setup_sh_routes_every_host_to_fork(self):
-        """CPU-only Linux (the last ggml-org artifact consumer) now routes to the
-        fork like every other host, so the release-repo decision is unconditional.
-        Guards against a silent reintroduction of a ggml-org CPU routing branch.
-        GPU usability detection (used for PyTorch / source decisions) must stay."""
+        """Every host routes to the unslothai/llama.cpp fork, so no ggml-org CPU routing branch may
+        return."""
         content = SETUP_SH.read_text(encoding = "utf-8")
         assert '_HELPER_RELEASE_REPO="unslothai/llama.cpp"' in content
         assert '_HELPER_RELEASE_REPO="ggml-org/llama.cpp"' not in content

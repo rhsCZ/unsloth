@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""`UNSLOTH_FORCE_CUSTOM_DTYPE` is a five field string, two of whose fields are code.
-
-`vision.py` used to `eval` the dtype fields and `exec` the code fields straight out of
-the environment. Two changes are pinned: the dtype fields go through a fixed table, and
-the code fields run only when this process set the variable. Defence in depth rather
-than a privilege boundary, but the code path is gone either way.
-"""
+"""UNSLOTH_FORCE_CUSTOM_DTYPE: dtypes come from a fixed table; code runs only if set in-process."""
 
 import ast
 import pathlib

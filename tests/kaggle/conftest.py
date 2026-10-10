@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""No test in this directory may see a real Kaggle credential.
-
-Found the hard way. `gate.py` now considers two accounts, and a developer box
-with `KAGGLE_API_TOKEN_2` exported turned the "a fork gets no secret" test into a
-LIVE run: the gate authenticated to a real account, read that week's actual
-remaining hours over the network, and answered `should_run=true`. The test failed
-for the right-looking reason and would have PASSED had the quota been low, which
-is the worse version -- a unit test whose verdict depends on somebody's usage.
-
-Every credential env var is therefore cleared before each test, and a test that
-wants one sets it explicitly afterwards. Autouse, because the hazard is in the
-tests that never think about credentials at all.
-"""
+"""Clear every Kaggle credential env var before each test, so an exported token cannot make it live."""
 
 from __future__ import annotations
 
@@ -51,14 +39,7 @@ _RELEASE_SIGNALS = tuple(
 
 @pytest.fixture(autouse = True)
 def _no_process_wide_release_handlers(monkeypatch):
-    """`launch.main()` installs SIGINT/SIGTERM/SIGHUP handlers and an atexit hook for its whole process.
-
-    In a pytest worker those outlive the test: the next test that sends itself SIGTERM
-    (tests/test_decision_gguf.py) reached `_release_and_die` instead of its own handler, which
-    re-raised the signal and killed the xdist worker. The handlers have their own tests, which run
-    them in a subprocess (test_launch_cleanup.py). Any other test here that leaves a disposition
-    changed fails, with the disposition put back.
-    """
+    """Stop launch's process-wide signal handlers outliving a test; any signal change left behind fails."""
     launch = sys.modules.get("launch")
     if launch is not None and hasattr(launch, "_install_release_handlers"):
         monkeypatch.setattr(launch, "_install_release_handlers", lambda release: None)

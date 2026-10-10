@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Gemma 4 base tokenizers must prepend <bos> at load time.
-
-Every google/gemma-4-* base repo prepends <bos>; no unsloth base mirror does. The delta is in
-tokenizer.json's post_processor, not tokenizer_config.json's add_bos_token key, which google
-omits on E4B, 31B and 26B-A4B while still prepending. Without the runtime fix, generation
-repeats degenerate text. See unslothai/unsloth#7903.
-
-Detection keys off the loaded tokenizer / config, not the Hub repo name, so
-local folders and extra quant suffixes still get the fix.
-"""
+"""Gemma 4 base tokenizers prepend <bos> via tokenizer.json post_processor, not add_bos_token."""
 
 import types
 from unittest.mock import patch

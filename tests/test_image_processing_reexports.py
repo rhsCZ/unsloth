@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Remote code reading image helpers off a model's image_processing module.
-
-Nothing asserts on a literal list of names: the set transformers 5 dropped
-differs per release, so a hardcoded list would pass while the fix did nothing.
-"""
+"""Tests never assert a literal name list: the set transformers 5 dropped differs per release."""
 
 import importlib
 import uuid
@@ -27,16 +23,7 @@ SIGLIP2 = "transformers.models.siglip2.image_processing_siglip2"
 
 
 def _import_or_skip(name):
-    """Import a target module, or skip when this host cannot have it at all.
-
-    transformers 5 made `image_processing_siglip2` import torchvision at module
-    top level, so on a transformers 5 host without torchvision every test that
-    touches it raised `ModuleNotFoundError` out of a fixture: measured on a
-    torchvision-free transformers 5.17.0 venv, 25 of 38 tests ERRORED and not
-    one of those errors said anything about this fix. Production already treats
-    that as "nothing to patch here" -- `_install_legacy_image_reexports`
-    catches the import and returns False -- so the tests must agree with it.
-    """
+    """Skip, not error, when the module cannot import: production treats that as nothing to patch."""
     try:
         return importlib.import_module(name)
     except ImportError as exception:
@@ -44,12 +31,7 @@ def _import_or_skip(name):
 
 
 def _fresh_module(name):
-    """A module with our patch fully removed, so a test sees the upstream state.
-
-    Removing only ``__getattr__`` is not enough: the forwarder caches each hit
-    with ``setattr``, so a later probe would see the names still present and
-    the test would skip itself into passing.
-    """
+    """Removing only __getattr__ leaves setattr-cached names behind, so the test skips into passing."""
     _import_or_skip(name)
     _remove_legacy_image_reexports(name)
     return importlib.import_module(name)
@@ -172,15 +154,8 @@ def test_import_unsloth_does_not_pull_in_the_image_stack():
 
 
 def _unsloth_import_or_skip():
-    """Skip when this host cannot finish `import unsloth` at all.
-
-    Callers assert on state that import installs without owning it, and a host
-    that never gets past `_gpu_init.py`'s device check would report the fix
-    missing for an unrelated reason. Any exception skips, not one keyed family:
-    CPU runners produced an accelerator NotImplementedError and an unrelated
-    unsloth_zoo ImportError in consecutive passes. Still failable, since a host
-    that CAN import unsloth does not skip.
-    """
+    """Any exception from importing unsloth skips, so unrelated host failures never read as a
+    missing fix."""
     try:
         import unsloth  # noqa: F401
     except Exception as e:
@@ -204,10 +179,7 @@ def test_the_fix_is_actually_installed_on_import():
 
 
 def test_remote_code_reading_siglip_helpers_loads(tmp_path):
-    """End to end through `get_class_in_module`, where the lazy fix installs.
-
-    Same module, decorator and class-body timing as the real checkpoint.
-    """
+    """Loads through get_class_in_module with the same decorator and class-body timing as a checkpoint."""
     import pathlib
 
     _unsloth_import_or_skip()
@@ -266,11 +238,7 @@ def test_retained_helpers_accept_the_numpy_arrays_remote_code_passes(siglip2_mod
 
 
 def test_the_torch_contract_is_untouched(siglip2_module):
-    """transformers' own Siglip2ImageProcessor calls these with tensors.
-
-    Replacing them outright would fix the remote checkpoint by breaking the
-    model the module is named after, so the shim dispatches on the argument.
-    """
+    """Shim dispatches on argument type, since Siglip2ImageProcessor still passes tensors to these."""
     torch = pytest.importorskip("torch")
     image = torch.arange(3 * 4 * 4, dtype = torch.float32).reshape(3, 4, 4)
 
@@ -302,12 +270,7 @@ def test_numpy_shim_is_idempotent_and_removable(siglip2_module):
 
 @pytest.mark.parametrize("style", ["positional", "keyword", "legacy-keyword"])
 def test_numpy_dispatch_covers_the_keyword_forms(siglip2_module, style):
-    """Both helpers have a valid keyword form, and transformers renamed one.
-
-    pad_along_first_dim's first parameter went from `array` (4.x) to `tensor`
-    (5.x), so a 4.x caller using the keyword names something the current
-    implementation does not accept at all.
-    """
+    """pad_along_first_dim renamed array to tensor in 5.x, so 4.x keyword calls must work too."""
     np = pytest.importorskip("numpy")
     if not _image_processing_reexports_are_missing(siglip2_module):
         pytest.skip("this transformers still re-exports the image helpers")
@@ -336,13 +299,7 @@ def test_numpy_dispatch_covers_the_keyword_forms(siglip2_module, style):
 
 
 def test_every_import_path_installs_the_fix():
-    """Both entry points must call it, not just the CUDA one.
-
-    `unsloth/__init__.py` returns early on Apple Silicon with MLX and never
-    reaches `_gpu_init.py`, so the call added there alone left macOS unpatched.
-    Caught by the macOS leg of cross-platform CI, held here so it fails
-    everywhere: the running host cannot exercise the branch it is not on.
-    """
+    """Every import path must install the fix: the MLX early return in __init__.py skips _gpu_init.py."""
     import pathlib
 
     root = pathlib.Path(__file__).parents[1] / "unsloth"
@@ -352,13 +309,7 @@ def test_every_import_path_installs_the_fix():
 
 
 def test_the_wrapper_is_reinstalled_after_a_module_reload():
-    """`importlib.reload` restores upstream get_class_in_module but keeps our flag.
-
-    Reload re-runs the module body in the EXISTING namespace, so the function
-    goes back to upstream while a module attribute we added survives. A guard
-    reading that attribute would then refuse to re-wrap a module that is once
-    again unpatched; the guard reads the live function instead.
-    """
+    """Reload keeps the module flag but restores upstream code, so the guard checks the live function."""
     from packaging.version import Version
 
     if Version(transformers.__version__) < Version("5.0.0"):
@@ -384,14 +335,7 @@ def test_the_wrapper_is_reinstalled_after_a_module_reload():
 
 
 def test_the_module_shims_are_reinstalled_after_a_module_reload(siglip2_module):
-    """Reload restores the helpers the module body assigns; the flag survives.
-
-    Measured, not assumed: `__getattr__` survives because the source never
-    assigns it, while `convert_image_to_patches` and `pad_along_first_dim` are
-    assigned by the body and come back as upstream torch implementations. So
-    the module ends up HALF patched, and a guard reading the module flag would
-    call that done and leave remote-code preprocessing broken again.
-    """
+    """Reload restores body-assigned helpers to upstream while the flag survives: a half-patched module."""
     if not _image_processing_reexports_are_missing(siglip2_module):
         pytest.skip("this transformers still re-exports the image helpers")
 
@@ -428,13 +372,7 @@ REMOTE_MODULE = "transformers_modules.unsloth_probe.image_processing_probe"
 
 
 def _backend_module():
-    """transformers 5's torchvision backend, or a skip where it cannot run.
-
-    The module imports cleanly even when torchvision is unusable but binds `tvF`
-    only behind `is_torchvision_available()`, so its methods then raise
-    `NameError: name 'tvF' is not defined` from inside transformers. Hence
-    transformers' own probe, not `import torchvision`, which succeeds anyway.
-    """
+    """Use transformers' torchvision probe: a bare import succeeds while tvF stays unbound."""
     module = pytest.importorskip("transformers.image_processing_backends")
     from transformers.utils import is_torchvision_available
 
@@ -445,11 +383,7 @@ def _backend_module():
 
 @pytest.fixture
 def remote_processor_class():
-    """A real `Siglip2ImageProcessor` subclass with a remote `__module__`.
-
-    Only the module string is faked, so everything the classifier and probe read
-    is genuine.
-    """
+    """A real Siglip2ImageProcessor subclass; only its remote __module__ string is faked."""
     siglip2 = _import_or_skip(SIGLIP2)
     base = siglip2.Siglip2ImageProcessor
 
@@ -502,10 +436,7 @@ def test_the_numpy_contract_is_restored_on_a_remote_subclass(remote_processor_cl
 
 
 def test_rescale_is_in_scope_because_it_is_wrong_not_because_it_raises(remote_processor_class):
-    """Pins why the gate cannot be "did it raise": rescale accepts numpy and
-    returns float64 where 4.x returned float32, so patching only the raising
-    method leaves pixel_values float64 with nothing to notice.
-    """
+    """rescale must be patched though it never raises: it returns float64 where 4.x returned float32."""
     np = pytest.importorskip("numpy")
     siglip2 = importlib.import_module(SIGLIP2)
     _backend_module()
@@ -557,10 +488,7 @@ def test_transformers_own_image_processor_is_untouched(remote_processor_class):
 
 
 def test_the_probe_decides_not_the_version(remote_processor_class):
-    """A class already honouring numpy is left alone: subclassing
-    `BaseImageProcessor` directly reproduces the 4.x MRO, so swapping the probe
-    for a `Version(...)` compare turns this red on transformers 5.
-    """
+    """Numpy-honouring classes stay untouched; a version compare would wrongly patch them."""
     utils = importlib.import_module("transformers.image_processing_utils")
     cls = type("ProbeLegacyEraProcessor", (utils.BaseImageProcessor,), {})
     cls.__module__ = REMOTE_MODULE
@@ -745,13 +673,7 @@ def test_the_remote_image_processor_finder_is_installed_once():
 
 
 def test_one_thread_inside_the_finder_does_not_blind_another():
-    """The re-entrancy guard is per thread, so a concurrent import is still patched.
-
-    Deterministic rather than a race: the guard is raised by hand on this
-    thread while another asks for a real remote module. Shared as a plain
-    attribute the second thread is told "not mine" and the module is imported
-    UNPATCHED with nothing raised, which is the failure worth pinning.
-    """
+    """Re-entrancy guard is thread-local: a concurrent import on another thread is still patched."""
     import shutil
     import sys
     import threading
@@ -785,11 +707,7 @@ def test_one_thread_inside_the_finder_does_not_blind_another():
 
 
 def test_remote_code_calling_the_backend_methods_on_numpy_loads_and_runs(tmp_path):
-    """End to end through `get_class_in_module`, the way a checkpoint does it.
-
-    The wiring test. Reverting the `_install_legacy_numpy_image_methods_now()`
-    call out of the wrapper makes this raise the TypeError it exists to stop.
-    """
+    """Reverting the wrapper's _install_legacy_numpy_image_methods_now() call makes this raise TypeError."""
     import pathlib
 
     np = pytest.importorskip("numpy")
@@ -943,11 +861,7 @@ def test_a_spawn_started_worker_rebuilds_a_patched_class(pickled_remote_processo
 
 
 def test_a_spawn_started_worker_without_unsloth_is_the_documented_limit(pickled_remote_processor):
-    """Negative control: proves the finder is what fixes the test above.
-
-    Also pins the boundary honestly. A child that never imports unsloth is
-    unpatched, and the failure is loud rather than a silent dtype change.
-    """
+    """A spawned child without unsloth stays unpatched and fails loudly, not with a silent dtype change."""
     out = _run_spawn_child(pickled_remote_processor, "")
     assert "PREAMBLE_OK" in out.stdout, out.stderr[-2000:]
     assert out.returncode != 0, out.stdout

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The Colab-intro cleanup must not overwrite a save it did not see.
-
-`strip_notebook` read the file, serialised the cleaned copy and then `os.replace`d it
-unconditionally, while JupyterLab was already serving $DEST. A save landing in that
-window was destroyed, and `migrate` then recorded the cleaned hash, so the state
-machine treats the notebook as pristine forever after.
-"""
+"""The Colab-intro cleanup must not overwrite a save that landed after the notebook was read."""
 
 from __future__ import annotations
 

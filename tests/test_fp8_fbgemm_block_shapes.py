@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""FP8 fbgemm blockwise linear must stay correct across tile grids and shapes.
-
-Guards three things:
-  * fbgemm <=1.3.0 corrupted whole outputs for some tile grids; the import-time
-    probe's 1x1 grid cannot catch that, so this battery covers the failure zones.
-  * f8f8bf16_blockwise takes only 128x128x128 blocks with in_features % 16 == 0
-    and out_features % 8 == 0; anything else crashed instead of falling back.
-  * activations are (tokens, K): they quantize with block width bs_k, not bs_n.
-"""
+"""Covers fbgemm <=1.3.0 output corruption on some tile grids, which the 1x1 import probe misses."""
 
 import math
 
@@ -58,28 +50,7 @@ def _reference(X, Wq, scale, block):
 
 
 def _bf16_atol(ref, floor = 5e-2):
-    """One bf16 ULP at the largest magnitude in the result.
-
-    Both sides of these comparisons are bf16, and an element's error comes from
-    cancellation among K terms whose magnitudes reach max|ref| -- not from the
-    size of the element itself. The absolute floor is therefore a last-bit
-    difference at THAT magnitude, and any atol below it compares the
-    accumulation order of whichever kernel fbgemm picked rather than whether
-    the fallback is correct.
-
-    Measured on the odd-N fixture (N=250, K=256): the errors land exactly on
-    bf16 ULPs -- max 0.25, p99 0.125, mean 0.021, against max|ref| = 42.75, one
-    ULP of which is 0.334. A flat atol=5e-2 cleared the worst element by 13%,
-    so it held on an idle GPU and failed 2 elements in 1000 under a loaded one,
-    where fbgemm selects a different split-k. Deriving the bound from the dtype
-    keeps the assert on the fallback's correctness: a genuinely wrong kernel
-    misses by orders of magnitude, not by a last bit.
-
-    This costs no detection power. Injecting a uniform mis-scale into the output
-    -- the failure this file exists to catch -- both bounds miss 2% and both
-    catch 5%, 8%, 10%, 50% and 2x, because rtol dominates on the large elements
-    where a mis-scale shows. Only the flake goes.
-    """
+    """atol scales with max|ref| in bf16 ULPs: error is K-term cancellation, not element size."""
     return max(floor, torch.finfo(torch.bfloat16).eps * ref.abs().max().item())
 
 

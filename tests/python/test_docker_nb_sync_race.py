@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guard for the notebook-sync race in the Unsloth Docker image.
-
-The parent's `trap finalize EXIT` ran while the detached refresh child was copying
-into the same tree, and the lost writes were permanent: a notebook copied while the
-parent hashed it got a recorded hash that no longer matched, so every later boot read
-it as user-edited and skipped it.
-
-The refresh stays detached and the ORDERING is fixed instead.
-"""
+"""Finalize on trap EXIT raced the detached refresh child, so copied notebooks got stale hashes."""
 
 from __future__ import annotations
 

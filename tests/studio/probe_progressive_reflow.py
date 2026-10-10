@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Does content above a detached reader move when it relayouts for a reason that is NOT a widening?
-
-While the mount window is open the viewport has native scroll anchoring disabled, so nothing in
-the browser absorbs a `<pre>` swapping in Shiki output, a KaTeX resize or an image landing. This
-injects one such reflow of a known size and measures whether the reader moves.
-
-Measured with it: 600px injected above a detached reader mid-build-in moved them the full 600px
-before the between-widenings compensation existed, and 0px after, against 0px on the merge base.
-Its own first two versions measured nothing, once by sampling before the probe's own smooth-scroll
-had finished (4332px of "drift" on both arms) and once by anchoring on the topmost row rather than
-a visible one, so read the guards as load-bearing.
-
-Not a gate. Prints and exits 0 on any measurement.
-
-    SMOKE_PORT=5719 python3 tests/studio/probe_progressive_reflow.py
-
-Needs #9016's heavy-thread harness, the same dependency probe_progressive_anchor.py has.
-"""
+"""Does a detached reader move when content above relayouts for a non-widening reason? Not a gate."""
 
 from __future__ import annotations
 import json, os, sys

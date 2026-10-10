@@ -190,10 +190,7 @@ def test_pyproject_declares_torch211_audio_extra_with_python_gate():
 
 
 def test_security_audit_covers_every_installable_torchcodec_line():
-    """extras-no-deps.txt used to pin torchcodec flat, so 0.10 was the only line that ever
-    installed and the only one audited. `_select_torchcodec_spec` now picks per torch minor,
-    and the repairs still resolve torch 2.10, 2.9 and 2.8, so each of those lines needs an
-    input of its own: the ranges are disjoint and cannot share a resolve."""
+    """Every torchcodec line needs its own audit input, since the per-torch ranges are disjoint."""
     text = SECURITY_AUDIT_YML.read_text(encoding = "utf-8")
     ips = _load_install_python_stack()
     tomllib = _tomllib()
@@ -383,20 +380,8 @@ def _starved_index_cells():
 
 
 def test_pinning_the_index_starves_only_where_the_retry_covers_it():
-    """A pin that removed audio from a supported host would trade one bug for another.
-
-    Mostly the pin cannot starve, because torch and torchcodec are cut together: cu128 stops
-    at torch 2.11 and its torchcodec stops at 0.11, the exact pair the matrix maps 2.11 to.
-    But cu129 serves torch 2.8 to 2.13 while publishing no torchcodec 0.8 or 0.9, so torch
-    2.9 there selects a window that index has nothing in, and cu132 and xpu start above the
-    lines the older torch minors select.
-
-    The answer is not a table of index contents -- that is what goes stale, and cu132 did not
-    exist when this file was written -- so the installer retries unpinned, which is what such
-    a host got before any of this pinned anything. This test pins down which cells rely on
-    that retry, so a new one cannot appear unnoticed, and the test below proves the retry is
-    really there.
-    """
+    """Pinning the index starves only cells the unpinned retry covers; a new starved cell fails this
+    test."""
     starved = {(tag, minor) for tag, minor, _ in _starved_index_cells()}
     assert starved == {("cu129", 9)}, sorted(starved)
 
@@ -414,10 +399,7 @@ def test_the_installer_retries_without_the_index_when_the_pin_finds_nothing():
 
 
 def test_an_accelerator_with_no_codec_build_of_its_own_takes_the_cpu_one():
-    """torchcodec has no XPU build at all. The xpu leaf republishes the CPU wheels verbatim
-    (`torchcodec-0.16.0+cpu-...`) and only for Linux x86_64, whereas the cpu leaf carries the
-    same wheel for aarch64 and Windows too and goes back to 0.3 rather than starting at 0.13.
-    So every Intel-GPU torch is served, not just the newest."""
+    """torchcodec has no XPU build, so every XPU torch is served the `+cpu` wheel."""
     ips = _load_install_python_stack()
     assert ips._TORCHCODEC_INDEX_TAGS == {"xpu": "cpu"}
     for minor in (7, 8, 9, 10, 11, 12, 13, 14):
@@ -433,13 +415,7 @@ def test_an_accelerator_with_no_codec_build_of_its_own_takes_the_cpu_one():
 
 
 def test_an_explicit_family_override_still_gets_the_substituted_leaf(monkeypatch):
-    """UNSLOTH_TORCH_INDEX_FAMILY names a leaf under our own base, so the xpu-to-cpu
-    substitution has to apply to it as well. Without that, setting the family to xpu sent
-    the codec to the xpu leaf, which publishes nothing below 0.13, and the retry then
-    installed PyPI's CUDA build -- exactly the case the substitution exists to avoid.
-
-    A full UNSLOTH_TORCH_INDEX_URL is different and is taken verbatim: its path belongs to
-    whoever configured the mirror, and rewriting a leaf inside it would be a guess."""
+    """UNSLOTH_TORCH_INDEX_FAMILY gets the xpu-to-cpu leaf substitution; a full URL is used verbatim."""
     ips = _load_install_python_stack()
     base = "https://download.pytorch.org/whl/"
 
@@ -463,10 +439,7 @@ def test_an_explicit_family_override_still_gets_the_substituted_leaf(monkeypatch
 
 
 def test_no_cuda_13_index_relies_on_the_unpinned_torchao_fallback():
-    """The fallback installs PyPI's torchao, which is the CUDA-12 build. That is harmless
-    wherever its cpp is skipped or the host is CUDA 12, and every starved cell today is one
-    of those. It would NOT be harmless on a CUDA-13 leaf whose torch matches the selected
-    release, so this fails if such a cell ever appears."""
+    """PyPI's torchao fallback is the CUDA 12 build, so no CUDA 13 index may rely on it."""
     ips = _load_install_python_stack()
     published = {
         "cu130": ({"0.14.0", "0.14.1", "0.15.0", "0.16.0", "0.17.0", "0.18.0"}, range(9, 15)),
@@ -484,10 +457,7 @@ def test_no_cuda_13_index_relies_on_the_unpinned_torchao_fallback():
 
 
 def test_the_provenance_check_compares_against_the_tag_the_pin_will_fetch():
-    """The step force-reinstalls when the installed codec's local tag says another index
-    built it. That tag has to be the one the PIN fetches, not the resident torch's own: an
-    xpu torch is served a `+cpu` wheel, so comparing against `xpu` never matches and every
-    run would force-reinstall a codec that was already right."""
+    """Compare the codec tag with the one the pin fetches, since an xpu torch is served a +cpu wheel."""
     ips = _load_install_python_stack()
     assert ips._torchcodec_index_tag("2.14.0+xpu") == "cpu"
     assert ips._torchcodec_index_tag("2.14.0+cu130") == "cu130"
@@ -501,10 +471,7 @@ def test_the_provenance_check_compares_against_the_tag_the_pin_will_fetch():
 
 
 def test_an_opaque_mirror_replaces_a_codec_it_cannot_vouch_for(monkeypatch):
-    """UNSLOTH_TORCH_INDEX_URL can be an accelerator-specific private mirror, and nothing
-    here can tell which build it serves. Reporting that as "no tag required" let an
-    installed untagged wheel -- PyPI's CUDA build -- compare equal and satisfy the version
-    range, so pip fetched nothing and the mirror was never reached."""
+    """An opaque `UNSLOTH_TORCH_INDEX_URL` mirror cannot be vouched for, so its codec is always replaced."""
     ips = _load_install_python_stack()
     monkeypatch.setenv("UNSLOTH_TORCH_INDEX_URL", "https://mirror.corp.example/whl/cu130")
     want = ips._torchcodec_index_tag("2.14.0+cu130")
@@ -600,13 +567,8 @@ def test_compat_matrix_matches_the_published_upstream_table():
 
 
 def test_installer_never_selects_a_torchcodec_built_against_another_torch():
-    """The window handed to pip must not contain a release upstream pairs with a different
-    torch: pip takes the HIGHEST match, so a window one minor too wide installs the mismatch
-    this whole module exists to prevent.
-
-    This also ties the installer to the runtime guard's own matrix, since
-    test_compat_matrix_matches_the_published_upstream_table pins that matrix to the literal
-    below."""
+    """Pip's window must exclude torchcodec releases built for another torch, since pip takes the
+    highest."""
     from packaging.specifiers import SpecifierSet
 
     ips = _load_install_python_stack()
@@ -629,13 +591,7 @@ def test_installer_never_selects_a_torchcodec_built_against_another_torch():
 
 
 def test_validator_and_runtime_guard_agree_on_the_whole_matrix(monkeypatch):
-    """The two checkers must not disagree; half a rule is how they drift.
-
-    The ABI rule has two halves -- exempt 0.12+ above the floor, and reject pre-0.12 past
-    it -- and porting only the first left the validator silent on torch 2.12 with
-    torchcodec 0.11, which the runtime guard reports. Comparing them pair by pair is what
-    stops the next half-port.
-    """
+    """Validator and runtime guard must agree on every pair; a half-ported ABI rule is how they drift."""
     from scripts import notebook_validator as nv
 
     fixes = _load_import_fixes_module()
@@ -675,14 +631,7 @@ def _guard_reports(fixes, monkeypatch, torch_version: str, codec_version: str) -
 
 
 def test_the_installer_never_installs_what_the_guard_rejects(monkeypatch):
-    """End-to-end invariant across all three checkers, past the table as well as inside it.
-
-    test_select_torchcodec_spec_matches_compat_matrix ties the installer to the matrix, but
-    it iterates the rows that EXIST, so a torch minor past the last row is not covered -- and
-    that is exactly where the ABI half-port hid. This asks the question that actually matters
-    instead: for every torch minor the installer will see, is every codec its own spec admits
-    accepted by the runtime guard?
-    """
+    """Every codec the installer's spec admits must pass the runtime guard, even past the matrix table."""
     from packaging.specifiers import SpecifierSet
 
     fixes = _load_import_fixes_module()
@@ -794,14 +743,7 @@ def _patch_host(ips, monkeypatch, label):
 
 
 def test_the_installer_never_selects_a_spec_with_no_wheel_here(monkeypatch):
-    """The gate must not green-light a window this platform never published into.
-
-    pip_install_try keeps a miss from ending the install, but attempting one is still a
-    wasted round trip and, before that call was changed, was fatal. Two cells were real:
-    Windows on the cu118 index sits at torch 2.7 and selects `>=0.3.0,<0.6.0`, where no
-    release ships win_amd64; and a Mac below 14 selects `>=0.12.0`, which is macosx_14_0
-    only.
-    """
+    """Skip torchcodec specs with no wheel on this platform, e.g. win_amd64 on cu118 or macOS below 14."""
     ips = _load_install_python_stack()
     for label in _SIM_HOSTS:
         for python in ((3, 9), (3, 10), (3, 12), (3, 13), (3, 14)):
@@ -866,12 +808,7 @@ def test_python_windows_match_the_published_upstream_table():
 
 
 def test_the_torchcodec_step_cannot_end_the_install():
-    """Audio is optional; pip_install exits on failure and pip_install_try does not.
-
-    Asserted on the source because the alternative is driving a whole install. The rule
-    it encodes is the one the extras-no-deps filter above it already states: the audio
-    extras step must not take down the install.
-    """
+    """Audio is optional, so the torchcodec step uses non-fatal `pip_install_try`, not `pip_install`."""
     source = (REPO_ROOT / "studio" / "install_python_stack.py").read_text(encoding = "utf-8")
     step = source.split("# 13b. torchcodec", 1)[1].split("# 14.", 1)[0]
     assert "pip_install_try(" in step, "the torchcodec step must use the non-fatal install"
@@ -928,10 +865,8 @@ def test_the_remedy_drops_the_extra_when_an_index_pin_is_needed(monkeypatch):
 
 
 def test_the_codec_index_honours_an_explicitly_pinned_torch_mirror(monkeypatch):
-    """UNSLOTH_TORCH_INDEX_URL names the index torch itself came from. Rebuilding a public
-    download.pytorch.org URL from the local tag sent an authenticated or air-gapped mirror to
-    the internet, and the `--index-url` that follows also drops the inherited index
-    configuration, so the codec install fails outright where public PyTorch is unreachable."""
+    """An explicit `UNSLOTH_TORCH_INDEX_URL` is reused for the codec, not rebuilt from public
+    PyTorch URLs."""
     from studio import install_python_stack as ips
 
     assert ips._torchcodec_index_url("2.11.0+cu128") == "https://download.pytorch.org/whl/cu128"
@@ -979,10 +914,7 @@ def test_the_runtime_remedy_honours_a_configured_torch_index(monkeypatch):
 
 
 def test_a_mismatched_accelerator_build_is_named_when_the_codec_cannot_load(monkeypatch):
-    """A cu128 venv holding PyPI's default torchcodec has the right VERSION and still cannot
-    dlopen, so the version hint says nothing and audio used to be disabled in silence. The
-    provenance hint only speaks once the load has actually failed, so a working pairing this
-    cannot explain never warns."""
+    """Name an accelerator mismatch only once the codec fails to load; a working pairing must never warn."""
     import sys
     import types
 
@@ -1012,10 +944,7 @@ def test_a_mismatched_accelerator_build_is_named_when_the_codec_cannot_load(monk
 
 
 def test_the_printed_codec_index_is_redacted(monkeypatch):
-    """The install status line goes straight to the terminal and the CI log, not through
-    _redact_install_output, which only covers captured pip output. An authenticated mirror
-    carries its credentials in the userinfo or a query token, so printing the configured
-    index verbatim persists them."""
+    """The printed codec index must be redacted: the status line bypasses `_redact_install_output`."""
     from studio import install_python_stack as ips
 
     monkeypatch.setenv(
@@ -1083,10 +1012,7 @@ def test_the_runtime_remedy_follows_a_configured_pytorch_mirror(monkeypatch):
 
 
 def test_the_provenance_hint_does_not_assert_a_cause_it_has_not_established(monkeypatch):
-    """Differing local tags show the two wheels came from different indexes, nothing more.
-    torchcodec is published per accelerator on every line, 0.12+ included, so the mismatch
-    stays possible there, but the load can equally have failed on a missing libavutil that no
-    reinstall repairs. The hint has to name both."""
+    """A tag mismatch does not establish the cause of a load failure, so the hint must not claim one."""
     import sys
     import types
 
@@ -1213,10 +1139,7 @@ def test_the_unsuffixed_request_is_bounded_to_the_major():
 
 
 def test_no_major_can_kill_the_install_or_emit_an_unparseable_requirement():
-    """`isdigit()` accepts more than `int()` does, and both gaps land here: the superscripts
-    raise ValueError out of an OPTIONAL dependency, and the non-ASCII decimal digits pass
-    `int()` but emit a non-PEP-440 `>=١٣`. The latter is reachable, since `_cuda_major_for_npp`
-    matches with a str pattern where `\\d` is every Unicode decimal digit."""
+    """`isdigit` accepts superscripts that crash `int()`, and non-ASCII digits make invalid requirements."""
     from studio.install_python_stack import _npp_requirement
 
     source = (REPO_ROOT / "studio" / "install_python_stack.py").read_text(encoding = "utf-8")
@@ -1270,10 +1193,7 @@ def test_the_npp_major_comes_from_the_resident_torch_not_the_index_url():
 
 
 def test_the_provenance_hint_reads_a_codec_it_cannot_import(monkeypatch):
-    """An unloadable wheel usually raises while `torchcodec/__init__` imports its decoders, and
-    Python drops a module whose initialisation raised, so importing it again just repeats the
-    exception. Reading the version back that way left the accelerator mismatch undiagnosed in
-    exactly the case the hint exists to name; the installer's metadata needs no native library."""
+    """Read the version from metadata, since a codec that failed to import is dropped and re-raises."""
     import importlib.metadata
     import sys
 

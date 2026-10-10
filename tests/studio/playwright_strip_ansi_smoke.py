@@ -44,12 +44,7 @@ def info(msg: str) -> None:
 
 
 def dump(page: Page, vite: subprocess.Popen[str] | None) -> None:
-    """Write down what the page actually was, since CI keeps no live browser.
-
-    `dump_diagnostics` records the browser side (screenshot, URL, body excerpt). The
-    dev server's own output is the other half: a transform error or a forced reload
-    is reported there and nowhere else.
-    """
+    """Capture the page and the vite tail, since transform errors and forced reloads show only in vite."""
     dump_diagnostics(page, ART, "smoke-ansi-failure", info = info)
     if vite is not None:
         info("vite tail:")

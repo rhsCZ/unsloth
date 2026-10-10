@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Capture a Chrome trace without contaminating the window being measured.
-
-`transferMode: "ReturnAsStream"`, never `ReportEvents`. `ReportEvents` pushes
-the trace back over the devtools pipe as `Tracing.dataCollected` notifications
-WHILE THE WINDOW IS OPEN. Every one of those is renderer-visible work, and its
-volume scales with how much the page is doing, which is to say it is correlated
-with the treatment. `ReturnAsStream` writes to a temp file in the browser
-process and hands back a stream handle at the end, so the drain happens after
-the measurement is over. (Confirmed in `content/browser/devtools/protocol/
-tracing_handler.cc`: `ReturnAsStream` builds a `DevToolsStreamFile` endpoint,
-while `OnTraceDataCollected` splices events into a notification per chunk.)
-
-A trace that hit its buffer is a FAILED CELL, not a short trace. A truncated
-trace reads exactly like "the expensive thing did not happen", which is the most
-dangerous possible failure for a tool whose whole job is to find an expensive
-thing. `Tracing.tracingComplete.dataLossOccurred` is the authoritative signal;
-it is a sticky OR over perfetto's `chunks_overwritten`, `chunks_discarded`,
-`abi_violations` and `trace_writer_packet_loss`, and it is valid even if buffer
-usage polling is off. `Tracing.bufferUsage.percentFull` is subscribed as an
-early warning; its `eventCount` is hardcoded to 0 on modern Chrome and its
-`value` is a legacy duplicate of `percentFull`, so neither is used.
-
-TRACING OVERHEAD IS MEASURED, NEVER ASSUMED. `OverheadLedger` records the same
-cell at L0 and at each higher level and reports `overhead_L1_vs_L0` and
-`overhead_L2_vs_L0` per rung. A level whose overhead GROWS WITH LENGTH is
-disqualified from exponent claims at that rung. Constant overhead is harmless
-to a slope; overhead correlated with the treatment manufactures one.
-"""
+"""Use ReturnAsStream, not ReportEvents: ReportEvents streams trace data during the measured window."""
 
 from __future__ import annotations
 
@@ -119,15 +92,8 @@ class TraceResult:
         return len(self.text)
 
     def integrity(self) -> dict[str, Any]:
-        """Integrity facts, under the no-bare-zero rule.
-
-        `max_percent_full` is the interesting case. A reading of 0.0 with buffer
-        usage events received means the buffer really was empty; a reading of
-        0.0 with NO events received means we never heard from the buffer at all,
-        and those two must not look the same. The second is precisely the state
-        in which an overflow would go unnoticed, so it is reported as unmeasured
-        with a reason rather than as a reassuring zero.
-        """
+        """No buffer events means max_percent_full is unmeasured, not zero, so overflow cannot pass
+        as empty."""
         from ..analysis import measured, merge, unmeasured
 
         if self.buffer_polls > 0:
@@ -171,13 +137,7 @@ class TraceResult:
 
 
 class TraceCapture:
-    """Drive `Tracing` over one CDP session.
-
-    Only one tracing session may exist per browser: a second `Tracing.start`
-    fails with "Tracing has already been started (possibly in another tab)". The
-    class refuses to double-start rather than letting that surface later as an
-    unrelated protocol error.
-    """
+    """Only one tracing session may exist per browser, so a second Tracing.start is refused here."""
 
     def __init__(
         self,
@@ -335,14 +295,8 @@ class TraceCapture:
         )
 
     def _drain(self, handle: str, compression: str) -> tuple[str, int]:
-        """Read the stream to EOF, then close it.
-
-        `IO.read` returns `base64Encoded: true` only for gzip or proto payloads,
-        and its `offset`/`size` are raw pre-base64 byte counts, so the offset is
-        never derived from `len(data)`; sequential reads with no offset are the
-        only safe form. The read that reaches EOF returns an empty `data`, so
-        the chunk is appended BEFORE the eof check.
-        """
+        """Never read by offset (it counts pre-base64 bytes); append the final chunk before the EOF
+        check."""
         parts: list[str] = []
         binary = False
         chunks = 0
@@ -367,23 +321,7 @@ class TraceCapture:
 
 @dataclass
 class OverheadLedger:
-    """Per-rung measured cost of instrumentation, and the disqualification gate.
-
-    The danger is not overhead. Constant overhead shifts an intercept and leaves
-    an exponent alone. The danger is overhead CORRELATED WITH THE TREATMENT,
-    because that manufactures exactly the slope the tool is looking for. So the
-    gate is not "overhead is small", it is "overhead does not grow with length".
-
-    HOW THIS RELATES TO THE HARNESS PATH, since there are two and they are not
-    competitors. Under Layer 1, each instrument reports its own measured
-    `overhead_ms` from `end_cell`, and the report layer assembles those across
-    rungs into its `overhead_growth_with_length` gate. That is the production
-    route and it needs nothing from this class. This ledger is the OFFLINE route:
-    it takes the same cell run at L0 and at a higher level and produces the
-    ratio and the disqualification verdict directly, which is what you want when
-    calibrating a machine or investigating a suspicious slope outside a full
-    run. Same rule, same tolerance, two entry points.
-    """
+    """The gate is that overhead does not grow with length; constant overhead only shifts the intercept."""
 
     cells: dict[str, dict[str, float]] = field(default_factory = dict)
     growth_tolerance: float = 0.15
@@ -413,12 +351,8 @@ class OverheadLedger:
         return out
 
     def disqualified_levels(self, rung_order: Sequence[str]) -> dict[str, str]:
-        """Levels whose overhead grows with length, with the reason.
-
-        `rung_order` must be smallest-first. Only rungs that actually recorded
-        both L0 and the level are considered, so a partial ladder narrows the
-        claim instead of inventing one.
-        """
+        """rung_order must run smallest first; rungs lacking L0 or the level are skipped, narrowing
+        the claim."""
         out: dict[str, str] = {}
         for level in (L1, L2, L3):
             series = [
@@ -452,12 +386,7 @@ def cross_check_with_metrics(
     metrics: dict[str, float],
     tolerance: float = 0.05,
 ) -> dict[str, Any]:
-    """Summed trace `RunTask` vs `Performance.getMetrics` `TaskDuration`.
-
-    Two independent accountings of the same physical quantity, produced by
-    different subsystems. Agreement is weak evidence that the trace is complete;
-    disagreement is strong evidence that it is not, and the cell fails.
-    """
+    """Disagreement with Performance.getMetrics TaskDuration is strong evidence the trace is incomplete."""
     task_duration_s = metrics.get("TaskDuration")
     if task_duration_s is None:
         raise CellFailure(
@@ -484,20 +413,8 @@ def cross_check_with_metrics(
 
 
 class MetricsWindow:
-    """Bracket `Performance.getMetrics` INSIDE the trace window.
-
-    `TaskDuration` is a monotonic renderer-wide counter, so a window is the
-    difference of two readings. The readings must be taken just AFTER
-    `Tracing.start` and just BEFORE `Tracing.end`, never outside, or the metrics
-    window is wider than the trace window and the cross-check reports a
-    disagreement that is entirely an artefact of how it was taken. A 5.7% false
-    failure was produced exactly this way while building this module, which is
-    why the ordering lives in a class instead of in a comment.
-
-    Taking the metrics strictly inside also makes the residual one-sided: the
-    trace should account for at least as much task time as the metrics do, so a
-    trace total BELOW the metrics total means missing events.
-    """
+    """Take getMetrics strictly inside the trace window; a wider metrics window causes false
+    disagreement."""
 
     def __init__(self, cdp: Any) -> None:
         self.cdp = cdp
@@ -523,24 +440,14 @@ class MetricsWindow:
 
 
 def read_metrics(cdp: Any) -> dict[str, float]:
-    """`Performance.getMetrics` flattened to a plain mapping.
-
-    The Performance domain must be enabled first; calling `getMetrics` on a
-    disabled domain returns an error rather than an empty result, and swallowing
-    that is how a cross-check silently stops checking.
-    """
+    """getMetrics on a disabled Performance domain errors; swallowing that error silently skips the
+    check."""
     res = cdp.send("Performance.getMetrics")
     return {m["name"]: m["value"] for m in res.get("metrics", [])}
 
 
 def enable_metrics(cdp: Any, *, time_domain: str = "timeTicks") -> None:
-    """Enable the Performance domain on the WALL clock.
-
-    `timeTicks` is the default and it is the right one here: trace `RunTask.dur`
-    is wall duration, so cross-checking it against a `TaskDuration` accumulated
-    in `threadTicks` would compare CPU time to elapsed time and read as a real
-    disagreement whenever the thread was descheduled.
-    """
+    """Use timeTicks, not threadTicks: RunTask.dur is wall time, so CPU time would read as disagreement."""
     cdp.send("Performance.enable", {"timeDomain": time_domain})
 
 

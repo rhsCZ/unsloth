@@ -1,9 +1,4 @@
-"""Wiring tests for the per-run cancel_id field.
-
-A thread-scoped session_id is unsafe as a cancel key (a late stop POST can match
-a later run on the same thread); cancel_id is a fresh per-generation UUID sent in
-both the completion payload and the /api/inference/cancel body. Verifies the
-field on backend/frontend types and the chat-adapter.ts generation + wiring."""
+"""cancel_id is a per-run UUID; a thread-scoped session_id would let a late stop hit a later run."""
 
 from __future__ import annotations
 

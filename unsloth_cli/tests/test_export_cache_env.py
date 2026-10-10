@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth export` / `list-checkpoints` must pin the cache env before importing the export
-backend.
-
-Neither calls ensure_studio_backend_path(), so before the seeding moved into
-studio_backend_imports() they reached studio.backend.core.export with UNSLOTH_COMPILE_LOCATION
-unset and unsloth_zoo resolved its relative default against the shell's cwd (#8865).
-"""
+"""unsloth export and list-checkpoints must seed the cache env before importing the backend."""
 
 import json
 import os
@@ -119,13 +113,7 @@ def test_export_commands_seed_compile_location(tmp_path, command_name):
 
 
 def test_node_discovery_does_not_build_the_cache_tree(tmp_path):
-    """`unsloth start` asks whether a managed Node exists; that is a read, not an install.
-
-    ensure_studio_backend_path() seeds the cache environment, and setup_cache_env() CREATES
-    every directory it pins, so routing Node discovery through it turned the lookup into 18
-    mkdirs under a home that may have nothing to do with the command -- including a launch
-    aimed at a remote server. The merge base created nothing here.
-    """
+    """Node discovery is a read, so it must not go through setup_cache_env(), which creates dirs."""
     home = tmp_path / "home"
     (home / ".unsloth" / "studio").mkdir(parents = True)
     probe = (

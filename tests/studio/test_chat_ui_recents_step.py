@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The chat UI driver's Recents step must wait for the thread, and must be able to fail.
-
-The step used to click the first Recents row, sleep 500 ms and read the turns once. Opening a
-chat runs a history loader that awaits four requests in a row before anything renders, and on
-the Windows lane (two Studios and two browsers on one runner) that took longer than 500 ms in
-about one run in four, so the read found `turns_text=''`. That never failed a job, because the
-soft_fail sat inside the `try` whose `except Exception` was meant for click errors: in STRICT
-mode the AssertionError was caught, logged as "recent-thread click 0 failed", and the step
-passed. The claim was being logged, not checked.
-
-The browser tests run the driver's helper, extracted by `ast` so nothing else in the driver
-executes, against a page whose thread renders late. They skip when Chromium is unavailable;
-the source checks below always run.
-"""
+"""The soft_fail check must sit outside the try, or STRICT mode's AssertionError is swallowed."""
 
 from __future__ import annotations
 

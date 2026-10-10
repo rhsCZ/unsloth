@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""On RDNA1 (gfx101x) Triton's AMD buffer ops silently do nothing.
-
-Every Triton kernel launches with hipSuccess and leaves its outputs untouched, because the
-buffer resource descriptor Triton builds is laid out for gfx10.3+ and gfx10.1 reads it
-differently. Found on an RX 5700 XT (gfx1010): a ten-line ``x * 2`` kernel returned 0 of
-1024 correct values, and every value with ``AMDGCN_USE_BUFFER_OPS=0``. unsloth sets that
-variable at import when such a GPU is visible. These are decision-table checks, no GPU.
-"""
+"""On gfx101x Triton's buffer ops silently leave outputs unwritten; AMDGCN_USE_BUFFER_OPS=0 avoids it."""
 
 import pytest
 
@@ -57,10 +50,7 @@ def test_bf16_gate_and_buffer_ops_gate_disagree_on_rdna2():
 
 
 def test_workaround_sets_knob_and_a_separate_cache_dir():
-    """The knob alone is not enough: Inductor's cache does not key on AMDGCN_USE_BUFFER_OPS,
-    so kernels compiled with buffer ops on are reused with them off. Measured on an RX 5700
-    XT: the same run trained cleanly with empty caches and went -inf / nan once a
-    buffer-ops-on process had populated them."""
+    """Inductor's cache ignores AMDGCN_USE_BUFFER_OPS, so the workaround needs its own TRITON_CACHE_DIR."""
     env = {}
     assert device_type.apply_gfx101x_triton_workaround(env, triton_home = "/th") is True
     assert env["AMDGCN_USE_BUFFER_OPS"] == "0"

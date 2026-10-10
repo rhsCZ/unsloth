@@ -1,9 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Unsloth's generated TRL configs may only move the defaults Unsloth means to move.
-
-A stale override drifts silently when TRL changes its own default (top_k after trl#4695, data_seed via the seed rewrite).
-"""
+"""Unsloth's TRL config overrides must cover only intended defaults, since stale ones drift silently."""
 
 from __future__ import annotations
 

@@ -1,10 +1,4 @@
-"""_fix_pad_token dispatch in unsloth/tokenizer_utils.py.
-
-It must delegate to unsloth_zoo's shared fix_pad_token when present (single
-source of truth), and fall back to a no-op against an older unsloth_zoo. Static
-+ CPU-only: _fix_pad_token is exec'd in isolation so the test never imports
-torch / transformers / unsloth.
-"""
+"""_fix_pad_token delegates to unsloth_zoo's fix_pad_token, and is a no-op on older unsloth_zoo."""
 
 import ast
 import os

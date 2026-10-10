@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Guard: shipping code must name an encoding on every text read and write.
-
-`Path.read_text()`, `Path.write_text()`, `Path.open()` and builtin `open()` fall back
-to `locale.getencoding()`: UTF-8 on the Linux and macOS runners, cp1252 on a stock
-Windows install. Every file this repo reads at runtime is UTF-8 (HF `config.json` /
-`tokenizer_config.json` / `adapter_config.json`, Ollama manifests, GGUF export
-metadata), so on Windows those reads crash or, worse, succeed with mojibake: a
-DeepSeek or Qwen tokenizer_config.json carries U+FF5C and U+2581 in its chat
-template, and at utils/models/model_config.py that read sits inside a broad
-`except Exception: logger.debug(...)`, so the token-pattern check silently
-returned the wrong answer.
-
-Unlike the import-time rule in test_source_read_encoding.py this is scope agnostic:
-runtime reads live inside functions, and shipping code has no legitimate reason to
-let the operator's locale decide. No reachability analysis to get wrong, so no
-allowlist and no false positives.
-
-Binary handles are skipped (no encoding to name, and passing one is a ValueError),
-and a non-constant mode counts as unknown rather than text: demanding `encoding =`
-on a call that may resolve to "rb" would leave no compliant way to write it.
-
-Known limitation, deliberately not closed: `configparser.ConfigParser.read()` also
-defaults to the locale encoding, but cannot be matched by name without resolving the
-receiver, since `f.read(n)`, `resp.read(limit)` and `handle.read(chunk)` are spelled
-identically. Flagging it would be a false positive with no compliant fix, the exact
-failure mode this guard avoids. The one live `ConfigParser.read` (/etc/wsl.conf,
-hub/utils/paths.py) is pinned by hand; a future one has to be caught in review.
-"""
+"""Runtime text reads and writes must name an encoding; the locale default is cp1252 on Windows."""
 
 # `str | None` below is evaluated at import on Python 3.9.
 from __future__ import annotations
@@ -91,12 +64,7 @@ def _mode(call: ast.Call, positional_index: int):
 
 
 def _names_encoding(call: ast.Call) -> bool:
-    """True only for an encoding that actually pins one.
-
-    `encoding = None` and `encoding = "locale"` re-select the platform default, so the
-    keyword being present is not enough. A `**kwargs` splat may carry an encoding we
-    cannot see, so it counts as named rather than as an unsatisfiable demand.
-    """
+    """Only a real encoding pins one: encoding = None or "locale" re-selects the platform default."""
     for kw in call.keywords:
         if kw.arg is None:
             return True
@@ -116,11 +84,7 @@ def _is_text(call: ast.Call, positional_index: int) -> bool:
 
 
 def _imports_at_each_call(tree: ast.Module) -> dict:
-    """The imports visible at every call, keyed by node id.
-
-    A function's own imports stay in that function: hoisting them would let one local
-    `from PIL.Image import open` turn off the builtin check for the whole file.
-    """
+    """Imports stay with their function so a local alias cannot switch off the builtin-open check."""
     visible_at = {}
 
     def walk(node, visible):
@@ -137,11 +101,7 @@ def _imports_at_each_call(tree: ast.Module) -> dict:
 
 
 def _foreign_names(tree: ast.Module) -> set:
-    """Names bound to an object another library built.
-
-    `z = zipfile.ZipFile(p)` then `z.open(name)` is a binary member stream taking no
-    encoding, so demanding one leaves no correct edit.
-    """
+    """Names bound to an object another library built, such as a ZipFile whose open() takes no encoding."""
     modules = _imported_names(tree)
     names = set()
     for node in ast.walk(tree):
@@ -153,12 +113,7 @@ def _foreign_names(tree: ast.Module) -> set:
 
 
 def _imported_names(tree) -> dict:
-    """Names this module's imports bind, mapped to where they came from.
-
-    The name alone settles nothing: `import tarfile as tf` hides an opener that takes
-    no encoding, and `from PIL.Image import open` puts another behind the most familiar
-    name there is. Resolving the origin covers both, with no module list to maintain.
-    """
+    """Maps names bound by imports to their origin, since an alias can hide the real opener."""
     bound = {}
     stack = list(ast.iter_child_nodes(tree))
     while stack:
@@ -220,11 +175,8 @@ def _is_path_attr(node) -> bool:
 
 
 def _foreign_receiver(node, modules) -> bool:
-    """True when the thing before `.open` is an object another library built.
-
-    `zipfile.ZipFile(p).open(name)` returns a binary member stream taking no encoding,
-    so it needs the same exemption as the bare `zipfile.open` spelling.
-    """
+    """True when .open is called on a foreign object like zipfile.ZipFile(p), which yields binary
+    streams."""
     if not isinstance(node, ast.Call):
         return False
     func = node.func

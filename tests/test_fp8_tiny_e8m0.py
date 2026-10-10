@@ -1,12 +1,4 @@
-"""FP8 block-quant linear must handle tiny / non-tileable weights and e8m0 scales.
-
-Two things break the triton block path:
-  * a hidden dim not divisible by the activation block size (tiny test models),
-  * float8_e8m0fnu weight scales, which have no triton dtype mapping.
-The forward falls back to a torch-native blockwise dequant + bf16 matmul; this
-test checks that fallback runs finite forward + backward and matches a plain
-dequant reference.
-"""
+"""Non-tileable dims and e8m0 scales skip triton; the torch fallback must match a dequant reference."""
 
 import pytest
 import torch

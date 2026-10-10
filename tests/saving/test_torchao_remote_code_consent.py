@@ -1,14 +1,4 @@
-"""Regression tests for the export-time remote-code trust decision.
-
-FP8/FP4/INT quantization export re-reads the just-merged checkpoint. It used to enable
-trust_remote_code whenever the checkpoint's config carried an ``auto_map`` entry, so a model
-that loads fine with built-in classes (and therefore skips the load-time consent scan) could
-smuggle unvetted remote code that then runs at export. The export paths now derive
-trust_remote_code from ``_loaded_via_remote_code`` - the already approved load decision - instead.
-
-These run on CPU with no torch / unsloth import: they AST-extract the real helper from
-unsloth/save.py and exec it in isolation, plus assert the call sites dropped the auto_map trust.
-"""
+"""Export re-reads take trust_remote_code from _loaded_via_remote_code, not config auto_map."""
 
 import ast
 from pathlib import Path

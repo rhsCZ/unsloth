@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The credential probe pushes a throwaway tag and must remove it again. Docker Hub
-rejects an organization access token on the legacy /v2/repositories/... routes
-with 403 whatever its scopes, and only the namespace-scoped routes accept it, so
-the delete step is run here with curl stubbed and its requests inspected.
-"""
+"""Docker Hub rejects org tokens on legacy /v2/repositories routes; delete via namespace routes."""
 
 from __future__ import annotations
 
@@ -118,19 +114,7 @@ def test_no_token_means_no_delete_and_a_failure(delete_step: dict, tmp_path: Pat
 
 
 def test_every_step_that_reads_the_key_is_given_the_key():
-    """Moving a secret out of the body means putting it into `env:`. Both halves.
-
-    Taking `${{ secrets.DOCKER_API_KEY }}` out of three `run:` bodies removed the key
-    from argv, which was the point, and left two of those steps reading
-    `os.environ["DOCKER_API_KEY"]` with nothing supplying it. Neither is exercised by a
-    pull request: the Hub README sync and the handle-tag cleanup run after a publish, so
-    the first sign would have been a released image whose page never updated and a set of
-    per-run tags that never got pruned, both reported as "could not exchange the key for
-    a token" -- a message that reads like an expired credential rather than a workflow
-    that forgot to pass one.
-
-    Derived by scanning, not listed, so a fourth site added later is covered too.
-    """
+    """Every workflow step that reads DOCKER_API_KEY from the environment must also be given it in env:."""
     offenders = []
     for path in sorted(WORKFLOW.parent.glob("docker-*.yml")):
         doc = yaml.safe_load(path.read_text(encoding = "utf-8"))

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""docker/build.sh must hand docker a COMMIT, not a branch name.
-
-Docker matches a RUN layer on the command string alone -- "the files updated in the
-container aren't examined to determine if a cache hit exists" -- so a build arg that
-stays "main" makes the pip-install-from-git layer a cache hit on every rebuild and the
-image keeps the commits of the first build while the build reports success. The publish
-workflow already freezes both refs with git ls-remote; the local script has to as well.
-"""
+"""docker/build.sh must pass commits, not branch names, or Docker reuses a stale git-install layer."""
 
 from __future__ import annotations
 

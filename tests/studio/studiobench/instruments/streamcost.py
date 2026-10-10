@@ -1,42 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Registers `stream_cost`: the streaming-phase cost accumulator.
-
-WHAT THIS ADDS THAT THE HARNESS DID NOT HAVE. Not an integral -- `time_in_jank_pct`, `jank_index`
-and `max_frame_ms` already integrate, and `_frame_measures` already pools the streaming windows
-into them. What it adds is SEPARATION and a DENOMINATOR:
-
-  SEPARATION. The three frame metrics collapse one film into one number per cell, and the action
-  windows dominate it. Measured on a 100K null control, `action:reasoning_toggle` contributes
-  2,865 ms of blocked time at 99.3% busy with a 1,866 ms worst frame, and `action:select_all_copy`
-  3,017 ms at 97.7% with a 2,102 ms worst frame, while the streaming stretch beside them runs at
-  3.6% busy with a 100 ms worst frame. A change to the streaming path moves the second and is
-  scored against the first.
-
-  The window KIND cannot make that separation, and this is the trap worth naming because the name
-  actively misleads. `SceneRunner._gap_window` opens EVERY inter-slot gap as `kind = "stream"`. On
-  the standard film that is eighteen windows called `stream:gapN` of which only the first four
-  contain any streaming, plus `stream:drain`, which on a measured 100K cell was 7 ms long because
-  the stream had finished forty seconds earlier. Filtering on `kind == "stream"` selects mostly
-  post-stream idle. The phase is therefore detected from the SSE traffic itself.
-
-  A DENOMINATOR. Cost per streamed character, not per cell. This is what makes two rungs
-  comparable on cost per unit of work, which is the claim the whole effort is testing: that a
-  thread twice as long costs more to stream one character into. Worth being honest about what it
-  buys and where: WITHIN one rung the denominator is very nearly a constant, because the pacer is
-  deficit-scheduled and the tail is pinned, and measured across twelve null-control pairs at 100K
-  the streamed character count varies by 0.0%. It earns its keep ACROSS rungs, where it is the
-  only way to compare 10K with 100K at all.
-
-WHY IT IS LEVEL 0. Its per-event work is O(1) and its per-window work is O(the reply being
-streamed), never O(the thread). The two hooks are a `TextDecoder.prototype.decode` wrapper that
-runs about fourteen times a second at field cadence, and a 1 ms timer of exactly the kind
-frames.js already runs and documents as costing nothing at about 150 ticks a second. Nothing here
-is proportional to the rung, which is what `overhead_growth_with_length` exists to catch, and
-`overhead_ms` is measured inside the hooks rather than asserted so the gate has something real to
-read.
-"""
+"""Streaming phase is detected from SSE traffic, not window kind, which tags idle gaps as stream."""
 
 from __future__ import annotations
 

@@ -1,12 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The About tab must show a runtime row on an Intel XPU host.
-
-`hardware.py` has always emitted `versions["xpu"]`, but the frontend only ever read `cuda`
-and `rocm`. On an Arc host both of those are null, so the runtime row vanished entirely
-while the GPU name and VRAM rows still rendered -- a host that looks half-detected. That
-was unreachable on Windows until the installer learned to select XPU wheels, which is what
-makes it worth a guard now.
-"""
+"""The About tab must render a runtime row for Intel XPU, since hardware.py emits versions["xpu"]."""
 
 from pathlib import Path
 

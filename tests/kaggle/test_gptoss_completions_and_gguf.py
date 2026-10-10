@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Completions-only training and the gpt-oss GGUF export, and how each lies.
-
-Both features share a failure shape: they can be requested, silently not
-happen, and leave every other number in the report looking correct.
-
-* A run that masks NOTHING trains on prompt and answer alike. It converges, its
-  losses are finite, its grad_norm is healthy, and no loss-based assertion can
-  tell it from a correct one. So the mask is read off a real collated batch and
-  ruled on here.
-* An export that is silently overridden to another format still writes a file
-  and reports ok. gpt-oss answers `q8_0` with MXFP4 BY DESIGN, so the leg must
-  ask for MXFP4 and accept only MXFP4; a wider accept list passes on the
-  override as though the request had been honoured.
-"""
+"""Completions-only masking and the gpt-oss GGUF override both fail silently, so each is checked."""
 
 from __future__ import annotations
 
@@ -75,19 +62,7 @@ def test_the_leg_asks_for_completions_and_for_mxfp4():
 
 
 def test_the_payload_requests_q8_and_accepts_only_mxfp4():
-    """The pairing looks backwards and is the only one that works.
-
-    gpt-oss overrides q8_0 to MXFP4 and says so. Asking for mxfp4 directly is
-    the obvious response and unsloth REJECTS it as an input, measured on kernel
-    unsloth-probe-gptoss-r3-832c85:
-
-        Unsloth: Quant method = [mxfp4] not supported. Choose from below:
-        [not_quantized] [fast_quantized] [quantized] [f32] [bf16] ...
-
-    So the documented override is the only route to an MXFP4 file. Accepting
-    ONLY mxfp4 keeps it honest: a run that produced a real q8_0 would fail,
-    which is right, because gpt-oss q8_0 is documented impossible.
-    """
+    """Only mxfp4 is accepted: asking for it directly is rejected, so the q8_0 override is the one route."""
     src = (PAYLOAD / "run_gptoss_t4.py").read_text(encoding = "utf-8")
     assert '"--gguf-quantization", default = "q8_0"' in src
     assert 'accept_quantizations = ("mxfp4",)' in src
@@ -104,17 +79,7 @@ def test_the_dataset_shape_and_the_text_field_cannot_both_be_set():
 
 
 def test_the_gptoss_export_does_not_land_in_the_artifact_volume():
-    """Measured, not reasoned about.
-
-    `/kaggle/working` is 21.0GB total. The gpt-oss export consumes 27.6GB of
-    transient disk (three mxfp4 shards at 13.76GB, plus the GGUF). Exporting
-    there fails in 2.8s with "Unsloth: Failed saving locally - no disk space
-    left", which reads like an export bug and is a disk fact. Observed on
-    kernel unsloth-probe-gptoss-comp-gguf-701d00.
-
-    `/tmp` is the overlay: 8656.9GB total, 1102.5GB free. tempfile honours
-    TMPDIR and lands there.
-    """
+    """The gpt-oss export needs 27.6GB of transient disk, more than the 21GB artifact volume holds."""
     src = (PAYLOAD / "run_gptoss_t4.py").read_text(encoding = "utf-8")
     assert 'tempfile.mkdtemp(prefix = "gptoss_gguf_")' in src
     assert (
@@ -123,18 +88,7 @@ def test_the_gptoss_export_does_not_land_in_the_artifact_volume():
 
 
 def test_the_off_gpu_walk_names_the_tensors_and_not_only_the_bytes():
-    """Driven through the REAL `placement()`, against a stub model.
-
-    `{'cpu': 579133440}` reached hardware twice and nobody could say which
-    tensor it was, because the walk used `model.parameters()` and threw the
-    names away. 579133440 is exactly 201088 x 2880 -- gpt-oss-20b's vocab by
-    its hidden size -- so it was one embedding-shaped tensor all along, and
-    that is a filable bug report where a byte count is not.
-
-    A rule fed a hand-written dict would pass either way; this executes the
-    producing code, which is the gap that let a missing `torch` import reach
-    Kaggle on the Default leg.
-    """
+    """placement() must keep parameter names, so an off-GPU byte count can be traced to a tensor."""
     import torch  # noqa: PLC0415
 
     from run_gptoss_t4 import _placement_failures, placement  # noqa: PLC0415
@@ -204,24 +158,13 @@ def _placement_record(**over):
 
 
 def test_the_deliberate_embedding_offload_is_not_a_failure():
-    """Measured, and the assertion was wrong rather than the stack.
-
-    `Unsloth: Offloading embeddings to RAM to save 1.08 GB` is a documented
-    optimisation: the input embedding moves to RAM and
-    `_install_offload_embedding_hooks` carries ids down and vectors back up. It
-    failed this leg twice while training converged, inference was coherent and
-    the adapter moved, because the rule read a device count and the count
-    cannot tell an optimisation from a spill.
-    """
+    """Embedding offload to RAM is a documented optimisation, not a spill, so it is not a failure."""
     from run_gptoss_t4 import _placement_failures  # noqa: PLC0415
     assert _placement_failures(_placement_record()) == []
 
 
 def test_the_excuse_is_the_hook_flag_and_not_the_device():
-    """The half that keeps it from being an excuse that can only excuse. An
-    embedding on the CPU WITHOUT the hooks is a genuine bug -- the lookup either
-    raises or silently synchronises -- and it is indistinguishable from the
-    healthy case in `parameters_by_device`."""
+    """The exemption keys on the hook flag, not the device: CPU without hooks is a real bug."""
     from run_gptoss_t4 import _placement_failures  # noqa: PLC0415
 
     embed = dict(_placement_record()["input_embedding"], offload_hooks_installed = False)
@@ -250,10 +193,7 @@ def test_a_second_tensor_off_the_card_is_still_a_failure():
 
 
 def test_the_hook_flag_is_READ_off_the_module_rather_than_assumed():
-    """Mutation found this one: hardcoding `offload_hooks_installed = True` in
-    `placement()` satisfied every rule above, because they all judge the record
-    and none of them produce it. The flag is the entire difference between an
-    optimisation and a bug, so it has to come off the module."""
+    """The hook flag must be read from the module: hardcoding it True passed every rule on mutation."""
     import torch  # noqa: PLC0415
 
     from run_gptoss_t4 import placement  # noqa: PLC0415
@@ -284,13 +224,7 @@ def test_the_hook_flag_is_READ_off_the_module_rather_than_assumed():
 
 
 def test_the_text_leg_exports_once_per_leg_and_not_once_per_cycle():
-    """Measured: the conversion is 310.8s and 312.3s on the two Latest_compile
-    cycles and 99.3s and 117.3s on the two vision ones, so the repeat is 47% of
-    the longest leg in the suite. The second export is the same base weights
-    plus an adapter trained by the same script with the same seed, so it re-runs
-    llama.cpp rather than asking a new question; the cycles already prove
-    reproducibility on the step tables and the generated text.
-    """
+    """Exports once per leg: a repeat cycle re-runs llama.cpp and asks no new question."""
     src = (PAYLOAD / "run_t4_smoke.py").read_text(encoding = "utf-8")
     assert 'if getattr(args, "export_gguf", False) and run_index > 0:' in src
     assert '"skipped": "exported on cycle 0' in src

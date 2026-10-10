@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The installers read the NVIDIA inventory from the driver's libraries when nvidia-smi cannot answer.
-
-Measured on a 8x B200 host (driver 590.48.01, CUDA 13.1) with a stub nvidia-smi that exits 1:
-main resolved no prebuilt at all ("runnable by this driver=none", a source build or the CPU)
-and picked the cu126 torch index; with the probe it resolves the cuda13 bundle and cu130.
-"""
+"""NVIDIA inventory falls back to the driver's libraries when nvidia-smi cannot answer."""
 
 from __future__ import annotations
 

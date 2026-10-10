@@ -110,12 +110,7 @@ _WANTED = {
 
 
 def _load_active_generations():
-    """The real registry `_TrackedCancel` records runs in.
-
-    Loaded straight off disk rather than imported, so the extracted class runs
-    against the genuine module without pulling in the whole route package (and
-    without putting studio/backend on sys.path for the rest of the session).
-    """
+    """Loads the real _TrackedCancel registry from disk, avoiding the route package and sys.path."""
     path = SOURCE_PATH.parents[1] / "state" / "active_generations.py"
     spec = importlib.util.spec_from_file_location("studio_active_generations", path)
     module = importlib.util.module_from_spec(spec)
@@ -133,15 +128,7 @@ _REGISTRY_SOURCE = None
 
 
 def _registry_source():
-    """The `_WANTED` top-level definitions, verbatim, joined in file order.
-
-    `ast.get_source_segment` re-splits the whole 1.72 MB source on every call, so
-    asking it for all 1011 top-level nodes took ~13s -- and each of the seven tests
-    below paid it again. Two changes, neither of which alters a byte of the result:
-    the membership test now runs before the segment is cut, so only the nodes that
-    are kept are ever cut, and the joined text is built once per process. The `exec`
-    stays per call, so every test still gets its own fresh `_CANCEL_REGISTRY`.
-    """
+    """Joins the _WANTED top-level definitions verbatim, cached per process because slicing is slow."""
     global _REGISTRY_SOURCE
     if _REGISTRY_SOURCE is not None:
         return _REGISTRY_SOURCE

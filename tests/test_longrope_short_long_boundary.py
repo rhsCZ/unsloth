@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""LongRope must use the short factor at exactly the pretraining length.
-
-transformers switches to the long factor at `seq_len > original_max_position_embeddings`
-(`_compute_longrope_parameters`, `_longrope_frequency_update`); `seq_len < original_max`
-here switched a token early, and crashed there as well, because the long cache is built
-only past `current_rope_size`, which starts at `original_max`.
-
-llama.py needs an accelerator to import, so the class is `ast`-extracted and run against a
-CPU-pinned prelude, the shape `tests/test_callback_signature_drift.py` uses.
-"""
+"""LongRope must switch to the long factor only when seq_len exceeds original_max_position_embeddings."""
 
 from __future__ import annotations
 

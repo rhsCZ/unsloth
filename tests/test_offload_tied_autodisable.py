@@ -1,14 +1,4 @@
-"""Tests _resolve_offload_embedding in vision.py. No GPU needed.
-
-`offload_embedding = True` on a model with tied word embeddings used to raise
-NotImplementedError and abort the load. It is a VRAM optimisation, not a
-correctness switch, so it should turn itself off instead, as the fast_inference
-case a few lines earlier already does. Two shipped notebooks (NeMo-Gym-Sudoku,
-NeMo-Gym-Multi-Environment) died this way on unsloth/Qwen2.5-1.5B-Instruct.
-
-Every platform branch is driven explicitly, so the assertions hold on Linux,
-macOS, Windows and WSL alike: the host's own os.name never decides.
-"""
+"""Tied word embeddings must auto-disable offload_embedding, a VRAM optimisation, not raise."""
 
 import ast, os, types
 from contextlib import contextmanager
@@ -349,10 +339,7 @@ def _under_ddp():
 
 
 def test_a_distributed_launch_declines_the_offload(capsys):
-    """The offload leaves embed_tokens on the CPU while the rest of the rank stays on CUDA.
-    Under full finetuning that parameter is trainable, and DDP wrapping with device_ids
-    refuses a module whose trainable parameters span both, so the run dies before step 1.
-    The old False default kept distributed callers away from this; the new one does not."""
+    """Decline embedding offload under DDP, since trainable params on CPU and CUDA break DDP device_ids."""
     with _as_platform("posix"), _card(16 * 2**30), _under_ddp():
         assert resolve(_sized_model(int(2.5 * 2**30)), "auto") is False
     assert capsys.readouterr().out == ""

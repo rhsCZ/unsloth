@@ -1,10 +1,4 @@
-"""Cancel tracker must register BEFORE StreamingResponse returns and clean up
-in each async generator's `finally`, else a Stop before the first SSE chunk
-leaves a zombie decode (a BackgroundTask would be skipped when stream_response raises).
-
-Structural verifies registration placement and try/finally cleanup; behavioral
-verifies the extracted `_TrackedCancel` cleans up across completion/OSError/aclose
-and that a pre-set cancel_event breaks the GGUF loop cleanly with final_chunk + [DONE]."""
+"""Cancel tracker must register before StreamingResponse returns, or a Stop leaves a zombie decode."""
 
 from __future__ import annotations
 
@@ -270,12 +264,7 @@ _WANTED = {
 
 
 def _load_active_generations():
-    """The real registry `_TrackedCancel` records runs in.
-
-    Loaded straight off disk rather than imported, so the extracted class runs
-    against the genuine module without pulling in the whole route package (and
-    without putting studio/backend on sys.path for the rest of the session).
-    """
+    """Loads the real registry from disk, not via import, to avoid pulling in the route package."""
     path = SOURCE_PATH.parents[1] / "state" / "active_generations.py"
     spec = importlib.util.spec_from_file_location("studio_active_generations", path)
     module = importlib.util.module_from_spec(spec)
@@ -292,15 +281,7 @@ _REGISTRY_SOURCE = None
 
 
 def _registry_source():
-    """The `_WANTED` top-level definitions, verbatim, joined in file order.
-
-    `ast.get_source_segment` re-splits the whole 1.72 MB source on every call, so
-    asking it for all 1011 top-level nodes took ~13s, once per test that loads the
-    registry. Two changes, neither of which alters a byte of the result: the
-    membership test now runs before the segment is cut, so only the nodes that are
-    kept are ever cut, and the joined text is built once per process. The `exec`
-    stays per call, so every test still gets its own fresh `_CANCEL_REGISTRY`.
-    """
+    """Built once per process: only the kept top-level nodes are cut, since get_source_segment is slow."""
     global _REGISTRY_SOURCE
     if _REGISTRY_SOURCE is not None:
         return _REGISTRY_SOURCE

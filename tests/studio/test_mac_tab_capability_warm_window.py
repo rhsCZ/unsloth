@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The macOS tab-capability smoke has to be able to fail.
-
-tests/studio/playwright_mac_tab_capabilities.py needs a live Unsloth and a browser, so
-CI is the only place it runs and nothing else checks that a red case comes out red.
-Twice now it has gone green having observed nothing: first by authenticating with
-nobody, then by computing `seen_spinner` and only logging it, so a backend that
-settled before the browser arrived skipped every assertion.
-
-This drives the same functions with the page and the backend stubbed, over the exact
-shapes that used to pass: the warm window already shut, the row absent, the row greyed
-out. It is a plain pytest file so it runs in the Backend CI walk over tests/, where
-neither playwright nor an Unsloth is installed.
-"""
+"""Checks the macOS tab-capability smoke can fail: it once passed green while observing nothing."""
 
 from __future__ import annotations
 
@@ -46,11 +34,8 @@ SETTLED_ENABLED = {"disabled": False, "spinner": False}
 
 
 def _load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Import the script with playwright and its env contract stubbed out.
-
-    Fresh per test: the script keeps its failures and its row sightings in module
-    globals, so a shared instance would carry one test's verdict into the next.
-    """
+    """Load fresh per test: failures and row sightings live in module globals and would leak across
+    tests."""
     if "playwright.sync_api" not in sys.modules:
         pkg = types.ModuleType("playwright")
         api = types.ModuleType("playwright.sync_api")
@@ -97,12 +82,7 @@ class FakeLocator:
 
 
 class FakePage:
-    """Enough of a Playwright page for the pending-state checks.
-
-    `rows` maps a nav row id to the DOM state the stub reports, or None for a row that
-    is not in the document. `row_missing` makes wait_for_selector time out the way a
-    sidebar that never rendered does.
-    """
+    """Maps nav ids to DOM state (None if absent) for rows; row_missing makes wait_for_selector time out."""
 
     def __init__(
         self,
@@ -497,13 +477,7 @@ BUDGET_S = 10.0
 
 
 def _timeline(duration_s, stalls = ()):
-    """Simulate the poller against a backend that answers nothing during *stalls*.
-
-    Each stall is a (start, end) window in seconds. A probe issued inside one answers
-    when the stall lifts if that falls inside its 10s budget, and times out otherwise.
-    Probes are sequential and a timeout costs the whole budget before the next route is
-    tried, which is what the real poller does.
-    """
+    """Backend silent during stalls: a probe answers only if the stall lifts inside its 10s budget."""
 
     def lifts_at(t):
         for start, end in stalls:
@@ -715,10 +689,7 @@ def test_the_probe_budget_is_the_launchers_own_number():
 
 
 def test_the_watchdog_replay_is_gone():
-    """It was removed on purpose: mirroring the launcher's state machine made every line
-    of commands.rs a correctness requirement here, for a rule this phase never runs and
-    could not decide inside its 120s window. Reintroducing it should be a deliberate act,
-    not a quiet one."""
+    """Removed on purpose: mirroring the launcher's state machine would couple this phase to commands.rs."""
     source = SCRIPT.read_text(encoding = "utf-8")
     for gone in ("watchdog_replay", "WATCHDOG_MAX_FAILURES", "WATCHDOG_INTERVAL_S"):
         assert f"def {gone}" not in source and f"\n{gone} =" not in source, gone
@@ -996,12 +967,7 @@ def test_pacing_never_sleeps_past_the_end_of_the_window(tmp_path, monkeypatch):
 
 
 def _serve_trickling_headers():
-    """A listener that accepts, then dribbles response HEADERS and never finishes them.
-
-    Deliberately raw sockets rather than http.server: the point is to stall inside
-    urlopen's header parsing, which is before any body-level bound can run, and a
-    BaseHTTPRequestHandler writes its headers in one go.
-    """
+    """Raw sockets, since http.server sends headers in one go and cannot stall urlopen's header parsing."""
     import socket as socket_mod
     import threading
 
@@ -1060,12 +1026,7 @@ def _serve_trickling_headers():
 
 
 def _probe_bounded(mod, path, timeout, wait):
-    """Call mod._get_json on a daemon thread and join for *wait*.
-
-    No test here may detect its own mutation by hanging: a hang reports nothing and
-    burns the runner, which is the failure these tests are about. A build whose probe
-    cannot end fails the assertion below instead of stopping the suite.
-    """
+    """Daemon-thread probe joined for wait, so an unending probe fails the assertion instead of hanging."""
     import threading
 
     box = {}
@@ -1081,10 +1042,8 @@ def _probe_bounded(mod, path, timeout, wait):
 
 
 def test_trickling_response_headers_cannot_outlive_the_probe_budget(tmp_path, monkeypatch):
-    """The body deadline does not cover this. While response headers are still arriving,
-    urlopen has not returned, so nothing inside it is running yet and only urllib's
-    per-socket-operation timeout applies, which a peer resets by dribbling. The budget is
-    whole-request for that reason: connect, headers and body under one deadline."""
+    """A per-socket timeout resets whenever a peer dribbles, so one deadline must cover the whole
+    request."""
     socket_timeout = 0.5
     mod = _load(tmp_path, monkeypatch)
     base, state, shutdown = _serve_trickling_headers()
@@ -1134,12 +1093,7 @@ def test_the_deadline_covers_the_whole_request_not_one_layer():
 
 
 def test_a_stall_that_begins_after_sampling_is_still_reported(tmp_path, monkeypatch, capsys):
-    """The gap the recovery watch opened. Sampling can end on a good probe and the backend
-    stall immediately afterwards; the watch then sees several timeouts, gets an answer, and
-    returns ok. Measuring spans from the poller's samples alone leaves that stall in no
-    span at all, so the run passes in silence. A recovered stall reported nowhere is the
-    one outcome this window was added to avoid, since the argument for warning instead of
-    failing is that somebody reads the warning."""
+    """A stall starting after the last sample must still be reported, or the run passes in silence."""
     mod = _load(tmp_path, monkeypatch)
     samples = _timeline(120)
     assert all(s["kind"] == "ok" for s in samples), "fixture must end with sampling healthy"

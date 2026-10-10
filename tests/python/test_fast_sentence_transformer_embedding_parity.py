@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Regression guard for issue #6881: FastSentenceTransformer must preprocess text
-like a stock SentenceTransformer for decoder embedding models. ST 5.x infers a
-"message" modality for chat-template models (e.g. Qwen/Qwen3-Embedding), so building
-via `Transformer(model_name, ...)` chat-wraps inputs and degrades embeddings;
-`_create_transformer_module` uses `Transformer.load(...)` instead.
-
-Layers: test_transformer_load_signature_supports_unsloth_kwargs (fast, runs when ST
-is importable) and test_fast_sentence_transformer_matches_stock_st (end-to-end parity,
-opt-in via UNSLOTH_EMBEDDING_PARITY_MODEL so default CI is unaffected).
-"""
+"""Use Transformer.load: ST 5.x infers a chat message modality that chat-wraps embedding inputs."""
 
 from __future__ import annotations
 

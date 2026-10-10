@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression tests for #6890: repeated base-model downloads across checkpoint exports.
-
-merge_and_overwrite_lora downloads missing 16-bit shards with hf_hub_download(local_dir),
-which never populates the persistent HF hub cache; a temporary merge directory (Unsloth
-GGUF exports delete it) means every checkpoint export re-downloads the full base model.
-_prewarm_base_model_hub_cache snapshot-downloads the base into the hub cache first so
-the zoo's cache-copy fast path is hit on later exports.
-
-unsloth.save cannot be imported on GPU-less hosts, so these tests extract the helper's
-source via ast and exec it against fakes, mirroring the other GPU-free tests.
-"""
+"""Pre-warm the hub cache: hf_hub_download(local_dir) never fills it, so later exports re-download."""
 
 from __future__ import annotations
 

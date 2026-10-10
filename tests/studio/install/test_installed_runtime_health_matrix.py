@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The launch preflight health probe across every platform, backend and shipped marker shape.
-
-``installed_runtime_health`` is asked at desktop launch, and a ``(False, reason)`` marks the
-install stale, which runs a repair that ends in ``_existing_install_runs`` deciding
-keep-or-reinstall. Those two deciders are what this file holds together.
-
-The load-bearing property is one directional inequality: a tree this probe calls broken must
-be a tree the repair would not keep. Otherwise the repair leaves the tree identical, the next
-launch rejects it again, and the user has an unbreakable loop with no error to act on.
-Asserted as a property over the whole matrix, since the pair of deciders is what drifts.
-
-The other half is backwards compatibility. ``UNSLOTH_PREBUILT_INFO.json`` is append-only
-across twelve shapes with no version field, so a wrong ``(False, ...)`` on any of them is a
-repair loop for every user carrying that shape today.
-
-Platforms are simulated through ``HostInfo`` and passed with ``host=``, as in
-``test_keep_install_backcompat_9979``, which this file borrows its fixtures and marker tables
-from. WSL is not a fourth platform: ``platform.system()`` says ``Linux`` there and every
-table is chosen off ``is_windows`` / ``is_macos``, so it is graded by the Linux rows. The
-arm64 hosts matter for the install kind names, though the payload intersection is picked by
-the platform prefix rather than the architecture.
-"""
+"""A tree the health probe calls broken must never be one _existing_install_runs keeps."""
 
 import importlib.util
 import json
@@ -265,11 +244,7 @@ _ASSET_TOKEN = {
 
 
 def shape_with_backend(shape: dict, backend: str) -> dict:
-    """A shipped shape re-pointed at ``backend`` the way that shape would record it.
-
-    Shapes older than #8520 have no ``backend`` key, and adding one would test a marker no
-    install ever carried, so they get the asset name ``marker_backend`` falls back to.
-    """
+    """Old shapes get no backend key, since no real install recorded one; only the asset name changes."""
     marker = {**shape, "asset": _ASSET_TOKEN[backend]}
     if "backend" in shape:
         marker["backend"] = backend
@@ -277,12 +252,7 @@ def shape_with_backend(shape: dict, backend: str) -> dict:
 
 
 def required_runtime_files(platform: str, backend: str, marker: dict) -> list[str]:
-    """The files a tree of this shape owes, stated independently of the module's tables.
-
-    Only backends the platform builds contribute a library: ``cuda`` on macOS filters to no
-    install kind, so the decider falls back to every kind the platform has, whose
-    intersection is the shared payload alone.
-    """
+    """Files a shape owes, stated apart from module tables; a backend not built there adds none."""
     source = marker.get("source")
     files = list(_SHARED_PAYLOAD[platform])
     if platform == "windows" and source not in {"published", "upstream"}:
@@ -324,13 +294,7 @@ def build_tree(
     binaries: bool = True,
     runtime_dir: bool = True,
 ) -> Path:
-    """Write a complete install tree at ``root``.
-
-    Complete for ``_existing_install_runs`` as well as for the health probe, since the
-    invariant test drives both against the same tree, so the root entrypoint copies,
-    ``convert_hf_to_gguf.py`` and ``gguf-py`` are written and the binaries are runnable
-    stubs. ``marker`` is the object to serialise, ``None`` writes none, ``str`` verbatim.
-    """
+    """Writes a complete tree for both probe and keep decision; marker None writes none, str verbatim."""
     platform = _platform_of(host)
     ext = ".exe" if host.is_windows else ""
     runtime = _runtime_dir(root, host)
@@ -417,13 +381,7 @@ def test_removing_any_single_required_file_is_reported_broken(tmp_path, cell, ho
 
 @pytest.mark.parametrize(("cell", "host", "backend", "shape"), CELLS, ids = CELL_IDS)
 def test_a_broken_tree_is_never_one_the_repair_would_keep(tmp_path, cell, host, backend, shape):
-    """THE INVARIANT, as a property over the matrix rather than as examples.
-
-    Every damaged tree the probe rejects is put to ``_existing_install_runs``, which the repair
-    ultimately consults. A tree rejected here and kept there is repaired, left unchanged, and
-    rejected again next launch, with no actionable error. The trees carry runnable stubs and
-    the full ``confirm_install_tree`` set so the keep path reaches its real decision.
-    """
+    """A tree the probe rejects must never be kept by _existing_install_runs, or repair loops forever."""
     marker = shape_with_backend(shape, backend)
     platform = _platform_of(host)
     ext = ".exe" if host.is_windows else ""
@@ -537,11 +495,7 @@ def test_removing_a_file_this_install_kind_does_not_owe_stays_healthy(tmp_path):
 
 
 def test_the_split_dylibs_are_owed_on_a_post_split_macos_bundle(tmp_path):
-    """macOS carries the same split: the real b11007 arm64 bundle ships
-    libllama-server-impl.dylib and libllama-quantize-impl.dylib, and dyld cannot start
-    llama-server without them. Every other group stayed satisfied, so this was the one
-    platform where the probe answered Ready on a runtime that could not run.
-    """
+    """Post-split macOS bundles owe the -impl dylibs: without them dyld cannot start llama-server."""
     post = build_tree(
         tmp_path / "post",
         host = MACOS_ARM64,

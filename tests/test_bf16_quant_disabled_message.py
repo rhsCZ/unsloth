@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The '-bf16' notice must not claim 16bit when a quantization_config survives.
-
-A `-bf16` name drops the plain load_in_4bit / 8bit / fp8 flags, but a user
-`quantization_config` stays in `**kwargs` and still quantizes, so there the
-notice would say the opposite of what happens.
-
-Source-level, because reaching the branch needs a real checkpoint download.
-"""
+"""The -bf16 notice must not claim 16bit when a user quantization_config survives and still quantizes."""
 
 import ast
 import os

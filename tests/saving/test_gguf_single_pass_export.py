@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""CPU-only routing tests for the single-pass GGUF export and parallel quantization.
-
-With convert/quantize monkeypatched, verify save_to_gguf's pass planning:
-- a single directly-convertible output type (f32/f16/bf16/q8_0) converts in ONE pass
-  with no llama-quantize step and no 16-bit intermediate,
-- k-quants and imatrix runs keep the two-pass route,
-- multiple quantize passes run through the bounded pool with request order preserved,
-- quantize failures still raise the actionable RuntimeError.
-"""
+"""A direct f32/f16/bf16/q8_0 export takes one pass; k-quants and imatrix keep the two-pass route."""
 
 from __future__ import annotations
 
@@ -242,12 +234,7 @@ def test_a_disposable_merge_is_reclaimed_when_the_disk_is_tight(monkeypatch, tmp
 
 
 def test_the_ownership_record_survives_the_same_trip(monkeypatch, tmp_path):
-    """The second half of the safety story has to arrive too.
-
-    A file named in `preexisting_weights` is the caller's, so the same tight-disk
-    export that reclaims the merge must leave it alone. Testing this at the
-    bottom only would not show that `save_to_gguf` still carries it down.
-    """
+    """Files in `preexisting_weights` are the caller's; a tight-disk save_to_gguf must not reclaim them."""
     _Harness(monkeypatch, tmp_path)
     weights = _merge_weights(tmp_path)
     _tight_disk(monkeypatch)

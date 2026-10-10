@@ -114,10 +114,8 @@ def test_st_transformer_base_class_either_path(tag: str):
 
 
 def test_st_transformer_load_accepts_unsloth_kwargs(tag: str):
-    """unsloth builds saved ST models via Transformer.load(...) so the saved
-    modality_config is honored (#6881). If .load stops accepting the hub kwargs it
-    passes (and has no **kwargs), update the fix before it silently regresses. Not
-    locating .load is a SKIP (may be inherited); the live test guards the install."""
+    """Transformer.load must accept unsloth's hub kwargs, or the saved modality_config regresses
+    silently."""
     candidates = [
         "sentence_transformers/models/Transformer.py",
         "sentence_transformers/models/transformer.py",

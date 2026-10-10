@@ -132,14 +132,8 @@ with sync_playwright() as p:
     hf_inflight: dict[object, float] = {}
 
     def _is_hub_url(url: str) -> bool:
-        """Only the origin the picker itself queries counts as Hub connectivity.
-
-        A substring test also matches datasets-server.huggingface.co, which the training
-        split lookup calls. The frontend keys its backoff by exact origin
-        (HUGGING_FACE_ORIGIN in studio/frontend/src/features/hub/lib/network.ts), so a
-        failure at a sibling host says nothing about the picker's search, and counting it
-        would let an unrelated lookup hand a real search regression the built-in list.
-        """
+        """Only the exact host huggingface.co counts; a substring also matches datasets-
+        server.huggingface.co."""
         try:
             return urllib.parse.urlsplit(url).netloc.lower() == "huggingface.co"
         except Exception:
@@ -705,25 +699,8 @@ with sync_playwright() as p:
                 next_rows_ms = float(WHEEL_ROWS_TIMEOUT_MS)
 
                 def search_abort_extension() -> tuple:
-                    """How much of the frontend's own search timeout is still to run.
-
-                    WHEEL_ROWS_TIMEOUT_MS is counted from `fill`, but the frontend starts its 15s
-                    from the debounced request, which a CPU-starved runner can schedule well past
-                    the nominal 300ms. While that request is in flight the abort that proves the
-                    Hub unreachable has not happened yet, so the budget is re-based onto the
-                    request rather than the step deciding the Hub is healthy without it.
-
-                    Only requests issued after the query was typed count: an unrelated Hub
-                    request left hanging from an earlier step started long ago and would anchor
-                    the budget to a deadline that has already passed.
-
-                    Returns the request as well, because the picker searches twice in sequence
-                    (unsloth-owned, then general: mergedModelIterator in
-                    studio/frontend/src/features/hub/hooks/use-hub-model-search.ts). A slow but
-                    healthy first search can spend the extension, and the second then starts with
-                    its own full budget, so the caller has to be able to re-base onto that one
-                    rather than treat the step as already extended.
-                    """
+                    """Re-bases the search budget onto the in-flight request, counting only requests
+                    made after typing."""
                     live = [(at, req) for req, at in hf_inflight.items() if at >= query_typed_at]
                     if not live:
                         return None, 0.0

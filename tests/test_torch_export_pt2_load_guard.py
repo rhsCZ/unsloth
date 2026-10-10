@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""CVE-2026-4538: torch.export .pt2 loading unpickles archive payloads with weights_only=False
-(always on older torch, as a fallback after a failed weights_only=True load on newer torch, and
-for `use_pickle` weights / constants), so a crafted .pt2 runs code on load. No torch release
-fixes it (pytorch/pytorch#176791 was closed unmerged).
-
-patch_torch_export_pt2_unsafe_load forces weights_only=True only for loads issued from the two
-export loader modules. The tests call torch.load from a function whose globals are those
-modules, which is exactly what the guard keys on, with a harmless class that torch's
-weights_only allowlist rejects.
-"""
+"""Forces weights_only=True on torch.load in the two .pt2 export loader modules (CVE-2026-4538)."""
 
 import importlib
 import importlib.util

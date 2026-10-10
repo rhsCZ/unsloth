@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Settings dialog behaviour harness: every tab renders, search jumps land, deep-open works.
-
-Drives smoke-settings.html (the real SettingsDialog and store, no backend), so a static-import
-tree and a React.lazy one are directly comparable. Emits a JSON report to $PW_OUT for a
-field-by-field diff.
-
-    PW_ENGINE=chromium PW_PORT=5399 PW_OUT=out.json python tests/studio/playwright_settings_tabs.py
-
-PW_CHUNK_DELAY_MS delays every tab module response, widening the window a lazy panel is
-in-flight for; PW_CHUNK_FAIL=<tab> aborts one tab's module outright.
-"""
+"""Settings tabs on the real dialog, no backend; PW_CHUNK_DELAY_MS and PW_CHUNK_FAIL inject faults."""
 
 import json
 import os
@@ -142,11 +132,7 @@ def settle(page, timeout_s: float = SETTLE_TIMEOUT_S) -> dict:
 
 
 def settle_panel(page, timeout_s: float = SETTLE_TIMEOUT_S) -> dict:
-    """Settle, but do not accept a placeholder as the answer.
-
-    The panel renders from a deferred value, so the outgoing content stays on screen until
-    the incoming one is ready, and under load that hand-off can hold still past SETTLE_MS.
-    """
+    """Waits past the deferred-render placeholder, which can outlast SETTLE_MS under load."""
     deadline = time.time() + timeout_s
     latest = settle(page, timeout_s = timeout_s)
     while latest.get("elements", 0) < 5 and time.time() < deadline:
@@ -184,14 +170,7 @@ def click_tab_and_observe(page, tab: str) -> dict:
 
 
 def require_harness(page) -> None:
-    """Fail with the cause rather than a selector timeout if the page has moved on.
-
-    Vite dev proxies /api to 127.0.0.1:8888. With a real Unsloth listening there and no
-    token, those calls come back 401 and the app's auth handling navigates, which takes
-    the harness's window with it. Every later step then times out on a dialog that cannot
-    exist. This is not the dialog's doing: it happens on main too, where the harness is
-    unmounted before the first open. So say so.
-    """
+    """Fail if the harness page is gone: a real Unsloth on 127.0.0.1:8888 gives /api 401 and navigates."""
     if not page.evaluate("() => !!window.__settingsSmoke"):
         raise RuntimeError(
             "the harness page is gone (window.__settingsSmoke undefined). This smoke page "
@@ -228,14 +207,7 @@ ABANDON_DEEP_OPEN_JS = """(delay) => {
 
 
 def run_abandoned_deep_open(page) -> None:
-    """A deep-open the panel never mounted for must not outlive the navigation.
-
-    `openArchivedChats` sets `archivedRequested`, and DataTab is the only thing that clears
-    it. Now that the panel is fetched on first view, closing the dialog while that fetch is
-    in flight leaves the request set with nothing to consume it, and the next ordinary visit
-    to Data opens an archive listing nobody asked for. Runs before anything else opens the
-    dialog, so the Data module is still cold and the hold is what decides when it arrives.
-    """
+    """Closing the dialog mid-fetch must not leave archivedRequested set for the next Data visit."""
 
     # Match only the Data module: the handler sleeps on the driver thread, queueing every request it sees.
     def hold_data(route):
@@ -446,12 +418,7 @@ def assert_persisted_monitor_restores(page) -> None:
 
 
 def run_keystroke_search(page) -> None:
-    """Searching the shortcut list by pressing a chord instead of typing its name.
-
-    Ordering is the whole risk here: the press has to reach the box ahead of the
-    shortcut it names and ahead of the dialog's own Escape, which only a real
-    browser can settle.
-    """
+    """Chord press must beat both the shortcut it names and the dialog's own Escape to the search box."""
     open_dialog(page, "keyboard-shortcuts")
     settle_panel(page)
     rows_js = """() => [...document.querySelectorAll('[data-settings-label]')]

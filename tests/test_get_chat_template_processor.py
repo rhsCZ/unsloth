@@ -1,23 +1,4 @@
-"""get_chat_template accepts a multimodal processor. See issue #10146.
-
-gemma-4-E2B-it and other multimodal checkpoints load as a processor, not a tokenizer:
-the text tokenizer sits in `processor.tokenizer`. On MLX the processor has no
-padding_side of its own, so `old_padding_side = tokenizer.padding_side` raised
-AttributeError before the function did anything. (On CUDA the loader sets padding_side
-on the processor at models/vision.py, which is why this only bit Apple Silicon, but the
-processor still has no Rust backend, so the vocab-editing templates broke there too.)
-
-It now unwraps the processor, works on the inner tokenizer and re-attaches on return.
-Three parts of that are quiet if broken: `old_tokenizer` must be bound after the unwrap,
-or the pad/bos/unk restore near the end reads None off the processor and blanks all
-three; the processor must come back carrying the new chat_template, since
-ProcessorMixin.apply_chat_template renders off its own attribute; and the bos/eos/pad
-copies the loader mirrored onto the processor must be refreshed, since chatml and
-gemma_chatml rebuild the tokenizer with a remapped eos.
-
-Importing unsloth needs a GPU, so the statements are pulled out of the source with ast
-and run over stand-ins, as tests/test_map_eos_token.py does.
-"""
+"""Works on the inner tokenizer of a multimodal processor, since MLX processors lack padding_side."""
 
 import ast
 import os

@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The chat-only /export check in playwright_extra_ui.py must wait for the gate, not count it.
-
-export-page.tsx renders "Export unavailable" only once the hardware query has answered
-(hardware.loaded && exportSupported === false). The form and its export CTA render first and
-satisfy the step's opening wait, so a count() taken then misses a gate that is on its way."""
+"""The /export check must wait for "Export unavailable", since a count() taken early misses it."""
 
 from pathlib import Path
 

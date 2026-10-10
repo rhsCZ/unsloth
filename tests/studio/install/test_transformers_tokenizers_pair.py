@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""transformers and tokenizers have to be pinned together, or Apple Silicon loses Train.
-
-transformers declares a tokenizers window and ENFORCES it at import, so a venv holding
-a transformers that rejects its tokenizers is not subtly wrong: every
-`import transformers` raises, `import mlx_lm` with it, mlx_repair.mlx_stack_blockers()
-reports a blocker, and Studio comes up chat-only with Train and Export disabled.
-
-Two ways that happened, both covered here:
-
-* extras-no-deps.txt pinned `transformers==5.5.0` under --no-deps, which skips
-  transformers' own tokenizers requirement, so whatever the earlier with-deps resolve
-  had picked stayed. Half a pair is worse than no pin.
-* install.sh's core phase runs with UV_OVERRIDE=overrides-darwin-arm64.txt and without
-  single-env/constraints.txt. An override REPLACES every requirement on a package, so
-  its unbounded `transformers>=5.5.0` also replaced pyproject's `<=5.5.0` cap. From
-  transformers 5.16.0 (2026-08-26), the first release wanting `tokenizers>=0.23.1`, that
-  resolve began landing tokenizers 0.23.2 on macOS arm64, and step 3b then downgraded
-  transformers alone.
-
-No unsloth commit caused the second one: a third-party release walked into an unbounded
-override. So the resolver test below checks the pair a fresh macOS arm64 install would
-END with, rather than any version number a diff would show.
-"""
+"""Pin transformers and tokenizers as a pair; a mismatch breaks every import on Apple Silicon."""
 
 from __future__ import annotations
 
@@ -170,10 +148,7 @@ def test_no_requirements_file_admits_a_tokenizers_outside_the_window():
 
 
 def test_the_darwin_override_admits_only_the_pinned_transformers():
-    """The override is the one file that can widen what the core install resolves, because
-    install.sh runs that one uv command without constraints.txt and an override replaces
-    every requirement on the package -- including pyproject's own cap. Bounded to exactly
-    what constraints.txt pins, it cannot drift into a fourth independent pin."""
+    """The darwin override replaces pyproject's cap too, so it may admit only the constraints.txt pin."""
     pinned = {
         str(req.marker): version
         for req in _named(_requirements(CONSTRAINTS), "transformers")
@@ -284,14 +259,7 @@ def _declared_window(version: str) -> SpecifierSet:
 
 
 def test_a_fresh_macos_arm64_install_ends_with_a_consistent_pair():
-    """Model the installer IN ORDER. Compiling everything at once would find a consistent
-    environment the installer never produces: install.sh's core phase resolves first, with
-    the override and without constraints.txt, and step 3b then replaces the packages
-    extras-no-deps.txt names, dependencies skipped.
-
-    Fails on the tree that shipped the defect (core phase -> transformers 5.16.1 +
-    tokenizers 0.23.2; step 3b -> transformers 5.5.0, tokenizers untouched).
-    """
+    """Model the installer's order: a single compile can find a pair the installer never produces."""
     platform_args = [
         "--python-platform",
         "aarch64-apple-darwin",

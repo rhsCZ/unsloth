@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The watchdog may not hard-exit a wait still inside its own timeout, or the run reports
-only "wedged somewhere". So the budget must restart on `wall_kick()`, and no two
-turn-scaled waits may run without a kick between them. `playwright_chat_ui.py` drives
-Playwright at import, so its half is read from source; the watchdog is run for real.
-"""
+"""Watchdog budget restarts on wall_kick(), so it never hard-exits a wait inside its own timeout."""
 
 from __future__ import annotations
 
@@ -77,10 +73,7 @@ def test_a_watchdog_that_expires_during_start_still_exits():
 
 
 def test_a_total_cap_is_a_ceiling_no_kick_can_move():
-    """What makes an outer bound around this process a sum instead of a guess.
-
-    Without it a caller sizing a backstop has nothing to size against: every kick moves
-    the deadline, so the exit lands at a wall-clock time the caller cannot predict."""
+    """total_deadline_s is a ceiling no kick can move, so an outer backstop can be sized."""
     fired = threading.Event()
     watchdog = _WallClockWatchdog(10.0, fired.set, total_deadline_s = 0.7).start()
     started = time.monotonic()

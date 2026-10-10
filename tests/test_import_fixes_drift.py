@@ -1019,12 +1019,7 @@ def test_torchao_intmm_patch_wired_into_gpu_init():
 
 
 def test_rope_scaling_replacement_keeps_the_base_frequency():
-    """The pathology: transformers 5 moved ``rope_theta`` inside
-    ``config.rope_parameters`` while keeping ``rope_scaling`` as an alias that replaces
-    that whole dict, so assigning a normalized scaling dict leaves the base ``None``.
-    Asked of the live build after the fix has run, so this fails whenever the fix
-    stopped neutralising it, and passes on 4.57.6 where there is nothing to neutralise.
-    """
+    """Assigning rope_scaling replaces rope_parameters wholesale in transformers 5, dropping rope_theta."""
     pytest.importorskip("transformers")
     from unsloth.import_fixes import (
         _rope_scaling_property_owner,
@@ -1085,13 +1080,8 @@ def test_rope_scaling_setter_patch_is_idempotent():
 
 
 def test_rope_theta_carry_only_writes_when_the_base_would_be_lost():
-    """The carry helper, on every shape the parameters can arrive as.
-
-    Cases three to five are the fix, case one is what keeps it self-neutralising on a
-    transformers that keeps the base itself, and the last two are the shapes a naive
-    carry would damage: a per-layer rope dict, and the Gemma local rotary, where a base
-    the caller stated on purpose must survive untouched.
-    """
+    """The carry writes rope_theta only when it would be lost; per-layer dicts and Gemma local bases
+    stay."""
     from types import SimpleNamespace
 
     from unsloth.import_fixes import _carry_rope_theta_across_assignment as carry
@@ -1491,14 +1481,7 @@ def test_rope_scaling_patch_wired_into_gpu_init():
 
 
 def test_a_reloaded_configuration_module_gets_the_new_base_class_patched():
-    """A reload replaces the owner underneath the cached config the probe measures.
-
-    `importlib.reload(transformers.configuration_utils)` re-runs the class body and
-    produces a NEW, unpatched base class, while `transformers.LlamaConfig` stays in
-    `sys.modules` with its old bases -- including the class we patched. The probe therefore
-    reported the base frequency survives, the fix returned early, and the new base class
-    stayed unpatched for every config module imported afterwards.
-    """
+    """After a reload the probe must check the new base class, not the cached config's old bases."""
     pytest.importorskip("transformers")
     from unsloth.import_fixes import (
         _rope_probe_inherits,
@@ -1527,15 +1510,7 @@ def test_the_reload_check_rejects_a_non_class_owner():
 
 
 def test_rope_theta_carry_restores_each_layer_types_own_base():
-    """Per-layer parameters hold one base PER LAYER TYPE, and a single scalar cannot
-    describe them.
-
-    transformers 5.5's T5Gemma2DecoderConfig starts at 10000.0 for sliding attention and
-    1000000.0 for full attention. Reading `parameters["rope_theta"]` off the OUTER dict
-    finds nothing, so the snapshot was None, the carry declined, and a later
-    standardize_rope_params filled both nested bases with None: invalid RoPE
-    initialisation with nothing raised.
-    """
+    """Per-layer rope parameters hold one base per layer type; a single scalar cannot restore them."""
     from types import SimpleNamespace
 
     from unsloth.import_fixes import (
@@ -1621,13 +1596,7 @@ def test_rope_theta_snapshot_still_reads_a_flat_base():
 
 
 def test_a_per_layer_snapshot_never_becomes_a_scalar_rope_theta():
-    """Per-layer parameters replaced by a FLAT dict.
-
-    The snapshot is a {layer_type: base} mapping and every slot below the per-layer branch
-    holds a number, so passing the mapping through wrote a dict into
-    `rope_parameters["rope_theta"]` and the first RoPE arithmetic on it would raise. One
-    base can stand for the mapping only when every layer type agreed on it.
-    """
+    """A per-layer snapshot is never written as a scalar rope_theta unless every layer type agrees."""
     from types import SimpleNamespace
 
     from unsloth.import_fixes import _carry_rope_theta_across_assignment as carry
@@ -1656,11 +1625,7 @@ def test_a_per_layer_snapshot_never_becomes_a_scalar_rope_theta():
 
 
 def test_the_torchvision_backend_still_breaks_the_4x_numpy_contract():
-    """DRIFT DETECTOR for the method shim: `normalize` refuses ndarray and
-    `rescale` silently returns float64 where 4.x returned float32. Both halves
-    are asserted; if upstream restores either, drop that entry from
-    `_LEGACY_NUMPY_IMAGE_METHODS` rather than wrap a method with itself.
-    """
+    """normalize refuses ndarray and rescale returns float64; drop a shim entry once upstream fixes it."""
     transformers = pytest.importorskip("transformers")
     np = pytest.importorskip("numpy")
     from packaging.version import Version
@@ -1699,11 +1664,7 @@ def test_the_torchvision_backend_still_breaks_the_4x_numpy_contract():
 
 
 def test_the_4x_numpy_helpers_the_method_shim_forwards_to_still_exist():
-    """DRIFT DETECTOR: the shim forwards to transformers' own 4.x functions.
-
-    Drop them upstream and there is no verified implementation left to restore,
-    so the shim must be reconsidered rather than reimplemented.
-    """
+    """Shim forwards to transformers' 4.x helpers; if upstream drops them, reconsider, not reimplement."""
     pytest.importorskip("transformers")
     np = pytest.importorskip("numpy")
     from transformers import image_transforms
@@ -1749,10 +1710,7 @@ def test_the_numpy_image_method_shim_is_wired_into_the_remote_code_hook():
 
 
 def test_transformers_scopes_a_submodules_conversion_mapping():
-    """``fix_transformers_composite_prefix_renaming``: transformers 5.4.0 to 5.5.4
-    merge a submodule's own prefix renaming into the parent's conversion mapping
-    verbatim, which renames a composite model's real weight names into names it does
-    not have and throws away the bitsandbytes quant_state sidecars with them."""
+    """transformers 5.4.0-5.5.4 merges submodule prefix renamings verbatim, breaking composite weights."""
     transformers = pytest.importorskip("transformers")
     from packaging.version import Version
 
@@ -1783,12 +1741,7 @@ def test_transformers_scopes_a_submodules_conversion_mapping():
 
 
 def test_composite_renaming_probe_agrees_with_the_real_mapping():
-    """The install gate is a claim about behaviour, so check it against the behaviour.
-
-    Builds a real composite Qwen3.5 on the meta device -- no weights, no download --
-    and asks whether the mapping transformers really produces rewrites that model's
-    own parameter names into names it does not have.
-    """
+    """Checks the install gate against a real meta-device Qwen3.5 composite, not a description of it."""
     torch = pytest.importorskip("torch")
     pytest.importorskip("transformers")
     from unsloth.import_fixes import _transformers_rescopes_submodule_prefix_renamings
@@ -1866,13 +1819,7 @@ def test_composite_renaming_patch_wired_into_gpu_init():
 
 
 def test_no_top_level_definition_is_shadowed_by_a_later_one():
-    """A second `def` of the same name silently wins and the first becomes dead code.
-
-    This branch stacks on #11450, which moved `_transformers_rescopes_submodule_prefix_renamings`
-    into the base. The merge landed both copies in different regions of the file, so git
-    reported no conflict while Python bound the later one and the earlier one, which
-    answered differently when `core_model_loading` failed to import, stopped running.
-    """
+    """A duplicate top-level def silently shadows the first, so a bad merge leaves dead code unnoticed."""
     import ast
     from collections import Counter
 

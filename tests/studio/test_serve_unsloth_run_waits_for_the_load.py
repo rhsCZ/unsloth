@@ -1,18 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""serve-unsloth-run.sh waits for the model load, not a fixed 30 seconds.
-
-`unsloth run` answers /api/health before it loads the model and prints its banner, API key
-included, only once the load is done. The script used to give the banner 30 one-second polls
-after health. That is about 10s of work normally, but a 4.8 GB GGUF on a busy CPU runner took
-longer, and the `connection (opencode, stable)` leg failed with "could not parse an API key
-from the banner" while the model was still loading.
-
-The script runs here against a stand-in `unsloth` on PATH, and a stand-in `sleep` that returns
-at once and counts its calls, so the script's seconds are counted polls. The stand-in prints
-the banner 40 polls after it first answers health, past the old window, in well under a second
-of real time.
-"""
+"""The banner with the API key appears only after the model loads, so wait for it, not 30 polls."""
 
 from __future__ import annotations
 

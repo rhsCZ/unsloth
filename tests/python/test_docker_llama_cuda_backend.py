@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guard for the llama.cpp CUDA backend inside the Docker image.
-
-The portable bundle dlopens libggml-cuda.so but carries none of the CUDA math
-libraries it links against, and with no libcublas on the loader path the backend
-fails to load SILENTLY: nothing printed, `--list-devices` empty, every GGUF request
-on the CPU. These pin the two Dockerfile halves that prevent it.
-"""
+"""Without libcublas on the loader path, the llama.cpp CUDA backend fails silently."""
 
 from __future__ import annotations
 
@@ -69,12 +63,7 @@ def test_build_fails_on_an_unresolved_cuda_backend(dockerfile: str):
 
 
 def _cublas_pkg_for(dockerfile: str, soname: str) -> str:
-    """The wheel the guard installs for a bundle asking for ``soname``.
-
-    Runs the Dockerfile's own selection lines instead of matching them. A name
-    is only correct if it resolves on PyPI, which no string comparison can tell
-    you, so pinning one spelling is how this went wrong the first time.
-    """
+    """Runs the Dockerfile's own wheel selection, since a name is right only if it resolves on PyPI."""
     guard = dockerfile[dockerfile.index("CUDA_SO=") :]
     start = guard.index('major="${want##*.}"')
     snippet = guard[start : guard.index('echo ">> $want missing', start)]

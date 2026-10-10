@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the runtime managed-Node resolver (studio/backend/utils/node_runtime.py).
-
-The Unsloth frontend installer may provision an isolated Node under
-``<UNSLOTH_HOME>/node`` that is never added to the user's PATH. The backend OXC
-validator must still find a usable Node at runtime: a version-adequate system
-Node, else the managed isolated one. These tests pin that resolution and the
-version floor (kept in sync with the setup scripts' Node decision).
-"""
+"""Pins Node resolution for OXC: a version-adequate system Node, else the managed isolated one."""
 
 from __future__ import annotations
 

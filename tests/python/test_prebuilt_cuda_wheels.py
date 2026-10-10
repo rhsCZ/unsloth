@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The wheels we build ourselves, and the resolver that has to find them.
-
-Upstream publishes prebuilt flash-attn / causal-conv1d / mamba-ssm wheels against torch 2.10 and
-2.11, reused through 2.12. torch 2.13 broke the extension ABI (materialize_cow_storage, the
-c10_cuda_check_implementation signature) and 2.14 broke it again, so from 2.13 on the wheels come
-from .github/workflows/prebuilt-cuda-wheels.yml and a release on this repository.
-
-Two halves have to agree for that to work at all, and they live in different languages in
-different directories: the workflow decides what a wheel is CALLED, and wheel_utils decides what
-the installer ASKS FOR. A disagreement between them is a 404 and a five-hour source build, and
-neither half can notice it alone. So the central test here builds the filename both ways for
-every cell the workflow can produce and asserts they are the same string.
-
-The rest pins what must not move:
-
-* 2.4 through 2.12 keep resolving to upstream, unchanged, including the 2.11/2.12 reuse;
-* the override is Linux x86_64, cu13, cxx11abiTRUE only, so Windows, macOS, aarch64, CUDA 12 and
-  a non-C++11-ABI torch keep exactly the behaviour they have today;
-* the workflow stays dispatch-only, keeps `contents: write` on the publish job alone, and keeps
-  every action pinned to a SHA, because it signs and publishes binaries under our identity.
-"""
+"""Workflow wheel names must equal what the resolver asks for, or installs 404; override is cu13 only."""
 
 from __future__ import annotations
 
@@ -86,13 +66,8 @@ def triggers(doc: dict) -> dict:
 
 class TestWorkflowAndResolverAgree:
     def test_every_cell_the_workflow_builds_is_what_the_resolver_asks_for(self):
-        """The one test this whole file exists for.
-
-        The workflow renames its build output to prebuilt_wheels.wheel_name(...); the installer
-        downloads the basename of unsloth_prebuilt_wheel_url(...). Nothing else checks that
-        those are the same string, and if they ever differ the symptom is a 404 on a user's
-        machine rather than a red run here.
-        """
+        """Nothing else checks the workflow's wheel name matches the installer's download; a
+        mismatch is a 404."""
         checked = 0
         for package, spec in prebuilt_wheels.SPECS.items():
             for torch_version in prebuilt_wheels.TORCH_VERSIONS:

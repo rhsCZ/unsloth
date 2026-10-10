@@ -63,10 +63,7 @@ def tls_certificate(tmp_path_factory):
 
 @pytest.fixture
 def stdlib_ssl():
-    """Run on the stdlib ``ssl``: importing ``prebuilt_core`` injects truststore on
-    macOS and Windows, whose SSLContext ignores SSL_CERT_FILE and cannot wrap a
-    server-side socket (``get_unverified_chain`` on None in ``_verify_peercerts``).
-    """
+    """Run on stdlib ssl: importing prebuilt_core injects truststore, which cannot wrap server sockets."""
     injected = ssl.SSLContext.__module__.startswith("truststore")
     if injected:
         import truststore

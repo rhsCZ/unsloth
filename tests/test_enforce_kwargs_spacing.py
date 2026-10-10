@@ -390,14 +390,7 @@ def test_collapse_short_assert_left_alone(name, src):
 
 
 class TestTheRewriteKeepsThePermissions:
-    """The rewrite is a temp file moved over the target, so the mode travels with it.
-
-    tempfile.mkstemp creates 0600 and os.replace carries that onto the target, so
-    every file this hook touched came back 0600: an executable script lost the bit,
-    git recorded 100755 -> 100644, and pre-commit.ci committed that mode change on
-    a branch whose diff showed nothing. scripts/run_ruff_format.py is one of the
-    files this hook formats, so it did it to itself.
-    """
+    """The rewrite must keep the target's mode, since mkstemp's 0600 otherwise lands on the file."""
 
     @staticmethod
     def _rewrite(path: Path) -> None:

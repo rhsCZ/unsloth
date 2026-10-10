@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""`get_lora_parameters` must not treat a `weight_scale` as a quant state for a weight that is
-already dequantized to bf16 (e.g. a compressed-tensors layer at forward time). Otherwise the
-bnb fast_gemv / fast_dequantize path reads a missing `absmax` and crashes.
-"""
+"""Ignore weight_scale on bf16-dequantized layers, or the bnb path reads a missing absmax."""
 
 from types import SimpleNamespace
 

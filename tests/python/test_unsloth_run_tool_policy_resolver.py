@@ -1,10 +1,6 @@
 # Copyright 2025-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Truth-table tests for `resolve_tool_policy`: no flag installs no process-wide
-OVERRIDE on any bind (loopback, --secure tunnel, raw network), so a request's own
-`enable_tools: false` is honored -- tools still default on for a request that
-omits the field, via the backend's separate tool-policy default. Explicit on/off
-wins, and the resolver never prompts (yes/silent/prompt kept for compatibility)."""
+"""Truth table for `resolve_tool_policy`: no flag sets no override, so a request's enable_tools wins."""
 
 import pytest
 

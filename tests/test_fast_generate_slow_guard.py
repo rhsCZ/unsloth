@@ -1,10 +1,4 @@
-"""GPU-free test for the fast_generate slow-mode guard in _utils.py.
-
-When fast_inference=False, model.fast_generate falls back to HuggingFace generate, so vLLM-only
-inputs must be rejected with a clear message instead of leaking into transformers.generate. Covers
-a string prompt, a vLLM {"prompt":..., "multi_modal_data":...} dict, SamplingParams passed both
-positionally and as a kwarg, and a normal tokenized call passing through.
-"""
+"""With fast_inference=False, vLLM-only inputs must be rejected, not leak into HF generate."""
 
 import ast, functools, os
 

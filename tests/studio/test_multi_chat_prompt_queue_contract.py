@@ -65,13 +65,7 @@ def _between(source: str, start: str, end: str) -> str:
 
 
 def _guard_for(source: str, call: str) -> str:
-    """The `if (...)` condition whose body performs ``call``.
-
-    Searching the whole file for the identity comparison is not enough: the abort
-    and cleanup branches next to the dispatch carry the same expression, so the
-    dispatch guard could regress to `.has(reservationKey)` on its own and a
-    whole-file search would still find a match in its neighbours.
-    """
+    """The if condition whose body performs call; whole-file searches match neighbouring branches."""
     assert call in source, f"missing call: {call}"
     head = source.split(call, 1)[0]
     opener = head.rfind("if (")
@@ -297,31 +291,8 @@ def test_composer_only_queues_behind_the_current_chat():
 
 
 def test_a_send_parked_on_the_settings_gate_queues_if_a_run_started_meanwhile():
-    """The park is not the bug; releasing it into a running thread is.
-
-    A submit that lands while a new chat's settings are pairing is parked with
-    a "Loading this chat's settings" toast. When the gate closes, the release
-    used to call `sendReservedComposer()` for anything that had not asked for
-    the queue with Cmd/Ctrl+Enter -- even when a run had started in the
-    meantime. The runtime refuses a send on a running thread, so the message
-    was neither queued nor sent, and the wait toast had already been dismissed
-    a few lines above: nothing on screen said the prompt was gone.
-
-    Measured, not reasoned about. With the browser under an 8x CDP CPU
-    throttle, so a build box renders like the 4 vCPU machines this shows up
-    on, the app's own trace reads:
-
-        +786 ms  submit -> settingsPending          (parked)
-        +10480   release  text="..." running=true   (gate closed 236 ms later)
-        +10482   release:sendReservedComposer
-
-    and 90 seconds later: one user bubble, one /v1/chat/completions request,
-    the prompt still sitting in the composer, no queue chip, no toast.
-
-    The `forceQueue` branch already re-read `isRunning` for exactly this
-    reason, in a comment that describes the bug in the branch beside it. The
-    rule below is that the run check governs BOTH.
-    """
+    """A parked send re-checks isRunning on release, since a send to a running thread is refused and
+    lost."""
     release = _between(
         THREAD,
         "      parkIfWaitingOnAttachments,\n    ],\n  );",
@@ -844,19 +815,7 @@ def test_queued_settings_are_thread_scoped_without_cross_chat_fallback():
 
 
 def test_a_media_turn_stays_legacy_and_its_attachments_stay_turn_scoped():
-    """A turn that carries media is still legacy; what changed is that it stops refusing its FOLLOW-UPS.
-
-    The gate used to read the raw base64 fields off post-prune HISTORY, so one screenshot anywhere in a thread
-    pushed every later text-only turn onto the cancel-on-disconnect stream - and that stale blob went out as a
-    top-level payload field too, so the backend 400'd "Media chat runs use the legacy streaming path" on turns that
-    never carried media at all. Both halves are pinned here: the gate is now `isDurableRunCandidate({...})` over
-    resolved values (its own truth table lives in tests/durable-gate.test.ts), and the payload's attachment channel
-    scans THIS turn's message alone.
-
-    Naming, because the two are easy to confuse: admitting a media turn ITSELF to a durable run is a separate
-    change living in #10406, and this branch does not make it. `turnCarriesMedia` still sends such a turn to the
-    legacy stream here, and routes/chat_generation_runs.py still refuses a populated `_MEDIA_FIELDS` payload.
-    """
+    """Media turns stay legacy; their attachments are scanned from this turn only, not old history."""
     assert "const generationCandidate = isDurableRunCandidate({" in CHAT_ADAPTER
     candidate = _between(
         CHAT_ADAPTER,
@@ -893,12 +852,8 @@ def test_a_media_turn_stays_legacy_and_its_attachments_stay_turn_scoped():
 
 
 def test_continuations_stay_on_the_legacy_stream():
-    """Continue yields its seeded partial before the request starts.
-
-    That autosave can reach storage before durable admission does, and admission refuses a
-    placeholder that already has content with a 409, which is not one of the errors that
-    falls back to the legacy stream. So the turn would fail outright rather than generate.
-    """
+    """Continuations stay on legacy: a seeded partial may be saved first, and durable admission then
+    409s."""
     candidate = _between(
         CHAT_ADAPTER,
         "const generationCandidate = isDurableRunCandidate({",
@@ -1078,12 +1033,7 @@ def test_sidebar_exposes_queue_activity_for_each_thread():
 
 
 def test_a_backgrounded_pane_autosaves_without_naming_itself_active():
-    """The shared provider (#9129) keeps a hidden pane's run alive, so its autosave still fires
-    after Compare has hidden it. The SAVE must keep happening; only the active-thread PUBLICATION
-    is suppressed, or the hidden base pane writes its own remote id into the store and Compare's
-    ``exportThreadIds = [model1, model2, activeThreadId]`` downloads the unrelated base
-    conversation alongside the two compare threads.
-    """
+    """Hidden panes keep saving but must not publish as active, or Compare exports the base chat."""
     autosave = _between(
         RUNTIME_PROVIDER,
         "function ThreadBackendAutosave(",
@@ -1127,14 +1077,7 @@ def test_a_backgrounded_pane_autosaves_without_naming_itself_active():
 
 
 def test_the_history_adapters_publish_stands_down_with_the_autosaves():
-    """``ThreadBackendAutosave`` is not the only place a pane names itself the active thread.
-
-    The history adapter's ``append()`` publishes the same id for every persisted message,
-    including the assistant message of the background run #9129 exists to keep alive.
-    ``enterCompare`` blanks the active id, so the ``!== remoteId`` test passes and a hidden pane
-    republishes itself into the same ``exportThreadIds`` the autosave guard was added for. Both
-    must stand down together, or gating one is decorative.
-    """
+    """Hidden panes' history append also publishes as active, so it must stand down with autosave."""
     append = _between(
         RUNTIME_PROVIDER,
         "      append({ parentId, message }: ExportedMessageRepositoryItem) {",

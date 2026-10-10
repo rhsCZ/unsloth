@@ -1,22 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Before/after evidence for a red parity verdict, and the ways a clean-looking pair proves nothing.
-
-The pictures exist because `msg22(assistant):17334->17334c` cannot tell a reviewer whether a
-difference is real, and a gate whose failures cannot be judged in ten seconds gets re-run instead
-of read. Which means the pair itself has to be trustworthy, and every test here is one of the ways
-it would not be:
-
-  a pair is built for the wrong actions      shooting every mismatch buries the one that turned
-                                             the verdict red under the ones the null already
-                                             excused
-  a half is missing and the other is shown   one image rendered alone reads as both
-  the two halves are at different scrolls    which looks exactly like a UI change
-  the halves cannot be told apart            both arms share a fixture, a film and a password
-
-Pillow is imported by the module under test only when a composite is actually drawn, so the
-collection path is asserted separately from the drawing path.
-"""
+"""Before/after screenshots for a red parity verdict; both halves must be present, at the same scroll."""
 
 from __future__ import annotations
 
@@ -388,13 +372,7 @@ def test_the_workflow_runs_the_gate_on_the_routes_the_measurement_depends_on():
 
 
 def test_the_evidence_uses_the_same_confined_set_the_verdict_scored_with(tmp_path):
-    """A finding the verdict keeps must get a picture.
-
-    The verdict confines the imported exemptions to what the scored runner reproduces, so an
-    evidence step reading the raw imported set goes back out of step with the job it illustrates:
-    the run reds on an action and the artifact has no composite for it. That is the same defect
-    as publishing no evidence at all, one round after it was fixed the first time.
-    """
+    """Evidence must use the confined exemption set the verdict scored with, not the raw imported set."""
     shots = tmp_path / "shots"
     null_rows = [{"row_type": "run_meta", "tier": "fast"}]
     for rep in ("rep0", "rep1"):
@@ -445,12 +423,7 @@ def test_a_direction_reversing_pair_is_not_illustrated_either(tmp_path):
 
 
 def test_two_shards_do_not_share_one_screenshot_identity(tmp_path):
-    """A cell id is deterministic, so every shard restarts at `r100K.base.rep0`.
-
-    Keyed without the shard, the last payload read won and `build` could pair a mismatch found in
-    one film with a picture taken during another. The verdict has always carried the shard; only
-    the index and the output filename threw it away.
-    """
+    """Cell ids repeat in every shard, so the shard must be part of a screenshot's identity."""
     shots = tmp_path / "shots"
     result = tmp_path / "result"
     for shard in ("sh1", "sh2"):
@@ -508,13 +481,7 @@ NOT_GATED: dict[str, str] = {
 
 
 def test_every_import_of_a_measured_route_is_gated_or_explicitly_waived():
-    """A route is not one file, and the filter should say where it stops.
-
-    Enumerates the DIRECT first-party imports of the routes studiobench drives and requires each
-    to be either in the workflow's path filter or in `NOT_GATED` with a reason. Direct only: the
-    transitive closure of `routes/inference.py` is most of the backend, and a filter that matches
-    everything is the same as no filter.
-    """
+    """Each direct first-party import of a measured route must be in the path filter or in NOT_GATED."""
     import re
 
     repo = Path(__file__).resolve().parents[5]

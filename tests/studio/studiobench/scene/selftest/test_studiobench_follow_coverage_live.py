@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""THE FOLLOW VERDICT COVERED THIRTEEN PERCENT OF THE STREAM AND READ AS A PASS.
-
-`follows_the_stream` exists to stop a windowed renderer producing a flattering streaming cost: if
-the thread stops following, the streamed message leaves the viewport, a virtualizer unmounts it,
-and the renderer is no longer rendering the thing being measured. The frame rate that comes out is
-excellent and is about nothing.
-
-The sampler splits its samples into two phases. ATTACHED, before the harness has scrolled
-anywhere: the thread must stay pinned as content arrives, and this is what `pinned_fraction`
-scores. DETACHED, after a deliberate scroll: the thread must NOT come back on its own.
-
-`detached` latched on the FIRST `suspend()` and was never cleared. Every scene in the suite calls
-`scroll_during_generation` about 1.5 seconds into an opening stream that runs for roughly 18
-seconds, and two more streamed turns follow it. So from that first scroll onwards every sample
-went to the detached branch, `running_samples` stopped growing, and the verdict was computed from
-the first few seconds. Measured on a real 100K cell: `running_samples` 11, `detached_samples` 72.
-Thirteen percent coverage, reported as 100% pinned, and quoted as evidence that the arm follows
-the stream.
-
-Two fixes, both pinned here. Coming back to the end RE-ATTACHES, because the contract is about
-intent and intent is re-expressed by returning. And the coverage travels with the verdict, so the
-fraction cannot be read without knowing how much of the stream it describes.
-"""
+"""Follow verdict must cover the whole stream; a detached latch that never cleared hid most of it."""
 
 from __future__ import annotations
 
@@ -126,12 +104,7 @@ def _read(page) -> dict:
 
 
 def _start_at_bottom(page) -> None:
-    """Position the viewport, THEN zero the counters.
-
-    The sampler ticks every 250ms from the moment the script loads, so a test that scrolls after
-    the first tick has already recorded a sample of the pre-scroll state and its `pinned_fraction`
-    is 0.5 for reasons that have nothing to do with the code under test.
-    """
+    """Scroll first, then reset the counters, or a pre-scroll sampler tick skews pinned_fraction."""
     _to_bottom(page)
     page.wait_for_timeout(60)
     page.evaluate("() => window.__sb.follow.reset()")
@@ -185,10 +158,7 @@ def test_a_gesture_that_ends_scrolled_up_does_NOT_reattach(page):
 
 
 def test_the_app_pulling_the_viewport_down_on_its_own_is_not_laundered_into_a_reattachment(page):
-    """Re-attachment is only ever evaluated on the way out of a DELIBERATE gesture. If it were
-    evaluated on every tick, an app that yanks a scrolled-up user back to the bottom would clear
-    `detached` and the yank would be scored as the user following again -- the sampler would
-    reward exactly the behaviour it exists to catch."""
+    """Only a deliberate gesture may re-attach; an app yanking the view to the bottom is not following."""
     _start_at_bottom(page)
     _settle(page)
     page.evaluate("() => window.__sb.follow.suspend()")

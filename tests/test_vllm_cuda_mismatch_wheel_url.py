@@ -11,16 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-"""The CUDA-mismatch hint used to hand-build a wheel filename as
-``vllm-{v}+cu{system_cuda}-cp38-abi3-manylinux_2_35_{arch}.whl``. No vLLM release
-has ever published a ``+cu128`` asset and the manylinux tag moved
-manylinux1 -> 2_31 -> 2_35 -> 2_34 -> 2_24 -> 2_28, so on a CUDA 12.8 box the hint
-was a 404 (the same broken pattern as vllm-project/vllm#37847).
-
-Every URL the hint prints is checked against ``_RELEASE_ASSETS`` below, a snapshot of
-the real GitHub release assets (``gh api repos/vllm-project/vllm/releases/tags/vX -q
-'.assets[].name'``) that is independent of the table in ``import_fixes.py``. GPU-free.
-"""
+"""Every URL the CUDA-mismatch hint prints is checked against _RELEASE_ASSETS, GitHub release assets."""
 
 from __future__ import annotations
 

@@ -372,12 +372,7 @@ def test_skip_env_var_with_short_value_rejected(tmp_path):
 
 
 def test_unsupported_lockfile_version_blocks_default(tmp_path):
-    """A v1 lockfile (or any non-v2/v3 version) means the structural
-    dependency walk never runs, so ``blocked-known-malicious`` /
-    ``known-ioc-string`` findings cannot be produced. Treating that as
-    advisory lets an attacker downgrade a checked-in lockfile to v1
-    and silently exit CI with rc=0. Default mode must refuse.
-    """
+    """Unsupported lockfile versions must block by default, so a downgraded v1 lockfile cannot exit 0."""
     p = tmp_path / "package-lock.json"
     p.write_text(
         "{\n"
@@ -398,27 +393,12 @@ def test_unsupported_lockfile_version_blocks_default(tmp_path):
 
 
 def test_blocking_kinds_contains_unsupported_lockfile_version():
-    """Direct module-level assertion: if anyone moves
-    ``unsupported-lockfile-version`` back out of BLOCKING_KINDS this
-    test trips immediately, before they re-introduce the downgrade
-    bypass."""
+    """unsupported-lockfile-version must stay in BLOCKING_KINDS, or the downgrade bypass returns."""
     assert "unsupported-lockfile-version" in lsa.BLOCKING_KINDS
 
 
 def test_skip_env_warning_escapes_workflow_command_injection(tmp_path):
-    """An attacker controlling ``UNSLOTH_LOCKFILE_AUDIT_SKIP`` could
-    embed a literal ``\\n::error::...`` and split the warning into a
-    second workflow-command annotation. Both branches interpolate the
-    value and so both must route it through ``_gha_escape()``: the
-    accepted branch echoes the stripped value, the rejected branch
-    echoes the PRE-strip raw one.
-
-    Which branch a value takes is decided AFTER stripping, so a payload
-    has to be chosen for the branch it is meant to exercise. Anything
-    long enough to carry a whole ``::error::`` lands on the accepted
-    side; the rejected side is reachable only under the 5-char floor or
-    on a booleanish token, which is why branch B below looks so small.
-    """
+    """UNSLOTH_LOCKFILE_AUDIT_SKIP is attacker-controlled; both branches must pass it to _gha_escape."""
     fixture = FIXTURES / "clean_lockfile.json"
 
     def _physical_lines_starting_with_double_colon(stderr: str) -> list[str]:
@@ -496,19 +476,7 @@ def test_skip_env_warning_escapes_workflow_command_injection(tmp_path):
 
 
 def test_audit_runs_before_npm_install_in_consumer_workflows():
-    """Any GH Actions workflow that consumes one of the audited
-    lockfiles via ``npm install`` / ``npm ci`` must run the
-    lockfile_supply_chain_audit step BEFORE that install, otherwise a
-    compromised lockfile's lifecycle scripts execute before the audit
-    can refuse the run.
-
-    Parsed as YAML and checked per JOB, not per file. Reading the raw
-    text instead sees neither half of the guarantee: an install written
-    as a ``run: |`` block scalar is invisible, and a file-wide "first
-    audit offset" lets one job's audit vouch for another job's install.
-    Together those left this test green with the whole Windows audit
-    step of studio-tauri-smoke.yml deleted.
-    """
+    """Every job that runs npm install or npm ci must run the lockfile audit step before that install."""
     import re
 
     import yaml

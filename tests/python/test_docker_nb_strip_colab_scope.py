@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guard for the Colab-intro strip in the Unsloth Docker image.
-
-cells[0] alone misses two shapes: the badge in cells[0] with the sentence in cells[1],
-and the sentence wrapped in a single-line HTML comment.
-
-The widening has to stay narrow: the scan stops at the first non-markdown cell so it
-never reaches prose between code cells, it stays idempotent, and it must leave
-unsloth_nb_content_sig's middle digest alone or the boot refresh re-strips forever.
-"""
+"""Colab-intro scan stops at the first non-markdown cell and must not change unsloth_nb_content_sig."""
 
 from __future__ import annotations
 

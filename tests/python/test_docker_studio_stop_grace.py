@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""docker stop must leave a training run the time to save its checkpoint.
-
-Studio stops the run cooperatively on SIGTERM and waits up to
-UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S for the save. supervisord and docker stop both
-default to a 10 second budget, so the image, the launcher and run.sh carry a matching one.
-"""
+"""Studio's save wait needs a longer grace than the 10s default that supervisord and docker stop use."""
 
 from __future__ import annotations
 

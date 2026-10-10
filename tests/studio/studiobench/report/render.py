@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Rendering: the rules about what may and may not be printed next to what.
-
-This module is where the report's editorial policy lives, and it is enforced in code rather than
-left to whoever writes the next summary:
-
-  * THE HEADLINE FOR HUMANS IS THE ONSET RUNG. The largest thread size still usable on this
-    machine. It is printed first, in plain words, because it is the only number that survives
-    being carried to a different laptop. The aggregate score is printed under it, labelled as
-    machine-local.
-  * NO SINGLE FRAME SUMMARY MAY BE A HEADLINE. `time_in_jank_pct` and `jank_index` catch opposite
-    failure shapes; quoting either alone is how a build with one three-second freeze gets called
-    smooth. `render_frame_health()` always prints all three, and `assert_headline_pair()` fails
-    a caller that tries to quote one.
-  * CEILING SHIFTS ARE NEVER FOLDED INTO THE SCALAR. Moving the onset rung is a different kind of
-    win from shaving 8% off every metric, and a single number that mixes them describes neither.
-  * `excluded_cells` IS ALWAYS RENDERED, INCLUDING WHEN EMPTY. An empty block is the claim "we
-    dropped nothing"; a missing block is a question nobody asked.
-  * THE HARNESS-BIAS CELL IS PRINTED AT THE TOP AND NEVER SUBTRACTED. Knowing the instrument
-    costs 4% is information; quietly removing 4% from every number is a second, unvalidated
-    measurement pretending to be a correction.
-"""
+"""No lone frame metric may be a headline, and excluded_cells is always rendered, even when empty."""
 
 from __future__ import annotations
 
@@ -42,13 +22,7 @@ class HeadlinePolicyError(AssertionError):
 
 
 def assert_headline_pair(keys: Iterable[str]) -> None:
-    """Refuse a headline that quotes one frame summary without its counterpart.
-
-    `time_in_jank_pct` answers "was it bad most of the time" and `jank_index` plus `max_frame_ms`
-    answer "was it catastrophic once". A build can be terrible by either route while looking fine
-    by the other, so a headline containing one and not the others is not a summary, it is a
-    selection.
-    """
+    """The frame metrics catch opposite failures, so a headline quoting only some of them is a selection."""
 
     chosen = {k for k in keys if k in HEADLINE_FRAME_METRICS}
     if chosen and chosen != set(HEADLINE_FRAME_METRICS):
@@ -199,11 +173,7 @@ def render_harness_bias(bias: Mapping[str, Any] | None) -> str:
 
 
 def render_ab_table(result: AbResult) -> str:
-    """The A/B table, or the reason there is no A/B table.
-
-    A void result prints its reason and no numbers at all. Printing a table with a warning above
-    it does not work: the table gets screenshotted and the warning does not.
-    """
+    """A void result prints its reason and no numbers; warnings above a table do not survive screenshots."""
 
     title = f"A/B: {result.label}"
     if result.is_null_control:

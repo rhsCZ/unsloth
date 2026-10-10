@@ -207,10 +207,7 @@ class TestPreflightMacosInstalledBinaries:
 
 
 class TestMacosDyldLoadProbe:
-    """The minos scan reads a header; it cannot see an install name pointing at a
-    library that exists on the builder and nowhere else. That shipped: a bundle
-    whose libggml-rpc.0.dylib wanted /usr/lib/librdma.dylib passed preflight, was
-    logged "prebuilt installed and validated", and then died on first launch."""
+    """A minos scan cannot see an install name that exists only on the builder; the dyld probe must run."""
 
     def _bundle(
         self,
@@ -258,11 +255,7 @@ class TestMacosDyldLoadProbe:
         ILP.preflight_macos_installed_binaries(binaries, install_dir, make_macos_host((15, 5)))
 
     def test_the_probe_still_runs_when_the_host_version_is_unknown(self, tmp_path):
-        """Only the static comparison needs the version; dyld does not.
-
-        Skipping both left the checksummed path with no check at all, since the
-        runtime validation it deferred to is disabled by default (#5854).
-        """
+        """The dyld probe runs without a known host version; only the static minos check needs one."""
         install_dir, binaries = self._bundle(
             tmp_path,
             exit_code = 1,
@@ -272,11 +265,7 @@ class TestMacosDyldLoadProbe:
             ILP.preflight_macos_installed_binaries(binaries, install_dir, make_macos_host(None))
 
     def test_a_nonzero_exit_with_program_output_is_not_a_link_failure(self, tmp_path):
-        """llama-quantize answers --version by printing its quantization table and
-        exiting non-zero. Reading the exit code as the verdict rejected every
-        published prebuilt, walked the release history to its end, and fell back to
-        a source build on every macOS runner.
-        """
+        """llama-quantize --version exits non-zero after printing output; that is not a link failure."""
         install_dir, binaries = self._bundle(
             tmp_path,
             exit_code = 1,

@@ -83,11 +83,8 @@ class TestStructuralTorchConstraint:
         assert '"$TORCH_CONSTRAINT"' in self._sh
 
     def test_hardcoded_torch_constraint_only_on_assignments(self):
-        """The default range is composed from the ceiling vars, so the supported
-        line is bumped in one place. A hard-coded range may still appear on a
-        curated per-index TORCH_CONSTRAINT= override -- the gfx906 (MI50) reroute
-        caps below 2.11 because the rocm6.3 index tops out at torch 2.9.x -- but
-        never on a pip/uv install line (those must reference $TORCH_CONSTRAINT)."""
+        """Hard-coded torch ranges belong only in curated TORCH_CONSTRAINT overrides, never on
+        pip/uv lines."""
         for literal in ('"torch>=2.4,<2.11.0"', '"torch>=2.4,<2.12.0"'):
             for ln in self._sh.splitlines():
                 if literal not in ln:
@@ -555,14 +552,7 @@ class TestE2ETokenizersFix:
         assert result.returncode != 0, "torch should NOT be importable"
 
     def test_negative_control_no_tokenizers(self, tmp_path):
-        """Without the tokenizers line, AutoConfig must fail (negative control).
-
-        Dropped by package name, not by exact text. This filter used to compare the whole
-        line against "tokenizers", which matched the bare entry #4748 added and matched
-        nothing once #5359 gave it a version bound: the control then installed tokenizers
-        and asserted a failure that could not happen, so it failed on every tree from that
-        commit onward. A name-based match survives the next bound too.
-        """
+        """Drops tokenizers by package name, since an exact-line match misses any version-bounded entry."""
         venv = self._create_venv(tmp_path, "neg-ctrl", "3.12")
         req_no_tokenizers = tmp_path / "no-tokenizers.txt"
         req_no_tokenizers.write_text(

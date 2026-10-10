@@ -1,9 +1,4 @@
-"""NVIDIA installer probes must be timeout-bounded (audit findings 5 and 6): a wedged nvidia-smi
-must not hang the installer, and the Windows probe must require a real GPU listing (not exit code 0).
-
-Source-level asserts check the guards in install.sh / install.ps1 / setup.ps1; one behavioral
-shell test confirms the bash helper returns within the timeout when nvidia-smi hangs.
-"""
+"""NVIDIA probes must be timeout-bounded; the Windows probe must need a GPU listing, not exit code 0."""
 
 import os
 import re

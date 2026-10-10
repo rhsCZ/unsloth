@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""Escaping tests for the predefined chat templates' {system_message} placeholder.
-
-Every predefined template holds {system_message} inside a Jinja string literal, so a
-system message carrying a quote or a backslash has to be escaped on the way in. Without
-it a quote closes the literal (TemplateSyntaxError) and a backslash is read as an escape,
-which silently rewrites the text (\\boxed -> \\x08oxed). Rendering, not just compiling,
-is asserted here: the corrupting cases compile fine.
-"""
+"""Quotes break the Jinja literal and backslashes rewrite text, so {system_message} must be escaped."""
 
 import jinja2
 import pytest

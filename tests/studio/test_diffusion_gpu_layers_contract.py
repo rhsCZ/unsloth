@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The diffusion runner must honour the GPU-layer split (#7574).
-
-Unsloth used to drop a manual GPU-layers setting on the diffusion path and pin every layer
-to GPU, so a GGUF larger than VRAM OOMed in cudaMalloc with no way out.
-
-The pure helpers run directly; the wiring is checked at source level, since importing the
-backend pulls in the whole studio stack.
-"""
+"""Manual GPU-layer settings must reach the diffusion runner, or a GGUF larger than VRAM OOMs."""
 
 from __future__ import annotations
 

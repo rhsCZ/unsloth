@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth studio update --local` must point at a checkout, not at site-packages.
-
-The repo root was derived from __file__, which only holds while the CLI runs from
-a source tree. On Windows the first `update --local` replaces the editable
-install with a normal one, so the second run derived site-packages and uv failed:
-
-    ERROR: file:///C:/Users/.../unsloth_studio/Lib/site-packages does not appear
-    to be a Python project: neither 'setup.py' nor 'pyproject.toml' found.
-    [FAILED] Python dependency installation failed (exit code 1)
-"""
+"""--local needs the checkout root, not __file__, which points into site-packages after reinstall."""
 
 from __future__ import annotations
 
@@ -139,14 +130,7 @@ def test_a_blank_override_falls_back_to_the_derived_root(monkeypatch):
 
 
 def test_the_override_runs_that_checkouts_setup_script(monkeypatch, tmp_path):
-    """The --local checkout's own setup script must win.
-
-    setup.sh/setup.ps1 build the frontend under their own $SCRIPT_DIR, and the
-    editable install of the checkout removes the installed tree the installed
-    copy's script would have built into. studio/frontend/dist is gitignored, so
-    running the installed script against a fresh checkout leaves Unsloth with no
-    frontend at all.
-    """
+    """The checkout's own setup script must run, since the installed copy builds the frontend elsewhere."""
     import platform as _platform
 
     checkout = tmp_path / "unsloth"
@@ -205,13 +189,7 @@ def test_windows_is_shown_a_powershell_assignment(monkeypatch, tmp_path):
 
 
 def test_a_checkout_without_a_setup_script_is_refused(monkeypatch, tmp_path):
-    """No silent fallback to the installed copy's script.
-
-    Falling back is the behaviour the override exists to prevent: the installed
-    script builds its own frontend, the editable install then removes that tree,
-    and the selected checkout is left without one. A sparse checkout is an
-    unusable local source, not a reason to run somebody else's script.
-    """
+    """A checkout without a setup script is refused; it must not fall back to the installed copy's."""
     checkout = tmp_path / "unsloth"
     checkout.mkdir()
     (checkout / "pyproject.toml").write_text("[project]\nname = 'unsloth'\n")

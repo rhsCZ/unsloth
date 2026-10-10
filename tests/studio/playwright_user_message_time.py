@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Timestamp behavior against real assistant-ui primitives and application CSS.
-
-Run: python tests/studio/playwright_user_message_time.py
-Requires frontend npm dependencies and Python Playwright/Chromium. No backend
-or GPU is needed. PW_CHROMIUM_EXECUTABLE may select an installed browser.
-"""
+"""User-message timestamps on real assistant-ui primitives and app CSS; no backend needed."""
 
 from __future__ import annotations
 

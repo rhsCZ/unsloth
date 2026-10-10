@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Native-Windows proof for #7897. Skipped everywhere else.
-
-The Linux suite simulates Windows by injecting ntpath; this asserts the same
-properties with the real os.path on real NTFS, so the simulation cannot quietly
-diverge from the platform it models. windows-latest runners have a second drive
-letter, which makes the cross-drive case real rather than notional.
-"""
+"""Checks the GGUF path rules on real Windows NTFS, so the ntpath simulation cannot drift."""
 
 from __future__ import annotations
 

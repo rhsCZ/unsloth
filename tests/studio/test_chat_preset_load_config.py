@@ -97,13 +97,7 @@ def test_preset_load_config_carries_reasoning_budget():
 
 
 def test_diffusion_suppresses_reasoning_without_dropping_gguf_context():
-    """loadedIsDiffusion gates the reasoning fields only, never the GGUF test.
-
-    A loaded DiffusionGemma reports is_gguf and is_diffusion, so folding the
-    diffusion check into isGguf made effectiveContextLength fall back to null and
-    stopped capturing store.ggufContextLength. On auto sizing that is the whole
-    load config, so the preset saved none at all.
-    """
+    """Diffusion gates only the reasoning fields; folding it into isGguf drops the GGUF context length."""
     source = _read("studio/frontend/src/features/chat/presets/preset-load-config.ts")
     capture = source[source.index("export function capturePresetLoadConfig") :]
     capture = capture[: capture.index("\n}")]
@@ -115,13 +109,7 @@ def test_diffusion_suppresses_reasoning_without_dropping_gguf_context():
 
 
 def test_preset_summary_marks_a_budget_message():
-    """hasPresetLoadConfig() counts the message, so the summary has to as well.
-
-    perModelConfigsEqual compares reasoningBudgetMessage, so a preset that sets only
-    the message is non-default and does change llama-server behaviour. With no part
-    for it the formatter returned null, and the sheet hides both "Active now" and
-    "Saved in preset" on null. A marker, never the text: it can reach 8 KiB.
-    """
+    """The summary must count a budget message, or the sheet hides it; show a marker, not the text."""
     source = _read("studio/frontend/src/features/chat/presets/preset-load-config.ts")
     body = source[source.index("export function formatPresetLoadConfigSummary") :]
     body = body[: body.index("\n}")]
@@ -158,13 +146,7 @@ _TOP_LEVEL_DECLARATION = re.compile(
 
 
 def _component_body(source: str, name: str) -> str:
-    """The module from `name`'s declaration up to the next top-level one.
-
-    The sheet holds several components, and later ones subscribe to the runtime store too. A
-    module-wide search would let `ChatSettingsPanel`'s selector be repointed at another field
-    while a sibling's subscription kept the guard green, leaving exactly the stale memos this
-    test exists to catch.
-    """
+    """Only that component is read: a module-wide search lets a sibling mask a repointed selector."""
     starts = [(match.start(), match.group(1)) for match in _TOP_LEVEL_DECLARATION.finditer(source)]
     for index, (offset, declared) in enumerate(starts):
         if declared == name:
@@ -184,11 +166,7 @@ def _store_selectors(source: str) -> list:
 
 
 def _without_comments(source: str) -> str:
-    """`//` and `/* */` removed, leaving string literals alone.
-
-    A comment is not part of the value an arm returns, so two arms that differ only by one are
-    the same expression and the condition between them steers nothing.
-    """
+    """Comments are dropped, since two arms differing only by a comment are the same expression."""
     out, index, quote = [], 0, None
     while index < len(source):
         char = source[index]
@@ -236,14 +214,7 @@ _UNARY_AFTER = _COLLAPSING | {None, ":", "(", ",", "??"}
 
 
 def _tokens(expression: str):
-    """`expression` as (kind, text) tokens, or None if it steps outside what is read here.
-
-    Reads, calls, literals, ternaries, `??` and comparisons only. Assignment, arrow functions,
-    blocks, templates, regexes, escapes, arithmetic, optional chaining and the comma operator
-    are refused rather than modelled, which leaves nothing that can bind, write, hide a
-    statement or skip a read. Parentheses
-    come back as "call" or "group"; `s["x"]` comes back as `s.x`.
-    """
+    """Anything outside this subset is refused, not modelled, so nothing can bind, write or hide a read."""
     raw, index, end = [], 0, len(expression.rstrip())
     while index < end:
         match = _TOKEN.match(expression, index)
@@ -348,12 +319,7 @@ def _value(token):
 
 
 def _pinned(guard: list, taken: bool, access: list):
-    """The one value the field holds where `guard` went this way, or None.
-
-    `budget === -1` taken, or `budget !== -1` not taken, pins -1. Anything looser (`==`, `>`,
-    a disjunction, a negation) holds the field to more than one value and pins nothing. Zero
-    pins nothing either: `=== 0` also takes -0, which zustand's Object.is tells apart.
-    """
+    """Only strict ===/!== pins a value; looser tests and zero pin nothing (=== 0 also takes -0)."""
     guard = _unwrapped(guard)
     if taken:
         if any(text == "||" for _, text in _top_level(guard)):
@@ -380,13 +346,7 @@ def _pinned(guard: list, taken: bool, access: list):
 
 
 def _reads_field(arm: list, access: list) -> bool:
-    """Does `arm` return the field itself, or a call on it?
-
-    The field has to be read off the parameter, not off some other object, and be the value
-    itself: `.length` after it, a comparison, a logical operator or a branch anywhere in the arm
-    returns something the field does not decide. A call is the one transform taken on trust,
-    as source cannot see into it.
-    """
+    """A call on the field is trusted as the one transform, since source cannot see inside it."""
     if any(text in _COLLAPSING for _, text in arm):
         return False
     size = len(access)
@@ -403,17 +363,7 @@ def _reads_field(arm: list, access: list) -> bool:
 
 
 def _selector_reads(selector: str, field: str) -> bool:
-    """Does every value this selector can return depend on `field`?
-
-    Zustand re-renders on the RESULT, so a selector that tests the field and returns something
-    else tracks nothing. Every path has to return the field (or a call on it), or return
-    exactly the literal a guard pins the field to on that path, as in
-    `s.budget === -1 ? -1 : s.budget`.
-
-    Only the subset `_tokens` accepts is read, and anything else is refused. That is
-    deliberate: a refusal fails this test loudly and asks for a plainer spelling, while
-    modelling more JavaScript is how a stale selector slips through.
-    """
+    """Zustand re-renders on the result, so every path must return the field or a pinned literal."""
     selector = _without_comments(selector)
     plain = re.match(r"\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*(?::[^=]*)?=>", selector)
     destructured = re.match(r"\s*\(?\s*\{([^}]*)\}\s*\)?\s*(?::[^=]*)?=>", selector)
@@ -453,12 +403,7 @@ def _selector_reads(selector: str, field: str) -> bool:
 
 
 def _memo_dependency_lists(source: str) -> dict:
-    """Each `const X = useMemo(...)`'s dependency array, keyed by the name it is bound to.
-
-    Keyed rather than counted: the memos that capture the preset config are named ones, and a
-    bare tally cannot tell a field moving out of `currentLoadSummary` and into some unrelated
-    memo from it never moving at all.
-    """
+    """Keyed by name: a bare count cannot tell a field moved to another memo from one never moved."""
     out = {}
     for match in re.finditer(r"const\s+([A-Za-z_$][\w$]*)\s*=\s*useMemo\(", source):
         body = _balanced(source, match.end() - 1)
@@ -558,19 +503,7 @@ def test_the_subscription_predicate_accepts_refactors_and_rejects_non_subscripti
 
 
 def test_preset_sheet_reacts_to_a_reasoning_budget_change():
-    """capturePresetLoadConfig() reads the runtime store through getState().
-
-    A captured field the sheet neither subscribes to nor lists as a memo dependency
-    cannot move the Update button or the summary: with the sheet open, changing only
-    the reasoning budget left both stale until some unrelated setting changed.
-
-    Asserted as behaviour, not spelling. Requiring the literal `(s) => s.reasoningBudget` at
-    two fixed indentations made af4e98e2f red for writing the same subscription as a
-    multi-line conditional. A guard a legal refactor breaks says nothing about what it guards.
-
-    Source alone cannot prove the returned value is distinct for distinct field values; a
-    selector mapping every budget to one constant would pass here.
-    """
+    """A captured field must be subscribed to or listed as a memo dependency, or it cannot move the UI."""
     sheet = _read("studio/frontend/src/features/chat/chat-settings-sheet.tsx")
     # Comments are stripped first: a commented-out selector is still a call to a text scan.
     panel = _without_comments(_component_body(sheet, "ChatSettingsPanel"))

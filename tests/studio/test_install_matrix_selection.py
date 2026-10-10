@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The install workflows run a PR subset of their legs and the whole set nightly.
-
-clean-machine-install-ci.yml (20 legs, 7 on macOS) and interrupted-install-ci.yml (10
-legs, 6 on macOS) used to run every leg on every pull_request that touched an installer,
-against an account capped at five concurrent macOS jobs. On the 20 PRs audited before
-the split not one of those runs finished: each was cancelled by the next push while its
-macOS legs were still queued, and while they queued they held the macOS pool against
-every other job in the org.
-
-The legs now live in .github/ci/*-matrix.yml with a `pr` flag each, and a `select` job
-hands every matrix job the `include` list for the event
-(.github/scripts/select_install_matrix.py). This file pins what that split relies on:
-
-* the matrix files parse and every leg has the keys its job's steps read, because a
-  leg missing a key no longer fails at YAML time but at `matrix.<key>` time on a runner;
-* the PR subset per job is what the workflow header says it is, and the clean-machine
-  subset keeps a macOS leg, so tests/studio/test_macos_slots_per_commit.py still counts
-  the file as a macOS workflow;
-* the `select` job is the only producer, every matrix job takes its legs from it, and a
-  job whose PR subset is empty gates on the `_count` output rather than expanding an
-  empty matrix, which is a workflow error;
-* the emitted JSON never carries the `pr` key, so what a job sees is exactly the leg.
-"""
+"""Install matrices keep a pr flag per leg; select_install_matrix.py hands each job its legs."""
 
 from __future__ import annotations
 
@@ -131,12 +109,7 @@ def test_every_matrix_job_takes_its_legs_from_select_and_nothing_else_does(name)
 
 @pytest.mark.parametrize("name", sorted(EXPECTED))
 def test_every_leg_has_the_keys_its_job_reads(name):
-    """A key a step reads through `matrix.<key>` must be on every leg, or be optional.
-
-    Keys the workflow reads with a truthiness test (`matrix.nonroot && ...`) are optional
-    by construction; those read into a name, a label or an env value must be present,
-    because an absent key renders as the empty string and the job runs with it.
-    """
+    """Keys read into a name, label or env must be on every leg; a truthiness-only key may be absent."""
     matrix_file, jobs = EXPECTED[name]
     doc = _doc(name)
     legs = _legs(matrix_file)
@@ -275,13 +248,7 @@ def _markers(matrix_file: str) -> list[tuple[str, str, str]]:
     ids = lambda v: str(v).replace(" ", "-"),
 )
 def test_every_interrupt_marker_is_text_the_installer_still_prints(job, label, marker):
-    """The marker is an ERE handed to `grep -qE` against the install log
-    (.github/scripts/interrupt-install.sh), so it is read the same way here.
-
-    The `[TAURI:STEP]` tag is put on the line by the installer's own logger, never by the
-    caller that names the phase, so it is checked once against the sources rather than
-    expected beside each phrase.
-    """
+    """Markers are ERE for grep -qE; [TAURI:STEP] is added by the installer's logger, not callers."""
     sources = INSTALLER_SOURCES[job]
     text = _installer_text(job)
     phrase, tagged = _TAURI_TAG.subn("", marker)

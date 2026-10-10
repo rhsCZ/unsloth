@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A config that subclasses ``SFTConfig`` must survive ``SFTTrainer.__init__``.
-
-Replacing ``trl.trainer.sft_trainer.SFTConfig`` leaves two live classes of that
-name. TRL guards with ``isinstance(args, TrainingArguments) and not
-isinstance(args, SFTConfig)`` and rebuilds the config when it fires; against our
-class that test is true for every config still derived from the pristine one, so
-a ``GKDConfig`` was rebuilt as a plain SFT config and lost ``lmbda``, ``beta``,
-``temperature``, ``teacher_model_name_or_path`` and the rest. See
-unslothai/unsloth#1941.
-
-Lifted out of ``unsloth/models/rl.py`` with ``ast`` the same way
-``_rl_source`` does, so this stays CPU-only and needs neither torch nor trl.
-"""
+"""An SFTConfig subclass such as GKDConfig must survive SFTTrainer.__init__ without being downcast."""
 
 from __future__ import annotations
 

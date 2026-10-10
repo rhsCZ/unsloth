@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The rung plan invariant that the whole upper ladder rests on.
-
-The streamed tail must be the SAME SIZE at every rung. When it grew with the rung instead, the
-stream took 811 seconds at 1M against a 135-second film, so the ten slots labelled "after the
-reply is complete" all ran mid-generation. Nothing crashed and a full table was printed; the
-labels were just false. A property that fails silently and prints numbers anyway is exactly the
-kind that needs a test rather than a comment.
-"""
+"""The streamed tail must be the same size at every rung, or the post-reply slots run mid-stream."""
 
 from __future__ import annotations
 
@@ -38,12 +31,7 @@ def test_the_streamed_tail_never_exceeds_the_declared_size():
 
 
 def test_stream_duration_is_rung_independent():
-    """The property the film depends on: the OPENING stream drains in the same time at every rung.
-
-    The opening turn is the one the film's slots are timed against. The follow-ups are separate
-    events sent later by `send_turn`, so folding them in here would measure a quantity no slot
-    depends on and would fail on the 1K rung, which legitimately streams only once.
-    """
+    """Only the opening stream is measured; follow-ups are sent later, and the 1K rung streams just once."""
     seconds = {r: p.streamed_chars / FIELD_CHARS_PER_SEC for r, p in _plans().items()}
     assert max(seconds.values()) < 20.0, seconds
     big = {r: s for r, s in seconds.items() if r != "1K"}
@@ -90,17 +78,8 @@ def test_during_generation_slots_actually_fall_during_generation():
 
 
 def test_stop_opens_only_after_the_tail_has_drained():
-    """Stop owns its own turn now; opening it mid-stream would truncate the measured reply.
-
-    HELD TO THE DECLARED CEILING RATHER THAN TO THE CURRENT CORPUS. This used to take the worst
-    drain the frozen corpus happened to produce, which made a scene's packing a function of the
-    corpus contents: the 1M rung streamed recycled text while the manifest was sized at exactly
-    the top rung's seeded target, the observed worst came in low, and the fast film sat at 18.2 s
-    against a real ceiling of 18.25 s without anything failing. Re-freezing the corpus moved the
-    observed number and the film that had been out of bounds all along was the thing that broke.
-    `STREAM_TAIL_CHARS` is the bound the plans are actually held to, one test above, so it is the
-    bound a schedule has to clear -- and it does not move when the corpus is re-frozen.
-    """
+    """Plans are held to the declared STREAM_TAIL_CHARS ceiling, so re-freezing the corpus cannot
+    move it."""
     from studiobench.scene.schedule import SCENES
 
     worst = STREAM_TAIL_CHARS / FIELD_CHARS_PER_SEC
@@ -132,13 +111,7 @@ SETTLED_ACTIONS = ("message_menu", "copy_markdown", "select_all_copy", "delete_m
 
 
 def test_settled_actions_open_after_the_follow_up_drains():
-    """A slot needing a finished reply must clear the follow-up turn the preceding send started.
-
-    Only films used at a rung that actually sends follow-ups are checked. Below
-    MULTI_TURN_MIN_CHARS a rung is single-turn, `send_turn` reports an exhausted queue, and there
-    is no follow-up stream to wait for -- so holding the quick film to this bar would be asserting
-    against a stream that never exists.
-    """
+    """Settled slots must wait for the follow-up stream; only multi-turn rungs have one to wait for."""
     from studiobench.__main__ import TIER_RUNGS
     from studiobench.fixture.corpus import FOLLOW_UP_CHARS, MULTI_TURN_MIN_CHARS
     from studiobench.scene.schedule import SCENES

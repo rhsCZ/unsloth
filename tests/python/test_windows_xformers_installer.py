@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""install.ps1 must install the xFormers wheel built for the torch it installed.
-
-Before this, install.ps1 never mentioned xFormers at all: it installed torch from a
-cu126 / cu128 / cu130 index and then plain `unsloth`, whose `windows` extra pulled
-xFormers from PyPI -- which publishes only the CUDA-12.8 flavour. On a cu130 host that
-produced the NVIDIA QA report "xFormers was built for PyTorch 2.10.0+cu128 with CUDA
-1208 (you have 2.10.0+cu130)", with memory-efficient attention silently disabled.
-"""
+"""install.ps1 must pin the xFormers wheel built for its torch: PyPI ships only the CUDA-12.8 flavour."""
 
 from __future__ import annotations
 
@@ -148,13 +141,7 @@ def test_installer_installs_xformers_from_the_torch_index():
 
 
 def test_a_family_pin_still_gets_the_direct_wheel_url():
-    """UNSLOTH_TORCH_INDEX_FAMILY sets $TorchIndexPinned too, so keying the index branch off
-    that flag sent a plain `cu130` pin down --default-index -- and uv's --index / UV_INDEX
-    are used "in addition to" the default one, so a machine-level UV_INDEX carrying the same
-    xFormers version could satisfy the pin from the wrong CUDA family, which is the failure
-    this step exists to prevent. A family pin names a leaf, so a direct URL can be built for
-    it; only a full-URL override (possibly an authenticated mirror we cannot rebuild) has to
-    go through the index."""
+    """A family pin keeps the direct wheel URL, since --index is additive and can resolve the wrong CUDA."""
     block = _extract(
         r"    # ── Pin xFormers to the wheel built for the torch.*?^    \}\n", _source()
     )
@@ -166,10 +153,7 @@ def test_a_family_pin_still_gets_the_direct_wheel_url():
 
 
 def test_a_full_url_override_naming_a_cuda_leaf_gets_a_direct_url():
-    """`--default-index` is not exclusive -- uv reads UV_INDEX "in addition to" it -- and every
-    CUDA family publishes the same xFormers version, so an index resolve can always be
-    satisfied from the wrong one. A documented `.../cu130` override names the leaf, so the
-    wheel is addressed under it directly, which nothing can substitute for."""
+    """Every CUDA family publishes the same xFormers version, so an index resolve can pick the wrong one."""
     block = _extract(
         r"    # ── Pin xFormers to the wheel built for the torch.*?^    \}\n", _source()
     )
@@ -234,14 +218,7 @@ def test_installer_never_installs_an_unpinned_xformers():
 
 
 def test_xformers_step_runs_after_the_torch_flavor_repair():
-    """The repair can reinstall torch from a different index; selecting the wheel before it
-    would pin against a torch build that is about to be replaced.
-
-    Anchored on code, not on comment prose. The previous anchors were the section
-    headers, and a comment-tightening pass that inserted one word into
-    "Enforce the installed torch flavor" turned this red without changing any
-    behaviour, which is a failure of the test rather than of the installer.
-    """
+    """The repair may reinstall torch from another index, so the xFormers pin must come after it."""
     source = _source()
     repair = source.index("$expectedTorchTag = Get-ExpectedTorchFlavorTag")
     xformers = source.index("xformers==$_xfVersion")

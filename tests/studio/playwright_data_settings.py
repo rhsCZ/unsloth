@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Data settings against memory-only chat storage, with no backend or model.
-
-PW_ENGINE=chromium|firefox|webkit selects the browser engine.
-PW_CHANNEL=chrome|msedge optionally selects a branded Chromium browser.
-PW_PORT and PW_OUT select the local port and JSON report.
-"""
+"""Data settings on memory-only chat storage, no backend or model; PW_ENGINE selects the browser."""
 
 import itertools
 import json

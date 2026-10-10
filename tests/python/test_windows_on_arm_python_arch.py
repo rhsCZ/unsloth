@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Windows on ARM has to end up on an x64 interpreter, or stop.
-
-PyPI publishes no `win_arm64` wheel for pyarrow (reached through `datasets`) or
-hf-transfer, at any version, so a native ARM64 CPython source-builds both and dies on CMake
-or Rust minutes in. Measured on a windows-11-arm runner with ARM64 CPython 3.12.10:
-
-    ERROR: Could not find a version that satisfies the requirement pyarrow (from versions: none)
-    *** CMake configuration failed
-
-The same probe on x64 resolved both, so it is the interpreter architecture. install.ps1
-already swaps a freshly selected ARM64 interpreter for x64; these tests close what it does
-when that swap CANNOT be made, and the fact that it only looks at a FRESH selection, so a
-migrated environment is reused on whatever built it.
-
-Provenance: #8495, #10875.
-"""
+"""Windows on ARM must end on an x64 interpreter or stop, since PyPI has no win_arm64 pyarrow wheel."""
 
 from __future__ import annotations
 
@@ -36,12 +21,7 @@ POWERSHELLS = [shell for shell in ("pwsh", "powershell") if shutil.which(shell)]
 
 
 def _function(name: str) -> str:
-    """The named function's source, verbatim from install.ps1.
-
-    Extracted rather than restated so these cases track the installer instead of a copy of
-    it, and indented-brace delimited rather than marker delimited so rewording a comment
-    cannot silently change what is under test.
-    """
+    """Extracts a function from install.ps1 by indented braces, so rewording a comment cannot change it."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     match = re.search(rf"    function {name} \{{.*?\n    \}}\n", source, flags = re.DOTALL)
     assert match is not None, f"install.ps1 no longer defines {name}"
@@ -183,12 +163,7 @@ Write-Host ("CHOSEN=" + $(if ($chosen) {{ $chosen.Arch }} else {{ "none" }}))
 
 
 def test_the_python_org_route_is_not_attempted_twice_inside_conda():
-    """Inside conda, python.org is tried FIRST, so the later winget fallback must not
-    repeat it.
-
-    On an offline machine the second attempt is the same failing download again, and it is
-    announced as "falling back to python.org" for a fallback that already ran.
-    """
+    """Inside conda python.org is tried first, so the later winget fallback must not repeat it."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     start = source.index('substep "installing Python ${PythonVersion}..."')
     end = source.index("Python installation failed", start)
@@ -310,10 +285,7 @@ def test_both_arm64_opt_out_readers_go_through_one_helper():
 
 
 def test_the_arm64_rebuild_tells_the_user_what_it_does_not_carry_over():
-    """A rebuild on a different architecture cannot reuse the old wheels, so packages the
-    user added to the ARM64 environment are gone from the new one. That is unavoidable; a
-    silent version of it is not. The branch has to name where the old tree went and how to
-    opt out."""
+    """Arch rebuilds drop user packages silently; the branch must name where the old venv went."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     start = source.find("Test-StudioVenvArchMismatch -VenvPython")
     assert start != -1
@@ -323,12 +295,7 @@ def test_the_arm64_rebuild_tells_the_user_what_it_does_not_carry_over():
 
 
 def test_the_installer_stops_when_no_x64_interpreter_can_be_installed():
-    """The caller must treat $null as a failure, not as "no change".
-
-    Resolve-WindowsOnArmX64Python returning $null is only a stop if the call site says so,
-    and a call site that assigned the result and carried on would leave every case above
-    passing while the installer behaved exactly as it did before.
-    """
+    """A $null from Resolve-WindowsOnArmX64Python must stop the installer, not be assigned and ignored."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     # Anchor on the call: the guard is multi-line and a shape anchor matched an unrelated block.
     call = source.index("$DetectedPython = Resolve-WindowsOnArmX64Python")
@@ -348,11 +315,7 @@ def test_the_installer_stops_when_no_x64_interpreter_can_be_installed():
 
 
 def test_the_venv_reuse_path_re_checks_before_it_reuses():
-    """The re-check has to sit ahead of the branch that decides to reuse.
-
-    Ordering is the whole property: placed after `step "venv" "using migrated environment"`
-    it would run once the installer had already committed to the environment.
-    """
+    """The arch re-check must run before the migrated-environment reuse branch, not after it commits."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     recheck = source.find("Test-StudioVenvArchMismatch -VenvPython")
     create = source.find('step "venv" "creating Python')
@@ -372,12 +335,7 @@ def test_the_venv_reuse_path_re_checks_before_it_reuses():
 def _x64_bootstrap_preamble(
     conda_active: bool, python_org_arch: str, winget_available: bool, winget_arch: str
 ) -> str:
-    """Stubs for everything Install-X64Python calls, so the case drives the decision.
-
-    `python_org_arch` / `winget_arch` are what each source manages to produce: "x86_64",
-    "arm64" (installed, but the wrong architecture, which the caller rejects) or "" for
-    nothing at all.
-    """
+    """Stubs for Install-X64Python's calls; each source returns x86_64, arm64 (rejected) or nothing."""
 
     def _result(arch: str, path: str) -> str:
         if not arch:
@@ -688,11 +646,7 @@ def test_the_opt_out_message_is_only_printed_for_an_arm64_environment(shell: str
 
 
 def test_the_architecture_rebuild_does_not_move_the_venv_twice():
-    """An ordinary reinstall has already moved $VenvDir into a rollback by the time this
-    branch runs, so a second Start-StudioVenvRollback would move a directory that is no
-    longer there, throw, and take every architecture migration out through
-    Exit-InstallFailure. The tree is already where the branch wants it; only the flag that
-    keeps it from being swept is missing."""
+    """A reinstall already moved $VenvDir to rollback; a second Start-StudioVenvRollback would throw."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     branch = source.index("windows on arm: the existing environment runs native ARM64 Python")
     # Search forward from the branch rather than a fixed window that breaks as the chain grows.

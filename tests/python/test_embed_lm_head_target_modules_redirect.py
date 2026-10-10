@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression test for unslothai/unsloth#9326.
-
-When `embed_tokens` and/or `lm_head` are listed in `target_modules`, Unsloth's
-fast regex path would silently drop them because they do not sit under an
-attention/MLP ancestor.  The fix auto-moves them to `modules_to_save` and
-warns once, which also makes `embedding_learning_rate` work.
-"""
+"""embed_tokens and lm_head in target_modules get silently dropped unless moved to modules_to_save."""
 
 import os
 import pytest

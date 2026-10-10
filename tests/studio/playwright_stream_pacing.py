@@ -1,45 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Main-thread cost of a fast streaming reply in the chat renderer.
-
-Four merged PRs moved this path and each rebuilt a throwaway harness to prove it:
-
-    #7892  Streamdown's transition starvation      9.86s -> 0.34s longest freeze
-    #8750  incremental Markdown parsing            O(n) per update -> tail only
-    #8845  publish coalescing                      4.01s -> 0.62s longest stall
-    #8935  incremental fence tokenization          21x fewer characters to Shiki
-
-None of them left anything behind that would notice the next regression, and each had to
-rediscover the same methodology. This is that harness, kept.
-
-It drives smoke-stream-pacing.html, which mounts the real MarkdownText inside a real
-assistant-ui local runtime, so nothing is a mock of the code under test and assistant-ui's
-own update scheduling is inside the measurement. Runs against a vite dev server; no
-backend, no auth, no GPU, no model.
-
-The reply is a fixed string. #8845's first measurement attempts failed because a real
-model gave the two sides different essays and the renderer's cost is superlinear in
-length, so a comparison across different text says nothing.
-
-CPU throttling is not decoration: on a developer machine the renderer keeps up with any
-rate this can feed, so an unthrottled run measures nothing on either side.
-
-Chromium only, deliberately. Both things that make this a measurement are Chromium-only:
-`Emulation.setCPUThrottlingRate` is reached over CDP, which Playwright exposes for Chromium
-alone, and `longtask` PerformanceObserver entries exist in no other engine (Gecko bug
-1348405 is open; WebKit has never shipped them). Neither fails loudly on firefox or webkit,
-since `observe({type: "longtask"})` is specified to abort silently on an unsupported type
-rather than throw, so the budgets would read a perfect zero instead of an error. The verdict
-below therefore refuses a run that saw no long tasks, and the harness records whether the
-engine supported them.
-
-Run:
-    python tests/studio/playwright_stream_pacing.py
-
-It starts and stops its own vite dev server. Point it at one you already have with
-SMOKE_BASE_URL, or move the port it picks with SMOKE_PORT.
-"""
+"""Streaming-reply main-thread cost, Chromium only: CDP CPU throttling and longtask entries."""
 
 from __future__ import annotations
 

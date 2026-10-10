@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The installer must survive a host where no exact path resolver can be reached.
-
-install.ps1 used to resolve path identity through three kernel32 imports. It got
-them by compiling C#, and Windows PowerShell 5.1 -- the interpreter
-studio/src-tauri/src/install.rs spawns -- compiles by writing the source into
-%TEMP% and running csc.exe. A %TEMP% that could not hold a file made Add-Type
-throw CS2001, and that exception travelled up Get-StudioPathHash to end a first
-launch as "Could not create the Unsloth install lock" (#9140). Behavioural
-antivirus then blocked the DLL the compiler produced, which is a failure no retry
-can route around, so the imports moved to DefinePInvokeMethod and no compiler ran
-at all. Reflection emit is now gone too: Skyhigh scored the apparatus as the
-largest single contributor to a BehavesLike.PS.Suspicious verdict on the shipped
-installer, and removing it cleared that verdict on a matched pair.
-
-What replaced it is a child interpreter. pathlib.Path.resolve is
-GetFinalPathNameByHandleW on Windows, the same system call the imports made, so an
-exact answer is still exact. Beneath it is the same fallback the compile failure
-used to land on: a lexical answer, Exact = $false, and a lock that is still
-acquired.
-
-Both halves are still guarded here. That no compiler is reachable is the first, and
-this file asserts it by sabotaging Add-Type and showing nothing changes. That a host
-with no interpreter to ask still installs is the second, reached through the
-UNSLOTH_EARLY_PYTHON_PROBE kill switch.
-
-These run under pwsh on any platform. Windows PowerShell 5.1 behaviour itself is
-exercised by the Windows-only tests in test_windows_installer_concurrency_guard.py.
-"""
+"""Installer must survive without an exact path resolver; no compiler runs and a lexical path is used."""
 
 from __future__ import annotations
 
@@ -583,14 +556,7 @@ Write-Output "KEPT:$(Test-Path -LiteralPath $replacement)"
 
 
 def _same_path(got: str, expected: str) -> bool:
-    """Compare two resolved paths without pinning one platform's spelling.
-
-    The resolver ends with [System.IO.Path]::GetFullPath, so on Windows the POSIX
-    fixtures below come back rooted on the current drive and with backslashes:
-    "/real/target" resolves to "D:\\real\\target". That is correct, and it has
-    nothing to do with what these cases measure, which is whether the shape
-    (Get-Item).Target arrived in was unwrapped to the right single target.
-    """
+    """Compare paths ignoring spelling; GetFullPath re-roots POSIX fixtures onto the current drive."""
 
     def norm(value: str) -> str:
         value = value.replace("\\", "/")
@@ -1761,18 +1727,7 @@ def test_split_path_never_pairs_literalpath_with_parent(name: str) -> None:
 
 
 def test_the_lock_chain_defines_everything_it_reaches() -> None:
-    """A helper the chain calls but the list forgets is a runtime break, not a missing test.
-
-    These scripts run under -ErrorActionPreference Stop, so the first call to an undefined name
-    ends the run, and the failure names the caller rather than the omission:
-
-        Get-StudioPythonFinalPath: The term 'Get-StudioSystem32Tool' is not recognized
-
-    LOCK_CHAIN is hand-written and install.ps1 moves under it, so splitting a body out into a new
-    helper silently breaks every case in this file. Found exactly that way on the windows-latest
-    parity row, hours after the helper landed. Closing the list over what the extracted bodies
-    actually call turns that into a local failure on every platform.
-    """
+    """LOCK_CHAIN is hand-written, so a helper split out of a body must be listed or every case breaks."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     extracted = _helpers(*LOCK_CHAIN)
     installer_functions = set(re.findall(r"^    function ([\w-]+) \{", source, flags = re.M))

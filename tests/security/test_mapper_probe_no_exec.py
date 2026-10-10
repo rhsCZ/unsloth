@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""`_get_new_mapper` used to `exec` an HTTPS response body: arbitrary code execution
-inside an ordinary model load, gated only on transport integrity. It now
-`literal_eval`s the `__INT_TO_FLOAT_MAPPER` dict and derives the five tables with the
-INSTALLED `build_mappers`, so a hostile body can still change what the probe reports,
-which was always true, but can no longer run."""
+"""_get_new_mapper must literal_eval the fetched __INT_TO_FLOAT_MAPPER dict, never exec the body."""
 
 import builtins
 import pathlib

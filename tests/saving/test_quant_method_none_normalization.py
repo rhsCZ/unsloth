@@ -1,17 +1,4 @@
-"""CPU-only regression for the quant-method normalization loops in save.py.
-
-`unsloth_save_pretrained_gguf` and `save_to_gguf_generic` each normalize the
-`quantization_method` list, mapping a ``None`` element to ``"q8_0"``. The mapping
-used to call ``quant_method.lower()`` as the first statement of the loop, so a
-``None`` element (e.g. ``quantization_method=[None]`` or ``["q4_k_m", None]``)
-raised ``AttributeError: 'NoneType' object has no attribute 'lower'`` and the
-``elif quant_method is None`` branch was unreachable dead code.
-
-The loop is inline inside two heavy functions (importing unsloth needs
-unsloth_zoo / a GPU), so - like test_is_gpt_oss_detection.py - we extract just the
-loop source via ``ast`` and exec it against sample inputs. That exercises the real
-source: it fails on the old ordering and passes once ``None`` is handled first.
-"""
+"""None quant methods must map to q8_0 before .lower() runs, or the loop raises AttributeError."""
 
 from __future__ import annotations
 

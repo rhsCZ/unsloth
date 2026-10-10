@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Fast, GPU-gated real-inference smoke.
-
-GitHub-hosted CI runners have no GPU, so this AUTO-SKIPS there; the full picker
--> load -> chat flow is covered on CPU by tests/studio/playwright_model_config.py
-and studio-ui-smoke.yml. This test adds a quick real-generation check for local
-dev and self-hosted GPU runners: it loads the smallest model (gemma-3-270m-it)
-on the GPU and does a single short greedy generation, asserting a non-empty
-reply. Kept deliberately short (a handful of new tokens) so it is a confidence
-check, not a benchmark. Select/deselect it by name, e.g. `-k gpu_generation`.
-"""
+"""Real GPU generation smoke that skips on GitHub-hosted runners; select it with -k gpu_generation."""
 
 from __future__ import annotations
 

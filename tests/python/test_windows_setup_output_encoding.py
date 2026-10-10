@@ -1,46 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The Windows desktop setup log must be UTF-8 and must print each step once.
-
-"Getting things ready..." used to produce::
-
-      ?? Unsloth Studio Setup
-      ????????????????????????????????????????????????????
-      gpu
-    none (chat-only / GGUF)
-      gpu            none (chat-only / GGUF)
-
-Encoding: 5.1 encodes redirected output with the OEM code page while the desktop
-app decodes the pipe as UTF-8 (``from_utf8_lossy``, src-tauri/src/install.rs).
-U+1F9A5 has no OEM form so PowerShell writes one ``?`` per UTF-16 surrogate;
-U+2500 has one, so it becomes a bare 0xC4 and arrives as U+FFFD.
-
-Duplication: ``step``/``substep`` wrote through Write-Host *and* a console-handle
-mirror, and the CLI spawns setup.ps1 as ``-Command "& '...' *>&1"``, which merges
-the Information stream into stdout.
-
-Splitting: ``step`` built one line from two Write-Host calls with -NoNewline,
-which a redirected consumer splits at the record boundary.
-
-Sink: fixing ``step``/``substep`` left every other line on Write-Host, which
-5.1's console host writes through its own console-attached writer rather than
-the UTF-8 one bound to ``[Console]::Out``. The banner and the footer are not
-steps, so they never entered the sink #8083 built. Both entry scripts now
-funnel through ``Write-StudioLine``, and Write-Host survives only inside
-helpers that have already ruled out the redirected sink.
-
-No console: the transcode above needs a console to transcode against. Where
-``CREATE_NO_WINDOW`` really leaves the child without one, which is the state
-install.rs's own comment assumes, Write-Host has no screen buffer to query and
-throws instead, taking the whole script down under ``-ErrorActionPreference
-Stop``. The banner is then not mangled, it is absent. That is what
-``test_banner_survives_a_console_less_spawn`` measures, and it is the only case
-here that separates this fix from what shipped before it.
-
-The byte-level tests assert on raw bytes; decoding first would hide the exact
-regression being guarded.
-"""
+"""Setup log must be UTF-8 and print each step once; redirected 5.1 output is OEM-encoded."""
 
 from __future__ import annotations
 
@@ -74,11 +35,7 @@ pwsh_only = pytest.mark.skipif(_PWSH is None, reason = "PowerShell is unavailabl
 
 
 def _harness(redirected_probe: bool) -> str:
-    """Emit a known banner + steps using the real helpers.
-
-    Extracted from setup.ps1 rather than restated, so a change in shape fails
-    here instead of drifting.
-    """
+    """Extracted from setup.ps1, not restated, so a change in shape fails here instead of drifting."""
     sink = "$true" if redirected_probe else "[Console]::IsOutputRedirected"
     return f"""
 $ErrorActionPreference = 'Stop'
@@ -112,12 +69,7 @@ substep "installing OXC validator runtime..."
 
 
 def _section(source: str, title: str) -> str:
-    """The statements under a ``# <title>`` box header, up to the blank line.
-
-    Sliced out of setup.ps1 rather than restated, so the banner and the footer
-    are exercised as written. A rewrite that drops them back onto Write-Host
-    fails here.
-    """
+    """Slices the box-header section out of setup.ps1 so a rewrite back onto Write-Host fails here."""
     match = re.search(rf"(?m)^# {re.escape(title)}\n#[^\n]*\n", source)
     assert match, f"no '{title}' section header in {SETUP_PS1.name}"
     body = source[match.end() :]
@@ -157,12 +109,7 @@ def _run_capturing_bytes(
     use_command_shape: bool,
     stem: str = "setup_output",
 ) -> bytes:
-    """Run through a real pipe, in both launch shapes the product uses.
-
-    ``-File`` is how the desktop app spawns the installer; ``-Command ... *>&1``
-    is how the CLI spawns setup for ``unsloth studio update``. Piped stdout is
-    required to reproduce, and is captured as bytes, never decoded here.
-    """
+    """Runs through a real pipe in both launch shapes (-File, -Command *>&1), returning undecoded bytes."""
     # Unique per call so xdist workers cannot unlink each other's script.
     tmp = (
         REPO_ROOT
@@ -253,12 +200,7 @@ def _strip_comments(source: str) -> str:
 
 
 def _mask_literals(source: str) -> str:
-    """Blank comments and string literals, keeping every offset in place.
-
-    A regex over the raw text would trip over the launcher script install.ps1
-    builds in a here-string (it has its own Write-Host and no helper to call)
-    and over the commented-out block in setup.ps1.
-    """
+    """Blanks comments and strings so a regex cannot match inside a here-string or commented-out code."""
     out = list(source)
     index, size = 0, len(source)
 
@@ -341,11 +283,7 @@ def test_entry_scripts_set_the_utf8_invariant(path: Path) -> None:
 
 @pytest.mark.parametrize("path", [SETUP_PS1, INSTALL_PS1], ids = ["setup.ps1", "install.ps1"])
 def test_entry_scripts_have_no_bom(path: Path) -> None:
-    """5.1 parses BOM-less scripts as ANSI, so the fix stays ASCII-only.
-
-    A BOM would be a far wider packaging change: these get concatenated and
-    streamed through `irm | iex`.
-    """
+    """5.1 parses BOM-less scripts as ANSI, so the fix stays ASCII-only; a BOM would change packaging."""
     assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
 
 
@@ -419,23 +357,14 @@ def test_entry_scripts_resolve_the_redirect_sink_once(path: Path) -> None:
 
 
 def test_refresh_environment_cannot_clobber_the_python_encoding_vars() -> None:
-    """Refresh-Environment reloads the registry repeatedly through a long run.
-
-    Without the guard a registry PYTHONUTF8=0 reloads over ours and every later
-    Python child goes back to mojibake.
-    """
+    """A registry PYTHONUTF8=0 reloaded by Refresh-Environment would clobber ours and restore mojibake."""
     source = SETUP_PS1.read_text(encoding = "utf-8")
     assert "$key -eq 'PYTHONUTF8' -or $key -eq 'PYTHONIOENCODING'" in source
 
 
 @pytest.mark.parametrize("path", [SETUP_PS1, INSTALL_PS1], ids = ["setup.ps1", "install.ps1"])
 def test_entry_scripts_bind_a_utf8_writer_when_there_is_no_console(path: Path) -> None:
-    """The setter needs a console handle, and the desktop spawns us without one.
-
-    It drops the cached writer BEFORE throwing, assigning OutputEncoding only
-    after, so Console.Out would rebuild on the old code page and redirected
-    step/substep, whose only sink it is, would stay locale-encoded.
-    """
+    """The setter throws without a console, so the cached writer must be dropped before it, not after."""
     source = path.read_text(encoding = "utf-8")
     assert "[Console]::OpenStandardOutput()" in source
     assert "[Console]::SetOut(" in source
@@ -444,16 +373,7 @@ def test_entry_scripts_bind_a_utf8_writer_when_there_is_no_console(path: Path) -
 
 
 def test_managed_cli_command_uses_the_utf8_switch_not_just_env() -> None:
-    """The managed CLI children must force UTF-8 on the command line.
-
-    Every Windows spawn of the CLI now goes through build_managed_cli_command in
-    process.rs, so that is where the switch has to be; update.rs only calls it.
-    The env vars alone are not enough: a caller that already exports
-    PYTHONIOENCODING wins over the ones set beside the spawn, and the Rust
-    readers decode as UTF-8 regardless. -X utf8 is not overridable that way.
-
-    https://docs.python.org/3/using/cmdline.html#cmdoption-X
-    """
+    """The CLI child needs -X utf8 in its command line; env vars lose to an exported PYTHONIOENCODING."""
     source = (REPO_ROOT / "studio" / "src-tauri" / "src" / "process.rs").read_text(encoding = "utf-8")
     assert re.search(
         r'"-X"\s*,\s*"utf8"', source
@@ -530,10 +450,7 @@ def _slice_optional(source: str, pattern: str) -> str | None:
 
 
 def _slice_if_chain(source: str, masked: str, start: int) -> str:
-    """A whole `if {} else {}`; brace-matching alone drops the non-ANSI branch.
-
-    The redirected run is exactly the one that takes that branch.
-    """
+    """Brace matching alone drops the non-ANSI else branch; the redirected run is the one that takes it."""
     end = _close_brace(masked, masked.index("{", start))
     chained = r"[ \t\r\n]*(?:elseif[ \t]*\(.*?\)|else)[ \t\r\n]*\{"
     while True:
@@ -602,11 +519,7 @@ def _console_less_probe(path: Path) -> str:
 
 @lru_cache(maxsize = None)
 def _run_console_less(path: Path, source: str | None = None) -> tuple[int, bytes, str]:
-    """Spawn the probe the way install.rs spawns the installer, and read bytes.
-
-    `source` is for the VT parity case, which runs this file's own function beside the one it
-    replaced. A str keeps the lru_cache above workable; a dict would not hash.
-    """
+    """Spawns the probe as install.rs does and returns raw bytes; a str source keeps lru_cache usable."""
     if not _CONSOLE_LESS_OPTED_IN:
         pytest.skip(
             "the FreeConsole probe trips AV heuristics; set UNSLOTH_TEST_CONSOLE_LESS=1 to run it"
@@ -627,12 +540,7 @@ def _run_console_less(path: Path, source: str | None = None) -> tuple[int, bytes
 
 
 def _decode_like_install_rs(raw: bytes) -> str:
-    """install.rs: read_until(b'\\n') -> trim_line_endings -> from_utf8_lossy.
-
-    One record per `install-progress` event, so this is what the log panel
-    renders. Python's 'replace' emits one U+FFFD per maximal subpart, the rule
-    Rust's from_utf8_lossy uses.
-    """
+    """Decodes as install.rs does; Python's 'replace' emits U+FFFD per maximal subpart, as Rust does."""
     records = raw.split(b"\n")
     if records and records[-1] == b"":
         records.pop()  # read_until returning Ok(0) at EOF, not an empty line
@@ -652,11 +560,7 @@ _MIN_BANNER_BYTES = 64
 
 
 def _banner_or_explain(path: Path) -> tuple[str, str]:
-    """Run the probe, insist the banner actually arrived, and decode it.
-
-    Every console-less case starts here. `raw` being truthy is not enough: the
-    aborted run is truthy too.
-    """
+    """Requires the banner itself: a truthy raw output is not enough, since an aborted run is truthy too."""
     code, raw, err = _run_console_less(path)
     detail = _explain(path, code, raw, err)
     assert code == 0, (

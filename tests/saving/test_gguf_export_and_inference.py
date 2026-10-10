@@ -1,17 +1,4 @@
-"""GPU smoke test for the llama.cpp (GGUF) export path.
-
-Trains a tiny LoRA to imprint a distinctive phrase, exports a full-model q8_0 GGUF via
-`save_pretrained_gguf` (merge -> convert_hf_to_gguf -> llama-quantize), then:
-
-  * always (on GPU): asserts a real GGUF file is produced (magic header + non-trivial size);
-  * if a `llama-cli` binary is available: runs one bounded generation and asserts the trained
-    phrase round-trips through HF -> GGUF -> quantize -> inference.
-
-Skipped without an accelerator (the export needs a real train + merge). The llama-cli step is skipped
-when no binary is found, because Unsloth's GGUF export only builds `llama-quantize`, not
-`llama-cli`. The generation is hard-bounded (byte cap + watchdog kill) because recent
-`llama-cli` builds are conversation-first and otherwise spin on empty stdin.
-"""
+"""GPU smoke test for GGUF export; llama-cli generation is hard-bounded and skipped without a binary."""
 
 from __future__ import annotations
 

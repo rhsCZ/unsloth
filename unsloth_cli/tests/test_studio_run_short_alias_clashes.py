@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for short-alias clashes with llama-server flags.
-
-`unsloth studio run` passes unknown flags through to llama-server.
-Pre-cleanup it exposed 1-char shorts ``-m`` / ``-f`` plus ``-hfr``;
-Click clustered llama-server tokens against them (``-fa`` -> ``-f a``,
-``-mg 0`` -> ``-m g``, ``-fitt 1024`` -> ``-f itt``, ...), silently
-breaking ~11 pass-through flags.
-
-The cleanup drops ``-m``, ``-f``, ``-hfr``. The 2-char ``-hf`` stays
-(documented; multi-char shorts don't cluster). Long forms remain.
-``studio_default`` keeps ``-f`` because it has no pass-through.
-
-See ``test_studio_run_parallel_flag.py`` for ``--parallel`` /
-``-np`` coverage and re-exec forwarding.
-"""
+"""Drops -m, -f and -hfr: Click clusters llama-server tokens like -fa against them; -hf stays."""
 
 from __future__ import annotations
 

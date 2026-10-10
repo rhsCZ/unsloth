@@ -1,10 +1,4 @@
-"""_backfill_dataclass_defaults must not shadow an inherited default.
-
-Deciding "no default yet" with `name not in cls.__dict__` was wrong: a subclass
-re-annotating an inherited field already has one, via the MRO. import_fixes.py
-is loaded by file spec because `import unsloth.import_fixes` would run
-unsloth/__init__.py first, pulling in torch, numpy and unsloth_zoo.
-"""
+"""The default backfill must check the MRO, not cls.__dict__, or it shadows an inherited default."""
 
 import importlib.util
 import sys

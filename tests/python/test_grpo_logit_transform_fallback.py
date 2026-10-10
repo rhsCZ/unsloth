@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""The GRPO fallback must answer the same as ``detect_logit_transforms``.
-
-The fallback is inlined into two GRPO bodies by ``inspect.getsource``, so it cannot be
-imported: lift each ``else:`` arm out with ast and run it. A wrong factor here does not
-raise, it shifts every log-prob and with it the importance ratio.
-"""
+"""GRPO's inlined fallback is lifted out with ast and must match detect_logit_transforms."""
 
 from __future__ import annotations
 

@@ -14,23 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""A float32 model on a GPU without bf16 must not be wrapped in fp16 autocast.
-
-Spark_TTS_(0_5B) loads with `dtype = torch.float32` and sets `fp16 = False,
-bf16 = False`. On a T4 it logged [nan] x 7 and then died at inference inside
-torch.multinomial, which refuses a distribution containing NaN.
-
-The cause is upstream of the sampler: rl.py reads "neither flag set" as "user
-did not choose" and picks the autocast dtype itself, which on a T4 is float16.
-float16 carries five exponent bits against float32's eight, so a value the
-model was loaded wide enough to hold overflows to inf and then NaN. bf16 GPUs
-keep the autocast, since bf16 has float32's exponent range; only float16 is
-unsafe and only that case changes.
-
-The block lives in rl.py as a string compiled into the generated trainer, so
-these tests pull the literal out and execute it against fake `args` / `model`
-objects. No GPU, no network, no trl import.
-"""
+"""rl.py picks float16 autocast when neither flag is set, which overflows float32 models to NaN."""
 
 import ast
 import types
@@ -214,14 +198,7 @@ def test_bfloat16_mixed_precision_mode_unchanged():
 
 
 def test_upcast_float32_on_a_v100_still_gets_fp16_autocast():
-    """The float32 the model was UPCAST to is not a request for float32.
-
-    Full finetuning upcasts trainable weights to float32 by itself, and
-    float16 autocast over float32 master weights is the ordinary V100/T4
-    mixed-precision recipe (issue #4082). Only an explicit
-    `dtype = torch.float32` at load time may suppress it, which is why the
-    new branch is gated on the recorded request rather than on the dtype.
-    """
+    """An upcast to float32 keeps fp16 autocast; only an explicit float32 load dtype opts out."""
     args, env = _run(torch.float32, bf16_supported = False, full_finetuning = "1", user_float32 = "0")
     assert (args.fp16, args.bf16) == (True, False)
     assert env["ACCELERATE_MIXED_PRECISION"] == "fp16"
@@ -258,10 +235,7 @@ def test_the_legacy_language_model_path_records_it_too():
 
 
 def test_the_text_diffusion_path_records_it_too():
-    """DiffusionGemma leaves FastModel through _dispatch_diffusion, which returns
-    before the stamping at the end of from_pretrained. A `dtype = torch.float32`
-    load on a T4 would otherwise reach the trainer unmarked and autocast to
-    float16, which is the overflow this whole branch exists to avoid."""
+    """_dispatch_diffusion skips the end-of-load stamp, so it must record the float32 request itself."""
     src = (REPO_ROOT / "unsloth" / "models" / "loader.py").read_text(encoding = "utf-8")
     tree = ast.parse(src)
     fn = next(

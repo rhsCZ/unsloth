@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The unsloth_zoo revision notice must never be the reason a Core cell goes red.
-
-It only says which revision was tested, and by the time it runs the clone, the install and
-the whole suite have passed. Under `set -euxo pipefail` that is easy to get wrong: for
-`head="$(a | b)"` the pipeline's status becomes the assignment's and `-e` ends the step, so
-a `git ls-remote` that loses a DNS lookup would take a green cell with it.
-
-Run rather than read: the block is extracted from the action and executed under the same
-shell flags, which is the only way to answer a question about `set -e` semantics.
-"""
+"""A failing revision lookup must not end the step: under set -e, an assignment takes its status."""
 
 from __future__ import annotations
 
@@ -169,12 +160,7 @@ def test_the_matching_revision_is_not_reported_as_stale(tmp_path):
 
 
 def test_the_lookup_absorbs_its_failure_inside_the_substitution():
-    """Structural companion to the behavioural tests above.
-
-    They would also pass if someone moved the guard to `|| true` AFTER the closing paren,
-    which silences the assignment's status but leaves the pipeline's own failure to be
-    caught by pipefail first in some shells. Pin the shape that is actually correct.
-    """
+    """The guard must sit inside the substitution: || true after the paren silences only the assignment."""
     block = _revision_notice_block()
     lookup = re.search(r'head="\$\((.*?)\)"', block, flags = re.S)
     assert lookup, f"the resolved-revision lookup changed shape:\n{block}"
@@ -185,11 +171,7 @@ def test_the_lookup_absorbs_its_failure_inside_the_substitution():
 
 
 def test_a_hanging_remote_lookup_does_not_hold_the_step(tmp_path):
-    """A lookup that stalls rather than fails must not run out the job's clock.
-
-    `|| true` cannot help: nothing has exited, so nothing is absorbed. Takes the bound in
-    real time, which is why it is the slowest test here.
-    """
+    """A stalled lookup never exits, so || true cannot absorb it; only a real-time bound stops it."""
     bound = _lookup_timeout_seconds()
     began = time.monotonic()
     proc = _run_notice(tmp_path, git_exit = 0, git_stdout = "", git_sleep = bound * 6)
@@ -235,13 +217,7 @@ def test_the_warning_does_not_prescribe_a_remedy_that_cannot_work(tmp_path):
 
 
 def test_the_suite_that_runs_this_guard_triggers_on_the_action_it_guards():
-    """A guard absent for the change it guards is not a guard.
-
-    Backend CI runs tests/studio and is path-filtered; without .github/actions in that
-    filter an action-only PR ran Core, which does not execute tests/studio, and skipped the
-    suite that does. test_local_actions_are_in_path_filters.py enforces that a workflow
-    lists the actions it `uses:`; this is the other direction, the ones its TESTS read.
-    """
+    """Backend CI's path filter must list .github/actions, or an action-only PR skips this suite."""
     workflow = yaml.safe_load(
         (_REPO / ".github" / "workflows" / "studio-backend-ci.yml").read_text(encoding = "utf-8")
     )

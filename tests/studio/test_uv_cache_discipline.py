@@ -1,28 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""
-The uv download cache must stay a download cache, and must never reach a
-cold-install lane.
-
-`Install Unsloth (--local, --no-torch)` is the single largest cost in CI: 92s
-median across 39 job runs in one sample, more total time than any test, and all
-of it uv re-downloading the same wheels because its cache is per-runner.
-
-Caching that is safe *because of what is cached*. uv's cache is content-addressed
-by URL and hash, so a stale entry cannot serve wrong content -- the worst it can
-do is miss. That property is the whole justification, and it is exactly what a
-later edit could take away by pointing the same cache config at the venv, or at
-`~/.unsloth`, where an editable overlay, a moving `unsloth-zoo @ git+main` and
-absolute paths in console scripts all live. These tests pin the distinction.
-
-The second invariant is the one with teeth. `clean-machine-install-ci.yml` and
-`desktop-app-clean-machine-ci.yml` exist to prove the installer works on a
-machine with nothing on it; both set their own `UV_CACHE_DIR` and delete it
-before running. If either ever adopted this action, the composite writes
-`UV_CACHE_DIR` to `$GITHUB_ENV`, which outranks a job-level `env:` for every
-later step -- so a warm cache would silently replace the cold machine those
-workflows are named after, and they would still go green.
-"""
+"""Caching is safe only for content-addressed downloads, never the venv or a cold-install lane."""
 
 from __future__ import annotations
 
@@ -51,20 +29,7 @@ def _own_steps(action: Path = ACTION) -> list[dict]:
 
 
 def _steps() -> list[dict]:
-    """This action's steps, with the steps of every local action it delegates to inlined.
-
-    The frontend dist cache moved into `.github/actions/frontend-dist-restore` and
-    `-save` when the Windows jobs adopted it, because they do not go through this action
-    and the key must have exactly one definition. A reader that only walked this file's
-    own steps would have gone blind to that cache the moment it was factored out -- and
-    silently, since `uses: ./.github/actions/frontend-dist-restore` does not contain the
-    substring `actions/cache` that the path check below looks for. Every assertion in
-    this file would have kept passing while guarding one cache instead of two.
-
-    That is the same failure mode test_cache_budget_discipline.py's `_composite_actions`
-    was written for, one level in: a rule quietly stops applying to the thing it was
-    written for.
-    """
+    """Steps of this action plus those of every local action it delegates to, so no cache goes unseen."""
     flat: list[dict] = []
     for step in _own_steps():
         uses = str(step.get("uses", ""))
@@ -92,13 +57,7 @@ CACHEABLE_PATHS = (".uv-cache", "studio/frontend/dist")
 
 
 def test_the_cache_holds_downloads_and_build_output_but_never_the_venv() -> None:
-    """
-    A venv cache would have to reason about the editable overlay, a moving
-    unsloth-zoo pin, and absolute paths in console scripts. Neither of the two
-    things this action caches reasons about any of that, which is why they are safe
-    at all. The forbidden list below is the invariant with teeth and applies to
-    every cache step regardless of which allowed path it uses.
-    """
+    """Caches may hold downloads and build output, never the venv (editable overlay, absolute paths)."""
     for step in _steps():
         if "cache" not in str(step.get("uses", "")):
             continue
@@ -134,11 +93,7 @@ def test_the_restore_happens_before_the_install_too() -> None:
 
 
 def test_a_near_miss_still_supplies_most_wheels() -> None:
-    """
-    restore-keys is what makes this worth having on a PR whose requirements moved
-    by one line. It is correct here precisely because the entry is content-
-    addressed; the same fallback on a venv cache would be a bug.
-    """
+    """Restore-keys fallback is correct only for content-addressed entries; on a venv it would be a bug."""
     restore = next(s for s in _steps() if "cache/restore" in str(s.get("uses", "")))
     assert (restore.get("with") or {}).get("restore-keys"), (
         "no restore-keys, so any change to requirements or pyproject drops the "
@@ -147,11 +102,7 @@ def test_a_near_miss_still_supplies_most_wheels() -> None:
 
 
 def test_the_cache_is_saved_on_main_only() -> None:
-    """
-    A PR-scoped entry can only be restored by re-runs of that same PR, while every
-    PR can restore from the default branch. Saving on PRs spends a budget measured
-    at 99.3% full once already, and evicts main's copy -- the one everyone reads.
-    """
+    """Saved on main only: PR entries serve only their PR, and PR saves evict main's copy."""
     saves = [s for s in _steps() if "cache/save" in str(s.get("uses", ""))]
     assert saves, "the cache is never saved, so it can never be restored either"
     for step in saves:
@@ -163,12 +114,7 @@ def test_the_cache_is_saved_on_main_only() -> None:
 
 @pytest.mark.parametrize("name", COLD_INSTALL_WORKFLOWS)
 def test_cold_install_lanes_never_adopt_this_action(name: str) -> None:
-    """
-    These prove the installer works on a machine with nothing on it. The composite
-    writes UV_CACHE_DIR to $GITHUB_ENV, which outranks a job-level `env:` for every
-    later step, so adopting it would hand a cold lane a warm cache and the lane
-    would still report success.
-    """
+    """Cold lanes must not adopt this action: GITHUB_ENV's UV_CACHE_DIR outranks a job-level env."""
     path = WORKFLOWS / name
     if not path.exists():
         pytest.skip(f"{name} no longer exists")
@@ -210,12 +156,7 @@ _HELPER = re.compile(r"\.github/scripts/([A-Za-z0-9_.-]+\.sh)")
 
 
 def _runs_installer(step: dict) -> bool:
-    """Whether ``step`` runs the installer itself or through a helper under .github/scripts.
-
-    studiobench-ui-parity installs each side through parity-install-side.sh, so the
-    invocation is one file away from the workflow; followed one level, like the smoke
-    trigger guard does for its helpers.
-    """
+    """Also follows one level into a helper script the step runs, since installs can sit one file away."""
     run = str(step.get("run", ""))
     if _INSTALLER.search(run):
         return True
@@ -274,11 +215,7 @@ def test_install_unsloth_local_delegates_the_uv_cache() -> None:
 
 
 def test_the_uv_actions_nest_nothing() -> None:
-    """`uses: ./...` inside a composite resolves from GITHUB_WORKSPACE and takes no expressions.
-
-    install-unsloth-local nests these two and is root-checkout-only for it. The leaf
-    actions must stay leaves, so a nested-checkout job can still call them directly.
-    """
+    """The uv cache actions stay leaves, so a job with a nested checkout can still call them."""
     for action in (UV_RESTORE, UV_SAVE):
         nested = [
             str(s.get("uses", ""))
@@ -289,12 +226,7 @@ def test_the_uv_actions_nest_nothing() -> None:
 
 
 def test_every_warm_installer_job_restores_the_uv_cache() -> None:
-    """A job that runs the installer without the cache pays the full download every run.
-
-    The cold lanes are the deliberate exception, named in COLD_INSTALL_WORKFLOWS and
-    COLD_INSTALL_JOBS, and a new installer call site has to either restore the cache or
-    be added to one of those lists in a diff someone reads.
-    """
+    """Every installer job must restore the uv cache, unless it is a named cold-install exception."""
     offenders = []
     for name, jid, job in _jobs():
         if name in COLD_INSTALL_WORKFLOWS or (name, jid) in COLD_INSTALL_JOBS:
@@ -317,12 +249,7 @@ def test_every_warm_installer_job_restores_the_uv_cache() -> None:
 
 
 def test_every_uv_restore_is_paired_with_a_save_wired_to_it() -> None:
-    """A restore with no save fills nothing; a save reading the wrong id saves nothing.
-
-    The upload half is derived from the workflow's triggers rather than allowlisted, as
-    for the dist: a consumer-only lane (no `push`, no `schedule`) passes `save: 'false'`
-    and a producer must not.
-    """
+    """A restore without a save fills nothing; save flags come from triggers, not an allowlist."""
     offenders = []
     for name, jid, job in _jobs():
         steps = job.get("steps") or []

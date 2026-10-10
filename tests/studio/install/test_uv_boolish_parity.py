@@ -1,32 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""One table for "is this UV_* variable set", in all four places that ask.
-
-The installers read the caller's UV_* switches to decide whether uv will touch a network
-and which indexes it will consult, and they do it in four separate languages:
-setup.sh's ``_uv_offline_requested``, install_python_stack.py's ``_uv_env_flag``, and a
-``Test-UvEnvFlag`` in each of install.ps1 and studio/setup.ps1. None of them can call
-another -- install.ps1 is executed straight off the wire by ``irm | iex``, with no file and
-no sibling module on disk -- so the only thing holding them together is this table.
-
-The rule is uv's, not ours. uv 0.10.7 parses every boolish UV_* variable in
-``crates/uv-static/src/lib.rs::parse_boolish_environment_variable``, which restates clap's
-``str_to_bool``: true is ``y yes t true on 1``, false is ``n no f false off 0``,
-case-insensitive, and anything else is a hard error rather than a guess.
-
-The PowerShell half used to spell the question inline as
-``-notin @("", "0", "false")``, which reads ``off``, ``no``, ``n`` and ``f`` as TRUE. Those
-four are exactly the values uv reads as FALSE, so a caller who wrote ``UV_OFFLINE=off``
-meaning "go online" got the offline path, and one who wrote ``UV_NO_CONFIG=off`` had their
-uv.toml suppressed and resolved against the wrong index policy.
-
-PIP_NO_INDEX is pip's variable and uv never reads it, so it gets its own function and its
-own row set, taken from pip's ``strtobool`` (``pip/_internal/utils/misc.py``) via
-``ConfigOptionParser._update_defaults``. The literals happen to coincide with uv's today;
-they are asserted separately anyway, so that a divergence upstream shows up as a failure
-here rather than as one resolver quietly adopting the other's rule.
-"""
+"""All UV_* switch readers must follow uv's boolish rule: off, no, n and f are false, not true."""
 
 from __future__ import annotations
 
@@ -110,12 +85,7 @@ TABLE_IDS = [repr(value) for value, _ in BOOLISH_TABLE]
 
 
 def _env(name: str, value: str | None) -> dict:
-    """A clean resolver environment with one variable set, for a child process.
-
-    Built by subtraction rather than by assignment inside the snippet: a value with a
-    quote, a backtick or a tab in it does not survive being pasted into PowerShell source,
-    and those are exactly the rows worth having.
-    """
+    """Set by subtraction: quotes, backticks or tabs in a value would not survive PowerShell source."""
     base = {"PATH": "/usr/bin:/bin"}
     for leaked in UV_POLICY_ENV:
         base.pop(leaked, None)
@@ -145,12 +115,7 @@ def _sh_offline(value: str | None, tmp_path: pathlib.Path) -> bool:
 
 
 def _py_flag(function: str, name: str, value: str | None, monkeypatch) -> bool:
-    """install_python_stack.py's answer, executed out of the source text.
-
-    The module is not imported: importing it runs an installer. The one function is lifted
-    by AST instead, which also means a test that keeps passing after the function is
-    renamed is impossible.
-    """
+    """Lifts the function by AST, not import, since importing install_python_stack.py runs an installer."""
     node = next(
         (
             n
@@ -172,12 +137,7 @@ def _py_flag(function: str, name: str, value: str | None, monkeypatch) -> bool:
 
 
 def _others(name: str) -> tuple:
-    """Every resolver variable except the one under test.
-
-    `clear_env(UV_POLICY_ENV)` is the right idiom for a lifted block and the wrong one
-    here: the variable being measured is in that list, so clearing it inside the snippet
-    would delete the input and leave every "true" row answering false.
-    """
+    """Every resolver variable except the one under test; clearing them all would delete the input."""
     return tuple(other for other in UV_POLICY_ENV if other != name)
 
 
@@ -337,13 +297,7 @@ def test_no_shipped_powershell_decides_a_resolver_flag_the_old_way(path):
 
 @pytest.mark.parametrize("path", PS1_FILES, ids = lambda p: p.name)
 def test_no_shipped_powershell_reads_an_environment_variable_unsafely(path):
-    """Structural, because the behavioural rows above can only reach the two readers.
-
-    Eighteen sites read a variable this way and every one of them is on the Windows on ARM
-    resolver path, where the variables are normally unset, so a caller's strict mode turned
-    an ordinary install into an abort at whichever site ran first. Fixing the two flag
-    readers alone would have moved the abort one line down, to UV_CONFIG_FILE.
-    """
+    """Env reads in shipped PowerShell must be strict-mode safe: an unset variable aborts the install."""
     text = path.read_text(encoding = "utf-8-sig")
     offending = [
         line.strip()
@@ -360,12 +314,7 @@ def test_no_shipped_powershell_reads_an_environment_variable_unsafely(path):
 
 @pytest.mark.parametrize("path", PS1_FILES, ids = lambda p: p.name)
 def test_every_resolver_variable_in_shipped_powershell_goes_through_a_reader(path):
-    """A UV_*/PIP_* switch read for its truth, anywhere, must be read by the one function.
-
-    Greps for the variable names rather than for the idiom: the previous bug was not a
-    typo, it was five sites each deciding the question for themselves, and only a rule
-    about the variables catches the sixth.
-    """
+    """Every UV_*/PIP_* switch read in shipped PowerShell must go through the one reader function."""
     text = path.read_text(encoding = "utf-8-sig")
     lines = text.splitlines()
     for number, line in enumerate(lines, start = 1):
@@ -390,14 +339,7 @@ def test_the_two_powershell_copies_are_identical(name):
 
 
 def test_uv_no_index_is_not_a_uv_environment_variable():
-    """Recorded as an assertion because the code reads a UV_-prefixed name and a reader
-    will otherwise assume uv defines it.
-
-    uv 0.10.7 defines UV_OFFLINE and UV_NO_CONFIG as environment variables and does NOT
-    define UV_NO_INDEX; `--no-index` exists only as a command-line flag. So our handling of
-    UV_NO_INDEX is our own convention, and every site that reads it goes through a function
-    whose name does not claim otherwise.
-    """
+    """UV_NO_INDEX is our convention, not a uv variable; uv only has the --no-index flag."""
     for source, reader, marker in (
         (INSTALL_SRC, "Test-NoIndexRequested", "function Test-NoIndexRequested"),
         (SETUP_SRC, "Test-NoIndexRequested", "function Test-NoIndexRequested"),
@@ -441,10 +383,7 @@ def test_our_no_index_convention_uses_uvs_spelling_by_choice(script, value, expe
 
 
 def test_we_do_not_silently_translate_our_convention_into_a_uv_flag():
-    """Position taken and pinned: we shape the arguments we pass, we do not pass
-    `--no-index` to uv. Turning UV_NO_INDEX into a real uv flag would make our behaviour and
-    uv's agree, but it would also turn a resolve that works today into one with no index at
-    all. If that is ever done deliberately, this test is the place it gets discussed."""
+    """We shape our own arguments; passing --no-index to uv would strip the index from working resolves."""
     for source in (INSTALL_SRC, SETUP_SRC):
         for line in source.splitlines():
             if line.strip().startswith("#"):

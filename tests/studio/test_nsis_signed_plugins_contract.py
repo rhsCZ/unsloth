@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Keep the NSIS plugin DLLs coming from the signed copy.
-
-NSIS runs its plugin DLLs out of $PLUGINSDIR, so the installer being signed says
-nothing about them. tauri-bundler signs a copy and points at it two different
-ways depending on version: the NSISPLUGINS env var up to bundler 2.8.1, and the
-signed_plugins_path template variable from 2.9.3 (tauri-apps/tauri#15422). The
-template carries both, because a missing plugin directory is a silent no-op, so
-dropping the wrong one ships unsigned DLLs with no build error.
-"""
+"""Carry both NSISPLUGINS and signed_plugins_path: a missing plugin dir silently ships unsigned DLLs."""
 
 from pathlib import Path
 

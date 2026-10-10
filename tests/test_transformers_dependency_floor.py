@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""``check_transformers_dependency_versions`` in ``unsloth/import_fixes.py``.
-
-A ``--no-deps`` install of transformers from git main leaves pip enforcing nothing,
-so the break lands at import with the wrong remedy (``pip install transformers -U``)
-for someone deliberately on main. These tests drive the real functions and pin: the
-requirement set comes from the installed distribution's metadata, only genuine
-violations are reported, the remedy names the DEPENDENCY, and nothing raises.
-
-Runs under the GPU-free ``tests/conftest.py``.
-"""
+"""Remedies must name the violating dependency, not transformers, since --no-deps leaves pip silent."""
 
 from __future__ import annotations
 
@@ -56,11 +47,7 @@ class _Missing(Exception):
 
 
 def _install_env(monkeypatch, requires, installed):
-    """Point the check at a synthetic environment.
-
-    ``requires`` is what transformers declares (or an exception to raise);
-    ``installed`` maps distribution name -> version, anything absent raises.
-    """
+    """Fakes transformers' requirements and installed versions; any name absent from installed raises."""
 
     def fake_requires(name):
         if name != "transformers":
@@ -241,12 +228,7 @@ def test_applicable_environment_marker_is_still_checked(monkeypatch, caplog):
 
 
 def test_an_absent_base_requirement_is_reported_like_a_stale_one(monkeypatch, caplog):
-    """`--no-deps` leaves a dependency missing as often as it leaves it old.
-
-    transformers checks its base requirements at its own root import and raises
-    PackageNotFoundError carrying the same misleading `pip install transformers -U`
-    hint, so skipping the absent case left the user with only that message.
-    """
+    """Missing base dependencies must be reported like stale ones; transformers' own hint misleads."""
     _install_env(
         monkeypatch,
         ["safetensors>=0.8.0", "typer", "tqdm>=4.27", 'fugashi>=1.0; extra == "ja"'],
@@ -374,10 +356,7 @@ def test_check_warns_rather_than_raises_on_a_violation(monkeypatch, caplog):
 
 
 def test_a_transformers_stub_in_sys_modules_does_not_break_the_import(monkeypatch, caplog):
-    """`find_spec` RAISES on a module in sys.modules whose `__spec__` is None or unset,
-    rather than returning None (documented behaviour, CPython Lib/importlib/util.py).
-    An unguarded probe there turns a warn-only check into a failed `import unsloth`.
-    """
+    """find_spec raises when a sys.modules entry has a None __spec__, so the probe must be guarded."""
     import sys
     import types
 
@@ -391,13 +370,7 @@ def test_a_transformers_stub_in_sys_modules_does_not_break_the_import(monkeypatc
 
 
 def test_check_also_runs_on_the_mlx_branch():
-    """Apple Silicon never reaches `_gpu_init`.
-
-    `unsloth/__init__.py` splits on `_IS_MLX` and only the `else` arm imports
-    `_gpu_init`, while the MLX arm imports transformers itself, so registering on one
-    arm leaves MLX users with transformers' own wrong remedy. The call belongs in the
-    `if _IS_MLX:` body, next to the torchao fixes that are there for the same reason.
-    """
+    """Apple Silicon never reaches _gpu_init, so the check must also be called in the _IS_MLX branch."""
     import ast
     from pathlib import Path
 

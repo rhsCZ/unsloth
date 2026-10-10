@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The "installed release: ..." line, in both setup twins, against real markers.
-
-Two things this holds. `backend` is absent from every marker written before #8520
-(2026-08-13), and reading a missing property is a terminating error under a caller's
-Set-StrictMode 2.0+, so an unguarded read aborts setup on those installs. And the twins
-must render identical bytes: PowerShell prints @(1, 2) as "1 2", Python as "[1, 2]".
-
-Both functions are sliced out rather than sourced whole, because both scripts run install
-steps at load (as tests/studio_setup_ps1/Get-FunctionSource.ps1 and tests/sh/ do).
-"""
+"""Setup twins' installed-release line: old markers lack backend; output must be byte-identical."""
 
 from __future__ import annotations
 
@@ -37,14 +28,7 @@ requires_pwsh = pytest.mark.skipif(
 
 
 def _usable_bash():
-    """A bash that actually runs a command, or None.
-
-    shutil.which("bash") alone is wrong on Windows: C:\\Windows\\System32\\bash.exe is the
-    WSL launcher, so it is the first PATH hit even with no distro installed, and running it
-    writes "Windows Subsystem for Linux has no installed distributions." to stdout as UTF-16
-    -- which this file then compared against a printer line. setup.sh is never executed on
-    Windows anyway (_find_setup_script picks setup.ps1 there), so probe before trusting.
-    """
+    """shutil.which('bash') finds the WSL launcher on Windows, so bash must be run as a probe first."""
     exe = shutil.which("bash")
     if exe is None:
         return None

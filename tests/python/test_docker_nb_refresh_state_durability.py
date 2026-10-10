@@ -1,19 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""A refreshed notebook must never end up on disk without a state record.
-
-That single combination is unrecoverable. Withholding the commit marker is not
-enough, because the truncated state is still published: the NEXT refresh reads the
-unrecorded notebook as a user edit, keeps it, finds nothing failed, and stamps the
-marker over it, so it is unmanaged for good.
-
-Driven end to end against the real script with a local repository standing in for
-upstream. RLIMIT_FSIZE fills the disk part-way through, sized so the clone still
-fits: git's index costs ceil((62 + len(path)) / 8) * 8 per entry while the state
-costs 67 + len(path), so a 17-character name makes the state outgrow the index and
-opens a window between them. Without that the clone always dies first and the state
-write is never reached.
-"""
+"""Never leave a refreshed notebook on disk without its state record; the next refresh would keep it."""
 
 from __future__ import annotations
 

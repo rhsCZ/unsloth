@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Python side of `instruments/layoutcost.js`: an instrument that measures its own cost.
-
-WHY THIS FILE LIVES UNDER `arms/`. `instruments/layoutcost.js` is the browser half; the harness
-layer owns `instruments/` as a package and its registration machinery. This is the ablation
-layer's adapter over it, and it exists for the ablation plane: the counters it reads
-(`scrollHeight` reads, `scrollTop` writes, MutationObserver callbacks and records, custom
-property writes) are the potency evidence for arms D and E, and the thing they instrument is the
-mechanism those arms remove.
-
-WHY IT IS OFF BY DEFAULT AND WHY IT RUNS TWICE. Wrapping the `scrollHeight` getter to time it
-adds a call frame and two `performance.now()` reads to the very operation under suspicion. That
-is not a small effect on a counter that fires per streamed character. So:
-
-  * the instrument declares level 3, and never runs at the levels the headline numbers come from;
-  * the deep tier runs the SAME CELL twice, once with it and once without, and reports the
-    difference as the instrument's in-situ cost.
-
-The second point is the one that matters. `selfCostEstimate()` inside the JS measures the wrapper
-against a detached, clean element, which is a lower bound and a fair one; the paired cell measures
-what it actually cost in the page, with a dirty layout tree and a real observer running. Those two
-numbers are usually different, and quoting the cheap one because it is easier to obtain is how an
-instrument's cost gets assumed rather than known.
-"""
+"""Off by default: wrapping scrollHeight adds cost, so its overhead is measured by a paired cell."""
 
 from __future__ import annotations
 
@@ -81,14 +59,7 @@ class LayoutCostReading:
 
 
 def reading_from_snapshot(snapshot: Mapping[str, Any] | None) -> LayoutCostReading:
-    """Turn the browser snapshot into Measures, preserving `attempted` per family.
-
-    A patch the engine refused (a non-configurable descriptor on some WebKit builds) comes back
-    in `unavailable`, and every counter under it becomes NOT ATTEMPTED rather than zero. That
-    distinction is the whole reason this adapter exists instead of the raw dict being written
-    straight into the payload: a WebKit run that could not install the getter patch would
-    otherwise report zero forced layouts, which is the most confident possible way to be wrong.
-    """
+    """A refused patch reads NOT ATTEMPTED, not zero, so WebKit cannot falsely show zero forced layouts."""
 
     if not snapshot:
         return LayoutCostReading(
@@ -144,13 +115,7 @@ def reading_from_snapshot(snapshot: Mapping[str, Any] | None) -> LayoutCostReadi
 
 
 def in_situ_overhead(with_instrument_ms: Measure, without_instrument_ms: Measure) -> Measure:
-    """The instrument's real cost, from the paired cell. Not its own estimate of itself.
-
-    Positive means the instrumented cell was slower, which is the expected direction. A negative
-    result larger than the noise means the pair is not measuring what it thinks it is, and it is
-    reported as a reading rather than clamped to zero, because a clamp would turn a broken pair
-    into a plausible one.
-    """
+    """Paired-cell cost, not self-estimate; a negative beyond noise is reported, never clamped to zero."""
 
     if not (with_instrument_ms.has_reading and without_instrument_ms.has_reading):
         return Measure.failed(
@@ -165,13 +130,7 @@ def in_situ_overhead(with_instrument_ms: Measure, without_instrument_ms: Measure
 
 
 class LayoutCostInstrument:
-    """Adapter satisfying the harness layer's `Instrument` protocol.
-
-    Registration is deliberately not done at import time here: `instruments/__init__.py` and its
-    `register_instrument` decorator belong to the harness layer, and importing them from this
-    layer would make the ablation package fail to import whenever the harness package is being
-    edited. `register()` below is called by whoever wires the two together.
-    """
+    """Registration happens in register(), not at import, so a harness edit cannot break this package."""
 
     name = "layoutcost"
     level = LAYOUTCOST_LEVEL
@@ -238,11 +197,7 @@ class LayoutCostInstrument:
 
 
 def register(register_instrument: Any) -> Any:
-    """Wire this instrument into the harness layer's registry.
-
-    Takes the decorator rather than importing it, so this module has no import-time dependency on
-    a package another layer is still building.
-    """
+    """Takes the decorator as an argument so this module has no import-time dependency on the harness."""
 
     @register_instrument(name = LayoutCostInstrument.name, level = LAYOUTCOST_LEVEL)
     def _make() -> LayoutCostInstrument:

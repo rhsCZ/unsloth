@@ -290,11 +290,8 @@ class TestEnsureFlashAttn:
         assert kwargs["uv_needs_system"] is True
 
     def test_wheel_that_does_not_import_is_not_trusted(self):
-        """pip exits 0 on a wrong-arch/ABI wheel; the import is what decides.
-
-        The #5420 / #6961 Blackwell shape: setup must report that rather than claim
-        flash-attn is ready.
-        """
+        """pip exits 0 on a wrong-arch or ABI wheel, so only a successful import shows flash-attn is
+        ready."""
         step_messages: list[tuple[str, str]] = []
 
         with (
@@ -336,11 +333,7 @@ class TestEnsureFlashAttn:
         assert ("warning", "Continuing without flash-attn") in step_messages
 
     def test_rejected_wheel_is_uninstalled(self):
-        """Leaving it installed is not "continuing without flash-attn".
-
-        unsloth/models/_utils.py finds it by metadata (_package_available) and then imports
-        the native module in process, so a wheel that killed the probe kills training too.
-        """
+        """Rejected wheels must be uninstalled: _package_available trusts metadata and imports natively."""
         step_messages: list[tuple[str, str]] = []
         removals: list[list[str]] = []
 

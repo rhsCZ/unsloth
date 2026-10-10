@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A step that reads a secret from its environment has to be given it.
-
-Secrets here are step-scoped on purpose (test_cached_paths_hold_no_credentials.py says why),
-and scripts read them through the environment rather than a `${{ secrets.* }}` expression
-spliced into the script, so the value never lands in the step's temporary shell file or in
-argv. That leaves one way to get it wrong that nothing else sees: a script that reads
-`os.environ["DOCKER_API_KEY"]` or `$DOCKER_API_KEY` in a step whose `env:` never maps it.
-Python raises KeyError, the shell expands to an empty string, and the step fails or quietly
-does nothing, only on the privileged run that holds the secret, which a pull request never
-exercises.
-
-That is what happened when the Docker Hub token exchanges moved to the environment: the Hub
-README step was given `DOCKER_API_KEY`, the cleanup step beside it and the ROCm workflow's
-README step were not, and every publish run from then on left its handle tags on Docker Hub.
-"""
+"""A step whose script reads a secret from its environment must map it in its env block."""
 
 from __future__ import annotations
 
@@ -44,11 +30,7 @@ def _strings(node):
 
 
 def _reads(script: str, name: str) -> bool:
-    """Whether a run script reads NAME from its environment, in shell or in inline Python.
-
-    Includes bash indirect expansion over a list of names, the shape release-desktop.yml's
-    notarization check uses: `for required in APPLE_ID ...; do [ -z "${!required:-}" ]`.
-    """
+    """Whether a run script reads NAME from env in shell (including indirect expansion) or Python."""
     n = re.escape(name)
     if (
         re.search(rf"os\.environ\[\s*['\"]{n}['\"]\s*\]", script)
@@ -111,13 +93,7 @@ _INDEXED = re.compile(r"secrets\[\s*([^\]]+?)\s*\]")
 
 
 def _secret_backed_names() -> frozenset[str]:
-    """Every name a step could be expected to receive a secret under, across all workflows.
-
-    A secret's own name, and every env key any workflow maps from a `secrets.*` expression:
-    `VT_API_KEY: ${{ secrets.VIRUS_TOTAL_API_TOKEN }}` makes VT_API_KEY secret-backed even in a
-    workflow that has lost its only mapping of it, which is exactly the file a per-file scan
-    would call clean.
-    """
+    """Names secret-backed in any workflow, so a file that lost its only mapping is still checked."""
     names = set(_SECRET_FOR) | set(_SECRET_FOR.values())
     for allowed in _INDEXED_FOR.values():
         names |= allowed[1]
@@ -140,10 +116,7 @@ SECRET_BACKED = _secret_backed_names()
 
 
 def _supplies_a_secret(value, key: str | None = None) -> bool:
-    """An env entry counts only when its value draws on a `secrets.*` expression: an empty
-    string, a `vars.*` lookup or a misspelled expression is present and still hands the
-    script nothing. `github.token` is the run's own token, and counts only for a key pinned to
-    GITHUB_TOKEN: handed to DOCKER_API_KEY it is a real token for the wrong service."""
+    """Counts only a secrets.* expression; github.token counts only for GITHUB_TOKEN, not other keys."""
     token_ok = key is not None and _SECRET_FOR.get(key) == "GITHUB_TOKEN"
     return isinstance(value, str) and any(
         _SECRET.search(expression)
@@ -213,10 +186,7 @@ def test_an_aliased_secret_is_tracked_under_the_name_the_script_reads():
 
 
 def test_an_inline_read_of_an_alias_is_caught_in_a_workflow_that_never_maps_it(tmp_path):
-    """The alias is known from the workflow that maps it, so a file that lost its only mapping
-    is still checked. Scripts the step merely invokes are out of scope: many read a secret
-    optionally by design (the pinned-symbol suites read GH_TOKEN only when present), and from
-    the file alone an intended absence and a lost mapping look the same."""
+    """Alias names come from any workflow that maps them; scripts a step only invokes are out of scope."""
     workflow = tmp_path / "w.yml"
     workflow.write_text(
         "on: push\n"
@@ -270,12 +240,7 @@ _WITHHELD_ON_PULL_REQUESTS = "github.event_name != 'pull_request' && {} || ''"
 
 
 def _allowed_shapes(key: str) -> set[str]:
-    """The expressions a known secret key may be given, whitespace-normalised.
-
-    The secret itself, or the one conditional this repository uses: withheld on pull_request
-    and supplied on every other event. Any other condition is a mapping this guard cannot read,
-    and `== 'pull_request' && secrets.X || ''` would starve exactly the privileged runs.
-    """
+    """Only the bare secret, or the one conditional withheld on pull_request, may feed a secret key."""
     shapes = set()
     if key in _SECRET_FOR:
         source = f"secrets.{_SECRET_FOR[key]}"

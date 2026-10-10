@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Back-compat for the kept-install path against every marker shape that has shipped.
-
-``UNSLOTH_PREBUILT_INFO.json`` is append-only across twelve shapes with no version field
-and no migration, so an absent key is normal for anything older. These call the deciders
-directly with the shapes real installs carry, rather than driving ``install_prebuilt``
-with a hand-built two-key marker. Platforms are simulated through ``HostInfo``: that
-covers the path decisions and payload tables, not macOS dyld.
-
-Run natively on Windows too (the parity workflow's windows-latest row), where the loader
-answers for real for every genuine image: the healthy rows start a real console launcher. The one
-file that is not an image is answered with the ``ERROR_BAD_EXE_FORMAT`` the loader gives it,
-without being started (see ``_windows_non_pe_is_refused_not_started``): a .exe that is not a
-PE is taken for a DOS program, and on a Windows desktop that raises the modal "Unsupported
-16-Bit Application" dialog. Two things stay POSIX-only there and are skipped rather than
-weakened: ``os.chmod`` cannot clear an execute bit Windows does not have, and
-``os.access(X_OK)`` is true for any file that exists.
-"""
+"""Kept-install back-compat over every shipped UNSLOTH_PREBUILT_INFO.json shape, which has no version."""
 
 import importlib.util
 import json
@@ -39,14 +23,7 @@ SKIP_X_OK = pytest.mark.skipif(
 
 
 def _windows_runnable_stub() -> bytes | None:
-    """Bytes of a real .exe that still starts after being copied somewhere else.
-
-    The keep path execs what it finds, so a Windows row needs a genuine PE. A renamed
-    System32 tool would do, but a Microsoft binary sitting at llama-server.exe is an AV
-    heuristic, so this is a pip-style console launcher instead (tests/_shared).
-    Verified by running the copy, not assumed: an unverifiable stub skips the module
-    instead of reporting the loader's refusal as a back-compat failure.
-    """
+    """Windows rows need a real PE: a pip-style console launcher, as a renamed Microsoft tool trips AV."""
     from windows_console_stub import console_stub_bytes
 
     stub = console_stub_bytes(0)
@@ -87,12 +64,7 @@ _ERROR_BAD_EXE_FORMAT = 193
 
 @pytest.fixture(autouse = True)
 def _windows_non_pe_is_refused_not_started(monkeypatch):
-    """Windows only: a non-PE image gets the loader's answer without reaching CreateProcess.
-
-    Genuine images, the runnable stub included, still go through the real ``run_capture``.
-    A test that replaces ``run_capture`` itself replaces this too, as before. POSIX is left
-    alone: execve on a non-ELF raises ENOEXEC with no UI, so the real answer is kept there.
-    """
+    """Windows only: a non-PE .exe gets ERROR_BAD_EXE_FORMAT unstarted, avoiding a 16-bit dialog."""
     if not WINDOWS_HOST:
         return
     real = ILP.run_capture

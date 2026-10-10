@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""CPU tests for the transformers security fixes in unsloth/import_fixes.py:
-CVE-2026-4372 (config.json `_attn_implementation_internal` picks a Hub kernel, fixed in 5.3.0),
-CVE-2026-5241 (LightGlue config.json `trust_remote_code`, fixed in 5.5.0) and
-CVE-2026-9856 (named chat template path traversal on save, fixed in 5.10.0).
-Each fix must block its exploit on an affected transformers, leave benign loads and saves
-unchanged, apply only once, and install nothing on a fixed transformers."""
+"""Each CVE fix blocks its exploit on affected transformers and installs nothing on a fixed one."""
 
 from __future__ import annotations
 

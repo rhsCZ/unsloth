@@ -1,18 +1,4 @@
-"""Regression guard for batched left-padded generation (issues #1066, #3699).
-
-Guards `_fast_prepare_inputs_for_generation` (unsloth/models/llama.py),
-shared by every decoder family wired through fix_prepare_inputs_for_generation,
-against two historical bugs:
-  (a) 2D attention mask truncated to its last column during cached decode,
-      losing padding info (fixed by #2216);
-  (b) position_ids taken from cache_position (which counts left-pad tokens),
-      so padded rows generated garbage (fixed by #4100).
-
-Two CPU-only deterministic layers: (1) AST structural checks (no unsloth
-import); (2) behavioral checks calling the real function with synthetic
-left-padded masks and fake caches. Companion GPU check:
-tests/utils/test_batched_leftpad_generation_gpu.py
-"""
+"""Guards cached decode against a truncated 2D attention mask and position_ids counting left-pad."""
 
 import ast
 from pathlib import Path

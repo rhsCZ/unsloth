@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""setup.ps1 must report the AMD GPU on a host with exactly one AMD adapter.
-
-`$wmiGpus = if (...) { $healthyGpus } else { $amdGpus }` unrolled a one-element branch into a bare
-WMI object, which has no .Count in PS 5.1, so the guard after it never fired: setup printed "gpu
-none (chat-only / GGUF)" while install.ps1 had just resolved the same GPU, then expected cpu torch
-against the ROCm wheels the installer placed, called the venv stale and exited, the installer rolled
-back, and the desktop app retried forever. Same expression one block down, `$gpuNames`, wraps each
-BRANCH but not the if, so a lone adapter name unrolls to a String and `$gpuNames[$nameIdx]` yields
-"A"; the `$nameArches[0]` rescue hides that unless a visible-device mask is set.
-
-Why the assertions look the way they do: only PowerShell's optimized member-binding path carries the
-PSv3 scalar Count fallback, and custom-adapter types (CimInstance, ManagementObject, COM,
-PSCustomObject) take the other one, which returned null until PowerShell/PowerShell#5745 shipped in
-6.1 -- never backported to 5.1. So under pwsh `.Count` answers 1 and the bug is INVISIBLE; asserting
-on it would pass against the unfixed source. Every runtime case asserts the SHAPE of the value,
-which is identical on both engines, and `ps51` re-runs the same block against stubs carrying an
-explicit `Count = $null` to reproduce 5.1's consequence rather than only its cause.
-"""
+"""Runtime cases assert the value's shape, since pwsh's .Count hides the 5.1 null-Count bug."""
 
 from __future__ import annotations
 
@@ -100,11 +83,7 @@ def _amd_scan_block(src: str) -> str:
 
 
 def _arch_resolution_block(src: str) -> str:
-    """Everything from the arch-resolution guard up to the hipconfig probe that follows.
-
-    Anchored on CODE at both ends for the same reason as _installer_scan_block: the two
-    comments this used to key on are exactly the kind a comment pass rewrites, and the
-    failure it produces is a ValueError rather than an assertion that says anything."""
+    """Anchored on code, not comments, which a comment pass rewrites; a missed anchor is a ValueError."""
     marker = src.index("$script:ROCmUnsupportedGfxArch = $null")
     start = src.index("    if (-not $script:ROCmGfxArch) {", marker)
     end = src.index("    if ($HasROCm -or $HipSdkInstalled) {", start)
@@ -133,11 +112,7 @@ def _driver(
     ps51: bool = False,
     strict: bool = False,
 ) -> str:
-    """Wrap the shipped blocks in a Get-CimInstance stub and report the result as JSON.
-
-    ps51 gives every stub adapter an explicit `Count = $null`, which is what a bare CimInstance
-    answers on Windows PowerShell 5.1 and what pwsh would otherwise paper over with 1.
-    """
+    """ps51 gives stub adapters an explicit Count = $null, as a bare CimInstance does on PowerShell 5.1."""
     count_member = "; Count = $null" if ps51 else ""
     items = ", ".join(
         f"[pscustomobject]@{{ Name = '{name}'; ConfigManagerErrorCode = {code}{count_member} }}"
@@ -544,10 +519,7 @@ def _present_names(pattern: str) -> tuple[str, ...]:
 
 
 def test_the_presence_masks_separate_every_ordered_pair():
-    """ORDERED, not unordered: a restore of A reading B's $hadPrevious flag only shows where A is
-    present and B is absent, since the other direction assigns A's saved $null, which removes the
-    variable exactly as the correct code does. Under the unordered form 43 of the 182 directed
-    substitutions survived."""
+    """Checks every ORDERED pair: the unordered form let 43 of 182 directed substitutions survive."""
     patterns = [_present_names(p) for p in _PRESENCE_PATTERNS]
     for a in _CALLER_ENV_NAMES:
         for b in _CALLER_ENV_NAMES:
@@ -560,12 +532,7 @@ def test_the_presence_masks_separate_every_ordered_pair():
 
 
 def _assert_caller_env_restored(out: dict, present: tuple[str, ...], what: str) -> None:
-    """The caller's shell as it was: same value, or still no variable at all.
-
-    Absence is `Test-Path Env:NAME` being false, not an empty value: 7.5+ keeps a variable present
-    when assigned "", so a restore writing "" instead of removing would pass a value check.
-    Present-but-EMPTY is unasserted: `$null -ne $previous` cannot tell "" from unset, so the answer
-    is engine-dependent."""
+    """Absence means Test-Path Env:NAME is false; an empty value still counts as present on pwsh 7.5+."""
     for name, sentinel in _CALLER_ENV:
         key = name.lower()
         if name in present:
@@ -622,10 +589,7 @@ def _caller_env_report() -> str:
 
 
 def _handoff_lifecycle_block() -> str:
-    """install.ps1's save / set / try / finally around the setup call, as shipped.
-
-    Anchored on the FIRST save, not the ROCm one: slicing below the five pairs above it left the
-    harness supplying their $previous*, so those restores were measured against harness constants."""
+    """Starts at the first save, not the ROCm one, so no $previous* is left to the harness."""
     src = INSTALL_PS1.read_text(encoding = "utf-8")
     start = src.index("    $previousSkipStudioBase = $env:SKIP_STUDIO_BASE")
     end = src.index("    if ($setupExit -ne 0) {", start)
@@ -800,11 +764,7 @@ def test_the_optional_handoffs_are_restored_when_this_run_sets_them(tmp_path, fa
 
 
 def test_every_save_sits_above_the_handoff_try():
-    """Ordering, not just membership: a save that drifts INSIDE the try is a live hazard.
-
-    A set comparison still matches, and no runtime case catches it either, since both injected
-    failures sit BELOW where such a save would land. What bites is a throw ABOVE it, leaving
-    $hadPrevious* unbound, hence $null, hence the finally removing a value the caller owned."""
+    """Saves must sit above the try: a throw leaves them unset, so finally clears the caller's value."""
     block = _handoff_lifecycle_block()
     assert block.count("\n    try {") == 1, "the block no longer has exactly one handoff try"
     try_at = block.index("\n    try {")
@@ -835,15 +795,7 @@ _RESTORE_TABLE_APPLY = re.compile(r"""Set-Item\s+["']Env:\$\(""")
 
 
 def _restored_names(block: str) -> set[str]:
-    """Every variable the finally puts back, in either spelling install.ps1 uses.
-
-    A regex that knew only `$env:NAME = $previousX` read the four UNSLOTH_WOA_* restores as
-    absent and called a correct block broken (#10282 landed them as a table and this file said
-    "saved but never restored"). Worse than the noise: had the table genuinely gone missing, the
-    same blind regex would have reported it identically, so the check could not tell the two
-    apart. Both spellings are recognised here, and a table only counts when something walks it --
-    rows nobody consumes restore nothing, and that is the failure this is guarding against.
-    """
+    """Reads inline and table restore spellings; a table counts only when a loop walks its rows."""
     names = set(_RESTORE_INLINE.findall(block))
     rows = set(_RESTORE_TABLE_ROW.findall(block))
     if rows:
@@ -857,12 +809,7 @@ def _restored_names(block: str) -> set[str]:
 
 
 def test_the_restore_reader_sees_both_spellings_and_no_others():
-    """The reader above is what stands between a real leak and a green run, so it gets rows.
-
-    Written as a table rather than against install.ps1 so it still says which spelling broke
-    when the installer is rewritten, and so the negative rows -- text that must NOT read as a
-    restore -- can be stated at all.
-    """
+    """Written as a table, not against install.ps1, so it survives a rewrite and can state negative rows."""
     inline = "    $env:SKIP_STUDIO_BASE = $previousSkipStudioBase\n"
     table = (
         "    foreach ($_p in @(\n"
@@ -884,10 +831,7 @@ def test_the_restore_reader_sees_both_spellings_and_no_others():
 
 
 def test_every_saved_variable_in_the_block_is_covered():
-    """_CALLER_ENV checked against the source, so a save added to the block names the variable
-    whose restore nothing exercises. UV_CACHE_DIR, TMP and TEMP are out of scope by construction:
-    saved and restored hundreds of lines outside this block, so covering them means slicing most
-    of install.ps1 and stubbing the venv build, the torch install and the llama.cpp fetch."""
+    """UV_CACHE_DIR, TMP and TEMP are excluded: they are saved hundreds of lines outside this block."""
     block = _handoff_lifecycle_block()
     covered = {name for name, _ in _CALLER_ENV} | {HANDOFF}
     saved = set(re.findall(r"\$previous\w+ = \$env:(\w+)", block))

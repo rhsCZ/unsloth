@@ -641,14 +641,7 @@ def test_run_attention_flash_varlen_covers_a_padded_flattened_row(monkeypatch):
 
 
 def test_run_attention_sdpa_windows_an_unpacked_unmasked_batch(monkeypatch):
-    """No packing, no padding mask: the case that had nothing to hang the window off.
-
-    SDPA's ``is_causal`` is FULL causal -- it has no window -- so with neither the xformers
-    bias nor flash's ``window_size`` in play, a model whose config declares a sliding window
-    attended its entire causal history. That is reachable from a Mistral training step the
-    moment xFormers is disabled and FlashAttention is absent, which is precisely what the
-    kernel probe can now decide.
-    """
+    """SDPA's is_causal has no window, so a sliding-window model must get an explicit mask when unpacked."""
     captured = {}
 
     def _fake_sdpa(Q, K, V, **kwargs):
@@ -734,10 +727,7 @@ def test_mistral_hands_the_dispatcher_its_configured_window():
 
 
 def test_a_zero_configured_window_is_full_causal_not_a_blank_mask():
-    """`sliding_window = 0` means "no local attention", the same as absent -- which is how
-    Mistral's own mask builders read it. Passing the 0 through makes the SDPA lower bound
-    `q_pos - (0 - 1)` sit above the causal upper bound, so every position is masked and the
-    layer returns nothing at all."""
+    """sliding_window = 0 must mean full causal like absent; passing it through masks every position."""
     import ast
     from pathlib import Path
 

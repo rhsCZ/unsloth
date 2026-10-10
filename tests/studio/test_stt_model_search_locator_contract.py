@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The dictation model search box must be reachable by test id, not by copy.
-
-`playwright_extra_ui.py` used `get_by_placeholder("Search model")`; #7835
-reworded that placeholder, so `Locator.fill` timed out and took the Chat UI
-Tests job down on every PR. The input now carries a test id.
-"""
+"""The dictation model search input is found by test id, since its placeholder text was reworded."""
 
 import ast
 import re
@@ -69,11 +64,7 @@ PER_LINE = r"get_by_(placeholder|label)\(|get_by_role\([^)]*name\s*="
 
 
 def copy_locator_calls(source, first_line, last_line):
-    """Copy-bound locator calls starting between two 1-based lines.
-
-    Walks the AST, so a call split over lines is one node. Parses the whole
-    file because the sliced step alone is not parseable.
-    """
+    """Walks the AST, so a call split over lines counts once; parses the whole file, not the slice."""
     offenders = []
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):

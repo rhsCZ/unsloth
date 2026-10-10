@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Windows signing toolchain has to be verified, and has to fail closed.
-
-`trusted-signing-cli` runs with the Azure Trusted Signing and Tauri signing
-secrets in the environment, so two things must hold: the binary is the one we
-pinned, and a check that cannot prove that cannot report success.
-
-Both have regressed before. The install step once restored the executable from
-an actions/cache and skipped the build on a hit, leaving a spoofable
-`--version` as the only gate. The verify step once ended both branches in
-`|| Write-Output "..."`, which exits 0, so a broken binary passed and surfaced
-later inside Tauri bundling.
-"""
+"""trusted-signing-cli runs with signing secrets, so it must be the pinned binary and fail closed."""
 
 from pathlib import Path
 

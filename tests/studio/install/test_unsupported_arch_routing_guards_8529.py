@@ -1,35 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The one safety property behind the #8529 unsupported-arch table: it is MESSAGING.
-
-The table added for #8529 (and extended for #8458) names AMD generations ROCm
-PyTorch does not cover: gfx1010 / gfx1011 / gfx1012 (RDNA 1, Navi 10/14) and
-gfx803 (Polaris 10/20/30). Every one of those must keep landing on CPU torch. If
-any of them ever reaches an AMD per-arch wheel index, the fix stops being a
-wording change: pip would install a repo.amd.com wheel built for another arch and
-the user gets an import-time HIP failure instead of a slow-but-working CPU stack.
-
-test_rdna1_unsupported_message_8529.py already asserts that property, but only
-against the SHAPE of one Python dict (`_GFX_TO_AMD_INDEX_ARCH`). Mutation testing
-showed three real routing changes that the whole suite still passes:
-
-* an extra `gfx803|gfx1010|gfx1011|gfx1012) echo gfx103X-all ;;` arm in install.sh's
-  `_amd_arch_index_family_for_gfx`, which sends UNSLOTH_ROCM_GFX_ARCH=gfx803 to
-  https://repo.amd.com/rocm/whl/gfx103X-all/ instead of the CPU index;
-* an extra `"gfx803" = "gfx110X-all"` entry in `$archFamilyMap`, in install.ps1 or
-  studio/setup.ps1 (only ever caught transitively, and only when the two copies
-  disagreed with each other);
-* a behavioural bypass inside `_amd_arch_index_url` / `_windows_rocm_index_url`
-  that hands back a family the dict does not contain, which a shape assertion on
-  the dict cannot see at all.
-
-So the tests below ask each source the routing question the installer asks it, in
-that source's own language: the Python functions are CALLED, install.sh's case
-table is EXECUTED under sh, and the PowerShell maps are read as maps (and, where
-pwsh exists, evaluated). Every group carries a positive control, because "no AMD
-index came back" is also what a renamed or unparsed table returns.
-"""
+"""Unsupported arches gfx1010/1011/1012 and gfx803 must keep routing to CPU torch, not an AMD index."""
 
 import importlib.util
 import os
@@ -154,10 +126,7 @@ _MULTIARCH_HOST = "repo.amd.com/rocm/whl-multi-arch"
 
 
 class TestRdna1RoutesOnWindowsOnly:
-    """#11614: the RDNA 1 arches reach AMD's multi-arch index, and only from
-    the Windows resolver. They are deliberately NOT keys of the per-family map: that map
-    is one URL leaf per family on repo.amd.com, and the multi-arch index selects the
-    device through the `torch[device-gfxNNNN]` extra instead."""
+    """RDNA 1 arches route only via the Windows multi-arch index, and are never per-family map keys."""
 
     @pytest.mark.parametrize("arch", _RDNA1_ARCH_INPUTS)
     def test_windows_resolver_names_the_multiarch_index(self, arch):
@@ -344,11 +313,7 @@ class TestInstallShIndexSelectorRuns:
         ), f"UNSLOTH_ROCM_GFX_ARCH={arch} reaches an AMD wheel index: {url!r}"
 
     def test_a_covered_arch_is_recognised_by_the_selector(self):
-        """First positive control: the selector really does tell the two apart. A
-        covered arch reaches the per-arch handoff (the reroute below get_torch_index_url
-        turns that into the repo.amd.com URL; the selector's own job is to name it),
-        and no unsupported arch does -- so "everything lands on /cpu" cannot be what
-        makes the bans above pass."""
+        """Covered arches must reach the AMD handoff, or 'everything lands on CPU' would pass the bans."""
         covered, covered_err = _run_sh_get_torch_index_url("gfx1030")
         assert covered.endswith("/cpu"), f"gfx1030 selected {covered!r}"
         assert (
@@ -450,15 +415,7 @@ def _ps_table_arches(path: Path, header: str, opener: str, closer: str) -> "list
 
 
 def _ps_arches(block: str) -> "list[str]":
-    """Every gfx arch the block routes: hashtable keys ("gfx1030" = ...) and plain
-    array members alike. Comments are stripped first, since both blocks annotate
-    their rows with generation names.
-
-    Quoting is not part of the property: PowerShell takes 'gfx803', "gfx803" and a
-    bare gfx803 as the same key or member, so all three have to be read, or a row
-    added in the other style is silently reported as absent. The trailing guard
-    stops a family VALUE from being misread as a routed arch: gfx103X-all shares a
-    prefix with gfx103, and only the full token is a routing key."""
+    """Reads gfx arches in any quoting style; the guard keeps gfx103X-all from matching as gfx103."""
     stripped = "\n".join(line.split("#", 1)[0] for line in block.splitlines())
     keys = re.findall(r"""['"]?(gfx[0-9a-z]+)['"]?\s*=(?!=)""", stripped)
     if keys:
@@ -502,11 +459,7 @@ class TestPowerShellRoutingTables:
 
     @pytest.mark.parametrize("path", [_INSTALL_PS1, _SETUP_PS1], ids = lambda p: p.name)
     def test_the_family_map_is_never_written_to_after_it_is_declared(self, path):
-        """The tests above read the `@{...}` literal, which is the whole map only for
-        as long as nothing edits it later. `$archFamilyMap["gfx803"] = "gfx103X-all"`
-        (or `.Add("gfx803", ...)`) anywhere below the declaration routes gfx803 in the
-        real installer while leaving the literal, and so every assertion on it, intact.
-        The map is a constant table; require it to stay one."""
+        """Nothing may write to $archFamilyMap after its declaration, or the literal tests miss a route."""
         src = path.read_text(encoding = "utf-8").replace("\r\n", "\n")
         block = _ps_block(src, "$archFamilyMap = @{", "{", "}")
         assert _PS_MAP_WRITE.search(block), (
@@ -563,10 +516,7 @@ class TestPowerShellMapEvaluated:
         assert not routed, f"{path.name}: {routed} reach an AMD wheel index"
 
     def test_contains_is_false_for_every_unsupported_arch(self):
-        """setup.ps1 gates the Windows AMD wheels on `$_rocmWheelArches -contains $arch`
-        rather than on the map, so that list needs the same evaluated check: a member
-        added in a quoting style this file's regex does not read would otherwise pass
-        the textual ban above and still route the arch."""
+        """Evaluate $_rocmWheelArches with -contains; a textual check misses members quoted another way."""
         src = _SETUP_PS1.read_text(encoding = "utf-8").replace("\r\n", "\n")
         block = _ps_block(src, "$_rocmWheelArches = @(", "(", ")")
         probes = ", ".join(f'"{a}"' for a in _UNSUPPORTED_ARCHES)

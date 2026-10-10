@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the `unsloth studio run --parallel` CLI flag.
-
-Pre-PR `llama_parallel_slots` was hardcoded to 4. These tests pin
-the typer Option (aliases, default 4, 1..64 range), the
-typer/denylist subset invariant, and re-exec forwarding.
-
-See ``test_studio_run_short_alias_clashes.py`` for the argv
-canonicaliser and the legacy `-m` / `-hfr` / `-f` shim.
-"""
+"""The --parallel aliases (default 4, 1..64) must stay a subset of the backend denylist."""
 
 from __future__ import annotations
 
@@ -117,10 +109,7 @@ def test_parallel_range_guards_are_set():
 
 
 def test_typer_parallel_aliases_are_subset_of_backend_denylist():
-    """Every typer alias for --parallel must be denied on the backend
-    too; otherwise HTTP /load could smuggle the value via
-    `llama_extra_args` and desync llama_parallel_slots from the
-    running llama-server."""
+    """Backend must deny every --parallel alias, or /load can smuggle it in via llama_extra_args."""
     studio_mod = _load_run_command()
     import inspect
     import importlib.util

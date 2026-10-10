@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Qwen3-Omni loads with text_only = True, and a kept wrapper still takes a text forward.
-
-Qwen3OmniMoeConfig has no top-level vision_config (it lives under thinker_config) and no
-causal-LM class, so text_only = True used to send it to AutoModelForCausalLM, which raised
-"Unrecognized configuration class". A default load kept the wrapper, whose missing forward
-made model(input_ids = ...) reach nn.Module.forward.
-"""
+"""text_only = True must not send Qwen3-Omni to AutoModelForCausalLM, which rejects its config."""
 
 import pytest
 import torch
@@ -24,11 +18,7 @@ DEVICE = "cuda" if has_real_cuda() else "cpu"
 
 @pytest.fixture(autouse = True)
 def _stock_causal_lm_loss_on_cpu():
-    """Any Unsloth load repoints LOSS_MAPPING at the Triton loss for the whole process, which a CPU
-    host cannot run ("0 active drivers"): one earlier in this worker, or this file's own
-    `_capture_fast_base_kwargs`. These tests are about where the forward goes, so on CPU they price it
-    with transformers' own loss and put the whole mapping back afterwards, leaking nothing to the next
-    test in the worker. On a GPU host they keep Unsloth's, as before."""
+    """On CPU use transformers' loss and restore LOSS_MAPPING, since Unsloth's Triton loss needs a GPU."""
     if DEVICE != "cpu":
         yield
         return

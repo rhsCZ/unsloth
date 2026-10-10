@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The compressed (FP8/NVFP4) export must free GPU weights before its llm-compressor
-subprocess loads a second copy from disk, including for accelerate-dispatched multi-GPU
-shards, which the old single-device-only ``.to("cpu")`` skipped and left resident.
-
-Pulls the release/restore helpers out of unsloth/save.py via AST (importing the module
-needs torch/transformers) and exercises them with fakes.
-"""
+"""Compressed export frees GPU weights, even multi-GPU shards, before its llm-compressor subprocess."""
 
 from __future__ import annotations
 
@@ -300,11 +294,7 @@ def test_single_device_xpu_model_is_released():
 
 
 def test_torchao_export_uses_the_shared_release():
-    """The torchao path must not re-inline a single-device-only ``.to("cpu")``.
-
-    A plain move is invalid on a dispatched model, so single-device-only handling left
-    a multi-GPU shard resident while ``device_map="auto"`` loaded a second copy.
-    """
+    """The torchao export reuses the shared release; a plain .to("cpu") is invalid on a dispatched model."""
     src = _SAVE_PY.read_text(encoding = "utf-8")
     torchao = src.split("def _unsloth_save_torchao(", 1)[1].split("\ndef ", 1)[0]
     assert "_offload_model_for_quantize_subprocess(model)" in torchao

@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Gates that let a remote-code multimodal model reach its first training step:
-padding-free off for a fixed-signature forward, gradient checkpointing inherited by
-a wrapper, and text training through the wrapped language model. No downloads.
-"""
+"""Padding-free off for fixed-signature forwards, and text training via the wrapped language model."""
 
 import os
 
@@ -142,12 +139,7 @@ class _Wrapper(PreTrainedModel):
 
 
 def test_wrapper_refuses_gradient_checkpointing_on_its_own():
-    """The precondition, on this transformers version.
-
-    unsloth_zoo (#1448) wraps PreTrainedModel.gradient_checkpointing_enable to grant the
-    same inheritance, so the precondition is read off transformers' own method, which the
-    wrapper keeps as `_unsloth_original`.
-    """
+    """Read transformers' own method past unsloth_zoo's wrapper of gradient_checkpointing_enable."""
     model = _Wrapper(_Cfg())
     assert model.supports_gradient_checkpointing is False
     enable = PreTrainedModel.gradient_checkpointing_enable

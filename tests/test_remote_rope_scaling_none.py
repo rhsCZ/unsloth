@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Remote modeling code written for transformers 4.x reads ``config.rope_scaling is None`` as plain RoPE.
-
-transformers 5 made ``rope_scaling`` an alias of ``rope_parameters``, which is a dict even for plain
-RoPE, so inclusionAI/Ling-2.6-flash's attention read scaling keys it never has. Remote configs with
-plain RoPE read ``None`` again; native configs and real scaling dicts are unchanged.
-"""
+"""Plain-RoPE remote configs must read `rope_scaling` as None, not the dict transformers 5 aliases."""
 
 import pytest
 import torch

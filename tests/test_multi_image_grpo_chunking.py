@@ -13,10 +13,7 @@ SOURCE_PATH = os.path.join(REPO_ROOT, "unsloth", "models", "rl_replacements.py")
 
 
 def _zoo_vision_helpers(*names):
-    """The multi image helpers ship with unsloth_zoo. An unsloth_zoo installed from before
-    they landed has none of them, and the static gates in this file already prove this repo
-    asks for them and fails loudly without them, so behaviour that can only be driven
-    through the zoo is skipped rather than reported as this repo being broken."""
+    """Skip rather than fail when the installed unsloth_zoo predates the multi-image helpers."""
     zoo = pytest.importorskip("unsloth_zoo.rl_replacements")
     missing = [name for name in names if not hasattr(zoo, name)]
     if missing:

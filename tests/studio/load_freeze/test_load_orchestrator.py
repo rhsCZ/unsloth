@@ -203,16 +203,7 @@ _DEADLOCK_GUARD_SEC = 30.0
 
 
 class _GatedProbe:
-    """A slow synchronous detect_audio_type whose duration the test controls.
-
-    It announces that it has started (``entered``) and then parks on ``released``
-    rather than sleeping. While it is parked the route is in exactly the state the
-    old wall-clock bound was trying to sample -- a blocking call in flight -- except
-    that the state now persists until the test ends it, so nothing has to be timed.
-
-    It also records the thread it ran on, which is the property itself: the call
-    belongs on a worker thread, not on the event loop's.
-    """
+    """Blocking detect_audio_type that parks on released, not sleeping; records the thread it ran on."""
 
     def __init__(self, result = "snac") -> None:
         self.entered = threading.Event()
@@ -262,12 +253,7 @@ def _health_burst(
     *,
     workers: int = 1,
 ) -> list[int]:
-    """Fire ``workers * n_per_worker`` /health requests and return their status codes.
-
-    A blocked event loop does not show up here as a slow-but-finished request, it shows
-    up as one that never answers, so a read timeout is reported with the request index
-    and the measured wait rather than being allowed to surface as a bare httpx error.
-    """
+    """A blocked event loop shows as a read timeout, not a slow answer, so each timeout names its index."""
     codes: list[int] = []
     lock = threading.Lock()
 
@@ -306,21 +292,7 @@ def test_buggy_route_blocks_event_loop():
 
 
 def test_fixed_route_keeps_event_loop_responsive():
-    """The to_thread-wrapped call leaves the event loop free to serve other routes.
-
-    This used to be twelve /health latencies compared against 250 ms, retried up to
-    three times. The 250 ms was a proxy: what the fix buys is that the blocking call
-    runs off the event loop thread, and a descheduled runner thread can falsify the
-    proxy on its own. It did, on a single 0.261s sample among eleven 0.0013s ones,
-    with the code entirely correct.
-
-    Nothing here is timed. The blocking call is held open, twelve /health requests are
-    answered while it is held, and only then is it released, so the ordering is the
-    evidence. On the pre-#5642 shape the blocked loop cannot answer /health, the
-    release never comes, and the run deadlocks rather than merely running late -- a
-    faster or slower machine does not change that, so this cannot flake into a pass
-    either.
-    """
+    """Ordering, not timing: twelve /health requests must be answered while the blocking call is held."""
     gate = _GatedProbe()
     with _UvicornServerThread(_gated_app(gate), port = _free_port()) as uv:
         base = f"http://127.0.0.1:{uv.port}"
@@ -529,18 +501,7 @@ def test_50_concurrent_probes_complete_without_deadlock():
 
 
 def test_100_concurrent_healths_during_slow_probe_all_responsive():
-    """104 /health across 8 connections are all answered while a slow /probe is in flight.
-
-    The old assertion was that the worst of those 104 latencies stayed under 350 ms.
-    That is a claim about the machine as much as about the route, and it is not the
-    thing the fix guarantees: what matters is that none of the 104 SERIALISE behind
-    the probe. Reaching for it through a threshold also made the test worse the more
-    concurrency it added, since a wider burst is a bigger sample of the worst case.
-
-    So the burst is now required to finish IN FULL before the probe is allowed to
-    return at all. It also no longer waits 0.05s hoping the probe got into
-    detect_audio_type first; it waits on the call announcing that it did.
-    """
+    """None of 104 /health requests may serialise behind a slow /probe; the burst completes first."""
     gate = _GatedProbe()
     with _UvicornServerThread(_gated_app(gate), port = _free_port()) as uv:
         base = f"http://127.0.0.1:{uv.port}"

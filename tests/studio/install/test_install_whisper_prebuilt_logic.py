@@ -1128,14 +1128,7 @@ FORK_REPO = "acme-fork/llama.cpp"
 
 @pytest.fixture(autouse = True)
 def _offline_published_tree_lookup(monkeypatch):
-    """Keep llama_runtime_pairs offline and its per-tag cache test-local.
-
-    A missing tree sends published_llama_ggml_tree to the llama release, so
-    without this the pairing assertions below would depend on live release
-    assets and on this machine's own llama marker. The cache is module level
-    and outlives monkeypatch, so clear it too. Tests wanting the lookup stub
-    _download_host_json_once themselves, which wins because this fixture is
-    applied first."""
+    """Block the published-tree lookup network; clear its module-level cache, which outlives monkeypatch."""
     M._PUBLISHED_GGML_TREE_CACHE.clear()
 
     def unreachable(url):
@@ -1220,10 +1213,7 @@ def test_published_ggml_tree_is_fetched_once_per_tag(monkeypatch):
 
 
 def test_the_manifest_probe_still_authenticates(monkeypatch):
-    """download_bytes falls back to auth_headers(url) only when headers are ABSENT, so a bare
-    User-Agent silently dropped auth. A private published repo then 404s and the caller falls
-    back to the -mix- suffix compare this probe exists to replace; an anonymous huggingface.co
-    fetch shares the per-IP limit that 429s CI fleets."""
+    """Passing any headers to download_bytes skips auth_headers(url), so a bare User-Agent drops auth."""
     seen = {}
 
     def fake_download_bytes(
@@ -1567,10 +1557,7 @@ def test_rocm_runtime_rejects_an_empty_rocblas_kernel_catalog(tmp_path):
 
 
 def _gfx103x_llama_bin(tmp_path: Path) -> Path:
-    """The published linux-x64-rocm-gfx103X layout from #8364: librocblas plus
-    its Tensile catalog, and libhipblaslt.so.1 with no hipblaslt/ catalog at all.
-    hipBLASLt builds no kernels for gfx1030 (RDNA2), so nothing is missing here;
-    llama.cpp installs and runs inference on exactly this tree."""
+    """gfx103X layout: hipBLASLt builds no kernels for RDNA2, so its missing catalog is expected."""
     llama_bin = _fake_llama_bin(tmp_path, backend_module = "libggml-hip.so")
     for name in ("libamdhip64.so.7", "libhipblas.so.3", "librocblas.so.5", "libhipblaslt.so.1"):
         (llama_bin / name).write_bytes(name.encode())
@@ -2235,10 +2222,7 @@ def test_whisper_current_install_needs_no_release_fetch(tmp_path, monkeypatch):
 def test_whisper_keep_paths_reject_an_empty_server_and_a_marker_without_a_fingerprint(
     tmp_path, monkeypatch
 ):
-    """The lookup-failure keep and the marker-only check share one predicate. A zero-byte
-    server keeps its mode and its marker, and neither the POSIX execute-bit check nor
-    the Windows existence check saw it; a marker missing the fingerprint the full path
-    holds it to is not a record of a finished install."""
+    """The keep check rejects zero-byte servers and markers without a fingerprint, as the full path does."""
     import json
 
     install_dir, host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
@@ -2269,10 +2253,8 @@ def test_whisper_keep_paths_reject_an_empty_server_and_a_marker_without_a_finger
 def test_whisper_marker_fields_edited_under_a_kept_fingerprint_take_the_full_path(
     tmp_path, monkeypatch
 ):
-    """A release_tag edited to the current tag over an old binary and its old
-    fingerprint used to read as current from the marker alone; the full path compared
-    the fingerprint against the plan's and reinstalled. The marker-only path now
-    recomputes the fingerprint from the marker's own fields."""
+    """Marker-only check recomputes the fingerprint from the marker's fields, so an edited tag
+    reinstalls."""
     install_dir, host, calls = _installed_cpu_tree(tmp_path, monkeypatch)
     marker_path = install_dir / M.METADATA_FILENAME
     original = marker_path.read_text(encoding = "utf-8")
@@ -2459,10 +2441,7 @@ def _slim_marker(install_dir: Path, **overrides) -> None:
 
 
 def test_a_slim_install_whose_llama_runtime_moved_is_not_current(tmp_path, monkeypatch):
-    """The reason this check cannot just be the llama one: whisper's slim bundle
-    hardlinks llama's ggml libraries, so a llama update invalidates a whisper install
-    at an unchanged whisper release. selection_from_artifact is what normally notices,
-    and it does not run on this path."""
+    """Slim whisper installs hardlink llama's ggml libraries, so a llama update invalidates them."""
     install_dir, host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
     _slim_marker(install_dir)
     monkeypatch.setattr(M, "installed_llama_ggml_tree", lambda: "ggml-abc")
@@ -2500,12 +2479,7 @@ def test_installed_paired_runtime_tree_reads_the_live_llama_marker(monkeypatch):
 
 
 def test_the_whisper_reuse_path_backfills_the_paired_ggml_tree(tmp_path, monkeypatch):
-    """A slim install made before the tree was recorded would otherwise fetch the
-    release, its manifest and its checksum index on EVERY update rather than once.
-
-    The reuse path is the only place that re-examines a slim install without
-    reinstalling it, and it gets there having just confirmed the fingerprint and the
-    wiring, so it is where the record is caught up."""
+    """Reuse backfills the ggml tree on old slim installs instead of refetching every update."""
     install_dir, host, calls = _installed_cpu_tree(tmp_path, monkeypatch)
     _slim_marker(install_dir, paired_llama_ggml_tree = None)
     monkeypatch.setattr(M, "installed_llama_ggml_tree", lambda: "ggml-abc")
@@ -2546,11 +2520,7 @@ FAILED_LINE = "prebuilt install failed"
 
 
 def _no_network(monkeypatch, *, release_error = None):
-    """No answer from anywhere: not the pre-check HEAD, not the release, not the listing.
-
-    The environment variables are cleared because main() reads its tag defaults from them,
-    and a pin is exactly what must NOT be answered by keeping a tree.
-    """
+    """Blocks every network answer and clears env pins, which must never be answered by keeping a tree."""
 
     def no_head(_repo):
         raise OSError("github.com unreachable")
@@ -2635,10 +2605,7 @@ def test_a_rate_limited_release_fetch_still_keeps_the_install(tmp_path, monkeypa
 def test_a_raw_network_error_from_the_release_fetch_still_keeps_the_install(
     tmp_path, monkeypatch, capsys
 ):
-    """The real fetch raises URLError, not PrebuiltFallback: a refused connection or a
-    proxy answering 403 reached install_prebuilt as "unexpected error" and the keep path
-    never ran. Patched at the shared core seam, so the wrapper in this module is what is
-    under test rather than a stand-in that already speaks PrebuiltFallback."""
+    """A raw URLError from the release fetch must still keep the install, not fail as unexpected."""
     import urllib.error
 
     install_dir, host, calls = _installed_cpu_tree(tmp_path, monkeypatch)
@@ -2697,11 +2664,7 @@ def test_an_unreachable_lookup_still_fails_on_a_broken_install(tmp_path, monkeyp
 
 
 def test_the_kept_path_refuses_a_mismatched_ggml_pairing(tmp_path, monkeypatch, capsys):
-    """A slim whisper tree hardlinks llama's ggml libraries, so a llama runtime that moved
-    underneath it is broken with every whisper byte still in place. The keep path has no
-    release in hand, so the paired tree this branch records on the whisper marker is the
-    only thing that can notice; a weaker "the wired files are present" check would keep a
-    pairing that no longer exists."""
+    """Kept path refuses a mismatched ggml pairing; only the recorded tree can notice it."""
     install_dir, _host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
     _slim_marker(install_dir)
     _no_network(monkeypatch)
@@ -2748,10 +2711,7 @@ def test_a_pairing_gap_still_reports_itself(tmp_path, monkeypatch, capsys):
 
 
 def test_an_explicit_release_request_is_never_answered_by_keeping(tmp_path, monkeypatch, capsys):
-    """Keeping the tree silently ignores whatever this run asked for, so anything that
-    names a release -- or demands the work be done anyway -- takes the failure instead.
-    --has-rocm and --rocm-gfx are deliberately not on that list: both entrypoints forward
-    DETECTED hardware on every AMD host, and the observed failure was on one."""
+    """Explicit release requests fail rather than keep; --has-rocm and --rocm-gfx are exempt."""
     install_dir, _host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
     _no_network(monkeypatch)
     rc, output = _cli_install(capsys, install_dir, "--rocm-gfx", "gfx1151")
@@ -2769,11 +2729,7 @@ def test_an_explicit_release_request_is_never_answered_by_keeping(tmp_path, monk
 
 
 def test_both_setup_scripts_report_the_kept_install_as_kept():
-    """The installer's exit status is 0 on the kept path, and a non-verbose run discards
-    its log, so without an arm of their own the shells print "prebuilt installed" for a
-    release nothing fetched. Wording and grep token are the llama arm's, verbatim, so a
-    strictly offline update reads the same for both components and one step matcher
-    covers them."""
+    """Whisper kept-install arm must use the llama wording verbatim, so one step matcher covers both."""
     kept = "update unavailable, existing prebuilt kept"
     token = "keeping the existing complete install"
     sh = (PACKAGE_ROOT / "studio" / "setup.sh").read_text(encoding = "utf-8")
@@ -2813,10 +2769,7 @@ def test_whisper_a_release_pin_does_not_excuse_a_wrong_upstream_pin(tmp_path, mo
 def test_an_unreachable_lookup_keeps_a_cpu_install_asked_for_with_cpu_fallback(
     tmp_path, monkeypatch, capsys
 ):
-    """--cpu-fallback is a backend request (resolve_backend makes it "cpu"), and the
-    intact check compares the marker's backend against it, so a kept CPU tree honours
-    the flag exactly as --backend cpu does; treating it as an explicit release request
-    turned a recoverable offline update into a failure."""
+    """--cpu-fallback counts as a backend request, so an offline update still keeps the CPU install."""
     install_dir, _host, calls = _installed_cpu_tree(tmp_path, monkeypatch)
     _no_network(monkeypatch)
     rc, output = _cli_install(capsys, install_dir, "--cpu-fallback")
@@ -2826,10 +2779,7 @@ def test_an_unreachable_lookup_keeps_a_cpu_install_asked_for_with_cpu_fallback(
 
 
 def test_the_whisper_backfill_is_written_under_the_install_lock(tmp_path, monkeypatch):
-    """The backfill is a read-modify-write of the marker. Outside the lock it raced a
-    concurrent installer swapping in a new release: old marker read, tree replaced, old
-    fields written over the new marker. The pre-lock keep now takes the lock, re-checks
-    the install and only then writes."""
+    """Marker backfill runs under the install lock, so a concurrent release swap is not overwritten."""
     install_dir, host, calls = _installed_cpu_tree(tmp_path, monkeypatch)
     _slim_marker(install_dir, paired_llama_ggml_tree = None)
     monkeypatch.setattr(M, "installed_llama_ggml_tree", lambda: "ggml-abc")
@@ -2936,11 +2886,8 @@ def test_force_compile_lets_a_lookup_failure_reach_the_source_build(tmp_path, mo
 
 
 def test_whisper_fast_path_accepts_a_recorded_macos_walk_back(tmp_path, monkeypatch):
-    """A Mac below the newest release's OS floor installs an older release; the
-    marker-only re-check asks the download host for the newest and must recognise the
-    recorded walk-back rather than send every such install down the full path. A
-    release newer than the recorded one, a macOS upgrade since the walk-back (the
-    newest release may fit now), or any other OS still does."""
+    """Marker-only check accepts a recorded macOS walk-back, but not after an OS upgrade or newer
+    release."""
     install_dir, _, _ = _installed_cpu_tree(tmp_path, monkeypatch)
     marker = {
         "release_tag": "old",
@@ -2993,11 +2940,7 @@ def test_the_marker_records_the_platform_it_was_selected_for(tmp_path, monkeypat
 
 
 def test_a_custom_repository_asset_name_is_judged_by_the_recorded_platform(tmp_path, monkeypatch):
-    """A custom --published-repo's manifest may name its assets freely; the platform
-    check reads the os/arch the marker records and only falls back to the fork's
-    asset naming for a marker written before they were recorded. Otherwise every such
-    install took the full path on every update, and the keep-existing path (which runs
-    when the newest release cannot be looked up) dropped a valid install."""
+    """Custom-repo asset names are judged by the recorded os/arch, with fork naming only for old markers."""
     install_dir, host, _ = _installed_cpu_tree(tmp_path, monkeypatch)
     os_token, arch_token = M.host_platform_tokens(host)
     _rewrite_marker(install_dir, asset = "server-bundle.tar.gz")

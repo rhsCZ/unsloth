@@ -1,9 +1,4 @@
-"""CPU-only, deterministic checks for the compressed-tensors export registry and the
-`save_method` normalization logic.
-
-No GPU, no model load, no torch math - just the pure routing logic - so a registry or
-alias regression is caught fast on CPU-only CI.
-"""
+"""CPU-only checks of the compressed-tensors registry and save_method normalization; no model load."""
 
 from __future__ import annotations
 

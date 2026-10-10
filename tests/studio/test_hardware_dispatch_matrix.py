@@ -353,11 +353,7 @@ def test_xpu_takes_priority_over_mlx_when_both_available(spoof_hardware):
 
 
 def _loader_device_map_helpers():
-    """The two loader functions, rebuilt over a fabricated torch.
-
-    ast rather than an import: `unsloth.models.loader_utils` pulls in the whole CUDA
-    import chain, which is exactly what the spoofs in this file are pretending about.
-    """
+    """Reads loader_utils via ast, not import, since importing it pulls the CUDA chain the spoofs mimic."""
     import ast as _ast
 
     source = (REPO_ROOT / "unsloth" / "models" / "loader_utils.py").read_text(encoding = "utf-8")
@@ -413,13 +409,7 @@ def _loader_device_map_helpers():
 def test_studio_placement_survives_the_loader_opt_in(
     profile, gpu_ids, opt_in, spoof_hardware, monkeypatch
 ):
-    """Whatever Unsloth decided, the loader hands transformers a map of the same shape.
-
-    "sequential" and "balanced" survive untouched. "unsloth_balanced" is a request to
-    plan, so the loader may answer with a plan or, when it declines -- as it does here,
-    with no planner installed -- with the sharding map that name declines to. What it
-    must never do is turn a multi-GPU ask into "sequential", which fills cuda:0 first.
-    """
+    """A multi-GPU ask must never come back as 'sequential', which fills cuda:0 first."""
     spoof_hardware(profile)
     hw = _import_studio_hardware_module()
 
@@ -450,15 +440,7 @@ def test_studio_placement_survives_the_loader_opt_in(
 
 @pytest.mark.parametrize("profile", PROFILES, ids = PROFILE_IDS)
 def test_studio_never_speaks_the_planning_sentinel(profile, spoof_hardware):
-    """get_device_map is the only thing that names a placement for Unsloth's loads, and
-    the plain "unsloth" sentinel is not one of its answers on any backend.
-
-    That name declines to "sequential", which gives cuda:0 its whole free budget and so
-    puts a model that fits there on one card. Every path the planner vetoes -- a full
-    finetune, an `auto_model` with no `_model_mapping`, a Falcon-H1 checkpoint missing
-    the mamba exclusions -- ends in that fallback, so a multi-GPU ask has to use the
-    name whose fallback still shards.
-    """
+    """get_device_map must never return the 'unsloth' sentinel; its fallback 'sequential' fills cuda:0."""
     spoof_hardware(profile)
     hw = _import_studio_hardware_module()
     answers = {hw.get_device_map(None), hw.get_device_map([])}

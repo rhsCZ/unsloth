@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A run releases the Unsloth instances it acquired, and records which ones they were.
-
-THE SIDES ARE ACQUIRED ONE AFTER THE OTHER. In a self-managed A/B the base is installed, launched
-and already serving before the treatment's clone begins, so a failure in the treatment's setup used
-to unwind past a base that nothing ever stopped: the cleanup lives in the `finally` under the cells
-and a failure during setup never reaches it. The same hole swallowed the two setup steps that leave
-by RETURNING -- the health check and the development-build gate -- with both Unsloth instances up.
-
-An abandoned Unsloth is not idle. `launch_studio` detaches the server with `setsid -f`, so it keeps
-the port; Unsloth's own launcher then ABORTS rather than binding when it finds one of its own servers
-there (`studio/backend/run.py`, `_resolve_port` with `avoid_own_studio`), the retry's server exits,
-and `wait_for_healthz` takes its 200 from the STALE process. That run measures the build the
-previous attempt installed while `run_meta` records the ref this one asked for.
-
-WHICH SERVER THE TREATMENT WAS is the second thing here, and it is asserted through the same drive
-because it is a property of the row a real run writes. An attached base is identified by its URL;
-the treatment carried only the label typed after `--ab`, so `--attach A --attach-b B --ab fix`
-resumed happily against `--attach-b C` and reported B's measurements as C's result.
-
-`run()` itself is driven, with the seams that leave this process stubbed at the boundary they cross:
-the installer, the launcher, the health check, the login, the browser and the cell runner. Nothing
-below them is re-implemented -- the acquisition loop, the gate, the identity and the payload are the
-shipped ones.
-"""
+"""Setup failures must stop Unsloth instances already acquired, or a stale server keeps the port."""
 
 from __future__ import annotations
 
@@ -81,12 +58,7 @@ class _Pacer:
 
 @pytest.fixture
 def studio(monkeypatch, tmp_path):
-    """Every seam `run()` reaches outside this process, stubbed where it leaves it.
-
-    The returned dict is both the knobs (which ref fails to install, whether /healthz answers,
-    whether the bundle is a production build) and the record (what was installed, launched and
-    stopped, and what the Unsloth instances looked like at the moment the first cell ran).
-    """
+    """Stubs every seam run() reaches outside the process; the returned dict is both knobs and record."""
 
     state = {
         "installed": [],
@@ -226,11 +198,7 @@ def test_a_studio_the_caller_attached_is_never_stopped(studio):
 
 
 def test_a_run_that_reaches_its_cells_stops_the_studios_once_at_the_end(studio):
-    """The control that matters: an ordinary run still gets two live Unsloth instances and still cleans up.
-
-    The guard is a `finally` over the whole of setup, so the failure it must not have is stopping
-    the Unsloth instances on the way IN. `stopped_when_the_cells_ran` is read inside the cell runner.
-    """
+    """Control: an ordinary run keeps both Unsloth instances up for its cells and stops them once."""
 
     args = _args(studio, "--branch", "main", "--ab", "pr-9296", "--reps", "2")
 
@@ -347,14 +315,7 @@ def test_the_same_treatment_studio_still_resumes(studio):
 
 
 def test_a_run_records_whether_the_click_probe_ran(studio):
-    """REGRESSION, and the recording half of the identity axis.
-
-    `--click-probe` runs a full `page.click`, a real mouse click, a dispatch, a focus and a hover
-    over the thread before the film starts, and its own help text says it "makes the cell's
-    timings incomparable with a cell that did not run it". A cell id carries the rung, the arm and
-    the repetition and none of that, so unless `run_meta` says which way the run was measured, a
-    later `--resume` has nothing to compare and cannot refuse a toggle.
-    """
+    """run_meta must record whether --click-probe ran, since cell ids do not carry it."""
 
     assert sb.run(_args(studio, "--branch", "main", "--click-probe")) == 0
 
@@ -472,13 +433,7 @@ def test_a_resume_that_drops_the_external_probe_is_refused(studio, probe, monkey
 
 
 def test_an_unreadable_probe_is_refused_before_the_payload_is_archived(studio, monkeypatch):
-    """REGRESSION. A refusal must not cost the previous run's payload its standard path.
-
-    Reusing an `--out` without `--resume` archives the payload already there, and that archive used
-    to run before `SBENCH_EXTRA_INIT_SCRIPT` was read. A path typo therefore exited 2 having
-    installed nothing, launched nothing and recorded nothing, while `payload.jsonl` was gone from
-    the one name every reader opens: `--report`, `--assert-liveness` and the next `--resume`.
-    """
+    """An unreadable SBENCH_EXTRA_INIT_SCRIPT is refused before payload.jsonl is archived."""
 
     monkeypatch.delenv("SBENCH_EXTRA_INIT_SCRIPT", raising = False)
     paths = Paths.under(studio["out"])
@@ -494,20 +449,7 @@ def test_an_unreadable_probe_is_refused_before_the_payload_is_archived(studio, m
 
 
 def test_a_duplicate_run_is_refused_before_it_archives_or_installs_anything(studio):
-    """REGRESSION. A run refused for the directory must not have moved the live payload first.
-
-    The guard against two runs in one `--out` used to be taken where the `Recorder` opens
-    `payload.jsonl`, which is after `prepare_payload` has archived what was already there and after
-    every clone, build and launch. A second launcher pointed at a busy directory therefore renamed
-    the FIRST run's live payload out from under it -- the writer keeps its inode through a rename,
-    so that run went on recording into `payload-<stamp>.jsonl` while `payload.jsonl`, the one name
-    `--report`, `--assert-liveness` and the next `--resume` open, was gone -- and put a clone and a
-    build on the machine the first run was measuring, before saying the word it could have said in
-    the first millisecond.
-
-    The holder here stands for that first run: it is the same lock a live run holds, so the second
-    invocation meets exactly what it meets in the field.
-    """
+    """A duplicate --out run is refused before it archives the payload or installs anything."""
 
     paths = Paths.under(studio["out"])
     assert sb.run(_args(studio, "--branch", "main")) == 0
@@ -534,25 +476,7 @@ def test_a_duplicate_run_is_refused_before_it_archives_or_installs_anything(stud
 
 
 def test_a_duplicate_is_still_refused_while_the_report_is_being_rendered(studio, monkeypatch):
-    """REGRESSION. The directory stays held until `run()` has finished READING the payload back.
-
-    `rec.close()` runs in the `finally` under the cells; `_render_ab` and `_summarise` then reopen
-    `payload.jsonl` after it and before `run()`'s own outer `finally` lets the directory go. While
-    `Recorder.close` released the lock it had ADOPTED from `run()`, the directory was free for the
-    whole of that window, and a duplicate arriving in it was admitted. It then did what the guard
-    exists to stop, to a run whose cells had all completed:
-
-      * `prepare_payload` renames `payload.jsonl` to `payload-<stamp>.jsonl` BEFORE it clones
-        anything, so for the minutes it spends installing there is no `payload.jsonl` at all and
-        the first run's reporting step dies with `FileNotFoundError` -- after every cell passed.
-      * once it has opened a payload of its own, that empty file is what `_render_ab` reads, so
-        `ab.md` is written out of another run's rows and the first run still exits 0.
-
-    The duplicate is driven through the real `run()`, from inside the reporting window, so it meets
-    the guard exactly where a second launcher meets it in the field. `flock` treats two descriptors
-    on one file independently even within a process, so the in-process contender is refused by the
-    same kernel lock a separate launcher is.
-    """
+    """The directory lock must stay held until run() has finished reading the payload back."""
 
     paths = Paths.under(studio["out"])
     real_render = sb._render_ab
@@ -597,16 +521,7 @@ def _clean_summary(studio) -> Path:
 
 
 def test_a_fresh_probe_run_replaces_the_summary_it_inherited(studio, monkeypatch, tmp_path):
-    """REGRESSION. A clean summary may not sit at the standard path over a probed payload.
-
-    `archive_payload` moves `payload.jsonl` and nothing else, so the `summary.md` an earlier
-    `--report` of this directory wrote stayed where every reader opens it while the payload it
-    described was moved aside and a probed one took its place. Nothing later corrected it: a probe
-    run is read through the probe's own console output, so `--report`, whose `SystemExit` clause
-    does replace the file, is the one command nobody has a reason to run on that payload. Without
-    `--ab` there is no `ab.md` either, so the stale summary was the only report-shaped file in the
-    directory.
-    """
+    """A probe run must invalidate the inherited summary.md; archive_payload moves only payload.jsonl."""
 
     monkeypatch.delenv("SBENCH_EXTRA_INIT_SCRIPT", raising = False)
     summary = _clean_summary(studio)
@@ -629,14 +544,7 @@ def test_a_fresh_probe_run_replaces_the_summary_it_inherited(studio, monkeypatch
 def test_a_fresh_single_arm_probe_run_replaces_the_ab_table_it_inherited(
     studio, monkeypatch, tmp_path
 ):
-    """REGRESSION. `_render_ab`'s own probe refusal cannot reach this case.
-
-    That function runs only under `if ab_ref`, so a fresh SINGLE-ARM probe run into a directory
-    an earlier `--ab` run left behind never calls it, and the clean table survives beside the new
-    unscorable payload. `archive_payload` moves only `payload.jsonl`, so nothing else touches it
-    either. Distinct from the resumed-A/B hole fixed in 52fc3e848, where `_render_ab` did run and
-    an early return jumped over its refusal.
-    """
+    """A single-arm probe run must replace an inherited ab.md, since _render_ab only runs under --ab."""
 
     monkeypatch.delenv("SBENCH_EXTRA_INIT_SCRIPT", raising = False)
     table = Paths.under(studio["out"]).out / "ab.md"
@@ -683,24 +591,7 @@ def test_a_probe_run_invents_no_summary_where_there_was_none(studio, monkeypatch
 
 
 def test_a_clean_rerun_also_invalidates_the_summary_it_inherited(studio, monkeypatch):
-    """REGRESSION, and this test previously asserted the opposite.
-
-    It was written as a control reading "only a PROBE run invalidates", on the reasoning that
-    `--report` rewrites the summary properly afterwards. That reasoning holds only for a reader
-    who runs `--report`, and it is the same asymmetry in reverse that made the probe case a bug:
-    `archive_payload` moves `payload.jsonl` and nothing else, so after ANY rerun of this directory
-    the standing `summary.md` describes a payload that is no longer at the path it names. A plain
-    run writes `summary.md` never and `ab.md` only under `--ab`, so a single-arm rerun produces no
-    report-shaped file to displace it.
-
-    The sharper version of the same hole is probed-then-clean: the probe refusal says in so many
-    words that the payload beside it is not scorable, and that claim survives into a directory
-    whose payload is now perfectly scorable. A refusal that outlives its reason is read as a
-    finding about the run that is actually there.
-
-    `--report` still writes a real summary over it, which is the half of the original control
-    that was correct and is kept below.
-    """
+    """A clean rerun must invalidate the inherited summary.md, since its payload was moved aside."""
 
     monkeypatch.delenv("SBENCH_EXTRA_INIT_SCRIPT", raising = False)
     summary = _clean_summary(studio)
@@ -735,13 +626,7 @@ def test_a_resume_under_the_same_probe_still_resumes(studio, probe):
 
 
 class _ProviderBackend:
-    """`lifecycle.register_provider`'s contract, per origin: idempotent by DISPLAY NAME.
-
-    The real one deletes every existing provider whose `display_name` matches before creating the
-    replacement, so registering the pacer twice against ONE Unsloth destroys the id the first
-    registration handed out. Modelled rather than stubbed to a constant, because that deletion is
-    the whole failure.
-    """
+    """Models lifecycle.register_provider, which deletes any provider with a matching display_name first."""
 
     def __init__(self) -> None:
         self.live: dict = {}
@@ -795,15 +680,7 @@ def _selected_provider_ids(scripts: list, origin: str) -> set:
 
 
 def test_an_attached_null_control_registers_one_provider_for_the_one_studio(studio, monkeypatch):
-    """`--attach U --attach-b U` is TWO SIDES ON ONE STUDIO, which `is_null_control` accepts.
-
-    Registering per side registered the pacer twice against that single backend, and the second
-    registration deleted the id the base side's seed script had already captured. Both scripts are
-    scoped to the same origin, Playwright does not define the order init scripts run in, and
-    `StudioAuth.rotate` re-adds them mid-run -- so the base could boot every cell with a DELETED
-    provider selected, which renders as "No longer offered" and throws `Connection not found`
-    without ever asking for a completion.
-    """
+    """Two sides on one studio register the pacer once, since a second registration deletes the first id."""
 
     backend = _ProviderBackend()
     monkeypatch.setattr(lifecycle, "register_provider", backend.register)

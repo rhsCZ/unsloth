@@ -11,15 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-"""Regression for #4735: a plain ``TrainingArguments`` silently disabling the
-gradient-checkpointing (GC) mode the model was configured with at setup.
-
-Setup records the effective GC mode as ``_unsloth_gradient_checkpointing``; the
-trainer restores *that* value, falling back to ``args.gradient_checkpointing``
-only when nothing was recorded. The restore lines live inside exec'd template
-strings, which ``py_compile`` never sees, so these tests pull the real snippets
-out of the source and execute them against fakes. GPU-free.
-"""
+"""Restores the GC mode recorded at setup, so a plain TrainingArguments cannot silently disable it."""
 
 from __future__ import annotations
 
@@ -102,12 +94,7 @@ def test_ternary_restore_semantics():
 
 
 def _extract_prepare_restore_block():
-    """Pull the multi-line restore block out of ``prepare_for_training_mode``'s wrapper.
-
-    It lives inside an exec'd template string, so grab it textually: from the
-    ``_model = getattr(self, 'model', None)`` line through the closing
-    ``else:``/``use_gc = ...`` pair.
-    """
+    """The restore block lives in an exec'd template string, so it is cut out textually, not parsed."""
     lines = _RL.splitlines()
     start = next(
         i for i, l in enumerate(lines) if l.strip() == "_model = getattr(self, 'model', None)"

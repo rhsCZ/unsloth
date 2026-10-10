@@ -1,25 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A cell that was re-run belongs to the run that FINISHED it, not to the one that died.
-
-`--resume` appends to the payload it continues and re-runs the cells that did not complete, and
-`make_cell_id` is deterministic, so the retry lands under the cell id of the attempt that died.
-Two readings came out of that, both silent and both wrong:
-
-  THE DEAD ATTEMPT'S FRAMES BECAME THE RETRY'S. Cell rows were scoped by session; the `action`
-  and `window` rows underneath them were collected by `cell_id` alone, so a 100 ms frame recorded
-  by the run that crashed stayed the RETRY's `max_frame_ms` and its gaps stayed in the retry's
-  jank distribution -- inside an A/B ratio, which is where cross-session drift does the most
-  damage.
-
-  THE SUCCESSFUL RETRY DID NOT COUNT. The rung kept the failure forever, so `--report` on a
-  payload whose only failure had already been re-run successfully still printed INCOMPLETE and
-  scored the rung zero, dragging the headline down with it.
-
-What must NOT change: two REPETITIONS are two observations, and a rung with a failed rep is still
-not a clean rung. Only a later attempt at the SAME cell supersedes an earlier one.
-"""
+"""Only a later attempt at the same cell supersedes an earlier one; repetitions are not retries."""
 
 from __future__ import annotations
 

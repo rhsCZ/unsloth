@@ -1,51 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unsloth macOS tab-capability Playwright test.
-
-Covers the two field failures from Unsloth Desktop 0.1.524-beta on Apple Silicon:
-
-1. The Train and Video sidebar rows rendered blacked out for minutes after launch,
-   then came back. The store seeded chat-only from a browser-UA guess, so on a Mac
-   both rows greyed out on first paint and stayed that way until /api/health
-   answered -- which, after the startup-speedup work moved the ML imports onto a
-   background warm thread, can take a long time. A row whose capability is still
-   unmeasured must spin, not grey out.
-
-   That state is asserted on a window this script opens itself, by holding the
-   browser's /api/health at hardware_detecting=true, rather than on the real warm.
-   The real one is a race nobody wins: see sample_natural_warm_window.
-
-2. The desktop launcher's health watchdog killed the backend about a minute in
-   ("Server stopped unexpectedly"). The warm thread holds the GIL through its
-   C-extension imports, so probes time out while the process is perfectly alive.
-   This polls the backend across the whole warm window and asserts it survives.
-
-   "Survives" here means the backend answered again, not that it answered every
-   probe. A probe that times out while the process is alive is the symptom this
-   file was written about, so failing on one states the opposite of the thing it
-   is trying to prove. Run 32862298967 went red on one timed-out probe per route
-   out of eighteen, on a commit that changed one frontend unit test. The stall
-   behind it was real -- the server served no request at all for 10.0s and then
-   33.2s, both windows ending on an /api/inference/status that had been in flight
-   throughout -- and it is worth a warning, but the backend was serving again
-   seconds later and was answering at the end of the run.
-
-   The verdict deliberately does not reproduce the launcher's watchdog. See
-   BackendSurvivalPoller.report: this phase runs no watchdog at all, and its 120s
-   window is shorter than the rule needs to reach any verdict. What fails here is
-   a backend that stops answering and never comes back, a non-200 answer, or a
-   refused port.
-
-   "Never comes back" is decided by await_recovery, which keeps watching after
-   sampling stops rather than letting one probe settle it. Sampling ends at an
-   arbitrary moment, so a stall straddling that boundary would otherwise fail a
-   run where the same stall a minute earlier only warned, which is this file's
-   own flake moved to the edge of the window instead of removed.
-
-Runs against a live Unsloth; drives the real UI. Env contract matches the other
-scripts here: BASE_URL, STUDIO_OLD_PW, PW_ART_DIR.
-"""
+"""Mac nav rows must spin, not grey out, while capability is unmeasured; backend must survive warm-up."""
 
 import json
 import os
@@ -137,32 +93,15 @@ def fail(m: str) -> None:
 
 
 def _transport_kind(err: object) -> str:
-    """Classify a failed probe as a dead port or a stalled one.
-
-    ECONNREFUSED is the only error that proves nothing is bound: the kernel answers it
-    itself, immediately, without a server involved. Everything else here -- a budget that
-    ran out, a reset, a truncated response -- is a listener that accepted the connection
-    and then failed to finish, which is the stall this poller is measuring. Treating those
-    as death is what made a backend the launcher would have kept come out as a crash.
-    """
+    """Only ECONNREFUSED proves nothing is bound; any other failure is a stalled listener, not a
+    dead one."""
     if isinstance(err, ConnectionRefusedError):
         return "refused"
     return "timeout"
 
 
 def _read_within(resp, deadline: float) -> str:
-    """Read a response body under one deadline for the whole read.
-
-    urllib's ``timeout`` is per socket operation, not per request. A peer that dribbles
-    bytes resets it on every chunk, so ``resp.read()`` can outlive any probe budget and,
-    here, the script's own wall-clock watchdog. These probes exist to decide whether the
-    backend is answering; a probe that never ends is the one outcome that must not
-    happen, because a hung job reports nothing and burns the runner.
-
-    read1() returns as soon as any data arrives rather than looping to fill the buffer,
-    so the deadline is checked between arrivals and the whole read is bounded by the
-    deadline plus at most one socket timeout.
-    """
+    """Bounds the whole body read by one deadline, since urllib's timeout resets on every chunk."""
     reader = getattr(resp, "read1", None) or resp.read
     chunks: list[bytes] = []
     total = 0
@@ -180,26 +119,7 @@ def _read_within(resp, deadline: float) -> str:
 
 
 def _probe_once(path: str, timeout: float) -> tuple[int, dict | None, str]:
-    """One GET attempt. Do not call directly; _get_json is what bounds it.
-
-    ``kind`` keeps apart the outcomes the desktop watchdog keeps apart, because they
-    are different failures and only one of them means the process is gone:
-
-      "ok"      -- answered 200.
-      "http"    -- answered, with a status that is not 200. The server is up and saying
-                   something is wrong.
-      "timeout" -- no answer inside the budget. The port is still there; the server is
-                   stalled. This is the case the watchdog spends extra patience on.
-      "refused" -- the connection was rejected. Nothing is listening, which is the only
-                   one of these that means the backend died.
-
-    Collapsing all three into "status != 200", which this used to do, reports a 10s
-    stall in the same words as a crash.
-
-    Only ECONNREFUSED earns "refused". A reset or a half-read response means there WAS
-    a listener that failed to see the request through, which is a stall wearing a
-    different errno, so it is counted as one rather than as a death.
-    """
+    """Call only through _get_json; only ECONNREFUSED means the backend died."""
     deadline = time.monotonic() + timeout
     try:
         with urllib.request.urlopen(f"{BASE}{path}", timeout = timeout) as resp:
@@ -219,30 +139,7 @@ def _probe_once(path: str, timeout: float) -> tuple[int, dict | None, str]:
 
 
 def _get_json(path: str, timeout: float = PROBE_TIMEOUT_S) -> tuple[int, dict | None, str]:
-    """GET *path* under a WHOLE-REQUEST deadline, returning (status, body, kind).
-
-    *timeout* bounds the entire probe: DNS, connect, response headers and body. It is
-    not a per-socket-operation timeout, and it must not be turned back into one.
-
-    That distinction is the whole reason this wrapper exists. urllib's own timeout
-    applies to each socket operation separately, so any peer that keeps sending
-    something, anything, more often than the timeout holds the call open forever. Each
-    layer was bounded in turn and the hole simply moved: capping the body read left
-    urlopen able to block indefinitely while response HEADERS trickled, because urlopen
-    has not returned yet at that point and the body deadline never gets to run. Bounding
-    the next layer down would only move it again, to the redirect chain or the TLS
-    handshake. A deadline outside all of them cannot be outflanked by any of them.
-
-    The probe therefore runs on a daemon thread and this joins it for at most *timeout*.
-    A join that expires is a timeout, and the thread is abandoned rather than waited on:
-    it is a daemon, so it cannot hold up interpreter exit, and _probe_once carries its
-    own body deadline and size cap so an abandoned one still lets go of its socket
-    instead of buffering forever. Those inner bounds are hygiene for the abandoned case;
-    the join is what actually enforces the budget.
-
-    Abandoning a thread per hung probe is affordable here because a backend that hangs
-    probes is one this script is about to report on and exit.
-    """
+    """Bounds the whole probe with a join on a daemon thread; urllib's socket timeouts are per operation."""
     outcome: list[tuple[int, dict | None, str]] = []
 
     def attempt() -> None:
@@ -259,21 +156,7 @@ def _get_json(path: str, timeout: float = PROBE_TIMEOUT_S) -> tuple[int, dict | 
 def await_recovery(
     window_s: float = RECOVERY_WINDOW_S, spacing_s: float = RECOVERY_PROBE_SPACING_S
 ) -> tuple[str, int, float]:
-    """Watch the backend after sampling stops, until it answers or *window_s* elapses.
-
-    Returns (kind, status, seconds spent watching, probes), where *probes* are
-    sample-shaped records of every attempt, on the poller's clock.
-
-    Only a stall is worth waiting on, so this returns the moment a probe brings back
-    anything decisive: an answer of any status settles whether the process is alive, and
-    a refused port is already death. Neither gets the window.
-
-    Without this the verdict turned on one probe taken at whatever moment the UI drive
-    happened to finish, which put the arbitrary end of the survival window in charge of
-    the result. A 25s stall in the middle of the run warned and passed while the same
-    stall straddling the boundary failed, which is the flake this file was changed to
-    remove, moved to the edge rather than fixed.
-    """
+    """Keeps probing after sampling stops; an answer of any status or a refused port ends the watch."""
     began = time.monotonic()
     probes: list[dict] = []
     status, kind = 0, "timeout"
@@ -310,17 +193,7 @@ def await_recovery(
 
 
 def _stall_windows(samples: list[dict]) -> list[tuple[float, float, bool]]:
-    """Spans where no probe answered, merged across both routes.
-
-    One answer from either route is proof the backend was serving at that instant, so an
-    answer closes whatever span was open. A span is closed at the moment the successful
-    probe was ISSUED rather than when it came back, which understates a stall that ended
-    mid-probe; the number here only ever feeds a warning, so erring short is the right
-    way to be wrong.
-
-    The third element says the span was still open when sampling stopped, which is the
-    only shape that can be a terminal stall.
-    """
+    """Gaps with no answer on either route; a gap closes at the issue time of the answering probe."""
     ordered = sorted(samples, key = lambda s: s["t"])
     spans: list[tuple[float, float, bool]] = []
     open_start = None
@@ -338,12 +211,7 @@ def _stall_windows(samples: list[dict]) -> list[tuple[float, float, bool]]:
 
 
 class BackendSurvivalPoller:
-    """Poll /api/liveness and /api/health for the whole run, on a daemon thread.
-
-    Records every non-200 and the worst latency seen. The UI drive happens
-    concurrently, so this measures the backend under the same load the desktop
-    launcher's watchdog would be probing it under.
-    """
+    """Polls /api/liveness and /api/health on a daemon thread while the UI drive loads the backend."""
 
     def __init__(self) -> None:
         self.samples: list[dict] = []
@@ -383,19 +251,7 @@ class BackendSurvivalPoller:
         final_wait_s: float = 0.0,
         recovery_samples: "list[dict] | tuple" = (),
     ) -> None:
-        """Write the samples out and decide whether the backend survived.
-
-        *final_kind* is what await_recovery saw once sampling stopped, and *final_wait_s*
-        is how long it watched for. Together they separate a stall that happened to be in
-        progress when the run ended from a backend that is genuinely gone, which is not a
-        distinction the samples alone can make: they stop at an arbitrary moment.
-
-        *recovery_samples* are that watch's own probes, on the same clock, and they are
-        laid end to end with the poller's. A stall can begin after sampling stops, and
-        one that then clears is exactly the case this file argues is worth reporting
-        rather than failing; measuring spans from the poller's samples alone would let it
-        pass in silence.
-        """
+        """Includes the recovery probes, so a stall that starts after sampling stops is still reported."""
         # Written below with the recovery probes folded in, or the artifact hides a reported stall.
         for path in PROBE_PATHS:
             got = [s for s in self.samples if s["path"] == path]
@@ -487,18 +343,7 @@ class BackendSurvivalPoller:
 
 
 def rotate_password(page) -> None:
-    """Complete the forced password change a bootstrap login lands on.
-
-    Unsloth seeds a one-time bootstrap password and requires it to be replaced before
-    the app proper is reachable. A harness that rotates it over the API first (the
-    staging one does) never sees this screen; a harness that hands over the raw
-    bootstrap password (this repo's macOS smoke does) always does. Handling it here
-    means the script works under both instead of only the one it was written against.
-
-    The current-password box is rendered only when the page did NOT receive the
-    bootstrap password (auth-form.tsx:362), so fill it when present rather than
-    requiring it.
-    """
+    """The current-password box only renders without the bootstrap password, so fill it when present."""
     step("completing the forced password change")
     try:
         page.locator("#new-password").wait_for(state = "visible", timeout = 60000)
@@ -518,19 +363,7 @@ def rotate_password(page) -> None:
 
 
 def log_in(page) -> bool:
-    """Sign in and prove it took. Returns False if the app is still signed out.
-
-    Three things about this form make the obvious version of this helper silently
-    do nothing, and all three cost a green run that checked an empty shell:
-
-    * auth-form.tsx returns null while the auth-status request is in flight, so at
-      domcontentloaded there is no form in the DOM at all. A `count()` reads 0 and
-      does not wait, which is exactly how this fell through to "assuming desktop
-      auth" on the runner. Wait for the field instead.
-    * Login mode renders a password and nothing else -- there is no username box
-      (auth-form.tsx:329-342). Requiring one made the fill a no-op.
-    * The submit button is labelled "Login", not "Sign in".
-    """
+    """Auth form is absent until auth-status returns, so wait for the password field; a count() reads 0."""
     page.goto(BASE, wait_until = "domcontentloaded", timeout = 120000)
     # A backend with its bootstrap password signs itself in to /change-password; check before #password.
     try:
@@ -597,32 +430,12 @@ _ROW_STATE_JS = """(ids) => {
 
 
 def row_states(page, ids = INLINE_ROW_IDS) -> dict:
-    """DOM state of each nav row by test id; None for a row that is not rendered.
-
-    Through robust_evaluate: the password rotation navigates the app on its own, which can
-    abort the post-login goto and leave a navigation in flight when the first sample is read
-    ("Execution context was destroyed"). That settles on its own and is not a page that
-    cannot be read; a page that stays unreadable still raises.
-    """
+    """Reads via robust_evaluate, since a password-rotation navigation can destroy the execution context."""
     return robust_evaluate(page, _ROW_STATE_JS, list(ids)) or {}
 
 
 def sample_natural_warm_window(page) -> None:
-    """Watch the real warm close, and fail on a real grey-out. Observes nothing on most runs.
-
-    Deliberately asserts nothing about having reached the window, because reaching it is
-    not something this script can arrange. `hardware_detecting` is stage 0 of the warm --
-    on the macOS runner's `--no-torch` install that is a failed `import torch` plus one
-    failed importlib.metadata lookup, so the verdict settles inside a second of the port
-    binding. Getting an authenticated sidebar in front of that costs a Chromium launch,
-    a login and two navigations, one of which spends the frontend's own 5s bounded wait
-    on the verdict (HARDWARE_DETECT_WAIT_MS in studio/frontend/src/config/env.ts). The
-    window is normally shut before the first sample, on a slow host as much as a fast
-    one, so requiring it -- under an env flag or otherwise -- would buy a permanently red
-    job rather than a test. The guarantee lives in assert_pending_state_on_forced_verdict
-    below; this stays for the case the window IS open, where it is the only check that
-    sees the real backend and the real UI disagree.
-    """
+    """Samples nav rows in the real warm window if it is still open; asserts nothing about reaching it."""
     step("sampling nav rows during the unmeasured window")
     deadline = time.monotonic() + 45
     samples = 0
@@ -667,25 +480,7 @@ def sample_natural_warm_window(page) -> None:
 
 
 def assert_pending_state_on_forced_verdict(page) -> None:
-    """Hold the verdict unmeasured for the browser and require the Train row to spin.
-
-    This is the check that cannot pass having observed nothing, and it is the reason the
-    one above does not have to. Instead of racing a sub-second warm, it answers the
-    browser's /api/health with a real reply that has the measurement taken back out, so
-    the provisional window stays open for as long as the check needs, on every host.
-
-    What the field report described is then exactly what this reads: with the verdict
-    unmeasured, `pending` beats `disabled` in resolveNavRowState
-    (studio/frontend/src/components/nav-row-state.ts), so nav-row-train must render
-    enabled with data-spinner="true". The regression rendered it disabled with no
-    spinner, which fails here on any host, fast or slow, warm window or none.
-
-    A missing row is a failure, not a skip: nav-row-train is pinned inline by default, so
-    if it is not in the DOM the sidebar did not render and there is nothing to assert on.
-    A stub body that drifted out of shape also fails loudly for the same reason, rather
-    than quietly passing -- there is no path through here that reports success without
-    having read the row.
-    """
+    """Forces an unmeasured verdict; the Train row must spin, because pending beats disabled."""
     step("forcing an unmeasured verdict and re-checking the pinned Train row")
     status, live, _kind = _get_json("/api/health")
     if status != 200 or not isinstance(live, dict):
@@ -754,22 +549,13 @@ def assert_pending_state_on_forced_verdict(page) -> None:
 
 
 def assert_row_never_greyed_while_unmeasured(page) -> None:
-    """A row whose verdict is unmeasured must spin, never grey out.
-
-    Two passes over the same contract. The first rides the real warm and is silent when
-    it misses it; the second creates the window it needs. Only the second can hold this
-    file to its promise, so it runs unconditionally and on every host.
-    """
+    """A row whose verdict is unmeasured must spin, never grey out; the forced pass runs on every host."""
     sample_natural_warm_window(page)
     assert_pending_state_on_forced_verdict(page)
 
 
 def stand_in_shown(page, row_id: str) -> bool:
-    """Whether the element a pinned row yields to is on screen, for a row that has one.
-
-    Visible, not merely mounted: on the collapsed icon rail the Projects section stays in the DOM
-    hidden by CSS, and that is exactly when its row has to come back.
-    """
+    """Checks visibility, not mounting: a collapsed rail keeps stand-ins in the DOM hidden by CSS."""
     selector = ROW_STAND_INS.get(row_id)
     if selector is None:
         return False

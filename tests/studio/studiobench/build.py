@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Build `dist/studiobench.pyz`: ONE file an external tester runs.
-
-    python -m tests.studio.studiobench.build
-    python dist/studiobench.pyz --doctor
-
-WHY ONE FILE. The people whose machines matter most are the ones who will not clone a monorepo,
-create a virtualenv and read a README to find out that their laptop drops frames at 90K characters.
-A zipapp is `python studiobench.pyz --doctor`, and the doctor then says in one screen what is
-missing and what each missing piece costs.
-
-WHAT GOES IN. The package, the frozen corpus, and the pieces of `tests/studio/_playwright_robust.py`
-that the runtime asks for by name. What does NOT go in is anything from `pip`: a zipapp cannot
-carry Playwright, which ships a node driver and a browser, so the bootstrap is stdlib-only and
-`--doctor` is what tells a tester to `pip install playwright && playwright install`.
-
-WHAT IS DELIBERATELY NOT COMPRESSED AWAY. `fixture/corpus/frozen/units.jsonl` is most of the
-artifact's size and all of its meaning: it is the frozen text, and shipping the generator instead
-of the text would make every tester's corpus a function of their own copy of the generator. The
-manifest's per-unit digests are checked at load, so a corpus that drifted refuses to run rather
-than quietly measuring something else.
-"""
+"""Builds one zipapp: Playwright cannot be carried, so --doctor tells the tester what to install."""
 
 from __future__ import annotations
 
@@ -51,13 +31,7 @@ def _copy_package(staging: Path) -> None:
 
 
 def _copy_robust(staging: Path) -> bool:
-    """`_playwright_robust.py` if it is there.
-
-    Vendored rather than imported, for the same reason lifecycle is: the artifact runs on a
-    machine with no checkout. `runtime/browser.py` imports it by either name and survives its
-    absence, so a build without it is degraded rather than broken -- it loses the maintained
-    Chromium flags, the view-transition killer and `dump_diagnostics`.
-    """
+    """Vendored since the artifact runs with no checkout; without this file it loses its Chromium flags."""
     src = REPO / "tests" / "studio" / "_playwright_robust.py"
     if not src.exists():
         return False

@@ -1,7 +1,4 @@
-"""Guard install.ps1's Unsloth launcher against the AV-heuristic shape (Kaspersky
-HEUR:Trojan.VBS.Agent.gen): a WScript .vbs spawning a hidden ExecutionPolicy-Bypass PowerShell.
-The shortcut must stay windowless via powershell.exe -WindowStyle Hidden over launch-studio.ps1,
-never a .vbs/WScript.Shell.Run wrapper, and any pre-existing .vbs must be deleted on upgrade."""
+"""Shortcut must use powershell.exe -WindowStyle Hidden, never a .vbs WScript wrapper, which AV flags."""
 
 import re
 from pathlib import Path

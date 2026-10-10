@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for tokenless (no GH_TOKEN) llama.cpp release resolution.
-
-Cover the github.com fallback that resolves upstream releases, their assets and
-their sha256 digests when the rate-limited api.github.com REST surface is
-unavailable. All I/O is monkeypatched.
-"""
+"""Tokenless llama.cpp release resolution via the github.com fallback; all I/O is monkeypatched."""
 
 import sys
 import urllib.error
@@ -111,10 +106,7 @@ class _Web:
 
 
 def _tag_page(prerelease: bool = True) -> str:
-    """A release page, labelled the way github.com labels one.
-
-    Prerelease by default because ggml-org marks every bNNNN build release that way.
-    """
+    """Fake github.com release page; prerelease by default, as ggml-org labels every bNNNN build."""
     label = (
         '<span class="Label Label--warning Label--large">Pre-release</span>'
         if prerelease
@@ -618,11 +610,7 @@ class TestPinnedTagHttpFailures:
 
 
 class TestFreshnessAgreesWithSelection:
-    """The update-currency check and the planner must answer from the same rule.
-
-    They disagreed live before this was threaded: the check reported v0.4.1 newest
-    while the planner installed b11071, so every update run would have reinstalled.
-    """
+    """The update check and the planner must pick the same release, or every update reinstalls."""
 
     RELEASES = [
         {
@@ -672,11 +660,7 @@ class TestFreshnessAgreesWithSelection:
 
 
 class TestLatestTagNamesABuild:
-    """The source build must compile the version the prebuilt path would install.
-
-    /releases/latest resolves by make_latest, and upstream points it at v0.4.1, a
-    pointer release that packages no prebuilt.
-    """
+    """Source builds compile the prebuilt's tag: /releases/latest can point at a pointer release."""
 
     def test_a_non_build_rest_tag_consults_the_feed(self, monkeypatch):
         monkeypatch.setattr(MOD, "fetch_json", lambda url: {"tag_name": "v0.4.1"})
@@ -700,11 +684,7 @@ class TestLatestTagNamesABuild:
 
 
 class TestUpstreamPointerReleasesAreNeverSelectable:
-    """Upstream ships binaries only under bNNNN; a versioned pointer release has none.
-
-    Accepting one lets the freshness check name it newest while the planner walks past
-    it for want of an asset, which reinstalls the same build on every update run.
-    """
+    """Only bNNNN releases are selectable: a versioned pointer release has no binaries to install."""
 
     def test_a_newer_pointer_release_is_not_newest(self, monkeypatch):
         releases = [

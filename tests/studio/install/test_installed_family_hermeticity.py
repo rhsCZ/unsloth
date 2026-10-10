@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A test that reaches the reinstall skip without pinning the installed-wheel pair reads
-the machine running pytest, so it passes on a bare laptop and fails on any host that
-already has AMD per-arch torch. Three cases in TestEnsureRocmTorch did.
-
-_installed_rocm_wheel_family, _torch_requires_rocm_sdk and _installed_bnb_provenance go to
-importlib.metadata for the RUNNING interpreter, which is the venv being repaired at install
-time and the test runner here. This file fakes the metadata layer, never the functions, so
-their parsing still runs.
-"""
+"""Fakes only importlib.metadata so ROCm/bnb helpers parse fake metadata, not the host's torch install."""
 
 from __future__ import annotations
 

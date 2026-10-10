@@ -1,33 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""A code fence the reader scrolled past on one arm is not a UI change.
-
-THE FALSE ALARM THIS HOLDS. `code-fence-defer.tsx` renders a code fence nobody has come near as a
-plain shell and upgrades it to token spans, one way only, the first time it comes within a viewport.
-On the r100K fast film `reasoning_toggle` leaves the viewport either near the tail or ~20,000px
-higher, at random per cell on ONE build, and the higher landing latches every fence in msg11/13/15
-for the rest of the cell. Their serialisations then differ by up to 1.7 million characters between
-two runs of the same build. A null control whose four cells all happened to land low called every
-later action stable, and two backend-only pull requests failed the gate on 2026-09-23:
-
-    #11727  run 35913031644  model_change / reasoning_toggle / select_all_copy / settings,
-                             msg15(assistant):1847269->2150610c, null control quiet
-    #11724  run 35913021155  image_upload, msg11(assistant):174956->283962c, the null control
-                             could not decide image_upload (one arm missed its slot)
-
-`testdata/` holds both runs' payloads as recorded by CI, trimmed to the fields the verdict reads
-(the verdict text is byte-identical on the trimmed and the full files). They predate the per-fence
-readings, so the first tests replay the failure as it happened. The rest add the readings that
-`scene/parity.js` now takes, modelled on the mechanism: in the messages whose size moved with the
-census's highlight-span count (msg11/13/15/17), each distinct digest is a distinct set of latched
-fences over identical fence TEXT and an identical message outside the fences. That model is the
-claim under test; the live evidence for it is a null run recorded with the new capture, and the
-DOM-level half is `test_the_capture_reads_a_shell_and_its_highlighted_fence_as_one_text` below.
-
-Every "clears" test is paired with one that injects a genuine difference into the same recorded
-payload and requires it to still fail, because a fix for a false alarm that also silences real
-changes is the worse bug.
-"""
+"""Fence latched by viewport position is not a UI change; each clearing test has a real-change twin."""
 
 from __future__ import annotations
 
@@ -73,11 +46,7 @@ def _captures(rows: list[dict]):
 
 
 def annotate(*payloads: list[dict]) -> None:
-    """Add the fence readings `scene/parity.js` now records, IN PLACE, across one run's payloads.
-
-    Built over BOTH payloads of a run together, so a digest seen in the null control and in the
-    result maps to the same latch set in each.
-    """
+    """Adds fence readings in place, over all payloads of a run, so one digest maps to one latch set."""
     seen: dict[int, list[str]] = {i: [] for i in LATCHING}
     for rows in payloads:
         for _row, cap in _captures(rows):

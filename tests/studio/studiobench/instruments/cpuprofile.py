@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The V8 CPU profiler, both ways round.
-
-There are two routes to sampled stacks and they are not interchangeable:
-
-* IN-TRACE (`disabled-by-default-v8.cpu_profiler`). Samples arrive as
-  `Profile` / `ProfileChunk` events on the SAME timeline as `RunTask`,
-  `TimerFire` and `EventDispatch`, on one clock. That is what lets a sample be
-  attributed to a classified task, which is the entire naming pipeline. This is
-  the route `instruments/tracing.py` at L2 takes, and it is the default.
-
-* STANDALONE (`Profiler.start` / `Profiler.stop`). One self-contained profile,
-  no trace, no task tree. Useful as a cross-check on the in-trace parser and as
-  a cheap way to get stacks when a full trace would overflow its buffer, but the
-  samples cannot be joined to task origins.
-
-`Profiler.setSamplingInterval` is in MICROSECONDS and must be set BEFORE
-`Profiler.start`; setting it on a running profiler is silently ignored, which
-looks exactly like the interval you asked for being unavailable.
-
-The cross-check `compare_with_trace_profile` exists because the in-trace parser
-is the load-bearing piece of this layer and it has several ways to be quietly
-wrong (incremental nodes, deltas on a sibling key, chunks on the profiler's own
-thread). Two independent extractions agreeing is worth having.
-"""
+"""Only the in-trace route can attribute samples to task origins; standalone profiles cannot."""
 
 from __future__ import annotations
 
@@ -77,14 +54,7 @@ class StandaloneProfiler:
 
 
 def from_profiler_result(raw: dict[str, Any]) -> CpuProfile:
-    """Adapt a `Profiler.stop` payload into the same object the trace path yields.
-
-    The standalone payload is the complete profile in one piece: `nodes` is the
-    full node list, `samples` and `timeDeltas` are flat arrays, and `startTime`
-    and `endTime` are microseconds. Reusing `CpuProfile` means every aggregation
-    and every gate in `analysis/cpuprofile.py` applies unchanged to both routes,
-    so the cross-check compares the same arithmetic on two inputs.
-    """
+    """Maps a Profiler.stop payload onto CpuProfile so both routes share one set of gates and arithmetic."""
     nodes = raw.get("nodes")
     if not nodes:
         raise CellFailure("cpuprofile_empty", "Profiler.stop returned a profile with no nodes")
@@ -129,14 +99,7 @@ def compare_with_trace_profile(
     *,
     tolerance: float = 0.25,
 ) -> dict[str, Any]:
-    """Do the two extraction routes agree on where the time went?
-
-    Compared on the SHARE of JS self time per frame, not on absolute
-    microseconds, because the two profiles cover different windows and different
-    sampling intervals. A large disagreement means one of the two parsers is
-    wrong, and since the in-trace one is the one this layer depends on, that is
-    a finding and not a warning.
-    """
+    """Compares per-frame self-time shares, not microseconds, as the two windows and intervals differ."""
 
     def shares(p: CpuProfile) -> dict[str, float]:
         by_name: dict[str, int] = {}

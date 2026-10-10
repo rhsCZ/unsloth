@@ -36,13 +36,7 @@ _GAVE_UP_MARKERS = (
 
 
 def _abandoned_reason(tauri_log: Path) -> str | None:
-    """The preflight verdict, when it means desktop auth will never be attempted.
-
-    Quotes the `disposition=` line, which names the outcome, plus the `Stale {...}`
-    line when there is one, since that is what carries the reason. Reporting the
-    first interesting line instead is worse than useless: on a box where preflight
-    read the install as Ready and then hit a port conflict, it quoted the Ready.
-    """
+    """Quotes disposition= and any Stale line; the first interesting line may contradict the verdict."""
     try:
         text = tauri_log.read_text(encoding = "utf-8", errors = "replace")
     except OSError:

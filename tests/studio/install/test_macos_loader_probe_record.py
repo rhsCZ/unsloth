@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for reusing a recorded macOS dyld probe.
-
-The probe may be skipped only when the runtime digests and host profile still match.
-"""
+"""Recorded macOS dyld probes are reused only while runtime digests and host profile match."""
 
 from __future__ import annotations
 
@@ -96,13 +93,7 @@ def build_install(
     *,
     load_probe_passed: bool = True,
 ) -> Path:
-    """Build an install whose marker passes the real fingerprint checks.
-
-    *load_probe_passed* mirrors what the installer learned from its own preflight:
-    True is the normal install, where dyld resolved every binary. False is the
-    install whose probe timed out or could not spawn, which must not be remembered
-    as a pass.
-    """
+    """load_probe_passed=False: a timed-out or unspawnable probe, which must never be recorded as a pass."""
     install_dir = tmp_path / "llama.cpp"
     runtime_dir = install_dir / "build" / "bin"
     runtime_dir.mkdir(parents = True)
@@ -154,12 +145,7 @@ def write_marker(install_dir: Path, marker: dict) -> None:
 
 
 def count_spawns(monkeypatch) -> list[int]:
-    """Stand in for a probe that RAN and loaded every binary.
-
-    Reporting the load matters: the real probe fails open, so preflight treats an
-    empty *loaded* as "could not run" and refuses to record a pass. A stub that only
-    returned [] would silently test the no-evidence path instead.
-    """
+    """Stub a probe that ran and loaded every binary; an empty result tests the no-evidence path."""
     calls = [0]
 
     def _probe(

@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""ROCm/RDNA spoof: present torch as an AMD Radeon (RDNA 2/3/4) card on a
-GPU-less host, so hip paths (device_type -> "hip", llama.cpp ROCm bundle) are
-testable in CPU-only CI with no AMD hardware. The ROCm sibling of
-_zoo_aggressive_cuda_spoof.py: it reuses that spoof's torch.cuda no-op machinery
-and overlays the AMD identity (torch.version.hip, gcnArchName, Radeon name).
-Apply BEFORE importing unsloth/unsloth_zoo, since DEVICE_TYPE is cached there.
-"""
+"""Spoof an AMD Radeon ROCm device; apply before importing unsloth, which caches DEVICE_TYPE."""
 
 from __future__ import annotations
 

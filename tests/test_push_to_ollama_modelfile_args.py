@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""push_to_ollama has to call create_ollama_modelfile with the arguments it takes.
-
-create_ollama_modelfile was `(tokenizer, gguf_location)` when push_to_ollama was written in
-#1648. It is now `(tokenizer, base_model_name, model_location)`, and this caller was left
-behind, so it raised `TypeError: unexpected keyword argument 'gguf_location'` before it
-reached Ollama. save.py needs a GPU to import, so the function is ast-extracted the way
-tests/test_ollama_eos_token_order.py extracts its own.
-
-Stubs are checked against save.py's AST, or a later rename drifts past a hand-copied one and
-leaves this green while the caller breaks again.
-"""
+"""push_to_ollama must pass create_ollama_modelfile's current arguments, or it raises TypeError."""
 
 import ast
 import importlib.util

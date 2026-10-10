@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The browser matrix keeps TMPDIR short, whatever the checkout is called.
-
-Branded Chrome and Edge create `$TMPDIR/com.google.Chrome.XXXXXX/SingletonSocket` at launch
-and abort with "Socket path too long" when that passes the 107 usable bytes of a unix socket
-path. With TMPDIR under the checkout the length tracked the repository name:
-`/home/runner/work/unsloth/unsloth/...` came to 100 bytes, and a fork named
-`unsloth-staging-2` to 120, which failed every chrome and msedge leg before a page loaded.
-Chromium, firefox and webkit create no such socket, so the break showed up as two browsers
-out of five.
-"""
+"""TMPDIR must stay short: branded Chrome and Edge abort when the socket path exceeds 107 bytes."""
 
 from __future__ import annotations
 

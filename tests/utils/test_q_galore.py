@@ -58,13 +58,7 @@ _BNB_OPTIMIZER_BACKEND = {}
 
 
 def requires_bnb_optimizer(device):
-    """Skip unless bitsandbytes can really run an optimizer step on ``device``.
-
-    Not `supported_torch_devices`: it lists "cpu" from 0.46.0 but the CPU kernels landed in
-    0.50.0, so gating on it fails these tests on 0.47.x/0.49.x, which pyproject allows.
-    The probe drives bitsandbytes' own AdamW32bit, so a real regression in the code under
-    test still fails rather than turning into a skip.
-    """
+    """Probes a real optimizer step: supported_torch_devices lists cpu before its kernels landed in 0.50."""
     available = _BNB_OPTIMIZER_BACKEND.get(device)
     if available is None:
         try:

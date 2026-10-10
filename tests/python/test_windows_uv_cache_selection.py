@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""install.ps1 must select a uv cache by the same rules install.sh does.
-
-install.sh and install.ps1 hold two copies of one decision, and the copies drift silently
-because nothing runs them against the same inputs. tests/sh/test_uv_cache_adaptive_selection.sh
-covers the POSIX half; this file is the Windows half, and it asserts BEHAVIOUR by running
-install.ps1's own selector, not text.
-
-The four rules below were added to install.sh first and did not exist in install.ps1. Measured
-against install.ps1 before this file: a rerun on Windows abandoned a warm Studio cache the moment
-one unrelated wheel made uv's default read as warm (re-downloading the Torch and CUDA bytes it
-already held), UV_NO_CACHE still probed and recorded a cache uv was not using, `archive-v0.backup`
-counted as warmth, and a populated-but-unwritable cache was selected -- which uv aborts on, so
-that one failed the install outright.
-
-Runs under pwsh on any OS: the selector is filesystem logic, and the Linux and macOS CI jobs
-carry pwsh, so the Windows path is exercised on every platform CI has rather than only on the
-Windows runners.
-"""
+"""install.ps1 must pick a uv cache by the same rules as install.sh; the copies drift silently."""
 
 from __future__ import annotations
 
@@ -53,14 +36,7 @@ def _selector_source() -> str:
 
 
 def _ps_literal(value: str) -> str:
-    """A PowerShell single-quoted string.
-
-    Not json.dumps: a JSON string is double-quoted, and PowerShell does not treat `\\` in a
-    double-quoted string as an escape, so `C:\\Users\\x` arrives as a path with DOUBLED
-    separators. Every Windows assertion in this file then compared a doubled path against a
-    real one, and the whole file only passed because POSIX paths have no backslashes to
-    double. A single-quoted PowerShell string is literal; `''` is the only escape it has.
-    """
+    """Not json.dumps: JSON double quotes make PowerShell see doubled backslashes; '' is the only escape."""
     return "'" + value.replace("'", "''") + "'"
 
 

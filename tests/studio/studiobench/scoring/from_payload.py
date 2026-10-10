@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Turn a recorded payload into the `{rung: {metric_key: Measure}}` the scoring layer consumes.
-
-This is the seam between the two halves of the tool, and it was the one piece neither half owned:
-the session layer emits rows shaped around what it observed, the scoring layer consumes readings
-shaped around what it scores, and nothing converted one into the other. Until this existed the
-ladder, the A/B and the report were all unreachable from a real run.
-
-Two rules it exists to enforce:
-
-  A MISSING READING IS NOT A GOOD READING.
-      An action that did not run, an action that ran without the timing key, and an action that
-      was never in the scene are three different facts and produce three different notes. None of
-      them produces a number, and none of them produces a zero. This matters most for the actions
-      that legitimately do not run at small rungs -- `scroll_during_generation` reports "the thread
-      is shorter than the viewport" at 1K -- because scoring those as instant would make a small
-      thread look like a fast one.
-
-  THE QUANTITY SCORED IS NAMED, NOT ASSUMED.
-      Every Measure carries the payload key it came from, because the anchor names and the
-      recorded names are not always the same quantity (see SCROLL_SETTLE_NOTE below).
-"""
+"""Seam from payload rows to scoring Measures; a missing reading is never a good one, nor a zero."""
 
 from __future__ import annotations
 
@@ -77,38 +57,7 @@ ATTEMPT_ROW_TYPES: frozenset[str] = frozenset({"cell", "action", "window"})
 
 
 def latest_attempt_rows(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Drop the rows of a SUPERSEDED attempt at a cell, keeping every other row untouched.
-
-    `--resume` appends to the payload it is continuing and re-runs the cells that DID NOT
-    complete, and `make_cell_id` is deterministic: the retry of `r10K.base.rep0` is written under
-    the same `cell_id` as the attempt that died. Nothing downstream keys on the attempt, so both
-    were read as one cell. Two ways that produced a wrong number, neither of them visible:
-
-      THE DEAD ATTEMPT'S FRAMES BECAME THE RETRY'S. `_frame_measures` pools every window row
-      carrying the cell id, so a 100 ms frame from the run that crashed stayed the RETRY's
-      `max_frame_ms`, and its gaps stayed in the retry's jank distribution.
-
-      THE RETRY DID NOT COUNT. `measures_from_records` keeps the FIRST cell row per rung and
-      `report.build._completion_by_rung` keeps a failure over a success, so a rung whose only
-      failure had already been re-run successfully still scored zero as INCOMPLETE.
-
-    An attempt is `(cell_id, session_id)` and the LAST one in file order wins, which is the one
-    the resumed run just wrote. Rows without a session id are kept: a payload from before the
-    recorder stamped them cannot be split into attempts, and dropping it would lose the run.
-
-    THE LATEST ATTEMPT IS THE LAST ONE THAT WROTE ANYTHING, not the last one that FINISHED. Keying
-    this on cell rows alone made an attempt invisible unless it reached its terminal row, and
-    `CellRunner.run` writes that in a `finally` -- which a SIGKILL, an OOM kill or a lost machine
-    never reaches, while the Recorder has already flushed and fsynced every action and window row
-    before it. So a resume hard-killed inside a cell left the older, completed attempt named as
-    the latest, and `__main__._resume_set` skipped it. Combined with a resume that had already
-    repaired an earlier pair, every cell then read as complete across two sessions, the next
-    `--resume` ran nothing at all and exited 0 over a stale table.
-
-    Any attempt-keyed row is evidence that an attempt happened, so all three types set it. This is
-    the same set the filter below applies to, which is the point: a row type that can leak from a
-    superseded attempt is a row type that can prove a newer one exists.
-    """
+    """Latest attempt is the last session to write any row; a killed run never writes its terminal row."""
     latest: dict[str, Any] = {}
     for row in records:
         if row.get("row_type") in ATTEMPT_ROW_TYPES and row.get("cell_id") is not None:
@@ -131,11 +80,7 @@ def _cell_rows(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
 def _actions_for(
     records: Sequence[Mapping[str, Any]], cell_id: str
 ) -> dict[str, Mapping[str, Any]]:
-    """Index the standalone `action` rows for one cell by action name.
-
-    The `actions` list embedded in the cell row is not used: it carries the timings but drops the
-    names, so it can only be decoded positionally and only if nothing was skipped.
-    """
+    """The embedded actions list drops names, so only the standalone action rows can be matched by name."""
     out: dict[str, Mapping[str, Any]] = {}
     for r in records:
         if r.get("row_type") == "action" and r.get("cell_id") == cell_id:
@@ -168,12 +113,7 @@ def _action_measure(metric_key: str, actions: Mapping[str, Mapping[str, Any]]) -
 
 
 def _frame_measures(windows: Sequence[Mapping[str, Any]]) -> dict[str, Measure]:
-    """Pool the active windows of one cell into the three frame metrics.
-
-    Pooled rather than averaged per window: `time_in_jank_pct` is a share of wall time and
-    `jank_index` is a sum normalised by wall time, so both are defined over the concatenated
-    distribution. Averaging per-window figures would weight a 2 s window equally with a 30 s one.
-    """
+    """Pooled, not averaged per window: both are shares of wall time, so windows must not weigh equally."""
     unit_by_key = {k: METRIC_BY_KEY[k].unit for k in FRAME_METRICS}
 
     deltas: list[float] = []
@@ -240,14 +180,7 @@ def _frame_measures(windows: Sequence[Mapping[str, Any]]) -> dict[str, Measure]:
 
 
 def _stream_windows(windows: Sequence[Mapping[str, Any]]) -> tuple[list[Mapping[str, Any]], dict]:
-    """The windows that carried streaming, and why each rejected one was rejected.
-
-    A window qualifies when the `stream_cost` instrument SAW SSE traffic in it and the reply it was
-    feeding grew by a usable amount. Both halves are needed. Traffic alone admits the tail window
-    in which the stream ended after 400 ms and the remaining twelve seconds were idle; growth alone
-    admits `thread_reopen`, which rebuilds the whole thread and grows the character count by tens
-    of thousands without a byte of it having been streamed.
-    """
+    """Needs SSE traffic and reply growth together; either alone admits idle tails or a rebuilt thread."""
     picked: list[Mapping[str, Any]] = []
     rejected: dict[str, int] = {}
 
@@ -296,72 +229,12 @@ def _stream_windows(windows: Sequence[Mapping[str, Any]]) -> tuple[list[Mapping[
 
 
 def _unaided(windows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Of the streaming windows, the ones with no scripted action running in them.
-
-    EVERY streaming quantity is taken from these, including the targeted numerator, and that is a
-    correction the measurements forced rather than a position held from the start.
-
-    The first version of this metric fed `delta_task_ms` from every streaming window, on the
-    reasoning that a task chain an SSE chunk started is attributable to the stream wherever it
-    happened. That reasoning is wrong, and a standard-tier 10K null shows exactly how. The chain
-    is measured from the chunk to the moment the event loop next reaches a macrotask, so ANY work
-    that lands in between is charged to it. Three of the film's slots run during generation on
-    purpose, and in `action:keystroke` on one cell the chain cost 23.77 ms per burst against 1.69
-    ms in the gap windows either side of it. That is typing, billed to the stream.
-
-    The window-wide quantities -- blocked time, the frame distribution, the worst frame -- fail
-    the same way and more obviously, because they charge the whole window. On a fast-tier 100K
-    null, admitting the action windows put a 1,738 ms worst frame into `stream_max_frame_ms` when
-    the unaided stretch beside it peaked at 286 ms: a scroll, reported as a streaming stall.
-
-    So the streaming phase, for scoring, is the quiet stretches where the stream is doing its work
-    unaided. Measured against the alternative on the same payload this also has the narrower null
-    floor (32.9% against 36.0%), which is the weaker argument of the two but points the same way.
-
-    Restricting FURTHER -- to the opening turn only -- was tried and is much worse (101.5%),
-    because fewer windows average less and one outlier then owns the cell. More streaming windows
-    is better as long as every one of them is unaided.
-
-    UNAIDED IS NOT THE SAME PREDICATE AS `kind == "gap"`, which is what this used to test. The
-    session layer opens one more quiet window that the scheduler does not: `stream:drain`, with
-    `kind = "stream"`, held open after the film to wait the reply out. On the default fixture it
-    carries nothing -- the tail is pinned at 6,000 characters, drains in 14 to 18 s against a
-    243 s standard film, and the measured drain window was 7 ms long -- so `_stream_windows`
-    rejects it for having seen no SSE traffic and the distinction never showed. It shows the
-    moment `--stream-tail-chars` is used, which is the one supported way to make the reply long:
-    at 96,000 characters the reply streams for 291 s at field cadence, so roughly 48 s of it lands
-    AFTER the last slot has closed, in the drain window, with nothing scripted running in it. That
-    stretch is unaided streaming by every part of the definition above, and dropping it dropped
-    the characters and the cost of the LAST fifth of the reply -- the part streamed into the
-    largest thread, so the most expensive part -- out of every streaming metric. Nor is
-    `stream_max_frame_ms` a ratio that might absorb it: a worst frame in that stretch was simply
-    never seen.
-
-    The kind filter is still what does the work, because it is the only thing that separates a
-    quiet window from an action window. It now names both quiet kinds instead of one.
-    """
+    """Only gap and stream:drain windows are unaided; action windows charge their own work to the stream."""
     return [w for w in windows if str(w.get("kind") or "") in UNAIDED_WINDOW_KINDS]
 
 
 def _stream_measures(windows: Sequence[Mapping[str, Any]]) -> dict[str, Measure]:
-    """The streaming phase alone, integrated, and divided by the characters it streamed.
-
-    TWO NUMERATORS, deliberately, because they fail in opposite directions and a reader should be
-    able to see both:
-
-      `stream_delta_cost_ms_per_kchar` is TARGETED. It sums only the main-thread task chains that
-      SSE chunks start, so it excludes the background churn -- async highlighting, GC, the app's
-      own timers -- that a whole-window figure charges to the stream. It is the sharper of the two
-      and the one a change to the delta path should move.
-
-      `stream_cost_ms_per_kchar` is BROAD. It sums blocked time over the streaming stretch, so it
-      catches stream-driven cost that lands outside the delta's own task chain, which is most of
-      the asynchronous work. It is the honest total and the noisier of the two.
-
-    Both are `null` with a reason rather than zero when the timer clamp was never established:
-    blocked time is a subtraction against an idle floor, and without a floor the quantity does not
-    exist.
-    """
+    """Two numerators: targeted delta-task cost (sharper) and broad blocked time (honest total, noisier)."""
     unit_by_key = {
         "stream_delta_cost_ms_per_kchar": "ms/kchar",
         "stream_cost_ms_per_kchar": "ms/kchar",
@@ -512,12 +385,7 @@ def _stream_measures(windows: Sequence[Mapping[str, Any]]) -> dict[str, Measure]
 def measures_from_records(
     records: Sequence[Mapping[str, Any]], metric_keys: Iterable[str] | None = None
 ) -> dict[int, dict[str, Measure]]:
-    """Build `{rung_tokens: {metric_key: Measure}}` from one run's payload rows.
-
-    A cell that did not complete still contributes its readings. Dropping it would be the same
-    mistake as scoring an incomplete rung as NaN: the fact that a build died at 500K is the most
-    important thing the run has to say, and it cannot say it if the rung disappears.
-    """
+    """Incomplete cells still contribute readings: dropping a rung that died would hide the failure."""
     keys = list(metric_keys) if metric_keys is not None else list(METRIC_BY_KEY)
     by_rung: dict[int, dict[str, Measure]] = {}
 
@@ -563,13 +431,7 @@ def measures_from_records(
 def measures_by_cell(
     records: Sequence[Mapping[str, Any]], metric_keys: Iterable[str] | None = None
 ) -> dict[tuple[int, int], dict[str, Measure]]:
-    """`{(rung_tokens, rep): {metric_key: Measure}}` -- one entry per CELL, not per rung.
-
-    `measures_from_records` collapses repetitions because a score is per rung. An A/B must not:
-    every repetition is an independent paired observation, and with them collapsed a run with
-    `--reps 4` produces one pair per metric, the bootstrap reports "too few pairs", and the
-    confidence interval that decides whether a difference is real never has anything to work with.
-    """
+    """Keyed per cell, not per rung, so every repetition stays an independent pair for the A/B bootstrap."""
     keys = list(metric_keys) if metric_keys is not None else list(METRIC_BY_KEY)
     out: dict[tuple[int, int], dict[str, Measure]] = {}
 
@@ -594,16 +456,7 @@ def measures_by_cell(
 
 
 def probe_scripts(records: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Every external init script this payload records, in order, without duplicates.
-
-    EVERY `run_meta`, not the first one. `--resume` continues an interrupted run by APPENDING to
-    the existing payload, so a file can carry a clean `run_meta` at the top and a second one
-    further down with a probe named in it, above the cells that were re-recorded under that
-    probe. Returning on the first row reads such a file as clean and scores perturbed cells.
-
-    The failed `probe_free` gate is read as well as the metadata field. Two independent records of
-    one fact, so a payload written by a version that emits only one of them is still refused.
-    """
+    """Reads every run_meta, since --resume appends a second header that may carry a probe."""
     found: list[str] = []
     for row in records:
         script = ""
@@ -620,12 +473,7 @@ def probe_scripts(records: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def refuse_if_probed(records: Sequence[Mapping[str, Any]], where: str) -> None:
-    """Raise rather than score a payload that was recorded with a probe in the page.
-
-    Called from every scoring entry point rather than from one of them. A refusal that only
-    `floor_table` performs still lets the run print an `ab.md` at the end and `--report` produce a
-    score from the same file afterwards, and those are the two tables somebody actually reads.
-    """
+    """Called from every scoring entry point, so no report can be produced from a probed payload."""
     scripts = probe_scripts(records)
     if not scripts:
         return

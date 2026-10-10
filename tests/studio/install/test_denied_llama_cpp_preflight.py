@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Check managed llama.cpp access before Windows installer work.
-
-The standalone installer copies setup.ps1's preflight helpers. These tests enforce
-their parity and cover real denied trees through the PowerShell harness.
-"""
+"""Parity of the preflight helpers in setup.ps1 and the standalone copy, plus denied-tree runs."""
 
 import re
 from pathlib import Path
@@ -317,11 +313,7 @@ def test_the_installer_never_repairs_permissions_by_itself() -> None:
 
 
 def test_the_label_exemption_is_narrow() -> None:
-    """The exemption must not cover an ACL change on anything but our own new directory.
-
-    Without this, widening it to `icacls` would read as a passing test while the rule it is
-    carved out of stopped applying at all.
-    """
+    """Only our new directory may skip the ACL rule; widening the carve-out would hide a stopped rule."""
     forbidden = (
         'icacls.exe "$LlamaCppDir" /setintegritylevel (OI)(CI)H',
         'icacls.exe "$dir" /grant "$env:USERNAME:(F)"',
@@ -368,10 +360,7 @@ def test_the_denial_detail_survives_a_directory_it_cannot_open() -> None:
 
 
 def test_the_security_software_holding_the_folder_is_named() -> None:
-    """takeown and icacls cannot clear a filter-driver block, and neither can
-    elevation, so the Defender mode that blocks file access, and any third-party
-    antivirus registered instead, are called out by name. A user told only that
-    "antivirus can deny this" cannot tell which product to open."""
+    """Denial by a filter driver is not fixed by takeown, icacls or elevation, so name the product."""
     for text in (INSTALL_PS1, SETUP_PS1):
         body = _function_source(text, "Get-SecuritySoftwareNote")
         assert "will not help" not in body
@@ -397,16 +386,7 @@ def test_the_security_software_holding_the_folder_is_named() -> None:
 
 
 def test_a_denied_cache_is_moved_aside_only_when_it_is_ours_to_move() -> None:
-    """The move is a bare rename, and only for the tree the guidance tells the user to delete.
-
-    Directory.Move rather than Move-Item, which is not a style choice. Move-Item falls back
-    to copy-then-delete when the rename is refused: it creates the aside folder, then dies on
-    the unreadable contents, leaving a stray llama.cpp.denied-* beside the original on every
-    run. Measured on windows-latest, denying each shape on the folder itself, every read
-    denial ((OI)(CI)(RX), (OI)(CI)(R), (RX)) refuses the rename while (DE) alone does not, so
-    on Windows this recovery cannot fire and must at least leave nothing behind. On POSIX the
-    rename needs only write and execute on the parent, so it recovers there.
-    """
+    """Directory.Move, not Move-Item, whose copy fallback leaves a llama.cpp.denied-* folder behind."""
     for text in (INSTALL_PS1, SETUP_PS1):
         body = _function_source(text, "Invoke-ManagedLlamaCppPreflight")
         assert "[System.IO.Directory]::Move($dir, $asideDir)" in body
@@ -434,10 +414,7 @@ def test_the_shared_helpers_have_a_sync_script() -> None:
 
 
 def test_a_denied_node_cache_gets_the_same_guidance_as_the_llama_cache() -> None:
-    """The same denial reaches the Node cache, where it used to read "unexpected
-    error" and then "install Node yourself, or check your network". Neither is
-    the fix, and a user whose antivirus holds the folder can spend a long time on
-    the second one."""
+    """A denied Node cache gets the same guidance as the llama.cpp cache, not a generic network error."""
     node = (ROOT / "studio" / "install_node_prebuilt.py").read_text(encoding = "utf-8")
     assert "EXIT_DENIED = 4" in node
     assert "except PermissionError as exc:" in node

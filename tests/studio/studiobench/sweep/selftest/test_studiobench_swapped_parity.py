@@ -1,26 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Two repetitions that swap the same two renderings between the arms are not a build difference.
-
-THE FALSE ALARM THIS HOLDS. #11756 touched only the Images/Video/Audio model pickers and failed
-the UI parity gate (run 35949769378) on four stable pairs:
-
-    delete_message  r100K rep0: thread scaffolding outside any message (11265->13287c)
-    delete_message  r100K rep1: thread scaffolding outside any message (13287->11265c)
-    thread_reopen   r100K rep0: thread scaffolding outside any message (11296->13308c)
-    thread_reopen   r100K rep1: thread scaffolding outside any message (13308->11296c)
-
-In the recorded payload every field `rendering_of` reads is the same in rep0's base capture and
-rep1's treatment capture, and the other way round. The extra 2012 and 2022 characters of scaffold
-follow the attachment chip `image_upload` leaves in the composer (inside the thread root) when it
-reaches its 800ms slot; on this run base missed it, head ran it, head missed it, base ran it. The
-null control shows the same build rendering both states. `testdata/pr11756_*` are CI's payloads
-trimmed to the fields the verdict reads (window rows dropped, action rows cut to the keys
-`pr11727_*` keeps); the verdict text is identical on the trimmed and the full files.
-
-Every "clears" test is paired with one that puts a genuine, consistent difference into the same
-recorded payload and requires it to still fail.
-"""
+"""Two reps swapping the same two renderings between arms are a race, not a build difference."""
 
 from __future__ import annotations
 
@@ -192,10 +172,7 @@ def test_the_same_difference_in_both_repetitions_still_fails(tmp_path, capsys, a
 
 
 def test_a_real_change_under_the_race_still_fails(tmp_path, capsys):
-    """The recorded swap, plus 17 characters head adds to the scaffold in both repetitions.
-
-    The renderings no longer line up across the repetitions, so the race cannot excuse them.
-    """
+    """A consistent real change under the same swap must still fail; the renderings no longer line up."""
     result, null = _recorded()
     for action in SWAPPED:
         for cell in ("r100K.treatment.rep0", "r100K.treatment.rep1"):

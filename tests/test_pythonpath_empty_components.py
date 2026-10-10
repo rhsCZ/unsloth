@@ -12,21 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""An empty PYTHONPATH component is an import location, not padding.
-
-`propagate_torchao_fix_to_subprocesses` prepends its directory to PYTHONPATH
-for every descendant process, and rebuilding that value with
-`[p for p in current.split(os.pathsep) if p]` would drop empty components.
-`export PYTHONPATH="$PYTHONPATH:/opt/mylib"` leaves one on the very common
-machine where PYTHONPATH was unset, and CPython reads it as the cwd: 3.11+
-absolutises every component in Modules/getpath.py (abspath("") is the cwd),
-and 3.10 puts the literal "" on sys.path, which site.removeduppaths() then
-makes absolute. Same outcome, different layer.
-
-A SET-BUT-EMPTY PYTHONPATH is the opposite case: CPython ignores it entirely,
-so turning "" into a lone "" component would ADD the cwd to every descendant.
-The rebuild keeps that special case.
-"""
+"""An empty PYTHONPATH component means the cwd, so keep it; a set-but-empty one must stay empty."""
 
 import importlib.util
 import os
@@ -43,12 +29,7 @@ from unsloth import import_fixes as IF  # noqa: E402
 
 
 def _stage(monkeypatch, tmp_path, pythonpath):
-    """Drive the real function with its gate forced open.
-
-    The gate returns None on a healthy torch/torchao pair, so without this
-    nothing below would run any of the code under test. `find_spec("torchao")`
-    is the one part not faked, so skip rather than pass when it is absent.
-    """
+    """Force the gate open, since it returns early on a healthy torch/torchao pair and nothing would run."""
     if importlib.util.find_spec("torchao") is None:
         pytest.skip("no torchao here; the function returns before PYTHONPATH")
     monkeypatch.setattr(
@@ -100,11 +81,7 @@ def test_it_is_still_idempotent(monkeypatch, tmp_path):
 
 
 def _probe_tree(tmp_path):
-    """cwddir holds a module reachable ONLY through the cwd.
-
-    The child runs as a script in scriptdir, so sys.path[0] is scriptdir, never
-    the cwd. `only_in_cwd` is importable iff a PYTHONPATH component is the cwd.
-    """
+    """Child's sys.path[0] is scriptdir, so only_in_cwd imports only if PYTHONPATH carries the cwd."""
     cwddir = tmp_path / "cwddir"
     libdir = tmp_path / "libdir"
     scriptdir = tmp_path / "scriptdir"

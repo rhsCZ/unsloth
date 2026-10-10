@@ -1,57 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""How the chat thread's interaction cost grows with the number of messages (#8977).
-
-Unsloth's chat UI is reported as sluggish on Windows 11 and worsening as the thread fills:
-opening menus, scrolling, deleting and typing all lag while token generation is unaffected.
-That shape says the cost is per-message renderer work, so the thing to measure is not a single
-absolute number but a curve: the same four interactions repeated at N in {10, 50, 200, 500}.
-
-Four scripted actions per N, under 6x CDP CPU throttling, against the real Thread mounted by
-studio/frontend/smoke-thread-weight.html:
-
-    keystroke  - one character into the composer, measured to the frame that paints it.
-    scroll     - one scroll gesture up through the thread; long-task ms is the lag a user feels.
-    menu       - one message action menu opened and closed, the Radix modal-layer fan-out.
-    delete     - one message deleted, the export / rebuild / import round trip.
-
-Each action is bracketed by CDP `Performance.getMetrics`, so LayoutCount, RecalcStyleCount,
-LayoutDuration, RecalcStyleDuration and TaskDuration separate the two families of cost: work
-that grows because layout is uncontained shows up in LayoutDuration and LayoutCount, while work
-that grows because a listener or an export is O(messages) shows up in TaskDuration alone.
-
-THIS HARNESS MEASURES, IT DOES NOT GATE. It prints the per-N table and exits 0 unless the
-harness itself broke -- the page failed to seed, an element it drives went missing, or every N
-produced the same number, which would mean it is measuring nothing. There are deliberately no
-performance budgets here. Budgets belong in a later change, set from real numbers taken on real
-hardware; a budget invented from one Linux CI run would either never fire or fire on noise.
-
-Chromium only for the numbers. `Emulation.setCPUThrottlingRate`, `Performance.getMetrics` and
-the `longtask` PerformanceObserver entry type are all Chromium features, so running this file
-under Firefox or WebKit would exercise the page as a correctness check and report no meaningful
-performance at all. The desktop app embeds WebKitGTK, not Chromium, so what transfers from these
-numbers is the shape of the curve, not the absolute milliseconds.
-
-Unlike playwright_chat_autoscroll.py this does NOT replace requestAnimationFrame with a fixed
-timer. That harness counts frames, where a deterministic pump is the point; this one measures
-time to paint, which a fake rAF would silently destroy. rAF is wrapped to count real callbacks
-and otherwise left alone; the harness's own waits use the unwrapped rAF, so __rafCount stays a
-count of the page's frames rather than of this file's.
-
-Read the timings against `paint_floor_ms`, which is printed per N. Anything clocked across a
-double rAF cannot resolve faster than two vsync intervals, measured at ~33ms here and unmoved by
-CPU throttling. An action that never happened therefore still reports ~33ms, which reads as a
-plausible measurement rather than as a failure, so the floor is subtracted before any growth
-ratio and the guards below reject a keystroke at or under it.
-
-Run:
-    python tests/studio/playwright_thread_weight.py
-    SMOKE_THREAD_SIZES=10,50 python tests/studio/playwright_thread_weight.py
-
-It starts and stops its own vite dev server. Point it at one you already have with
-SMOKE_BASE_URL, or move the port it picks with SMOKE_PORT.
-"""
+"""Thread cost vs message count; measures without gating, and subtracts the ~33ms paint floor."""
 
 from __future__ import annotations
 

@@ -1,25 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Behavioural check on `vllm_generation_init_patch()` across TRL `generate` shapes.
-
-`fast_inference = True` GRPO hands its own vLLM engine to TRL's
-`VLLMGeneration`, and the adapter only reaches vLLM if `lora_request=` is
-passed on the rollout call. That injection used to be a source rewrite of
-TRL's `VLLMGeneration.generate`, anchored on a
-`self.llm.collective_rpc("reload_weights")` line. TRL 1.10.0 deleted that
-call (it invokes `self.sync_weights()` instead), so the anchor matched
-nothing and raised, the `lora_request` injection that ran after it in the
-same function never happened, and `_init_vllm` / `sync_weights` were already
-installed -- rollouts came from the BASE model, exit 0, finite losses, no
-warning a user would connect to it.
-
-So these tests are shape-driven, not version-driven: they build a synthetic
-`trl.generation.vllm_generation` module whose `_init_vllm` / `sync_weights`
-are TRL-shaped (those two are still source-patched) and whose `generate`
-reaches the engine the way a given TRL era reaches it, then run the real
-patch over it and watch what arrives at a fake engine. No vLLM, no GPU, no
-network, and no dependence on which TRL happens to be installed.
-"""
+"""Checks lora_request reaches vLLM rollouts across TRL generate shapes, not by version."""
 
 from __future__ import annotations
 
@@ -92,12 +73,7 @@ def sync_weights(self, tags = None):
 
 
 class FakeEngine:
-    """Stand-in for the vLLM `LLM` object unsloth hands to TRL.
-
-    `shared_weights = True` is what marks an engine as unsloth's own, i.e. one
-    that already holds the live training weights and therefore needs the LoRA
-    passed explicitly on every call.
-    """
+    """shared_weights = True marks an engine holding live training weights; pass the LoRA on each call."""
 
     shared_weights = True
 
@@ -138,11 +114,7 @@ def _build_fake_trl(
     sync_src = _SYNC_WEIGHTS,
     version = "1.10.0",
 ):
-    """Install a synthetic `trl.generation.vllm_generation` and return its class.
-
-    Everything goes through `monkeypatch`, so sys.modules is exactly as it was
-    once the test ends no matter which order tests run in.
-    """
+    """Installs the fake module through monkeypatch, so sys.modules reverts regardless of test order."""
     class_src = (
         "class VLLMGeneration:\n"
         + "\n".join(
@@ -222,11 +194,7 @@ def _lora_requests(log, kind = "generate"):
 
 
 def _lora_name():
-    """The adapter directory the patch derives, device suffix and all.
-
-    Recomputed rather than hardcoded: the suffix depends on CUDA_VISIBLE_DEVICES,
-    which is set on any CI runner that has a GPU and unset on the ones that do not.
-    """
+    """Recomputed, not hardcoded: the suffix depends on whether CUDA_VISIBLE_DEVICES is set."""
     name = "vllm_gen_lora"
     if "CUDA_VISIBLE_DEVICES" in os.environ:
         name += "_" + os.environ.get("CUDA_VISIBLE_DEVICES", "0").replace(",", "")
@@ -234,12 +202,7 @@ def _lora_name():
 
 
 def test_lora_reaches_engine_without_reload_weights_anchor(monkeypatch):
-    """TRL >= 1.10.0 `generate`: no reload_weights line, adapter still passed.
-
-    This is the reported bug. Before the fix the anchor regex matched nothing,
-    raised, and took the `lora_request` injection down with it, so vLLM sampled
-    the base model.
-    """
+    """TRL >= 1.10.0 generate has no reload_weights line; the LoRA adapter must still reach the engine."""
     cls = _build_fake_trl(monkeypatch, _GENERATE_TRL_1_10)
     _rl_replacements().vllm_generation_init_patch()
 
@@ -293,11 +256,7 @@ def test_chat_rollouts_get_the_adapter_too(monkeypatch):
 
 
 def test_engine_is_restored_after_the_call(monkeypatch):
-    """The override lasts one `generate` call and no longer.
-
-    The same engine object backs `model.fast_generate`, so a leaked override
-    would silently attach the training adapter to unrelated user generations.
-    """
+    """The override must not outlive generate, since the same engine backs model.fast_generate."""
     cls = _build_fake_trl(monkeypatch, _GENERATE_TRL_1_10)
     _rl_replacements().vllm_generation_init_patch()
 
@@ -371,11 +330,7 @@ def test_server_mode_falls_through(monkeypatch):
 
 
 def test_sleeping_engine_is_woken_before_sync_weights_returns(monkeypatch):
-    """TRL >= 1.x only wakes the engine inside `sync_weights`.
-
-    The shared-weights guard returns early from that method, so without an
-    explicit wake-up the next rollout runs against a sleeping engine.
-    """
+    """The shared-weights guard returns early in sync_weights, so the engine needs an explicit wake-up."""
     cls = _build_fake_trl(monkeypatch, _GENERATE_TRL_1_10)
     _rl_replacements().vllm_generation_init_patch()
 
@@ -390,12 +345,7 @@ def test_sleeping_engine_is_woken_before_sync_weights_returns(monkeypatch):
 
 
 def test_failed_patch_rolls_all_three_methods_back(monkeypatch):
-    """Half-patched is worse than unpatched, so it must be unreachable.
-
-    `_init_vllm` + `sync_weights` without the adapter injection means no weight
-    sync AND no LoRA, which is exactly the silent base-model sampling this fix
-    exists to stop.
-    """
+    """A failed patch must roll back all three methods; half-patched samples the base model silently."""
     cls = _build_fake_trl(monkeypatch, _GENERATE_TRL_1_10, sync_src = _SYNC_WEIGHTS_UNPATCHABLE)
     originals = {name: getattr(cls, name) for name in ("_init_vllm", "sync_weights", "generate")}
 
@@ -490,12 +440,7 @@ def test_the_adapter_still_reaches_a_signature_accurate_engine(monkeypatch):
 
 
 def test_a_positionally_supplied_adapter_is_not_injected_over(monkeypatch):
-    """The caller already filled `lora_request`; a keyword on top is a TypeError.
-
-    Not hypothetical arithmetic: `chat` takes `lora_request` positionally in every
-    vLLM release checked, so this is reachable from any TRL that spells the call
-    that way. Before the signature check the wrapper raised here.
-    """
+    """A positionally passed lora_request must not get a keyword added on top; that is a TypeError."""
     cls = _build_fake_trl(monkeypatch, _GENERATE_CHAT_POSITIONAL)
     _rl_replacements().vllm_generation_init_patch()
 
@@ -509,12 +454,7 @@ def test_a_positionally_supplied_adapter_is_not_injected_over(monkeypatch):
 
 
 def test_an_explicit_none_adapter_is_overridden(monkeypatch):
-    """`lora_request = None` by keyword means base-model rollouts, which is the bug.
-
-    A shared-weights engine holds the BASE weights, so honouring the None is how
-    the adapter goes missing in the first place. Only a non-None value from the
-    caller is treated as a choice worth keeping.
-    """
+    """A keyword lora_request=None is overridden; the shared-weights engine has only base weights."""
     cls = _build_fake_trl(
         monkeypatch,
         """

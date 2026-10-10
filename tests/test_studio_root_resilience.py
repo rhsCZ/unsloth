@@ -43,10 +43,7 @@ def test_infer_studio_home_swallows_permission_error(tmp_path, monkeypatch):
 
 
 def test_infer_studio_home_refuses_the_docker_app_dir(tmp_path, monkeypatch):
-    """The Docker image keeps the venv under UNSLOTH_STUDIO_APP and links it into the
-    Studio home, so sys.prefix resolves to the app dir, which carries the sentinels.
-    Adopting it would send studio.db and auth/ into the container layer instead of the
-    volume; inference must decline so the later defaults apply."""
+    """Inference must decline the Docker app dir, else studio.db and auth/ land in the container layer."""
     app = tmp_path / "unsloth-studio-app"
     venv = app / "unsloth_studio"
     venv.mkdir(parents = True)

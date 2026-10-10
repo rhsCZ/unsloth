@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The GRPO loss must resolve `importance_sampling_level` on every TRL in the declared window.
-
-GSPO added the knob in TRL 0.20.0 as a `GRPOConfig` field the trainer copies onto itself; at
-0.18.2/0.19.1 neither exists and the level is token by construction. Reading
-`self.importance_sampling_level` unconditionally therefore raised AttributeError at the bottom of
-`trl>=0.18.2,!=0.19.0`. `test_the_window_still_binds_what_this_loss_expects` re-derives that from
-upstream, so a TRL that moves the knob again fails here rather than in a user's training loop.
-"""
+"""importance_sampling_level only exists from TRL 0.20.0; reading it unconditionally breaks 0.18.2."""
 
 from __future__ import annotations
 

@@ -12,17 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure-CPU, no-network tests pinning unsloth/_version.py as the one source of the version.
-
-Three consumers read that literal by different means and each breaks differently when it
-moves: pyproject resolves it with a static AST parse (a non-literal makes setuptools import
-torch inside the build env), Unsloth's version fallback scans the file line by line for
-``__version__ = `` (a re-export line silently reports "dev"), and the MLX branch of
-unsloth/__init__.py imports the module directly (anything with imports defeats its
-torch-free boot, which is what drove it to borrow unsloth_zoo's number instead -- unsloth#8171).
-
-None of that is visible from `unsloth.__version__` on a GPU host, so it is pinned here.
-"""
+"""_version.py must keep a literal __version__ line; three readers rely on its exact shape."""
 
 import ast
 import re
@@ -108,12 +98,7 @@ def test_setuptools_resolves_the_version_without_importing_torch():
 
 
 def _get_unsloth_version_with_metadata_missing(main_py_path):
-    """Run studio/backend/main.py::get_unsloth_version with the distribution metadata
-    forced absent, which is the source-checkout case its file scan exists for.
-
-    The function body is exec'd rather than imported because importing main.py starts the
-    whole FastAPI backend.
-    """
+    """Body of get_unsloth_version is exec'd, not imported, because importing main.py starts FastAPI."""
     src = _Path_read(main_py_path)
     start = src.index("def get_unsloth_version()")
     body = src[start : src.index("\n\n\n", start)]

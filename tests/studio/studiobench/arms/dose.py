@@ -1,37 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Dose-response: the only design in this file set that makes a NULL result informative.
-
-An on/off arm that reads "no difference" is almost worthless. It is consistent with the mechanism
-being absent, with the arm not firing, with the instrument being blind, and with the mechanism
-being real but smaller than the noise. Those four are not distinguishable from one number.
-
-A DOSE-RESPONSE is different. The same content is split across 4, 40, 400 and 4,000 memoised
-siblings. Content is held FIXED, so the amount of text laid out, highlighted and painted does not
-change; the only thing that changes is how many siblings React has to walk. If the cost is
-O(children) -- one cloned work-in-progress fibre per sibling per render, which is what
-`cloneChildFibers` does when `childLanes` is set and `bailoutOnAlreadyFinishedWork` cannot return
-null -- then the cost must be a STRAIGHT LINE THROUGH THE ORIGIN in the number of siblings.
-
-That makes both outcomes informative:
-
-  * a straight line through the origin, with a slope well above the minimum detectable slope, is
-    a positive identification of an O(children) term, and the slope is its per-child cost;
-  * a FLAT line is a real negative, and it comes with a number: "any O(children) term is below
-    X microseconds per child", where X is set by the detection floor and the largest dose. An
-    on/off arm can never produce that sentence.
-
-WHAT MAKES IT FAIL. A large intercept with a flat slope means the cost is there but is not
-proportional to children, so it belongs to some other mechanism. A curve (better fit with a
-quadratic than a line) means something superlinear, which at these sizes usually means the
-allocator or a cache boundary rather than the walk. Both are reported rather than forced into a
-line.
-
-MEMOISED IS LOAD-BEARING. The siblings must be `memo`-wrapped and not re-rendering, because the
-claim under test is that React reaches a child it does not render. If the children re-render, the
-slope measures rendering, which nobody doubts.
-"""
+"""Fixed content over varying sibling counts: a flat line gives an upper bound on per-child cost."""
 
 from __future__ import annotations
 
@@ -133,13 +103,7 @@ def _r2(xs: Sequence[float], ys: Sequence[float], predict) -> float | None:
 def fit_dose_response(
     points: Sequence[DosePoint], *, detection_floor_ms: float | None = None
 ) -> DoseFit:
-    """Fit both models and decide what the shape says.
-
-    `detection_floor_ms` sets the minimum detectable slope: below `floor / max_dose` per child,
-    no arrangement of these doses could have seen the term, and a flat result is UNDERPOWERED
-    rather than a negative. Printing a null without that number is how a real O(children) term
-    gets declared absent.
-    """
+    """A flat slope below detection floor divided by max dose is underpowered, not a negative."""
 
     usable = [p for p in points if p.cost.has_reading]
     contents = {p.content_chars for p in points}

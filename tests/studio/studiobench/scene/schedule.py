@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The scene: a FIXED-DURATION FILM, slot-scheduled on wall clock.
-
-THIS IS NOT A TASK LIST, and the difference is the whole point.
-
-A sequential script runs action 1, waits for it, runs action 2. On a slow machine each action
-takes longer, so the session is longer, so the stream has delivered more characters by the time
-action 7 runs, so action 7 happens against a bigger thread, at a different point in the stream,
-with a different amount of content mounted. The slow machine has taken a DIFFERENT PATH through a
-DIFFERENT-LENGTH session, and none of its columns are comparable with the fast machine's. Every
-number is then a mixture of "this machine is slower" and "this machine measured something else",
-and no amount of care downstream can separate them.
-
-So every action has a fixed `(t_start_ms, budget_ms)` on the session clock. The scheduler waits
-until `t_start_ms`, runs the action with the remaining budget, and moves on. A machine too slow to
-reach a slot in time records `slot_missed: true` and the film rolls on. Both machines see the same
-thread at the same point in the same stream, and a missed slot is an honest, first-class reading
-of "this machine could not do this here", which is exactly the finding worth having.
-
-The deficit-scheduled pacer is the other half of this. Slots are only meaningful if the stream's
-own progress is a function of wall clock, which is what deficit scheduling buys.
-"""
+"""Actions run on fixed wall-clock slots, not in sequence, so every machine sees the same film."""
 
 from __future__ import annotations
 
@@ -44,12 +24,8 @@ class Scene:
         return max((s.t_start_ms + s.budget_ms for s in self.slots), default = 0)
 
     def scaled(self, factor: float) -> "Scene":
-        """A scene of the same SHAPE over a longer film.
-
-        Used to give a big rung more room without changing the order or the relative spacing of
-        the actions, so a 1K scene and a 1M scene are the same film at different speeds rather
-        than two different films.
-        """
+        """Stretches the same film over a longer duration, keeping action order and spacing, for big
+        rungs."""
         return Scene(
             name = self.name,
             slots = [
@@ -204,12 +180,7 @@ class SceneRunner:
             return {"census_attempted": False, "reason": f"{type(exc).__name__}: {exc}"}
 
     def _watch_visible(self) -> None:
-        """Install the visible-region observer BEFORE the window opens.
-
-        Before, not after, because the compared set is the union of everything the viewport showed
-        during the action. An action that scrolls reveals messages and hides them again, and an
-        observer installed at the close would compare only wherever the scroll happened to stop.
-        """
+        """Install before the window opens: the compared set is the union of what the viewport showed."""
         try:
             self.page.evaluate("() => window.__sb.parityVisible.watch()")
         except Exception:  # noqa: BLE001
@@ -217,11 +188,7 @@ class SceneRunner:
             pass
 
     def _visible(self) -> dict:
-        """The visible-region capture, taken at the close and BEFORE the census and the digest.
-
-        It closes an accumulating observation rather than reading a static DOM, so it goes first;
-        see the comment at the call site for what its tail costs when it does not.
-        """
+        """Read before the census and digest, because it closes an observation that accumulates."""
         try:
             got = self.page.evaluate("async () => await window.__sb.parityVisible.capture()")
             self.page.evaluate("() => window.__sb.parityVisible.stop()")
@@ -230,11 +197,8 @@ class SceneRunner:
             return {"visible_attempted": False, "reason": f"{type(exc).__name__}: {exc}"}
 
     def _parity(self) -> dict:
-        """A structural digest of what is on screen, for the UI-parity check across arms.
-
-        Taken at the CLOSE of the action window, at the same moment as the census, so the digest
-        and the occupancy it should be read against come from one reading of one DOM.
-        """
+        """Taken with the census at the window's close, so digest and occupancy come from one DOM
+        reading."""
         want_raw = bool(self.base_args.get("parity_raw"))
         try:
             return self.page.evaluate("(raw) => window.__sb.parity.capture({ raw })", want_raw)
@@ -242,20 +206,7 @@ class SceneRunner:
             return {"parity_attempted": False, "reason": f"{type(exc).__name__}: {exc}"}
 
     def _parity_shot(self, action: str) -> dict:
-        """A viewport PNG taken at the same instant as the digest, when `--parity-shots` asked.
-
-        WHY THE VIEWPORT AND NOT THE DIFFERING ELEMENT. An element screenshot is the better
-        picture and Playwright takes it by SCROLLING the element into view, which mutates the
-        page. The next slot in the film is scripted against where the thread actually is, so a
-        shot that scrolls has changed the run it was supposed to be observing. The viewport is
-        what the user sees and costs nothing beyond the encode.
-
-        SCROLL IS RECORDED RATHER THAN FORCED, for the same reason. Both arms are driven by one
-        script inside one session so their offsets agree by construction, but "by construction"
-        is a claim, and a pair of shots at different offsets looks exactly like a UI change. The
-        number travels with the image and the composite refuses to present a mismatched pair as
-        a comparison.
-        """
+        """Viewport shot, not element shot: an element shot scrolls the page and would change the run."""
         out = self.base_args.get("parity_shots")
         if not out:
             return {}

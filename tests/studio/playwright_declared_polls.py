@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every path the idle app polls must be declared in the log budget.
-
-The budget suite in ``studio/backend/tests/log_budget`` checks two backend files against
-each other: the suppression sets in ``loggers/handlers.py`` and the poll cadences in
-``log_budget/session.py``. That catches quieting a path without declaring it, and
-declaring a path without classifying it.
-
-It cannot catch the case this exists for. A pull request that adds a polling call site in
-the frontend touches neither file, so nothing fails, the new endpoint quietly lands in the
-``normal`` class on a 300 ms window, and the access log grows by 12 lines a minute that
-nobody chose. That is how the last several log-volume PRs became necessary.
-
-Static analysis does not close it either: polling here is 53 ``setInterval`` call sites,
-most of which are UI timers rather than fetches, plus 257 ``setTimeout`` of which an
-unknown number are recursive poll loops, and the fetch is usually several helper layers
-below the timer. So observe the browser instead. Whatever a path is polled BY, it shows up
-here.
-
-What this reaches, and what it does not. It sees any poll that runs unconditionally on a
-screen the walk visits, which is where a newly added ``setInterval`` normally lands. It
-does NOT see polls gated behind state a bare runner cannot reach: with no GPU and no model
-loaded, the loaded-models indicator and the training views never start their timers, and
-Train is not even clickable. Measured on such a runner the observable set is two paths. So
-treat this as a net with a known mesh size rather than a proof that no new poll exists.
-
-Run: BASE_URL, STUDIO_OLD_PW and STUDIO_NEW_PW as the other suites take them.
-"""
+"""Observes the idle app in a browser and fails on any poll path missing from the log budget."""
 
 from __future__ import annotations
 

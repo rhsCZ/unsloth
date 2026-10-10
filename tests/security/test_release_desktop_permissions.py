@@ -28,16 +28,7 @@ def test_only_publish_job_can_write_repository_contents():
 
 
 def _poll_loop_body(script):
-    """Return the body of the first live `while ...; do ... done` loop.
-
-    Assertions about a wait have to land inside the loop that waits, not
-    anywhere in the step, and that loop has to be one the shell actually
-    enters: `while false; do` keeps a textually perfect body while skipping
-    every API read and status check, and the step falls straight through to a
-    download that races the matrix. So the condition must be the unconditional
-    `:` or `true` that a poll exiting via `break` uses. Nesting is tracked by
-    depth; every opener in this workflow ends its line with `do`.
-    """
+    """Returns the first while loop body the shell enters; its condition must be : or true, not false."""
     lines = script.split("\n")
     opener = re.compile(r"\s*while\s+(?P<condition>.*?)\s*;\s*do\s*$")
     starts = [
@@ -61,16 +52,7 @@ def _poll_loop_body(script):
 
 
 def test_build_matrix_hands_off_assets_without_release_credentials():
-    """The build matrix signs bundles; only publish-release may release them.
-
-    The handoff is one-way and credential-free: the matrix uploads artifacts and
-    holds no release token, and publish-release downloads them. Since #8193 the
-    ordering is no longer expressed as `needs: build` (publish-release starts
-    alongside the matrix to queue for its runner in parallel) but by the "Wait
-    for the build matrix" step, which must be at least as strict. Both halves
-    are asserted below, so removing the wait does not silently reintroduce
-    publishing a partial release.
-    """
+    """The build matrix holds no release token; publish-release waits for it before releasing."""
     jobs = _workflow()["jobs"]
     build = jobs["build"]
     publish = jobs["publish-release"]
@@ -143,13 +125,7 @@ def test_build_matrix_hands_off_assets_without_release_credentials():
 
 
 def test_post_publish_scan_job_holds_no_release_credentials():
-    """#8194 added a job that handles release bundles; it must not be able to release.
-
-    virustotal-scan downloads the published assets and uploads them to a third
-    party. It declares no `permissions` block, so it inherits the workflow's
-    `contents: read`, and it carries no repository token of any kind: the only
-    secret it sees is the VirusTotal key.
-    """
+    """virustotal-scan uploads release assets to a third party, so it must hold no release token."""
     scan = _workflow()["jobs"]["virustotal-scan"]
 
     assert "permissions" not in scan
@@ -279,10 +255,7 @@ def test_the_updater_workflow_skips_releases_without_desktop_bundles():
 
 
 def test_the_updater_workflow_validates_the_target_before_deleting_its_assets():
-    """The tag is typed by hand, so a mistyped or mis-flagged one names a real
-    older release. Deleting release assets cannot be undone, so every check that
-    rejects the target has to run before the sweep, or the rejected release is
-    already missing its signatures by the time the run fails."""
+    """Tag checks must run before the asset sweep, because deleted release assets cannot be recovered."""
     job = yaml.safe_load(UPDATER_WORKFLOW.read_text(encoding = "utf-8"))["jobs"]["publish-updater"]
     order = [step.get("name") for step in job["steps"]]
 

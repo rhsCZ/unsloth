@@ -1,7 +1,4 @@
-"""
-Evaluate language models on the combined AIME dataset
-(test2024 + test2025-I + test2025-II).
-"""
+"""Evaluates language models on the combined AIME dataset: test2024, test2025-I and test2025-II."""
 
 import json
 import requests

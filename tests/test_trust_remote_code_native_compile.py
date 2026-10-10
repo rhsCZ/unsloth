@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
-"""`trust_remote_code = True` on a native architecture must not switch the compiler off.
-
-The compiler pass (fast LoRA forward, fused linear cross entropy, compiled norms and
-attention) was skipped whenever the flag was set, on the grounds that remote code
-cannot be traced. That is only true when the checkpoint actually ships its own
-modeling files. Gemma-4 loaded with the flag lost all of it: PEFT's own Linear4bit
-forward ran, casting every activation to the float32 LoRA dtype and running both
-LoRA matmuls as fp32 SIMT GEMMs, and the 262k-vocab logits were materialised in
-full instead of going through the fused loss.
-"""
+"""Remote code blocks the compiler only when the checkpoint ships its own modeling files."""
 
 import os
 from types import SimpleNamespace

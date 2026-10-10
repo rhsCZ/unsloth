@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An interrupted A/B resumes at PAIR granularity, because a pair is the unit of the comparison.
-
-The two cells of one `(rung, rep)` pair run adjacent in time inside one session, and that adjacency
-is the whole method: cross-session drift on the measured machine ran to 8%, larger than most of the
-wins anybody argues about, so `readings_by_arm` scopes the ratio to a single session and
-`assert_comparable` refuses two session ids outright.
-
-An interruption between those two adjacent cells is the ordinary way a run stops. Skipping the arm
-that completed and measuring only its partner in the new session therefore bought a full cell of
-measurement that no table can contain: the old arm is dropped by the session filter, the new one
-has nothing to pair with, and `_render_ab` writes that repetition out of the table -- at one
-repetition, out of the table entirely, as NO READING with an exit code of 0 underneath it.
-"""
+"""An A/B resumes by pair: the pair is the unit of comparison, and drift across sessions reached 8%."""
 
 from __future__ import annotations
 
@@ -109,14 +97,7 @@ def test_a_pair_recorded_on_both_arms_is_skipped():
 
 
 def test_a_comparison_with_work_left_re_runs_every_pair():
-    """A COMPLETE PAIR FROM THE OLD SESSION IS AS UNUSABLE AS A LONE ARM, and this asserted the
-    opposite until a resumed standard tier published `VERDICT: IMPROVED (20.0% faster)` off its
-    100K pair while the 10K pair it had already measured -- a 30% regression, complete, in session
-    one -- was dropped by the session filter with nothing in `ab.md` naming the missing rung.
-
-    The rule the module already argues for a half-finished pair is the rule for a half-finished
-    table: re-run both arms of every pair, adjacent in time, in one session.
-    """
+    """A complete pair from an old session is as unusable as a lone arm, so both arms re-run together."""
 
     work = _work(reps = 2)
     done = {"r10K.base.rep0", "r10K.treatment.rep0", "r10K.base.rep1"}
@@ -195,11 +176,7 @@ def test_without_pair_granularity_the_same_resume_reports_nothing(tmp_path):
 
 
 def _two_rung_resumed_table(tmp_path, *, whole_table: bool) -> str:
-    """The same drive over TWO rungs, with the first pair fully recorded in session one.
-
-    10K measured base 100 ms against treatment 130 ms -- a 30% regression, complete, beyond the
-    noise floor. The run then died inside the 100K pair, where the treatment is the faster side.
-    """
+    """Two rungs, the first pair fully recorded in session one, then the run dies inside the 100K pair."""
 
     paths = Paths.under(tmp_path / "out")
     interrupted = Recorder(paths.payload_jsonl, "sess-1")
@@ -262,14 +239,7 @@ if __name__ == "__main__":
 
 
 def test_a_resume_killed_inside_a_cell_does_not_read_as_a_finished_run(tmp_path):
-    """THE CONSEQUENCE, through `_resume_set` and `skippable_cells` together.
-
-    Session one failed the 10K base arm. The resume repaired the 10K pair, then was hard-killed
-    inside the 100K base arm: its action and window rows are on disk, fsynced, but the terminal
-    cell row that `CellRunner.run` writes in a `finally` never was. Keyed on cell rows alone, the
-    older completed 100K attempt stayed the latest, every cell read as done across two sessions,
-    and the next `--resume` ran nothing and exited 0 over a stale table.
-    """
+    """A cell killed before its terminal row must not let an older completed attempt read as finished."""
 
     paths = Paths.under(tmp_path / "out")
     first = Recorder(paths.payload_jsonl, "sess-1")

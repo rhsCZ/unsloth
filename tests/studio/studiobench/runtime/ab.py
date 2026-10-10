@@ -1,25 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Run two Unsloth builds against each other INSIDE ONE SESSION.
-
-WHY THIS CANNOT BE TWO RUNS. Cross-session drift on this app measured 8%, which is larger than
-most of the wins anybody argues about. `scoring.ab.assert_comparable` refuses two different
-session ids outright, and that refusal is correct: running the base today and the treatment
-tomorrow produces a ratio whose dominant term is the machine, not the change. So both builds are
-installed up front, one browser drives both, and the cells alternate.
-
-WHY THE ORDER FLIPS. Anything that drifts monotonically within a session -- thermal throttling, a
-browser heap that never quite shrinks, another process ramping up -- is charged entirely to
-whichever side runs second if the order is fixed. Alternating (base, treatment) on even reps and
-(treatment, base) on odd ones cancels the linear part of that term instead of measuring it. With
-`--reps 1` the order cannot be balanced, which is why a single-rep A/B prints the warning it does.
-
-WHAT VOIDS THE RESULT. The null control -- the base build compared against ITSELF, interleaved the
-same way -- runs first and must land inside its own noise band. If comparing a build to itself
-produces a difference, then a difference between two builds means nothing, and no table is worth
-printing. That check is the whole reason this file interleaves at all.
-"""
+"""Builds share one session: cross-session drift can exceed the wins measured, and order alternates."""
 
 from __future__ import annotations
 
@@ -49,29 +31,7 @@ DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
 
 
 def browser_origin(url: str) -> str:
-    """The ORIGIN a browser computes for `url`, spelled the way `window.location.origin` spells it.
-
-    THE ONLY THING THAT DISCRIMINATES THE TWO ARMS. Both are driven by one browser context and one
-    page, so `origin_scoped`'s `window.location.origin !== <url>` is the whole of the gate, and the
-    right-hand side of that comparison has to be what the browser will actually produce rather than
-    what the caller typed. Measured in chromium against real documents:
-    `http://studio:80` and `HTTP://STUDIO` and `http://studio/app` all report an origin of
-    `http://studio`, so every one of those spellings gates a script onto a document that does not
-    exist. The failure is silent in both directions -- the base's seed then runs on the treatment's
-    documents as well, and the treatment's injection runs on neither -- and it reaches
-    `evaluate_stream_cost_recovery_gate` as a recovery of zero blamed on the accumulator.
-
-    WHAT IS NOT FOLDED TOGETHER: `localhost` and `127.0.0.1`. A browser treats those as two
-    origins, chromium reports them as two (`http://localhost:8000` stays `http://localhost:8000`),
-    and a check that called them one would refuse a perfectly good pair of arms. Only the four
-    canonicalisations the URL standard itself performs are applied: the scheme and host are
-    lower-cased, a port the scheme implies is dropped, and the path, query, fragment and any
-    userinfo are discarded.
-
-    A string this cannot parse as an absolute URL is returned trailing-slash-stripped, which is
-    what the acquisition loop does with `--attach` anyway: an unparseable URL is the caller's
-    problem to see at `wait_for_healthz`, not a reason for this to guess.
-    """
+    """Canonical origin as window.location.origin spells it; localhost and 127.0.0.1 stay distinct."""
     from urllib.parse import urlsplit
 
     try:
@@ -91,17 +51,7 @@ def browser_origin(url: str) -> str:
 
 
 def origin_scoped(base_url: str, script: str) -> str:
-    """Run `script` only on its own Unsloth's origin.
-
-    `add_init_script` fires on every document in the context, and localStorage is per-origin under
-    the SAME KEY NAMES on both builds. Seeding both unconditionally means whichever script runs
-    last writes the other build's auth token into this build's storage, and the failure shows up
-    much later as a logged-out SPA or a provider that renders as "No longer offered" -- neither of
-    which points back here.
-
-    Gated on the CANONICAL origin rather than on the URL as typed: see `browser_origin` for the
-    spellings that otherwise gate a script onto a document no browser will ever produce.
-    """
+    """Seeds the page only on its own build's origin, since both builds share localStorage key names."""
     import json as _json
     return (
         "(() => { if (window.location.origin !== "
@@ -115,12 +65,7 @@ def origin_scoped(base_url: str, script: str) -> str:
 def interleave(
     cells: list[tuple[Cell, RungPlan]], targets: list[Target]
 ) -> list[tuple[Target, Cell, RungPlan]]:
-    """Order the work so the two sides sit next to each other in time, not in separate halves.
-
-    Adjacent in time is the point: the closer two paired readings are, the less of whatever the
-    machine is doing separates them. Returned as a flat list so the caller's loop stays a loop
-    and the ordering decision lives in one testable function.
-    """
+    """Sides of a pair run adjacent in time, not in halves, so machine drift between them is minimized."""
     out: list[tuple[Target, Cell, RungPlan]] = []
     for cell, plan in cells:
         order = list(targets) if cell.rep % 2 == 0 else list(reversed(targets))
@@ -130,41 +75,7 @@ def interleave(
 
 
 def skippable_cells(work: list[tuple[Any, Cell, RungPlan]], done: set) -> set:
-    """Of the cells `--resume` COULD skip, the ones it may: only whole `(rung, rep)` pairs.
-
-    A PAIR IS THE UNIT OF AN A/B, NOT A CELL. An interruption between the two adjacent cells of one
-    pair is the ordinary way a run stops, and skipping the arm that completed then measured its
-    partner ALONE in the new session. That lone reading can never be used: `readings_by_arm` scopes
-    the comparison to one session on purpose -- cross-session drift measured 8%, larger than most
-    wins anybody argues about -- so the completed arm from the old session is dropped, the new
-    arm has nothing to pair with, and the run pays a full cell for a number no table can contain.
-    What it renders instead is that repetition missing from the table, or NO READING with an exit
-    code of 0 underneath it.
-
-    So a pair is skipped only when EVERY arm of it is already complete, and otherwise both arms are
-    re-run -- adjacent in time, in one session, which is the only arrangement `interleave` exists to
-    produce. The old attempt stays in the payload and `latest_attempt_rows` supersedes it, exactly
-    as it already does for a cell that died.
-
-    AND A COMPARISON IS ALL OF ITS PAIRS, which is the same argument one step further out. The
-    session filter that drops a lone completed arm drops a WHOLE completed pair for exactly the
-    same reason, and `_render_ab` then prints a headline and a VERDICT over whatever is left
-    without saying which rungs are missing: an interrupted standard tier whose 10K pair had
-    recorded a 30% regression published `VERDICT: IMPROVED (20.0% faster)` off the 100K pair alone,
-    with nothing in `ab.md` mentioning 10K at all. `render.py` rules out fixing that with a note
-    above the table -- the table gets screenshotted and the warning does not -- and declining to
-    publish costs the same wall clock as re-running while yielding no table. So an A/B with ANY
-    work left re-runs EVERY pair in the new session, at most one tier budget, which is the budget
-    the interrupted run was already paying.
-
-    A FINISHED A/B still skips everything: nothing runs, and `_render_ab` keeps the table that run
-    already wrote. And a legitimate extension -- `--resume --rungs 1K,10K` over a finished 1K run
-    -- now produces a complete two-rung table instead of a 10K-only one.
-
-    Single-target work is a degenerate case of the same rule: each pair holds one cell, so nothing
-    changes for a run without `--ab`, whose ladder `report.build.score_payload` reads across
-    sessions anyway.
-    """
+    """Skips a (rung, rep) pair only if all its arms are complete; a lone completed arm has no partner."""
     by_pair: dict[tuple[str, int], list[str]] = {}
     for _target, cell, _plan in work:
         by_pair.setdefault((str(cell.rung), int(cell.rep)), []).append(str(cell.cell_id))
@@ -180,11 +91,7 @@ def skippable_cells(work: list[tuple[Any, Cell, RungPlan]], done: set) -> set:
 
 
 def order_is_balanced(plan: list[tuple[Target, Cell, RungPlan]]) -> bool:
-    """True when each side ran first equally often, so linear drift cancels rather than lands.
-
-    Reported rather than enforced: an unbalanced plan is still worth running, it just carries a
-    drift term that the reader has to be told about instead of discovering later.
-    """
+    """Reported, not enforced: an unbalanced order still runs, but its drift term must be disclosed."""
     labels = {target.label for target, _cell, _plan in plan}
     first_counts: dict[str, int] = {label: 0 for label in labels}
     seen: set[str] = set()
@@ -203,43 +110,8 @@ INVALIDATING_CELL_GATES: frozenset[str] = frozenset({"thread_complete", "follows
 
 
 def gate_detail_is_unmeasured(detail: Mapping[str, Any]) -> bool:
-    """Did this failed gate row report a MISSING READING rather than a FAILING BUILD?
-
-    ONE DEFINITION FOR BOTH ADMISSION LISTS. `INVALIDATING_CELL_GATES` above was centralised so
-    the scorers could not drift into disagreeing about what invalidates a cell; the predicate that
-    waives a row is the same decision one level down, and `sweep/ui_parity.py` applies it to the
-    same rows for the DOM side. Two copies of it drift the same way the gate names would have, and
-    the drift is invisible because each copy looks locally correct.
-
-    THREE PRODUCERS, all meaning "the instrument did not answer", none meaning "the arm lost
-    something":
-
-    `follow_attempted: False` is `_read_follow` reporting that the page-side sampler is not
-    installed, and `probe_attempted: False` is `probe_thread_completeness` reporting the same for
-    `window.__sb.dom`. `pinned`/`coverage` are then None and the row says `passed: False`. That is
-    an absent INSTRUMENT, not a film that went wrong -- the same thing `timer_clamp` is kept off
-    the list above for -- and reading it as fatal would mark every cell of every run unusable
-    wherever the harness is not loaded, a far larger blast radius than the defect being closed.
-
-    `stream_coverage_unmeasured: True` is the third and the one that was standing open.
-    `attached_fraction_of_stream` is fixed by the scene schedule rather than by the build, so it
-    is identical on both arms by construction and cancels in every comparison drawn from these
-    cells; see the block in `session.py` that writes it for the measurements. Left fatal it voided
-    the entire A/B table -- VERDICT: NO READING -- for a reason that has nothing to do with the two
-    builds being compared, and did so on the null control as readily as on a real pair. The cell's
-    timings still stand: both arms rendered the same share of the same film.
-
-    NARROWED TO THE INSTRUMENT, because `probe_attempted: False` has two producers and only one of
-    them is an absent instrument. `window.__sb.dom is not installed` is the harness not being
-    loaded and is waived. `no thread viewport` is the ARM missing the surface the film measures,
-    which is a defect about the build, and waiving it let a real failure ride the instrument
-    allowance.
-
-    This does NOT relax the `unmeasured` COVERAGE VERDICT of the completeness probe, which is a
-    different value and stays fatal: `record_completeness_gate` refuses to score a cell whose probe
-    RAN and could not answer, because "we could not tell" must not be recorded as "it was fine".
-    The case waived here is the probe never having run at all.
-    """
+    """Absent instruments are waived; no thread viewport is a defect in the arm, not an absent
+    instrument."""
 
     unmeasured = (
         detail.get("follow_attempted") is False
@@ -250,24 +122,7 @@ def gate_detail_is_unmeasured(detail: Mapping[str, Any]) -> bool:
 
 
 def failed_invalidating_gates(records: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    """`{cell_id: why}` for every cell carrying a FAILED INVALIDATING per-cell gate row.
-
-    Shared with `report/build.py` and `sweep/floor_table.py`, which are the other two scorers that
-    admit a cell, so the three cannot drift into disagreeing about what invalidates one.
-
-    RUN-LEVEL GATES ARE NOT IN HERE. `production_build` and `reportable_tier` are emitted without a
-    `cell_id`, and they are properties of the whole run: reading them as per-cell would empty both
-    arms and turn a fast-tier A/B into an empty table rather than the table it asked for. Only a
-    gate that named a cell can disqualify that cell.
-
-    ATTEMPTS ARE SCOPED BY HAND because `latest_attempt_rows` cannot do it: `ATTEMPT_ROW_TYPES` is
-    `{cell, action, window}`, so a gate row survives the filter that drops the rest of a superseded
-    attempt. `--resume` reuses the cell id, so without this a cell that failed its gate, was re-run
-    and PASSED would stay disqualified by the dead attempt's row -- the retry silently unable to
-    count, which is the mirror of the defect this function is fixing. The winning attempt is the
-    session the surviving cell row carries; a row without a session id predates the stamp and is
-    kept, as `latest_attempt_rows` keeps it.
-    """
+    """Only per-cell gates disqualify; a resumed retry must not inherit a dead attempt's failed gate row."""
     winning: dict[str, Any] = {}
     for row in records:
         if row.get("row_type") == "cell" and row.get("cell_id") is not None:
@@ -298,23 +153,8 @@ def unmeasured_planned_cells(
     planned: Sequence[str],
     session_id: Optional[str] = None,
 ) -> list[str]:
-    """The planned cells this session has no completed reading for, in plan order.
-
-    A COMPARISON IS ALL OF ITS PAIRS, and a cell that failed removes its HEALTHY PARTNER from the
-    table too: `readings_by_arm` drops the incomplete cell, and `compare_arms` intersects the two
-    arms' keys, so the surviving pairs are a subset chosen by which cell happened to die. The
-    hazard is the one `skippable_cells` describes for an interrupted resume, arriving by the other
-    road -- `CellRunner.run` catches the exception and returns an incomplete row, so the run
-    continues and `_render_ab` is reached with a hole in the plan. A 10K base cell that died
-    published `VERDICT: IMPROVED (20.0% faster)` off the 100K pair alone while the completed 10K
-    pair underneath it was a 26.5% regression, and `ab.md` named neither the missing rung nor the
-    failure.
-
-    The exit code is already nonzero when a cell fails, and it is not enough: `ab.md` outlives the
-    process and is what gets quoted. `render_ab_table` prints no numbers at all when a result is
-    void, for the reason stated there -- the table gets screenshotted and the warning does not --
-    and an incomplete plan is voided on the same grounds.
-    """
+    """An incomplete plan must void the table: a failed cell also drops its healthy partner from the
+    pair."""
     from ..scoring.from_payload import latest_attempt_rows
 
     # Apply the same two filters as readings_by_arm, so gate-failed cells also void the plan.
@@ -334,41 +174,7 @@ def unmeasured_planned_cells(
 def readings_by_arm(
     records: list[dict], session_id: Optional[str] = None
 ) -> dict[str, dict[int, dict]]:
-    """Split one payload's cell rows into `{arm: {rung_tokens: {metric: Measure}}}`.
-
-    A CELL THAT DID NOT COMPLETE IS NOT AN ARM'S READING. The ladder scores an incomplete cell on
-    purpose -- a build that dies at 500K is the most important thing the run has to say -- but a
-    ratio is a different question. An arm that crashed after emitting one action row still carries
-    that row's timings, and pairing them against a completed cell on the other side turns a crash
-    into a win: a treatment cell holding nothing but a 50 ms keystroke, measured against a
-    completed 100 ms base cell, reports IMPROVED. The crash is still in the payload, in the
-    summary and in `excluded_cells`; it is only kept out of the ratios.
-
-    A CELL THAT FAILED A PER-CELL GATE IS NOT ONE EITHER, for the same reason and by a shorter
-    route. `thread_complete` and `follows_the_stream` are advisory at the point they are emitted:
-    `record_completeness_gate`'s verdict is discarded by its caller and the film runs on, so the
-    cell reaches this function with `completed=True` and a full set of timings. Those timings are
-    CHEAPER THAN A CORRECT CELL'S, and cheaper in the direction that flatters the arm -- a thread
-    that lost its middle renders fewer rows, and a streamed reply that left the viewport and was
-    unmounted stops costing anything to paint. Pairing one against a complete cell on the other
-    side reports the defect as an improvement, which is the crash-into-a-win failure again with a
-    gate row instead of a missing one.
-
-    `excluded_from_rows` does not cover this path. It reads the same failed gate rows into
-    `excluded_cells`, but that block is derived, rendered and schema-checked and nothing filters
-    on it: stripping the failing gate rows out of a payload and re-scoring produces byte-identical
-    metric lines. `ab.md` is scored here, from `readings_by_arm` and `measures_by_cell`, and
-    neither consulted a gate row before this.
-
-    `session_id`, when given, keeps the comparison inside ONE session. `--resume` appends to the
-    payload a previous run wrote, so an interrupted A/B resumed into the same directory otherwise
-    hands `compare_arms` cells from two browser sessions -- the 8% cross-session drift term that
-    `assert_comparable` exists to refuse, arriving through the back door because both sides are
-    labelled with the CURRENT session id.
-
-    Deferred import: `scoring` pulls in the anchor table and this module is imported by the CLI
-    before a run, where that cost buys nothing.
-    """
+    """Incomplete or gate-failed cells are excluded from ratios, or a crash reads as a win."""
     from ..scoring.from_payload import latest_attempt_rows, measures_by_cell
 
     # Resumed retries reuse the dead attempt's cell_id, so filter to the latest attempt first.
@@ -483,11 +289,7 @@ def make_target(
     username: str,
     password: str,
 ) -> Target:
-    """Authenticate against one Unsloth, register the shared pacer on it, and bind a runner.
-
-    Both sides talk to the SAME pacer, so the bytes on the wire are identical by construction
-    rather than by two configurations that are meant to match.
-    """
+    """Both sides share one pacer, so wire bytes are identical by construction, not by matching settings."""
     from .lifecycle import authenticate, external_checkpoint_id, pacer_provider, register_provider
     from .seeder import Seeder
     from .session import CellRunner

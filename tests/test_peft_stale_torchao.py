@@ -12,20 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""An old torchao must not end LoRA creation that never touches torchao.
-
-`peft.import_utils.is_torchao_available` returns False when torchao is absent
-but raises when it is installed and older than peft's minimum, and
-`dispatch_torchao` calls it for every LoRA layer, so one stale optional
-dependency ends `get_peft_model`. FunctionGemma_(270M)-LMStudio dies this way
-on Kaggle, whose preinstalled torchao is 0.10.0; its sibling notebook survives
-the same kernel only because it upgrades torchao first.
-
-"Installed but unusable" is closer to "not installed" than to "fatal". Any
-other ImportError still propagates, including ones whose message also says
-"torchao" (missing submodule, unloadable extension), which is why the version
-complaint is matched rather than the word.
-"""
+"""A too-old torchao should read as not installed; other ImportErrors still propagate."""
 
 import sys
 import types
@@ -69,11 +56,7 @@ _WANTED = ("fix_peft_stale_torchao_import_error", "_TORCHAO_STALE_VERSION_ERROR"
 
 
 def _fix(warning = None):
-    """Load the function without importing unsloth (which needs a GPU).
-
-    The module-level regex it consults must come along, or the wrapper
-    NameErrors on the first suppressed ImportError.
-    """
+    """Extract the module-level regex too, or the wrapper NameErrors on the first suppressed ImportError."""
     import ast
     import re
 

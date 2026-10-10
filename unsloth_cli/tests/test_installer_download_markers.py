@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The installers turn uv's large-download announcements into markers the app reads.
-
-These drive the real run_install_cmd out of install.sh and the real Invoke-InstallCommand
-out of install.ps1, against recorded uv output, with only their collaborators stubbed.
-"""
+"""Installers turn uv's large-download notices into markers the app reads, tested on recorded output."""
 
 from __future__ import annotations
 

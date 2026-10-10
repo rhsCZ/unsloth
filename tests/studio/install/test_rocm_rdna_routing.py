@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""RDNA 2/3/4 routing, validated on CPU-only CI with no AMD hardware.
-
-tests/_zoo_rocm_spoof.py presents torch as each Radeon gfx arch, then we assert
-unsloth_zoo routes it: device_type -> "hip", llama.cpp target -> ("rocm", gfx),
-and the per-family ROCm bundle suffix. The torch-facing checks run in a
-subprocess so the spoof never leaks into sibling tests and DEVICE_TYPE (cached
-at import) resolves from a clean process.
-"""
+"""Validates RDNA 2/3/4 routing on CPU CI; the torch spoof runs in a subprocess so it cannot leak."""
 
 from __future__ import annotations
 

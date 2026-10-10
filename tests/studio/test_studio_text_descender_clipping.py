@@ -38,15 +38,7 @@ SIDEBAR_ACCOUNT_CLASSES = frozenset(
 
 
 def _class_lists(src: str, required: frozenset) -> list[str]:
-    """Every double-quoted literal in `src` carrying all of `required`.
-
-    Matching the `className="..."` attribute directly is not enough: an element
-    that takes a caller override is written `className={cn("...", override)}`, and
-    the class list then sits in a plain string argument. That is how the trigger
-    label stopped being checked, so both checks below read the literals wherever
-    they are written and select on the class tokens instead. Selecting on four or
-    five specific Tailwind tokens is what makes reading every literal safe.
-    """
+    """Matches literals by their class tokens, not the attribute, so a cn() override is still checked."""
     return [
         literal for literal in re.findall(r'"([^"\n]*)"', src) if required <= set(literal.split())
     ]

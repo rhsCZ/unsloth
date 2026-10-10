@@ -1,35 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""[Windows, Linux, WSL, macOS] x [NVIDIA, AMD/ROCm, CPU-only] for the MLX context report.
-
-Per cell: the ``DeviceType`` ``detect_hardware()`` returns, whether ``worker.py`` would
-construct ``MLXInferenceBackend`` (the selection is ``_hw.DEVICE == _hw.DeviceType.MLX``
-and nothing else, asserted against the source too), and whether the context triple reaches
-the API. Only an MLX load resolves ``native_context_length`` / ``max_context_length``, so
-the other eleven cells withhold them through ``_mirrored_model_entry`` and ``/v1/models``.
-
-Every cell is presented with a HEALTHY MLX stack, including the absurd ones: the gate, not
-the missing package, is what must keep MLX off the other eleven. If the ordering in
-``_detect_hardware_locked`` changed, only a matrix that installs mlx everywhere would see it.
-
-What this CANNOT prove, recorded rather than skipped (tests at the bottom):
-
-  * WSL is indistinguishable from Linux in ``utils/hardware/**``, so its row is asserted
-    byte-identical to linux and the absence of any WSL discriminator is asserted structurally.
-  * macOS x NVIDIA and macOS x AMD are not bootable cells; the rows describe the detector's
-    ordering, not a machine.
-  * Windows x MLX is impossible by construction: ``is_apple_silicon()`` ANDs Darwin with
-    arm64, so Windows-on-ARM with a full MLX stack still lands on CPU.
-  * No Apple Silicon, ROCm or AMD GPU exists on this host, so every non-CPU answer comes
-    from the mocked torch shapes ``test_gpu_arch_gate_os_matrix_7624`` documents.
-
-Machinery is reused from ``test_gpu_arch_gate_os_matrix_7624.py`` and
-``test_hardware_dispatch_matrix.py``. It mutates ``hardware.py`` globals, so it is
-registered in ``test_backend_ci_parallel_isolation.py::ISOLATED`` and in both halves of the
-Backend CI pairing. Written without the workflow directory's literal path, which
-``test_workflow_guards_run_unfiltered`` scans for.
-"""
+"""Only an MLX load resolves the context triple; WSL rows mirror Linux rather than testing it."""
 
 from __future__ import annotations
 
@@ -65,14 +37,7 @@ _REAL_TORCH = sys.modules.get("torch")
 
 
 def _code_without_comments(path: Path) -> str:
-    """Source with comments removed and string literals kept.
-
-    Both halves matter for the WSL claim below: `WSL` appears in this package only in
-    prose (two comments explaining that WSL is deliberately NOT special-cased), while a
-    real discriminator would be a string -- ``os.environ.get("WSL_DISTRO_NAME")``,
-    ``open("/proc/version")`` -- so stripping strings instead would hide exactly the thing
-    being looked for.
-    """
+    """Comments removed, string literals kept, so a WSL discriminator string stays visible."""
     text = path.read_text(encoding = "utf-8")
     return "".join(
         token.string if token.type != tokenize.COMMENT else ""
@@ -81,11 +46,7 @@ def _code_without_comments(path: Path) -> str:
 
 
 def _load_sibling(name: str, path: Path):
-    """Load a test module by path so its helpers can be reused verbatim.
-
-    By path rather than by name: ``tests/studio`` and ``studio/backend/tests`` are both
-    unpackaged, so neither is importable as ``tests.studio.x`` from the other.
-    """
+    """Loads by path: tests/studio and studio/backend/tests are unpackaged, so neither imports the other."""
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     # Registered before execution: @dataclass resolves annotations via sys.modules.
@@ -215,14 +176,7 @@ def _devices_for(vendor: str) -> list:
 
 @pytest.fixture
 def spoof_cell(monkeypatch, spoof_hardware):
-    """Present one (OS, vendor, machine, mlx) host to ``detect_hardware()``.
-
-    Layered rather than rewritten. ``spoof_hardware`` owns the MLX side (the fake
-    ``mlx``/``mlx.core`` modules, the ``utils.mlx_repair`` stubs, and the meta-path finder
-    that makes ``import mlx.core`` raise), ``_apply_os`` owns ``sys.platform`` /
-    ``platform.system()``, and the fake torch is installed last so it shadows the real one
-    for the ``import torch`` inside the detector.
-    """
+    """Fake torch is installed last so it shadows the real one for the detector's import."""
 
     def _apply(
         os_key: str,
@@ -293,12 +247,7 @@ def test_detected_device_per_cell(os_key, vendor, spoof_cell):
 
 @pytest.mark.parametrize(("os_key", "vendor"), CELLS, ids = CELL_IDS)
 def test_mlx_backend_selection_per_cell(os_key, vendor, spoof_cell):
-    """``MLXInferenceBackend`` is constructed on exactly one cell.
-
-    The predicate is the worker's own: ``_hw.DEVICE == _hw.DeviceType.MLX``. The test
-    below pins that this really is the whole condition, so evaluating it here is
-    evaluating the selection rather than a paraphrase of it.
-    """
+    """Selection is the worker's own DEVICE == DeviceType.MLX check, pinned as the whole condition below."""
     expected = EXPECTED[(os_key, vendor)]
     hw = spoof_cell(os_key, vendor)
     hw.detect_hardware()
@@ -310,11 +259,7 @@ def test_mlx_backend_selection_per_cell(os_key, vendor, spoof_cell):
 
 
 def test_worker_selects_mlx_on_device_type_alone():
-    """The construction site is guarded by the DEVICE comparison and nothing platform-ish.
-
-    Read with ast, not a regex: the guard also carries the native-audio exclusion, and a
-    grep for "DeviceType.MLX" would match the import line and the comment above it.
-    """
+    """Parsed with ast: a grep for DeviceType.MLX would match the import and a comment, not the guard."""
     tree = ast.parse(WORKER_SOURCE)
     guards = []
     for node in ast.walk(tree):
@@ -339,13 +284,7 @@ _TORCH_MODEL = SimpleNamespace(max_seq_length = 4096)
 
 
 def _model_info_for(mlx_selected: bool, requested: int) -> dict:
-    """The ``model_info`` the serving backend publishes for a load of ``requested``.
-
-    Both branches call the shipped resolver rather than restating its answer: the MLX one
-    is ``MLXInferenceBackend._resolve_context_lengths`` (which reads nothing off ``self``),
-    the other is ``runtime_context_length``, which is the only context field
-    ``core/inference/inference.py`` sets.
-    """
+    """Both branches call the shipped resolvers, so the test cannot drift from what serving publishes."""
     if mlx_selected:
         served, native, ceiling = MLXInferenceBackend._resolve_context_lengths(
             None, _MLX_MODEL, requested
@@ -374,12 +313,7 @@ class _FakeOrchestrator:
 @pytest.mark.parametrize(("os_key", "vendor"), CELLS, ids = CELL_IDS)
 @pytest.mark.parametrize("requested", [0, 8192], ids = ["auto", "pinned"])
 def test_context_triple_reported_per_cell(os_key, vendor, requested, spoof_cell, monkeypatch):
-    """The triple survives to ``/v1/models`` on the MLX cell and is withheld on the rest.
-
-    Three seams, because a field can be lost at any of them and each loss looks identical
-    from the last one: what the backend resolves, what the parent mirrors out of the
-    subprocess (``_mirrored_model_entry``), and what the OpenAI listing publishes.
-    """
+    """The triple reaches /v1/models only on the MLX cell; a loss at any of three seams looks identical."""
     expected = EXPECTED[(os_key, vendor)]
     hw = spoof_cell(os_key, vendor)
     hw.detect_hardware()
@@ -423,14 +357,8 @@ def test_context_triple_reported_per_cell(os_key, vendor, requested, spoof_cell,
 
 
 def test_only_the_mlx_backend_resolves_a_native_window():
-    """The asymmetry the matrix above turns on, stated once and directly.
-
-    Only the MLX load resolves a triple. ``core/inference/inference.py`` publishes
-    ``context_length`` and nothing else, whatever ``runtime_context_length`` itself can
-    read, so "withheld on eleven cells" is a property of the serving path rather than of
-    the eleven fixtures. Asserted on the published entry, not on the helper's own answer,
-    which reads a declared window as well as the attached one.
-    """
+    """Only MLX resolves a native window; inference.py publishes context_length alone, so others
+    withhold it."""
     assert runtime_context_length(_MLX_MODEL, 8192) == 8192
     served, native, ceiling = MLXInferenceBackend._resolve_context_lengths(None, _MLX_MODEL, 0)
     assert (served, native, ceiling) == (131072, 131072, 131072)
@@ -438,13 +366,7 @@ def test_only_the_mlx_backend_resolves_a_native_window():
 
 
 def test_wsl_is_indistinguishable_from_linux_in_the_detector():
-    """No file under ``utils/hardware`` can tell WSL from Linux.
-
-    So the three wsl rows above are not independent evidence, and this is what says so.
-    ``llama_cpp.py`` does discriminate (``_wsl_system_rocm_lib_dirs``, and the #8403
-    Windows free-VRAM cap deliberately does NOT engage under WSL) -- that is the point:
-    the discrimination lives in the llama.cpp probe, not in device detection.
-    """
+    """Nothing in utils/hardware tells WSL from Linux; WSL discrimination lives in llama_cpp.py instead."""
     # Not the bare token "WSL": hardware.py mentions it in comments.
     markers = (
         "WSL_DISTRO_NAME",
@@ -482,11 +404,7 @@ def test_wsl_row_equals_the_linux_row(vendor, spoof_cell):
 
 
 def test_windows_on_arm_with_a_healthy_mlx_stack_is_still_cpu(spoof_cell):
-    """Windows x MLX is impossible by construction, not by the package being absent.
-
-    arm64 alone is not enough, and this is the half of ``is_apple_silicon`` the ordinary
-    Windows row cannot exercise (it is x86_64, so either conjunct would explain it).
-    """
+    """is_apple_silicon ANDs Darwin with arm64, so Windows-on-ARM with MLX still lands on CPU."""
     hw = spoof_cell("windows", "cpu", machine = "arm64", mlx = True)
     assert hw.detect_hardware() == hw.DeviceType.CPU
     assert hw.is_apple_silicon() is False
@@ -526,11 +444,7 @@ def test_intel_mac_is_not_an_mlx_host(spoof_cell):
 
 
 def test_amd_sdk_wheel_reaches_is_rocm_without_version_hip(monkeypatch, spoof_hardware):
-    """The AMD row's other wheel shape, which the vendor axis alone cannot carry.
-
-    An AMD SDK / Radeon wheel leaves ``torch.version.hip`` unset, so IS_ROCM is reached
-    through ``torch.__version__`` instead. Same verdict, different evidence.
-    """
+    """AMD SDK wheels leave torch.version.hip unset; IS_ROCM is read from torch.__version__ instead."""
     spoof_hardware(
         _DISPATCH.HardwareProfile(
             name = "windows-amd-sdk",

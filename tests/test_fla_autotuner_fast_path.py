@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""PR #11238, commit 7b45cc8f9: `patch_fla_autotuner_fast_path` rebinds
-`fla.ops.utils.cache.CachedAutotuner.run` to launch with a latched config.
-
-Each test compares the patched path against the ORIGINAL `CachedAutotuner.run` on the same
-inputs, so "same kernel, same config, same numerics" is measured, not asserted.
-
-    PYTHONPATH=<tree> CUDA_VISIBLE_DEVICES=<n> pytest -q test_fla_autotuner_fast_path.py
-"""
+"""Each case compares the patched CachedAutotuner.run with the original on the same inputs."""
 
 import importlib
 

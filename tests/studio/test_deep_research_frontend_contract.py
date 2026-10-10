@@ -370,11 +370,7 @@ def test_research_stop_is_prompt_only_and_deduplicated() -> None:
 
 
 def test_the_handoff_is_keyed_on_the_result_the_backend_writes() -> None:
-    """tool_end alone closes a denied, skipped or budget-exhausted call too.
-
-    Reading a run out of one spends the chat's single Deep Research on a question the loop
-    refused to pass on, so the two sides have to agree on what "it ran" looks like.
-    """
+    """The handoff keys on the backend's result, since tool_end also fires for denied or skipped calls."""
     helper = source("features/chat/utils/deep-research-handoff.ts")
     tools = (ROOT / "studio" / "backend" / "core" / "inference" / "tools.py").read_text(
         encoding = "utf-8"
@@ -399,11 +395,8 @@ def test_the_handoff_is_keyed_on_the_result_the_backend_writes() -> None:
 
 
 def test_the_handoff_uses_the_turn_that_asked_for_it() -> None:
-    """The handoff runs after the model's stream, and the model selector stays usable.
-
-    Reading the store there researched model A's handoff with whichever model B had since
-    been picked, or failed outright when B runs no Studio tools.
-    """
+    """The handoff must use the turn that asked for it, not the model selected since, which may lack
+    tools."""
     adapter = source("features/chat/api/chat-adapter.ts")
     research = adapter.split("const startDeepResearch = async function*", 1)[1].split(
         "const deepResearchHandoff = newDeepResearchHandoff();", 1

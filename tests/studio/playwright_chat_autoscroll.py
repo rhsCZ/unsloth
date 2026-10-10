@@ -1,36 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Per-frame cost and intent correctness of the main chat viewport's autoscroll (#8483).
-
-The chat viewport follows the bottom through a 600ms window that every mutation re-arms, so a
-streaming message keeps the window open for its whole duration. What that window costs depends
-on whether the frame chain re-arms unconditionally or only while layout is still moving, which
-is the change PR #8525 made to the research activity panel's equivalent loop.
-
-Four phases, and the third is the one that decides whether the port is worth making:
-
-    stream  - tokens and blocks at a realistic cadence; how many frames does the loop run.
-    idle    - the loop must stop when the content goes quiet.
-    silent  - content grows via an inline style, which the MutationObserver deliberately
-              excludes and a border-box ResizeObserver cannot see. Only a frame that reads
-              layout notices. This models a decoding image, a font-display: swap webfont and a
-              late KaTeX pass. Measures how long the view stays off the bottom.
-    intent  - scrolling up detaches and stays detached through further streaming; scrolling
-              back re-attaches. A cheaper loop must not cost any of this.
-
-requestAnimationFrame is pumped on a fixed 16ms timer: Chromium here produces only a couple of
-real frames a second, which would flatten a runaway per-frame loop into a passing number. The
-counts are therefore a property of the code, not of this machine's compositor. Chromium is also
-not the WebKitGTK webview the desktop app embeds, so what transfers is the work, not the
-absolute timings.
-
-Run:
-    python tests/studio/playwright_chat_autoscroll.py
-
-It starts and stops its own vite dev server. Point it at one you already have with
-SMOKE_BASE_URL, or move the port it picks with SMOKE_PORT.
-"""
+"""Per-frame cost and scroll-intent checks of the chat autoscroll loop, under Playwright."""
 
 from __future__ import annotations
 

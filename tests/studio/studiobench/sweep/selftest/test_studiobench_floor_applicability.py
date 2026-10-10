@@ -1,41 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A floor may only certify a result it is actually a floor FOR.
-
-Two holes on the same line of `render`, both on the side of the comparison nobody looked at.
-
-THE FLOOR'S OWN CENSORING. `summarise` marks a metric `poolable = False` when it answered on some
-cells and was censored on others, and `render` read that flag on the RESULT only. So a result
-measured in full was scored against a floor built from whichever repetitions of the null control
-survived. Censoring is decided against a fixed budget, so the repetitions it removes are the slow
-ones, and `spread_pct` is `max - min` over what is left: removing pairs can only narrow it.
-
-Measured on the real null control of this campaign, `outputs/rp/sbench_{T,C}_null` pooled as one
-100K plus 500K plus 1M ladder: `reasoning_toggle.close_ms` is censored above 100K, the surviving
-four 100K pairs give a floor of 17.1%, and the campaign result of -24.8% printed `faster` and was
-counted as a metric that cleared all three gates. The repetitions that censoring removed are the
-slow ones by construction -- 1429 to 2149 ms against 498 to 681 ms at 100K -- and they pair as far
-apart as 1.50 on IDENTICAL BUILDS, which is three times the floor that was applied. The null's own
-`settings` action shows the same shape from the other end: one repetition failed its assertion at
-3425.8 ms against a median near 200 ms, and dropping it is what left the tight floor behind.
-
-THE REST OF THE COMPARABILITY IDENTITY. The scoring path validated tier and corpus, which is two
-of the eleven fields `comparability_key` covers. `--compare` covers all eleven and is a separate
-command that nothing obliges a caller to run. So an 0.1.0 floor scored an 0.2.0 payload on the
-same corpus and tier, and this commit is exactly why that is not a formality: it redefines
-`reasoning_toggle.open_ms` to terminate on a settled DOM rather than on the `data-state` flip, so
-an older floor measures a different quantity under the same name. Reproduced on the real payloads:
-the 0.1.0 null control scored a 0.2.0 payload and certified nine metrics, `reasoning_toggle.close_ms
--24.8% faster` among them. A Darwin/arm64 payload against a Linux/x86_64 floor passed identically.
-
-PRODUCER IN THE LOOP. Every payload below is written through the real `Recorder`, so the schema
-check, the required-key check and the run lock are all on the path -- the row types and the
-required keys are the producer's, not this file's. The row CONTENTS are hand-specified, and the
-values are copied from the real payloads named above; what that does not prove is that the harness
-still emits censoring in this shape, which `test_studiobench_partial_censoring.py` and the
-`expect` contract in `scene/actions.py` cover.
-"""
+"""A floor may only certify a result it was measured for, under the full comparability key."""
 
 from __future__ import annotations
 
@@ -79,14 +45,7 @@ def _cell(cid: str) -> dict:
 
 
 def _toggle(cid: str, close_ms: float, censored: bool) -> dict:
-    """One `reasoning_toggle` action row, censored or measured, in the producer's shape.
-
-    THE CENSORED ROW STILL CARRIES ITS TIMING, which is what the real 500K rows look like:
-    `open_ms` is withheld, `close_ms` was measured, and `expect_ok` is False because `ok` is one
-    conjunction over four clauses. `_action_timings` then discards every timing on the row and
-    `censored_metrics` names them all, which is the case `payload_rules` calls the one that
-    reaches furthest -- a measurement that succeeded on its own terms and contributes nothing.
-    """
+    """A censored row keeps its timing, but expect_ok is False so every timing on it is discarded."""
     timings = {"close_ms": close_ms}
     return {
         "row_type": "action",
@@ -172,13 +131,7 @@ def test_the_censored_null_is_marked_unpoolable_in_the_first_place(tmp_path):
 
 
 def test_censoring_the_null_tightens_the_floor_it_leaves_behind(tmp_path):
-    """The quantity at issue, measured on both sides rather than asserted.
-
-    Same null control, same real readings, the only difference being whether the 500K repetitions
-    were censored. `spread_pct` is `max - min` over the surviving paired ratios, so removing pairs
-    can only narrow it -- and the pairs removed here are the slow ones, because censoring is what
-    happens to a cell that ran out of budget.
-    """
+    """Censoring the null drops its slow pairs, which narrows the floor it leaves behind."""
     whole = floor_table.summarise([_null(tmp_path, censored = False)])[METRIC]
     left = floor_table.summarise([_null(tmp_path, censored = True)])[METRIC]
     wide = max(abs(whole["delta_pct"]), whole["spread_pct"])
@@ -210,11 +163,7 @@ def test_a_censored_floor_cannot_certify_a_measured_result(tmp_path, capsys):
 
 
 def test_the_result_is_not_labelled_as_the_censored_one(tmp_path, capsys):
-    """`[f]` and `[*]` say different things and must not be collapsed.
-
-    The result's own number is sound here. Marking it `[*]` would tell a reader to distrust a
-    figure that is fine, which is its own way of publishing a wrong thing about a number.
-    """
+    """A sound result must not be labelled [*] because its floor was censored; the figure is fine."""
     floors = floor_table.summarise([_null(tmp_path, censored = True)])
     floor_table.render([_result(tmp_path)], "t", floors = floors)
     row = next(
@@ -251,13 +200,7 @@ def _floor_and_result(
     result_meta: dict,
     tag: str = "",
 ):
-    """A null control and a result differing only in their run metadata.
-
-    `tag` keeps each call in its own directory. The Recorder APPENDS, which is correct for shards
-    and wrong for a fixture reused inside a loop: without it the second call leaves two headers in
-    one file and the payload is refused for disagreeing with itself, which would pass this file's
-    assertions for the wrong reason.
-    """
+    """Null and result differ only in run_meta; `tag` gives each call its own dir as Recorder appends."""
     floor = _write(tmp_path, f"cmp_null{tag}", _ladder(NULL_100K, NULL_100K, False), floor_meta)
     result = _write(
         tmp_path, f"cmp_result{tag}", _ladder(RESULT_100K, RESULT_100K, False), result_meta
@@ -266,12 +209,7 @@ def _floor_and_result(
 
 
 def test_an_older_harness_floor_cannot_score_a_newer_payload(tmp_path):
-    """The case this commit creates.
-
-    `open_ms` now terminates on a settled DOM rather than on the `data-state` flip, and
-    `TOOL_VERSION` was bumped for exactly that reason. A 0.1.0 floor and a 0.2.0 payload therefore
-    hold two different quantities under one metric name, on the same corpus, at the same tier.
-    """
+    """A floor from an older TOOL_VERSION measures a different quantity under the same metric name."""
     from tests.studio.studiobench.__main__ import TOOL_VERSION
 
     floors, floor_meta, result = _floor_and_result(
@@ -283,13 +221,7 @@ def test_an_older_harness_floor_cannot_score_a_newer_payload(tmp_path):
 
 
 def _meta_differing_in(field: str) -> dict:
-    """A `run_meta` that differs from `_meta()` in exactly `field`, wherever that field lives.
-
-    The nesting is DISCOVERED rather than listed. `engine`, `system`, `machine` and the browser
-    build fields are read out of `platform` and the rest off the row, and a hand-kept list of
-    which is which is the drift this whole file is about: `comparability_fields` grew two more
-    nested fields while this branch was open.
-    """
+    """A run_meta differing from _meta() in one field, wherever that field is nested."""
     probe = ["100K", "500K", "1M"] if field == "rungs" else "CHANGED"
     changed = _meta()
     changed[field] = probe
@@ -306,13 +238,7 @@ def _meta_differing_in(field: str) -> dict:
 
 
 def test_every_comparability_field_stops_a_floor_from_being_applied(tmp_path):
-    """Enumerated from `comparability_fields`, so a field added there is enforced here for free.
-
-    Written this way rather than as a list of the fields that matter today because the list of
-    fields that matter today is what the scoring path had: it knew about tier and corpus, and
-    every axis added since -- host, engine, headed, cadence, the browser build, the injection and
-    probe flags -- was added to the key and not to the guard that certifies numbers.
-    """
+    """Every comparability field is checked, so a field added to the key also guards applying a floor."""
     for field in payload_rules.comparability_fields(_meta()):
         floors, floor_meta, result = _floor_and_result(
             tmp_path, _meta(), _meta_differing_in(field), tag = field
@@ -367,12 +293,7 @@ def test_a_payload_with_no_run_meta_at_all_is_not_scored(tmp_path):
 
 
 def test_the_cli_applies_both_guards(tmp_path, capsys):
-    """A guard reachable only from a keyword argument nobody passes is not a guard.
-
-    This branch has now hit that three times -- `refuse_partial_censoring` with no caller,
-    `refuse_collisions` behind an unreachable branch, a row type registered nowhere -- so the
-    check is driven through `main`, the way a person runs it.
-    """
+    """Drives both guards through main, the way a person runs it, since an unreachable guard is no guard."""
     _null(tmp_path, censored = True)
     _result(tmp_path)
     rc = floor_table.main([str(tmp_path / "result"), "--floor", str(tmp_path / "null_censored")])

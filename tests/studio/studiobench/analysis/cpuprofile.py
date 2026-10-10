@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Turn `ProfileChunk` trace events into (timestamp, stack) pairs.
-
-This is the module that deletes the concept of a residual. A renderer bucket
-like `TaskOtherDuration` is a number the renderer computed for its own
-accounting and it has no stack; a V8 CPU sample has a stack, so every
-microsecond it covers resolves to a leaf call frame with an ancestry.
-
-Four properties of the real wire format, each confirmed against a captured
-trace rather than assumed, and each of which silently produces a wrong answer if
-you get it wrong:
-
-* `nodes` arrive INCREMENTALLY. In a real 118-chunk capture only 6 chunks
-  carried a `nodes` array at all. A parser that reads nodes per chunk and
-  discards them resolves almost every sample to "unknown node".
-* `timeDeltas` lives at `args.data.timeDeltas`, a SIBLING of `cpuProfile`, not
-  inside it. `samples` lives at `args.data.cpuProfile.samples`.
-* `ts`, `Profile.args.data.startTime` and every entry of `timeDeltas` are
-  MICROSECONDS on the same monotonic clock as the rest of the trace.
-* `timeDeltas` entries can be NEGATIVE. The V8 sampler timestamps samples on the
-  sampling thread and small reorderings happen. Summing is still correct;
-  clamping each delta at zero is not, because it inflates the total.
-
-The sum of `timeDeltas` over a window must equal the window wall duration.
-Assert it, and FAIL THE CELL when it does not, rather than rescaling: a scale
-factor that reconciles a broken profile with wall clock is a way of making every
-downstream number look plausible and be wrong.
-"""
+"""Turns ProfileChunk events into timed stacks; deltas can be negative, so sum them, never clamp."""
 
 from __future__ import annotations
 
@@ -57,13 +31,8 @@ class CallFrame:
 
     @property
     def key(self) -> tuple[str, str, int, int]:
-        """Identity of a function, stable across chunks and across a session.
-
-        Keyed on script id and source position rather than on name, because the
-        name is very often the empty string for a module top level or an
-        anonymous callback, and because two different functions minified to the
-        same short name are different functions.
-        """
+        """Keyed on script id and source position, not name, which is often empty or collides when
+        minified."""
         return (self.function_name, self.script_id, self.line, self.column)
 
     @property
@@ -110,25 +79,16 @@ class CpuProfile:
         return self.start_time - self.declared_start_time
 
     def stack_for_sample_trace_id(self, sample_trace_id: int | str) -> list[CallFrame]:
-        """The EXACT stack recorded for a tagged instrumentation point.
-
-        Timeline events such as `EventDispatch`, `FunctionCall`,
-        `RequestAnimationFrame` and `TimerInstall` carry
-        `args.data.sampleTraceId` when the timeline.stack category is enabled.
-        Looking that id up here gives the true stack at that event, with none of
-        the sampling error that makes short windows unrankable.
-        """
+        """Exact stack of a tagged event via sampleTraceId, with none of the sampling error of short
+        windows."""
         node = self.trace_ids.get(str(sample_trace_id))
         if node is None:
             return []
         return self.stack(node)
 
     def stack(self, node_id: int) -> list[CallFrame]:
-        """Leaf-first ancestry of a sample node.
-
-        Guards against a cyclic `parent` chain, which a corrupt trace can
-        produce and which would otherwise hang the whole analysis.
-        """
+        """Stops at a repeated node: a corrupt trace can hold a cyclic parent chain that hangs the
+        analysis."""
         out: list[CallFrame] = []
         seen: set[int] = set()
         cur: int | None = node_id
@@ -191,12 +151,8 @@ class CpuProfile:
         return None
 
     def assert_deltas_match_wall(self, tolerance: float = DELTA_WALL_TOLERANCE) -> dict[str, Any]:
-        """Sum of deltas must equal the profiled wall span within `tolerance`.
-
-        A profile whose deltas do not add up to the wall clock is either
-        truncated or came from a different clock, and either way every self time
-        derived from it is wrong by an unknown factor.
-        """
+        """Deltas must sum to the profiled wall span; if not, every self time is off by an unknown
+        factor."""
         if not self.samples:
             raise CellFailure("cpuprofile_empty", "profile contained no samples")
         delta_sum = sum(s.delta for s in self.samples)
@@ -238,15 +194,7 @@ def _call_frame(raw: dict[str, Any]) -> CallFrame:
 
 
 def parse_cpu_profiles(trace: Trace) -> dict[str, CpuProfile]:
-    """Build every CPU profile in a trace, keyed by the `Profile` event id.
-
-    The `Profile` event carries the pid/tid of the PROFILED thread and the
-    `startTime` anchor. `ProfileChunk` events carry the same `id` but are
-    emitted on the V8 profiler's own thread (`v8:ProfEvntProc`), so they are
-    correlated by `(pid, id)` and never by thread id. Filtering chunks by the
-    renderer main thread id returns zero samples, which is indistinguishable
-    from the CPU profiler having been left off.
-    """
+    """Chunks sit on the V8 profiler thread, so they are matched by (pid, id), never by thread id."""
     profiles: dict[str, CpuProfile] = {}
     for e in trace.events:
         if e.get("name") != "Profile" or "cpu_profiler" not in str(e.get("cat", "")):
@@ -362,19 +310,7 @@ def self_time_in_windows(
     include_synthetic: bool = False,
     limit: int = 40,
 ) -> tuple[list[tuple[CallFrame, int]], dict[str, Any]]:
-    """Rank leaf frames across a set of disjoint time windows.
-
-    This is how a task ORIGIN becomes a NAMED FRAME: take the windows of every
-    task classified as, say, message-channel, and rank the leaves sampled inside
-    them. Windows are half-open and assumed non-overlapping, which holds for
-    top-level `RunTask` intervals on one thread.
-
-    The returned diagnostics carry `js_sample_count`, and callers must look at
-    it. Synthetic V8 frames ((program), (idle), (garbage collector)) routinely
-    dominate short windows at a 150 us sampling interval, so a ranking built
-    from a handful of JS samples is noise wearing a function name. Dropping the
-    synthetic frames silently would hide exactly that.
-    """
+    """Check js_sample_count: synthetic V8 frames dominate short windows, so a few JS samples is noise."""
     totals: dict[tuple[str, str, int, int], int] = {}
     frames: dict[tuple[str, str, int, int], CallFrame] = {}
     js_samples = 0

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The GRPO hidden-states fallback must wrap the module that owns the head.
-
-TRL builds GRPO's `ref_model` as a bare `*ForCausalLM`, and that also has a
-`.model`, so walking `("base_model", "model")` landed the wrapper on the decoder
-body. Nothing raised: the head above ran untouched and the caller silently got
-[B, T, vocab] where it expects [B, T, hidden], which blows up later as a reduction
-dim mismatch in `chunked_hidden_states_selective_log_softmax`.
-"""
+"""Wrap the module that owns lm_head: a bare *ForCausalLM also has .model, the decoder body."""
 
 import contextlib
 import os

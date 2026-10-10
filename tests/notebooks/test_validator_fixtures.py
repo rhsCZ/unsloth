@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Golden-fixture tests for scripts/notebook_validator.py: each reconstructs a broken install cell from an unslothai/notebooks PR and asserts the matching rule fires (and falls silent after the fix).
-
-Cross-references: PR #258->R-INST-003, #260->R-EXC-001, #261a->R-INST-004,
-#261b/#264->R-INST-005, #221->R-INST-001, 51b1462->R-DRIFT-001.
-"""
+"""Golden-fixture tests for scripts/notebook_validator.py: each rule fires on a broken install cell."""
 
 from __future__ import annotations
 
@@ -257,13 +253,7 @@ def test_lint_smoke_no_module_errors():
 
 
 def test_live_notebooks_dir_skips_an_unreadable_candidate(tmp_path):
-    """An unreadable candidate must read as absent rather than raise.
-
-    The skipif decorators above call ``_live_notebooks_dir`` at import time, so an
-    uncaught EACCES there aborts collection of this whole file, taking the entire
-    Repo tests (CPU) job with it. The candidates are absolute paths outside the repo,
-    so on a shared machine one of them can belong to another user.
-    """
+    """An unreadable candidate dir must count as absent: skipif calls _live_notebooks_dir at import time."""
     blocked_parent = tmp_path / "blocked"
     blocked = blocked_parent / "notebooks"
     blocked.mkdir(parents = True)

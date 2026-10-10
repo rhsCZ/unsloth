@@ -1,10 +1,4 @@
-"""CPU-only behavioral routing tests for the export API.
-
-With the heavy save helpers monkeypatched, confirm each `save_method` / `quantization_method`
-reaches the correct export path with the correct arguments. A bare object stands in for the
-model, so these run on CPU-only CI with no GPU and no real weights, yet they catch routing
-regressions that pure AST checks cannot (e.g. wrong scheme/suffix/outtype passed through).
-"""
+"""With save helpers stubbed, each save_method must reach its export path with the right arguments."""
 
 from __future__ import annotations
 
@@ -549,11 +543,7 @@ def test_apply_token_to_child_env(token, explicit, expected):
 
 
 def test_every_converter_child_env_goes_through_the_token_boundary():
-    """No child env in save.py may be built without applying the caller boundary to it.
-
-    Structural rather than textual: a third subprocess added next to these two would otherwise
-    repeat the leak silently, which is how _unsloth_save_compressed_tensors came to have it.
-    """
+    """Each converter child env in save.py must use the token boundary, else a new subprocess leaks."""
     import ast
     import pathlib
 

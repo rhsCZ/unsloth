@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Per-chat settings: the composer pills and permission level follow the chat.
-
-Drives two saved chats through the real UI and asserts each keeps its own modes across a
-switch and a reload, that a chat's edits leave the installation defaults (and so every new
-chat) alone, and that a chat which stored nothing still opens on those defaults.
-
-Needs no model: with nothing loaded the Search and Code pills stay clickable, which is what
-lets this run in seconds rather than behind a GGUF download.
-
-    BASE_URL=http://127.0.0.1:18921 STUDIO_NEW_PW=... \
-        python tests/studio/playwright_thread_scoped_settings.py
-"""
+"""Per-chat settings checks; with no model loaded the Search and Code pills stay clickable."""
 
 import json
 import os
@@ -166,12 +155,7 @@ def sign_in(page):
 
 
 def app_created_thread_id():
-    """The id a chat started in the app really carries.
-
-    assistant-ui mints `__LOCALID_<id>` for a thread before its first send, the thread list
-    adapter hands that same string back as the remoteId, and the row keeps it as its primary
-    key. The prefix therefore says nothing about whether a row exists.
-    """
+    """Thread id as the app stores it (__LOCALID_<id>); the prefix does not show whether a row exists."""
     return f"__LOCALID_{uuid.uuid4().hex}"
 
 
@@ -261,14 +245,7 @@ def open_thread(page, thread_id):
 
 
 def unload_any_model(page, token):
-    """Leave no model loaded, so the capability-gated pills stay clickable.
-
-    The Search and Code pills are disabled when a model is loaded that cannot run tools
-    (`modelLoaded && !(supportsTools || supportsBuiltinWebSearch)`), and this file drives
-    both. In CI an earlier step in the same job leaves a small GGUF resident, which has
-    no tool support, so every pill click here would time out on a disabled button. With
-    nothing loaded the pills are pre-selectable, which is the state this test is about.
-    """
+    """Search and Code pills are disabled while a model without tool support is loaded, so unload it."""
     status = page.evaluate(
         """async ({ base, token }) => {
             const res = await fetch(base + "/api/inference/status", {
@@ -383,10 +360,7 @@ def read_globals(page):
 
 
 def _wait_globals(page, expected):
-    """Until the Search default in localStorage reads `expected`, instead of a fixed 600 ms.
-
-    Gives up quietly after 10 s: the caller's own check then reports the value it found.
-    """
+    """Polls up to 10 s for the Search default to read expected; on timeout the caller's check reports."""
     try:
         wait_until(
             lambda: read_globals(page)["unsloth_chat_tools_enabled"] == expected,

@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A cell that under-streamed must not report COMPLETE.
-
-`send_turn` used to call `pacer.reset()` before loading the next turn, and `CellRunner` records
-only `pacer.last_stats()`. So on any rung that streams more than once -- 10K upwards -- the opening
-reply's `StreamStats` were discarded by the first follow-up and the first follow-up's by the
-second. The only other liveness signal is the UI no longer running, and a later turn that finishes
-satisfies it on behalf of an earlier one that did not. Measured against the real pacer: an opening
-reply whose client went away after 4,624 of 10,000 characters was erased by a follow-up that
-delivered its 1,500 in full, and the cell was marked complete and scored against a thread half the
-size of the rung it is named for.
-
-That is the defect class this whole benchmark has been burned by repeatedly: a measurement that
-under-measures and still reports success. It is worse than no measurement, because people act on
-it. So the stats for every planned turn are kept and checked, and a cell that did not stream what
-it planned fails by name.
-
-Three levels. The first drives the REAL pacer over a REAL socket through the REAL `send_turn`. The
-second drives the shipped `CellRunner` over dictated streams and asserts the consequence a reader
-sees. The third runs the whole cell against a real pacer over real wire bytes, so the control --
-an ordinary multi-turn cell still completes -- is not taken on trust either.
-"""
+"""Stats for every planned turn are kept and checked, so an under-streamed cell fails by name."""
 
 from __future__ import annotations
 
@@ -537,10 +517,7 @@ def test_a_follow_up_that_streamed_but_never_joined_the_thread_fails_the_cell(
 
 
 def test_an_ordinary_action_whose_assertion_failed_does_not_fail_the_cell(cell_runner, monkeypatch):
-    """THE SCOPE OF THE RULE, deliberately. `select_text` selecting nothing voids its own timing --
-    `scoring.from_payload._action_measure` already returns `Measure.failed` for it -- but it does
-    not change the workload the rest of the cell measured, and failing the cell would throw away a
-    whole cell's frame readings for a gesture that missed."""
+    """An action whose assertion failed voids only its own timing; it does not fail the cell."""
 
     monkeypatch.setattr(
         session_mod,
@@ -618,10 +595,7 @@ def test_a_send_turn_that_did_not_run_is_not_demanded_of_the_pacer(cell_runner, 
 
 
 class _WirePage:
-    """A page whose sends really do fetch a stream off the pacer, so `isRunning` is true for
-    exactly as long as bytes are arriving. Everything the browser does with them is out of scope
-    here; what is in scope is that a healthy multi-turn cell passes the new check when the streams
-    are real rather than dictated by the test."""
+    """A fake page whose sends read a real pacer stream, so isRunning is true only while bytes arrive."""
 
     def __init__(self, pacer: Pacer) -> None:
         self.pacer = pacer

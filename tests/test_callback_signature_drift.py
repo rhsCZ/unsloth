@@ -1,15 +1,4 @@
-"""Static-analysis regression test: callback signature drift.
-
-Catches a producer (e.g. unsloth_zoo's MLXTrainer) changing the arity it passes to a registered
-callback while consumers still declare the old arity; the producer's try/except swallows the
-TypeError so the callback silently never fires. Pure AST so it runs on every CI OS/Python.
-
-Producer: a class with ``self._<name>_callbacks`` populated by ``add_<name>_callback`` and invoked
-via ``for cb in self._<name>_callbacks: cb(...)`` (the call-site arity is canonical).
-Consumer: ``<obj>.add_<name>_callback(fn)`` where ``fn`` is a def/async def in the same file; its
-arity must equal canonical (or be variadic). ``*args``/``**kwargs`` accept any arity; methods and
-unresolved Name targets are skipped with a note.
-"""
+"""Catches callback arity drift: a producer's try/except swallows the TypeError and nothing fires."""
 
 from __future__ import annotations
 
@@ -78,11 +67,7 @@ def _safe_parse(path: pathlib.Path):
 
 
 def _callback_list_attrs_in_nodes(nodes) -> set[str]:
-    """self._<name>_callbacks attributes assigned or appended-to in a class.
-
-    Takes the already-walked nodes rather than the class, so the caller's walk
-    is shared instead of repeated.
-    """
+    """Takes the caller's already-walked nodes, so one ast.walk serves every callback-list lookup."""
     found = set()
     for node in nodes:
         if isinstance(node, ast.Assign):
@@ -185,10 +170,7 @@ def discover_producers(roots: list[pathlib.Path]) -> dict[str, list[tuple[pathli
 def check_registrations(
     roots: list[pathlib.Path], producers: dict[str, list[tuple[pathlib.Path, int]]]
 ):
-    """Assert each in-file <x>.add_*_callback(fn) arity matches the producer's canonical arity.
-
-    Returns (issues, skipped, ok_count).
-    """
+    """Checks in-file add_*_callback arity against canonical arity; returns (issues, skipped, ok_count)."""
     issues: list[str] = []
     skipped: list[str] = []
     ok_count = 0
@@ -259,10 +241,7 @@ def check_registrations(
 
 
 def _zoo_roots() -> list[pathlib.Path]:
-    """unsloth_zoo source roots, in order: UNSLOTH_ZOO_SRC env, ../unsloth-zoo sibling, pip package.
-
-    (The pip wheel may strip submodules like mlx/, missing MLX producers.) All existing roots scanned.
-    """
+    """Roots in order: UNSLOTH_ZOO_SRC, the ../unsloth-zoo sibling, the pip package, which may lack mlx/."""
     roots: list[pathlib.Path] = []
     env_src = os.environ.get("UNSLOTH_ZOO_SRC")
     if env_src:

@@ -2756,14 +2756,7 @@ class TestLinuxPublishedAttemptsNvidiaCpuGate:
         assert all(a.install_kind != "linux-cpu" for a in attempts)
 
     def test_the_masked_host_keeps_torchs_runtime_preference(self, monkeypatch):
-        """Both of the usual gates answer "no GPU" under the mask.
-
-        has_usable_nvidia is false by definition and torch.cuda.is_available() sees no
-        devices, so the preference was skipped and selection fell back to newest-first:
-        a CUDA 13 bundle for a cu12 venv, which is the stray-runtime mismatch the
-        unmasked path exists to avoid. torch.version.cuda is a build-time constant no
-        mask touches.
-        """
+        """Masks hide GPUs from both gates, but torch.version.cuda is build-time and no mask touches it."""
         fake_torch = SimpleNamespace(
             version = SimpleNamespace(cuda = "12.8"),
             cuda = SimpleNamespace(is_available = lambda: False),
@@ -2845,12 +2838,8 @@ class TestLinuxPublishedAttemptsNvidiaCpuGate:
         return make_host(**base)
 
     def test_amd_without_rocm_gets_the_published_vulkan_bundle(self):
-        """Regression: an AMD host with no usable ROCm silently took the CPU bundle.
-
-        The Vulkan preference was stated in direct_upstream_release_plan and resolve_upstream_asset_choice but NOT
-        here, the branch that runs whenever a published bundle exists, so a Steam Deck installed the CPU llama.cpp
-        and only setting UNSLOTH_LLAMA_CPP_BACKEND by hand could fix it.
-        """
+        """Published attempts must prefer Vulkan in _linux_published_attempts for AMD without ROCm,
+        not CPU."""
         host = self._gpu_host(has_amd_gpu_without_rocm = True)
         attempts = INSTALL_LLAMA_PREBUILT._linux_published_attempts(
             host, self._vulkan_and_cpu_bundle()
@@ -3026,11 +3015,7 @@ class TestPublishedLegacyNamedArm64BundlesAreOrdered:
 
 
 class TestAnUpstreamLookupFailureCostsOnlyCuda:
-    """On a Windows ARM64 NVIDIA host with no approved CUDA bundle, the upstream asset list is
-    fetched from the release API. A rate limit or an outage there raised out of the planner,
-    which catches only PrebuiltFallback, so the whole install aborted although the published
-    ARM64 CPU bundle was there to fall through to. It now costs the CUDA bundle only, like the
-    digest fetch beside it."""
+    """An upstream lookup failure costs only the CUDA bundle, not the published ARM64 CPU fallback."""
 
     TAG = "b8508"
     CPU = "app-b8508-windows-arm64-cpu.zip"
@@ -3163,14 +3148,7 @@ class TestResolveReleaseAssetChoicePin:
 
 
 class TestWindowsAmdWithoutRocmTakesVulkan:
-    """An AMD Windows host with no usable ROCm must take the Vulkan bundle, not windows-cpu.
-
-    The Windows gate checked has_intel_gpu alone while the Linux one checked
-    `has_intel_gpu or has_amd_gpu_without_rocm`, so the same silicon took Vulkan on Linux
-    and CPU on Windows. Measured on a gfx1151 (Radeon 8060S) box where amd-smi.exe failed
-    to load its library and HIP_PATH / ROCM_PATH were both unset: every ref resolved
-    app-<tag>-windows-x64-cpu.zip, with a windows-vulkan bundle sitting in the same
-    release."""
+    """An AMD host without usable ROCm takes the Vulkan bundle on Windows too, matching the Linux gate."""
 
     TAG = "b10909"
 
@@ -3246,12 +3224,7 @@ class TestWindowsAmdWithoutRocmTakesVulkan:
 
 
 class TestWindowsMaskedNvidiaTakesCuda:
-    """A Windows host whose NVIDIA GPU is hidden by CUDA_VISIBLE_DEVICES selects CUDA, as Linux does.
-
-    The CUDA branch was gated on has_usable_nvidia alone, so physical-without-usable fell
-    into the windows-cpu arm and a masked run (the backend pins GPUs for itself and the
-    in-app update inherits that env) installed the CPU bundle over a CUDA machine for good.
-    """
+    """A masked NVIDIA GPU (CUDA_VISIBLE_DEVICES) must still select CUDA on Windows, as on Linux."""
 
     TAG = "b10909"
 
@@ -4218,11 +4191,7 @@ class TestCudaDriverToolkitMismatchMessage:
         *,
         only_path_dir = False,
     ):
-        """Run `body` under setup.sh's CUDA driver/toolkit helpers, with the usual preamble.
-
-        `only_path_dir` drops the inherited PATH, which is the only way a case that means
-        "no nvidia-smi anywhere" stays honest on a machine that has one in /usr/bin.
-        """
+        """only_path_dir drops the inherited PATH so no nvidia-smi is found, even if /usr/bin has one."""
         script = textwrap.dedent(
             f"""\
             set -euo pipefail
@@ -4601,13 +4570,7 @@ class TestCudaDriverToolkitMismatchMessage:
 
 
 class TestExactSourceAssetUrl:
-    """exact_source_asset_url resolves the published source-commit asset for mix builds even when the manifest
-    omits the top-level repo/release_tag.
-
-    A mix build's merge commit is never pushed, so its codeload/archive URLs 404 and
-    ``llama.cpp-source-commit-<sha>.tar.gz`` is the only durable copy. An empty asset URL sends hydration to the
-    404-ing commit archive and the whole prebuilt install falls to a source build.
-    """
+    """Mix builds' merge commits are never pushed, so the published source-commit asset is the only copy."""
 
     COMMIT = "c4fca6de" + "a" * 32
     INSTALL_TAG = "b9616-mix-17e50db"
@@ -4719,12 +4682,7 @@ class TestExactSourceAssetUrl:
 
 
 class TestDirectUpstreamRequiresAssetDigests:
-    """The upstream planner must bind every attempt to a digest.
-
-    It used to leave expected_sha256 None, which download_file_verified treats as a pass,
-    so an archive the installer reroutes to by itself (Linux ARM64 Vulkan, any
-    --published-repo) was extracted, chmod 0o755'd and executed unverified.
-    """
+    """A None expected_sha256 passes verification, so upstream archives were executed unverified."""
 
     TAG = "b9365"
 
@@ -4771,12 +4729,8 @@ class TestDirectUpstreamRequiresAssetDigests:
 
 
 class TestUpstreamDigestKeepsTheFunctionalSmokeTest:
-    """Requiring a digest must not quietly disable the smoke test it replaces.
-
-    validate_prebuilt_choice skips the test for any attempt carrying a sha256. Upstream
-    attempts reached it with None and so always ran it; binding them to a release digest
-    would have flipped that off for every upstream install.
-    """
+    """Digests must not disable the smoke test, which validate_prebuilt_choice skips when a sha256
+    is set."""
 
     TAG = "b9365"
 
@@ -4852,12 +4806,8 @@ class TestUpstreamDigestKeepsTheFunctionalSmokeTest:
         assert INSTALL_LLAMA_PREBUILT.prebuilt_needs_functional_validation(hashless)
 
     def test_probe_preresolution_agrees_with_the_validation_decision(self):
-        """All three gates must read the same predicate.
-
-        A gate left on `expected_sha256 is None` while validation tests something wider
-        would validate upstream attempts with an unresolved probe, which the probe gates'
-        own comments say demotes a healthy GPU pick to CPU.
-        """
+        """All three gates must read one predicate, or an unresolved GPU probe demotes a healthy
+        pick to CPU."""
         source = pathlib.Path(INSTALL_LLAMA_PREBUILT.__file__).read_text(encoding = "utf-8")
         stale = [
             line.strip()

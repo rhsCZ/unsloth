@@ -39,16 +39,7 @@ def _realpath(path: str) -> str:
 
 
 def _loaded_stacks(test_module):
-    """Every live copy of install_python_stack, sys.modules or not.
-
-    Three test files load it into sys.modules under the same name
-    ("studio_install_python_stack"), so the last one imported owns that key and the
-    others keep a module object nothing in sys.modules points at any more. Resetting
-    only sys.modules leaves those copies carrying the previous test's pass state, which
-    is invisible when the file runs alone and decides the answer when the directory
-    runs together. So the module under test is looked up through the test file that
-    holds it as well.
-    """
+    """Finds every loaded install_python_stack copy, not just the one sys.modules still points at."""
     target = _realpath(str(_STACK_FILE))
     found = {}
     candidates = list(sys.modules.values())
@@ -83,12 +74,7 @@ def _reset_pass_state(test_module) -> None:
 
 @pytest.fixture(autouse = True)
 def reset_install_pass_state(request):
-    """Start and end every test with the state a fresh dependency pass would have.
-
-    Here rather than in each file because the state belongs to install_python_stack, not
-    to any one suite, and a file that forgets it fails in a way that only shows up when
-    the whole directory runs in one process.
-    """
+    """Resets install_python_stack pass state around each test, so it cannot leak between files."""
     _reset_pass_state(request.module)
     yield
     _reset_pass_state(request.module)

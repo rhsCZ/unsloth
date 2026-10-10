@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""setup.sh must not replace a working GPU llama.cpp prebuilt with a CPU source build (#9255).
-
-A prebuilt update that fails (network, a GitHub limit, a bad release) restores the existing
-install and then source-builds. Without nvcc that build is CPU-only, and the swap replaced
-the restored CUDA prebuilt for good while the installer reported "built". Part one drives
-the keep decision, sliced out of setup.sh, against real markers. Part two pins the wiring:
-the decision runs before the compile and again at the swap, and the footer names the outcome.
-"""
+"""setup.sh must not replace a working GPU llama.cpp prebuilt with a CPU-only source build."""
 
 from __future__ import annotations
 

@@ -1,59 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""A message that is still being written has no defined moment, so it is refused rather than scored.
-
-THE DEFECT. studiobench drives both arms through the same scripted actions, and the parity digest
-is taken at the CLOSE of each action window -- a wall-clock offset in the film. The two arms are
-two cells run back to back against one pacer: the bytes on the wire are identical by construction,
-but each arm has its own send click, its own `t0` and its own paint clock. So when a slot lands
-inside a live reply the two digests are taken at two different points in the same stream, and the
-difference that comes back is wall clock wearing the shape of a UI change. It is the same mistake
-as every entry in the instrument-defect list this file is a response to: MEASURING AT A MOMENT
-WHOSE MEANING IS NOT STABLE ACROSS THE THINGS BEING COMPARED.
-
-WHY YOU CANNOT RECOGNISE IT BY ITS SIZE, which is the part that has misled people. Mid-stream,
-Unsloth does not show a prefix of the finished reply. `parseIncompleteMarkdown` runs remend over the
-tail and closes whatever construct is half-arrived, KaTeX renders the repaired formula and, while
-it will not parse, writes the parse error and its character offset into a `title`, Shiki
-re-tokenises the repaired fence, and the trailing code block carries `data-incomplete`. None of
-that is monotonic in how much text has arrived.
-
-MEASURED, out of tree, on the shipped frozen corpus (the streamed unit, 4,238 characters) driven
-through the real remend, the real KaTeX and the real Shiki into the shipped `signature()`:
-
-  stepping by the pacer's own 24-character chunk   175 of 175 adjacent pairs differ
-                                                   0 of them at the same serialised length
-  stepping one character at a time                 52 of 4,237 steps make the signature SHORTER
-                                                   34 pairs of distinct stream positions serialise
-                                                   to the same length with different digests
-                                                   398 of 4,237 steps move the digest not at all
-
-So at the shipped cadence the drift is total -- one chunk of skew fails a stable action outright --
-and the same-length variant, while real, needs sub-chunk skew to reach. Both are the same defect
-and the fix is deliberately blind to length: what is refused is the message that was in flight, not
-a difference of a particular size.
-
-WHAT THE FIX MUST NOT DO. A normaliser that quietened this by widening what it erases would be
-worse than the bug: it would pass a null control perfectly and detect nothing. So this file scores
-both directions on every change, as a MUTANT SCORE and a NULL SCORE rather than as "the tests pass".
-
-  NULL   pairs that are the same build at two points in one stream. Every one must be refused.
-  MUTANT real, visible rendering differences, injected WHILE A REPLY IS IN FLIGHT. Every one must
-         still be caught, because a change that only shows up during a stream is still a change.
-
-The before/after comparison is free and needs no second checkout: a capture WITHOUT the streaming
-fields is exactly what the previous instrument produced, and `compare` falls back to the plain
-digest for it. `test_the_null_battery_scores_the_old_instrument_too` runs the same battery both
-ways and pins both numbers.
-
-THE SCORES THIS FILE HOLDS, and the same two scores taken out of tree against a real jsdom document
-built by the real renderers and digested by the shipped `capture()` rather than by these fixtures:
-
-  in tree     NULL 0 of 6 reported as a difference (all 6 refused); MUTANT 13 of 13 detected, and
-              0 of 13 reported as a MATCH.
-  live DOM    NULL 15 of 15 -> 0 of 15 reported as a difference; MUTANT 10 of 11 still detected,
-              11 of 11 never a MATCH. The one demotion is the reorder pinned below.
-"""
+"""Streamed replies are refused, not scored: the two arms sample the same stream at different points."""
 
 from __future__ import annotations
 
@@ -80,12 +27,7 @@ def message(
     extra: list | None = None,
     attrs: dict | None = None,
 ) -> dict:
-    """One thread message, in the shape Unsloth renders.
-
-    `streaming` puts `data-status="running"` on the text part, which is assistant-ui's own
-    published state and what `scene/dom.js::streamingMessages` reads. A settled part reads
-    `"complete"`, so the attribute is present either way and its VALUE is what moves.
-    """
+    """The text part's data-status is running while streaming and complete once settled; the value moves."""
     children: list = [
         {
             "tag": "div",
@@ -115,12 +57,7 @@ def thread(messages: list[dict], overlays: list[dict] | None = None) -> dict:
 
 
 def _mark_elided(node: dict) -> dict:
-    """The same tree with every message marked for elision, which is what the scaffold digest is.
-
-    Recursive and keyed on `data-role`, because that is what `capture()` elides: `dom.messages()`
-    returns every `[data-role]` in the document, wherever it sits. A helper that only reached the
-    first branch would build a scaffold that quietly agreed about the branches it never walked.
-    """
+    """Recursive and keyed on data-role like capture(); a shallow walk would skip nested branches."""
     if not isinstance(node, dict):
         return node
     if (node.get("attrs") or {}).get("data-role"):
@@ -129,12 +66,7 @@ def _mark_elided(node: dict) -> dict:
 
 
 def capture(tree: dict, *, streaming_fields: bool = True) -> dict:
-    """A parity capture for one arm, every digest taken by the shipped `signature()`.
-
-    `streaming_fields=False` produces exactly what the instrument produced before the streamed
-    message was named: digests only, no `in_flight`, no settled digest. That is the before-picture
-    and it is not a mock of one.
-    """
+    """Per-arm parity capture; streaming_fields=False gives the pre-streaming instrument's exact output."""
     messages = tree["children"][0]["children"]
     overlays = tree.get("_overlays") or []
     # Elide every message, as capture() does, so the scaffold walk is identical on both arms.
@@ -222,12 +154,7 @@ STREAM_POINTS = (12, 24, 48, 81)
 
 
 def test_the_same_document_at_two_points_in_one_stream_moves_the_raw_digest():
-    """CASE ONE: the drift is real, and it is not the comparison layer inventing it.
-
-    Two arms, one build, one pacer, the same logical document -- and the digests disagree, because
-    the digest was taken at two different points in the same reply. This is the reading that has
-    been read as "this pull request changed the UI".
-    """
+    """Same build sampled at two points in one reply moves the raw digest: stream drift, not a UI change."""
     a, b = streaming_arm(24), streaming_arm(48)
     assert a["digest"] != b["digest"], "no drift to fix; the fixture is not reproducing the defect"
     assert a["digest_scaffold"] == b["digest_scaffold"]
@@ -242,11 +169,7 @@ def test_the_drift_is_refused_rather_than_reported_as_a_ui_change():
 
 
 def test_two_genuinely_different_documents_still_differ_while_a_reply_streams():
-    """CASE TWO, and it is the one a bad fix breaks.
-
-    Same point in the stream on both arms, but a SETTLED message renders different text. That is a
-    real difference and it has to survive the streamed message being excused.
-    """
+    """A real difference in a settled message must still be reported while a reply streams."""
     got = P.compare(
         streaming_arm(24, settled_body = "settled text"),
         streaming_arm(24, settled_body = "settled text, rewritten"),
@@ -284,12 +207,7 @@ def test_the_null_score_is_zero():
 
 
 def test_the_null_battery_scores_the_old_instrument_too():
-    """The before-picture, on the same fixtures, in the same run.
-
-    A capture without the streaming fields is exactly what the previous instrument recorded, and
-    `compare` falls back to the plain digest for it. So this is not a claim about what used to
-    happen; it is the old behaviour, measured.
-    """
+    """Runs the null battery without streaming fields, so compare falls back to the plain digest."""
     before = null_battery(streaming_fields = False)
     assert all(r["verdict"] == P.DIFFER for r in before), before
     for r in before:
@@ -472,17 +390,7 @@ def test_the_mutant_score_is_unchanged_by_the_streaming_fields():
 
 
 def test_reordering_the_streamed_message_past_a_sibling_is_refused_not_passed():
-    """THE SECOND COST, and the one that had to be found by a mutant rather than by reading.
-
-    The per-message rows are keyed by mounted index. Swap the streamed message with the settled one
-    and the streaming row sits at index 2 on one arm and index 1 on the other, so BOTH indices are
-    in flight on one side or the other and both are withheld -- and the scaffold markers that
-    survive carry the same `assistant` role in either order. So a reorder of two same-role messages
-    involving the streamed one is demoted from a difference to a refusal.
-
-    Demoted, NOT hidden: NOT COMPARABLE is not a pass and nothing goes green on it. Pinned here so
-    the demotion is a known cost rather than something a later reader discovers.
-    """
+    """Reordering the streamed message past a same-role sibling is refused as NOT COMPARABLE, not passed."""
     a = streaming_arm(24)
     b = capture(
         thread(
@@ -499,14 +407,7 @@ def test_reordering_the_streamed_message_past_a_sibling_is_refused_not_passed():
 
 
 def test_a_real_change_inside_the_streamed_message_is_refused_not_caught():
-    """THE COST, stated as a test so it cannot be forgotten.
-
-    A rendering regression that lands inside the message that happens to be streaming is no longer
-    distinguishable from stream progress, and comes back NOT COMPARABLE. It was not distinguishable
-    before either -- every action that lands in a stream is on the declared unstable list, so the
-    difference used to print under "expected to vary" and the run exited 0. The outcome moves from
-    a pass to "not measured", which is the honest one, but it is a give-up and it is written down.
-    """
+    """A real change inside the streaming message is NOT COMPARABLE, a known give-up rather than a pass."""
     a = streaming_arm(24)
     b = capture(
         thread(
@@ -550,14 +451,8 @@ def test_a_message_that_vanished_is_never_excused_by_being_in_flight():
 
 
 def test_a_running_reply_the_probe_could_not_place_refuses_the_pair():
-    """A scan that can return zero needs a control, and this one can.
-
-    `streamingMessages()` walks selectors written against Unsloth's markup. Rename `data-status` and
-    it matches nothing, every capture reads as "no reply was in flight", and the instrument returns
-    the strongest claim it has about the stream on the strength of never having looked. The app
-    publishes the same fact through the Stop button, so the disagreement is carried out of the page
-    and refused here rather than resolved into the reassuring answer.
-    """
+    """A running reply the probe cannot place refuses the pair, rather than reading as no reply in
+    flight."""
     a = streaming_arm(24)
     blind = dict(streaming_arm(24), in_flight = [], in_flight_unplaced = True)
     got = P.compare(a, blind)
@@ -567,11 +462,7 @@ def test_a_running_reply_the_probe_could_not_place_refuses_the_pair():
 
 
 def _blind_arm(chars: int, *, prompt: str = "the prompt") -> dict:
-    """A streaming arm whose `data-status` hook went quiet, so it could not place its own stream.
-
-    The shape the treatment side of a hook-renaming build has: the app says a reply is running and
-    not one message published a streaming state.
-    """
+    """A streaming arm whose data-status hook published nothing, so its own stream cannot be placed."""
     arm = capture(
         thread(
             [
@@ -585,17 +476,7 @@ def _blind_arm(chars: int, *, prompt: str = "the prompt") -> dict:
 
 
 def test_a_settled_user_row_survives_the_blind_probe_refusal():
-    """A USER ROW IS NEVER THE REPLY BEING WRITTEN, so the refusal may not take it out.
-
-    The reachable pair is one build against another that renamed the `data-status` hook -- an
-    assistant-ui bump does exactly that -- and the same bump can restyle the user bubble. The
-    stream cannot be placed, so every assistant row is withheld correctly; the USER row is not,
-    because a stream writes into an assistant message and both arms agree this row is the user's.
-
-    Without this it left as NOT COMPARABLE with an empty `moved`, and `report` buckets a refusal as
-    blind and never consults it for the exit code, so a real rendering regression exited 0 with no
-    row on screen naming it. `compare_visible` already applies this rule to its own rows.
-    """
+    """A user row is never the reply being written, so the blind-probe refusal must not withhold it."""
     base = _blind_arm(24)
     treat = _blind_arm(24, prompt = "the prompt, rendered differently")
     assert treat["in_flight_unplaced"] is True
@@ -609,11 +490,7 @@ def test_a_settled_user_row_survives_the_blind_probe_refusal():
 
 
 def test_a_role_that_changed_survives_the_blind_probe_refusal():
-    """The role is captured BESIDE the digest, so how far a reply has arrived cannot explain it.
-
-    A treatment that renders the live assistant row as `data-role="user"` is a structural
-    regression, and it is exactly the row the refusal is otherwise about.
-    """
+    """The role is captured beside the digest, so a role change survives the blind-probe refusal."""
     base = _blind_arm(24)
     treat = dict(
         capture(
@@ -640,20 +517,7 @@ def test_a_role_that_changed_survives_the_blind_probe_refusal():
 
 
 def test_the_blind_scaffold_rule_needs_run_state_evidence_the_composer_cannot_forge():
-    """SUPPRESSING A COMPOSER DIFFERENCE WITH THE COMPOSER IS ARGUING IN A CIRCLE.
-
-    The blind branch withheld the scaffold whenever `generation_disagrees` said the arms were at
-    different points in the turn -- and that predicate reads `composer_control`, the token naming
-    which control the composer rendered. So a treatment that DROPS the Stop button, renames it, or
-    selects the wrong control makes the tokens differ FOR THAT REASON, and the scaffold carrying
-    the regression went out with the refusal. `report` files a refusal under `blind` and takes its
-    exit code from `stable_bad or one_sided`, so the run went green on it.
-
-    `streaming` and `queued_idle` are read off the thread's run state, not off the composer, so
-    they are evidence the composer cannot manufacture. Here they AGREE -- both arms are generating
-    -- so there is no run-state explanation for the scaffold moving and it is a finding. This is
-    the same corroboration the settled-pair composer suppression already requires.
-    """
+    """Scaffold suppression needs run-state evidence the composer cannot forge, not composer_control."""
     base = dict(_blind_arm(24), composer_control = "Stop generating", streaming = True)
     treat = dict(
         _blind_arm(24),
@@ -691,18 +555,7 @@ def test_the_blind_scaffold_rule_still_withholds_a_corroborated_run_state_differ
 
 
 def test_the_composer_refusal_says_the_scaffold_reading_is_an_aggregate():
-    """A REFUSAL THAT NAMES ONE CAUSE READS AS HAVING RULED OUT THE OTHERS.
-
-    `digest_scaffold` is one digest over the viewport, the composer dock and the empty state
-    together. The suppression is justified by the composer swap alone, but the reading it acts on
-    cannot tell that swap apart from a change to another scaffold surface in the same
-    cross-run-state capture, so such a change rides along inside the refusal.
-
-    That is a real limit of this capture and separating it needs a composer-scoped digest the
-    payload does not carry. What must not happen meanwhile is the sentence claiming more than the
-    reading supports: unqualified, it reads as "only the composer differed", which is what a reader
-    would act on. So the refusal states the aggregate and states what it could not separate.
-    """
+    """digest_scaffold covers viewport, composer dock and empty state together, so it is an aggregate."""
     settled = thread([message(0, role = "user", body = "the prompt"), message(1)])
     base = dict(capture(settled), composer_control = "Stop generating", streaming = True)
     treat = dict(
@@ -720,11 +573,7 @@ def test_the_composer_refusal_says_the_scaffold_reading_is_an_aggregate():
 
 
 def test_the_streamed_row_itself_is_still_withheld_when_the_probe_is_blind():
-    """The narrowing is not a hole in the other direction.
-
-    An assistant row that differs is precisely the reading with no defined moment, and it stays
-    refused. Only rows that provably cannot be the reply being written are reported.
-    """
+    """Assistant rows stay withheld while the probe is blind; an unplaceable stream may write into any."""
     got = P.compare(_blind_arm(24), _blind_arm(48))
     assert got["verdict"] == P.NOT_COMPARABLE, got
     assert got["moved"] == []

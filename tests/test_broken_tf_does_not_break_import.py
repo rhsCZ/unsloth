@@ -291,10 +291,7 @@ def test_the_environment_path_still_covers_the_transformers_not_loaded_case(tmp_
 
 
 def _run_env_branch(tmp_path, preamble, site, **env):
-    """Run the real opt-out block with Transformers not yet imported. The
-    `import tensorflow; import unsloth` order cannot be tested end to end here:
-    leaving TF enabled makes Transformers import `TFPreTrainedModel`, which needs
-    a genuine `tf.keras` (and h5py), not a stub."""
+    """Runs the real opt-out block with Transformers unimported; leaving TF on needs a genuine tf.keras."""
     guard = tmp_path / "env_guard.py"
     guard.write_text(ast.unparse(_guard_block()), encoding = "utf-8")
     return _run(
@@ -424,10 +421,7 @@ def test_the_v4_only_cases_skip_on_transformers_5x(monkeypatch, tmp_path, case):
 
 
 def test_a_partly_imported_transformers_still_gets_the_variables():
-    """`"transformers" in sys.modules` does not mean Transformers is ready: Python
-    publishes a module object before executing its body, so a thread part-way
-    through `import transformers` reaches the `else` branch with `import_utils`
-    still absent. Nothing cached to clear there, so the environment is the lever."""
+    """Being in sys.modules does not mean Transformers is ready: a half-run import is already published."""
     environ = {}
     _exec_guard({"transformers": types.ModuleType("transformers")}, environ)
     assert environ == {"USE_TF": "0", "USE_FLAX": "0"}

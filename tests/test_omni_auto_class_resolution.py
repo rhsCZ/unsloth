@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Auto-class resolution for omni checkpoints, and what it must NOT move.
-
-`Qwen/Qwen3-Omni-30B-A3B-Instruct` names `Qwen3OmniMoeForConditionalGeneration`
-and so reads as a VLM, but transformers registers `qwen3_omni_moe` only under
-`AutoModelForTextToWaveform`. Every other auto class raises "Unrecognized
-configuration class" on it, which is a hard load failure before the weights are
-touched.
-
-The resolver is consulted ONLY when the already-chosen class has no mapping, so
-these tests spend as much effort on the models that must keep taking exactly
-the branch they take today as on the one that changes.
-"""
+"""The omni resolver runs only if the chosen auto class has no mapping, leaving other branches as-is."""
 
 import pytest
 

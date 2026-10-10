@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The overlay rail's update banners must never print over each other.
-
-The reported failure: in a window short enough that the rail hits its cap, the
-app-update card's release notes were painted over its own row of buttons.
-
-The second thing checked here is where the rail is. It was placed from JS for a
-while, dodging the boxes the composer and the floating panels publish, and every
-input to that placement moved on its own, so the rail drifted out of its corner
-into the middle and the top of the window. It is anchored in CSS again, and the
-indicator pass at the end asserts it stays there while cards come and go.
-
-The node suite cannot catch either: one is a flex shrink across a capped column
-and the other is where a fixed box actually lands, so both need a real layout,
-a real ResizeObserver and the real route, and they show only at some viewport
-heights. Rects are intersected with whatever clips them, so anything an
-overflow-hidden ancestor hides does not count as visible.
-
-Both update endpoints are stubbed with page.route, so this runs on any host: no
-GPU, no pypi release, no llama.cpp build.
-
-Run: BASE_URL, STUDIO_OLD_PW and STUDIO_NEW_PW as the other suites take them.
-STUDIO_PLAYWRIGHT_BROWSER selects chromium (default), firefox or webkit.
-"""
+"""Update banners must not overlap; the rail must stay CSS-anchored. Node tests cannot see either."""
 
 from __future__ import annotations
 
@@ -426,15 +404,7 @@ def read_ui_font_size(token: str) -> int | None:
 
 
 def set_ui_font_size(token: str, size: int | None) -> None:
-    """Set, or clear, the Appearance type size on the SERVER.
-
-    Seeding it into localStorage is not enough and is actively harmful: the
-    appearance store syncs up to `/api/settings/personalization`, so a browser
-    that starts at 20px leaves the install at 20px for everything that runs
-    after it. That is not hypothetical, it is how a whole afternoon of local
-    runs came to be measured at 20px while reporting themselves as default,
-    and how a later suite in the same CI job would inherit it.
-    """
+    """Set the size on the server: seeding localStorage alone leaks into every later run on the install."""
     current = api("/api/settings/personalization", token = token)
     current["appearance"]["customization"]["uiFontSize"] = size
     api("/api/settings/personalization", current, token = token, method = "PUT")
@@ -832,16 +802,7 @@ def settle_stack(
     tries: int = 24,
     gap_ms: int = 250,
 ) -> None:
-    """Wait until the rail's box stops moving.
-
-    Waits for STABILITY, not for the answer the checks want: a card mounting
-    late changes the stack's height, which re-measures the placement, which
-    moves the rail on the frame after that. Measuring in the middle of that is
-    how the models indicator pass reported the cards below the viewport when a
-    probe watching the same page settled correctly a second later. Waiting for
-    `card.bottom <= innerHeight` instead would be waiting for the assertion,
-    and would pass on a layout that never settled at all.
-    """
+    """Wait for the rail's box to stop moving, not for the assertion's answer; a late card re-places it."""
     seen = None
     stable = 0
     for _ in range(tries):
@@ -854,12 +815,7 @@ def settle_stack(
 
 
 def settle_cards(page, timeout_ms: int = SETTLED_MS) -> None:
-    """Wait for the rail and each card in it to hold one box with nothing animating.
-
-    Replaces a fixed pause after mount or resize: it ends as soon as the stack is still, and on a runner slow enough
-    that the pause was not enough it keeps waiting instead of measuring mid-transition. A stack that never settles is
-    reported and measured anyway, so the checks, not this wait, say what is wrong with it.
-    """
+    """Wait for the rail and its cards to stop moving; a stack that never settles is measured anyway."""
     for selector in (
         '[data-testid="overlay-rail"]',
         '[data-testid="web-update-banner"]',

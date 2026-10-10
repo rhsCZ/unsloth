@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""`revision` must reach the config, weight and tokenizer loads (issue #3544).
-
-FastLlamaModel.from_pretrained took a `revision` argument and never read it, so the
-config, weights and tokenizer silently came from the repo's default branch. These are
-AST-structural so they need no GPU, no network and no gated checkpoint; importing
-unsloth on a CPU runner is what tests/conftest.py exists to work around.
-"""
+"""`revision` must reach the config, weight and tokenizer loads, or they use the default branch."""
 
 import ast
 import types

@@ -1,25 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""One session: one browser, one Unsloth, one pacer, N cells.
-
-A SESSION IS THE UNIT OF COMPARISON. Every slope, ratio and A/B pair must be read within one of
-these, because cross-session drift on this app has been measured at 8% -- larger than most of the
-effects worth arguing about. `Cell.session_id` carries the truth so the report layer can refuse a
-comparison that spans two.
-
-The measured window structure per cell, in order:
-
-  1. seed the thread over REST, navigate, wait for the thread to mount
-  2. ENFORCED IDLE WINDOW -- nothing streaming, no action, the page at rest -- and the timer clamp
-     is calibrated inside it. This is the fix for the salvaged recorder's worst bug: calibrating
-     from the first 60 ticks of a page that already has 31,637 elements standing measures the
-     app's steady-state load, calls it the timer floor, subtracts it out of every window, and
-     reports a saturated page as 0.2% busy.
-  3. a resting census, so the growth axis has a denominator that was actually counted
-  4. press send; the film starts; the scene's slots run against wall clock
-  5. drain the stream, final census, teardown
-"""
+"""One session (one browser, Unsloth, pacer, N cells) is the unit every comparison must stay within."""
 
 from __future__ import annotations
 
@@ -81,45 +63,7 @@ FOLLOW_MIN_STREAM_COVERAGE = 0.50
 
 
 def follow_verdict(follow: Mapping[str, Any]) -> tuple[bool, dict[str, Any]]:
-    """The `follows_the_stream` verdict, and the coverage fields recorded whatever it says.
-
-    A module-level function rather than four lines inside the cell runner because the SPLIT it
-    encodes is the whole point and has to be testable without a browser: which shortfalls are a
-    reading of the BUILD and which are a property of the FILM.
-
-    FATAL, because they describe how the arm behaved while it was attached and can genuinely
-    differ between two builds:
-
-      `pinned_fraction`   below `FOLLOW_PINNED_MIN`, or absent while the sampler was present
-      `ever_fell_behind`  absolute; one drift past tolerance is a failure however fast the recovery
-
-    NOT MEASURED, because it is set by the SCENE SCHEDULE and not by the build under test:
-
-      `attached_fraction_of_stream` below `FOLLOW_MIN_STREAM_COVERAGE`, AND ONLY WHEN THE ARM
-                                    re-attached at least once, so the shortfall is the schedule's
-                                    and not this build's refusal to come back
-
-    The film scrolls away twice inside an ~18s opening stream and the app then correctly declines
-    to yank the reader back, so roughly half the streaming time is detached BY CONSTRUCTION.
-    Measured over 32 cells it is 0.481 +/- 0.009, range 0.4625 to 0.5063 -- so a floor of 0.50 sat
-    above the mean of the quantity it was gating and made the verdict a coin flip. It refused 32 of
-    32 pairs with `TOO LITTLE COMPARED`, exit 3, and the NULL CONTROL -- the same commit on both
-    arms -- refused identically. A gate that fails its own null is not measuring what it names. It
-    was blinding the null audit too, which could not establish its own noise floor: all 16 actions
-    came back `undetermined`.
-
-    Both arms run the same film, so the shortfall is symmetric by construction. It cannot
-    discriminate between them; it can only void the run. It still qualifies an ABSOLUTE quote -- a
-    thread that spent half the stream detached did render less -- which is why the coverage is
-    RECORDED AS A NUMBER rather than dropped, and why this stays a failed gate row a reader has to
-    step over. What it may no longer do is take the cell out of a COMPARISON, where the confound is
-    common to both sides and cancels. Raising the constant instead would be the same trap one turn
-    later: it would need re-deriving every time the film's scroll schedule moves.
-
-    `pinned_ok and not fell_behind` in the `stream_coverage_unmeasured` conjunction is
-    LOAD-BEARING. Without it a genuine follow failure on a large rung, where coverage is low
-    anyway, would ride out on this allowance -- the same defect in the opposite direction.
-    """
+    """Pinned and fell-behind are fatal; low stream coverage is set by the schedule, not the build."""
 
     pinned = follow.get("pinned_fraction")
     coverage = follow.get("attached_fraction_of_stream")
@@ -157,38 +101,7 @@ class WindowInUse(RuntimeError):
 
 
 def record_completeness_gate(recorder: Recorder, cell: Cell, completeness: dict) -> bool:
-    """Write the completeness verdict as a gate row AGAINST THE CELL THAT PRODUCED IT.
-
-    WHY THIS IS NOT `recorder.gate(...)`. `Recorder.gate` writes `{row_type, name, passed,
-    detail}` and no cell_id, and `report/payload.py::excluded_from_rows` reads a failed gate as
-    `row.get("cell_id") or "run"`. So a windowed cell that had really lost messages was excluded
-    under the synthetic cell id "run": the report could say a self-check failed somewhere in the
-    run and could not say which arm or which rung lost them, which is the one thing this probe
-    exists to find out. `cell_id` is `r{rung}.{arm}.rep{rep}`, so attributing the row names all
-    three. `Recorder.failure` already takes a cell_id for the same reason.
-
-    THE VERDICT ITSELF is the head marker AND the ordinal coverage, and coverage is three-valued.
-    `False` is a finding. `None` is two different answers wearing one value, and they are told
-    apart by `ordinal_coverage_state`:
-
-      not_applicable  no row published an `aria-posinset` for the traversal to count. A fully
-                      mounted arm publishes none anywhere -- the shipped build publishes none --
-                      so the question does not arise, and failing on it would fail the shipped
-                      build's own completeness gate on every cell.
-      unmeasured      the question arises and the sweep could not answer it: the gesture stopped
-                      short of the top, or its consecutive stops did not overlap so the middle of
-                      the thread was never in view.
-
-    Only the first is a pass. A store that retains the first page and the last one and has lost
-    everything between them is the exact arm this probe was written to catch, and accepting
-    `unmeasured` let it back in through the unknown state: the head marker arrives, the coverage
-    sweep never looks, and the cell stays scoreable. "We could not tell" must not be recorded as
-    "it was fine". The remedy for a coarse sweep is a smaller `step_px`, not a pass.
-
-    A completeness dict carrying no state at all is treated the same way as `unmeasured`, because
-    an undifferentiated `None` is precisely the ambiguity above and resolving it in favour of a
-    pass is the defect.
-    """
+    """Sets cell_id on the row, or a lost-message failure is filed under run and loses its arm and rung."""
     coverage = completeness.get("ordinal_coverage_complete")
     state = completeness.get("ordinal_coverage_state")
     passed = (
@@ -244,14 +157,8 @@ class Session:
             self.ctx.recorder.emit(w.row())
 
     def each_instrument(self, method: str, *args) -> dict:
-        """Run one lifecycle hook on every instrument, and collect what each returned.
-
-        OVER A SNAPSHOT, not the live list. `_safe` drops an instrument that raises, and removing
-        from the list being iterated makes Python skip whichever instrument shifted into the freed
-        index, so one broken optional instrument silently cost its neighbour's hook as well --
-        `heap` failing took `input`, and with it the highest-weight metric in the table, while the
-        cell still completed and reported.
-        """
+        """Iterate a snapshot: _safe may drop a failing instrument, which would skip its neighbour's
+        hook."""
         out: dict = {}
         for inst in list(self.instruments):
             got = self._safe(inst, method, *args)
@@ -695,21 +602,7 @@ class CellRunner:
 
     @staticmethod
     def _planned_streams(cell: Cell, plan: RungPlan, row: dict) -> list[dict]:
-        """The turns this cell MEANT to stream, each with its tag and its character count.
-
-        The opening reply, plus one entry per `send_turn` that was ATTEMPTED -- taken from the
-        recorded action rows and from the tag the action itself reports, so the naming rule lives
-        in one place rather than two.
-
-        THE TWO KINDS OF "DID NOT RUN" ARE NOT THE SAME, and treating them alike was a hole in the
-        first version of this check. `ran = False` means the turn was never attempted: an exhausted
-        queue at the small rungs, a slot missed on a slow machine. Nothing was loaded into the
-        pacer, the cell simply has fewer turns, and demanding one would fail every small rung.
-        `ran = True, expect_ok = False` is the opposite: the turn WAS attempted, `send_turn` loaded
-        the pacer with it and pressed Enter, and no reply started. That is a planned turn that did
-        not stream, and skipping it let a cell whose follow-up never arrived pass the check with
-        `planned_turns: 1`, complete, and score 91.6 against a thread one turn short of its rung.
-        """
+        """A send_turn that ran but got no reply is a planned turn that did not stream; it must fail."""
         planned: list[dict] = []
         unit = plan.streamed_unit
         if unit is not None:
@@ -740,20 +633,8 @@ class CellRunner:
 
     @staticmethod
     def _streamed_follow_ups(plan: RungPlan, row: dict) -> list:
-        """The follow-up units that actually reached the thread during the film.
-
-        EVERY TURN THAT STREAMED, not just the opening one. From 10K upwards the plan carries two
-        follow-ups and the scene streams both through `send_turn` before the peak census is taken,
-        so a mirror seeded from the prefix plus the opening unit is two assistant turns short of
-        the thread it is being compared against. `assistant_messages` is a GATED key, and two
-        missing turns out of six is 33% drift against a 2% tolerance: the check then failed on
-        every healthy cell and labelled every larger rung `seeded_only` for a difference the
-        mirror had introduced itself.
-
-        Counted from the recorded action rows rather than from the plan, because a `send_turn`
-        that did not run (an exhausted queue at the small rungs, a slot missed on a slow machine)
-        put nothing in the thread and must not be seeded into the mirror either.
-        """
+        """Counts every follow-up that streamed, from the action rows, so the mirror seeds only what
+        landed."""
         streamed = 0
         for action in row.get("actions") or []:
             if action.get("action") != "send_turn":
@@ -763,12 +644,7 @@ class CellRunner:
         return list(plan.follow_up_units or [])[:streamed]
 
     def _check_equivalence(self, plan: RungPlan, row: dict) -> dict:
-        """Build the SAME content as a fully seeded thread and compare what the app made of it.
-
-        The streamed reply has just been measured. This seeds a second thread containing every
-        unit including that one -- so the two threads carry identical text -- loads it, and
-        compares the DOM the app built. Two paths, one corpus, one comparison.
-        """
+        """Seeds the same text as a full thread and compares the DOM the app built from both paths."""
         s = self.session
         page = s.ctx.page
         # The streamed peak is racy vs the stable seeded read; it widens the tolerance, not the direction.
@@ -831,13 +707,7 @@ class CellRunner:
         return got
 
     def _wait_for_thread(self, page, seeded: SeededThread) -> Readiness:
-        """The readiness gate. See runtime/readiness.py for what it asserts and why.
-
-        The mode is the CELL RUNNER's, not the thread's: an arm declares that it mounts a window
-        and the whole run is then gated that way and labelled that way in every row it writes. A
-        thread cannot be allowed to talk its way past the gate by looking virtualised, because
-        "looks like it mounted fewer nodes on purpose" is indistinguishable from "did not finish".
-        """
+        """The mode is the cell runner's, so a thread cannot pass the gate by looking virtualised."""
         return wait_for_thread_ready(
             page,
             seeded.messages,
@@ -848,54 +718,15 @@ class CellRunner:
         )
 
     def _click_attribution(self, page, selector: str) -> dict:
-        """Split the composer click into what a user pays and what the DRIVER pays.
-
-        `page.click` is not a click. Before dispatching it resolves the selector, waits for the
-        element to be visible, enabled and stable, scrolls it into view, then hit-tests the point
-        with `elementsFromPoint` and checks that what is under the cursor is what was asked for,
-        retrying until it agrees. Every one of those steps is O(DOM), and a human does none of
-        them. The Chromium CPU profile of that window at 500K is dominated by Playwright's own
-        injected script, so a number taken from `page.click` cannot be reported as user cost
-        without first showing how much of it is the driver.
-
-        Four paths, ordered by how much machinery each one skips:
-
-          click     `page.click`         full actionability, which is what the ladder recorded
-          mouse     `page.mouse.click`   real input at a point: the browser hit-tests, the driver
-                                         does not resolve or re-check anything
-          dispatch  `dispatch_event`     a synthesised event, no hit test at all
-          focus     `el.focus()`         no event and no hit test, just focus and its handlers
-
-        And one that involves no click whatsoever:
-
-          hover     move the cursor from a corner into the transcript, flipping `:hover` down the
-                    whole hover chain. If THIS costs seconds then focus was never the variable and
-                    the cost is style invalidation from a pseudo-class flip, which is worse news
-                    than a slow click: a user pays it on every mouse movement over the thread.
-
-        Each is preceded by a blur and a settle so no repetition inherits the previous one's state.
-        """
+        """page.click adds O(DOM) driver work a user never pays; the other paths isolate the user's cost."""
 
         def blur() -> None:
             page.evaluate("() => document.activeElement && document.activeElement.blur()")
             page.wait_for_timeout(250)
 
         def settled(fn) -> float:
-            """Time `fn` AND the wait for the main thread to be free again.
-
-            Timing the call alone measures the wrong thing, and differently wrong per engine.
-            `page.mouse.click` hands an input event to the browser over the debug protocol and
-            returns; whether the acknowledgement waits for the renderer to process it is an
-            implementation detail of each engine's Playwright backend, not a property of the app.
-            Read that way, Chromium came back at 3 ms for both 100K and 500K, which does not mean
-            the work was free, only that the ack did not wait for it.
-
-            So every path is followed by a round trip into the page. `page.evaluate` CANNOT return
-            while the main thread is blocked, and `offsetHeight` forces any pending style and
-            layout to be resolved rather than deferred. The reading is then "how long until the
-            page could serve me again", which is the thing a user actually experiences and is
-            comparable across engines.
-            """
+            """Times fn plus a round trip into the page, since the call can return before the page
+            processes it."""
             started = time.monotonic()
             fn()
             page.evaluate("() => document.body.offsetHeight")
@@ -967,28 +798,8 @@ class CellRunner:
         return out
 
     def _press_send(self, page) -> float:
-        """Type a prompt and press send. Returns the driver monotonic time the film starts.
-
-        THE CELL MUST SURVIVE THIS, and it took losing a whole rung to notice it did not.
-
-        This runs before the film starts, so it was written as setup and inherited the default
-        8s action timeout. At 500K `page.click` exceeds it and the exception killed the cell
-        before a single slot opened, three times out of three across two runs, so the ladder had
-        NO data at 500K at all. `COMPOSER_CLICK_TIMEOUT_S` fixes that: the cell survives, the film
-        runs, and the cost is recorded whatever it comes to. Still bounded, because a click that
-        never lands is a different fact from a slow one.
-
-        `composer_click_ms` IS NOT WHAT A USER PAYS, and must never be quoted as though it were.
-        I made exactly that mistake and published it. `page.click` resolves the selector, waits
-        for visible, enabled and stable, scrolls into view, hit-tests the point with
-        `elementsFromPoint` and re-checks that the element under the cursor is the one asked for,
-        retrying until it agrees. All of that is O(DOM) and a human does none of it. Measured at
-        500K on WebKit with `--click-probe`: `page.click` 11,036 ms, a real mouse click at the
-        same point 573 ms. About 95% of the number is the driver.
-
-        So this reading is a HARNESS health number: it says whether the cell can start. For what
-        the user pays, run `--click-probe` and read `mouse_ms` and `focus_ms`.
-        """
+        """Bounded by COMPOSER_CLICK_TIMEOUT_S; composer_click_ms is harness health, not what a user
+        pays."""
         selector = 'textarea[aria-label="Message input"]'
         page.wait_for_selector(selector, timeout = 60_000)
         if self.click_probe:
@@ -1103,21 +914,7 @@ def ladder_chars_per_token(
     model_id: str = "",
     log: Callable[[str], None] = lambda _m: None,
 ) -> dict:
-    """The ratio THE RUNGS ARE SIZED BY, measured on the corpus BEFORE anything is planned.
-
-    A rung is named in tokens and the corpus is built in characters, so the ratio is what makes the
-    two the same claim. `PROVISIONAL_CHARS_PER_TOKEN` is what a rung is planned with when nothing
-    has been tokenised yet, and it was previously what EVERY production rung was planned with: the
-    per-cell measurement runs after the thread is already seeded and its result is recorded and
-    nothing else, so a cell labelled 1M tokens carried 4,000,000 characters of a corpus that
-    tiktoken reads at 3.34 -- about 1.2M tokens, a fifth over its own label, on the axis the onset
-    headline is quoted against.
-
-    Measured once for the whole ladder rather than per rung: the per-cell number is taken from that
-    rung's streamed unit alone, which is 6,000 characters of either reasoning or code and swings
-    between 3.2 and 4.9 by which kind the rung happens to land on. The axis needs the corpus's
-    ratio, not one turn's.
-    """
+    """Measured once on the corpus before planning, not per rung, since one unit's ratio swings."""
     got = measure_chars_per_token(_corpus_sample(corpus), base_url, auth, model_id)
     measured = got.get("chars_per_token")
     source = got.get("source")
@@ -1158,12 +955,7 @@ def build_cells(
     stream_tail_chars: Optional[int] = None,
     corpus_dollars: bool = False,
 ) -> list[tuple[Cell, RungPlan]]:
-    """The ladder's cells, sized by the MEASURED ratio unless a caller names one.
-
-    `chars_per_token = None` means "measure the corpus first", which is what the production caller
-    does. The ratio that sized the ladder travels on every cell's `meta` so a reader of the payload
-    can see which one it was and whether a tokeniser answered.
-    """
+    """chars_per_token None measures the corpus first; the ratio used is recorded in each cell's meta."""
     if chars_per_token is None:
         ratio = ladder_chars_per_token(corpus, base_url, auth, model_id, log)
     else:

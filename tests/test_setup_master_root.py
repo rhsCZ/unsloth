@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""setup.sh / setup.ps1 must install the managed runtimes at the same root the resolvers read.
-
-`llama.cpp`, `node` and `whisper.cpp` are siblings of `studio/` under `UNSLOTH_HOME`, and
-`storage_roots.unsloth_home()` sends every runtime resolver there. The CLI exports
-`UNSLOTH_STUDIO_HOME=<root>/studio` before running setup, so a setup that derived the runtime
-parent from the Studio home alone would install them one level too deep and no GGUF model,
-managed Node or dictation engine would be found. Companion to
-tests/test_managed_tools_master_root.py, which holds the resolvers to each other.
-"""
+"""Setup must place the runtimes at UNSLOTH_HOME, not under the studio home the CLI exports."""
 
 from __future__ import annotations
 
@@ -49,11 +41,7 @@ def _slice(src: str, start: str, end: str) -> str:
 
 
 def _runtime_parent(env: dict[str, str]) -> tuple[str, str]:
-    """Run the shipped setup.sh derivations and report (node parent, llama.cpp parent).
-
-    The two blocks are executed rather than pattern-matched, so a later edit that keeps the
-    words and changes the order still fails here.
-    """
+    """Runs the shipped setup.sh blocks rather than matching text, so reordering them still fails."""
     src = SETUP_SH.read_text(encoding = "utf-8")
     master = _slice(src, "# Stripped before anything else", "# Directory-local evidence")
     node = _slice(src, "# Mirror the llama.cpp UNSLOTH_HOME derivation", "NODE_DIR=")
@@ -93,11 +81,7 @@ def _env(home: Path, **overrides: str) -> dict[str, str]:
 
 
 def _master_root_answer(tmp_path: Path, environment: str) -> str:
-    """What uninstall.ps1's own _MasterRoot answers, with *environment* run before it.
-
-    The functions are Invoke-Expression'd straight out of the shipped script, so a rewrite that
-    keeps the words and loses the behaviour fails here instead of passing against a copy.
-    """
+    """Runs the shipped _MasterRoot from uninstall.ps1 so a rewrite that keeps only the words fails."""
     script = tmp_path / "probe.ps1"
     script.write_text(
         f"""$txt = Get-Content -Raw "{UNINSTALL_PS1}"
@@ -228,14 +212,7 @@ def _whisper_root_block() -> str:
 
 @pytest.fixture
 def whisper_path(tmp_path_factory):
-    """PATH for the extracted whisper block, with git and cmake satisfied by stubs.
-
-    The slice above is the shipped file verbatim, so it carries the builder's `command -v`
-    preflight along with the root selection these tests are about. On a runner without cmake the
-    block exits 1 before choosing anything and four tests fail for a reason that has nothing to
-    do with what they assert. Stubbed rather than excised: cutting the preflight out of the slice
-    would mean the tests no longer run the shipped text, which is the whole point of lifting it.
-    """
+    """Stubs git and cmake on PATH so the shipped whisper block's command -v preflight passes."""
     stub_bin = tmp_path_factory.mktemp("stubbin")
     for tool in ("git", "cmake"):
         path = stub_bin / tool
@@ -728,16 +705,7 @@ def test_only_a_directory_can_be_adopted_at_a_runtime_path(tmp_path):
 
 
 def test_the_windows_inductor_cache_agrees_with_the_resolver():
-    """setup.ps1 persists TORCHINDUCTOR_CACHE_DIR to the USER environment.
-
-    Every later Studio process inherits it, so _setup_cache_env's fill-if-unset default never
-    applies on Windows and the containment this branch is for does not happen there. It has to
-    name the directory the resolver would have chosen. Two things still outrank that, and both
-    are recorded here so a later edit cannot quietly drop them: long paths off keeps the short
-    drive-root directory for MAX_PATH headroom, and a path holding whitespace or an apostrophe is
-    refused for the same reason storage_roots.toolchain_path_unparseable refuses one, since the
-    C++ builders paste it in unquoted and reparse it with shlex in POSIX mode.
-    """
+    """Persisted TORCHINDUCTOR_CACHE_DIR must match the resolver, since later processes inherit it."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     block = _slice(ps, "$TorchCacheDir = $null", "$env:TORCHINDUCTOR_CACHE_DIR = $TorchCacheDir")
     assert 'Join-Path (Join-Path $StudioHome "cache") "torchinductor"' in block
@@ -760,17 +728,7 @@ def test_the_windows_inductor_cache_agrees_with_the_resolver():
 
 
 def test_the_windows_node_guard_covers_a_master_root():
-    """setup.ps1's Node ownership guard and its marker both hung off $NodeOverride alone.
-
-    $NodeOverride is set only in the UNSLOTH_STUDIO_HOME / STUDIO_HOME branch. The master-root
-    branch sets $NodeParent and leaves it null, so <master>\\node reached the whole-directory
-    os.replace() in install_node_prebuilt.py with no ownership evidence at all, and the tree the
-    run then created stayed unmarked, which makes the uninstaller decline to remove it later.
-    setup.sh had already moved these two sites to _RUNTIME_ROOT_IS_CUSTOM.
-
-    The sibling test above only rejects $StudioHomeIsCustom beside $NodeDir, which this bug
-    never wrote: it named a third variable. So the rule here is positive, not a denial.
-    """
+    """The Node ownership guard and marker must also cover a master root, not only $NodeOverride."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     # Keyed on $NodeOverride, not $NodeDir, whose probe moved and would pass by seeing less.
     lines = ps.splitlines()
@@ -816,14 +774,7 @@ Write-Output (_MasterRoot)
 
 
 def test_neither_uninstaller_recurses_into_an_install_lock_path():
-    """A lock is always a regular file, so a directory at one of those fixed names is the user's.
-
-    prebuilt_core.install_lock creates it with os.open(O_CREAT | O_EXCL). Both uninstallers
-    reached the lock names through their recursive remover, which in a user-chosen master root
-    deletes a whole tree with none of the owner-marker proof the runtime children require.
-    Behaviour is covered by tests/sh/test_uninstall_master_root.sh for the POSIX half; this
-    holds the PowerShell twin, which has no runner here.
-    """
+    """Install lock names are always regular files; a directory there is the user's, so never recurse."""
     sh = UNINSTALL_SH.read_text(encoding = "utf-8")
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
 
@@ -854,10 +805,7 @@ def test_neither_uninstaller_recurses_into_an_install_lock_path():
 
 
 def test_both_uninstallers_clear_the_master_root_children():
-    """setup installs llama.cpp, node and whisper.cpp as children of the master root, so an
-    uninstaller that only knows the legacy siblings and the Studio root strands them. Behaviour
-    is covered by tests/sh/test_uninstall_master_root.sh; this holds the PowerShell twin, which
-    the Linux runners cannot execute, and pins the marker gate on both."""
+    """Uninstallers must also clear the master root's runtime children, not only the legacy siblings."""
     sh = UNINSTALL_SH.read_text(encoding = "utf-8")
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
     assert "_master_root() {" in sh
@@ -875,10 +823,7 @@ def test_both_uninstallers_clear_the_master_root_children():
 
 
 def test_the_stop_pass_covers_the_master_root_runtimes():
-    """Windows locks a loaded executable, so a runtime still running under the master root has
-    to be stopped before its tree is removed or the delete exhausts its retries. _MasterRoot is
-    resolved before the stop pass, and only marker-owned children join it, so an unmarked
-    neighbour's process is never killed."""
+    """Stop runtimes under the master root before removing them, since Windows locks loaded executables."""
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
     stop_line = next(l for l in ps.splitlines() if l.strip().startswith("$stopRoots = "))
     assert "$masterChildrenToStop" in stop_line, stop_line
@@ -904,13 +849,7 @@ def test_a_shared_staging_directory_is_pruned_not_deleted():
 
 
 def test_the_windows_uninstaller_refuses_a_note_carried_in_from_elsewhere(tmp_path):
-    """A Studio tree copied from master root A to B keeps a note naming A.
-
-    A's llama.cpp, node, whisper.cpp and sd.cpp carry exactly the owner markers B's would, so
-    the marker gates cannot tell them apart: accepting the copied note has the uninstall of B
-    delete the ORIGINAL install's runtimes. The note has to describe the tree it was found in,
-    which means the Studio directory it was read from lying inside the root it names.
-    """
+    """Refuse a note copied from another install; owner markers cannot tell the two trees apart."""
     original = tmp_path / "original"
     (original / "studio").mkdir(parents = True)
     copied = tmp_path / "copied"
@@ -949,13 +888,7 @@ Write-Output "ANSWER:$answer"
 
 
 def test_the_windows_uninstaller_does_not_borrow_another_installs_note(tmp_path):
-    """Two installs on one box: the legacy tree carries a note, the named one does not.
-
-    _MasterRoot probed the legacy path first, so its note won here while the removal still
-    worked on the tree UNSLOTH_STUDIO_HOME names. The run deleted the named Studio and then
-    followed the OTHER install's master root and took its marked runtime children with it.
-    Runs the shipped function, as the test below does.
-    """
+    """_MasterRoot must not follow a note from a legacy install when the named Studio tree has none."""
     profile = tmp_path / "profile"
     (profile / ".unsloth" / "studio" / "share").mkdir(parents = True)
     borrowed = tmp_path / "borrowed"
@@ -980,16 +913,7 @@ Write-Output "ANSWER:$answer"
 
 
 def test_the_windows_uninstaller_finds_a_master_root_from_the_note(tmp_path):
-    """`$env:UNSLOTH_HOME = 'D:\\portable'; unsloth studio update` names the root for one command.
-
-    setup.ps1 puts node\\, llama.cpp\\ and whisper.cpp\\ under it and marks them, and a later
-    uninstall run from an ordinary shell has no UNSLOTH_HOME at all. Reading only the current
-    environment, _MasterRoot answered null there, so the run removed <master>\\studio and left
-    multi-gigabyte runtimes beside it. setup.sh already wrote the note; setup.ps1 did not, and
-    the PowerShell uninstaller did not read it.
-
-    Runs the shipped function, so a rewrite that keeps the words and loses the behaviour fails.
-    """
+    """The uninstaller must read the master-root note, since an ordinary shell has no UNSLOTH_HOME set."""
     master = tmp_path / "portable"
     (master / "studio" / "share").mkdir(parents = True)
     (master / "studio" / "share" / ".unsloth-master-root").write_text(
@@ -1011,12 +935,7 @@ Write-Output (_MasterRoot)
 
 
 def test_the_windows_setup_records_the_master_root_for_the_uninstaller():
-    """The note the test above reads has to be written, and only where it is true.
-
-    A staging run installs to a throwaway root, and every non-master branch derives the root
-    from paths the uninstaller already knows, so a note there would only ever be able to go
-    stale. This is the same rule setup.sh applies.
-    """
+    """Write the master-root note only for a real master root; elsewhere it could only go stale."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     block = _slice(
         ps, "# Record the master root inside the Studio tree", "$WithLlamaCppDir = $null"
@@ -1031,19 +950,8 @@ def test_the_windows_setup_records_the_master_root_for_the_uninstaller():
 
 
 def test_the_refused_windows_cache_path_is_taken_away_on_upgrade():
-    """Declining to write a value is not enough: the old one is already persisted.
-
-    Every setup before the refusal existed wrote an apostrophe-named account's contained path to
-    the USER environment, so on an upgrade it is already there for exactly the account the
-    refusal exists for, and every other process on that account still inherits it. The backend
-    refuses such a value for its own process; clearing it here is what stops it reaching the
-    rest. Only a value the builders cannot read is cleared, and only one this installer wrote.
-
-    And it has to clear on EVERY launch. The refusal itself lives inside
-    `if (-not $SkipPythonDeps)`, which a current core package and a verified UV_OFFLINE tree
-    both skip, so a cleanup nested in there would never reach that account. The clear needs
-    nothing that block computes, so it is hoisted out of it.
-    """
+    """A refused cache path already persisted must be cleared on every launch, not only in the deps
+    block."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     body = _slice(
         ps, "function Clear-UnparseableTorchCacheEnv {", "\nClear-UnparseableTorchCacheEnv"
@@ -1078,13 +986,7 @@ def test_the_refused_windows_cache_path_is_taken_away_on_upgrade():
 
 
 def test_the_windows_uninstaller_clears_the_inductor_path_it_persisted():
-    """setup.ps1 writes TORCHINDUCTOR_CACHE_DIR to the USER environment, so it outlives the
-    install. Every later PyTorch process on the account inherits it, including ones unrelated to
-    Unsloth, and they compile into the deleted tree and rebuild part of it.
-
-    Only a value inside a root this run owned: a directory the user chose is theirs, and the
-    shared C:\\tc fallback is not install specific and is not deleted here either.
-    """
+    """The uninstaller clears TORCHINDUCTOR_CACHE_DIR only when it lies inside a root this run owned."""
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
     block = _slice(
         ps, "# Clear the persisted Inductor cache path", "# Remove HKCU\\Software\\Unsloth"
@@ -1099,13 +1001,7 @@ def test_the_windows_uninstaller_clears_the_inductor_path_it_persisted():
 
 
 def test_the_windows_node_guard_treats_a_file_as_occupied():
-    """install_node_prebuilt's _swap_into_place renames whatever it finds out of the way.
-
-    Guarding on -PathType Container meant a regular file or a symlink named `node` under a
-    user-selected master root was invisible to the check and got displaced. Ownership evidence
-    lives inside a directory, so a non-directory can never carry it and is refused outright.
-    setup.sh's _assert_studio_owned_or_absent takes the same view of -d against -e and -L.
-    """
+    """Files and symlinks count as occupied, since ownership evidence lives inside directories."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     block = _slice(
         ps,
@@ -1121,14 +1017,7 @@ def test_the_windows_node_guard_treats_a_file_as_occupied():
 
 
 def test_the_windows_runtime_guard_treats_a_file_as_occupied():
-    """The Node guard above is one of three: llama.cpp and whisper.cpp share
-    Assert-StudioOwnedOrAbsent, which was still container-only.
-
-    install_llama_prebuilt's activate_install_tree moves aside whatever Path.exists() finds, so
-    a regular file named `llama.cpp` under a master root was renamed to a rollback name and
-    replaced. The behaviour is run for real in tests/studio/test_path_probe_access_denied.ps1,
-    which the Linux runners cannot execute; this holds the shape there too.
-    """
+    """Assert-StudioOwnedOrAbsent must treat a regular file as occupied, not only a directory."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     block = _slice(ps, "function Assert-StudioOwnedOrAbsent", "function Mark-StudioOwned")
     code = "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
@@ -1143,14 +1032,8 @@ def test_the_windows_runtime_guard_treats_a_file_as_occupied():
 
 
 def test_neither_uninstaller_takes_a_studio_root_that_is_also_the_master_root():
-    """The flat layout, UNSLOTH_HOME and UNSLOTH_STUDIO_HOME naming one directory.
-
-    A Studio root is removed WHOLE once it carries the ownership marker, so in the flat case
-    anything else the user keeps in that directory goes with the install. Every other
-    master-root child is individually marker-gated precisely so a user-chosen root is never
-    removed wholesale; this was the one hole in that rule. Kept rather than pruned: data left
-    behind is recoverable and printed, a deleted file is not.
-    """
+    """Never delete a Studio root that is also the master root; a whole-directory delete takes user
+    files."""
     sh = UNINSTALL_SH.read_text(encoding = "utf-8")
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
 
@@ -1168,13 +1051,7 @@ def test_neither_uninstaller_takes_a_studio_root_that_is_also_the_master_root():
 
 
 def test_neither_uninstaller_re_resolves_the_master_root_after_deleting_it():
-    """_master_root can read its answer from a note INSIDE a Studio tree.
-
-    The custom-root loop removes that tree, so a second call after it returns nothing and the
-    marked llama.cpp, Node and whisper.cpp siblings are stranded: the very failure the note was
-    added to prevent, reintroduced by asking too late. Both scripts resolve it once, before
-    anything is deleted, and every later use takes that value.
-    """
+    """Resolve the master root once before deleting anything, since its note lives inside a Studio tree."""
     sh = UNINSTALL_SH.read_text(encoding = "utf-8")
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
 
@@ -1295,11 +1172,7 @@ def _run_note_block(
     existing_note = None,
     home = None,
 ):
-    """Run the shipped note gate + writer + legacy sweep against a fixture, and report the note.
-
-    The whole region is executed, not pattern-matched: the gate, the writer it guards and the
-    sweep below it are one decision, and slicing them apart is how a gate that never runs passes.
-    """
+    """Executes the note gate, writer and legacy sweep as one block, since they are one decision."""
     src = SETUP_SH.read_text(encoding = "utf-8")
     block = _slice(src, "_master_root_note_is_honoured() {", "LLAMA_CPP_DIR=")
     note = studio_home / "share" / ".unsloth-master-root"
@@ -1407,15 +1280,8 @@ def test_the_windows_note_gate_holds_the_same_two_rules():
 
 
 def test_the_windows_note_writer_is_a_no_op_when_the_note_already_says_this():
-    """Move-Item -Force is not an atomic replace: PowerShell's provider deletes the destination
-    and then moves the source, so an interruption in between leaves NO note, and a backend that
-    looks next caches "no master root" from it. Re-entering that window on every update to
-    rewrite bytes that are already there is the avoidable half, and the staging file has to go
-    whether the move threw or not.
-
-    Run under pwsh rather than asserted from source text: the comparison is the point, and a
-    structural check would pass on a version that compares the wrong two things.
-    """
+    """Skip the write when the note already matches: Move-Item -Force is not atomic and can leave no
+    note."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     block = _slice(
         ps, '        $notePath = Join-Path $noteDir ".unsloth-master-root"', "\n    } catch {"

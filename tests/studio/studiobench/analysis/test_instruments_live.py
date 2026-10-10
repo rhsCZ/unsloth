@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Drive Layer 2's instruments through Layer 1's ACTUAL protocol, in a real browser.
-
-The unit tests next door prove the analysis is right about a trace. This proves
-the instruments are wired correctly into the harness contract, which is a
-different failure mode entirely and the one my own report flagged as untested:
-four modules that imported cleanly and registered nothing.
-
-It uses the real `Cell`, `Window`, `BenchContext` and `Paths` from
-`runtime.types`, the real `instruments.build(level)` registry, and calls
-`attach / start_cell / open / close / end_cell / detach` in the documented order
-with the documented reverse-order close. Nothing is mocked except the page,
-which is a local synthetic instead of an Unsloth install.
-
-Requires Playwright with Chromium. Skips cleanly without it, because a machine
-that cannot run a browser should report that rather than fail.
-
-    python tests/studio/studiobench/analysis/test_instruments_live.py
-"""
+"""Runs instruments through the real harness lifecycle in a browser; a clean import proves nothing."""
 
 from __future__ import annotations
 
@@ -70,12 +53,7 @@ def _skip(reason: str) -> int:
 
 
 def _drive(instruments, ctx, cell, page, window_names):
-    """Run the documented lifecycle over a list of windows.
-
-    Open is in `name` order, close is in REVERSE `name` order, exactly as
-    INTERFACES.md section 2 specifies. A raising instrument is caught and
-    disabled for the rest of the cell rather than losing the window.
-    """
+    """Opens in name order, closes in reverse per INTERFACES.md; a raising instrument is disabled."""
     ordered = sorted(instruments, key = lambda i: i.name)
     for inst in ordered:
         inst.attach(ctx)

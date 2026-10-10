@@ -1,63 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Qwen3-4B GRPO with vLLM on a single T4: does the engine fit and generate?
-
-The payload behind the `grpo` leg, written first as a FEASIBILITY PROBE. Two
-things are genuinely in doubt on this hardware.
-
-**Does vLLM run on sm_75 at all, at the version installed?** vLLM selects an
-attention backend by compute capability, and Turing has neither FlashAttention
-nor FlashInfer. It used to depend on the xformers backend, deleted in 0.12.0,
-and at the version this leg installs the ladder in `vllm/platforms/cuda.py`
-falls through the two unavailable ones to TRITON_ATTN. The leg names TRITON_ATTN
-in `VLLM_ATTENTION_BACKEND` rather than trusting that order, so a release that
-reorders or drops it goes red instead of silently substituting. None of this
-fails at install or import time; it fails when the engine is constructed, deep
-inside platform selection, so the resolved vLLM version, the backends the build
-offers, the backend selected and the construction outcome are recorded
-separately.
-
-**Does it fit?** The notebook this leg comes from sets `load_in_4bit=False`,
-roughly 8GB of 16-bit weights, and then asks a vLLM engine at
-`gpu_memory_utilization=0.9` and a LoRA training loop to share one 16GB card.
-`--load-in-4bit` is therefore a first-class switch, and peak reserved and
-allocated memory are reported for whichever setting ran.
-
-What it asserts, and what it deliberately does not:
-
-**Not the loss.** With `num_iterations=1` and `beta=0.0` the TRL GRPO objective
-is zero by construction on a healthy run -- the policy that generated the
-completions is the one being updated, so the importance ratio is exactly 1, and
-with no KL term the loss cancels. A check on it would always pass or fire on
-arithmetic noise, so it is recorded and never asserted.
-
-**Reward, reward_std and the completions instead.**
-
-* `reward` must be logged and finite on every step. Absent means the reward
-  functions never ran, so generation produced nothing.
-* `reward_std` must be non-zero on at least one step. Zero across a group means
-  every completion scored identically, which in practice means they were
-  IDENTICAL: a sampler ignoring its temperature, a seed applied per-completion
-  instead of per-group, or an engine returning the same cached text N times. The
-  gradient is exactly zero then, so training "succeeds" while learning nothing
-  and no other number moves.
-* At least one completion must be non-empty, and the completions seen are
-  captured and reported: an engine returning N empty strings scores them all the
-  same, so the reward checks alone would call that clean.
-* The optimizer must have applied something. Under fp16 here every step can
-  overflow and be skipped while loss, reward and reward_std are still logged.
-  Decided on the LoRA weights, fingerprinted before and after training, with
-  `grad_norm` as fallback so a TRL version that stops logging it cannot take the
-  assertion with it. See training_evidence.py.
-* The final `fast_generate` runs with the TRAINED adapter, transferred in with
-  `save_lora` + `load_lora`. `lora_request=None` reads the base weights and
-  passes whether or not the adapter can reach vLLM, which is the second of the
-  two questions above.
-
-`--probe` records everything and asserts nothing, for the one-off feasibility
-runs.
-"""
+"""Loss is recorded, never asserted: with num_iterations=1 and beta=0.0 it is zero by construction."""
 
 from __future__ import annotations
 
@@ -115,39 +59,15 @@ _LENGTH_SCALE = 200.0
 
 
 def reward_length(completions, **kwargs) -> list[float]:
-    """Longer completions score higher, without ever saturating.
-
-    Deterministic given the text, yet SENSITIVE to a group's diversity: a
-    constant reward zeroes `reward_std` on a healthy run and destroys the only
-    instrument this leg has.
-
-    THAT IS NOT HYPOTHETICAL - this function used to be
-
-        min(len(t), 200) / 200.0
-
-    and the docstring above already claimed it was diversity-sensitive. It was
-    not. Kernels unsloth-probe-grpo-rep2-b03be8 and -rep3-bc3828 recorded
-    completions of 2534 to 3396 characters, an order of magnitude past the cap,
-    so every completion scored exactly 1.0, every group tied, and the leg failed
-    with `reward_std was zero on every step` - a red that looks like a broken
-    generation path and is really a reward that stopped measuring anything.
-    Two of three runs died this way, which made it the leg's dominant failure.
-
-    The cap was the whole problem: it was set BELOW the lengths the model
-    actually produces, so the one region it discriminated in was the one region
-    the run never visited.
-    """
+    """A length cap saturated every completion at 1.0 and zeroed reward_std; this curve never saturates."""
     texts = _texts(completions)
     SEEN_COMPLETIONS.append(texts)
     return [len(t) / (len(t) + _LENGTH_SCALE) for t in texts]
 
 
 def reward_digit(completions, **kwargs) -> list[float]:
-    """A second, differently shaped signal, so `reward` is not one function.
-
-    One broken reward function looks exactly like a broken generation path; two
-    disagreeing sources make that distinguishable in the report.
-    """
+    """A second reward of different shape, so one broken reward function can't pass for broken
+    generation."""
     return [1.0 if any(c.isdigit() for c in t) else 0.0 for t in _texts(completions)]
 
 
@@ -165,13 +85,7 @@ def memory() -> dict:
 
 
 def vllm_facts() -> dict:
-    """Which vLLM, and which attention backend it would choose here.
-
-    Recorded BEFORE the engine is built, so a payload that dies constructing it
-    still says what it was trying to construct. The backend comes from vLLM's
-    own selector where reachable and from the environment override otherwise;
-    both are reported, since an override silently deciding it is worth seeing.
-    """
+    """Recorded before the engine is built, so a crash in construction still reports what was attempted."""
     facts: dict = {"env_override": os.environ.get("VLLM_ATTENTION_BACKEND")}
     try:
         import vllm
@@ -225,15 +139,7 @@ def build_dataset(rows: list[dict]):
 
 
 def train(args, report: dict | None = None) -> dict:
-    """One GRPO cycle. Writes progress into ``report`` as it goes.
-
-    The second argument makes the feasibility verdict survive a crash.
-    Everything used to be returned at the end, so an exception after the engine
-    was built threw away the fact that it HAD been, and the report said
-    `engine_built: false` -- the opposite of what happened, and the exact
-    distinction this probe draws between "vLLM cannot start on sm_75" and "vLLM
-    started and GRPO failed later". Facts are published as soon as known.
-    """
+    """Facts are written to report as soon as known, so a crash cannot erase that the engine was built."""
     import torch
     from unsloth import FastLanguageModel
 
@@ -489,36 +395,7 @@ def failures_for(result: dict, args) -> list[str]:
 
 
 def make_libcuda_linkable() -> dict:
-    """Let the linker find `-lcuda`, so flashinfer's JIT can link what it built.
-
-    Measured twice on real T4 sessions (kernels unsloth-t4-ci-e2d9ce9b and
-    -916d5986). flashinfer 0.6.6 JIT-compiles its sampling ops on first use, and
-    on Kaggle all three .cu files COMPILE cleanly for
-    `-gencode=arch=compute_75,code=sm_75` -- nothing here is a Turing problem --
-    and then the link dies:
-
-        /usr/bin/ld: cannot find -lcuda
-
-    `-L/usr/local/cuda/lib64/stubs` is already on that command line; the image
-    simply ships no `libcuda.so`, only the runtime `libcuda.so.1`, a versioned
-    soname the linker will not resolve `-lcuda` against. Normally the CUDA
-    toolkit's driver STUB fills that gap; this image has the directory and not
-    the file.
-
-    `VLLM_USE_FLASHINFER_SAMPLER=0` was tried first and did not help, which is
-    the useful part: the JIT is not reached only through the sampler, so
-    switching off one consumer is whack-a-mole, while making `-lcuda` resolvable
-    fixes every flashinfer op at once.
-
-    `LIBRARY_PATH` rather than a symlink into /usr/local: gcc and ld search it
-    for `-l`, it needs no root, and it cannot damage the image for anything else
-    in the session. Linking against the real driver rather than a stub is
-    correct, the driver being present is the whole reason a stub would have
-    substituted for it.
-
-    Returns what it did, so the report says so rather than the next reader
-    inferring it from an absence of failure.
-    """
+    """Kaggle has libcuda.so.1 but no libcuda.so, so -lcuda fails; LIBRARY_PATH avoids a symlink."""
     facts: dict = {"needed": False, "applied": False}
     try:
         import ctypes.util

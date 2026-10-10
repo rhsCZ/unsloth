@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Routing tests for ROCm targets absent from PyTorch's generic wheels.
-
-Torch, hardware probes, and pip are mocked; the generic wheel architecture list was measured.
-"""
+"""ROCm routing tests for targets absent from generic PyTorch wheels; torch, probes and pip mocked."""
 
 from __future__ import annotations
 
@@ -383,13 +380,7 @@ def test_kfd_topology_answers_when_neither_userland_probe_is_installed():
 @pytest.mark.parametrize("value", ["", "-1"])
 @pytest.mark.parametrize("probe", [(), ("gfx1103",)])
 def test_a_mask_that_selects_no_gpu_takes_no_reroute(mask, value, probe):
-    """An empty (or -1) visible-device mask selects NO GPU, whichever source answers.
-
-    "" and "-1" are a deliberate choice of no device, and NO source here is filtered the
-    way honouring that needs: only ROCR reaches rocminfo, amd-smi reads the driver, KFD
-    sysfs. So a probe answering is no evidence the GPU is visible -- hence both the empty and
-    populated probe, since CI exports an empty mask over a populated /sys/class/kfd. Generic
-    torch still installs."""
+    """An empty or -1 device mask selects no GPU; no probe honours it, so a probe hit proves nothing."""
     calls = _run_install(gfx_devices = probe, kfd = ("gfx1103",), env = {mask: value})
     assert f"{_AMD}/gfx110X-all/" not in calls, calls
     assert _GENERIC in calls, calls
@@ -437,10 +428,7 @@ def test_a_probed_arch_still_wins_over_the_inferred_one():
 
 
 def test_an_explicit_arch_outranks_the_probe():
-    """UNSLOTH_ROCM_GFX_ARCH is the documented escape hatch, and install.sh,
-    _infer_linux_amd_gfx_arch, _runtime_target_is_gfx906 and _detect_windows_gfx_arch all read
-    it before probing. Resolving it after the probes made this the one place the hardware
-    could overrule the override."""
+    """UNSLOTH_ROCM_GFX_ARCH is read before any probe, so the hardware cannot overrule it."""
     calls = _run_install(
         gfx_devices = ("gfx1200",),
         env = {"UNSLOTH_ROCM_GFX_ARCH": "gfx1103"},
@@ -510,10 +498,7 @@ def test_a_leaf_that_needs_torch_211_keeps_its_floor():
 
 
 def test_a_kfd_only_spoofed_host_clears_the_override_before_installing():
-    """With no rocminfo and no amd-smi the spoof check has nothing to distrust and declines,
-    but amdkfd writes gfx_target_version itself, so a single-arch kernel reading the override
-    contradicts IS the corroborated spoof. Left set, the gfx1151-only wheels get a device the
-    runtime still calls gfx1100 (#7331)."""
+    """Kernel KFD alone can corroborate a spoof; a contradicting override must then be cleared."""
     calls = _run_install(
         gfx_devices = (),
         kfd = ("gfx1151",),
@@ -652,10 +637,7 @@ def test_every_strix_arch_has_a_leaf_in_the_shared_map():
 
 
 def test_a_generic_torch_beside_a_stale_rocm_meta_package_is_still_repaired():
-    """Measured 2026-08-27: forcing generic rocm7.1 torch over a per-arch install leaves
-    `rocm` and rocm-sdk-libraries-gfx110X-all behind, so the family still reads gfx110x-all
-    while torch is 2.10.0+rocm7.1 with no gfx1103 kernels. torch.version.hip is set on both,
-    so only torch's own requires separates them."""
+    """Generic torch beside stale per-arch ROCm packages is detected only via torch's own requires."""
     calls = _run_install(
         gfx_devices = ("gfx1103",),
         torch_probe = _ROCM_GENERIC_TORCH,
@@ -866,10 +848,8 @@ def test_keeping_the_matching_wheels_also_clears_a_confirmed_spoof():
 
 
 def test_the_rocr_layer_is_applied_before_the_hip_index_on_an_unfiltered_list():
-    """ROCr is processed first and HIP indexes the SURVIVORS, so HIP's index is relative to
-    what ROCr left. Neither amd-smi (driver) nor KFD sysfs (kernel) is ROCr-filtered:
-    resolving HIP against those lists names a GPU the runtime does not expose, and installs
-    per-arch wheels that fault on first use."""
+    """HIP indexes the survivors of ROCr; amd-smi and KFD are unfiltered, so HIP must not resolve on
+    them."""
     calls = _run_install(
         gfx_devices = ("gfx1200", "gfx1103"),
         env = {"ROCR_VISIBLE_DEVICES": "1", "HIP_VISIBLE_DEVICES": "0"},
@@ -951,10 +931,7 @@ def _target(
     env,
     kfd = (),
 ):
-    """Resolve the runtime target with ``probe_source`` named as the probe that answered.
-
-    ``kfd`` is the kernel topology, empty by default: an unreadable /sys/class/kfd leaves
-    only the probe's own ordering to go on."""
+    """Resolve the runtime target from a named probe_source; with no KFD topology only its order remains."""
     with (
         patch.object(stack_mod, "_detect_amd_gfx_codes", return_value = list(gfx_devices)),
         patch.object(stack_mod, "_kfd_gfx_targets", return_value = list(kfd), create = True),
@@ -990,11 +967,7 @@ def test_a_mask_mixing_an_index_and_a_uuid_keeps_the_host_ambiguous():
 
 
 def test_amd_smi_discovery_order_is_not_indexed_as_hip_order():
-    """amd-smi enumerates in discovery order while the masks index HIP order, derived from
-    the KFD node id. setup.sh translates through `amd-smi list -e`'s HIP_ID map and refuses a
-    mask when it is missing or not 1:1; no map is read here, so on unlike adapters an
-    untranslated ordinal names another card's arch. No KFD topology either, so the ordering
-    the next test substitutes is unavailable."""
+    """amd-smi is in discovery order, not HIP order; an untranslated mask ordinal names the wrong arch."""
     assert _target(["gfx1103", "gfx1200"], "amd-smi", {"HIP_VISIBLE_DEVICES": "1"}) is None
     # rocminfo and KFD sysfs are already in the order the masks use.
     assert _target(["gfx1103", "gfx1200"], "kfd", {"HIP_VISIBLE_DEVICES": "1"}) == "gfx1200"
@@ -1300,10 +1273,7 @@ def test_a_named_arch_outranks_an_ordinal_the_inference_cannot_place():
     ],
 )
 def test_a_masked_gfx906_is_judged_by_the_host_the_legacy_route_probes(env):
-    """ROCr filters the list this function sees, so a physically mixed host arrives as a lone
-    gfx906 while _runtime_target_is_gfx906 re-probes the machine and declines the rocm6.3 tag.
-    Deriving "is it alone" twice lets the two disagree, and the demotion then installs a newer
-    wheel whose BLAS has no gfx906 kernels."""
+    """A ROCr-masked gfx906 is judged by the host probe the legacy route uses, not the filtered list."""
     calls = _run_install(
         gfx_devices = ("gfx1100", "gfx906"),
         env = env,
@@ -1341,10 +1311,7 @@ def test_the_strix_reroute_keeps_the_wheels_it_would_have_fetched():
 
 
 def test_an_explicit_arch_keeps_its_feature_suffix_out_of_the_target():
-    """rocminfo and HSA spell a target with its feature flags (gfx1151:sramecc-:xnack-), so a
-    user copying one into UNSLOTH_ROCM_GFX_ARCH offers a string every lookup misses: the Strix
-    set, the AMD leaf map and the generic list are keyed on the bare arch, so the one thing
-    the decline message tells the user to set would resolve nothing."""
+    """Lookups are keyed on the bare arch, so :sramecc-/:xnack- flags must be stripped from the override."""
     assert _target([], "rocminfo", {"UNSLOTH_ROCM_GFX_ARCH": "gfx1151:sramecc-:xnack-"}) == (
         "gfx1151"
     )
@@ -1391,10 +1358,7 @@ def test_a_stale_host_version_does_not_pick_a_generic_tag_without_the_target():
 )
 @pytest.mark.parametrize("value", ["", "-1"])
 def test_a_mask_that_selects_no_gpu_takes_no_gfx906_reroute_either(mask, value):
-    """The legacy route is a harsher version of what the guard above declines: a
-    force-reinstall onto an OLDER tag, plus the loss of bitsandbytes. Its detection asks
-    whether gfx906 is the sole arch, which no mask filters, so a CI job hiding every GPU over
-    a populated host was downgraded while the same job on any other arch was not."""
+    """Legacy gfx906 reroute checks sole-arch, which no mask filters; a masked GPU must not trigger it."""
     calls = _run_install(gfx_devices = ("gfx906",), rocm_version = (7, 2), env = {mask: value})
     assert "rocm6.3" not in calls, calls
     assert f"{_GENERIC}7.2" in calls, calls
@@ -1411,10 +1375,8 @@ def test_a_mask_that_selects_no_gpu_takes_no_gfx906_reroute_either(mask, value):
 
 
 def test_an_explicit_arch_still_reconciles_a_contradicting_spoof():
-    """UNSLOTH_ROCM_GFX_ARCH returns before the spoof detection runs, and
-    HSA_OVERRIDE_GFX_VERSION=11.0.0 is the workaround half these hosts carry from before
-    per-arch wheels existed. Naming the physical arch bought the right wheels and left ROCr
-    handing torch a gfx1100 agent none of them match: #7331 with the fix downloaded."""
+    """Explicit arch still reconciles a contradicting HSA_OVERRIDE_GFX_VERSION, else ROCr exposes
+    gfx1100."""
     calls = _run_install(
         gfx_devices = (),
         kfd = ("gfx1151",),
@@ -1455,10 +1417,7 @@ def test_an_arch_naming_what_the_override_spoofs_to_keeps_the_spoof():
 
 
 def test_a_repin_between_per_arch_leaves_is_applied():
-    """Swap the card, edit UNSLOTH_TORCH_INDEX_URL to the new leaf, and every shape the
-    version string carries stays put: gfx1151 and gfx120X-all are both torch 2.11 with a
-    three-part +rocm7.13.0 tag. Judged on that alone the edited pin reads as satisfied, so the
-    old wheels survive the update in silence."""
+    """Per-arch leaves share version strings, so a repinned UNSLOTH_TORCH_INDEX_URL is compared by leaf."""
     calls = _run_install(
         gfx_devices = ("gfx1200",),
         rocm_version = (7, 2),
@@ -1478,10 +1437,7 @@ def test_a_repin_between_per_arch_leaves_is_applied():
 
 
 def test_a_pin_at_a_non_floor_leaf_keeps_the_build_from_that_leaf():
-    """The version heuristic reads any 2.11 build as a mismatch, because that is what a build
-    from some OTHER index looks like. The leaf serves 2.11 too, so a correctly pinned host
-    force-reinstalled under the legacy torch<2.11 cap on every update. A readable family says
-    which index the build came from, and is decisive both ways."""
+    """A readable ROCm family decides the match; the 2.11 version heuristic misreads leaf builds."""
     assert _AMD not in _run_install(
         gfx_devices = ("gfx1100",),
         rocm_version = (7, 2),
@@ -1511,11 +1467,7 @@ def test_a_floor_leaf_still_repairs_a_sub_211_build_of_its_own_family():
 
 
 def test_a_generic_only_target_gets_its_tag_floor_on_a_fresh_install_too():
-    """gfx950 has no AMD per-arch leaf, so the only way to give it kernels is a generic tag
-    that carries it (rocm7.0+), so its architecture floor still chooses rocm7.2 on ROCm6.3.
-    Automatic generic installs for covered arches also honor the BNB floor: a fresh CPU/CUDA
-    install for gfx1100 on that host uses rocm6.4 instead of the stale rocm6.3 tag. Which tag
-    carries an arch is a fact about the arch."""
+    """gfx950 has no per-arch leaf, so only generic rocm7.0+ tags carry its kernels; arch sets the floor."""
     for _probe in (_CPU_TORCH, None):
         calls = _run_install(
             gfx_devices = ("gfx950",),
@@ -1541,10 +1493,7 @@ def test_a_generic_only_target_gets_its_tag_floor_on_a_fresh_install_too():
 
 
 def test_matching_per_arch_wheels_clear_a_confirmed_spoof_with_nothing_to_reroute():
-    """The spoof clear lived inside the missing-kernel / below-floor branch, so a host whose
-    per-arch wheels ALREADY match reached no arm at all -- exactly when the wheels are right
-    and the spoof is the only thing wrong. They carry the physical arch alone, so the runtime
-    keeps asking them for code they do not have (#7331)."""
+    """Spoof clearing must run even when per-arch wheels already match, not only on a reroute."""
     calls = _run_install(
         gfx_devices = ("gfx1100",),
         rocm_version = (7, 2),
@@ -1572,10 +1521,7 @@ def test_a_spoof_survives_wheels_that_are_not_the_targets_family():
 
 
 def test_a_rocr_masked_mi50_beside_a_dgpu_keeps_the_generic_wheels():
-    """The mixed-host rule withholds the rocm6.3 tag from a gfx906 sharing a machine: the
-    downgrade is persistent and every tag above rocm6.3 dropped the dGPU's kernels, while the
-    mask lasts one session. rocminfo runs on the ROCr stack, so with ROCR naming the MI50 it
-    reports that card alone and the machine read as single-architecture."""
+    """A ROCr-masked MI50 beside a dGPU keeps generic wheels, since the rocm6.3 downgrade persists."""
     calls = _run_install(
         gfx_devices = ("gfx906",),
         unmasked_gfx_devices = ("gfx1100", "gfx906"),

@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""GRPO runs nightly, and the reason is a measurement rather than a preference.
-
-Over nine T4 sessions the leg hit an intermittent illegal memory access in
-vLLM's standby sleep on Turing in FOUR of them. Everything else about it is
-sound -- 0.95 utilisation confirmed on both Colab and Kaggle, sleep/wake
-surviving three cycles, a non-zero ``reward_std`` on every step once the reward
-function stopped saturating -- but a 44% red in front of every PR, for a race no
-reader can act on, is exactly how a check gets switched off before the day it is
-right. At nightly cadence a clean run still arrives most days and a red one
-costs nobody a merge.
-
-So the rules here are about the SHAPE that makes that possible:
-
-* the schedule exists and fires the GRPO leg specifically;
-* a leg list REPLACES ``--all-kernels`` rather than filtering after it, because
-  the kernel plan and the expected payload count come out of the same call and
-  a filter applied afterwards leaves the launcher waiting on payloads nobody
-  built;
-* the schedule bypasses the sampling gate. A nightly sampled at 15% is a
-  weekly, and the difference is invisible until someone goes looking for a
-  result that never existed.
-"""
+"""GRPO runs nightly: vLLM standby sleep on Turing hit an illegal memory access in 4 of 9 sessions."""
 
 from __future__ import annotations
 
@@ -113,10 +92,7 @@ def test_the_nightly_set_fits_in_one_kernel():
 
 
 def test_no_nightly_leg_is_ALSO_in_the_per_pr_set():
-    """The whole point, and it applies to each of them. If grpo were wired into
-    KERNELS the 44% crash rate would be back in front of every PR; if multi_gpu
-    were, the makespan it was moved here to avoid would be back too. Either way
-    the nightly becomes a second copy of the per-PR run."""
+    """A nightly leg wired into per-PR too makes the nightly a second copy of the per-PR run."""
     wired = {name for kernel in legs.KERNELS for name in kernel}
     both = sorted(set(_nightly_legs()) & wired)
     assert not both, (
@@ -172,12 +148,7 @@ def _compose_argv(
     studio_concurrent = "",
     github_output = "",
 ):
-    """Run the build step's shell body and return the argv it would invoke.
-
-    Executed by bash, not pattern-matched, so the branches decide what is
-    emitted exactly as on a runner. The only substitution is `python`, a stub
-    on PATH that records its arguments.
-    """
+    """Runs the build step's shell under bash, stubbing only python, so its branches pick the argv."""
     import json
     import os
     import shlex
@@ -245,11 +216,7 @@ def _run_builder(argv, tmp_path):
 
 
 def test_the_nightly_command_line_is_one_the_builder_accepts(tmp_path):
-    """THE RULE THAT WOULD HAVE CAUGHT IT.
-
-    Not "the flags look right": the step's own shell composes the argv and the
-    real builder is handed it.
-    """
+    """The real builder must accept the argv the nightly step's shell composes, not a flags check."""
     argv, log, printed = _compose_argv("schedule", tmp_path)
     proc = _run_builder(argv, tmp_path)
     assert proc.returncode == 0, (
@@ -317,13 +284,7 @@ def test_an_explicit_leg_dispatch_takes_the_same_path_as_the_nightly(tmp_path):
 
 
 def test_studio_concurrent_false_actually_removes_the_flag(tmp_path):
-    """The OTHER half of the input, which the text rules cannot see.
-
-    A branch that hardcoded the flag instead of reading the variable would
-    still contain every string they look for. Only running it with the input
-    `false` and finding the flag gone says the switch works, and that dispatch
-    is the only way Studio's own two-card device selection is under test.
-    """
+    """Dispatches with studio_concurrent=false: a hardcoded flag would pass the text rules but not this."""
     off, _, printed = _compose_argv("workflow_dispatch", tmp_path, studio_concurrent = "false")
     assert "--studio-concurrent" not in off, (
         f"studio_concurrent=false still shares a card, so the two-card Studio "
@@ -340,14 +301,8 @@ def test_studio_concurrent_false_actually_removes_the_flag(tmp_path):
 
 
 def test_the_studio_reporter_is_told_when_studio_is_not_aboard(tmp_path):
-    """The build step publishes whether it packed Studio; the reporter gates
-    on it.
-
-    `own_verdict` answers an EMPTY `studio-gpu` report set with `partial`,
-    carrying the notebook kernel's reason, so an ungated reporter renders
-    "Unsloth GPU smoke: PARTIAL" on every leg-list run about a payload that was
-    never aboard. Not red, which is worse: it reads like a result.
-    """
+    """Without this gate, an empty studio-gpu report set renders PARTIAL on runs that never packed
+    Studio."""
     for event, expected in (("schedule", "false"), ("push", "true")):
         outfile = tmp_path / f"out_{event}"
         outfile.write_text("", encoding = "utf-8")

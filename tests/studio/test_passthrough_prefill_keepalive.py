@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A passthrough relay must not go silent while llama-server prefills.
-
-llama-server sends nothing until the first token and undici aborts a response
-after 300s with no bytes. Behavioural checks that the pump keepalives across a
-stalled read without restarting it, that the stall guard still fires, and that
-teardown leaves no pending read; structural checks that no fifth passthrough
-surface can be added without translating the sentinel.
-"""
+"""Relay must keep sending bytes during prefill: undici aborts a response after 300s with no bytes."""
 
 from __future__ import annotations
 
@@ -525,20 +518,7 @@ def test_sdk_sse_readers_ignore_the_keepalive_comment(module_name):
 
 
 def test_the_tick_is_a_whole_comment_frame_not_a_bare_line():
-    """The tick must be a complete SSE comment frame, blank line included.
-
-    A bare `: keep-alive\\n` looks tempting: it puts bytes on the wire without
-    closing a block, which avoids an SDK decoder bug where a data-less block
-    dispatches an empty event once an `id:` has been seen. But a bare line rides
-    at the head of the NEXT frame, and a reader that classifies a frame by its
-    first character -- comment if it starts with ":", data if it starts with
-    "data:" -- then files the whole frame as a comment and DROPS THE CHUNK. Raw
-    curl and Node undici readers both do exactly that, and both lose the token.
-
-    So the frame form is deliberate: it costs an ignorable empty event on two
-    Python decoders, and only when the upstream sends `id:`, which llama-server
-    does not. Losing a token is much worse than emitting an ignorable one.
-    """
+    """Tick is a complete SSE comment frame, blank line included, or readers drop the next chunk."""
     assert '_OPENAI_PASSTHROUGH_SSE_KEEPALIVE = ": keep-alive\\n\\n"' in SRC
     assert (
         "_OPENAI_PASSTHROUGH_SSE_KEEPALIVE_LINE" not in SRC

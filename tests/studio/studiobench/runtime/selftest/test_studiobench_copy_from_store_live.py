@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""SELECT-ALL COPY ON A WINDOWED THREAD, IN A REAL BROWSER, WITH A REAL CLIPBOARD.
-
-The data-loss case, end to end. A windowed message list cannot SELECT what it has not mounted, so
-`Selection.toString()` is short by design; whether the user loses their conversation depends
-entirely on whether the app's copy handler serialises from the message store. Those two facts look
-identical from the DOM and opposite from the clipboard, which is why `select_all_copy` now scores
-itself on the clipboard.
-
-The unit tests in the Unsloth worktree stub `containsNode`, so the rule "the selection spans the
-whole mounted list" has never met a real `Selection` there. That is the part most likely to be
-quietly wrong -- partial containment, text-node endpoints, whether a select-all over a scroll
-container really reports the first and last rows as contained -- and it is what this exercises.
-
-Three threads, one keystroke:
-
-  full mount              clipboard whole, selection whole. The shipping build.
-  windowed, no handler    clipboard SHORT. The regression, reproduced rather than described.
-  windowed, handler       clipboard whole, selection still short. The fix, and the only
-                          combination that distinguishes it from the other two.
-"""
+"""A windowed thread's select-all copy must yield the whole conversation, not only the mounted rows."""
 
 from __future__ import annotations
 
@@ -156,12 +137,7 @@ def test_a_windowed_thread_without_the_handler_loses_most_of_the_conversation(co
 
 
 def test_the_handler_puts_the_whole_conversation_on_the_clipboard(context):
-    """THE FIX. Same window, same short selection, whole clipboard.
-
-    Both halves are asserted. A test that only checked the clipboard would pass just as well
-    against a build that quietly stopped virtualising, and the entire question is whether the
-    conversation survives WHILE the DOM is windowed.
-    """
+    """Asserts the clipboard is whole while the DOM stays windowed, so un-virtualising cannot pass it."""
     page = _page(context, "windowed", copy_from_store = True)
     try:
         got = _select_all_copy(page)
@@ -173,17 +149,7 @@ def test_the_handler_puts_the_whole_conversation_on_the_clipboard(context):
 
 
 def test_a_partial_selection_is_not_replaced_by_the_whole_conversation(context):
-    """The failure mode of the fix itself, which would be worse than the bug.
-
-    Someone highlighting one message must not silently get forty turns of markdown.
-
-    A SENTINEL IS WRITTEN FIRST, because the obvious version of this test is not deterministic. It
-    asserted that the partial selection was non-empty, and under a loaded machine
-    `Selection.toString()` came back empty for a row Chromium had not laid out -- passing when the
-    file ran alone and failing in a full-suite run. Seeding the clipboard means both outcomes are
-    still conclusive: either the copy happened and the clipboard holds one row, or it did not and
-    the clipboard still holds the sentinel. Neither is the whole conversation, which is the claim.
-    """
+    """A partial selection must not silently copy the whole conversation; a sentinel is written first."""
     page = _page(context, "windowed", copy_from_store = True)
     try:
         page.evaluate("async () => await navigator.clipboard.writeText('SENTINEL')")

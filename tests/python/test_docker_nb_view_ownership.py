@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The categorized notebook VIEW may only delete the links it created.
-
-The VIEW is also JupyterLab's landing dir. Every link the tool creates points at
-DEST/nb/<file>, but the ownership predicate accepted ANY target under DEST, so a
-user's own shortcut to a notebook beside the checkout was deleted on the next boot.
-"""
+"""Delete only links pointing at DEST/nb/; accepting any DEST target deleted a user's shortcut."""
 
 from __future__ import annotations
 

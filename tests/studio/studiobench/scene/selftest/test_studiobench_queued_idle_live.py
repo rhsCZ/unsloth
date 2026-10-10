@@ -1,35 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""THE POSITIVE CONTROL ON THE STREAMING PROBE, read off a real DOM instead of a fixture dict.
-
-`in_flight_unplaced` says "the app says a reply is running and not one message published a
-streaming state, so the probe has gone blind". It is checked offline in
-fixture/selftest/test_studiobench_parity_streamed.py by handing `compare()` a capture with the flag
-already set, which proves what the flag DOES and nothing at all about when `capture()` sets it --
-and when it is set is the whole of its value, because a control that fires on an ordinary settled
-thread costs exactly the coverage it was added to protect.
-
-The state that fires it wrongly is QUEUED-IDLE: a prompt waiting in the queue while the thread is
-doing nothing. `ComposerRightControls` renders `aria-label="Queue message"` there, under
-`isQueueRunning && !thread.isRunning`, and it renders the same button on a RUNNING thread whose
-composer has text -- `queueDisabled` swaps Stop for Queue. So the button alone cannot tell a
-waiting queue from a live stream, and `dom.isRunning()`, which accepts it because every action that
-asks "may I send now" needs the broad reading, cannot either.
-
-Three states, all of them rendered from the shipped markup, and the claim is about which pairs of
-them a reader can tell apart:
-
-    STREAMING     a reply is being written; the last message publishes `data-status="running"`.
-    QUEUED-IDLE   a prompt waits in the queue, nothing is being written, every message is settled.
-    BLIND         a reply really is being written and the `data-status` hook was renamed, so
-                  `streamingMessages()` matches nothing. This is what the control exists for.
-
-QUEUED-IDLE and BLIND are the pair that matters. Reading the queue button as "running" makes them
-the SAME observation -- both `in_flight_unplaced: true` -- and `compare()` then refuses a settled
-queued-idle pair, in front of its settled digests, as a broken instrument. That refusal is not a
-pass, but it is not a reading either, and a real difference elsewhere in the thread is lost with it.
-"""
+"""A waiting queue with nothing streaming must not read as running, or settled pairs get refused."""
 
 from __future__ import annotations
 
@@ -101,17 +73,7 @@ def _page(
     tail: str,
     overlay: str = "",
 ) -> str:
-    """A thread, a composer, and one composer control. `statuses` is per assistant message, and
-    None renames the hook the probe walks -- which is what going blind looks like.
-
-    THE HOOK IS ON ASSISTANT ROWS ONLY, and the rename is too, because that is where it lives:
-    only assistant parts are rendered through `MarkdownText`, which is the single component that
-    emits `<div data-status={status.type}>` (thread.tsx `ASSISTANT_PART_COMPONENTS`), and
-    `dom.statusHookPresent` is scoped to assistant messages for exactly that reason. A fixture that
-    also moved the attribute on the USER rows would make going blind change a surface the real
-    rename cannot touch, and any rule that reads settled user rows would score the fixture's own
-    artefact rather than the build.
-    """
+    """The status hook lives on assistant rows only, so a rename is modelled there, not on user rows."""
     messages = []
     for i, status in enumerate(statuses):
         role = "user" if i % 2 == 0 else "assistant"
@@ -218,12 +180,7 @@ def test_a_waiting_queue_is_not_read_as_a_blind_probe(page):
 
 
 def test_a_settled_queued_idle_pair_is_scored_rather_than_refused(page):
-    """What the conflation cost, at the level of the verdict.
-
-    Two queued-idle arms whose settled threads genuinely differ. Reading the queue button as a
-    running reply sets the control on both, and `streaming_probe` refuses the pair inside
-    `compare()` BEFORE the per-message digests are reached, so the difference is never localised.
-    """
+    """Reading the queue button as running would refuse a settled pair before its digests are compared."""
     base = _capture(page, QUEUED_IDLE, tail = "alpha")
     treat = _capture(page, QUEUED_IDLE, tail = "omega")
     assert base["digest"] != treat["digest"]
@@ -244,13 +201,7 @@ def test_a_real_stream_is_still_placed_and_still_scored(page):
 
 
 def test_what_reading_the_queue_surface_gives_up(page):
-    """A queue with a prompt still waiting, a live stream, and text in the composer.
-
-    The surface is up and Stop is not rendered, so this reads as queued-idle and the control is not
-    armed for this capture. Under-claiming rather than over-claiming, and bounded: a probe goes
-    blind by a renamed selector, which is global, so the control still fires on the run's other
-    captures. Pinned so the cost is a known one.
-    """
+    """A live stream with a prompt queued reads as queued-idle, so the control is not armed."""
     cap = _capture(page, QUEUED_AND_STREAMING_BLIND)
     assert cap["in_flight"] == []
     assert cap["in_flight_unplaced"] is False, cap
@@ -262,14 +213,7 @@ _EN_LOCALE = _THREAD_TSX.parents[2] / "i18n" / "locales" / "en.ts"
 
 
 def _en_string(key: str) -> str:
-    """`promptQueue.<key>` out of the shipped en.ts, or fail saying the key is gone.
-
-    A regex over the TypeScript rather than a parse: the catalog is a plain object literal of
-    string values, and the alternative is a Node dependency for a suite that is otherwise pure
-    Python. Narrow enough to be honest -- it matches the key at its own indent inside the file,
-    and a key that stops existing raises here instead of returning "" and passing a substring
-    check against everything.
-    """
+    """Reads promptQueue.<key> from en.ts by regex; a missing key fails rather than returning empty."""
     src = _EN_LOCALE.read_text(encoding = "utf-8")
     match = re.search(rf"(?m)^\s*{re.escape(key)}:\s*\"((?:[^\"\\]|\\.)*)\",?\s*$", src)
     assert match, f"the en catalog no longer defines promptQueue.{key} ({_EN_LOCALE})"
@@ -277,23 +221,7 @@ def _en_string(key: str) -> str:
 
 
 def test_the_shipped_composer_still_renders_the_two_queue_buttons():
-    """The fixtures above are hand-written, so they can drift into asserting themselves.
-
-    What makes them a claim about Unsloth is that the app still renders BOTH Queue buttons and still
-    names the queue surface, so this reads that out of the shipped TSX. If Unsloth stops rendering
-    the queued-idle button the conflation is gone and this file should go with it; if it renames
-    the queue surface, `dom.promptQueue()` goes quiet and the conflation is back.
-
-    Read through the CATALOG, not off an English literal in the TSX. #11117 localized the queue
-    view -- the label the composer renders became `t("promptQueue.queueButton")` and the queue
-    surface's accessible name became `t("promptQueue.regionLabel", ...)` -- and this file pinned
-    both as the English text that used to be inline, so it went red on a correct change. Worse,
-    the second of the two was hidden behind the first and would have come back one fix later.
-    The invariant that actually matters survived that change untouched and is what is asserted
-    now: the composer still picks between two DIFFERENT labels on `followUpBehavior`, the queue
-    surface still names itself, and the English those keys resolve to is still the English the
-    fixtures above and `dom.js`'s selector are written in.
-    """
+    """Checks the composer still picks between two queue labels via the catalog, not English text."""
     if not _THREAD_TSX.exists():
         pytest.skip(f"the shipped composer is not in this checkout: {_THREAD_TSX}")
     src = _THREAD_TSX.read_text(encoding = "utf-8")
@@ -353,11 +281,7 @@ def _capture_html(page, html: str) -> dict:
 
 
 def test_an_overlay_difference_survives_the_blind_probe_refusal(page):
-    """A menu that changed while the stream could not be placed is still a finding.
-
-    Without this the refusal took it out, and `structural_report` buckets a refusal as blind and
-    never consults it for the exit code, so a real menu or dialog regression went green.
-    """
+    """Overlay differences survive a blind-probe refusal, since the exit code never reads refused pairs."""
     base = _capture_html(page, _page(tail = "same", overlay = _MENU, **BLIND))
     treat = _capture_html(page, _page(tail = "same", overlay = _MENU_CHANGED, **BLIND))
     assert base["in_flight_unplaced"] is True and treat["in_flight_unplaced"] is True
@@ -369,15 +293,7 @@ def test_an_overlay_difference_survives_the_blind_probe_refusal(page):
 
 
 def test_a_settled_user_row_survives_the_blind_probe_refusal(page):
-    """A user row cannot be the reply being written, so the refusal may not take it out either.
-
-    Read off the real DOM rather than a fixture dict, and on the state the control is actually for:
-    both arms generating with the hook renamed. Only assistant parts publish `data-status`, so the
-    rename does not touch this row -- what moved it is the build.
-
-    Without this it left as NOT COMPARABLE with an empty `moved`, and `report` buckets a refusal as
-    blind and never consults it for the exit code, so the run went green on it.
-    """
+    """A settled user row is still compared when the probe refuses, since only assistant rows stream."""
     base = _capture_html(page, _page(tail = "same", **BLIND))
     treat = _capture_html(
         page,
@@ -404,17 +320,7 @@ def test_matching_overlays_still_leave_the_blind_pair_refused(page):
 
 
 def test_the_scaffold_is_not_an_independent_surface_and_here_is_why(page):
-    """WHY the scaffold is deliberately NOT consulted beside the overlays.
-
-    `ThreadPrimitive.Root` wraps `ThreadComposerDock` (thread.tsx), so the composer is inside
-    `.aui-thread-root` and inside the scaffold, and the composer is exactly what changes when a
-    reply starts and stops. On the pair the refusal is about -- one arm generating with a quiet
-    hook, the other finished -- the scaffold therefore differs BECAUSE one arm is generating, and
-    reporting that as a rendering difference would manufacture the wall-clock false alarm this file
-    exists to remove.
-
-    Two threads with identical messages, differing only in the composer control.
-    """
+    """The scaffold is not compared, since the composer inside it changes whenever a reply runs."""
     settled = dict(QUEUED_IDLE, control = _SEND_BUTTON, queue_stack = False)
     generating = dict(settled, control = _STOP_BUTTON)
     a = _capture_html(page, _page(tail = "same", **settled))
@@ -441,12 +347,7 @@ def _writing(**kw):
 
 
 def test_a_scaffold_only_difference_across_a_finished_and_a_running_arm_is_refused(page):
-    """THE REGRESSION, on the pair this mode exists for.
-
-    Every settled message row is byte-identical; the only thing that moved is the composer, and it
-    moved because one arm was generating. Reported as DIFFER this read as a rendering change, with
-    the single claim `thread scaffolding outside any message (373->381c)`.
-    """
+    """A scaffold-only difference between finished and running arms is refused, not a rendering change."""
     base = _capture_html(page, _page(tail = "arrived at last", **_finished()))
     treat = _capture_html(page, _page(tail = "arr", **_writing()))
     assert base["streaming"] is False and treat["streaming"] is True
@@ -521,12 +422,7 @@ def test_a_scaffold_difference_with_both_arms_agreeing_is_still_a_difference(pag
 
 
 def test_the_blind_branch_reads_the_scaffold_when_the_arms_agree_about_generation(page):
-    """The correct form of the scaffold half of the earlier review item.
-
-    Refused there because the composer is a function of generation. When both arms are generating,
-    that objection does not apply and a scaffolding change is a finding even though the stream
-    could not be placed.
-    """
+    """Both arms generating, so a scaffolding change is a real finding even with the stream unplaced."""
     base = _capture_html(page, _page(tail = "same", **BLIND))
     treat = _capture_html(
         page,
@@ -547,15 +443,7 @@ _NO_CONTROL = '<div class="ml-1.5 flex items-center"></div>'
 
 
 def test_a_composer_regression_between_two_settled_arms_is_reported(page):
-    """THE CIRCLE. `generation_disagrees` reads `composer_control`, so a composer that regressed
-    supplied its own excuse: the refusal said the arms were at different points in the turn on the
-    authority of the very surface whose difference was in question.
-
-    Both arms here are settled. Nothing is generating, nothing is queued, every message and overlay
-    agrees, and the treatment simply has no Send button. That is as plain a rendering regression as
-    this tool can be shown, and NOT COMPARABLE would take it out of the exit code entirely, since
-    `report` files a refusal under `blind` and scores only `stable_bad or one_sided`.
-    """
+    """Generation state must not be read off the composer, or a composer regression excuses itself."""
     base = _capture_html(page, _page(tail = "same", **_finished()))
     treat = _capture_html(
         page,
@@ -586,18 +474,7 @@ def test_a_finished_against_a_running_arm_is_still_refused_after_that(page):
 
 
 def test_a_dispatched_queue_wait_is_a_run_state_not_a_rendering_difference(page):
-    """THE TRANSIENT THAT READ AS IDLE.
-
-    Once a queued entry is dispatched, `ComposerRightControls` renders "Stop queued message" under
-    `isQueueRunning && !thread.isRunning`, so the thread says it is not running and neither control
-    `isRunning()` matches is present. Both `streaming` and `queued_idle` therefore came back false,
-    which is exactly how a settled Send arm reads.
-
-    An arm caught in that interval against a settled one then had a differing composer and a
-    differing scaffold with NO run-state difference to account for it -- and that is precisely the
-    shape the comparison layer is entitled to call a rendering regression, now that the scaffold
-    suppression requires independent run-state evidence. It is queue timing, so it must refuse.
-    """
+    """A dispatched queue wait looks idle, not running, so it must be refused as run-state timing."""
     dispatched = _capture_html(
         page,
         _page(tail = "same", **dict(QUEUED_IDLE, control = _STOP_QUEUED_BUTTON, queue_stack = False)),
@@ -651,14 +528,7 @@ def _style_values(cap: dict) -> list[str]:
 
 
 def test_the_style_probe_does_not_report_a_control_swap_as_a_css_regression(page):
-    """THE ADVISORY THAT WAS NOT ABOUT CSS.
-
-    One arm still generating, the other settled: the structural pair is refused as run-state
-    timing, and the style probe walks `Stop generating` on one side and `Send message` on the
-    other. Its signature carries the selector that matched, so the digest moves while `display`,
-    `visibility` and `pointer-events` are IDENTICAL on every element -- asserted here rather than
-    asserted about, off the raw signature.
-    """
+    """A control swap is not a CSS change: the style digest includes which selector matched."""
     settled = _capture_html_raw(page, _page(tail = "same", **_finished()))
     writing = _capture_html_raw(page, _page(tail = "same", **_writing()))
     assert settled["styles"]["elements"] == writing["styles"]["elements"]
@@ -676,12 +546,7 @@ def test_the_style_probe_does_not_report_a_control_swap_as_a_css_regression(page
 
 @pytest.mark.parametrize("control", [_QUEUE_BUTTON_IDLE, _STOP_QUEUED_BUTTON])
 def test_a_queue_control_missing_from_the_selector_list_is_not_a_css_regression(page, control):
-    """The other flavour, and it does not even reach the digest.
-
-    Neither queue control is in `STYLE_SELECTORS`, so a queued arm matches one element FEWER than
-    a settled one and the probe reports "a different number of elements" -- over a page whose CSS
-    is byte-identical. Both the undispatched wait and the dispatched one.
-    """
+    """A queue control missing from STYLE_SELECTORS shifts the element count, not the CSS."""
     settled = _capture_html_raw(page, _page(tail = "same", **_finished()))
     queued = _capture_html_raw(
         page,
@@ -728,10 +593,7 @@ def test_a_composer_that_lost_its_control_is_still_a_style_finding(page):
 
 
 def test_what_the_style_elision_gives_up(page):
-    """Pinned rather than left for a later reader: on a pair that DOES straddle the control swap,
-    a genuine CSS regression elsewhere goes with it. The probe reads ONE aggregate digest over
-    every matched element, so the swap cannot be separated from anything else inside it. The
-    verdict is a refusal and not a MATCH, so nothing here reads as a pass."""
+    """One aggregate style digest cannot separate a control swap from a CSS regression beside it."""
     settled = _capture_html_raw(page, _page(tail = "same", **_finished()))
     writing_and_broken = _capture_html_raw(
         page,

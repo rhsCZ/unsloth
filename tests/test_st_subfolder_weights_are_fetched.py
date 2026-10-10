@@ -12,19 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A sentence-transformers model can have weights at the root AND in subfolders.
-
-`weights_at_root` splits repos two ways, root weights or per-subfolder weights,
-and `unsloth/embeddinggemma-300m` is both: a root `model.safetensors` plus
-`2_Dense/model.safetensors` and `3_Dense/model.safetensors`, which the ST load
-reads as part of the model. `_SUBDIR_WEIGHT_IGNORE_PATTERNS` pruned those two,
-unsloth_zoo's post-download gate correctly flagged the missing weights, and the
-retry excluded the same files again and raised DownloadStallError, blaming the
-network for a request that could never have been satisfied.
-
-Offline: the hub call is stubbed, since a test that depends on the network
-eventually reports a bug that is not there.
-"""
+"""Some ST repos keep weights at the root and in subfolders; the subfolder prune must skip them."""
 
 import json
 import sys
@@ -138,12 +126,7 @@ def _ignores(
     siblings = None,
     **kw,
 ):
-    """The ignore_patterns `maybe_prefetch_hf_snapshot` actually sends.
-
-    Driven through the real function with the downloader stubbed, not through
-    `_prefetch_ignore_patterns`, which knows nothing about the subdir branch and
-    would have passed either way.
-    """
+    """Drives maybe_prefetch_hf_snapshot itself; _prefetch_ignore_patterns skips the subdir branch."""
     seen = {}
 
     def fake_download(name, **kwargs):
@@ -222,10 +205,7 @@ def test_an_older_unsloth_zoo_degrades_instead_of_crashing(modules_json):
 
 
 def test_both_weights_at_root_call_sites_go_through_the_check():
-    """`weights_at_root = True` is passed from exactly two places (vision.py and
-    llama.py), both reaching the prune through maybe_prefetch_hf_snapshot, so one
-    carve-out covers both. A third call site, or an inlined copy of the patterns,
-    fails here instead of leaving half the loaders pruning ST weights."""
+    """Only vision.py and llama.py pass weights_at_root=True; a third site or inlined copy must fail."""
     root = Path(U.__file__).resolve().parents[1]
     sites = []
     for p in root.rglob("*.py"):

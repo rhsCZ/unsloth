@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A VLM repo without preprocessor_config.json (Step-3.7-Flash) still gets its native processor.
-
-Without it the remote processor's patch_pixel_values are ignored by the native forward ("tokens: 493,
-features: 169"). Functions are ast-extracted from vision.py; hub resolver and offline check stubbed.
-"""
+"""Without preprocessor_config.json, a VLM must still use the native processor, or patch values drop."""
 
 import ast
 import json

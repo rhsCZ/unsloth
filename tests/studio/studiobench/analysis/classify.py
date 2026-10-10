@@ -1,45 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Classify every main-thread task by ORIGIN, read rather than inferred.
-
-"A scheduler task took 8 ms" is not a finding. "A `MessageChannel` port message
-posted from Blink's mojo connector ran 8 ms of page script, and there were 119
-of them" is. The difference is that the second one is read out of the trace.
-
-There is deliberately NO catch-all class. Buckets called "other" are exactly the
-failure this tool exists to remove, so a task that no rule explains is counted
-as `unclassified` and raises `unclassified_task_pct`; above the threshold the
-cell FAILS instead of quietly reporting a smaller, cleaner-looking table.
-
-Three evidence sources, in strict order of authority:
-
-1. **Blink's own task type**, from the `scheduler` trace category. That category
-   adds no events; it attaches TYPED ARGS to the `toplevel`
-   `ThreadControllerImpl::RunTask` slice:
-   `args.renderer_main_thread_task_execution.task_type` (a `TaskType` enum such
-   as `TASK_TYPE_JAVASCRIPT_TIMER_DELAYED_HIGH_NESTING` or
-   `TASK_TYPE_*POSTED_MESSAGE`) and `args.sequence_manager_task.queue_name`
-   (`FRAME_THROTTLEABLE_TQ`, `COMPOSITOR_TQ`, `INPUT_TQ`, `V8_TQ`, ...). This is
-   the scheduler stating what it thinks it is running. It is not an inference at
-   all, and it is why `scheduler` is in the category list.
-2. `src_file` / `src_func` on the same slice: the C++ that called `PostTask`.
-3. The `devtools.timeline` events nested inside the task (`TimerFire`,
-   `FireAnimationFrame`, `EventDispatch`, resource events), which say what the
-   task then DID.
-
-The ordering matters for the one class this tool most needs to get right.
-Blink implements `MessagePort` on top of a mojo message pipe, so a React
-scheduler callback and an inbound IPC arrive as the SAME
-`connector.cc / PostDispatchNextMessageFromPipe` task and `src_file` cannot
-separate them. The task type can: on a real capture, 120 `MessageChannel` round
-trips came back labelled as posted-message tasks, exactly 120 of them, while the
-`src_file` evidence lumped them in with unrelated IPC.
-
-Note that `sequence_manager` as a category does NOT carry queue names, which is
-the natural but wrong assumption; it contributes only the DoWork and DoIdleWork
-scoping slices.
-"""
+"""Classifies main-thread tasks from trace evidence; there is no catch-all for unexplained work."""
 
 from __future__ import annotations
 
@@ -212,12 +174,7 @@ _QUEUE_NAME_RULES: tuple[tuple[str, str], ...] = (
 
 
 def scheduler_labels(task: Task) -> dict[str, str]:
-    """Read Blink's own labels for a task, if the `scheduler` category was on.
-
-    Returns `{}` when the category was absent, which is a legitimate state:
-    classification then falls back to `src_file` and nested evidence and the
-    result carries lower-authority evidence strings.
-    """
+    """Blink's own task types from the scheduler category; empty when that category was not captured."""
     for t in walk_within_task(task):
         if t.name != "ThreadControllerImpl::RunTask":
             continue
@@ -455,12 +412,7 @@ def cross_check_task_duration(
     cdp_task_duration_s: float,
     tolerance: float = 0.05,
 ) -> dict[str, Any]:
-    """Summed trace `RunTask` must agree with `Performance.getMetrics.TaskDuration`.
-
-    Two independent accountings of the same quantity. If they disagree the trace
-    is missing tasks or the metrics window did not line up with the trace
-    window, and either way nothing derived from either is safe to quote.
-    """
+    """Trace RunTask sum must match Performance.getMetrics TaskDuration, else nothing derived is safe."""
     trace_s = classification.total_us / 1e6
     if cdp_task_duration_s <= 0:
         raise CellFailure("task_duration_zero", "Performance.getMetrics reported TaskDuration <= 0")

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unsloth chat composer IME + multilingual regression smoke.
-
-Covers: stuck IME composition (#5318 / PR #5327), multilingual paste round-trip,
-stuck compositionend (#5546), and Mac input-method switch recovery (keydown/blur).
-Model-free; the bug surface is the composer, not inference. Env contract matches
-playwright_chat_ui.py: BASE_URL, STUDIO_NEW_PW, PW_ART_DIR, STUDIO_UI_STRICT.
-"""
+"""Model-free chat composer IME and multilingual smoke; env contract matches playwright_chat_ui.py."""
 
 import os
 import re
@@ -160,11 +154,8 @@ with sync_playwright() as p:
             return
 
     def _resolve_deferred_404s() -> None:
-        """Promote every console 404 with no matching unspent GET into a failure.
-
-        Ordering between the response event and the console error is not
-        guaranteed, so resolution happens once at the end rather than inline.
-        """
+        """Resolved once at the end because the response event and console error can arrive in
+        either order."""
         for text, url in deferred_404_console:
             remaining = unspent_get_404s.get(url, 0)
             if remaining > 0:

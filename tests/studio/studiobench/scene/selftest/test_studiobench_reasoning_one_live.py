@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""THE WORST NUMBER ON THE PAGE DESCRIBES A GESTURE NOBODY MAKES.
-
-`reasoning_toggle` reads 2.2 fps at the 100K rung with a p95 frame of 2,084 ms. It gets there by
-opening EVERY reasoning pane in the thread in one gesture: 10 panes, 74,917 highlight spans, 2,143
-ms to open and 805 ms to close. That is a legitimate stress reading and it has been quoted as a
-user-journey reading, which it is not -- a user expands one pane.
-
-`reasoning_toggle_one` is that second number. These tests hold the property that makes the two worth
-having side by side: the cost of the thread-wide action scales with thread length and the cost of
-the single-pane one does not.
-"""
+"""Times one pane's expansion, unlike reasoning_toggle; its cost must not scale with thread length."""
 
 from __future__ import annotations
 
@@ -138,10 +128,7 @@ def test_it_opens_exactly_one_pane_and_leaves_the_rest_shut(make_page):
 
 
 def test_the_cost_does_not_scale_with_thread_length(make_page):
-    """THE PROPERTY THAT MAKES IT A DIFFERENT NUMBER. `reasoning_toggle` materialises every pane's
-    spans, so it grows with the thread. This one materialises one pane's, so it does not -- and a
-    reading that quietly grew with thread length would be the thread-wide action under a new name.
-    """
+    """Cost must not grow with thread length: one pane's spans are materialised, not the whole thread's."""
     small = A.reasoning_toggle_one(_ctx(make_page(panes = 2, spans_per_pane = 4)))
     large = A.reasoning_toggle_one(_ctx(make_page(panes = 40, spans_per_pane = 4)))
     assert small.ran and large.ran
@@ -165,10 +152,7 @@ def test_it_refuses_a_thread_that_is_already_open(make_page):
 
 
 def test_it_is_not_in_the_standard_film(make_page):
-    """Adding a slot to a fixed-duration schedule shifts every window after it and voids
-    comparability against every payload already on disk. The action exists so the number can be
-    taken deliberately; it must not appear in the shipped scene until a corpus or tier bump is
-    invalidating those payloads anyway."""
+    """Not in the standard film: a new slot shifts later windows and breaks comparison with old payloads."""
     schedule = (Path(_STUDIO_TESTS) / "studiobench" / "scene" / "schedule.py").read_text(
         encoding = "utf-8"
     )

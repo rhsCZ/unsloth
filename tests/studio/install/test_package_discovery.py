@@ -77,12 +77,7 @@ def _tracked_files():
 
 
 def _wheel_payload():
-    """Files that build_py would stage, i.e. what the wheel actually ships.
-
-    include-package-data hands every tracked file to the nearest ANCESTOR package
-    that survived discovery, so a directory dropped from packages.find comes back
-    as data of its parent. exclude-package-data is the veto that stops it.
-    """
+    """Files build_py stages, minus exclude-package-data's veto of include-package-data ancestor leaks."""
     package_dirs = {name.replace(".", "/"): name for name in _discovered_packages()}
     excluded = _exclude_package_data()
     shipped = []
@@ -161,15 +156,7 @@ def test_built_wheel_has_no_frontend_source():
 
 
 def test_manifest_prunes_match_exclude_package_data():
-    """The two vetoes have to name the same paths, for different artifacts.
-
-    exclude-package-data is what keeps these out of the WHEEL, and it keeps
-    working in the sdist -> wheel rebuild `python -m build` performs: restoring
-    the excluded files into an extracted sdist and listing them in its MANIFEST
-    still produces a wheel without them, which is setuptools' documented
-    exclusion precedence. These prunes are what keep them out of the SDIST
-    itself, so neither artifact carries a tree nothing installs.
-    """
+    """exclude-package-data (wheel) and MANIFEST prunes (sdist) must name the same paths."""
     manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding = "utf-8")
     for path in (
         "studio/frontend/public",

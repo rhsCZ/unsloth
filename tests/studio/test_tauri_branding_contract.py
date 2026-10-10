@@ -229,11 +229,7 @@ RUST_VERBATIM_LINES = frozenset(
 
 
 def locale_entries(text: str) -> list[tuple[str, str]]:
-    """Every leaf entry of a locale module as (dotted key path, value text).
-
-    The catalogs are plain nested object literals, and values routinely wrap onto their
-    own line, so an entry runs from its key to the next key or closing brace.
-    """
+    """Values may wrap across lines, so an entry runs from its key to the next key or closing brace."""
     stack: list[tuple[int, str]] = []
     out: list[tuple[str, str]] = []
     path: str | None = None
@@ -262,12 +258,7 @@ def locale_entries(text: str) -> list[tuple[str, str]]:
 
 
 def rust_branding_offenders() -> list[str]:
-    """Every crate line naming the display name, bar the transcribed ones.
-
-    Line granularity rather than file granularity so one verbatim fixture does not buy its
-    whole file an exemption: install.rs holds captured AMSI stderr, and the rest of install.rs
-    is still ordinary user-facing Rust that has to obey the contract.
-    """
+    """Exempts by line, not file, so one verbatim captured fixture does not exempt the whole file."""
     return [
         f"{path.relative_to(REPO)}:{number}"
         for path in sorted(RUST_SOURCES.rglob("*.rs"))
@@ -311,13 +302,7 @@ def test_desktop_surfaces_do_not_restore_studio_branding() -> None:
 
 
 def test_the_branding_sweep_still_covers_the_crate() -> None:
-    """The Rust half has to keep walking a real tree, and the exemption has to stay verbatim.
-
-    The failure this guards is the one the hand-kept list actually produced: a sweep that looks
-    thorough while never reading the file the offending sentence lives in. Here that shape would
-    be an rglob that returns nothing after a crate reshuffle, which reports zero offenders and
-    passes.
-    """
+    """An empty sweep would report zero offenders and pass, so the crate tree must still be walked."""
     swept = sorted(RUST_SOURCES.rglob("*.rs"))
     assert RUST_SOURCES.is_dir(), f"the crate source root moved: {RUST_SOURCES}"
     assert len(swept) >= 25, f"the crate sweep collapsed to {len(swept)} files"
@@ -351,12 +336,7 @@ def test_the_branding_sweep_still_covers_the_crate() -> None:
 
 
 def test_the_branding_sweep_still_covers_the_frontend() -> None:
-    """The locale exemption must stay narrow.
-
-    A sweep that matches nothing passes this contract while proving nothing. Both halves
-    can fail that way: move src and the rglob goes empty, or reformat the catalogs and the
-    key parser yields nothing, either one leaving the test green over an unchecked tree.
-    """
+    """An empty frontend sweep, or a key parser that reads nothing, would pass while checking nothing."""
     swept = [
         path
         for suffix in ("*.ts", "*.tsx")

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""`UNSLOTH_FORCE_CUSTOM_DTYPE` is parsed by two separately released packages.
-
-Both do `value.split(";", 4)` and assert at least four separators, and they ship on
-their own schedules, so changing the layout on one side breaks the other on skew. The
-hardening changed how the fields are INTERPRETED, not what they are; this pins the
-count, the positions, and the direction of the trust decision.
-"""
+"""Two packages split UNSLOTH_FORCE_CUSTOM_DTYPE on ';' and ship separately, so its layout is pinned."""
 
 from __future__ import annotations
 

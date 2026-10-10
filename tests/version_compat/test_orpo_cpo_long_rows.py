@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""ORPO / CPO rows must fit max_length after the Unsloth tokenize_row patch.
-
-TRL 0.29+ never truncates the prompt and cuts answers to `max_length - longer_response_length`,
-so prompt + answer can exceed max_length; the fast forward then cuts input_ids but not labels.
-"""
+"""TRL 0.29+ leaves prompts untruncated, and the fast forward then cuts input_ids but not labels."""
 
 from __future__ import annotations
 

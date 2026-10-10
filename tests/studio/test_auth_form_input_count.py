@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Fast source and runtime contracts for Unsloth's frontend authentication flows.
-
-PR #5490 added a third "Current password" input, regressing first-boot UX to
-three inputs; PR #5545 restores two by rendering it only when BOOTSTRAP is absent.
-Issue #7114 covers auth redirects and the persisted System monitor; its browser
-lifecycle remains covered by tests/studio/playwright_chat_ui.py."""
+"""First boot shows two password inputs; 'Current password' renders only when BOOTSTRAP is absent."""
 
 from __future__ import annotations
 
@@ -180,11 +175,7 @@ def _at_depth_zero(condition: str):
 
 
 def _leading_disjunct(condition: str) -> str:
-    """The first operand of ``condition`` read as a `||` chain.
-
-    Split at depth zero, so `!active || !(a || b)` yields `!active` and the inner
-    `||` is left where it belongs.
-    """
+    """The first `||` operand, split at bracket depth zero so a nested `||` stays intact."""
     for index, char in _at_depth_zero(condition):
         if char == "|" and condition[index : index + 2] == "||":
             return condition[:index]
@@ -192,13 +183,7 @@ def _leading_disjunct(condition: str) -> str:
 
 
 def _binds_looser_than_or(condition: str) -> bool:
-    """Whether something outside the `||` chain decides what ``condition`` is worth.
-
-    `?:` and `,` both bind looser than `||`, so `!active || mounted ? false : true`
-    and `!active || track(), active` each leave the disjunction as a sub-expression
-    whose value is then discarded, and both skip the return while inactive. `?.` and
-    `??` are neither.
-    """
+    """True if `?:` or `,` binds looser than `||`, so the disjunction's value can be discarded."""
     for index, char in _at_depth_zero(condition):
         if char == ",":
             return True
@@ -211,12 +196,7 @@ def _binds_looser_than_or(condition: str) -> bool:
 
 
 def _blanked(source: str) -> str:
-    """A same-length copy of ``source`` with comment and string bodies blanked.
-
-    Bracket depth and token searches only mean anything once prose and literals can
-    no longer contribute brackets, or a guard that survives only as a commented-out
-    line still reads as the guard.
-    """
+    """Blanks comment and string bodies, so brackets and tokens inside prose cannot be mistaken for code."""
     out, index, end = list(source), 0, len(source)
     while index < end:
         pair = source[index : index + 2]
@@ -237,12 +217,7 @@ def _blanked(source: str) -> str:
 
 
 def _function_body(source: str, name: str) -> str:
-    """``name``'s body, from its opening brace to the matching close.
-
-    The parameter list is walked past rather than skipped by eye: the signature is
-    `({ active }: { active: boolean })`, so the first brace after the name belongs to
-    the destructuring and not to the body.
-    """
+    """Walks past the parameter list first, since a destructured `{ active }` parameter has braces."""
     index = source.index("(", source.index(f"export function {name}("))
     depth = 0
     while index < len(source):
@@ -260,14 +235,7 @@ def _function_body(source: str, name: str) -> str:
 
 
 def _inactive_returns_null(body: str) -> bool:
-    """Whether ``body`` returns null from its OWN top level on every inactive render.
-
-    Read as a parse and not as text. The condition has to be a disjunction whose first
-    operand is `!active`, because that is what makes an inactive render short-circuit to
-    the return whatever the rest of the guard says. Only statements directly in the
-    component body count: `(active) => { if (!active) return null; }` returns from the
-    callback and leaves the component mounting.
-    """
+    """Only a top-level `if` in the component body counts; a return inside a callback leaves it mounted."""
     for match in re.finditer(r"\bif \(", body):
         before = body[: match.start()]
         if before.count("{") - before.count("}") != 1:

@@ -1,7 +1,4 @@
-"""Tests _pin_device_to_decoder in vision.py: while the embedding is offloaded to RAM,
-`model.device` must report the decoder device, because `inputs.to(model.device)` is the
-documented idiom and CPU ids make generation build position_ids on the wrong device.
-No GPU needed: a meta parameter stands in for the accelerator."""
+"""While embed_tokens is offloaded, model.device must report the decoder device, not the CPU."""
 
 import ast, os
 import torch

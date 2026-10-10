@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Wiring for the legacy chat title repair, where a unit test cannot reach.
-
-The repair module pulls in the chat API, so these are source checks on the
-seams: which map it reads from, and what keeps it going page to page.
-"""
+"""Checks the repair's seams by source text, since importing the module pulls in the chat API."""
 
 from __future__ import annotations
 
@@ -43,10 +39,7 @@ def test_the_repair_reads_its_own_messages_as_late_as_it_can():
 
 
 def test_the_repair_reads_only_stored_messages():
-    """Dexie keeps rows the backend has pruned, because deleting a message never
-    clears them. Reading it here could put a deleted prompt back into a title,
-    so a chat whose messages are not stored yet is left for a later refresh
-    instead."""
+    """Dexie keeps rows for deleted messages, so only stored messages may feed a title."""
     repair = _read(REPAIR)
     assert "listUnimportedChatMessages" not in repair
     assert "mergeMessagesById" not in repair

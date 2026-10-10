@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An Unsloth this harness launched and could not reach is terminated, not abandoned.
-
-THE PROCESS WE LAUNCH IS NOT THE PROCESS WE SPAWN. `launch_studio` runs the server under
-`setsid -f`, which always forks and whose parent exits without waiting, so `Popen.pid` belongs to a
-`setsid` that is already gone and the server sits in a session of its own that our process group
-cannot reach. `pgrep` is the only handle on it -- and it used to be taken AFTER the health check,
-so a server that started and stayed unhealthy raised with `install.pid` still None and
-`stop_studio` had nothing to kill.
-
-That leak is not idle. It holds the requested port, and Unsloth's own launcher aborts rather than
-binding when it finds one of its own servers there (`studio/backend/run.py`, `_resolve_port` with
-`avoid_own_studio`), so the next attempt's server exits and `wait_for_healthz` takes its 200 from
-the STALE one -- which by then has finished starting. The run then measures the build the previous
-attempt installed and records the ref this one asked for.
-
-AND THE PORT CAN BE OCCUPIED WITHOUT ANYTHING HAVING FAILED. `--keep-studio` asks for an Unsloth to
-be LEFT RUNNING, so no cleanup reaches it by design and the next run walks into exactly the same
-launch: `_discover_pid` pgreps `unsloth studio.*-p <port>` and finds the older process, `/healthz`
-answers 200 from it, and `authenticate` retries with `BENCH_PASSWORD` -- which a previous
-studiobench run has already rotated that Unsloth to -- so the login succeeds as well. Nothing
-downstream can tell which build answered, so an occupied port is refused before anything is
-launched rather than reported afterwards.
-"""
+"""setsid -f detaches the server from Popen.pid, so pgrep is the only handle left to terminate it."""
 
 from __future__ import annotations
 
@@ -44,11 +22,7 @@ STUDIO_PID = 4242
 
 @pytest.fixture
 def launched(monkeypatch, tmp_path):
-    """Everything `launch_studio` reaches outside this process, stubbed at the seam it uses.
-
-    Returns a dict the test reads back: which pids were signalled, and whether the server was
-    running at all when `pgrep` was asked.
-    """
+    """Stubs launch_studio's outside seams; the returned dict records signalled pids and pgrep state."""
 
     state = {
         "signalled": [],
@@ -134,12 +108,7 @@ def test_a_healthy_studio_whose_pid_cannot_be_found_is_still_returned(launched):
 
 
 def test_a_port_that_is_already_serving_is_refused_before_anything_is_launched(launched):
-    """The `--keep-studio` case, which no cleanup covers because retention is what was asked for.
-
-    Everything downstream would have agreed the launch worked: `pgrep` finds the older server on
-    the same port, `/healthz` answers 200 from it, and `authenticate` reaches it with the password
-    a previous run rotated it to. The refusal has to arrive before the spawn.
-    """
+    """A busy port is refused before spawning: healthz and login would both succeed on the older server."""
 
     launched["port_busy"] = True
     launched["healthy"] = True
@@ -178,11 +147,7 @@ def test_a_free_port_still_launches(launched):
 
 
 def test_the_probe_itself_gives_both_answers_against_a_real_socket():
-    """The probe, unstubbed, against a listener this test owns.
-
-    A guard that answered "busy" for everything would pass both tests above and refuse every real
-    launch, so the two answers are taken from a real socket rather than from the stub.
-    """
+    """The port probe is tested unstubbed on a real socket, so it cannot answer busy for everything."""
 
     import socket
 

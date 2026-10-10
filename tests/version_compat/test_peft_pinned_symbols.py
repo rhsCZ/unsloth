@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Pinned-symbol compat check across PEFT minor versions unsloth + unsloth-zoo
-target. For each tracked tag, fetch source from github.com/huggingface/peft and
-assert every PEFT symbol unsloth touches is present, catching API drift.
-Versioning covers unsloth/pyproject.toml's `peft>=0.18.0,!=0.11.0` window + main.
-"""
+"""Checks each tracked PEFT tag's GitHub source for every symbol unsloth touches, catching API drift."""
 
 from __future__ import annotations
 

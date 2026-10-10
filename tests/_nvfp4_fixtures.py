@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Tiny compressed-tensors NVFP4 + FP8 mixed-precision checkpoints, laid out like unsloth/Qwen3.8-27B-NVFP4.
-
-MLPs are NVFP4 (weight_packed U8, weight_scale F8_E4M3 per 16 columns, weight_global_scale and input_global_scale F32[1]),
-attention and the last layer's MLP are FP8 per channel (weight F8_E4M3, weight_scale BF16 [out, 1]). Built without
-llmcompressor: scales are computed here and the tensors come from compressed-tensors' own compressors.
-
-    python tests/_nvfp4_fixtures.py OUT_DIR [--arch qwen3|qwen3_5]
-"""
+"""Builds tiny NVFP4/FP8 compressed-tensors checkpoints without llmcompressor; scales computed here."""
 
 import argparse
 import copy

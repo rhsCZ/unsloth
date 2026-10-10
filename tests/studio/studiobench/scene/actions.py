@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The fifteen actions, each with an `expect` that proves it actually happened.
-
-THE RULE THIS FILE EXISTS TO ENFORCE: an action that did not happen is `ran = False`. It is NEVER
-a fast timing. That is not a style preference, it is the failure mode that wasted a day of
-measurement. A menu whose trigger opens on `pointerdown` does not open when you call `.click()`,
-and the column then reads a tidy small number that looks like a fast menu. A jump scroll from the
-bottom is read by Unsloth's intent-aware autoscroll as programmatic and snapped straight back, so
-the viewport lands where it started and the timing is real, precise and about nothing. Every
-action below therefore asserts a POSITIVE observable consequence -- the scroll travelled at least
-90% of what was commanded, the menu opened AND closed with a non-zero item count, the delete
-dropped the `[data-role]` count -- and reports `ran = False` with a reason when it cannot.
-
-The JS is ported from `tests/studio/playwright_heavy_thread.py` (KEYSTROKE_JS, SCROLL_JS, JUMP_JS,
-MENU_JS, DELETE_JS, REOPEN_JS, PAINT_FLOOR_JS) with `window.__heavyThread` replaced by
-`window.__sb.dom`, which is the same API backed by the shipping app's own selectors.
-"""
+"""Each action asserts a positive consequence and reports ran = False when it did not happen."""
 
 from __future__ import annotations
 
@@ -57,18 +42,7 @@ _EXC_CHARS = 160
 
 
 def _why(exc: BaseException) -> str:
-    """An exception as a reason a person can act on: the class AND its first line.
-
-    `type(exc).__name__` alone is worthless here and cost a full day of someone else's. Playwright's
-    own exception class is named `Error`, so every clipboard refusal in two complete 100K payloads
-    read "the clipboard could not be read back: Error" -- which names no cause, points at no engine
-    and cannot be told apart from any other failure in the stack. The message is where the browser
-    says `NotAllowedError: Document is not focused` or `TypeError: navigator.clipboard is
-    undefined`, and it is the whole diagnosis.
-
-    First line only, and truncated: Playwright appends the call log, which is dozens of lines and
-    belongs in the log rather than in a row's `reason`.
-    """
+    """Class and first line only: Playwright's class is just Error, so the message carries the cause."""
     first = str(exc).strip().splitlines()
     head = first[0][:_EXC_CHARS] if first else ""
     return f"{type(exc).__name__}: {head}" if head else type(exc).__name__
@@ -113,12 +87,7 @@ KEYSTROKE_SETTLE_POLL_MS = 25
 
 
 def _settle_keystrokes(ctx: ActionContext, inst: Any) -> None:
-    """Wait until no keystroke's paint is still in flight, bounded.
-
-    The fixed 200 ms wait this replaces dropped whichever sample had not painted when it expired,
-    which is systematically the slowest one. A bigger constant has the same defect on a slower
-    machine or a heavier rung, so the wait is on the WORK rather than on the clock.
-    """
+    """Waits on the paint work itself, not a fixed clock, since a fixed wait drops the slowest sample."""
     deadline = time.monotonic() + KEYSTROKE_SETTLE_TIMEOUT_MS / 1000
     settled = getattr(inst, "settled", None)
     if settled is None:
@@ -690,19 +659,7 @@ async (opts) => {
 
 
 def _own_turn_was_accepted(ctx: ActionContext, messages_before: Any) -> bool:
-    """Did Enter actually SEND the throwaway turn?
-
-    Two signals, either of which is enough, because they become true at different moments and the
-    question is asked at whichever one the timeout landed on. The composer clears on send, so text
-    still in it is a refusal -- `queueDisabled` turns Send into Queue whenever something is already
-    running, and a Queue press leaves the box alone. The thread grows on send too, and it can grow
-    before the composer's own re-render lands.
-
-    ASKED IN THE CONSERVATIVE DIRECTION: anything that is not clearly a refusal counts as accepted,
-    including a page call that threw, because the cost of treating a refusal as a send is a wait
-    this action was going to spend anyway and the cost of the reverse is a live turn left in the
-    thread.
-    """
+    """Anything not clearly refused counts as sent, since a live turn left in the thread is worse."""
     if _ev(ctx, "() => window.__sb.dom.composerText()") != OWN_TURN_TEXT:
         return True
     after = _ev(ctx, "() => window.__sb.dom.threadTotal()")
@@ -714,27 +671,7 @@ def _own_turn_was_accepted(ctx: ActionContext, messages_before: Any) -> bool:
 def _reclaim_pending_turn(
     ctx: ActionContext, messages_before: Any, reason: str, deadline: float
 ) -> ActionResult:
-    """Take back the throwaway turn Enter has ALREADY submitted, then report `not_run`.
-
-    THE SLOT RAN OUT, THE TURN DID NOT. `stop_generation` presses Enter and then waits for the
-    reply to start, and that wait is bounded by the slot -- but returning at the bound abandons a
-    turn the app has accepted. It starts a second or two later, streams through the windows the
-    next actions are being timed in, and leaves a user message and an assistant message in the
-    thread that the rest of the film, the final census and the seeded-versus-streamed comparison
-    all then measure. That is the same scaffolding `STOP_CLEANUP_JS` exists to remove, arrived at
-    by giving up rather than by finishing.
-
-    SO THE WAIT IS SPLIT RATHER THAN SHORTENED. Up to the slot's bound the turn is still worth
-    measuring; past it, up to `deadline`, it is only worth catching, and this polls on for it,
-    stops it and deletes it. Nothing here is bounded by the slot, for the reason the stop-settle
-    poll is not either: an overrun costs the next action's window, and a turn left generating costs
-    every window after that plus the census.
-
-    DELETES ONLY WHAT IT ADDED. `STOP_CLEANUP_JS` removes the LAST assistant message, so running it
-    when the send was refused or when the app never rendered the turn would take a seeded reply out
-    of the thread and every count after this point would be wrong in the other direction. The
-    thread total is read before Enter and again here, and the delete runs only if the thread grew.
-    """
+    """After Enter has submitted, polls on past the slot and deletes the turn only if the thread grew."""
     if not _own_turn_was_accepted(ctx, messages_before):
         return not_run(f"{reason}, and the composer still held it, so nothing was sent")
 
@@ -1520,16 +1457,7 @@ _NEW_MENU_OPEN_JS = """() => {
 
 
 def _close_open_menu(ctx: ActionContext) -> Optional[bool]:
-    """Escape until no menu opened by this attempt is left, bounded. True when one was open and is
-    now closed, False when none was, None when one is still open after the attempts.
-
-    An action that gives up must leave the page as it found it. A menu this action opened and then
-    abandoned is not this action's failure alone: the next action's click hit-tests to nothing, it
-    reports the control as unclickable, and a run that allows this action not to run still fails on
-    the one after it. A menu that was already open is not this action's to close: it can be the very
-    thing that made the click time out, and it belongs to whatever opened it. Escape dismisses the top
-    layer first, which is the one this attempt opened, so the loop stops before reaching an older one.
-    """
+    """Closes only a menu this attempt opened; a pre-existing menu belongs to whoever opened it."""
     if _ev(ctx, _NEW_MENU_OPEN_JS) is not True:
         return False
     for _ in range(3):
@@ -1784,13 +1712,7 @@ def thread_reopen(ctx: ActionContext) -> ActionResult:
 
 @dataclass
 class Transition:
-    """WHICH ROUTE a state change took, so a substitute can never be read as the original.
-
-    `ok` alone was the whole return value of `_click_or_navigate`, and it collapsed three
-    outcomes -- the control was clicked, the control failed and a page load was substituted, and
-    nothing worked -- into two. The middle one is the dangerous one: it produces a row that looks
-    like a measurement of a click and is a measurement of a document reload.
-    """
+    """Records which route a state change took, so a navigation substitute is never read as a click."""
 
     ok: bool
     path: str  # "click", "navigate" or "failed"
@@ -1863,28 +1785,7 @@ _HOVER_TARGET_JS = """
 
 
 def _reveal_by_hover(ctx: ActionContext, selector: str) -> tuple[float, float] | None:
-    """Hover a hover-revealed control into existence, then return a point on it.
-
-    THE CONTROL WAS NEVER COVERED. The sidebar's New chat button is
-    `.sidebar-header-action`, which ships `opacity-0 pointer-events-none` and is revealed only by
-    `.group/sidebar-header:hover` (or `:focus-visible`). With no mouse over the header it is a
-    20x20 box that is laid out, reported `visible` by every check Playwright makes, and transparent
-    to every hit test -- so `click()` waits out its whole timeout and the hit-test spread reports
-    "no point on the control hit-tests to it". Both are accurate and both are the wrong conclusion:
-    nothing is covering it and the sidebar is not collapsed. The harness simply never did the half
-    of the gesture that makes the control exist, and then substituted a page reload for the click.
-
-    Moving the mouse to where the button IS suffices, and is what a person does. `pointer-events:
-    none` means the pointer falls through to the group underneath, the group's `:hover` matches,
-    and the button becomes solid under a mouse that is already on it. So this deliberately does not
-    walk ancestors looking for the reveal group: hovering the control's own centre finds it by
-    construction, and cannot pick the wrong one.
-
-    Called ONLY after the ordinary hit test has already failed, so a control that is reachable at
-    rest is never hovered and no stray mouse movement enters a measured window. Returns None when
-    hovering does not make the control hit-testable, which is a real finding and is reported as
-    one rather than papered over with a page load.
-    """
+    """Hovers the control's own centre to reveal it; called only after the ordinary hit test has failed."""
     target = _ev(ctx, _HOVER_TARGET_JS, selector)
     if not isinstance(target, dict) or "x" not in target:
         return None
@@ -1908,26 +1809,7 @@ def _click_or_navigate(
     *,
     allow_navigate: bool = True,
 ) -> Transition:
-    """Click the control a user would click; fall back to the URL it would produce, and SAY SO.
-
-    A click is preferred because it exercises the app's own handler. Playwright's actionability
-    retries do not give up on an element that is visible, enabled and stable and merely covered by
-    something else, so the click burns its whole timeout. The navigation reaches the same app
-    state, and for getting the scene somewhere it is a perfectly good tool.
-
-    WHAT IT IS NOT is the same operation, and the caller is now told which one it got. Every
-    caller must decide for itself whether a navigation still answers its question. `thread_reopen`
-    decides that it does not, because a document reload and a subtree rebuild are the two things
-    that action exists to tell apart.
-
-    `allow_navigate = False` lets a caller decide that BEFORE the substitution rather than after
-    it. Reading `path == "navigate"` afterwards is enough to keep the ROW honest and not enough to
-    keep the SCENE intact: by then the page has already left, and for the call that leaves the
-    thread that means every later slot in the film runs against an empty one. Declining up front
-    returns `path = "failed"` with the same explanation and leaves the page exactly where it was.
-    The default is `True`, so a caller that has not thought about it keeps the behaviour every
-    caller had.
-    """
+    """Clicks the control; a navigation substitute needs allow_navigate and is reported as one."""
     handle = ctx.page.query_selector(selector)
     click_error = f"no element matched {selector}"
     if handle is not None:

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""PEFT's v4 -> v5 MoE config conversion must not take LoRA away from same-named nn.Linear layers.
-
-DeepSeek-V3 style models keep dense `gate_proj` / `up_proj` / `down_proj` Linears (shared experts and the
-first_k_dense_replace layers) next to the fused expert parameters. PEFT rewrote every such target into an
-expert parameter target, so the dense layers silently got no LoRA and a v4 adapter's weights for them
-were dropped on load.
-"""
+"""The v4 to v5 MoE conversion must keep LoRA on dense nn.Linear layers that share expert names."""
 
 import copy
 import importlib.util
@@ -264,10 +258,7 @@ def test_model_without_dense_namesakes_converts_as_before():
 
 @pytest.mark.parametrize("make_model", [_deepseek_v3, _qwen2_moe], ids = ["deepseek_v3", "qwen2_moe"])
 def test_v4_adapter_reloads_dense_and_expert_weights(tmp_path, make_model):
-    """A transformers v4 adapter (per-expert Linear keys) matches the model merged by hand.
-
-    qwen2_moe also checks the base family is mapped onto itself: without it its experts stay unconverted.
-    """
+    """qwen2_moe must map onto itself, or its experts stay unconverted on v4 adapter reload."""
     from safetensors.torch import save_file
 
     model = make_model()

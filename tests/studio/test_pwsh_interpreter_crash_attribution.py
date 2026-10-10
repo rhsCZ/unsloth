@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The shared pwsh runner must blame the interpreter for a crash and nothing else.
-
-Backend CI run 32341628757 reported one runner-level pwsh failure mode as 284 independent
-Windows-installer regressions across 19 files. tests/_shared/unsloth_pwsh_runner.py exists
-to stop that, and its value is entirely in which of these two it does to a given run:
-
-  * a shell killed by a signal produced no verdict  -> retry, then blame the interpreter;
-  * a shell that exited normally produced a verdict -> hand it back untouched, right or wrong.
-
-Getting the second one wrong would turn this helper into a way to retry real regressions
-into green, which is strictly worse than the bug it fixes. So both directions are executed
-here against a real SIGABRT rather than reviewed.
-"""
+"""A signal-killed shell is retried, then blamed on the interpreter; a normal exit is never touched."""
 
 import json
 import os
@@ -73,15 +61,7 @@ def test_a_clean_run_is_not_retried():
 
 
 def test_the_startup_cache_is_redirected_without_disturbing_the_callers_env():
-    """The mechanism fix, asserted from the child's own view of its environment.
-
-    Four xdist workers sharing one $HOME share one 83 KB StartupProfileData-NonInteractive,
-    and a startup that reads a half-written one dies. Measured at 7/4000 shared against
-    0/4000 private, reproducing both crash shapes this repo has seen. The redirect must
-    therefore actually reach the child, and must add exactly one variable: a hermetic env
-    dict is how several of these tests keep a developer's exported settings from deciding
-    an inference assertion, and quietly widening it would break that silently.
-    """
+    """The redirect must reach the child and add exactly one variable, keeping hermetic envs hermetic."""
     dump = [sys.executable, "-c", "import json,os; print(json.dumps(dict(os.environ)))"]
 
     marker = "UNSLOTH_PWSH_RUNNER_LEAK_PROBE"

@@ -71,11 +71,7 @@ def _extract(pattern: str, source: str) -> str:
 
 
 def _no_torch_resolution_script() -> str:
-    """Get-PersistedNoTorch plus the $NoTorchMode resolution, verbatim.
-
-    Extracted rather than reimplemented so the test cannot drift away from the
-    production text the way a hand-copied predicate would.
-    """
+    """Extracted from setup.ps1, not reimplemented, so the test cannot drift from Get-PersistedNoTorch."""
     source = SETUP_PS1.read_text(encoding = "utf-8")
     getter = _extract(r"function Get-PersistedNoTorch \{.*?\n\}\n", source)
     setter = _extract(r"function Set-PersistedNoTorch \{.*?\n\}\n", source)

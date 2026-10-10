@@ -75,13 +75,7 @@ AUDIO_PLAYER = FRONTEND / "components/assistant-ui/audio-player.tsx"
 
 
 def _scale_constants() -> dict[str, str]:
-    """The mac chrome constants, resolved to the strings provider.tsx puts in a style block.
-
-    ``NATIVE_MAC_TITLEBAR_HEIGHT_VAR`` is ``var(--studio-native-titlebar-height, 34px)``
-    built from ``NATIVE_MAC_TITLEBAR_HEIGHT_PX``. The runtime divides by the interface zoom
-    and provider.tsx uses the same constant as the CSS fallback, which is what keeps a
-    single 34 in the codebase, so read it from there rather than repeating it here.
-    """
+    """Reads the mac chrome constants from their one source, so 34px is not repeated here."""
     # Raw: native chrome is not UI-scaled, so a respelled 34px must not collapse back here.
     source = _window_chrome_source(INTERFACE_SCALE_RUNTIME)
     numbers = dict(re.findall(r"export const (\w+_PX) = (\d+);", source))
@@ -92,14 +86,7 @@ def _scale_constants() -> dict[str, str]:
 
 
 def _chrome_style_blocks(source: str) -> dict[str, dict[str, str]]:
-    """Each ``const <NAME>_STYLE = { ... } as CSSProperties`` block as a var -> value map.
-
-    Per block, so a value is only ever compared against the others that ship with it.
-
-    A value may be a string, a template, or one of the imported constants above. Before the
-    interface-scale setting they were all plain px strings; resolving the other two is what
-    keeps these contracts checking the same arithmetic instead of silently reading absent.
-    """
+    """Resolves template and imported constant values, which would otherwise silently read as absent."""
     constants = _scale_constants()
 
     def resolve(raw: str) -> str:
@@ -128,14 +115,7 @@ def _titlebar_nav_button_px(source: str) -> int | None:
 
 
 def _px(value: str | None) -> int | None:
-    """*value* as whole pixels at 100% interface scale, or None if it is not pixel-valued.
-
-    **At 100%, and only there.** The mac chrome vars carry their own px fallback and the
-    runtime divides that number by the webview zoom, because macOS draws the titlebar and
-    traffic lights at a size zoom does not touch. So every sum below is the arithmetic as
-    it ships at 100%, which is the scale these contracts were written against and the only
-    one a static read of the source can see.
-    """
+    """Valid only at 100% scale: the mac chrome runtime divides its px fallback by webview zoom."""
     text = (value or "").strip()
     for pattern in (
         r"(\d+)px",
@@ -180,12 +160,7 @@ def test_desktop_update_search_has_a_stable_general_tab_destination():
 
 
 def test_desktop_update_keeps_the_in_app_path_on_a_guessed_policy():
-    """resolveUpdatePolicy fails safe to manual_linux_package on every platform.
-
-    Acting on that guess routes macOS, Windows and AppImage into the Linux-only
-    command, which returns Ok(None) off Linux, so Settings would claim the app
-    was up to date while an update was waiting.
-    """
+    """A guessed policy must keep the in-app path, or Settings reports up to date while one waits."""
     hook = _ui_source(TAURI_UPDATE_HOOK)
     policy = _ui_source(DESKTOP_UPDATE_POLICY)
 
@@ -902,19 +877,7 @@ def test_chat_sidebar_rows_are_compact_without_vertical_padding():
 
 
 def _resolve_classes(source: str, expression: str, variant: str) -> str | None:
-    """`expression` as the class string it yields for `variant`, or None if unreadable.
-
-    Every argument has to resolve. Collecting the quoted literals and ignoring the rest is
-    what let the pin's own `cn(..., REVEAL_WITH_OPEN_MENU_PROJECT_CHAT)` read as complete:
-    a constant supplying `sidebar-row-action`, an `is-*` modifier or a positioning utility
-    would have been invisible, and the button skipped or its reach understated with the
-    contract still green.
-
-    Four forms are read, and anything else is None: a literal, `cn(...)` over readable
-    arguments, a ternary on `variant === "..."`, and an identifier defined as a const in this
-    file, which is resolved recursively. `undefined` and a plain conditional's short-circuit
-    contribute nothing, which is what they do.
-    """
+    """Every argument must resolve: ignoring unreadable ones hid a constant's classes from the check."""
     expression = expression.strip().rstrip(",").strip()
     if not expression or expression == "undefined":
         return ""
@@ -949,16 +912,8 @@ def _resolve_classes(source: str, expression: str, variant: str) -> str | None:
 
 
 def _spread_may_supply(tag: str, attribute: str = "className") -> bool:
-    """True when a top-level JSX spread could be supplying or replacing *attribute*.
-
-    A spread's contents are not resolvable here, and both ways it can matter are silent. With
-    no explicit `className`, a spread may be the only thing supplying one, and this reader
-    returned "" for that tag so `_labelled_actions` skipped the action entirely: a pin handed
-    `{...{ className: "sidebar-row-action sidebar-touch-reveal right-40" }}` left the reach
-    calculation altogether while the shared options button kept every later assertion
-    satisfied. With an explicit `className`, only a spread written AFTER it can override, since
-    JSX applies attributes left to right and the last write wins.
-    """
+    """With no explicit className, any spread may supply one; with one, only a later spread can
+    override it."""
     spreads, depth = [], 0
     for index, char in enumerate(tag):
         if char == "{":
@@ -1068,57 +1023,23 @@ HEADER_COLUMNS = "grid-cols-[minmax(0,var(--media-rail-width,408px))_minmax(13re
 
 
 def _ui_source(path) -> str:
-    """A checked-in source, read at the default UI scale.
-
-    Every contract in this file is written against fixed lengths. #11458 wrapped those
-    lengths in `calc(... * var(--ui-space-scale, 1))` so they follow the UI font size, which
-    renders identically at the default scale of 1. Reading through `_at_default_scale` keeps
-    each contract asking about the length it was written for instead of the spelling.
-    """
+    """Reads at the default UI scale, where the calc() length wrappers render as the fixed lengths."""
     return _at_default_scale(path.read_text(encoding = "utf-8"))
 
 
 def _window_chrome_source(path) -> str:
-    """A checked-in source, read exactly as written.
-
-    Window chrome does not scale with the interface font size. The custom titlebar is 34px
-    because the Tauri window decoration is 34px, and `DesktopChromeVarsEffect` only mirrors
-    that number onto `<html>` for the portalled sheets to sit below. Reading that mirror
-    through `_ui_source` would accept `calc(34px * var(--ui-space-scale, 1))` as 34px while
-    the real titlebar stayed put and every fixed sheet slid off it at a non-default UI size,
-    so the chrome is read raw and a scale wrapper fails the contract.
-    """
+    """Window chrome does not scale with UI font size, so it is read raw; a scale wrapper fails here."""
     return path.read_text(encoding = "utf-8")
 
 
 def _spacing_rem(live_css: str) -> float | None:
-    """The rem one Tailwind spacing unit is worth, read from the theme's `--spacing`.
-
-    Every `pr-N` here is N of these, while the pin's offset and padding are stated in the
-    stylesheet as fixed rem. Assuming 0.25 made the two comparable only by coincidence: set
-    `--spacing: 0.20rem` and `pr-14` buys 2.8rem where the pin still needs 3.5, so the action
-    overlaps the title while this arithmetic, done in assumed units, says it does not.
-
-    Every declaration has to agree. More than one value means the answer depends on which
-    theme block is in force, which this guard does not model.
-    """
+    """Read from the theme's --spacing; None when declarations disagree, since the theme block decides."""
     stated = {match.group(1) for match in re.finditer(r"--spacing:\s*([\d.]+)rem\s*;", live_css)}
     return float(stated.pop()) / 1 if len(stated) == 1 else None
 
 
 def _as_spacing_units(cls: str, spacing: float) -> str:
-    """`pr-[78px]` as `pr-19.5`, so an arbitrary gutter is compared rather than refused.
-
-    The checks below compare `pr-N`, where N counts Tailwind spacing units of 0.25rem. A row
-    that states its touch gutter as an exact pixel value is saying the same thing in another
-    spelling, and refusing it made a correct row (#11408's spinner column, `pr-[78px]`) fail a
-    guard about a defect it does not have.
-
-    Only px and rem convert, and only on `pr-`: those are the two the arithmetic here is
-    defined in. Anything else (`%`, `calc()`, `var()`) resolves against something this cannot
-    see, so it is left alone for the refusal below to catch. Left alone rather than dropped,
-    which is the point: an unconvertible value must still reach a check that says so.
-    """
+    """Converts pr-[Npx] and pr-[Nrem] to spacing units, leaving other values for the refusal check."""
     match = re.fullmatch(r"((?:\S*:)?pr)-\[(\d+(?:\.\d+)?)(px|rem)\]", cls)
     if not match:
         return cls
@@ -1128,13 +1049,7 @@ def _as_spacing_units(cls: str, spacing: float) -> str:
 
 
 def _own_declarations(live_css: str, selector: str) -> str | None:
-    """One rule's own body, with any rule nested inside it removed.
-
-    Brace-matched rather than read as `[^}]*`, which stops at the first `}` and so takes in a
-    nested rule's selector and declarations while cutting the outer rule short.
-    `.sidebar-row-action` has such a nested rule, `.sidebar-touch-reveal`, so the lazy form was
-    reading part of a different rule as if it belonged to this one.
-    """
+    """Brace-matched, since a lazy [^}]* stops at a nested rule's } and mixes its declarations in."""
     start = re.search(rf"{re.escape(selector)}\s*\{{", live_css)
     return None if not start else _declarations_at(live_css, start.end() - 1)
 
@@ -1173,13 +1088,7 @@ _SHORTHANDS = {
 
 
 def _sole_measure(body: str, utility: str, prop: str, spacing: float) -> float | None | str:
-    """One rule's value for a measure: the number, None if unreadable, "" if it states none.
-
-    Every declaration is collected, because CSS resolves a repeat to the last and a
-    first-match read reports the first. Two readable values are refused rather than resolved:
-    which one wins also depends on specificity and on where Tailwind emits the utility, and
-    this guard models neither.
-    """
+    """Refuses two readable values rather than picking one: specificity and emit order decide the winner."""
     properties, utilities = _SHORTHANDS[utility]
     shorthand = [
         name for name in properties if re.search(rf"(?<![\w-]){re.escape(name)}:", body)
@@ -1196,17 +1105,7 @@ def _sole_measure(body: str, utility: str, prop: str, spacing: float) -> float |
 
 
 def _stated_units(body: str, utility: str, prop: str, spacing: float) -> list[float | None]:
-    """Every value this rule states for one measure, in spacing units.
-
-    EVERY one, because CSS resolves a repeated declaration to the last, and a first-match
-    search reports the first. `.sidebar-row-action-glyph` gaining a `size-20` after its
-    `size-6`, or the base action rule gaining an `@apply pr-20` after its `pr-1.5`, changes
-    what renders and left every floor here unmoved. The caller refuses anything but a single
-    readable answer rather than picking one, since which wins also depends on specificity and
-    on where Tailwind emits the utility, and this guard does not model either.
-
-    None marks a value it cannot read, which must not collapse into "not stated".
-    """
+    """Every stated value, not the first, since CSS takes the last; None means unreadable, not unstated."""
     found: list[float | None] = []
     for match in re.finditer(rf"(?<![\w-]){re.escape(utility)}-(\S+?)(?=[\s;]|$)", body):
         raw = match.group(1)
@@ -1227,13 +1126,7 @@ def _stated_units(body: str, utility: str, prop: str, spacing: float) -> list[fl
 
 
 def _base_row_action_offset(live_css: str, spacing: float) -> float | None:
-    """The right edge `.sidebar-row-action` itself sets, in units, or None if unreadable.
-
-    Every action's position is measured from this. It is `right-0` today, so an assumed zero
-    was right by luck; and returning on the first `@apply right-*` ignored a later
-    `right: 5rem` in the same rule, which is what CSS would render, so the reader went on
-    saying zero while every action extended into the title.
-    """
+    """Reads every right declaration in the rule, since a later `right:` overrides an earlier @apply."""
     body = _own_declarations(live_css, ".sidebar-row-action")
     if body is None:
         return None
@@ -1242,13 +1135,7 @@ def _base_row_action_offset(live_css: str, spacing: float) -> float | None:
 
 
 def _row_action_offsets(live_css: str, base: float, spacing: float) -> dict[str, float | None]:
-    """Each `.sidebar-row-action.is-*` modifier, and the right edge it renders with.
-
-    Read from CSS rather than named here, so an action positioned by a modifier this file has
-    never heard of is refused instead of being recorded as flush right. A modifier that states
-    no edge leaves the base rule's in force, which is what CSS does, so it gets *base* rather
-    than zero. None means the rule states one this cannot resolve, and the caller refuses it.
-    """
+    """Read from CSS, not a list, so an unknown modifier is refused; one with no edge inherits the base."""
     return {
         name: base
         if (measure := _sole_measure(body, "right", "right", spacing)) == ""
@@ -1260,13 +1147,7 @@ def _row_action_offsets(live_css: str, base: float, spacing: float) -> dict[str,
 def _row_action_left_paddings(
     live_css: str, base: float, spacing: float
 ) -> dict[str, float | None]:
-    """Each modifier, and the LEFT padding it renders with, in units.
-
-    The left padding is inside the button, so it is part of what a tap hits even though it
-    shows nothing, and `.sidebar-row-action.sidebar-touch-reveal` makes the button clickable
-    on a coarse pointer. The pin sets it to zero for that reason; the shared options button
-    keeps the base, which faces the pin rather than the title.
-    """
+    """Left padding is inside the button, so it is part of what a tap hits; the pin sets it to zero."""
     return {
         name: base
         if (measure := _sole_measure(body, "pl", "padding-left", spacing)) == ""
@@ -1276,13 +1157,7 @@ def _row_action_left_paddings(
 
 
 def _row_action_paddings(live_css: str, base: float, spacing: float) -> dict[str, float | None]:
-    """Each modifier, and the right padding it renders with, in units.
-
-    The base `pr-1.5` is not what every action gets: the container is justify-end, so its
-    right padding decides where the glyph sits, and `.is-unpin-action` overrides it to
-    `0.125rem` to close the gap to the options button. Applying the base to every action put
-    the pin's reach at 15 when it is 14, and that false floor rejected a sufficient `pr-14`.
-    """
+    """The base pr-1.5 is not universal: `.is-unpin-action` overrides it to 0.125rem for the pin."""
     return {
         name: base
         if (measure := _sole_measure(body, "pr", "padding-right", spacing)) == ""
@@ -1303,16 +1178,7 @@ def _labelled_actions(
     base_offset: float,
     live_css: str,
 ) -> dict[int, tuple[str, float]]:
-    """The row actions one variant renders: label -> whether it is the offset one.
-
-    A row's actions are not all shared: the pin sits inside `{variant === "recent" && (` or
-    its project counterpart, while the options button is outside both and renders on every
-    row. Counting them together and applying the total to both rows would make an action
-    added to one of them require room on the other, failing a change that is correct.
-
-    A gate is read as everything between `{variant === "x" && (` and the parenthesis that
-    closes it; a button outside every gate belongs to both rows.
-    """
+    """Per variant, since the pin sits in a variant gate while the options button renders on every row."""
     gates = []
     for match in re.finditer(r'\{\s*variant\s*===\s*"(\w+)"\s*&&\s*\(', block):
         depth = 0
@@ -1441,11 +1307,7 @@ def _labelled_actions(
 
 
 def _opening_jsx_tags(source: str, marker: str) -> list[str]:
-    """Every `marker ... >` opening tag in `source`, braces balanced.
-
-    A `>` inside an attribute expression does not end the tag, so depth is tracked rather
-    than scanning to the first one.
-    """
+    """Depth is tracked, since a `>` inside an attribute expression does not end the tag."""
     tags, start = [], source.find(marker)
     while start != -1:
         depth = 0
@@ -1463,11 +1325,7 @@ def _opening_jsx_tags(source: str, marker: str) -> list[str]:
 
 
 def _operators(text: str) -> list[tuple[int, str]]:
-    """Positions of `?`, `:`, `&&` and `||` that are not inside a string or brackets.
-
-    Tailwind's own colons all sit inside a quoted class list or inside `[...]`, so depth and
-    quoting are the whole of it. `?.` and `??` are skipped: they are not this grammar.
-    """
+    """`?.` and `??` are skipped because they are not part of this grammar."""
     found, depth, quoted, index = [], 0, False, 0
     while index < len(text):
         char = text[index]
@@ -1495,14 +1353,7 @@ def _operators(text: str) -> list[tuple[int, str]]:
 
 
 def _branches(argument: str) -> list[tuple[tuple[tuple[str, bool], ...], str]]:
-    """Every value one cn() argument can evaluate to, with the conditions that select it.
-
-    The conditions come back as (text, truth) so that two arguments branching on the SAME
-    expression cannot be combined into a state neither can be in. That matters here: the
-    row's touch gutters live in `showWorkSpinner ? undefined : "...pair..."` while the room
-    for the spinner case is stated in a different argument, also on `showWorkSpinner`. A
-    product that ignored the correlation would invent a row with neither.
-    """
+    """Conditions are kept so arguments on the same expression are not combined into an impossible row."""
     text = argument.strip()
     marks = _operators(text)
     opened = next((index for index, (_, token) in enumerate(marks) if token == "?"), None)
@@ -1544,11 +1395,7 @@ def _branches(argument: str) -> list[tuple[tuple[tuple[str, bool], ...], str]]:
 
 
 def _values_are_readable(argument: str) -> bool:
-    """True when every value `argument` can evaluate to is a string literal or `undefined`.
-
-    Conditions are not values: in `a && "x"` and `c ? "x" : undefined` only the operands that
-    can BECOME the class string matter, so `a` and `c` may be anything.
-    """
+    """Only operands that can become the class string count; their guarding conditions may be anything."""
     return all(
         value.strip() in ("", "undefined") or re.fullmatch(r'"[^"]*"', value.strip())
         for _, value in _branches(argument)
@@ -1582,12 +1429,7 @@ _DECLARES_RIGHT_EDGE = (
 
 @functools.lru_cache(maxsize = 4)
 def _css_rules(live_css: str) -> tuple[tuple[str, str], ...]:
-    """Every rule in the stylesheet once, as (selector list, own declarations).
-
-    Cached and shared. The per-class scan below re-read the whole file for every class it was
-    asked about, five times over, which took about six seconds on its own: more than the other
-    thirty-six tests in this file put together.
-    """
+    """Cached and shared, since re-scanning the stylesheet per class was too slow to run in tests."""
     rules = []
     for match in re.finditer(r"([^{}]*)\{", live_css):
         body = _declarations_at(live_css, match.end() - 1)
@@ -1597,13 +1439,7 @@ def _css_rules(live_css: str) -> tuple[tuple[str, str], ...]:
 
 
 def _classes_setting(live_css: str, classes: set[str], declares: str) -> list[str]:
-    """Which of *classes* index.css gives a declaration matching *declares*.
-
-    The gutter and reach comparisons read utilities off the elements, so an ordinary project
-    class whose rule sets the same property replaces the number that renders while the
-    comparison carries on with the utility's. A coarse-pointer rule doing it with `!important`
-    is the worst case: the row still says `pr-16` and the rendered gutter is zero.
-    """
+    """Finds project classes that set the same property, since they override the utility the row reads."""
     offenders = []
     for name in sorted(classes):
         mentions = re.compile(rf"\.{re.escape(name)}(?![\w-])")
@@ -1624,16 +1460,7 @@ def _classes_setting(live_css: str, classes: set[str], declares: str) -> list[st
 
 
 def _escapes_the_model(tag: str) -> str | None:
-    """Why *tag*'s position cannot be read from its classes and index.css, or None.
-
-    Every number this file computes comes from a class list and a stylesheet rule. Three
-    things beat both: an inline `style`, a spread that could supply one, and a utility that
-    moves the element by a route the `right` plus `padding-right` sum does not model.
-
-    One function because the drift was the actual defect. The carrier, the row actions, the
-    spinner's wrapper and the spinner itself each grew these checks separately and each ended
-    up with a different subset, so a rule added to one path kept being missing from the next.
-    """
+    """Names why a tag's position cannot be read from its classes: an inline style or a spread."""
     if re.search(r"(?:^|[\s{])style=", tag):
         return "sets an inline style"
     if any(_spread_may_supply(tag, name) for name in ("className", "style")):
@@ -1643,16 +1470,7 @@ def _escapes_the_model(tag: str) -> str | None:
 
 
 def _touch_spinner_reach(block: str, spacing: float) -> tuple[str, float] | None:
-    """How far the working-row spinner reaches into the row on a coarse pointer, in units.
-
-    The row actions are not the only thing the title has to clear. A working row also renders
-    a spinner, anchored right and pushed clear of the actions on touch, and the gutter has to
-    hold both. Measuring only the actions let the touch gutter drop from the 78px the spinner
-    needs to the 64px the pin needs, with the spinner then over the title.
-
-    Read the way everything else here is: the offset off the element that carries it, the
-    width off the glyph inside it, and None for anything this cannot resolve.
-    """
+    """The spinner must clear the title too, not just the actions, or the touch gutter is too narrow."""
     gate = next(
         (
             found
@@ -1705,21 +1523,12 @@ def _touch_spinner_reach(block: str, spacing: float) -> tuple[str, float] | None
 
 
 def _rendered_class_lists(arguments: list[str]) -> list[list[str]]:
-    """Every class list the builder can produce, in builder order, one per live branch.
-
-    Combinations that would need one condition to hold two truths at once are dropped, not
-    checked: they are not rows anyone can render.
-    """
+    """Combinations that would need one condition to be true and false at once are dropped, not checked."""
     return [classes for _, classes in _rendered_with_conditions(arguments)]
 
 
 def _rendered_with_conditions(arguments: list[str]) -> list[tuple[dict[str, bool], list[str]]]:
-    """As above, but keeping which conditions each rendering needed.
-
-    The conditions are what tie a rendering to the rest of the row. The spinner is gated on
-    the same flag as the row's widest gutter, and without them a check can only ask what SOME
-    rendering reserves, not what the rendering that shows the spinner reserves.
-    """
+    """Conditions tie each rendering to the row, so the spinner checks the gutter it is shown with."""
     lists: list[tuple[dict[str, bool], list[str]]] = [({}, [])]
     for argument in arguments:
         grown = []
@@ -2368,11 +2177,7 @@ _LENGTHS_THAT_MUST_KEEP_THE_SCALE = (
     (AUDIO_PAGE, "@[50rem]:", "pt", "60px", 2),
     (DIFFUSION_TRAIN_PANEL, "@[50rem]:", "pt", "42px", 1),
     (DIFFUSION_TRAIN_PANEL, "", "pt", "42px", 1),
-    # The sidebar row: its height, the gap it sets when pinned, and the indent a project row
-    # takes. These are hand-set one-off lengths, which is exactly the spacing that used to
-    # stay put while the labels grew, so the row clips its own text at a larger setting.
-    # Eight rows: #11589 added the drop-cue row, #12016 a second section header for the
-    # custom sidebar sections, and #12927 the pinned-pages label, all scaled like the rest.
+    # Hand-set lengths must scale with the text, or the row clips its own text at a larger setting.
     (APP_SIDEBAR, "", "h", "30px", 8),
     (APP_SIDEBAR, "", "gap", "8.5px", 6),
     (APP_SIDEBAR, "", "pl", "39px", 2),
@@ -2501,10 +2306,7 @@ def test_the_lengths_these_contracts_measure_still_follow_the_ui_scale():
 
 
 def test_the_media_rail_fallback_is_the_width_hook_fallback():
-    """The 408px inside var(--media-rail-width,408px) is only what paints before the page sets the
-    variable; the hook's own fallback is what a first visit stores. They have to agree, or the
-    divider jumps on first paint. Each page that reads the variable also has to set it on the
-    element marked as the rail root, or every rail silently sits at the fallback."""
+    """The CSS fallback must equal the hook's fallback, or the divider jumps on first paint."""
     hook = (FRONTEND / "hooks/use-media-rail-width.ts").read_text(encoding = "utf-8")
     for kind, page in (("images", IMAGES_PAGE), ("audio", AUDIO_PAGE)):
         block = hook.split(f"  {kind}: createPanelWidthStore(", 1)[1].split("}),", 1)[0]

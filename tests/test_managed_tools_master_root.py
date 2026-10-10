@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""UNSLOTH_HOME names the tree, not the Studio directory inside it, and the native runtimes are
-siblings of studio/, the spelling studio/setup.sh and scripts/build_whisper_cpp.sh already use. A
-resolver deriving them from studio_root() would look in <root>/studio/<tool> for what the
-installer put at <root>/<tool>, so managed Node and whisper.cpp go missing and run.py pins the
-wrong llama.cpp path into every worker.
-
-Run in a subprocess per case: these modules read the environment at import time.
-"""
+"""UNSLOTH_HOME is the tree root; native runtimes sit beside studio/, not under studio_root()."""
 
 from __future__ import annotations
 

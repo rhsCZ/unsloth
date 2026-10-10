@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the session-layer -> scoring-layer seam.
-
-Every test here is written against a failure that would otherwise render as a plausible number.
-The seam's whole job is to keep three different absences apart, so each is asserted separately
-rather than through "is not None".
-"""
+"""Each test targets a failure that would render as a plausible number; absences are kept distinct."""
 
 from __future__ import annotations
 
@@ -146,12 +141,7 @@ def test_recorder_never_installed_reads_not_attempted():
 
 
 def test_a_window_that_recorded_no_frames_fails_the_pool_instead_of_dropping_out():
-    """A complete freeze during one action must not be answered for by the windows beside it.
-
-    `compute_frame_stats` already calls a single attempted-but-frameless window a failed
-    measurement. Pooled, that window used to be skipped, and the cell came back with the
-    remaining window's clean numbers.
-    """
+    """A frameless window fails the cell's pool instead of being skipped, so a freeze is not hidden."""
     normal = _window("c1", [16.0] * 50 + [40.0], duration_ms = 1000.0)
     frozen = _window("c1", [], duration_ms = 4000.0)
     m = measures_from_records([_cell(), normal, frozen])[10_000]
@@ -313,15 +303,7 @@ def test_a_wire_character_count_of_zero_is_still_a_failure():
 
 
 def test_a_thread_that_was_not_yanked_back_can_still_be_reported():
-    """The block `runtime/session.py` writes as `scroll_intent`, with the reading that broke CI.
-
-    `detached_samples: 7, yanked_back_samples: 0` is the GOOD outcome -- the user scrolled away and
-    the app left them there -- and it made the whole payload unrenderable: the real-path CI session
-    ran every action, wrote its cell, and then `--report` refused with `bare zeros found:
-    $.cells[0].scroll_intent.yanked_back_samples = 0`. The block is derived from the same page-side
-    read as `follow`, which is covered by its own `follow_attempted`, so it carries the same
-    attestation rather than a new exemption.
-    """
+    """A thread the user scrolled away from (yanked_back_samples 0) is a good outcome and must validate."""
     validate_payload(
         {
             "excluded_cells": [],
@@ -343,12 +325,8 @@ def test_a_thread_that_was_not_yanked_back_can_still_be_reported():
 
 
 def test_the_scroll_intent_block_still_attests_in_the_session_layer():
-    """The exemption is an attestation, so it lives with the writer and can be dropped there.
-
-    Pinned at the source because the payload shape that fails is only produced by a live run: a
-    `scroll_intent` block written without `follow_attempted` passes every unit test in this file
-    and refuses the first real session that reaches the report step.
-    """
+    """The scroll_intent block in runtime/session.py must carry follow_attempted, or a live run is
+    refused."""
     session = (Path(__file__).resolve().parents[2] / "runtime" / "session.py").read_text(
         encoding = "utf-8"
     )
@@ -408,10 +386,7 @@ def test_setup_is_a_declared_window_kind():
 
 
 def test_a_probe_payload_with_legitimate_zeros_still_validates():
-    """An unseeded rung has no code blocks, and `performance.now()` is coarsened to 100 us, so
-    `code_token_spans`, `blur_inpage_ms` and `forced_layout_ms` can all be a true 0. Before the
-    attestation was written next to them, `--report` refused the whole payload of a run that
-    completed."""
+    """Unseeded rungs can have true zeros from the coarsened clock, which validation must accept."""
     cell = _cell()
     cell["composer_click_ms"] = 120.0
     cell["click_attribution"] = {

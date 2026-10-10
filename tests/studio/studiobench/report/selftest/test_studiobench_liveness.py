@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""`--assert-liveness` is the gate that catches an action which never fired reading as "no effect".
-
-A gate that cannot fail is worse than no gate, because it is quoted as evidence. So every test here
-that asserts a pass is paired with one that asserts the corresponding failure, and the empty-payload
-case is tested explicitly: a check that passes over zero rows is the same false negative wearing a
-different hat.
-"""
+"""--assert-liveness must fail when an action never fired; a gate that cannot fail is worse than none."""
 
 from __future__ import annotations
 
@@ -141,16 +135,7 @@ def test_a_not_run_allowance_does_not_swallow_a_missed_slot(tmp_path):
 
 
 def test_an_action_whose_own_assertion_failed_fails(tmp_path):
-    """RAN IS NOT DID WHAT IT CLAIMED, and this gate is the machine that checks it.
-
-    `scoring/from_payload.py` refuses to score a timing whose `expect_ok` is False and
-    `report/payload.py` lists the cell under EXCLUDED CELLS saying its timings "must not be
-    quoted". Read raw, this gate agreed with neither: `ran = True, expect_ok = False` reached
-    neither the NOT RUN branch nor the missed-slot branch, so the CI liveness job exited 0 and
-    the report that dropped every excluded number exited 0 as well. A selector regression that
-    fails EVERY cell's assertion is precisely the "absent read as no effect" failure this gate
-    exists for.
-    """
+    """An action that ran but has expect_ok False must fail the liveness gate."""
 
     path = write_payload(
         tmp_path,
@@ -253,12 +238,7 @@ def attempt(
 
 
 def test_a_resumed_cell_is_not_failed_by_the_attempt_that_died(tmp_path):
-    """`--resume` appends, so both attempts at one `cell_id` are in the file forever.
-
-    The resumed run exits 0 and `--report` scores the retry. Read raw, this gate found the dead
-    attempt's `completed: false` and NOT RUN actions on every later invocation, so a payload that
-    had already been repaired could never pass again.
-    """
+    """A resumed retry supersedes the dead attempt at the same cell_id, and the gate must ignore it."""
 
     path = write_payload(
         tmp_path,
@@ -273,11 +253,7 @@ def test_a_resumed_cell_is_not_failed_by_the_attempt_that_died(tmp_path):
 
 
 def test_the_superseded_attempt_does_not_count_as_a_second_cell(tmp_path):
-    """Not merely "does not fail": the dead attempt is not a cell this payload contains.
-
-    Counting it would make `--assert-liveness` report two cells where one ran, and the count is
-    the only thing standing between this gate and an empty payload passing vacuously.
-    """
+    """Only a later attempt at the same cell id supersedes an earlier one; other cells stay checked."""
 
     rows = [
         attempt(OLD, [{"action": "message_menu", "ran": False}], completed = False),
@@ -324,11 +300,7 @@ def test_the_latest_attempt_is_judged_on_its_own_failures(tmp_path):
 
 
 def test_a_different_cell_in_an_earlier_session_is_not_superseded(tmp_path):
-    """Only a later attempt at the SAME cell id supersedes an earlier one.
-
-    A resumed run re-runs only the cells that died; every cell the first session completed stays
-    in the payload under its own id and must still be checked.
-    """
+    """A killed attempt supersedes the recorded one and writes no cell row, so it cannot count as a pass."""
 
     path = write_payload(
         tmp_path,
@@ -343,15 +315,7 @@ def test_a_different_cell_in_an_earlier_session_is_not_superseded(tmp_path):
 
 
 def test_an_attempt_killed_before_its_cell_row_is_not_a_pass(tmp_path):
-    """A SIGKILL inside a cell must not delete that cell from the gate's answer.
-
-    `latest_attempt_rows` names the latest attempt from ANY attempt-keyed row, because the
-    Recorder flushes and fsyncs action and window rows while the terminal `cell` row is written in
-    a `finally` that a SIGKILL never reaches. The killed attempt therefore supersedes the recorded
-    one and contributes no cell row itself, so reading cell rows alone dropped the cell entirely:
-    a resume killed inside a cell whose first attempt had already recorded `completed: false` with
-    a NOT RUN action turned exit 1 into exit 0 while both facts were still in the file.
-    """
+    """A run killed mid-cell must not pass on the strength of its earlier, complete cells."""
 
     path = write_payload(
         tmp_path,
@@ -380,11 +344,7 @@ def test_an_attempt_killed_before_its_cell_row_is_not_a_pass(tmp_path):
 
 
 def test_a_run_killed_during_a_later_cell_does_not_pass_on_its_earlier_ones(tmp_path):
-    """The same hole without a resume: the killed cell has no attempt behind it at all.
-
-    Earlier cells stay complete and live, so a gate that only reads cell rows reports them and
-    exits 0 over a run that stopped in the middle.
-    """
+    """A cell killed before writing any attempt row must fail the gate, not vanish from it."""
 
     path = write_payload(
         tmp_path,
@@ -403,13 +363,7 @@ def test_a_run_killed_during_a_later_cell_does_not_pass_on_its_earlier_ones(tmp_
 
 
 def test_an_allowed_action_that_ran_and_failed_its_assertion_still_fails(tmp_path):
-    """`--allow-not-run` excuses NOT RUNNING, not everything the gate checks.
-
-    The allow-list skip used to sit above all three branches, so a listed name was exempt from
-    the gate entirely. `image_upload` is listed in studiobench-ci.yml only because the fixture
-    cannot mount an upload; the day it does mount, an upload that produces no attachment has to
-    be a failure rather than an excuse inherited from a different reason.
-    """
+    """--allow-not-run excuses only NOT RUNNING, so a listed action that ran and failed still fails."""
 
     path = write_payload(
         tmp_path,
@@ -446,15 +400,7 @@ def test_an_allowed_action_that_ran_and_missed_its_slot_still_fails(tmp_path):
 
 
 def test_a_missed_slot_is_not_excused_by_a_not_run_allowance(tmp_path):
-    """`--allow-not-run` excuses an action the platform cannot perform, not one it was late for.
-
-    `scene/schedule.py` records an overrun as `ran = False, slot_missed = True`, so checking the
-    allowance first let a listed name inherit an excuse written for a different failure. The
-    action could have been performed; the machine was too slow to reach the window. On
-    `image_upload`, the only allowance this repo ships, that is the difference between a timed
-    benchmark and an untimed one, and the help text already promises a listed action is still
-    held to its slot.
-    """
+    """--allow-not-run excuses an action the platform cannot perform, not one whose slot was missed."""
 
     path = write_payload(
         tmp_path,

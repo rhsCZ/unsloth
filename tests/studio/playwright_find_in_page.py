@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Exercise find-in-page in real browsers and degraded engine modes.
-
-The Node suite covers pure indexing. This harness covers browser-only chords, geometry,
-highlights, fallback selection, and visibility behavior.
-
-    SMOKE_ENGINES=chromium,firefox,webkit python3 tests/studio/playwright_find_in_page.py
-
-The modes emulate missing highlight support, legacy visibility options, and no visibility API."""
+"""Find-in-page in real browsers, plus degraded modes without highlight or visibility API."""
 
 import json
 import os
@@ -110,14 +103,7 @@ def settle(
     *,
     timeout: int = 10000,
 ) -> None:
-    """Give `condition` until `timeout` to hold, and do not fail here if it never does.
-
-    A flat sleep before reading the state asserts the runner's speed alongside the
-    behaviour, and a busy runner failed the chord re-focus check on a build that only
-    touched a PowerShell script. Waiting on the condition lets a slow machine take its
-    time, while a genuinely broken one spends the timeout and then fails on the SAME check
-    with the same message, so nothing is swallowed here.
-    """
+    """Waits on the condition rather than a flat sleep, so a slow runner is not failed by timing."""
     try:
         page.wait_for_function(condition, timeout = timeout)
     except PlaywrightTimeout:

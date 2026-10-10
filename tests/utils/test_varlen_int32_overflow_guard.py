@@ -13,19 +13,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""A packed row holding more than a few thousand documents used to abort a training run with
-`CUDA error: an illegal memory access was encountered`, which poisons the CUDA context so every
-later op in the process fails too.
-
-Root cause: flash-attn 2's varlen BACKWARD allocates
-``dq_accum = zeros(total_q + 128 * n_seqs, n_heads, round_up(head_dim, 32))`` and indexes it
-with int32, so the kernel faults once that element count reaches 2**31. xFormers dispatches a
-BlockDiagonal* bias to the same flash-2 op, which is why the crash showed up on the xformers
-path. Forward-only never allocates the buffer and never faults.
-
-The parametrised bounds below are measurements from a B200 (bf16, one flattened row,
-forward + backward), bisected on document count.
-"""
+"""flash-attn 2 varlen backward indexes dq_accum with int32 and faults at 2**31 elements."""
 
 import pytest
 import torch
@@ -141,10 +129,7 @@ def test_oversized_partition_falls_back_to_sdpa(monkeypatch, backend):
 # 8129 documents at 16 heads / head_dim 128 is the last count that ran.
 @pytest.mark.parametrize("backend", [ad.XFORMERS, ad.FLASH_VARLEN])
 def test_softcapped_model_raises_instead_of_silently_dropping_the_softcap(monkeypatch, backend):
-    """Gemma 2 hands `attn_logit_softcapping` to the fast kernels through
-    `flash_varlen_kwargs` alone (unsloth/models/gemma2.py), and the SDPA branch has no
-    softcap at all. Downgrading a softcapped model would keep the run alive on wrong logits
-    and wrong gradients, which is worse than the fault the guard prevents, so it must stop."""
+    """Softcapped models must raise, not fall back to SDPA, which has no softcap and gives wrong logits."""
     with pytest.raises(RuntimeError) as excinfo:
         _run(monkeypatch, backend, n_docs = 20000, requires_grad = True, softcap = 50.0)
     message = str(excinfo.value)

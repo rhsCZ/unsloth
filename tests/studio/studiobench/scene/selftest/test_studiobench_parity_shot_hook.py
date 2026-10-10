@@ -1,19 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The screenshot taken beside the parity digest, and the things it must never do.
-
-It must not fire when nobody asked, because it costs an encode per action per arm on every run of
-a gate whose whole argument is that it is cheap. It must not take the page with it when it fails:
-a shot is evidence about a measurement, so a broken camera has to leave the measurement standing
-rather than turn a real reading into `parity_attempted: false`. And it must not be charged to the
-measured window, because the film runs on a wall clock and an encode inside the window eats the
-gap before the next slot, which is exactly how an action comes to report a MISSED SLOT.
-
-Driven against a stub page rather than a browser. What is under test is the hook's contract --
-when it fires, what it names the file, what it records, and what it does with an exception -- and
-none of that needs Chromium. That the screenshot itself is a picture of the right thing is the
-live job's business.
-"""
+"""The shot fires only when asked, never fails the measurement, and stays outside the timed window."""
 
 from __future__ import annotations
 

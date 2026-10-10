@@ -1,111 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""When is a thread READY to be measured?
-
-THE OLD GATE COUNTED DOM NODES, and that is the whole problem.
-`_wait_for_thread` waited for `[data-role]` to reach the number of messages the seeder had
-written, and raised `TimeoutError: the thread mounted 9 of 18 messages in 180s` otherwise. For a
-thread that mounts everything, that is a fine proxy: the last thing the app does is mount the last
-message, so the count reaching N means the app has finished. For a thread that mounts a WINDOW by
-design, the count never reaches N, so the arm that addresses the actual root cause -- the standing
-DOM -- could not be scored at all. Raising the timeout would not have helped; the count is not
-going to arrive.
-
-WHAT THE GATE IS ACTUALLY FOR. It is not for counting. It is for refusing to start the film while
-the app is still building, because a window opened mid-build charges the build to the first action
-and reports a flattering number for everything after it. The property worth asserting is therefore
-"the app has finished, and what it finished with is the real thread", not "N elements exist".
-
-THE SIGNAL. Five facts, all of which a fully-mounted thread and a correctly virtualised one can
-both satisfy, and none of which a half-built one can:
-
-  SETTLED     two samples at least `STABLE_GAP_MS` apart agree on the mounted message count, the
-              total element count and the viewport's scrollHeight. A thread still mounting is
-              still growing on all three; this is the condition that catches the exact failure the
-              gate exists for.
-  END PRESENT the LAST message of the seeded thread is mounted, identified by the marker string
-              the seeder itself wrote into the last user turn. Mounting runs front to back, so the
-              last message is the last thing to appear: a run that has mounted 9 of 18 has mounted
-              the first 9 and cannot satisfy this. It is also what a virtualised thread anchored
-              at the end of the conversation has by construction.
-  TOTAL       every mounted message agrees on `aria-setsize`, and it equals the number of messages
-              the seeder wrote. This is the virtualizer's own claim about how long the thread is,
-              read from the place the ARIA spec already requires a windowed list to publish it.
-              Required in `windowed` mode, recorded but not gated in `full` (where the mounted
-              count is the total).
-  ORDINALS    every mounted row publishes an `aria-posinset` that is ACTUALLY A POSITION: at least
-              1, unique across the mounted rows, no larger than the set size those same rows
-              declare, and -- for a window anchored at the bottom -- reaching the seeded total.
-              Presence alone is worth nothing: rows that all publish `0`, all publish the same
-              ordinal, or number a bottom-anchored window from 1 satisfy "the attribute is there"
-              while telling this gate and a screen reader nothing about where in the thread the
-              window sits. Gated in `windowed` mode only, and waived for a thread that is fully
-              mounted and publishes no ordinals at all, which is what the shipped build does.
-  ANCHORED    the viewport is at the bottom, read from the app's OWN state rather than from
-              arithmetic: Unsloth disables assistant-ui's autoscroll and runs
-              `use-intent-aware-autoscroll`, which pins to the bottom on `thread.initialize` and
-              hides `.aui-thread-scroll-to-bottom` with `invisible` exactly when it considers
-              itself at the bottom. The scrollTop arithmetic is kept as a corroborating reading,
-              never as the verdict on its own. Gated in `windowed` mode only, where it is what
-              makes the mounted set reproducible between the two arms; in `full` mode every
-              message is mounted whatever the scroll position, so gating on it would add a way to
-              fail that has nothing to do with readiness.
-
-A NOTE ON WHAT THIS ASKS OF THE ARM. Unsloth ships no virtualization and no ordinal attributes:
-there is no `aria-setsize`, no `aria-posinset` and no `data-message-index` anywhere in the chat
-thread today, and `@tanstack/react-virtual` is used only by the hub's model catalog. So TOTAL is
-not a signal that exists and is being read; it is a CONTRACT THE VIRTUALIZATION ARM MUST MEET.
-That is a requirement, not a favour: WAI-ARIA already requires a list that does not have all of
-its items in the DOM to publish `aria-setsize` and `aria-posinset`, so a virtualised thread that
-omits them is broken for assistive technology whatever it does to the frame rate. Refusing to
-score it is the right answer rather than an inconvenience. `full` mode requires none of this and
-runs unchanged against the shipped build.
-
-WHY IT CANNOT PASS EARLY ON A BROKEN ARM. Each of the interesting breakages is refused by a
-different one of those, so no single mistake in an arm can produce a pass:
-
-  still mounting              SETTLED fails (counts still climbing) and END PRESENT fails (the
-                              last message has not been reached yet)
-  mounts a window but has
-  only loaded part of the
-  thread into its store       TOTAL fails, because `aria-setsize` is the store's length and it
-                              will not equal what the seeder wrote
-  publishes ordinals that
-  are not positions -- all
-  zero, all identical, or
-  a bottom window numbered
-  from 1                      ORDINALS fails. Each of those is a real virtualizer bug (publishing
-                              the index WITHIN the window rather than the position in the thread
-                              is the common one) and each one makes the window unlocatable
-  mounts a window, claims
-  the right total, and has
-  really dropped the head     `probe_thread_completeness` fails: it scrolls to the top and
-                              requires the FIRST message, by the seeder's own marker, to mount
-  keeps the first and last
-  pages and loses messages
-  from the MIDDLE             `probe_thread_completeness` fails on COVERAGE: the head marker
-                              arrives, so the marker check alone is satisfied, and the ordinals
-                              recorded on the way up have a hole in them that no scroll position
-                              fills
-
-The residual, stated rather than hidden: an arm that publishes a truthful `aria-setsize`, keeps the
-whole thread in its store and materialises rows on demand passes all of it. That is not a hole,
-that is a correctly virtualised thread, which is the thing we set out to be able to score.
-
-WHY NOT THE OTHER CANDIDATES.
-  the app's own store         there is no supported handle on it from outside. Reaching into a
-                              React fibre or a bundler-internal module to read one would make the
-                              gate depend on the build's internals, which is exactly what a
-                              harness that has to run two different builds in one session cannot
-                              afford. `aria-setsize` is the same number, published on purpose.
-  scroll-to-end settled       necessary, not sufficient: an empty thread is settled at the bottom.
-                              It is one of the four here, not the whole signal.
-  the last message's content   used, but via the seeder's marker rather than the corpus text. The
-                              corpus goes through a markdown renderer, so its rendered text is not
-                              its source text and a tail match on it would be a guess. The marker
-                              is plain text this harness wrote itself.
-"""
+"""Readiness means the app has finished building the real thread, not that N DOM nodes exist."""
 
 from __future__ import annotations
 
@@ -128,11 +24,7 @@ DEFAULT_TIMEOUT_S = 180
 
 
 class ThreadNotReady(TimeoutError):
-    """The gate refused. A TimeoutError subclass so existing `except TimeoutError` still catches it.
-
-    Carries the last probe reading on `.detail`, because "the thread mounted 9 of 18 messages"
-    told you the count and nothing about which of the four conditions was the one that failed.
-    """
+    """TimeoutError subclass so existing except clauses still catch it; `.detail` has the last reading."""
 
     def __init__(self, message: str, detail: dict):
         super().__init__(message)
@@ -266,12 +158,7 @@ class Readiness:
 
 
 def evaluate(probe: dict, previous: Optional[dict], expected_messages: int, mode: str) -> dict:
-    """The whole decision, as a pure function of two probe readings. Tested without a browser.
-
-    Returns `{condition: True | False | None}`. `None` means NOT APPLICABLE IN THIS MODE and is
-    never treated as a pass or a fail -- the same distinction the parity layer draws between a
-    match and a surface that was never measured.
-    """
+    """Returns a verdict per condition; None means not applicable in this mode, never a pass or a fail."""
     if not probe.get("probe_attempted"):
         return {"probe": False}
 
@@ -565,46 +452,7 @@ def ordinal_coverage(
     expected_messages: int,
     extra_seen: Any = (),
 ) -> dict:
-    """Which of the seeded ordinals the traversal actually SAW, and what that does and does not
-    prove. A pure function of the traversal's own record, so it is tested without a browser.
-
-    THREE-VALUED, for the same reason `head_reached` is. `True` is coverage, `False` is a message
-    the arm no longer has, and `None` is this probe not having looked -- which is the one answer
-    the old code could not give and the reason a coarse gesture must never be allowed to report a
-    row it never scrolled past as a row the app lost.
-
-    AND `ordinal_coverage_state` SAYS WHICH KIND OF `None` IT IS, because the two are opposites and
-    a caller that cannot tell them apart has to treat them the same. `not_applicable` is a question
-    that does not arise -- no row published an ordinal, which is what a fully mounted arm does by
-    design -- and `unmeasured` is a question that arises and was not answered. The `thread_complete`
-    gate passes the first and refuses the second; collapsing them made a store that kept only its
-    first and last page scoreable whenever the sweep happened to be coarse.
-
-    The three ways `None` is the honest answer:
-
-      no row published an ordinal           NOT APPLICABLE. A fully mounted arm publishes none at
-                                            all, by design, and MODE_FULL never asked it to.
-                                            Checked FIRST: a windowed arm records the ordinals of
-                                            its mounted rows before the gesture takes its first
-                                            step, so an empty union really does mean an arm that
-                                            publishes nothing rather than a gesture that failed
-      the gesture never reached the top     UNMEASURED. Nothing was traversed, so nothing was
-                                            covered
-      consecutive stops did not overlap     UNMEASURED. The gesture jumps `TRAVERSE_STEP_PX` at a
-                                            time and a virtualizer mounts what is near the
-                                            viewport, so rows between two stops were never in view.
-                                            The remedy is a finer step, not a softer verdict
-
-    And the two that are a verdict about the arm:
-
-      a hole inside one mounted window      a virtualizer mounts a CONTIGUOUS run, so an ordinal
-                                            missing from between the smallest and the largest
-                                            mounted at a single stop -- and mounted at no other
-                                            stop either -- is a message the store does not have
-      a continuous sweep with a gap         every stop overlapped the last, so the union really is
-                                            everything the thread could show, and what is not in
-                                            it is not in the thread
-    """
+    """None is not_applicable (no ordinals published) or unmeasured; ordinal_coverage_state says which."""
     seen = {int(n) for n in (traverse.get("ordinals_seen") or [])}
     seen.update(int(n) for n in (extra_seen or ()))
     expected = set(range(1, expected_messages + 1)) if expected_messages > 0 else set()
@@ -684,28 +532,7 @@ def probe_thread_completeness(
     steps: int = TRAVERSE_STEPS,
     step_px: int = TRAVERSE_STEP_PX,
 ) -> dict:
-    """Does the thread really CONTAIN the whole conversation, not just show the end of it?
-
-    THE ONE QUESTION THE READINESS GATE CANNOT ANSWER FROM THE END OF THE THREAD. A windowed arm
-    anchored at the bottom looks identical whether its store holds all N messages or only the last
-    handful, and the difference is data loss. So this drives the only probe a user has: scroll to
-    the top and see whether the first message of the conversation arrives.
-
-    AND THE MARKER AT THE TOP IS NOT ENOUGH ON ITS OWN. A store that kept the first page and the
-    last one and lost everything between them mounts the head when you scroll to it, passes every
-    reading taken at the bottom, and is missing most of the conversation. So the traversal also
-    records the `aria-posinset` of every row it passes and `ordinal_coverage` says what that
-    covers -- including, when the gesture's stops did not overlap, that it covers nothing and the
-    answer is NOT MEASURED.
-
-    Run BEFORE the measured window, never inside it -- it scrolls the viewport the whole length of
-    the thread and mounts whatever the arm materialises on the way, which is real work that has no
-    business inside anybody's frame rate. The caller re-establishes the resting state afterwards.
-
-    Reported, not raised. A failure here does not mean the readiness gate was wrong; it means the
-    arm is losing messages, which is a finding to record against the arm rather than a reason to
-    lose the cell.
-    """
+    """Scrolls the whole thread to check the first message and ordinal coverage; reported, never raised."""
     out: dict = {"probe_attempted": True, "expected_messages": expected_messages}
     top = page.evaluate(TRAVERSE_JS, [True, steps, step_px])
     if not isinstance(top, dict) or not top.get("ran"):

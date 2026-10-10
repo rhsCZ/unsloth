@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Pinned-symbol + source-pattern transformers compat checks via GitHub raw-fetch + grep.
-
-Catches breakage classes from unsloth#3998/5036/5155/5259 and
-unsloth-zoo#572/571/549/543/541/495/491/488/472/393/388/583/584/159.
-CPU-only, no install. Anchors: transformers 4.57.6 (floor), 5.17.0 (ceiling) and 5.5.0
-(the old ceiling, still the Apple Silicon cap).
-"""
+"""CPU-only checks against transformers GitHub source; anchors 4.57.6, 5.5.0 and 5.17.0."""
 
 from __future__ import annotations
 
@@ -137,13 +131,7 @@ def _write_cached_matrix(tags: list[str]) -> None:
 
 
 def _resolved_tags() -> list[str]:
-    """`_release_tags()`, resolved once per run and shared across xdist workers.
-
-    Every return goes through `_with_always`, the published one included: the cache agrees on the
-    PyPI half of the answer, it is not a second source of truth for the anchors. A file written by
-    another revision and returned verbatim dropped the floor, the old ceiling and the notebook pins
-    while reporting green.
-    """
+    """Cached and fresh results both go through _with_always, so a stale file cannot drop the anchors."""
     cached = _cached_matrix()
     if cached is not None:
         return _with_always(cached)
@@ -156,13 +144,7 @@ def _resolved_tags() -> list[str]:
 
 
 def _release_tags() -> list[str]:
-    """Every transformers minor at or above the floor, latest patch of each, oldest first.
-
-    Read from PyPI, not pinned: this suite says which versions the cap may be lifted to, and a
-    hand-maintained list answers for the day it was edited. One tag per minor bounds the matrix; a
-    patch that broke something earns a place in `_ALWAYS`. Yanked and rc/dev/post builds are
-    skipped, since pip will not install them.
-    """
+    """Reads versions from PyPI rather than a pinned list; yanked and rc/dev/post builds are skipped."""
     try:
         with urllib.request.urlopen(
             "https://pypi.org/pypi/transformers/json",
@@ -195,12 +177,7 @@ def _release_tags() -> list[str]:
 
 
 def _with_always(tags) -> list[str]:
-    """`tags` with every `_ALWAYS` anchor present, sorted, deduplicated.
-
-    Every return path goes through here, the fallback ones included: `_TAGS_FALLBACK` carries one
-    tag per minor so it holds neither v5.5.0 nor v5.16.0, and returning it unmerged let an outage
-    drop the Apple Silicon ceiling and the tokenizers breakpoint and still report green.
-    """
+    """Every return path goes through here, fallback included, so an outage cannot drop the anchors."""
     return sorted(set(tuple(tags) + _ALWAYS + _declared_ceiling_tag()), key = _sort_key)
 
 
@@ -598,11 +575,7 @@ def test_training_args_parallel_mode_importable(tag: str):
 
 
 def test_the_matrix_starts_at_the_declared_floor(tag: str) -> None:
-    """The matrix is only a compatibility claim if it begins where the claim does.
-
-    `_FLOOR` was a literal 4.57.6 while pyproject declared 4.52.4, so every 4.52-4.56 release was
-    discarded and a change landing after the floor could break supported users, matrix still green.
-    """
+    """_FLOOR must equal the floor pyproject declares, or releases between them are silently skipped."""
     declared = _declared_floor()
     assert _FLOOR == declared, (
         f"_FLOOR is {_FLOOR} but pyproject declares {declared}; the matrix would skip "
@@ -617,11 +590,7 @@ def test_the_matrix_starts_at_the_declared_floor(tag: str) -> None:
 
 
 def test_trainer_training_step_model_train_call_is_standalone(tag: str):
-    """unsloth#11238 rewrites the FIRST `model.train()` in Trainer.training_step.
-
-    A release writing `self.model.train()` earlier in that method turns the same replace into
-    `self._unsloth_train_if_needed(model)` and every training step dies with AttributeError.
-    """
+    """The first model.train() in training_step must stand alone or unsloth's rewrite breaks every step."""
     candidates = ["src/transformers/trainer.py", "src/transformers/trainer/__init__.py"]
     hit = first_match("huggingface/transformers", tag, candidates)
     assert hit is not None

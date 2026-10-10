@@ -1,56 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Guard: tests that read checked-in files must name their encoding.
-
-`Path.read_text()` and `open()` with no encoding use `locale.getencoding()`:
-UTF-8 on the Linux and macOS runners, cp1252 on a stock Windows install. A test
-that reads a repo file that way passes in CI and raises UnicodeDecodeError for a
-Windows contributor as soon as that file gains a non-ASCII byte, which the
-source-scanning tests do constantly:
-
-    studio/backend/routes/inference.py carries the DeepSeek tool-call token
-    regexes, so it holds U+FF5C and U+2581. Reading it as cp1252 dies on
-    "byte 0x81", taking test_cancel_atomicity.py and test_cancel_id_wiring.py
-    out at collection time.
-
-A call is an offence when it does un-pinned text I/O and either of two things
-holds. It runs at import, where nothing can see a tmp_path fixture yet. Or the
-path it reads anchors on something checked in: a module-level constant or
-import, which a fixture parameter can never be, `__file__`, or a relative
-literal that names a file actually present in the tree. Anchoring is what
-decides the second one, followed through `/` joins, path methods, the locals
-and loop variables of the enclosing function, and the parameters of helpers
-every caller hands a checked-in path. So `for p in (_B / "routes").rglob("*.py")`
-is in scope, `_source(LOADER_PATH)` puts the bare read inside `_source` in
-scope, and anything growing out of a tmp_path stays out. That reaches test
-bodies, where the same failure lands one step later:
-
-    test_gemma4_chat_template.py opens unsloth/chat_templates.py through a
-    helper its tests call, and cp1252 cannot decode that file ("byte 0x90").
-    test_consent_gate.py reads routes/inference.py as `(_BACKEND / rel)` and
-    test_gguf_load_cache_reuse.py as `Path(__file__).parent.parent / ...`, both
-    dying on the same 0x81 the two cancel modules hit at collection.
-
-Every question the rules ask is answered by the call, its path expression, or
-the call sites of the helper it sits in, which keeps them mechanical enough to
-enforce with no allowlist and quiet about temp-dir I/O, where the platform
-default is harmless and the test wrote the bytes itself.
-
-Three shapes are consequently out of reach, all fixed by hand and none decidable
-from the call. A path a helper hands back rather than takes in, as
-`for path in _iter_caller_files()` does in test_security_gate_consistency.py,
-says nothing about itself at the read. Text read from a checked-in file and
-then written back to a tmp_path, at test_studio_install_workspace_guard.py:851
-and test_scan_packages.py:40, is unsafe only because of where the string came
-from. And a read inside a `python -c` snippet, as test_studio_import_no_torch.py
-and test_e2e_no_torch_sandbox.py build for their subprocess tests, runs in a
-child interpreter this scan never parses: the snippet is an f-string whose paths
-are replacement fields, so recovering it would mean evaluating the
-interpolation. Reviewers have to catch those three; running the suite under
-LC_ALL=C is the cheapest way to find them, since ASCII rejects every byte cp1252
-does and more.
-"""
+"""Tests that read checked-in files must name their encoding; the locale default is cp1252 on Windows."""
 
 # `str | None` below is evaluated at import on Python 3.9 without this.
 from __future__ import annotations
@@ -80,13 +31,7 @@ def _walked_test_files(repo: Path):
 
 
 def _tracked_test_files(repo: Path):
-    """The same, but only what git is actually tracking.
-
-    A walk picks up whatever happens to be lying in the checkout: a scratch
-    directory, a nested worktree, a vendored dependency. None of those are ours
-    to police, and a single syntax error in one would fail this test for
-    everybody who has one. Asking git keeps the promise the docstring makes.
-    """
+    """Lists tracked *.py files only, so scratch dirs, worktrees and vendored code are not scanned."""
     try:
         listed = subprocess.run(
             ["git", "-C", str(repo), "ls-files", "-z", "--", "*.py"],
@@ -199,11 +144,7 @@ def _static_truth(node: ast.AST):
 
 
 def _live_branches(node: ast.AST):
-    """The children of a branch that can actually run, or None if it is not one.
-
-    `if False:` and the right of `False and ...` never execute, so reporting a
-    read there is a CI failure with no reachable cause and no correct edit.
-    """
+    """Skips branches that can never run, such as if False: or the right side of False and ...."""
     if isinstance(node, ast.If):
         taken = _static_truth(node.test)
         if taken is None:
@@ -231,11 +172,7 @@ def _callee_name(func: ast.AST):
 
 
 def _is_main_guard(node: ast.AST) -> bool:
-    """True for `if __name__ == "__main__":`, whose body never runs at import.
-
-    The operator has to be `==`: `if __name__ != "__main__":` runs its body at
-    import, so treating it as script-only would invert the rule.
-    """
+    """Matches if __name__ == "__main__" only, since a != guard does run at import."""
     if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
         return False
     if not all(isinstance(op, ast.Eq) for op in node.test.ops):
@@ -247,37 +184,14 @@ def _is_main_guard(node: ast.AST) -> bool:
 
 
 def _is_eager_consumer(func: ast.expr) -> bool:
-    """True for a callee that drains a generator argument on the spot.
-
-    iter/zip/map/filter/enumerate/reversed hand back another lazy object, so a
-    genexp passed to those still has not run.
-    """
+    """Lazy builtins like zip or map return another lazy object, so a genexp passed to them has not run."""
     if isinstance(func, ast.Attribute):
         return func.attr in {"join", "extend", "update", "writelines"}
     return isinstance(func, ast.Name) and func.id in EAGER_CONSUMERS
 
 
 def _import_time_calls(tree: ast.Module):
-    """Yield Call nodes that run at import time.
-
-    That is module scope, class bodies, and the bodies of module-level helpers
-    invoked from either. A helper is the same hazard as an inline read:
-    `CODE = _extract_mixed_precision_code()` runs its `read_text()` during
-    collection, so skipping every def would let the Windows failure back in.
-
-    A def's body waits for a call, but its decorators and argument defaults run
-    when the def executes, so those are followed. Lambda bodies are skipped for
-    the same reason, as is everything but the outermost iterable of a generator
-    expression. List, set and dict comprehensions are walked in full: unlike a
-    genexp they run their element, filters and nested iterators immediately.
-
-    A body is only ever entered through an executed statement, never by walking
-    into a def, so the "this definitely runs" property that makes the rule
-    allowlist-free holds. Not followed: the body of
-    `if __name__ == "__main__":`, which pytest never runs (its `else` arm does,
-    so that is walked), and non-name calls, which are left unresolved rather
-    than guessed at.
-    """
+    """Yields Call nodes that run at import: module and class bodies, and helpers they call."""
     # Defs reachable from import-time scopes: module body, class bodies, and nested helpers.
     helpers: dict = {}
 
@@ -343,12 +257,7 @@ def _eagerly_consumed(tree: ast.Module) -> set:
 
 
 def _eagerly_consumed_uncached(tree: ast.Module) -> set:
-    """Nodes whose lazy value is drained right where it is written.
-
-    Covers both things that defer: a generator expression, and a call to a
-    generator function. Neither runs its body until something pulls from it, so
-    an unconsumed one has not happened yet.
-    """
+    """Generator expressions and generator calls drained where written; an unconsumed one has not run."""
     # A generator consumed through a name must lead back to its definition.
     named: dict = {}
     for node in _walk(tree):
@@ -399,11 +308,7 @@ def _temp_rooted_names(tree: ast.Module) -> set:
 
 
 def _non_path_names(tree: ast.Module) -> set:
-    """Module-level names bound to a call that plainly does not make a path.
-
-    `response = requests.get(...)` then `response.read_text()` at import is not
-    pathlib I/O, and demanding an encoding there leaves no compliant edit.
-    """
+    """Module names bound to calls that do not build a path, such as requests.get, are not pathlib I/O."""
     names = set()
     for node in tree.body:
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
@@ -416,10 +321,7 @@ def _non_path_names(tree: ast.Module) -> set:
 
 
 def _is_generator(func) -> bool:
-    """True when calling this only builds a generator, leaving the body unrun.
-
-    Yields inside a nested def belong to that def, so those do not count.
-    """
+    """Only yields in this function's own body count; yields inside a nested def belong to that def."""
     stack = list(func.body)
     while stack:
         node = stack.pop()
@@ -466,11 +368,7 @@ def _module_level_names(tree: ast.Module) -> set:
 
 
 def _local_names(func) -> set:
-    """Every name the function binds, so a module constant it shadows is skipped.
-
-    Walking nested defs too over-approximates, which only ever drops a call from
-    the scan.
-    """
+    """Every name the function binds, so a shadowed module constant is not treated as a path."""
     args = func.args
     names = {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
     for extra in (args.vararg, args.kwarg):
@@ -495,17 +393,7 @@ def _local_names(func) -> set:
 
 
 def _imported_names(node) -> dict:
-    """Names this scope's own imports bind, mapped to where they came from.
-
-    The name alone is not enough in either direction. `import gzip as gz` binds
-    a name nobody would recognise to an opener that does take an encoding, and
-    `from PIL.Image import open` binds a name everybody recognises to one that
-    does not. Keeping the origin settles both.
-
-    Nested function bodies are left out: an import inside one is that
-    function's business, and treating it as the module's would let a single
-    local `from PIL.Image import open` turn off the builtin check everywhere.
-    """
+    """Maps import-bound names to their origin; a nested function's imports stay with that function."""
     bound = {}
     stack = list(_kids(node))
     while stack:
@@ -530,13 +418,7 @@ def _import_bindings(node) -> dict:
 
 
 def _imports_at_each_call(tree: ast.Module) -> dict:
-    """The imports visible at every call, keyed by node id.
-
-    A function's own imports are added on the way in and go out of view again
-    on the way out, which is what keeps a local alias local. Within a scope they
-    accumulate in statement order, so `DATA = open(p)` above a later
-    `from gzip import open` still resolves to the builtin it actually called.
-    """
+    """A function's imports leave view on exit, and within a scope they apply in statement order."""
     visible_at = {}
 
     def walk(node, visible):
@@ -567,12 +449,7 @@ def _imports_at_each_call(tree: ast.Module) -> dict:
 
 
 def _open_alias(name, modules):
-    """What a bare callable resolves to: "builtin", a COMPRESSED_OPENERS key, or None.
-
-    `from io import open as io_open` is the builtin under another name and
-    `from gzip import open as gzopen` is gzip's, while `from PIL.Image import
-    open` is neither and takes no encoding at all.
-    """
+    """Maps a bare callable to builtin, a COMPRESSED_OPENERS key or None, so PIL's open gives None."""
     origin = modules.get(name)
     if origin is None:
         return "builtin" if name == "open" else None
@@ -598,11 +475,7 @@ def _compressed_key(name, modules):
 
 
 def _is_path_class(name, modules) -> bool:
-    """True for a pathlib class, including under an alias.
-
-    `from pathlib import Path as P` still puts the instance in slot 0 of an
-    unbound `P.read_text(SOURCE)`, so matching the bare name is not enough.
-    """
+    """Matches pathlib classes under any alias, since P.read_text(SOURCE) passes the path in slot 0."""
     if name is None:
         return False
     return (modules.get(name) or name).split(".")[-1] in PATH_CLASSES
@@ -614,11 +487,7 @@ def _is_path_attr(node: ast.AST) -> bool:
 
 
 def _is_path_preserving(func) -> bool:
-    """True for a call whose result still points at its first argument.
-
-    Qualified spellings count: `pathlib.Path(p)` and `os.path.join(p, x)` are
-    the same constructors as the bare names.
-    """
+    """Qualified spellings like pathlib.Path(p) or os.path.join(p, x) count the same as bare names."""
     name = _callee_name(func)
     return name in PATH_CLASSES or name in PATH_FUNCTIONS
 
@@ -634,12 +503,8 @@ def _is_module_receiver(name, modules) -> bool:
 
 
 def _path_expr(call: ast.Call, modules = NO_MODULES):
-    """The expression naming the file the call reads.
-
-    Usually the receiver, but a module or the Path class in that slot means the
-    path is the first argument instead: `Path.read_text(REPO / "x.py")` and
-    `gzip.open(path, "rt")` both read their argument, not `Path` or `gzip`.
-    """
+    """The path a read targets: the receiver, or the first argument when the receiver is Path or a
+    module."""
     func = call.func
     if isinstance(func, ast.Attribute):
         if _is_path_attr(func.value) or (
@@ -661,14 +526,7 @@ def _path_keyword(call: ast.Call):
 
 
 def _path_root(node: ast.AST) -> ast.AST:
-    """Follow a path expression back to whatever it is anchored on.
-
-    `(_BACKEND / rel).read_text()` anchors on _BACKEND and
-    `Path(__file__).parent / "routes"` on __file__, so joining a relative name
-    onto a checked-in root stays in scope. Anchoring is what decides it, not the
-    names further down: `tmp_path / SUBDIR` anchors on the fixture, so a
-    constant used as a leaf cannot drag temp-dir I/O in.
-    """
+    """Anchor decides scope: a checked-in root keeps a path in scope, while tmp_path / SUBDIR does not."""
     while True:
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             node = node.left
@@ -733,12 +591,7 @@ def _is_checked_in_root(
 
 
 def _class_path_attrs(tree: ast.Module, module_names: set) -> set:
-    """Class-body names bound to a checked-in path, read back as `self.NAME`.
-
-    `class T: _SETUP_SH = ROOT / "setup.sh"` then `self._SETUP_SH.read_text()`
-    is as statically provable as the module-level spelling, and the repository
-    reads seven real source files exactly that way.
-    """
+    """Class attributes holding a checked-in path, read as self.NAME, are as provable as module names."""
     attrs, mixed = set(), set()
     for node in _walk(tree):
         if not isinstance(node, ast.ClassDef):
@@ -758,11 +611,7 @@ def _class_path_attrs(tree: ast.Module, module_names: set) -> set:
 
 
 def _reads_itself(name: str, value: ast.AST) -> bool:
-    """`source = source.read_text()` reads the path before replacing it.
-
-    The name holds a checked-in path right up to that call, so the assignment
-    is not evidence against it; it is the very read we are looking for.
-    """
+    """A name rebound from its own read_text() still held the checked-in path at that read, so it counts."""
     if not isinstance(value, ast.Call):
         return False
     expr = _path_expr(value)
@@ -770,13 +619,7 @@ def _reads_itself(name: str, value: ast.AST) -> bool:
 
 
 def _unpack(target, value, paired: bool):
-    """Yield (name node, the value it is bound to) for one binding.
-
-    A destructured target contributes every name inside it. Where the two sides
-    line up, as in `A, B = P1, P2`, each name takes its own element; where they
-    do not, as in `for name, path in CASES`, they all take the iterable, which
-    is the thing whose provenance is known.
-    """
+    """Destructured names take their own element when the sides line up, else the whole iterable."""
     if isinstance(target, ast.Name):
         yield target, value
         return
@@ -797,13 +640,8 @@ def _checked_in_locals(
     shadowed,
     seed = (),
 ) -> set:
-    """Locals that only ever hold a checked-in path.
-
-    `route = Path(_BACKEND_DIR) / "routes" / "inference.py"` followed by
-    `route.read_text()` is the same read one line apart. A name bound any other
-    way, or assigned anything else anywhere in the scope, is not tracked, and
-    the pass repeats so that a path built up over several locals still counts.
-    """
+    """Locals that only ever hold a checked-in path, iterated to a fixpoint so chained locals still
+    count."""
     assignments = []
     targets = set()
     bad = set()
@@ -859,11 +697,7 @@ def _unwrap_param(node: ast.AST) -> ast.AST:
 
 
 def _parametrized_values(func) -> dict:
-    """Parameter values supplied by @pytest.mark.parametrize.
-
-    pytest calls a parametrized test itself, so the decorator is the only call
-    site there is; without reading it every such parameter looks unprovable.
-    """
+    """Reads parameter values from @pytest.mark.parametrize, the only call site a parametrized test has."""
     supplied: dict = {}
     for decorator in func.decorator_list:
         if not isinstance(decorator, ast.Call) or len(decorator.args) < 2:
@@ -885,17 +719,7 @@ def _parametrized_values(func) -> dict:
 
 
 def _checked_in_params(tree: ast.Module, module_names: set) -> set:
-    """(function, parameter) pairs that only ever receive a checked-in path.
-
-    `_source(LOADER_PATH)` is what tells us that the `path` parameter of
-    `_source` is reading a file that ships in the repo; the bare
-    `path.read_text()` inside it cannot say so on its own. One hop only, and a
-    parameter any call leaves out, or passes anything else, is not tracked.
-
-    Definitions are held by identity, not by name. Two tests that each nest a
-    `_read` helper are two different functions, and merging them would let the
-    one handed a tmp_path rule out what the other proves.
-    """
+    """Parameters that only receive a checked-in path, one call hop out; defs are matched by identity."""
     # Record each def's scope so calls resolve to the nearest enclosing def, as Python does.
     scope_of: dict = {}
     defs_in: dict = {}
@@ -1005,19 +829,7 @@ def _checked_in_path_calls(
     modules = NO_MODULES,
     visible_at = None,
 ):
-    """Yield calls, at any depth, whose path is provably a checked-in file.
-
-    The import-time walk alone leaves test bodies unguarded, and a bare read
-    there is the same Windows failure one step later: `_extract_template()` in
-    test_gemma4_chat_template.py opens unsloth/chat_templates.py, which cp1252
-    cannot decode ("byte 0x90"), so the test errors rather than the collection.
-
-    Two spellings qualify. A tmp_path arrives as a fixture parameter and a
-    tempfile is built in the body, so neither can be bound at module scope nor
-    derived from `__file__`. That keeps temp-dir I/O out of scope without an
-    allowlist, since there the platform default is harmless and the test wrote
-    the bytes itself.
-    """
+    """Calls at any depth whose path is provably checked in; tmp_path and tempfile I/O stay out of scope."""
     module_names = _module_level_names(tree)
     consumed = _eagerly_consumed(tree)
     visible_at = _imports_at_each_call(tree) if visible_at is None else visible_at
@@ -1059,12 +871,7 @@ def _checked_in_path_calls(
 
 
 def _open_mode(call: ast.Call, mode_index: int):
-    """The literal mode of an open() call, or UNKNOWN_MODE.
-
-    A splat or a non-literal hides the mode. Defaulting those to "r" would
-    demand an encoding on a call that may resolve to "rb", where passing one is
-    a ValueError, so the contributor would have no compliant edit.
-    """
+    """A splat or non-literal mode is UNKNOWN_MODE, not "r", since "rb" would reject an encoding."""
     if any(isinstance(a, ast.Starred) for a in call.args):
         return UNKNOWN_MODE
     if any(kw.arg is None for kw in call.keywords):
@@ -1084,12 +891,7 @@ def _is_text(call: ast.Call, mode_index: int) -> bool:
 
 
 def _names_encoding(call: ast.Call) -> bool:
-    """True only for an encoding that actually pins one.
-
-    `encoding = None` and `encoding = "locale"` both re-select the platform
-    default, so the keyword being present is not enough. A `**kwargs` may carry
-    one we cannot see, so it counts as named rather than risking a false alarm.
-    """
+    """Only a real encoding pins one: encoding = None or "locale" re-selects the platform default."""
     for kw in call.keywords:
         if kw.arg is None:
             return True
@@ -1102,12 +904,7 @@ def _names_encoding(call: ast.Call) -> bool:
 
 
 def _pins_encoding(call: ast.Call, position: int | None) -> bool:
-    """True when the call names an encoding, positionally or by keyword.
-
-    `position` is None where the API takes it keyword-only. A splat makes the
-    positions meaningless, so it counts as named rather than demanding an edit
-    the contributor cannot make correctly.
-    """
+    """A splat makes positions meaningless, so it counts as naming an encoding."""
     if any(isinstance(a, ast.Starred) for a in call.args):
         return True
     if position is not None and len(call.args) > position:

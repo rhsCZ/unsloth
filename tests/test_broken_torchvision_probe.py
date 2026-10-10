@@ -12,15 +12,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""Name a torchvision whose compiled ops do not match torch.
-
-`torchvision_compatibility_check` compared version metadata, which cannot see
-an ABI break. Found by running `Gemma4_(E2B)_GRPO`: its T4 branch installs
-vllm==0.9.2 beside Colab's torch, and `import unsloth` then died with
-`RuntimeError: operator torchvision::nms does not exist`, raised from
-`transformers/image_utils.py` and naming nothing. The vLLM half of the same
-breakage was already handled.
-"""
+"""The torchvision check must catch compiled-op ABI breaks, which version metadata alone cannot see."""
 
 import ast
 import builtins
@@ -223,14 +215,7 @@ def test_the_pairing_this_relies_on_is_what_pypi_publishes():
 
 
 def test_the_repair_command_keeps_the_backend_torch_was_built_for():
-    """PyPI carries one torchvision build per release and it is the CUDA one:
-    `torchvision-0.22.0-cp310-manylinux_2_28_x86_64.whl` links libcudart.so.12,
-    libc10_cuda.so and libtorch_cuda.so, while `0.22.0+rocm6.3` links
-    libamdhip64.so.6, libc10_hip.so and libtorch_hip.so. `--no-deps` keeps the
-    installed torch, so on a ROCm, XPU or CPU host an unqualified pin swaps the
-    working wheel for the CUDA one and reproduces the exact `operator
-    torchvision::nms does not exist` this command is handed out to clear
-    (reproduced end to end on torch 2.7.1+cpu with torchvision 0.22.1+cpu)."""
+    """PyPI ships only the CUDA torchvision, so an unqualified --no-deps pin breaks ROCm, XPU and CPU."""
 
     def advice(torch_raw):
         """The message a user on `torch_raw` is actually shown."""
@@ -254,12 +239,7 @@ def test_the_repair_command_keeps_the_backend_torch_was_built_for():
 
 
 def test_a_build_no_public_index_carries_is_not_sent_to_pip():
-    """A vendor or source build has no index that pairs with it, and a nightly's
-    companion version is synthesised from the release numbers alone, so any
-    pinned reinstall installs a wheel that cannot load against the installed
-    torch. This repo ships such builds itself: the `rocm72-torch291` extra
-    installs `torch 2.9.1+rocm7.2.0.lw.git7e1940d4` beside a repo.radeon.com
-    torchvision 0.24.0, and the table would otherwise advertise PyPI's 0.24.1."""
+    """Vendor and source torch builds have no pairing index, so a pinned reinstall cannot load."""
 
     def advice(torch_raw, required):
         with pytest.raises(ImportError) as excinfo:
@@ -287,10 +267,7 @@ def test_a_build_no_public_index_carries_is_not_sent_to_pip():
 
 
 def test_a_conda_torch_is_not_sent_to_pypis_torchvision(tmp_path):
-    """conda records the backend in the build string and leaves the version
-    plain, so a conda CPU or ROCm torch reaches the tag check looking exactly
-    like a PyPI one. `--no-deps` then keeps that torch beside PyPI's CUDA-only
-    torchvision, which is the mismatch the command is handed out to clear."""
+    """conda keeps the backend only in the build string, so a conda torch looks like PyPI's."""
     conda_meta = tmp_path / "conda-meta"
     conda_meta.mkdir()
     (conda_meta / "pytorch-2.5.1-py3.12_cuda12.4_cudnn9_0.json").write_text("{}")

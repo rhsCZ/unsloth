@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The chat mount must end up on the model the server is loading, not the one it is replacing.
-
-Runs the real ``refresh`` -> ``syncInferenceStatusToStore`` -> ``waitForServerModel`` sequence from
-use-chat-model-runtime.ts under node with the module boundary stubbed, so these assert behaviour
-rather than source text. A replacement names the outgoing model ``active_model`` and the incoming
-one ``loading``; adopting the outgoing one sets the checkpoint the observer needs empty.
-"""
+"""The chat mount must adopt the model the server is loading, not the outgoing one it replaces."""
 
 import json
 import os
@@ -589,12 +583,7 @@ def test_the_mount_refresh_does_not_wait_on_the_lora_inventory():
 
 
 def test_a_wait_from_the_send_path_also_stops_a_refresh_publishing_the_outgoing_model():
-    """The gate is shared, so the send-path poll gets the same protection as the mount one.
-
-    That poll's stopEarly reads params.checkpoint to decide the user picked something. A
-    refresh hydrating the outgoing model mid-replacement would look exactly like a pick and
-    hand it to the send, which then talks to the model the server is replacing.
-    """
+    """Send-path polls share the gate: a refresh publishing the outgoing model looks like a user pick."""
     out = _run(
         """
         setScenario({
@@ -617,11 +606,7 @@ def test_a_wait_from_the_send_path_also_stops_a_refresh_publishing_the_outgoing_
 
 
 def test_a_stalled_status_read_does_not_park_the_poll_on_one_request():
-    """Each read is capped, so the loop's own deadline is real.
-
-    fetch has no timeout, so before this the advertised cap bounded nothing: one half-open
-    read parked the poll indefinitely, holding the shared gate and the send's lease with it.
-    """
+    """fetch has no timeout, so each status read needs its own cap or one stalled read parks the poll."""
     out = _run(
         """
         setScenario({

@@ -1,11 +1,4 @@
-"""Guard against config.rope_scaling being silently dropped (issue #2405):
-the replacement rotary classes ignored it on the config path, so Llama-3.1
-ran with unscaled RoPE and produced gibberish past ~32K tokens.
-
-Three layers: (1) AST tripwire; (2) CPU checks of the pure helper
-_compute_config_rope_inv_freq vs ROPE_INIT_FUNCTIONS; (3) CUDA checks on the
-real class (skipped without a real device). Layers 2-3 fail on the unfixed code.
-"""
+"""Guards against config.rope_scaling being silently dropped, which left Llama-3.1 on unscaled RoPE."""
 
 import ast
 import math

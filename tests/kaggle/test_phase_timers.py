@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The load phase split, and the ways a timer like this reports a lie.
-
-Three of these guards exist because the obvious implementation gets them wrong
-and the wrong answer looks exactly like a real result in the report:
-
-* a timer that never attached reporting **0.0 seconds**, which reads as "no
-  download happened" rather than "nothing was measured";
-* `snapshot_download` calling `hf_hub_download` per file, so a naive sum counts
-  the same seconds twice and can report more download time than the phase it
-  sat inside;
-* a raising download leaving the timer installed, so every later call in the
-  process is still wrapped.
-"""
+"""Timers must not report 0.0s when unmeasured, double-count snapshot_download, or stay installed."""
 
 from __future__ import annotations
 
@@ -148,18 +136,8 @@ def test_the_split_never_reports_a_negative_weight_load(hub, tmp_path):
 
 
 def test_no_alias_of_a_hub_download_is_left_unwrapped(monkeypatch):
-    """`transformers.utils.hub` does `from huggingface_hub import ...` at import
-    time, so it holds its OWN reference and rebinding the public name leaves it
-    untouched. `cached_files` calls that alias for a multi-file (sharded)
-    checkpoint, which is the biggest download any leg does, so missing it moves
-    the dominant fetch into `weight_load_seconds` while `patched` stays
-    non-empty and the record still looks valid.
-
-    Derived, not listed: the aliases are DISCOVERED by comparing each module's
-    attributes against the originals before patching, so a module that starts
-    holding one of these names is covered without editing this test, and
-    dropping a target fails here rather than on hardware.
-    """
+    """Modules that hold their own alias of a hub download must be wrapped, or sharded fetches go
+    untimed."""
     real_hub = types.ModuleType("huggingface_hub")
     real_hub.hf_hub_download = lambda *a, **k: ""
     real_hub.snapshot_download = lambda *a, **k: ""

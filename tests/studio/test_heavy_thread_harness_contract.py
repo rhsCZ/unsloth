@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The heavy-thread harness must read every guard it records, and must stay portable.
-
-`tests/studio/playwright_heavy_thread.py` measures in a browser and then decides pass/fail in
-`main()`. A metric that is recorded but never compared is how a harness goes false-green, which is
-the rule already pinned for the #8483 harnesses in test_autoscroll_harness_contract.py.
-
-This file adds the constraint that is specific to this harness: it is meant to run on WebKit and
-Firefox as well as Chromium, because Unsloth Desktop is a Tauri webview and not Chromium. Every
-CDP counter and the Long Tasks API are Chromium-only, and the failure mode is silent -- a
-`longtask` PerformanceObserver on JavaScriptCore never fires, which reads as "no jank" rather than
-as "no measurement". So no growth axis and no pass/fail decision may rest on one.
-"""
+"""Every metric recorded must be compared, and no verdict may rest on a Chromium-only counter."""
 
 import re
 from pathlib import Path
@@ -191,11 +180,7 @@ def test_the_fork_count_stub_answers_the_shape_the_endpoint_returns() -> None:
 
 
 def _stub_patterns(page: str) -> list[str]:
-    """The regex literals in STUBBED_API, as Python patterns.
-
-    They are deliberately plain -- literal path segments, `[^/]+`, `(\\?|$)`, `$` -- so the JS
-    source and the Python equivalent differ only in the escaped forward slashes.
-    """
+    """STUBBED_API regexes are kept plain so the JS and Python patterns differ only in escaped slashes."""
     block = page[page.index("const STUBBED_API") : page.index("const stubbedApiCalls")]
     return [literal.replace("\\/", "/") for literal in re.findall(r"\[/(.+?)/,", block)]
 

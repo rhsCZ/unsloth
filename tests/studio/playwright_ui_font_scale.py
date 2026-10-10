@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""UI font size scaling regression (Settings > Appearance).
-
-Drives the real appearance controls and asserts the typography-scale
-contract: text and line heights scale by size/16, the root font size and
-layout geometry never move, an explicit Code font size stays fixed, and an
-overflowing Radix select scrolls its viewport by keyboard and wheel.
-
-Runs against an already-booted, already-bootstrapped Unsloth:
-    BASE_URL=http://127.0.0.1:18894 STUDIO_PW=... python tests/studio/playwright_ui_font_scale.py
-"""
+"""Font scale regression: text scales by size/16 while the root size and layout stay fixed."""
 
 import os
 import re
@@ -64,14 +55,7 @@ def settled_scroll_top(
     quiet_ms = 200,
     timeout_ms = 5_000,
 ):
-    """The select viewport's scrollTop once it has stopped moving.
-
-    Radix scrolls the highlighted item into view off the back of the keypress, so
-    a scrollTop read straight after `keyboard.press` is a mid-scroll sample, not
-    where the viewport ends up. Poll until it holds the same value for `quiet_ms`.
-    Falls back to the last value seen rather than raising: this only establishes
-    the floor for the wheel check, and that check reports its own failure.
-    """
+    """Poll scrollTop until it holds for quiet_ms; a read right after keypress is mid-scroll."""
     last = page.evaluate(SCROLL_TOP_JS)
     quiet_since = time.monotonic()
     deadline = time.monotonic() + timeout_ms / 1000

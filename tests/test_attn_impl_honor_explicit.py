@@ -1,9 +1,4 @@
-"""An explicit non-flash attention request must survive the flash disable path.
-
-When flash attention is disabled for a model, a caller who explicitly asked for
-"sdpa" or "flex_attention" should keep that choice instead of being downgraded
-to whatever the conservative supports_* fallback would pick.
-"""
+"""An explicit sdpa or flex_attention request must survive when flash attention is disabled."""
 
 import pytest
 

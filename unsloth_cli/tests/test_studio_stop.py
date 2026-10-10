@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth studio stop` must stop every server it started.
-
-With one PID file the second launch overwrote the first entry, so stop killed
-the newer server, claimed success, and left the older one serving.
-"""
+"""unsloth studio stop must stop every server started; one PID file was overwritten per launch."""
 
 from __future__ import annotations
 

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Contract tests for the amd / huggingfacenotorch extras.
-
-security-audit.yml indexes [huggingfacenotorch] straight out of pyproject.toml. A release
-branch shipping without it killed four security jobs for three weeks: a bare KeyError reads
-as a generic crash, not as a missing extra.
-"""
+"""Checks the amd and huggingfacenotorch extras exist, since security-audit.yml indexes them directly."""
 
 from __future__ import annotations
 
@@ -38,11 +33,7 @@ def _extras() -> dict[str, list[str]]:
 
 
 def _extras_referenced_by_the_audit_workflow() -> set[str]:
-    """Every extra name security-audit.yml reaches into pyproject.toml for.
-
-    All three shapes must be read or the check is vacuous: the literal index, the guarded
-    helper call, and the shell list the per-extra loop iterates over.
-    """
+    """Must read all three shapes the workflow uses: literal index, guarded helper call, shell list."""
     source = SECURITY_AUDIT.read_text(encoding = "utf-8")
     names = set()
     for block in _inline_python_blocks():
@@ -147,11 +138,7 @@ class TestAmdBitsandbytesFloor:
 
 
 class TestSecurityAuditWorkflowStaysInSync:
-    """Every extra the audit workflow indexes has to actually exist.
-
-    The workflow reaches into pyproject.toml by name, so a rename or omission takes out the
-    scan jobs rather than the branch that caused it.
-    """
+    """Every extra the audit workflow indexes must exist in pyproject.toml, or the scan jobs fail."""
 
     def test_indexed_extras_exist(self):
         referenced = _extras_referenced_by_the_audit_workflow()
@@ -163,18 +150,11 @@ class TestSecurityAuditWorkflowStaysInSync:
 
     @pytest.mark.parametrize("known", ["huggingfacenotorch", "audio-torch211"])
     def test_the_extras_the_scan_set_is_built_from_are_still_named(self, known: str):
-        """The scan set loses coverage silently if one of these stops being read.
-
-        `test_indexed_extras_exist` passes just as well when the workflow names nothing.
-        """
+        """Each known extra must still be named by the workflow, or the scan set loses coverage silently."""
         assert known in _extras_referenced_by_the_audit_workflow()
 
     def test_every_lookup_is_guarded(self):
-        """A bare index is the failure mode this file exists for.
-
-        Parse every inline Python block and require each optional-dependencies subscript
-        to sit inside a try/except, so deleting a guard fails here rather than in CI.
-        """
+        """Each optional-dependencies lookup in the inline Python blocks must be guarded by try/except."""
         bare = []
         for block in _inline_python_blocks():
             tree = ast.parse(block)

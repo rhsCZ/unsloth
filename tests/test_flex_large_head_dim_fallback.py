@@ -358,13 +358,7 @@ def test_upstream_still_materialises_a_mask_when_padded():
 
 
 def _mask_wrapper_is_compiled():
-    """Whether the installed create_causal_mask wrapper calls a compiled function.
-
-    Read off the wrapper rather than UNSLOTH_COMPILE_DISABLE: unsloth_zoo decides once, when it
-    patches at import, and a test module can flip the variable later in the same process. With
-    the switch set, zoo still installs the wrapper (its keyword fixes apply) around the
-    uncompiled original, which is what it stashes.
-    """
+    """Reads the installed wrapper, not UNSLOTH_COMPILE_DISABLE, since zoo decides once at import."""
     import inspect
 
     from transformers import masking_utils
@@ -427,12 +421,7 @@ def test_kill_switch_keeps_the_mask_for_an_unpadded_batch(monkeypatch):
 
 
 def test_an_uncompiled_wrapper_keeps_the_upstream_skip(_skip_on):
-    """Without compilation the wrapper agrees with upstream on unpadded and padded batches.
-
-    unsloth-zoo#1335 made the wrapper install under UNSLOTH_COMPILE_DISABLE=1 too, around the
-    uncompiled original. The mask is then skipped exactly as upstream skips it, and kept exactly
-    where upstream keeps it.
-    """
+    """Uncompiled, the mask wrapper skips exactly when upstream does, on padded and unpadded batches."""
     import torch
     from transformers import masking_utils
 

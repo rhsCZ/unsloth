@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Multi-account browser flow against a disposable Studio: the owner creates an account,
-its setup code is private, and switching accounts in one browser clears account data.
-
-    STUDIO_E2E_URL=http://127.0.0.1:8000 STUDIO_E2E_OWNER_PASSWORD=... \
-        python tests/studio/playwright_multi_account.py
-
-Skips (exit 0) without the owner password. The account it creates is deleted at the end.
-"""
+"""Multi-account flow on a disposable Studio; skips (exit 0) unless STUDIO_E2E_OWNER_PASSWORD is set."""
 
 from __future__ import annotations
 

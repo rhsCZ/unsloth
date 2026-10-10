@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The patched layers summary says why the fused LoRA kernels were skipped.
-
-unsloth#2076. patch_peft_model only installs the fused kernels when
-`lora_dropout == 0 and bias == "none"`, so anyone who passes lora_dropout = 0.1 (or a bias
-term) gets
-
-    Unsloth 2026.x patched 32 layers with 0 QKV layers, 0 O layers and 0 MLP layers.
-
-which reads as a failed patch even though training is fine. _fused_lora_skip_reason supplies
-the missing clause. It is a separate function so the wording can be tested without loading
-a checkpoint, and the gate parity test below is what stops the two from drifting apart.
-"""
+"""Fused LoRA kernels are skipped when lora_dropout or bias is set, and the summary must say why."""
 
 from __future__ import annotations
 

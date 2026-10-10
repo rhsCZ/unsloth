@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the scoring layer, run against synthetic payloads.
-
-The scoring layer is pure, so it can be tested exhaustively without a browser, and it is the part
-where a mistake is least likely to be noticed: a wrong ms is obvious, a wrong aggregation rule
-produces plausible numbers forever.
-
-The tests that matter most are the ADVERSARIAL ones, each of which encodes a specific way a
-benchmark lies:
-
-    a crashed rung must not outscore a slow one
-    a regression must surface despite a positive headline
-    NULL and SPIKE must behave, and must be caught when they misbehave
-    a zero must never be printable without saying whether the thing was attempted
-"""
+"""Adversarial unit tests on synthetic payloads, each encoding one specific way a benchmark lies."""
 
 from __future__ import annotations
 
@@ -92,11 +79,7 @@ def test_validate_payload_accepts_a_zero_inside_a_measure():
 
 
 def test_validate_payload_accepts_the_first_parity_message_row():
-    """`i` is the ordinal scene/parity.js writes for message 0, not a missing measurement.
-
-    Without this exemption every payload carrying parity rows failed validation, so the
-    documented `--report` step never ran at all.
-    """
+    """Ordinal i of 0 is the first parity message, not a missing measurement, so it must validate."""
 
     payload = {
         "excluded_cells": [],
@@ -139,11 +122,7 @@ def test_validate_payload_still_rejects_a_bare_zero_beside_a_parity_ordinal():
 
 
 def test_validate_payload_accepts_an_equivalence_field_absent_from_both_arms():
-    """`reasoning_spans` reads 0 streamed and 0 seeded on a real quick-tier run.
-
-    `drift` was already exempt; the two counts it is computed from were not, so every payload
-    carrying an equivalence block failed validation.
-    """
+    """A zero reasoning_spans count on both arms (quick tier) is a legitimate reading and must validate."""
 
     payload = {
         "excluded_cells": [],
@@ -167,11 +146,7 @@ def test_validate_payload_accepts_an_equivalence_field_absent_from_both_arms():
 
 
 def test_validate_payload_accepts_a_zero_sample_in_an_attested_instrument_array():
-    """A 0 ms inter-frame gap is two frames in one millisecond, not a missing reading.
-
-    The block attests with `frames_attempted`, which already covers the scalar counters beside
-    it; walking into the sample array dropped that attestation.
-    """
+    """A 0 ms gap in an array attested by frames_attempted is a real reading, so it must validate."""
 
     payload = {
         "excluded_cells": [],
@@ -439,12 +414,7 @@ def test_ab_refuses_across_sessions():
 
 
 def test_a_regression_surfaces_despite_a_positive_headline():
-    """The adversarial case: a headline win of 16% hiding a 60% worse worst frame.
-
-    This is the shape that ships. Nobody merges a change whose headline is negative; the change
-    that gets merged is the one that improves five metrics and quietly ruins the sixth, and a
-    single headline number is exactly the instrument that would let it through.
-    """
+    """A 16% headline win hiding a 60% worse worst frame must still be reported as a regression."""
 
     pairs = _pairs(
         {
@@ -548,12 +518,7 @@ def test_a_ci_that_spans_no_effect_is_not_an_improvement():
 
 
 def test_a_ci_that_spans_no_effect_does_not_clear_a_regression():
-    """An unresolved regression is still a regression: the fail-safe direction is FAIL.
-
-    The mirror of the case above must NOT be symmetric. Refusing to claim a win costs a
-    contributor a headline; refusing to raise a fail lets the regression ship. So the metric is
-    labelled unresolved and still counted.
-    """
+    """An unresolved regression still FAILs; withholding a loss ships it, so the refusal is one-sided."""
     result = compare(
         "treatment",
         _split_pairs("keystroke_p95_ms", [1.4, 1.4, 0.9, 0.9]),
@@ -742,14 +707,7 @@ def test_a_null_control_of_only_bounded_ratios_falls_back_to_the_declared_defaul
 
 
 def test_an_unresolved_metric_does_not_lend_its_magnitude_to_the_headline():
-    """A metric that cannot resolve its own sign must not supply the number that gets quoted.
-
-    The headline is a weighted geometric mean of point estimates with no interval of its own, so
-    an inconclusive metric that happened to move a long way used to dominate it. keystroke_p95_ms
-    at 0.2, 0.2, 1.5, 1.5 (geomean 0.548, CI 0.200-1.500) beside a resolved menu_open_ms of 0.900
-    produced a headline of 0.631 and the word IMPROVED: a quoted 36.9% win almost entirely made
-    of data the same table labels inconclusive.
-    """
+    """An inconclusive metric must not lend its magnitude to the headline, which quoted a 36.9% win."""
 
     pairs = _split_pairs("keystroke_p95_ms", [0.2, 0.2, 1.5, 1.5])
     pairs += _split_pairs("menu_open_ms", [0.9, 0.9, 0.9, 0.9])
@@ -763,11 +721,7 @@ def test_an_unresolved_metric_does_not_lend_its_magnitude_to_the_headline():
 
 
 def test_a_run_whose_every_moving_metric_is_unresolved_is_inconclusive_not_no_reading():
-    """Dropping unresolved metrics from the headline must not turn "says nothing" into "no data".
-
-    NO READING means there was nothing to read. This run measured fine and simply failed to
-    resolve a direction, which is a different answer and the one the operator has to act on.
-    """
+    """When every moving metric is unresolved the run is INCONCLUSIVE, not NO READING: it measured fine."""
 
     pairs = _split_pairs("keystroke_p95_ms", [0.7, 0.7, 1.2, 1.2])
     pairs += _split_pairs("menu_open_ms", [0.6, 0.6, 1.3, 1.3])
@@ -779,13 +733,7 @@ def test_a_run_whose_every_moving_metric_is_unresolved_is_inconclusive_not_no_re
 
 
 def test_an_unresolved_mover_beside_a_flat_metric_is_not_no_difference():
-    """ "No difference" asserts the change did nothing, which is stronger than this data supports.
-
-    Dropping an unresolved mover from the headline can leave only flat metrics behind, putting the
-    aggregate back inside the noise floor. Reading that as NO DIFFERENCE would convert a refusal
-    to answer into a positive finding of no effect, when one metric did move and simply could not
-    resolve its own sign.
-    """
+    """An unresolved mover beside a flat metric must not read as NO DIFFERENCE, a claim of no effect."""
 
     pairs = _split_pairs("keystroke_p95_ms", [0.7, 0.7, 1.2, 1.2])
     pairs += _split_pairs("menu_open_ms", [1.0, 1.0, 1.0, 1.0])
@@ -810,13 +758,7 @@ def test_an_unresolved_metric_never_clears_a_resolved_regression():
 
 
 def test_a_metric_with_no_ci_at_all_does_not_claim_a_direction():
-    """An interval that does not exist cannot clear 1.0, so it must not read as permission.
-
-    `bootstrap_geomean_ci` returns (None, None) below three usable pairs, which a short ladder or
-    a partially measured metric reaches easily. The rule added here claims a direction only when
-    the CI clears no effect, and testing "does the interval contain 1.0" fails open when there is
-    no interval: two pairs at 0.5 printed a 50% win with nothing behind it.
-    """
+    """A missing CI cannot clear 1.0, so too few pairs for a CI must not claim a direction."""
 
     result = compare(
         "treatment",
@@ -837,12 +779,7 @@ def test_a_metric_with_no_ci_at_all_does_not_claim_a_direction():
 
 
 def test_a_regression_with_no_ci_is_still_a_regression_and_still_in_the_headline():
-    """The refusal is one-sided: a missing interval withholds a win, never a loss.
-
-    Withholding an unresolved win costs a headline; withholding an unresolved loss ships the
-    regression. So the worse side keeps its plain "regressed" label, its FAIL, and its place in
-    the aggregate, where it can only pull the number toward worse.
-    """
+    """A missing interval withholds a win, never a loss, so a regression keeps its FAIL and its weight."""
 
     result = compare(
         "treatment",

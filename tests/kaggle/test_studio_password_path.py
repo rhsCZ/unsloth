@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Starting Studio headless with --password, and the way that check goes vacuous.
-
-`unsloth studio --password X` sets the INITIAL admin password when none is set
-yet, which is exactly the state a scripted server is in. Without it the only way
-in is the bootstrap password Studio seeds into a file and prints to its own log,
-and a deployment that has to read a log to log in is not one anybody scripts
-twice.
-
-**The vacuity to avoid is a fallback.** If logging in with the passed password
-failed and the payload then tried the bootstrap, the run would go green while
-proving `--password` does nothing at all. There is deliberately no fallback, and
-that is asserted from the source here.
-
-**The second risk is a leaked credential.** The password reaches a process
-command line, Studio's startup banner, `studio.log`, and the evidence bundle
-that travels home. It is generated per run and registered as a secret before
-anything can log it, so every log leaving the machine is scrubbed.
-"""
+"""A --password login must not fall back to the bootstrap password, or the flag proves nothing."""
 
 from __future__ import annotations
 

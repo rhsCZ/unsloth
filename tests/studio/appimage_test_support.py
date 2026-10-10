@@ -19,11 +19,7 @@ FIXTURE_BACKEND_VERSION = "9999.12.31"
 
 
 def assert_fixture_version_clears_floor(repo_root: Path) -> None:
-    """Fail by name if the floor ever catches up with the sentinel.
-
-    Compared on the leading component: a string compare would read "999" as above
-    "9999", which is the one answer this must not get wrong.
-    """
+    """Fails if the floor reaches the sentinel; compares leading numbers, not strings."""
     source = (repo_root / "studio/src-tauri/src/preflight/version.rs").read_text(encoding = "utf-8")
     marker = 'MIN_DESKTOP_BACKEND_VERSION: &str = "'
     start = source.find(marker)

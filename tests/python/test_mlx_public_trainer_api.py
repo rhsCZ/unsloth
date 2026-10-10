@@ -1185,10 +1185,7 @@ def test_mlx_rl_trainers_stub_with_clear_error(monkeypatch):
 
 
 def test_mlx_rl_trainer_stub_is_lazy_import_safe(monkeypatch):
-    """Stubbing unsupported trl trainers must not resolve them: trl lazy-imports
-    pull torch, so on a torch-free MLX install a getattr probe would crash
-    `import unsloth`. The shim reads __all__/vars metadata and never triggers
-    trl's __getattr__ for a trainer it is about to replace."""
+    """Unsupported trl trainers must be stubbed without getattr, since trl's lazy import pulls in torch."""
     unsloth = _import_mlx_unsloth()
     trl = types.ModuleType("trl")
     trl.__path__ = ["real-trainer-package"]

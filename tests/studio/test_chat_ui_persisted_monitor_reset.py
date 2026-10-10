@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The "persisted monitor: reset" step of playwright_chat_ui.py must not run script in
-the page it is about to discard.
-
-That page is CPU-throttled and its auth was revoked by the CLI rotation just before, so
-the app can be busy retrying; page.evaluate waits for its event loop with no timeout of
-its own. The step wedged for its whole watchdog budget on Windows and on the Kaggle T4
-runner with nothing printed. The storage writes now go through the fresh page."""
+"""Storage writes use the fresh page: page.evaluate on the discarded, throttled page can hang."""
 
 import re
 from pathlib import Path

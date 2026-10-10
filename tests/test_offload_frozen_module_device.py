@@ -14,17 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""`_offload_frozen_module_for_training` must not drag the copy off its card.
-
-Continued pretraining puts `embed_tokens` and `lm_head` in `target_modules`, so
-PEFT wraps each in a `ModulesToSaveWrapper` and llama.py moves the trainable
-copy onto the accelerator with `DEVICE_TYPE_TORCH`, the bare string "cuda".
-A bare "cuda" carries no index and resolves to the CURRENT device, so a copy on
-cuda:1 was moved to cuda:0 while the rest of its layer stayed behind.
-
-The stub RECORDS the device it is handed rather than allocating, so the second
-card is testable on any box, including CI runners with no GPU.
-"""
+"""A bare 'cuda' resolves to the current device, which moved a cuda:1 copy onto cuda:0."""
 
 import types
 import pytest

@@ -1,40 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""An OpenAI-compatible SSE server that paces a reply the way a real backend does.
-
-WHY THIS EXISTS AT ALL. The harness this replaces measured a backend-free smoke page driven by a
-local `ChatModelAdapter`. Two whole mechanisms therefore never executed: the cumulative
-`<think>` re-parse in `chat-adapter.ts`, which re-parses the ENTIRE growing buffer on every delta,
-and the autoscroll `MutationObserver` in `use-intent-aware-autoscroll.tsx`, which answers every
-streamed character with a synchronous `scrollHeight` read over the whole thread. Both are O(thread)
-per chunk and neither is reachable without real bytes arriving over a real transport. So Unsloth is
-pointed at THIS, as an external provider, and the bytes go out over the wire, through the Unsloth
-backend's own relay, into the app's own `TextDecoder`, its own SSE framing and its own delta
-accumulation. Nothing is stubbed and there is no `page.route` anywhere near the primary transport.
-
-THREE things here are not incidental.
-
-**Threaded.** `ThreadingHTTPServer`, not `HTTPServer`. A single-threaded server previously lost 11
-cells of a matrix to `goto` timeouts: the browser opens the SPA's own requests while a stream is in
-flight, and one blocked handler stalls all of them, so the page never finishes navigating and the
-cell dies without a number.
-
-**Deficit-scheduled cadence.** Each tick computes `floor((now - t0) / gap)` and sends the SHORTFALL
-in one burst, rather than sleeping a gap per chunk. Two consequences, both wanted. Stream duration
-becomes a function of wall clock alone, so a 90K reply takes the same 276 seconds on a fast machine
-and a slow one and a tier's time budget is honest. And a renderer that jams gets a BURST when it
-recovers, which is exactly what a real backend does: the model keeps generating while the socket
-backs up, and the queue drains at once. `sleep(gap)` per chunk instead makes the SERVER slow down
-whenever the client does, which quietly converts a rendering problem into a shorter benchmark.
-
-**The exact chunk shapes the app parses.** The backend's own `_gguf_chat_delta_line` emits
-`reasoning_content` WITH `content: ""` alongside, so that is what goes out here. The terminal chunk
-carries `finish_reason: "stop"` AND is followed by `data: [DONE]`: `streamChatCompletions` in
-`chat-api.ts` throws `StreamInterruptedError` at EOF if it saw neither, and a harness that omits
-one measures error handling. A usage chunk follows because the app always sends
-`stream_options: {include_usage: true}` and its context bar reads the result.
-"""
+"""Serves SSE over real HTTP; sends the shortfall in bursts so a slow client cannot slow the server."""
 
 from __future__ import annotations
 
@@ -73,12 +40,7 @@ class Script:
 
 @dataclass
 class StreamStats:
-    """What the pacer ACTUALLY did, which is the only honest record of the cadence.
-
-    Kept because the driver cannot see it any other way: what reaches the page has been through a
-    backend relay and a browser, so "did the fixture send what it meant to" and "did the page
-    receive it" are two different questions and only one of them is about the app.
-    """
+    """The pacer's own record of what it sent; the page only sees bytes after relay and browser."""
 
     request_id: str = ""
     tag: str = ""
@@ -404,13 +366,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.state.record(stats)
 
     def _write(self, raw: bytes, stats: StreamStats) -> None:
-        """Write, and CHARGE THE TIME to the stats.
-
-        A blocking write is backpressure: the relay's receive buffer is full because the browser
-        has not drained it because the main thread has not run. That is the same jam the frame
-        recorder sees from the other side, and having both makes it attributable rather than
-        merely visible.
-        """
+        """Blocked write time is charged to stats as backpressure, the same jam the frame recorder sees."""
         frame = b"%x\r\n" % len(raw) + raw + b"\r\n"
         started = time.monotonic()
         self.wfile.write(frame)
@@ -506,12 +462,7 @@ class Pacer:
         return last.as_dict() if last else None
 
     def all_stats(self) -> list[dict]:
-        """Every stream this pacer served since the last `reset`, in order.
-
-        `last_stats` alone cannot answer "did the cell stream what it planned": a cell streams an
-        opening reply and then one follow-up per `send_turn`, and the LAST of those is the only
-        one it describes. See `check_planned_streams`.
-        """
+        """All streams since the last reset, in order; last_stats only describes the final one."""
         return [s.as_dict() for s in self.state.snapshot()]
 
     def expected_duration_ms(
@@ -532,23 +483,8 @@ class Pacer:
 
 
 def check_planned_streams(streams: list[dict], planned: list[dict]) -> dict:
-    """Did every turn the cell PLANNED actually stream, in full?
-
-    A cell is not one stream. It opens with a reply and then streams one follow-up per `send_turn`,
-    and until this existed the only record kept was `last_stats()` -- the LAST of them. An opening
-    reply that disconnected, or delivered 4,624 of the 10,000 characters its rung is named for, was
-    therefore erased by whichever turn happened to finish last, and the cell was scored COMPLETE
-    against a thread thousands of characters short of the one it claims. That is the one failure a
-    benchmark must never have: under-measuring and reporting success, because a reader acts on it.
-
-    Matching is by `tag`, first unmatched stream wins, because a tag is not unique. The
-    `stop_generation` action sends its OWN throwaway turn against whatever script is loaded, so it
-    produces a second, deliberately cancelled stream carrying the tag of the turn before it. Those
-    land in `extra` and are reported rather than validated: an aborted throwaway is the action
-    working, not the cell failing.
-
-    Returns a dict; `ok` is False when any planned turn is missing, unfinished, or short.
-    """
+    """Matches by tag, first unmatched stream wins; cancelled throwaway streams go to extra, not
+    failures."""
     remaining = list(streams)
     turns: list[dict] = []
     ok = True
@@ -600,11 +536,7 @@ def check_planned_streams(streams: list[dict], planned: list[dict]) -> dict:
 
 
 def _selftest() -> int:
-    """Serve one scripted reply to a plain socket client and check the wire bytes.
-
-    Run with `python -m tests.studio.studiobench.pacer`. No browser, no Unsloth, no Playwright: the
-    pacer's contract is with the wire, and the wire is checkable on its own.
-    """
+    """No browser or Unsloth needed: the pacer's contract is with the wire, which can be checked alone."""
     import urllib.request
 
     pacer = Pacer().start()

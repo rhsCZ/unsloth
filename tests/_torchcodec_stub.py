@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A torchcodec placeholder for the Colab-shaped smoke job, which has no CPU wheel to install.
-
-Installed as a real (tiny) distribution on sys.path rather than as an entry poked into
-sys.modules, because both of the obvious sys.modules shapes fail against the transformers the
-Colab image pins:
-
-  * `types.ModuleType("torchcodec")` leaves `__spec__` None, and `importlib.util.find_spec`
-    RAISES for a module sitting in sys.modules with no spec instead of returning None. That is
-    `ValueError: torchcodec.__spec__ is None`, which is how the smoke matrix was failing.
-
-  * the same module carrying a hand-made ModuleSpec answers find_spec, but then
-    `is_torchcodec_available()` is True -- transformers 5.16.1 calls `_is_package_available`
-    without `return_version`, so it never looks at distribution metadata and reports presence
-    from the spec alone -- and `audio_utils` line 61 immediately does
-    `version.parse(importlib.metadata.version("torchcodec"))` at import time. With no
-    distribution installed that is PackageNotFoundError: one import failure traded for another.
-
-A distribution on disk answers both questions honestly. It also answers a third one the right
-way: the version is deliberately below the 0.3.0 floor `load_audio` requires, so the "auto"
-backend resolves to librosa and nothing ever asks this placeholder to decode anything.
-"""
+"""Ship torchcodec as a real on-disk distribution; a sys.modules stub breaks find_spec and metadata."""
 
 from __future__ import annotations
 
@@ -43,10 +23,7 @@ Summary: Placeholder installed by the Unsloth notebooks smoke job; no CPU wheel 
 
 
 def install(target_dir: "str | Path | None" = None) -> "str | None":
-    """Put the placeholder on sys.path unless a real torchcodec is already importable.
-
-    Returns the directory it was written to, or None when a real one was found.
-    """
+    """Put the placeholder on sys.path unless a real torchcodec is already present; returns None then."""
     if _already_present():
         return None
 

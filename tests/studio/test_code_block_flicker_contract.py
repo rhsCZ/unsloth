@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What the code-block flicker harness is held to.
-
-`tests/studio/playwright_code_block_flicker.py` decides whether a code block flickered from a
-per-frame log of rendered heights. Two failures there never show up as a failing run: the detector
-never fires and every tree looks clean, or it fires on a height change that is not a flicker and
-every tree looks broken.
-
-So it is exercised here against hand-written frame logs, including the ones it must NOT report,
-and the harness is held to driving at least one variant known to flicker, so a run reporting "no
-flicker" has said something.
-
-The analysis lives in `_code_block_flicker_analysis.py` so this file can import it wherever the
-CPU suite runs: the harness imports playwright, this does not.
-"""
+"""Tests the analysis in _code_block_flicker_analysis.py, which avoids importing playwright."""
 
 import ast
 import sys
@@ -74,11 +61,7 @@ def test_a_one_frame_collapse_to_the_placeholder_is_a_collapse() -> None:
 
 
 def test_a_collapse_that_deepens_reports_its_deepest_point() -> None:
-    """A drop arriving over several frames is one collapse, measured at the floor.
-
-    The reported drop must agree with the recorded floor, or a red run understates what it caught:
-    1700 -> 700 -> 200 is a 1500px collapse, not a 1000px one.
-    """
+    """A drop over several frames is one collapse, measured to its deepest floor, not its first step."""
     frames = [frame([1700.0]), frame([700.0]), frame([200.0]), frame([1700.0])]
     result = analyse_stream(frames)
     assert result["collapses"] == 1
@@ -134,12 +117,7 @@ def test_a_block_that_goes_short_and_stays_short_is_not_a_flicker() -> None:
 
 
 def test_a_drop_still_open_when_the_log_ends_is_recorded() -> None:
-    """The tail is shorter than RECOVERY_FRAMES, so the realistic case ends mid-drop.
-
-    2500ms is ~150 frames at 60Hz against RECOVERY_FRAMES of 240, so a block collapsing at
-    finalization and staying short never trips the threshold. It must still appear in `detail`,
-    the one place a non-recovering drop is promised to show up.
-    """
+    """A drop open at log end is recorded in detail, since it never recovers within RECOVERY_FRAMES."""
     frames = [frame([1700.0])] * 3 + [frame([226.0])] * 150
     result = analyse_stream(frames)
     assert result["collapses"] == 0, "it never came back, so it is not a flicker"
@@ -170,10 +148,7 @@ def test_a_thread_that_simply_gets_shorter_is_not_a_dip() -> None:
 
 
 def test_blocks_appearing_and_disappearing_are_not_collapses() -> None:
-    """The heights array is not a fixed-width record: it grows as blocks are APPENDED, and empties
-    when the thread unmounts. An absent block has no height, which is not a height of zero:
-    reading it as zero turns every teardown into a column of collapses.
-    """
+    """An absent block has no height, not zero; reading it as zero turns every teardown into collapses."""
     appearing = [frame([1700.0])] * 3 + [frame([1700.0, 900.0])] * 3
     assert analyse_stream(appearing)["collapses"] == 0
 
@@ -227,11 +202,7 @@ def harness_source() -> str:
 
 
 def module_assignment(source: str, name: str) -> ast.expr | None:
-    """The value assigned to a module-level `name`, or None.
-
-    Parsed rather than grepped: a substring check passes on a constant renamed to `NAME_DISABLED`
-    and left unread, which is how one of these guards gets turned off without a test noticing.
-    """
+    """Parsed, since a substring check passes on a constant renamed to NAME_DISABLED and left unread."""
     tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, ast.Assign):

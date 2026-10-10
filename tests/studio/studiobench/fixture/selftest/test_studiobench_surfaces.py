@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The surface registry and the coverage manifest, checked without a browser.
-
-WHAT THESE TESTS ARE FOR. A registry is a list of promises about an app that is not present when
-the list is read, so almost nothing about it can be verified here. What CAN be verified is the
-class of defect that makes a sweep worthless: an entry that cannot be executed, a coverage number
-that counts a surface nobody reached, and a row that records a failure without recording why. All
-three have the same shape -- the artefact looks complete and says the wrong thing -- and all three
-are cheap to catch here rather than after a forty-minute run.
-
-No browser and no Unsloth. The step lists are declarative for exactly this reason, and the sweep is
-driven against a scripted stand-in page so its bookkeeping is exercised on both the reached and
-the unreached path.
-"""
+"""Checks registry entries run, coverage excludes unreached surfaces, and failure rows give a reason."""
 
 from __future__ import annotations
 
@@ -374,12 +362,7 @@ def test_an_unscoped_sweep_says_so_in_the_rendered_manifest():
 
 
 class _FakePage:
-    """A scripted stand-in for a Playwright page.
-
-    `reach_ok` false makes every click raise, which is how a broken selector presents. The point
-    is not to simulate a browser: it is to prove that a sweep whose reaches all fail still emits
-    one row per surface, each carrying a reason, rather than emitting nothing.
-    """
+    """Scripted stand-in for Playwright; reach_ok=False makes every click raise, like a broken selector."""
 
     def __init__(
         self,

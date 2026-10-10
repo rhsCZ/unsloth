@@ -1,7 +1,4 @@
-"""RaiseUninitialized must ignore a checkpoint that only re-initializes deterministic
-position_ids buffers, but still raise when a real weight is missing -- even if the same
-HF record also lists a benign position_ids buffer.
-"""
+"""RaiseUninitialized ignores position_ids buffers but still raises for any real missing weight."""
 
 from __future__ import annotations
 

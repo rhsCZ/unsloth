@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Pinned-symbol compat check across vLLM PyPI minors >= 0.9.0 (GitHub raw-fetch, no pip/GPU).
-
-Catches API drift like vLLM PR #30253 (vllm.lora.models split), 0.14
-supports_tower_connector_lora(), 0.15 create_lora_manager rename, the
-lora_path -> lora_dir rename, and the 0.11 v0 graph-capture removal.
-Asserts every symbol unsloth-zoo's vllm_utils + vllm_lora_* expects is present.
-"""
+"""Checks symbols unsloth-zoo expects exist in vLLM >= 0.9.0 by GitHub fetch, without pip or GPU."""
 
 from __future__ import annotations
 
@@ -66,13 +60,7 @@ _VLLM_TAGS_FALLBACK = [
 
 
 def _stable_release_tags() -> list[str]:
-    """Stable vLLM releases >= _VLLM_MIN_VERSION, as git tags, oldest first.
-
-    All-numeric versions only: rc/dev/post builds are not what users pip
-    install, and a fully yanked release is not one we owe compatibility to.
-    Hotfixes carry a fourth component (0.9.0.1, 0.10.1.1) and are ordinary
-    installable releases, so the component count is not fixed at three.
-    """
+    """Stable releases only: all-numeric, no rc/dev/post or yanked; hotfixes may have four components."""
     try:
         with urllib.request.urlopen("https://pypi.org/pypi/vllm/json", timeout = 20) as r:
             releases = json.loads(r.read().decode("utf-8"))["releases"]
@@ -98,14 +86,7 @@ VLLM_TAGS = _stable_release_tags() + ["main"]
 
 @functools.lru_cache(maxsize = None)
 def _ref_resolves(repo: str, ref: str) -> bool:
-    """Does this ref resolve? Asked of the ref itself, not of a file in it.
-
-    Probing a path conflates "ref is gone" with "that one file was renamed",
-    and a false negative skips the whole tag, `main` included, which is the ref
-    that catches drift before release. Only an explicit success counts: a
-    rate-limited or unreachable API knows nothing, so fall back to the path
-    probe rather than treating "not a 404" as resolved.
-    """
+    """Asks the ref itself: a renamed file would wrongly skip the tag; only an explicit 200 counts."""
     status = _api_status(f"repos/{repo}/commits/{ref}")
     if status is not None:
         return status == 200
@@ -128,13 +109,7 @@ VLLM_BNB_PLUGIN_FALLBACK_REF = "v0.0.3"
 
 @functools.lru_cache(maxsize = None)
 def _plugin_ref() -> str | None:
-    """The plugin tag users get from `pip install vllm-bnb-plugin`, or None.
-
-    Never `main`: an unreleased fix there would hide a broken published
-    plugin, and an unreleased regression would fail every historical vLLM at
-    once. Neither says anything about a pair anyone can install. None means no
-    released ref resolved, which is a skip rather than a verdict.
-    """
+    """Never main: an unreleased fix would hide a broken published plugin; None is a skip, not a verdict."""
     version = None
     try:
         with urllib.request.urlopen("https://pypi.org/pypi/vllm-bnb-plugin/json", timeout = 20) as r:
@@ -156,11 +131,7 @@ VLLM_BNB_SYMBOLS = (
 
 @functools.lru_cache(maxsize = None)
 def _api_status(path: str) -> int | None:
-    """HTTP status for a GitHub API path, or None if the API cannot answer.
-
-    None covers an unreachable network and an unauthenticated rate limit, both
-    of which are the runner's problem rather than a compatibility answer.
-    """
+    """GitHub API HTTP status for a path; None when unreachable or rate limited, not a verdict."""
     req = urllib.request.Request(f"https://api.github.com/{path}", method = "HEAD")
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
@@ -176,11 +147,7 @@ def _api_status(path: str) -> int | None:
 
 @functools.lru_cache(maxsize = None)
 def _fetch_text(repo: str, ref: str, path: str) -> str | None:
-    """Fetch a file's text from GitHub; None on 404 (renamed/removed, informational).
-
-    Cached: uncached, every-release x every-test is thousands of requests and
-    gets rate limited.
-    """
+    """Fetch a file's text from GitHub, None on 404; cached because uncached fetches get rate limited."""
     url = f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
     req = urllib.request.Request(url)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -362,13 +329,7 @@ def test_unsloth_zoo_standby_guards_present():
 
 @pytest.mark.parametrize("tag", VLLM_TAGS)
 def test_vllm_bitsandbytes_symbols_have_a_home(tag: str):
-    """The bnb symbols unsloth_zoo patches must exist in tree OR in the plugin.
-
-    This is the check that was missing when vLLM 0.28 moved bitsandbytes out of
-    tree: `import unsloth_zoo.vllm_utils` raised ModuleNotFoundError at module
-    scope, taking out every fast_inference GRPO run on 0.28+ rather than only
-    the 4-bit ones, and the tag list here stopped at v0.20.1 so nothing noticed.
-    """
+    """unsloth_zoo's bnb symbols must exist in the vLLM tree or the plugin; vLLM 0.28 moved them out."""
     in_tree = _fetch_text("vllm-project/vllm", tag, VLLM_BNB_IN_TREE)
     if in_tree is not None:
         missing = [s for s in VLLM_BNB_SYMBOLS if not _has_def(in_tree, s)]
@@ -401,12 +362,7 @@ VLLM_UNSTACK_HELPERS = ("get_rename_mapper", "get_unstacked_mapper")
 
 @pytest.mark.parametrize("tag", VLLM_TAGS)
 def test_weights_mapper_unstack_helper_is_named_as_expected(tag: str):
-    """unsloth_zoo must be able to strip the fused q/k/v + gate/up maps.
-
-    0.25.0 added `get_unstacked_mapper`, 0.29.0 renamed it `get_rename_mapper`;
-    probing only the old name fused the LoRA names and killed GRPO with
-    fast_inference in vLLM's set_lora (IndexError: tuple index out of range).
-    """
+    """vLLM 0.29 renamed get_unstacked_mapper to get_rename_mapper; probe both or LoRA names fuse."""
     src = _fetch_text("vllm-project/vllm", tag, VLLM_WEIGHTS_MAPPER_PATH)
     if src is None:
         pytest.skip(f"{tag}: {VLLM_WEIGHTS_MAPPER_PATH} not present")

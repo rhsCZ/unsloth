@@ -1,46 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every test that crashes a process on purpose must suppress its core dump.
-
-Some tests need a child that dies of a real fatal signal, usually to prove that a
-supervisor treats a hard fault differently from a clean non-zero exit. The signal is
-legitimate. The core dump that follows is not: `/proc/sys/kernel/core_pattern` on a
-stock Ubuntu box pipes it to apport, which reads the WHOLE core before the child is
-reaped. Measured locally that is 123ms and a multi-MB write per fault, against 30ms
-with the dump suppressed.
-
-At CI volume that is a slow suite. The reason it is worth a guard is that the idiom
-gets copied. The same `ctypes.string_at(0)` line, lifted into a local reproduction
-harness wrapped in `for _ in range(trials)`, produced roughly 240 deliberate faults in
-46 seconds on a shared build box and the resulting apport storm took down every tmux
-session for that user. The tests here are where people learn the pattern, so this is
-where the rule belongs.
-
-The fix is one call before the fault:
-
-    ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)   # PR_SET_DUMPABLE = 0
-
-A non-dumpable process still dies of the same signal, so nothing a test asserts
-changes, and no core is written. Note that `RLIMIT_CORE = 0` is NOT a substitute: a
-piped core_pattern ignores it, measured at 117ms and still dumping. If the test only
-needs "the child vanished" rather than a specific signal, prefer SIGKILL, which never
-produces a core.
-
-Three things this deliberately gets right, each of which it got wrong first:
-
-  * Detection is AST-based. Roughly forty places in this suite mention SIGSEGV or
-    SIGABRT in a comment, a docstring, or a return-code assertion such as
-    `assert f(-11) is True`, and none of those crash anything. A textual scan would be
-    almost entirely false positives, and comments could satisfy the suppression side.
-  * A crash written as ordinary code counts, not only one inside a `-c` script string.
-    A `multiprocessing` target that calls `ctypes.string_at(0)` dumps exactly the same
-    core as a script string that does.
-  * Suppression is matched to the crash it is meant to cover, not to the file. A file
-    that defines a suppressed helper must not thereby bless a naked crash added to it
-    later, which is the most likely way this regresses given the files that now
-    contain such helpers.
-"""
+"""Tests crashing on purpose must prctl(PR_SET_DUMPABLE, 0) first, or each fault dumps a core."""
 
 from __future__ import annotations
 
@@ -106,12 +67,7 @@ def _test_roots():
 
 
 def _iter_test_files():
-    """Every Python file under a test root, not only `test_*.py`.
-
-    conftest.py, shared harnesses and the `_*_shim.py` files CI invokes directly can
-    all spawn children, so restricting this to `test_*.py` would leave a real hole.
-    This module is excluded: it necessarily contains every marker it looks for.
-    """
+    """Every .py under a test root, not just test_*.py: conftest and shim files can spawn children too."""
     seen = set()
     for root in _test_roots():
         for path in sorted(root.rglob("*.py")):
@@ -125,12 +81,7 @@ def _iter_test_files():
 
 
 def _called_name(node):
-    """Trailing attribute of a call, without unparsing it.
-
-    `ast.unparse` on every Call in the suite is what made an earlier version of this
-    check cost 9s. Almost every call is ruled out by its name alone, so unparse only
-    the handful that survive.
-    """
+    """Reads the trailing name directly; ast.unparse on every Call was too slow."""
     if not isinstance(node, ast.Call):
         return None
     func = node.func
@@ -173,11 +124,7 @@ def _is_libc_handle(node, aliases = ()) -> bool:
 
 
 def _prctl_dumpable_value(node, libc = ()):
-    """The value a prctl(PR_SET_DUMPABLE, v, ...) call sets, else None.
-
-    The value argument matters: prctl(4, 1) re-enables dumps, so treating any
-    PR_SET_DUMPABLE call as suppression would bless a crash that still dumps.
-    """
+    """prctl(4, 1) re-enables core dumps, so the value matters, not just the PR_SET_DUMPABLE call."""
     if _called_name(node) != "prctl" or len(node.args) < 2:
         return None
     # The receiver matters: a mock's `fake.prctl(4, 1)` touches no kernel state.
@@ -193,11 +140,7 @@ def _prctl_dumpable_value(node, libc = ()):
 
 
 def _fold(node, env):
-    """Constant-fold a string expression. Returns (value, consumed literal ids).
-
-    Needed so `_SAFE = _SUPPRESS + "ctypes.string_at(0)"` is judged as the script it
-    actually becomes, rather than as a bare literal with no suppression next to it.
-    """
+    """Folds a string expression, so concatenated scripts are judged as the script they become."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value, {id(node)}
     if isinstance(node, ast.Name):
@@ -222,13 +165,7 @@ def _assigned_pair(node):
 
 
 def _string_env(tree):
-    """Name to foldable string, per scope, so same-named locals cannot collide.
-
-    One flat map let an unrelated `SCRIPT = "print(1)"` overwrite a module-level
-    `SCRIPT` that really crashes. Functions are seeded from the module bindings and
-    shadow them locally; concatenations fold, so `_SUPPRESS + "string_at(0)"` is
-    judged as what it becomes.
-    """
+    """Per-scope name map: a flat one let a local SCRIPT overwrite a module-level one that crashes."""
     owner = _enclosing_scopes(tree)
     module_env, scoped = {}, {}
     for module_pass in (True, False):
@@ -247,11 +184,7 @@ def _string_env(tree):
 
 
 def _iter_executable(scope, enter_classes = True):
-    """Nodes that run when `scope` runs, skipping bodies that need a separate call.
-
-    Walking everything treated a call inside an uninvoked nested `def` as having
-    already run, so a helper that suppresses cores blessed a crash it never covered.
-    """
+    """Skips nested def bodies, which run only when called; walking them blessed uncovered crashes."""
     for child in ast.iter_child_nodes(scope):
         # Not a class body: it runs the moment the class is defined.
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
@@ -277,12 +210,7 @@ def _rebound_names(scope):
 
 
 def _sequence_env(tree, owner):
-    """Name to the elements of a list/tuple it is bound to.
-
-    Separate from `_string_env`, which folds to a string; a command vector does not.
-    Flat by name rather than per scope: a collision only adds a candidate string to
-    read, which is cheaper than missing the script a child runs.
-    """
+    """Flat by name on purpose: a collision only adds a candidate to read, cheaper than a missed script."""
     out = {}
     for node in ast.walk(tree):
         pair = _assigned_pair(node)
@@ -295,12 +223,7 @@ def _sequence_env(tree, owner):
 
 
 def _snippets(tree):
-    """Strings that actually reach a child interpreter.
-
-    Only a call argument counts, directly or via a name, list/tuple or concatenation,
-    as in `subprocess.run([exe, "-c", SCRIPT])`. Counting every literal flagged
-    ordinary assertions over a string nothing executes.
-    """
+    """Only strings passed as call arguments reach a child; a literal elsewhere is never executed."""
     owner, module_env, scoped = _string_env(tree)
     sequences = _sequence_env(tree, owner)
     out = []
@@ -351,13 +274,7 @@ def _snippets(tree):
 
 
 def _crash_aliases(tree):
-    """Names imported directly from a crashing module, e.g. `from os import abort`.
-
-    A bare `abort()` is only fatal from `os` or `ctypes`; Playwright's `route.abort()`
-    keeps its receiver and stays ignored. Keyed by the call-site name and valued by the
-    name the rules use, since `from os import abort as die` binds `die`, which finds
-    nothing in `_CRASH_CALLS`.
-    """
+    """Imported crash names (from os import abort): a bare abort() crashes, route.abort() does not."""
     out = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or node.module is None:
@@ -506,11 +423,7 @@ def _dumpable_writes(
     shadowed = (),
     libc = (),
 ):
-    """`(position, value, certain)` for each prctl dumpability write on this path.
-
-    With `functions`, a call to a local helper counts too, at the call's position, as
-    whatever that helper leaves dumpability set to.
-    """
+    """(position, value, certain) per prctl dumpability write, counting local helper calls too."""
 
     def written(node):
         value = _prctl_dumpable_value(node, libc)
@@ -568,11 +481,7 @@ def _clears_dumpable_before(
     functions = None,
     libc = (),
 ) -> bool:
-    """A prctl(4, 0, ...) on this scope's own path that runs before `position`.
-
-    Order matters. Suppression placed after the fault does nothing, so accepting it
-    anywhere in the scope blessed a child that still dumps.
-    """
+    """Suppression must precede the fault: a prctl(4, 0) after the crash leaves the child dumping."""
     shadowed = _rebound_names(scope) if hasattr(scope, "body") else ()
     writes = sorted(
         w
@@ -623,11 +532,7 @@ def _is_awaited(call, scope) -> bool:
 
 
 def _live_aliases(aliases, scope, rebound):
-    """The imported crash names still in force where this call sits.
-
-    A scope that binds the name itself no longer means the import, so a test that
-    does `abort = mock` before calling it is not crashing anything.
-    """
+    """A local rebind of an imported crash name, e.g. abort = mock, is no longer a crash."""
     if not aliases or scope is None:
         return aliases
     if id(scope) not in rebound:
@@ -683,12 +588,7 @@ _MAX_SNIPPET_DEPTH = 5
 
 
 def _bindings_before(tree, scope, position):
-    """`(env, maybe)` for `scope` at `position`.
-
-    `env` holds what a name is definitely bound to there. `maybe` collects values a
-    name might still hold, because a rebind under a branch may not have run: dropping
-    the old value on `if False: INNER = "pass"` lost the crash it replaced.
-    """
+    """maybe keeps old values a rebind under a branch may not have replaced; dropping them lost a crash."""
     env, maybe = {}, {}
     # A name assigned anywhere in a function is local throughout, so the global is never read.
     shadowed = _rebound_names(scope) if scope is not tree else ()
@@ -726,11 +626,7 @@ def _assignments_before(
 
 
 def _nested_scripts(tree, inherited = False):
-    """Source a snippet hands to exec/eval, or on to another child interpreter.
-
-    `SCRIPT = 'exec("import os; os.abort()")'` parses cleanly and holds no crash call
-    of its own, so without this the crash one level down was never looked at.
-    """
+    """Finds source a snippet hands to exec/eval or another interpreter, so nested crashes get checked."""
     owner = _enclosing_scopes(tree)
     functions = _functions_by_name(tree)
     for node in ast.walk(tree):
@@ -778,12 +674,7 @@ def _snippet_state(
     depth: int = 0,
     inherited: bool = False,
 ):
-    """`(crashes, violates)` for a child script.
-
-    The snippet is Python, so parse it and reuse the same call detector rather than
-    matching marker substrings. Textual matching missed aliased forms such as
-    `from os import abort; abort()` and any spacing the markers did not anticipate.
-    """
+    """Parses the child and reuses the call detector: text matching missed aliased forms like abort()."""
     try:
         with warnings.catch_warnings():
             # Snippets are other people's source; their escape-sequence warnings are noise here.
@@ -806,11 +697,7 @@ def _snippet_state(
 
 @lru_cache(maxsize = None)
 def _analyze(path):
-    """`(crashes_on_purpose, unsuppressed_reasons)` for one file.
-
-    One pass, cached, because both tests below ask about every file and parsing twice
-    doubles the cost of the check for nothing.
-    """
+    """One cached pass per file: both tests ask about every file, and parsing twice is wasted work."""
     source = path.read_text(encoding = "utf-8", errors = "replace")
     if not any(marker in source for marker in _PREFILTER):
         return False, ()
@@ -1362,10 +1249,7 @@ def test_the_detector_is_not_fooled(tmp_path, name):
 
 
 def test_the_scan_finds_the_files_it_is_meant_to_guard():
-    """A silent scan matching nothing would pass forever and protect nothing.
-
-    This module excludes itself, so the match has to come from a real test.
-    """
+    """A silent empty scan would pass forever; this module excludes itself, so the match must be real."""
     crashing = [p.relative_to(REPO_ROOT) for p in _iter_test_files() if _crashes(p)]
     assert crashing, (
         "no deliberate-crash files matched, so this check is guarding an empty set. "

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the `--cloudflare/--no-cloudflare` Unsloth flag.
-
-Pins the typer Option (tri-state, default off / None) on both `unsloth studio`
-and `unsloth studio run`, and that the chosen polarity reaches the re-exec'd
-child and run_server. Modeled on test_studio_run_parallel_flag.py.
-"""
+"""Tests the --cloudflare/--no-cloudflare tri-state Option and forwarding to re-exec and run_server."""
 
 from __future__ import annotations
 

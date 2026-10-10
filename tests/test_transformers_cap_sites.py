@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""The published transformers window and every CI lane that mirrors it have to agree.
-
-The cap is spelled in pyproject.toml, unsloth_zoo's pyproject, and several workflows. A site
-left behind when the cap moves keeps CI green while testing a range users no longer get, so
-the assertions are not "the number is 5.17.0" but "the window admits what was measured,
-still rejects what was rejected, and no lane sits below it without saying why".
-
-Reads files only, which is what lets it run on the Windows and macOS runners too.
-"""
+"""Every copy of the transformers cap (pyproject, workflows) must agree, or CI tests a stale range."""
 
 from __future__ import annotations
 

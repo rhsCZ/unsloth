@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
-"""Batch-1 NF4 GEMV kernel (unsloth/kernels/nf4_gemv.py). It reduces each quantization block
-before scaling it, so it is held to an fp32 reference with a tolerance and must never be worse
-than bitsandbytes' own GEMV. Streams, CUDA graphs and torch.compile through fast_gemv are covered
-in test_bnb_integration_compile.py."""
+"""NF4 GEMV reduces before scaling, so it is checked against fp32 and must not lose to bitsandbytes."""
 
 import pytest
 import torch

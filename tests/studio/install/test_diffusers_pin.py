@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The pinned Diffusers release has to survive a fresh install.sh, not just an update.
-
-MiniMax-H3 and MiniMax Music 3 need Diffusers 0.40.0 or newer, and Unsloth refuses
-to load them otherwise. The pin originally lived in
-studio/backend/requirements/base.txt, which did not reach fresh install.sh installs at
-the time. base.txt now reaches those installs as an independent shared phase, but it
-still runs too early to hold this pin safely.
-
-These tests pin the shape that fixes it: exactly one file names diffusers, and the step
-that installs it sits outside every skip.
-"""
+"""Diffusers is pinned in one file, installed outside every skip, since base.txt runs too early."""
 
 from __future__ import annotations
 
@@ -65,10 +55,7 @@ def _requirements(path: pathlib.Path) -> list[str]:
 
 
 def _code_only(source: str) -> str:
-    """`source` with comment text blanked out, offsets preserved.
-
-    The ordering check scans for requirements filenames and has to read them as installs,
-    not prose. Blanking keeps every index truthful; tokenize spares a `#` inside a string."""
+    """Blanks comment text but keeps offsets, so scans read code only; string literals are left intact."""
     lines = source.splitlines(keepends = True)
     starts, offset = [], 0
     for line in lines:
@@ -122,14 +109,7 @@ def test_only_the_pin_file_names_diffusers():
 
 
 def test_the_main_build_pins_a_commit_and_runs_after_the_release():
-    """The main-build file exists, names a COMMIT, and runs after the release pin.
-
-    The commit is the load-bearing part and is asserted rather than trusted: a branch ref would
-    leave nothing pinning behaviour, because any main build reports 0.41.0.dev0 and
-    ``_version_tuple`` truncates it to (0, 41, 0), so no version check can tell two apart. Now that
-    this installs by default that is a stronger requirement, not a weaker one, since the whole user
-    base would otherwise be on whatever main happened to be that morning.
-    """
+    """The main build must pin a commit, since any main build reports the same version."""
     assert MAIN_FILE.is_file(), f"{MAIN_FILE} is missing"
     lines = _requirements(_active_main())
     assert len(lines) == 1, lines
@@ -176,11 +156,7 @@ def _probe_module(name: str, active: bool = True):
 
 
 def test_the_main_build_is_on_by_default_and_opts_out_on_zero(monkeypatch):
-    """Default ON is the whole point, so the unset case is asserted, not assumed.
-
-    The opt-out is deliberately narrow: only an explicit falsy value turns it off, because a typo
-    in the variable name silently disabling a model is the worse failure of the two.
-    """
+    """Only an explicit falsy UNSLOTH_DIFFUSERS_MAIN turns the main build off; unset means on."""
     module = _probe_module("install_python_stack_probe")
 
     monkeypatch.delenv("UNSLOTH_DIFFUSERS_MAIN", raising = False)
@@ -204,14 +180,7 @@ def test_the_main_build_is_on_by_default_and_opts_out_on_zero(monkeypatch):
 
 
 def test_the_main_build_falls_back_to_the_zip_when_there_is_no_git(monkeypatch):
-    """No git is the COMMON case, so it must still get the pinned commit.
-
-    Measured on a host whose ``git`` exits non-zero, which is what the desktop bundle looks like on
-    macOS: installing 0.1.811 and then updating to 0.1.812 both left diffusers at 0.40.0, and
-    Qwen-Image-2.1 refused to load on an install that had done nothing wrong. Nothing about that
-    needed git: the same commit is a zip over plain https. The git clone stays the default because
-    it records a ref, and this is the fallback.
-    """
+    """With no working git, the main build comes from the commit's zip over https."""
     module = _probe_module("install_python_stack_probe2")
 
     monkeypatch.delenv("UNSLOTH_DIFFUSERS_MAIN", raising = False)
@@ -275,12 +244,7 @@ def test_the_zip_route_is_skipped_without_exactly_one_pinned_digest(tmp_path, mo
 
 
 def test_the_main_build_keeps_the_release_when_there_is_no_git_and_no_zip(monkeypatch):
-    """Diffusers is mandatory, unlike triton_kernels, so a host that can reach neither route must
-    be left with the release the previous step installed rather than nothing at all.
-
-    Reached by a pin file the zip route cannot serve: a non-GitHub remote, or a branch ref, which
-    an archive cannot pin because it records no ref of its own.
-    """
+    """Without git or a zip, the release stays: diffusers is mandatory, unlike triton_kernels."""
     module = _probe_module("install_python_stack_probe2b")
 
     monkeypatch.delenv("UNSLOTH_DIFFUSERS_MAIN", raising = False)
@@ -301,13 +265,7 @@ def test_the_main_build_keeps_the_release_when_there_is_no_git_and_no_zip(monkey
 
 
 def test_an_archive_install_reads_back_as_resident(monkeypatch):
-    """The half that makes the zip route survive.
-
-    Without it the fallback works exactly once: pip records ``archive_info`` and no ref, the
-    residency check only understood ``vcs_info``, so the main build read as absent,
-    ``_diffusers_main_supersedes_release`` said the release pin had not been superseded, and the
-    NEXT pass reinstalled diffusers 0.40.0 straight over it. Measured, not theorised.
-    """
+    """Residency must read archive_info as well as vcs_info, or the next pass reinstalls the release."""
     module = _probe_module("install_python_stack_probe2c")
 
     revision = _requirements(_active_main())[0].rpartition("@")[2].strip().lower()
@@ -350,13 +308,7 @@ def test_the_zip_route_refuses_anything_it_cannot_pin():
 
 
 def test_a_failed_main_build_degrades_instead_of_failing_the_install(monkeypatch):
-    """The one that makes default-on safe.
-
-    ``pip_install`` exits the installer. Using it here would make a reachable github.com a hard
-    requirement of installing Unsloth: a blocked proxy, an offline mirror or an upstream outage
-    would turn a working install into no install. The release pin is already resident, so the
-    failure is survivable and must be survived.
-    """
+    """A failed main build must degrade rather than exit, since the release pin is already resident."""
     module = _probe_module("install_python_stack_probe3")
 
     monkeypatch.delenv("UNSLOTH_DIFFUSERS_MAIN", raising = False)
@@ -485,13 +437,7 @@ def test_install_sh_still_delegates_the_core_package_skip():
 
 
 def test_no_generated_filter_snapshot_is_tracked():
-    """They are a copy of a file already in the tree, and one got committed.
-
-    _filter_requirements writes beside the source so relative -r/-c includes resolve.
-    pip_install unlinks them in a finally, but a test calling the helper directly, or an
-    install killed mid-run, leaves them in the checkout, where `git add -A` picks them up.
-    A stale snapshot then reads as a second, silently divergent copy of the pins.
-    """
+    """Filter snapshots are copies of pins and must not be committed, or a stale one diverges silently."""
     done = subprocess.run(
         ["git", "ls-files", "-z", "--", "studio/backend/requirements/"],
         cwd = REPO_ROOT,
@@ -558,13 +504,7 @@ def test_the_win_arm64_floor_is_the_first_release_that_has_a_wheel(relpath, dist
 
 
 def test_the_release_pin_stands_down_once_the_main_build_is_resident(monkeypatch):
-    """The one that makes a second update a no-op.
-
-    The release pin is a version pin and the main build reports ``0.41.0.dev0``, so the pin never
-    reads as satisfied once the commit is in place. Left alone it reinstalls the release on every
-    pass and the step after it reinstalls the same commit on top, which is two Diffusers installs
-    per update and an offline update that downgrades a working build and then cannot restore it.
-    """
+    """The release pin stands down once the main build is resident, or each update installs twice."""
     module = _probe_module("install_python_stack_probe5")
 
     calls = []
@@ -623,13 +563,7 @@ def test_opting_out_or_a_missing_main_build_still_reinstates_the_release(monkeyp
 
 
 def test_a_damaged_main_build_is_repaired_rather_than_believed(monkeypatch):
-    """Provenance alone is not a build, and here that is worse than it is for triton kernels.
-
-    ``direct_url.json`` survives inside dist-info while the package tree under it is deleted or
-    truncated. The release pin reads the same predicate to decide it has been superseded, so a
-    provenance-only answer would skip the reinstall AND the repair, on a MANDATORY dependency, on
-    every later pass rather than one. Either half failing has to mean "install it".
-    """
+    """A damaged main build must be reinstalled, since direct_url.json can survive a truncated tree."""
     module = _probe_module("install_python_stack_probe7")
     monkeypatch.delenv("UNSLOTH_DIFFUSERS_MAIN", raising = False)
 
@@ -691,13 +625,7 @@ def test_python_39_does_not_clone_a_build_it_can_never_install(monkeypatch):
 
 
 def test_the_full_deps_escape_hatch_reaches_both_diffusers_steps(monkeypatch):
-    """UNSLOTH_STUDIO_FULL_DEPS is the documented repair, and this was the one pin-shaped pair it
-    could not reach.
-
-    ``_diffusers_main_resident`` is exactly the kind of evidence the hatch exists to override:
-    ``_payload_recorded_intact`` compares recorded sizes, so a same-size corruption reads as intact
-    and both steps would skip, leaving nothing to repair Diffusers with.
-    """
+    """The full-deps hatch must reach both Diffusers steps, since size checks miss same-size corruption."""
     module = _probe_module("install_python_stack_probe_fulldeps")
 
     calls: list = []

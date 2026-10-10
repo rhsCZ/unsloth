@@ -1,19 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""main must be a fixed point of its own formatting hook.
-
-pre-commit runs `ruff-format-with-kwargs` on the files a PR touches, so a file
-that lands unformatted is never looked at again: the next PR to edit it inherits
-a red `pre-commit.ci - pr` for a diff it did not write, and the author goes
-looking for a defect that is not in their change. Two files reached main that
-way and sat there, one of them for months.
-
-The check is the real thing rather than `ruff format --check`. The hook is
-`enforce_kwargs_spacing --pre`, then `ruff format`, then `enforce_kwargs_spacing`
-again, and ruff only covers the middle pass, so a file can pass a ruff check
-cleanly and still be rewritten by the hook. It is run over copies, so a failing
-run reports the drift instead of quietly fixing it.
-"""
+"""Main must be a fixed point of the full pre-commit hook, not just ruff format --check."""
 
 from __future__ import annotations
 
@@ -59,17 +46,7 @@ _TRACKED_GLOBS = ("*.py", "*.pyi")
 
 
 def hook_exclude_pattern(config_text: str, hook_id: str) -> str | None:
-    """The `exclude:` regex the named hook is configured with, or None.
-
-    Read out of .pre-commit-config.yaml rather than copied here. A second copy of
-    the exclusion list is a second thing to forget, and forgetting it in this
-    direction is the expensive one: this test would format a file the hook never
-    touches and fail main over it.
-
-    Scanned rather than parsed with PyYAML, matching how the version pin is read
-    next door: the block is found by its `- id:` and abandoned at the next `- id:`
-    or `- repo:`, which keeps the ruff hook's own `exclude: '\\.ipynb$'` out.
-    """
+    """Read the hook's exclude regex from .pre-commit-config.yaml, not a copy, so the two cannot drift."""
     lines = config_text.splitlines()
     inside = False
     for line in lines:
@@ -112,11 +89,7 @@ def eligible_files(root: Path) -> list[str]:
 
 
 def _pinned_ruff_reason() -> str | None:
-    """Why this cannot be checked here, or None when it can.
-
-    ruff's formatting is not stable across releases, so another ruff answers a
-    different question, and the formatter refuses to run under one anyway.
-    """
+    """Returns why ruff cannot be checked here, or None; output differs between ruff releases."""
     pinned = pinned_ruff_version(CONFIG.read_text(encoding = "utf-8")) if CONFIG.exists() else None
     installed = installed_ruff_version()
     if installed is None:
@@ -127,16 +100,7 @@ def _pinned_ruff_reason() -> str | None:
 
 
 def guard_verdict(ruff_reason: str | None, in_ci: bool) -> str:
-    """`run`, `skip` or `fail`.
-
-    Skipping is for a contributor who has not installed the pinned ruff; making
-    them install one to run the rest of the suite would be rude. In CI it is the
-    wrong answer: the runner installs the pin in a step of its own, so a missing
-    ruff there means that step moved, was renamed, or a new job started calling
-    `pytest tests/` without it, and the guard would go green having checked
-    nothing. That is the failure this whole file exists to stop, applied to
-    itself, and it costs nothing to notice.
-    """
+    """Skip without the pinned ruff locally, but fail in CI so a moved install step cannot go green."""
     if ruff_reason is None:
         return "run"
     return "fail" if in_ci else "skip"
@@ -222,18 +186,7 @@ class TestTheGuardCannotGoGreenHavingCheckedNothing:
 
 
 def formatter_argvs(copies: list[str], head: list[str] | None = None) -> "list[list[str]]":
-    """Every command line the fixed-point guard will run, in order.
-
-    Batches are accumulated until adding the next path would take the command line past
-    `_FORMAT_ARGV_BUDGET`, so a single path longer than the budget still gets its own call
-    rather than being dropped -- the caller would rather run one over-long command and see the
-    OS refuse it than silently skip a file.
-
-    The guard and the Windows-limit test below both go through this, deliberately. A test that
-    only checked the budget constant would be measuring a number while the caller did something
-    else, and deleting the batching at the call site would leave it green. Here there is one
-    definition of what actually gets executed, so the limit test cannot drift away from the run.
-    """
+    """Batches up to _FORMAT_ARGV_BUDGET; an over-long path runs alone, never dropped."""
     head = head or [sys.executable, str(_ROOT / "scripts" / "run_ruff_format.py")]
     base = _command_line_length(head)
     argvs: list[list[str]] = []
@@ -252,15 +205,7 @@ def formatter_argvs(copies: list[str], head: list[str] | None = None) -> "list[l
 
 
 def _command_line_length(argv: list[str]) -> int:
-    """What Windows counts against its command-line cap for this argv.
-
-    CreateProcess is handed ONE string, so the cost is the arguments joined by the separating
-    spaces, plus a pair of quotes around every argument a runner path forces (the hosted image
-    checks out under `D:\\a\\unsloth\\unsloth`, no spaces, but `C:\\Users\\RUNNER~1\\AppData\\
-    Local\\Temp` is where tmp_path lands and a user name with a space is normal off CI). Counted
-    with the quotes always, because this is a headroom check and the cheap direction to be wrong
-    in is pessimistic.
-    """
+    """Windows CreateProcess cap: each argument's length plus two quotes and a space, always counted."""
     return sum(len(arg) + 3 for arg in argv)
 
 
@@ -337,14 +282,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 @contextlib.contextmanager
 def _timeout_signal_held():
-    """Defer SIGALRM (pytest-timeout's signal method) until the block has finished.
-
-    Masking the thread would not do: under xdist the kernel can hand the signal to another
-    thread, and CPython still runs the Python handler here at the next bytecode. So the handler
-    itself is swapped for one that only records the signal, and the signal is raised again once
-    the real handler is back. Windows has no SIGALRM, and pytest-timeout's thread method there
-    ends the whole process rather than raising into this one.
-    """
+    """Hold SIGALRM by swapping the handler for one that records it, then re-raise once the block ends."""
     if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
         yield
         return
@@ -359,14 +297,7 @@ def _timeout_signal_held():
 
 
 def _run_side_by_side(argvs: list[list[str]], log_dir: Path) -> list[tuple[int, str]]:
-    """Run `argvs` at most `os.cpu_count()` at a time; (returncode, output) for each, in order.
-
-    Driven from the calling thread rather than a thread pool: pytest-timeout raises in this
-    thread, and a pool's shutdown would wait on worker threads blocked in subprocess.run, so a
-    stalled formatter would outlive the per-test timeout and hold the job to its own. Here the
-    exception lands in the polling loop and the finally kills whatever is still running.
-    Output goes to files so a chatty child can never block on a full pipe.
-    """
+    """Runs on the calling thread, not a pool, so a pytest-timeout raise reaches the kill loop."""
     log_dir.mkdir(parents = True, exist_ok = True)
     limit = max(1, min(len(argvs), os.cpu_count() or 1))
     results: list[tuple[int, str] | None] = [None] * len(argvs)

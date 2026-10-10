@@ -1509,25 +1509,7 @@ def test_text_model_stream_without_metadata_keeps_packing():
 
 
 def _fake_sft_self():
-    """A stand-in `self` for the three `SFTTrainer._prepare_dataset` tests below
-    (four cases; the last one is parameterized).
-
-    Fails first, and by name, if `SFTTrainer` is not Unsloth's. Those tests call
-    `_prepare_dataset` unbound with a SimpleNamespace, which is fine against the
-    patched implementation (it reads `data_collator` and nothing else) and is not
-    fine against TRL's own, which reaches for `self._is_vlm`. So when the patch
-    silently falls back -- `import unsloth` warns and continues, see
-    `_patch_trl_rl_trainers` in unsloth/models/rl.py -- all four report
-
-        AttributeError: 'types.SimpleNamespace' object has no attribute '_is_vlm'
-
-    which names the fake object and not the patcher. That is what unsloth-zoo
-    #1192 vs the source anchor fixed in #10854 actually looked like from here,
-    and it is why 16 failures across five files took a while to add up to one
-    cause. Padding the namespace out with `_is_vlm` would be worse than the
-    AttributeError: the tests would then quietly pass against TRL's trainer and
-    assert nothing about Unsloth's.
-    """
+    """Fail by name if SFTTrainer is not Unsloth's; padding _is_vlm would let tests pass against TRL."""
     assert SFTTrainer.__name__ == "UnslothSFTTrainer", (
         f"trl.SFTTrainer is {SFTTrainer.__name__!r}, so Unsloth's SFT patch did not "
         "apply and these tests would be exercising TRL's _prepare_dataset instead of "
@@ -1644,15 +1626,7 @@ class _DummyModel(torch.nn.Module):
 
 
 def _build_trl_language_modeling_collator():
-    """Build TRL's SFT collator with only the fields the installed TRL accepts.
-
-    The dataclass fields drift between TRL releases, so hardcoding a kwarg set
-    breaks whenever upstream drops one: ``return_position_ids`` only existed
-    around TRL 0.22, and ``completion_only_loss`` was removed from this collator
-    in TRL 1.7.0 (huggingface/trl#6037, commit f9aeb59) when label masking moved
-    into dataset preparation. Filtering against the live signature keeps the
-    dummy trainer faithful to whatever TRL is installed.
-    """
+    """Filters kwargs against the installed collator signature, since TRL drops fields between releases."""
     wanted = {
         "pad_token_id": 0,
         "completion_only_loss": False,
@@ -1732,11 +1706,7 @@ def test_enable_sample_packing():
 
 
 def test_enable_sample_packing_only_requires_torch_call():
-    """Packing must not depend on optional TRL collator fields.
-
-    TRL keeps adding and removing fields on its SFT collator, so
-    ``enable_sample_packing`` is only allowed to require ``torch_call``.
-    """
+    """Packing may require only torch_call, since TRL keeps changing its SFT collator fields."""
 
     class _MinimalCollator:
         def torch_call(self, examples):
@@ -1970,14 +1940,7 @@ def test_require_replace_raises_on_missing_anchor():
 
 
 def test_require_replace_survives_a_trailing_comment_on_the_anchor():
-    """A comment appearing on an anchored line is not a code change.
-
-    unsloth_zoo #1192 put `# noqa: F821` on the `pack_dataset(` call while
-    building a lint gate. The literal anchor stopped matching, the required edit
-    raised, and every SFT run silently fell back to TRL's own trainer -- losing
-    the packing and truncation fixes this module exists to apply. The code the
-    anchor points at never moved.
-    """
+    """A trailing comment on an anchored line must not stop _require_replace from matching the code."""
     from unsloth.models.rl_replacements import _require_replace
 
     anchor = "dataset = pack_dataset(\n    a,\n    b,\n)"

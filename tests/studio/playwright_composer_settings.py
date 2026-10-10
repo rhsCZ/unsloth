@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Production settings/preview and assistant-ui input smoke test; no inference required.
-Run: python tests/studio/playwright_composer_settings.py
-PW_ENGINE=webkit selects WebKit. PW_OUTPUT optionally saves screenshots.
-"""
+"""Settings and preview smoke test with no inference; PW_ENGINE picks the browser engine."""
 
 import json
 import os

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The studiobench layer contract. See INTERFACES.md, which this file implements.
-
-Stdlib only, and it imports nothing else from studiobench, so Layer 2 and Layer 3 can import it
-without dragging in Playwright, psutil or the fixture generator. `python -c "import
-tests.studio.studiobench.runtime.types"` works on a machine with nothing installed, which is what
-makes `--doctor` able to report what is missing rather than crash on the way to finding out.
-"""
+"""Stdlib only and no studiobench imports, so --doctor can report missing deps rather than crash."""
 
 from __future__ import annotations
 
@@ -149,12 +143,7 @@ class Window:
 
 @dataclass
 class ActionResult:
-    """The outcome of one action.
-
-    `ran = False` is the ONLY way to report an action that did not happen. It is never a fast
-    timing: `timings` is forced empty in that case by __post_init__, so a caller that forgets
-    cannot leak a paint-floor number into a table as if it were a measurement.
-    """
+    """ran = False is the only way to report an action that did not happen; timings are forced empty."""
 
     ran: bool
     expect_ok: Optional[bool] = None
@@ -284,29 +273,7 @@ class BenchContext:
 
 
 class OutDirLock:
-    """One output directory, held by one run, FROM BEFORE THE FIRST THING THAT MOVES OR STARTS.
-
-    SEPARATE FROM THE `Recorder` BECAUSE OF WHEN IT HAS TO BE TAKEN. The guard used to be taken
-    where the payload is opened, which is after `prepare_payload` has archived whatever was in the
-    directory and after both Unsloth instances have been cloned, built and launched. A second launcher
-    pointed at a busy `--out` without `--resume` therefore did all of that before being refused,
-    and both halves of it hurt the run it was refused in favour of:
-
-      * `archive_payload` RENAMES the live `payload.jsonl` the first run is still writing. A rename
-        does not disturb the writer -- its descriptor names the inode, not the path -- so the first
-        run goes on recording into a file that is no longer at the name every reader opens.
-        `--report`, `--assert-liveness` and the next `--resume` all open `payload.jsonl`, and the
-        run that was never refused anything has silently lost its evidence from that name. That is
-        exactly the rule `prepare_payload` states for itself: a refusal has to leave the payload it
-        refused exactly as it found it.
-      * A clone, a build and a launch are not free. The first run is MEASURING, and the refusal
-        that arrives after all of that has already put a compiler and a second Unsloth on the
-        machine the first run thought it had. Contention between two runs sharing one `--out` is
-        the whole reason this guard exists; it must not be the guard's own cost of saying no.
-
-    So the lock is taken by `run()` in the first millisecond, held across setup and the cells, and
-    handed to the `Recorder`, which adopts it rather than taking a second one.
-    """
+    """Taken by run() before anything moves or starts; a refusal must leave the live payload untouched."""
 
     def __init__(self, out: Path) -> None:
         self.out = Path(out)
@@ -319,11 +286,7 @@ class OutDirLock:
         out: Path,
         session_id: str = "starting",
     ) -> "OutDirLock":
-        """Hold `out`, or raise `SystemExit` naming the run that already holds it.
-
-        `session_id` is written into the marker so a refusal can name a holder. A run takes the
-        directory BEFORE it has a session, so the default stands in until `claim` replaces it.
-        """
+        """The refusal names the holder from the marker; the default session_id stands in until claim()."""
         lock = cls(out)
         lock.out.mkdir(parents = True, exist_ok = True)
         # Legacy per-session marker names are still checked, but only the fixed name is a mutex.
@@ -332,48 +295,12 @@ class OutDirLock:
         return lock
 
     def claim(self, session_id: str) -> None:
-        """Name the session in the marker, now that the run has one.
-
-        The refusal a contender prints reads the marker, so leaving it saying `starting` for the
-        life of the run would make every refusal anonymous.
-        """
+        """Names the session in the marker, so a contender's refusal can say who holds the directory."""
         if self._fd is not None:
             self._write(session_id)
 
     def _acquire(self, session_id: str) -> None:
-        """Hold this output directory for the life of the process, or refuse and say who has it.
-
-        A KERNEL LOCK, NOT A FILE THAT STANDS FOR ONE. The previous design created the marker with
-        `O_CREAT | O_EXCL` and reclaimed a marker naming a dead pid by unlinking it. The create is
-        atomic and fixed the cold-start race completely -- 0 of 200 with two launchers on a clean
-        directory. The RECLAIM is not atomic and could not be made so: two launchers meeting the
-        same crashed run's marker both read its dead pid, one unlinks and creates its own, and the
-        other's unlink then deletes THAT, so both are admitted. Measured on a seeded stale marker,
-        23 of 200 trials with two processes and 40 of 100 with four.
-
-        Verifying the file's identity before unlinking does not fix it and measurably makes it
-        worse -- 80 of 200 against 59 for the plain version -- because there is no atomic
-        "unlink if this is still the same file", so the check only widens the window between the
-        judgement and the unlink. This is the GnuPG dotlock race (T5884); inode verification is a
-        post-acquisition theft detector, not a pre-unlink guard. Renaming the marker aside before
-        unlinking is worse again at four contenders (200 of 200), because the rename leaves the
-        path briefly empty and the next `O_EXCL` create walks straight in.
-
-        An advisory lock removes the whole problem rather than narrowing it: the kernel drops it
-        when the holder dies, so a crashed run leaves nothing to reclaim and there is no reclaim
-        path to race. That also retires the other hazard the old design had to paper over, a marker
-        that exists but has not been written to yet.
-
-        `fcntl` is Unix-only, so Windows takes `msvcrt.locking`, which is the same branch
-        `pre-commit` and `portalocker` use. It locks a byte RANGE rather than the file, hence the
-        seek to 0 and the single byte. The property genuinely given up is NFS correctness, which
-        the `O_EXCL` design did not have either.
-
-        THE LOCK IS NEVER UNLINKED, only released. Unlinking on close reintroduces the same race
-        from the other end: a launcher that has opened the path but not yet locked it would end up
-        holding a lock on an inode with no name, while the next run creates a fresh file and locks
-        that. The file left behind carries no authority, so a stale one is harmless.
-        """
+        """A kernel lock, since reclaiming a dead pid's O_EXCL marker races; the file is never unlinked."""
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
         try:
             self._lock_fd_exclusive(fd)
@@ -406,18 +333,7 @@ class OutDirLock:
             pass
 
     def release(self) -> None:
-        """Drop the lock. IDEMPOTENT, so a second call is a no-op rather than a double free.
-
-        RELEASED BY WHOEVER TOOK IT. `run()` takes the directory and releases it in its outer
-        `finally`, after the report has been rendered; a `Recorder` that ADOPTED that lock does
-        not release it in `close`, because `close` happens while `run()` still has the payload to
-        read back. See `Recorder.close`.
-
-        RELEASED, NOT DELETED. Dropping the lock is what frees the directory; unlinking the file
-        as well would let a launcher that has already opened the path end up holding a lock on an
-        inode with no name while the next run creates a fresh file and locks that, which is the
-        reclaim race in reverse. The file left behind carries no authority.
-        """
+        """Idempotent. Releases the lock but never unlinks the file, which would reopen the lock race."""
         fd = self._fd
         if fd is None:
             return
@@ -478,29 +394,8 @@ class OutDirLock:
         path: Path,
         budget_s: float = 0.5,
     ) -> "Optional[tuple[str, int]]":
-        """`_read_marker`, waiting out the gap between taking the lock and writing into it.
-
-        THE HOLDER LOCKS FIRST AND WRITES SECOND, and it has to: the write is what makes the marker
-        say anything, and writing before the lock would let a loser publish itself as the holder. So
-        there is a window in which the marker exists, is locked, and is still empty, and a contender
-        that reads it there gets nothing and refuses without naming anybody -- which is exactly what
-        the refusal is not allowed to do, because a reader then goes looking for a phantom.
-
-        The window is microseconds wide and closes on its own, so it is waited out rather than
-        designed around. Bounded, because a holder that died between the lock and the write leaves
-        an empty marker that never fills, and the generic wording is right for that one. Measured:
-        the gap is `ftruncate` + `write` + `fsync`; half a second is three orders of magnitude of
-        headroom on a path that is about to exit anyway. Two-core CI is where this was observed --
-        the same test passes on an unloaded machine, which is what made it look flaky rather than
-        like a hole in the message.
-
-        DO NOT SIMPLIFY THE LOOP BELOW TO `if got is not None`. That is the version this was
-        written as twice, independently, by two people who each then had to fix it the same way --
-        which is the evidence that the wrong shape is the intuitive one and is not visible from the
-        call site. Waiting only for the marker to become NON-EMPTY stops on the retained record
-        described below and names a run that finished hours ago, so the liveness test is the point
-        of the wait rather than a refinement of it.
-        """
+        """The holder locks before it writes, so wait out the empty marker; a single read would name
+        no one."""
         deadline = time.monotonic() + budget_s
         while True:
             got = cls._read_marker(path)
@@ -593,14 +488,8 @@ class Recorder:
         detail: Optional[dict] = None,
         cell_id: Optional[str] = None,
     ) -> None:
-        """A pass/fail verdict row. `cell_id` NAMES THE CELL THE VERDICT IS ABOUT.
-
-        Optional because a few gates really are run-level, but almost none are. `excluded_from_rows`
-        reads `row.get("cell_id") or "run"`, so a per-cell gate emitted without one is attributed to
-        the synthetic cell "run": a failure that says one arm at one rung lost messages is presented
-        as a run-level self-check failure, and the report cannot say which arm or which rung. Pass
-        it whenever the verdict is about a cell.
-        """
+        """Pass cell_id whenever the verdict is about a cell; without it the failure is attributed
+        to run."""
         row = {"row_type": "gate", "name": name, "passed": bool(passed), "detail": detail or {}}
         if cell_id is not None:
             row["cell_id"] = cell_id

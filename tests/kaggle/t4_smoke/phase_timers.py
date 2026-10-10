@@ -1,35 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Split the load phase into FETCH and WEIGHT LOAD, so one dispatch can say
-whether the Hub download is worth optimising at all.
-
-Every leg today reports one `load` number covering `from_pretrained`, which is
-a download, a disk read and a quantised materialisation in one figure. The
-prefetch lane, the second-wave reorder and the whole `D` argument in the plan
-rest on how that figure splits, and it has never been measured -- only bounded
-by subtraction, which is not the same thing.
-
-**Why this instruments the process rather than the cache.** The obvious
-approach is to diff the hub cache around the call. It cannot work here: the
-legs download into ONE shared cache CONCURRENTLY, so a whole-cache delta
-credits another leg's bytes to this one and reports a rate the Hub never
-delivered. Scoping the diff to one repo folder fixes that but reintroduces a
-different error, because `load_in_4bit=True` redirects through Unsloth's
-FLOAT_TO_INT_MAPPER and the repo that downloads is not the repo that was asked
-for. Timing the download calls INSIDE this interpreter is immune to both: each
-leg is its own process, so anything measured here was fetched by this leg.
-
-**The failure mode this is built to avoid.** An instrument that silently
-reports zero is worse than no instrument, because "no download happened" and
-"the timer never attached" read identically in a report and only one of them is
-a finding. So `seconds` is None until something is genuinely patched, and
-`patched` names what was wrapped. A reader can tell the two apart.
-
-Nothing here may fail the run. A payload that dies while collecting a
-diagnostic reports nothing at all, which is the one outcome worse than a
-missing number.
-"""
+"""Times Hub calls in-process, since a shared cache filled concurrently by legs can't be diffed."""
 
 from __future__ import annotations
 
@@ -48,13 +20,7 @@ _TARGETS = (
 
 
 class FetchTimer:
-    """Accumulate wall time and bytes spent inside Hub download calls.
-
-    Re-entrant by design: `snapshot_download` calls `hf_hub_download` per file,
-    so a naive sum would count the inner calls twice and report more download
-    seconds than the phase itself took. A depth counter means only the
-    OUTERMOST call contributes to `seconds`.
-    """
+    """Re-entrant: snapshot_download nests hf_hub_download, so only the outermost call adds to seconds."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()

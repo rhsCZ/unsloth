@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""The verdict gates, and the refusals that keep a number from being quoted when it should not be.
-
-Every gate here is paired: one test that a clean result passes it, one that a result which should
-fail it does. A gate that only ever passes is indistinguishable from no gate, and it is worse than
-no gate because it gets cited.
-"""
+"""Each verdict gate and refusal is tested both ways: a clean result passes it, a bad one fails."""
 
 from __future__ import annotations
 
@@ -508,13 +503,7 @@ JANKY = [16.7] * 530 + [120.0] * 10
 
 
 def test_a_clean_zero_base_arm_still_pairs_so_a_jank_regression_is_not_lost(tmp_path):
-    """Zero is these metrics' CLEAN reading, and `if b` dropped every pair that had one.
-
-    Measured on this repository's recorded payloads, 349 of 668 `stream_time_in_jank_pct` pairs
-    have a zero base arm. Dropped, a treatment that introduces jank against a clean base left no
-    row in the table at all, and where only some repetitions had a zero base the metric was pooled
-    over whichever pairs the BASE arm happened to make non-zero.
-    """
+    """Zero is a clean reading, so a zero base arm must still pair or a jank regression vanishes."""
     result = stream_payload(tmp_path, "result", [(SMOOTH, JANKY)] * 4)
     null = stream_payload(tmp_path, "null", [(SMOOTH, SMOOTH)] * 4)
 
@@ -534,21 +523,7 @@ def test_a_clean_zero_base_arm_still_pairs_so_a_jank_regression_is_not_lost(tmp_
 
 
 def test_an_unchanged_repetition_does_not_read_as_a_pair_disagreeing_on_sign(tmp_path):
-    """REGRESSION. A difference of exactly 0.0 is a TIE, and ties are the modal reading here.
-
-    `all(d > 0) or all(d < 0)` is the right question for ratios, where an exact 1.0 essentially
-    never occurs. On differences of a metric whose clean value IS 0.0 it voided a group the moment
-    any repetition was unchanged: `[0.0, 12.0]` failed both halves and printed
-    VOID (pairs disagree on sign) although nothing moved the other way. Measured over the recorded
-    payloads that hit 34 of 250 pooled groups, and all 34 were ties rather than disagreements.
-
-    WHAT THIS DOES AND DOES NOT BUY, measured rather than assumed. Of the 34 groups, ZERO change
-    their verdict: a tie drags the spread above the mean, so GATE 3 voids every one of them for
-    scatter instead. That is the correct gate doing its job, and it is why this fixes the REASON
-    a comparison was refused rather than surfacing a regression. A tool whose refusal states
-    something that did not happen is reporting a wrong answer in the right vocabulary, which is
-    worth three lines on its own; it is not worth relaxing gate 3 to chase.
-    """
+    """A zero difference is a tie, not a sign disagreement; it must not void a group."""
     result = stream_payload(tmp_path, "result", [(SMOOTH, SMOOTH), (SMOOTH, JANKY)] * 2)
     null = stream_payload(tmp_path, "null", [(SMOOTH, SMOOTH)] * 4)
 
@@ -566,10 +541,7 @@ def test_an_unchanged_repetition_does_not_read_as_a_pair_disagreeing_on_sign(tmp
 
 
 def test_a_group_that_did_not_move_at_all_is_still_not_a_finding(tmp_path):
-    """The other side of the tie rule: all-zero differences must not become 'consistent'.
-
-    Relaxing to `>=` alone would score a metric that never moved as a directional result.
-    """
+    """All-zero differences must not be scored as a consistent directional result."""
     result = stream_payload(tmp_path, "result", [(SMOOTH, SMOOTH)] * 4)
     s = F.summarise([result])["stream_time_in_jank_pct"]
     assert [t - b for b, t in F.paired(F.read_rows(result))["stream_time_in_jank_pct"]] == [0.0] * 4
@@ -641,12 +613,7 @@ def timed_action(cid: str, sid: str, ms: float) -> dict:
 
 
 def resumed_payload(tmp_path: Path, name: str, retry_session: str) -> Path:
-    """One arm completed, its partner died, and only the dead arm was re-run: a PARTIAL resume.
-
-    `retry_session` is the session the retry was recorded under. The real `--resume` mints a new
-    one; passing the original back is the control that shows the refusal keys on the session and
-    not on there being two attempts.
-    """
+    """Partial resume: one arm completed, and only its dead partner re-ran under retry_session."""
     return write(
         tmp_path,
         name,
@@ -817,17 +784,8 @@ def in_session(row: dict, sid: str) -> dict:
 
 
 def resumed_parity(tmp_path: Path, name: str, retry_session: str) -> Path:
-    """A null control whose treatment arm died at 100K and was re-run by `--resume`.
-
-    The base arm completed under `s1` and stays there; `--resume` skips it and re-runs only the
-    arm that died, under `retry_session`, appending into the SAME shard directory. The retry's
-    digests carry a session-scoped volatile the normaliser did not catch, so they differ from the
-    base arm's for a reason that has nothing to do with either build.
-
-    `retry_session` is the session the retry was recorded under. The real `--resume` mints a new
-    one; passing `s1` back is the control that shows the refusal keys on the SESSION and not on
-    there being two attempts.
-    """
+    """Null control whose treatment retry under retry_session carries an uncaught session-scoped
+    volatile."""
     rows: list[dict] = [{"row_type": "run_meta", "tier": "standard", "session_id": "s1"}]
     for rep in ("rep0", "rep1"):
         rows.append(in_session(parity_action(f"r100K.base.{rep}", "settings", "STABLE"), "s1"))
@@ -875,11 +833,7 @@ def test_a_parity_payload_with_no_session_ids_pairs_exactly_as_before(tmp_path):
 
 
 def parity_cell(cid: str, arm: str, sid: str, rep: str, completed: bool) -> dict:
-    """The `cell` row the recorder closes an attempt with, which is what names the attempt.
-
-    `CellRunner.run` emits it from a `finally`, so it lands AFTER every action row the scene
-    wrote and it lands whether the cell completed or not.
-    """
+    """Closes an attempt: written from a finally, after its action rows, whether it completed or not."""
     return {
         "row_type": "cell",
         "cell_id": cid,
@@ -898,17 +852,7 @@ def drained_arm(rows: list[dict], arm: str, rep: str, sid: str, digest: str, com
 
 
 def resumed_both_arms(tmp_path: Path, name: str) -> Path:
-    """A null control interrupted mid-pair and resumed the way `skippable_cells` resumes.
-
-    A pair is skipped only when EVERY arm of it completed, so an interruption between the two
-    adjacent cells of one repetition re-runs BOTH arms under one new session. The treatment arm
-    died inside `stream:drain`, which the scene reaches only AFTER its action rows are written, so
-    the dead attempt sits in the append-only payload carrying a full set of digests -- and one of
-    them differs, because it was captured off an arm that was already on its way down.
-
-    So the file holds a complete base/treatment pair under `s1` and another under `s2`, and they
-    are one logical repetition, not two.
-    """
+    """An interrupted pair re-runs both arms under one new session; the dead attempt stays in the file."""
     rows: list[dict] = [{"row_type": "run_meta", "tier": "standard", "session_id": "s1"}]
     drained_arm(rows, "base", "rep0", "s1", "STABLE", True)
     drained_arm(rows, "treatment", "rep0", "s1", "DYING", False)
@@ -961,11 +905,7 @@ def test_an_attempt_that_was_never_re_run_still_carries_its_parity_verdict(tmp_p
 
 
 def two_tier_parity(tmp_path: Path, name: str, fast: tuple[str, str], standard: tuple[str, str]):
-    """One shard holding a fast run and a standard run, both at 100K, appended in that order.
-
-    The shape a second `--out` reuse at the other tier leaves behind: `fast` walks 100K only and
-    `standard` walks 1K, 10K and 100K, so the two films meet on that rung.
-    """
+    """One shard holding a fast and a standard run that both reach 100K, appended in that order."""
     rows: list[dict] = [{"row_type": "run_meta", "tier": "fast", "session_id": "s1"}]
     rows.append(in_session(parity_action("r100K.base.rep0", "settings", fast[0]), "s1"))
     rows.append(in_session(parity_action("r100K.treatment.rep0", "settings", fast[1]), "s1"))
@@ -1101,11 +1041,7 @@ def test_a_payload_recorded_with_a_probe_installed_is_refused(tmp_path):
 
 
 def test_a_probe_named_in_a_later_run_meta_is_still_caught(tmp_path):
-    """`--resume` APPENDS a second run_meta and the remaining cells to the existing file.
-
-    So a payload can carry a clean header above cells that were re-recorded under a probe.
-    Reading only the first run_meta scores those cells.
-    """
+    """A probe named only in a later run_meta is still caught, as --resume appends a header."""
     path = probe_payload(tmp_path, "resumed", None)
     with path.open("a", encoding = "utf-8") as fh:
         fh.write(
@@ -1271,12 +1207,7 @@ def liveness_action(cell_id: str, ms: float | None) -> dict:
 
 
 def liveness_payload(tmp_path: Path, name: str, pairs: list[tuple[float, float | None]]) -> Path:
-    """One shard whose cells carry their own actions, which is what `--assert-liveness` reads.
-
-    `paired` reads the standalone action rows and the liveness gate reads the list embedded in the
-    cell row, so a payload that exercises both has to carry the action twice, exactly as a real
-    `SceneRunner` cell does.
-    """
+    """Each action is written twice, standalone and in its cell, for paired and liveness to read."""
     out = tmp_path / name
     out.mkdir(parents = True, exist_ok = True)
     rows: list[dict] = [{"row_type": "run_meta", "tier": "standard"}]
@@ -1413,16 +1344,7 @@ def test_the_null_repetition_that_kept_its_reading_voids_the_same_result(tmp_pat
 
 
 def test_a_gate_from_an_attempt_that_never_closed_still_refuses_its_cell(tmp_path):
-    """The winning attempt is named by any attempt-stamped row, not by the terminal `cell` row.
-
-    `CellRunner.run` writes that row from a `finally`, which a SIGKILL or an OOM kill never
-    reaches, while the recorder has already flushed the action and gate rows before it. So a
-    resume hard-killed inside a cell leaves the OLDER completed session as the only one holding a
-    `cell` row. Named from terminal rows alone the winner was that dead-and-buried attempt, and
-    the LIVE attempt's own failed gate was discarded as belonging to a superseded session --
-    while `latest_attempt_rows` kept that same attempt's action rows, so `collect` scored a cell
-    whose self-check had recorded conversation loss with no `_incomplete` stamp on it.
-    """
+    """An attempt is named by any attempt-stamped row, since a killed attempt never writes its cell row."""
     cid = "r100K.treatment.rep0"
     rows: list[dict] = [{"row_type": "run_meta", "tier": "standard", "session_id": "s1"}]
     rows.append(in_session(parity_action(cid, "settings", "STABLE"), "s1"))
@@ -1447,15 +1369,7 @@ def test_a_gate_from_an_attempt_that_never_closed_still_refuses_its_cell(tmp_pat
 
 
 def gated_then_resumed(tmp_path: Path, name: str) -> Path:
-    """A pair whose treatment arm FAILED `thread_complete`, re-run by `--resume`, retry crashed.
-
-    `ab.skippable_cells` re-runs a pair WHOLE, so a resume with any work left re-attempts both
-    arms of a repetition that had already completed. `CellRunner.run` writes its `cell` row from a
-    `finally`, so a retry that raises still closes itself -- with `completed=False`.
-
-    The payload then holds, under one cell id, a completed attempt carrying a FAILED gate row and
-    a later, incomplete attempt carrying none.
-    """
+    """A completed attempt with a failed gate, then a crashed retry of the same cell that has no gate."""
     rows = [
         {"row_type": "run_meta", "tier": "standard", "session_id": "s1"},
         {"row_type": "cell", "cell_id": "r100K.base.rep0", "session_id": "s1", "completed": True},
@@ -1494,16 +1408,7 @@ def gated_then_resumed(tmp_path: Path, name: str) -> Path:
 
 
 def test_a_superseded_cell_does_not_come_back_when_its_retry_crashes(tmp_path):
-    """A resume must not resurrect the reading its own retry replaced.
-
-    Two lenses on one cell id. `failed_invalidating_gates` names the winning attempt from the LAST
-    `cell` row whatever its completion state, so the crashed retry supersedes the dead attempt's
-    FAILED gate; `cell_metrics` kept the last COMPLETED cell row, which is that same dead
-    attempt's. The guard therefore answered about `s2` while the numbers it was guarding came from
-    `s1`, and a cell refused for losing its thread's middle before the resume was published after
-    it -- pairing 50 ms of a broken thread against a clean 100 ms base arm and printing `faster`,
-    which is the 28.2% failure `cell_metrics` documents, arriving through `--resume`.
-    """
+    """A crashed retry must not resurrect the cell it superseded; both lenses must name the same attempt."""
     path = gated_then_resumed(tmp_path, "gated_resume")
     rows = F.read_rows(path)
 
@@ -1512,11 +1417,7 @@ def test_a_superseded_cell_does_not_come_back_when_its_retry_crashes(tmp_path):
 
 
 def test_a_resumed_cell_that_is_not_superseded_still_reports_its_reading(tmp_path):
-    """The control: superseding is keyed on a LATER attempt, not on the cell having a gate row.
-
-    Without this, dropping every gate-adjacent or every twice-written cell would pass the test
-    above by deleting readings the run legitimately earned.
-    """
+    """Control: a resumed cell is only superseded by a later attempt, not by having a gate row."""
     rows = [
         {"row_type": "run_meta", "tier": "standard", "session_id": "s1"},
         {"row_type": "cell", "cell_id": "r100K.base.rep0", "session_id": "s1", "completed": True},
@@ -1536,15 +1437,7 @@ def test_a_resumed_cell_that_is_not_superseded_still_reports_its_reading(tmp_pat
 
 
 def test_the_visible_floor_is_derived_from_finished_cells_only(tmp_path):
-    """An unfinished null-control cell is not an observation of stability.
-
-    Action rows are written as the film runs and the `cell` row when it ends, so a null cell that
-    died mid-film leaves a complete-looking set of captures that nothing owns. One DIFFERING
-    unfinished observation plus one MATCHING finished one is exactly `min_observations`, which
-    marked the action unstable and let `visible_report` file a real difference at the same key
-    under "differ against an identical build". `unstable_set` already admits only finished cells
-    on the structural side; the visible floor now reads through the same rule.
-    """
+    """An unfinished null cell is not evidence of stability; the visible floor reads finished cells only."""
     rows: list[dict] = [{"row_type": "run_meta", "tier": "standard", "session_id": "s1"}]
     for rep, (digest, completed) in enumerate((("X", False), ("same", True))):
         for arm in ("base", "treatment"):

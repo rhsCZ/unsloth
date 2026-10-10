@@ -11,14 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-"""Regression tests for unslothai/unsloth#2660.
-
-On Windows, text-mode subprocess calls without explicit encoding decode child
-output as cp1252, raising UnicodeDecodeError on UTF-8 bytes undefined there
-(e.g. 0x9d) and aborting GGUF export. A source-level drift check asserts save.py
-pins encoding="utf-8" on every text-mode call; a behavioural check reproduces
-the cp1252 failure and confirms the utf-8/replace fix reads it cleanly.
-"""
+"""Subprocess text calls must pin encoding utf-8; Windows defaults to cp1252 and aborts GGUF export."""
 
 from __future__ import annotations
 

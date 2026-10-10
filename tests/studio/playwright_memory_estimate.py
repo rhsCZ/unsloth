@@ -1,49 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-""" "Estimated Memory Usage" row Playwright regression test (GPU-free, no model load).
-
-The row lives in the model-picker's run-settings panel (MemoryEstimateRow in
-features/model-picker/components/model-config-page.tsx) and it renders ONLY when the
-selected target is a GGUF and POST /api/inference/estimate-memory answers
-`available: true`. When it cannot answer it returns `null` -- the row HIDES rather
-than erroring -- which is why a screenshot of this panel proves nothing on its own:
-an unavailable estimate, a 404 from a backend predating the route, and a row that
-was never implemented all look identical on screen.
-
-So this drives the row against a RECORDED API exchange. Every
-/api/inference/estimate-memory call is intercepted with `context.route`, its POST body
-is captured, and the response this test hands back is the one the row is then asserted
-to be displaying. What that buys, gate by gate:
-
-  - Request carries the settings: typing a distinctive Context Length must produce a
-    NEW estimate POST whose `n_ctx` is that number, and whose body still carries the
-    rest of the load settings the panel is supposed to price (model_path, cache_type_kv,
-    n_parallel, gpu_memory_mode). A row that re-renders without re-pricing, or one wired
-    to a stale request object, fails here (HARD).
-  - Response reaches the screen: the figures shown are the ones the stub returned, to
-    the byte -- `formatBytesGiB` of the stubbed totals, and, once the row is expanded,
-    the breakdown lines plus the KV note built from the echoed context and cache dtype
-    (HARD).
-  - The row hides rather than errors: `available: false` hides it, restoring the
-    available response brings it BACK -- without that half, "hidden" is satisfied by a
-    panel that simply died -- and an HTTP 404, the answer from a backend predating the
-    route, hides it too, with no page error (HARD).
-
-Stubbing is deliberate. The real endpoint needs a GGUF whose header is on this disk and
-answers with whatever that machine's memory happens to be, so a test asserting real
-figures would either assert nothing specific or be a hardware report. The request half
-is not stubbed: it is the panel's own, unmodified.
-
-Runs as a plain script (not via pytest), mirroring tests/studio/playwright_model_config.py:
-accumulate failures in `_failed`, exit non-zero if any HARD gate failed. With
-STUDIO_UI_STRICT=1 (as CI sets), soft_fail also gates; genuinely-optional checks use
-runtime_warn so they never flake the merge gate.
-
-Honours STUDIO_PLAYWRIGHT_BROWSER in {chromium, firefox, webkit}, like every sibling
-scene. The locale is pinned to en-US because one assertion reads a number the app
-formatted with `toLocaleString`.
-"""
+"""Estimated Memory Usage row against a stubbed estimate API; the row must hide when unavailable."""
 
 import json
 import re
@@ -114,17 +72,7 @@ STUB_GPU_LAYERS = 12
 
 
 def _gib(num_bytes: int) -> str:
-    """Python-side mirror of `formatBytesGiB` in `lib/memory/format.ts`.
-
-    The label is GiB, not GB, and that is the assertion rather than a detail.
-    This mirror used to print "GB" because the panel did, so the test agreed
-    with the app about a divide by 1024**3 that both of them called a decimal
-    gigabyte. Consolidating the formatters corrected the app; correcting the
-    mirror to match is what keeps this test measuring the app rather than
-    re-stating whatever the app currently happens to do.
-
-    Only the unit moved. Every figure here is byte-for-byte what it was.
-    """
+    """Mirrors formatBytesGiB in lib/memory/format.ts; its label is GiB, not GB, and is asserted."""
     return f"{num_bytes / GIB:.2f} GiB"
 
 
@@ -162,12 +110,7 @@ def runtime_warn(m: str) -> None:
 
 
 def _count(loc) -> int:
-    """Number of matches, or 0.
-
-    A raise here is not the same as no match: a closed page or a lost execution context
-    also throws, and reporting that as "selector missing" sends the reader after the
-    markup instead of the crash. Say so, then still return 0.
-    """
+    """Returns 0 on no match; a raise is reported apart, since a closed page is not a missing selector."""
     try:
         return loc.count()
     except Exception as exc:
@@ -217,13 +160,7 @@ UNAVAILABLE_BODY = {
 
 
 def _available_body(request_payload: dict) -> dict:
-    """An available estimate whose context / cache dtype / slot count ECHO the request.
-
-    Echoing is what turns the KV note into a round-trip assertion: the note is built
-    from `nCtx` and `cacheTypeKv` off the RESPONSE, so seeing the context that was typed
-    into the control appear there proves the value travelled control -> request ->
-    response -> DOM, not merely that a number rendered.
-    """
+    """Echoes n_ctx, cache dtype and slot count from the request, so the KV note proves a round trip."""
     raw_ctx = request_payload.get("n_ctx")
     n_ctx = int(raw_ctx) if isinstance(raw_ctx, (int, float)) and raw_ctx else 0
     raw_parallel = request_payload.get("n_parallel")
@@ -633,15 +570,8 @@ with sync_playwright() as p:
         return None
 
     def estimate_button():
-        """The visible toggle, by role first and by markup second.
-
-        The role query is the one that carries a claim worth making -- a row a screen
-        reader cannot announce is a row that is not there for some users -- so it is
-        tried first and its success is recorded. The structural fallback exists because
-        this scene must be able to tell "the panel never rendered the row" from "the
-        row is unreachable by role", and a single locator that answers no to both
-        cannot.
-        """
+        """Finds the toggle by role first, which proves a screen reader can reach it; markup is a
+        fallback."""
         found = _first_visible(page.get_by_role("button", name = ESTIMATE_LABEL), "role=button")
         if found is not None:
             return found
@@ -665,14 +595,7 @@ with sync_playwright() as p:
         return estimate_visible() == present
 
     def _readable(raw: str | None) -> str:
-        """`inner_text` with the row's layout glue normalised back to plain spaces.
-
-        The breakdown captions join their items with U+00A0 so a narrow panel breaks
-        between "262,144 tokens" and "4 slots" rather than inside either. That is a
-        line-breaking detail and not something a reader distinguishes, but it does
-        defeat a plain `"6,144 tokens" in text` check, so every assertion below reads
-        the caption the way it looks rather than the way it is encoded.
-        """
+        """Maps U+00A0 to plain spaces so each caption matches how it looks, not how it is encoded."""
         return (raw or "").replace(" ", " ").strip()
 
     def header_text() -> str:
@@ -709,11 +632,8 @@ with sync_playwright() as p:
         since: int,
         timeout_ms: int = ESTIMATE_WAIT_MS,
     ):
-        """The first recorded exchange at or after `since` matching `predicate`, or None.
-
-        Driven off the recorded transcript rather than `expect_request`, because these
-        gates are about WHAT was asked as well as that something was.
-        """
+        """Reads the recorded transcript rather than expect_request, since the gates check what was
+        asked."""
         deadline = time.monotonic() + timeout_ms / 1000
         while time.monotonic() < deadline:
             for record in exchanges[since:]:
@@ -728,16 +648,8 @@ with sync_playwright() as p:
     _used_contexts: set[int] = set()
 
     def reprice(popover, label: str):
-        """Move the Context Length and return `(value, record)` once it has been priced.
-
-        `value` is picked here rather than fixed per step, against what the box is showing
-        at this moment: typing the number already displayed is a no-op the panel does not
-        re-price (see the note on CTX_CANDIDATES), and the box reveals its number only once
-        it has focus, so the choice cannot be made before the click.
-
-        `record` is None when nothing was priced, which every caller reports as its own
-        failure rather than carrying on against a stale row.
-        """
+        """Picks a Context Length different from the shown one; the panel does not re-price the same
+        value."""
         box = context_input(popover)
         if box is None:
             fail(f"{label}: the Context Length control is not in the run-settings panel")

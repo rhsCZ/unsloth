@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Keyboard shortcut behaviour, in a real browser, on three emulated platforms.
-
-Drives smoke-shortcuts.html: the real registry, the real store and the real
-useShortcut against a browser's own keyboard. The node suite reaches the pure
-functions, but a listener is not a pure function, so what a chord does to a
-focused button, to a text field, on auto-repeat, under AltGr, or to a stored
-binding carried over from another platform is only answerable here.
-
-    SMOKE_ENGINES=chromium,firefox,webkit python3 tests/studio/playwright_keyboard_shortcuts.py
-
-Platform is emulated the way the app reads it, through navigator.platform and
-the user agent, because isMacPlatform() is memoised on first call.
-"""
+"""Keyboard shortcuts in real browsers on three emulated platforms, set via navigator.platform."""
 
 import json
 import os
@@ -143,13 +131,7 @@ def check_defaults(page, engine: str, platform: str) -> None:
 
 
 def check_every_default(page, engine: str, platform: str) -> None:
-    """Press every chord the build ships, not just the handful named below.
-
-    The harness registers the registry itself, so this is the dispatch layer end to
-    end: a default the matcher cannot match, a chord another action owns, a modifier
-    that maps differently off macOS. The app's own call sites are pinned separately,
-    by "every action has a useShortcut call site" in the node suite.
-    """
+    """Presses every shipped default chord through the real dispatch, not a sample of named ones."""
     rows = page.evaluate(
         """() => {
             const r = window.__shortcutsSmoke.registry;

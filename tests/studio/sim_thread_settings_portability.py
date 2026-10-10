@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Portability checks for the per-chat settings column.
-
-`settings_json` is added to an existing `chat_threads` by an idempotent ALTER, and
-every Unsloth install that upgrades runs it exactly once against a database it has
-been writing to for months. The interesting differences between platforms are the
-bundled SQLite, the filesystem and the path handling, none of which CI exercises
-today: the chat settings tests only ever run on Linux.
-
-Everything here is stdlib plus `storage.studio_db`, so it runs unchanged on
-Windows, macOS and Linux.
-
-    python tests/studio/sim_thread_settings_portability.py
-"""
+"""Portability checks for the settings_json ALTER on chat_threads, run on Windows, macOS and Linux."""
 
 import json
 import os

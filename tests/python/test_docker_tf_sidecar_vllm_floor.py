@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression guard for transformers-sidecar selection in the Unsloth Docker image.
-
-Selection was a pure CEILING, ignoring that vLLM is version-locked to transformers, so
-the sidecars the common pins selected could not be imported by the baked vLLM at all.
-
-The FLOOR in front of it is measured, not hardcoded: the Dockerfile imports
-vllm.transformers_utils.config (the vLLM module that reads the transformers API, and
-it needs no GPU, which the build host lacks) under every candidate.
-"""
+"""Sidecar selection needs a floor: vLLM is version-locked to transformers, so a ceiling alone fails."""
 
 from __future__ import annotations
 

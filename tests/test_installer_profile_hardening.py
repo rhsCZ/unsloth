@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for install.ps1 under a user PowerShell profile.
-
-The installer used to succeed only from a console started with -NoProfile. A profile runs before
-"irm https://unsloth.ai/install.ps1 | iex" does and shares its scope, and there is no script file
-to re-launch without it, so four couplings were cut individually: $PSDefaultParameterValues,
-Set-StrictMode, $PSNativeCommandUseErrorActionPreference, and command discovery finding a profile
-alias or function named "uv" ahead of PATH. A fifth lived outside install.ps1 -- the handoff to
-`unsloth studio setup` passed -NoProfile only when stdout was not a tty, which is never true for
-the console install this is about; setup.ps1 itself is not otherwise covered here.
-"""
+"""install.ps1 must not inherit user profile state: strict mode, defaults, native errors, aliases."""
 
 from __future__ import annotations
 
@@ -62,11 +53,7 @@ def _extract_function(name: str) -> str:
 
 
 def _code_only() -> str:
-    """install.ps1 with whole-line comments blanked, so ordering is judged on what executes.
-
-    The hardening block names the very cmdlets it protects, and those mentions would otherwise
-    read as the first use of each.
-    """
+    """Blanks comment lines so ordering checks judge only what executes, not mentions in comments."""
     return "\n".join(
         "" if line.lstrip().startswith("#") else line for line in _install_ps1().splitlines()
     )
@@ -110,13 +97,7 @@ def test_proxy_defaults_are_carried_across_rather_than_dropped():
 
 
 def test_profile_hardening_precedes_every_use_it_protects():
-    """Ordering, not presence: a fix applied after the first unset-env test or the first
-    download protects nothing.
-
-    Only in-process first uses are anchored. The first textual Invoke-RestMethod and
-    Start-Process are inside the launcher here-string, which is text for a separate process
-    that install.ps1 starts with -NoProfile of its own.
-    """
+    """Hardening must precede the first in-process use it protects; presence alone protects nothing."""
     code = _code_only()
     strict_idx = _locate(code, "Set-StrictMode -Off", "the strict-mode pin")
     defaults_idx = _locate(code, "$PSDefaultParameterValues = $_UnslothKeptDefaults", "the filter")
@@ -188,10 +169,7 @@ def test_uv_is_resolved_as_an_application():
 
 
 def test_setup_ps1_handoff_never_inherits_the_profile():
-    """install.ps1 ends by running `unsloth studio setup`, which re-enters PowerShell. That
-    launch used to add -NoProfile only when stdout was not a tty, so the console install this
-    whole file is about ran setup.ps1 with the user's profile loaded and its bare `uv` calls
-    exposed to the same alias."""
+    """The setup.ps1 handoff must always pass -NoProfile, not only when stdout is not a tty."""
     src = STUDIO_COMMAND.read_text(encoding = "utf-8")
     start = _locate(src, "powershell_args = [powershell]", "the setup.ps1 launch")
     branch = _locate(src[start:], "_should_hide_windows_subprocesses()", "the hidden-window branch")
@@ -268,12 +246,7 @@ _PROFILE_SCOPES = (
 
 
 def _profile_paths(env: dict[str, str]) -> dict[str, Path]:
-    """The four profile paths pwsh itself reports under `env`.
-
-    Asked rather than assumed. The path this replaces was hardcoded to the ".config under $HOME"
-    branch, which is only PowerShell's fallback when XDG_CONFIG_HOME is unset, so on a host that
-    exports it the fixture wrote a file pwsh never opened and the profile silently did not apply.
-    """
+    """Asks pwsh for its profile paths: a hardcoded ~/.config path is wrong when XDG_CONFIG_HOME is set."""
     res = run_pwsh(
         [
             shutil.which("pwsh") or "pwsh",
@@ -303,15 +276,7 @@ def _run_with_profile(
     path_override: Path | None = None,
     profile: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run `body` with the hostile profile dot-sourced into the scope that encloses it.
-
-    That is the scope relationship a profile has to the installer: the profile runs at global
-    scope, then "irm ... | iex" defines and calls Install-UnslothStudio in that same scope.
-    Dot-sourcing reproduces it on every OS, which planting a profile file does not -- Windows
-    resolves the Documents folder through the known-folder API, so no environment variable can
-    redirect $PROFILE at a fixture. test_a_real_profile_reproduces_the_same_state anchors this
-    against a genuinely loaded profile where that is possible.
-    """
+    """Dot-sources the profile into this scope: $PROFILE cannot be redirected to a fixture on Windows."""
     profile_path = tmp_path / "hostile_profile.ps1"
     profile_path.write_text(_HOSTILE_PROFILE if profile is None else profile, encoding = "utf-8")
     script = tmp_path / "body.ps1"
@@ -605,11 +570,7 @@ def test_an_alias_to_a_real_uv_is_followed_to_the_executable(tmp_path):
 
 
 def test_no_bare_winget_token_survives_at_a_call_site():
-    """winget installs both Python and uv, so an alias on it owns the same ground.
-
-    Detection used a bare Get-Command, and all five invocations were bare tokens, so the fix
-    applied to uv left the other half of the bootstrap exposed to the identical wrapper.
-    """
+    """winget call sites must not be bare tokens, or an alias or function can shadow them."""
     src = _install_ps1()
     assert (
         "Get-Command winget -CommandType Application -All" in src
@@ -669,11 +630,7 @@ def _proxy_prelude() -> str:
 
 
 def test_the_setup_launch_reapplies_the_proxy_it_told_the_child_to_forget():
-    """-NoProfile on the setup handoff drops the whole $PSDefaultParameterValues table, proxy
-    entries included, and setup.ps1 downloads on its own (the VC++ runtime, the uv installer).
-    Where a profile proxy entry is the only egress, keeping it in install.ps1 and losing it one
-    process later is the same broken install. A PowerShell variable cannot cross a process
-    boundary, so it travels as environment."""
+    """Proxy defaults travel to setup.ps1 as env vars, because -NoProfile drops the defaults table."""
     assert "_UNSLOTH_PS_PROXY_DEFAULTS" in _install_ps1(), "install.ps1 must publish the handoff"
     prelude = _proxy_prelude()
     assert "_UNSLOTH_PS_PROXY_DEFAULTS" in prelude, "the child must read it back"
@@ -893,10 +850,7 @@ def test_the_probe_reads_a_hostile_profile_without_carrying_anything_else(tmp_pa
 
 
 def test_a_profile_that_prints_a_banner_does_not_cost_the_proxy(monkeypatch):
-    """The profile has already run by the time the record is printed and is free to say
-    anything: a MOTD, a "loading modules" line, a corporate banner. With the record bare, that
-    output arrived first, the parse threw, and the answer was dropped -- so the locked-down host
-    that needed the proxy handed the -NoProfile child nothing."""
+    """A profile banner can precede the proxy record, so the parser must tolerate surrounding output."""
     from unsloth_cli.commands import studio as studio_cmd
 
     class _Result:
@@ -925,11 +879,7 @@ def test_a_profile_that_prints_nothing_useful_is_still_no_answer(monkeypatch):
 
 
 def test_the_caller_edition_is_read_from_the_order_not_the_absence(monkeypatch):
-    """A machine can carry BOTH module trees on PSModulePath -- 5.1 launched from a session
-    that already had 7's path, or a profile that appends it, the mixed case setup.ps1
-    documents. Reading "7 is present, so the caller is 7" then gave the wrong profile
-    precedence and let its proxy override the console the command was typed into. Each host
-    puts its own module directory first, so the earliest tree names the caller."""
+    """With both module trees on PSModulePath, the earliest tree names the caller, not mere presence."""
     from unsloth_cli.commands import studio as studio_cmd
 
     monkeypatch.setattr(studio_cmd.shutil, "which", lambda name: f"C:\\{name}")
@@ -963,10 +913,7 @@ def test_the_probe_pins_its_own_output_encoding(monkeypatch):
 
 
 def test_one_host_owns_a_cmdlet_outright(monkeypatch):
-    """Filling a missing companion parameter from the other edition's profile builds a
-    configuration neither host has: the earlier host's Proxy with the later host's
-    ProxyUseDefaultCredentials, which offers the user's Windows credentials to a proxy whose
-    own profile never asked for that."""
+    """Do not mix a Proxy from one PowerShell edition with ProxyUseDefaultCredentials from the other."""
     from unsloth_cli.commands import studio as studio_cmd
 
     class _Result:
@@ -1012,13 +959,7 @@ def test_the_probe_signature_evaluates_on_the_oldest_supported_python():
 
 
 def test_the_probe_asks_both_powershell_editions(monkeypatch):
-    """pwsh and powershell.exe keep SEPARATE profiles.
-
-    `unsloth studio update` is typed into whichever host the user has open, and probing only
-    powershell.exe missed a proxy living in the PowerShell 7 profile -- the likelier place on
-    a machine that has pwsh at all. The -NoProfile child then had no proxy and setup.ps1's
-    downloads failed.
-    """
+    """pwsh and powershell.exe keep separate profiles; the probe must read both or it misses a PS7 proxy."""
     from unsloth_cli.commands import studio as studio_cmd
 
     asked: list[str] = []
@@ -1063,11 +1004,7 @@ def test_the_callers_edition_wins_where_the_two_profiles_disagree(monkeypatch):
 
 
 def test_two_spellings_of_one_key_are_one_key(monkeypatch):
-    """$PSDefaultParameterValues is case-insensitive; a Python dict is not.
-
-    With both spellings carried across, the prelude replayed them in order and the
-    lower-priority host's value landed last -- the exact reverse of earlier-host-wins, and on
-    a stricter host the case-colliding JSON is rejected outright."""
+    """$PSDefaultParameterValues is case-insensitive, a Python dict is not; merge spellings to one key."""
     from unsloth_cli.commands import studio as studio_cmd
 
     class _Result:
@@ -1107,11 +1044,8 @@ def test_one_profile_that_prints_both_spellings_is_folded_too(monkeypatch):
 
 
 def test_a_wildcard_key_claims_the_whole_cmdlet_family(monkeypatch):
-    """The command half of a $PSDefaultParameterValues key may be a wildcard, and PowerShell
-    applies such an entry to every cmdlet it matches. Comparing the strings literally let
-    Invoke-Web*:Proxy from one host merge with Invoke-WebRequest:ProxyUseDefaultCredentials from
-    the other -- one invocation configured from two profiles, offering the user's Windows
-    credentials to a proxy whose own profile never asked for that."""
+    """Compare wildcard command keys by the cmdlets they match, not as literal strings, or profiles
+    merge."""
     from unsloth_cli.commands import studio as studio_cmd
 
     class _Result:
@@ -1136,10 +1070,7 @@ def test_a_wildcard_key_claims_the_whole_cmdlet_family(monkeypatch):
 
 
 def test_two_wildcards_that_share_a_cmdlet_are_one_family(monkeypatch):
-    """Matching either pattern against the other as a STRING does not establish whether their
-    match sets overlap: Invoke-Web* and *-WebRequest both apply to Invoke-WebRequest and neither
-    matches the other. Overlap between two patterns is assumed, so the lower-priority profile
-    cannot slip ProxyUseDefaultCredentials in beside the other's proxy."""
+    """Matching one wildcard against the other as a string does not show overlap, so overlap is assumed."""
     from unsloth_cli.commands import studio as studio_cmd
 
     class _Result:
@@ -1163,10 +1094,7 @@ def test_two_wildcards_that_share_a_cmdlet_are_one_family(monkeypatch):
 
 
 def test_the_probe_re_pins_utf8_after_the_profiles_have_run():
-    """A profile setting [Console]::OutputEncoding is an ordinary customization and it
-    overrides the pin at the top of the probe. The parent decodes this stream as UTF-8, so a
-    profile that leaves the console on UTF-16 or a legacy code page corrupts the framed record
-    and a non-ASCII proxy URI goes with it."""
+    """A profile can reset [Console]::OutputEncoding, so the probe re-pins UTF-8 after the profiles run."""
     from unsloth_cli.commands.studio import _PS_PROXY_PROBE as probe
 
     pin = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false"
@@ -1176,10 +1104,7 @@ def test_the_probe_re_pins_utf8_after_the_profiles_have_run():
 
 
 def test_the_record_is_emitted_through_the_builtin_cmdlets():
-    """An alias or function named ConvertTo-Json or Write-Output in the profile shadows the bare
-    name, and clearing $PSDefaultParameterValues does not cover a command override. A wrapper
-    that reshapes the output produces a frame the reader cannot parse, which costs a standalone
-    update its only proxy."""
+    """Call the Microsoft.PowerShell.Utility cmdlets by full name; a profile can shadow the bare names."""
     from unsloth_cli.commands.studio import _PS_PROXY_PROBE as probe
 
     assert probe.count("Microsoft.PowerShell.Utility\\Write-Output") == 2
@@ -1189,10 +1114,7 @@ def test_the_record_is_emitted_through_the_builtin_cmdlets():
 
 
 def test_a_vscode_terminal_still_reads_its_own_host_profile():
-    """TERM_PROGRAM=vscode is set by EVERY VS Code integrated terminal, not only the PowerShell
-    extension's host. Substituting Microsoft.VSCode_profile.ps1 for the current-host profile
-    therefore missed the proxy a plain pwsh terminal in VS Code actually has, while applying an
-    unrelated one. Both are read, current-host last."""
+    """TERM_PROGRAM=vscode is set in every VS Code terminal, so read the current-host profile as well."""
     from unsloth_cli.commands.studio import _PS_PROXY_PROBE as probe
 
     assert "$__unslothProfiles += $PROFILE.CurrentUserCurrentHost; " in probe
@@ -1308,11 +1230,8 @@ def test_the_parity_job_installs_what_this_suite_imports():
 
 
 def test_the_probe_output_is_decoded_lossily():
-    """The profile ran before the record was printed and may have said anything in any
-    encoding. `text=True` alone decodes with the locale codec and STRICT errors, so a UTF-8
-    banner on an ANSI console raised UnicodeDecodeError -- neither OSError nor
-    SubprocessError, so it escaped the handler and took the update down before the
-    -NoProfile child ever ran."""
+    """Decode probe output leniently; a UTF-8 profile banner on an ANSI console raises
+    UnicodeDecodeError."""
     import ast
 
     tree = ast.parse(STUDIO_COMMAND.read_text(encoding = "utf-8"))
@@ -1354,10 +1273,8 @@ def test_a_non_ascii_banner_does_not_cost_the_proxy(monkeypatch):
 
 
 def test_the_setup_child_does_not_hand_the_proxy_secret_to_its_descendants():
-    """A profile proxy is routinely an authenticated URI (http://user:secret@proxy). The prelude
-    copies it into $PSDefaultParameterValues, which is NOT inherited -- but the environment
-    variable it read from is, so every native process setup.ps1 starts, and everything they
-    start in turn, saw the plaintext credential. It is removed the moment it has been read."""
+    """The proxy env var is inherited by every descendant process, so it is removed as soon as it is
+    read."""
     from unsloth_cli.commands.studio import _PS_PROXY_DEFAULTS_PRELUDE
 
     prelude = _PS_PROXY_DEFAULTS_PRELUDE
@@ -1370,14 +1287,7 @@ def test_the_setup_child_does_not_hand_the_proxy_secret_to_its_descendants():
 
 
 def test_the_probe_adds_the_callers_host_profile_beside_the_current_host_one(monkeypatch):
-    """pwsh.exe and powershell.exe run the CONSOLEHOST profile, so a caller in the VS Code
-    Integrated Console -- whose defaults live in Microsoft.VSCode_profile.ps1 -- got no proxy
-    and the -NoProfile child could not download.
-
-    Added beside the current-host profile, never in place of it: TERM_PROGRAM=vscode is set by
-    every VS Code integrated terminal, so substitution robbed a plain pwsh terminal there of the
-    only profile it has. Named hosts only, since a directory-wide sweep of
-    Microsoft.*_profile.ps1 ran profiles for hosts nobody was using."""
+    """Also read the caller's host profile beside the current-host one, never instead of it."""
     from unsloth_cli.commands import studio as studio_cmd
 
     probe = studio_cmd._PS_PROXY_PROBE
@@ -1407,10 +1317,7 @@ def test_the_probe_adds_the_callers_host_profile_beside_the_current_host_one(mon
 
 
 def test_the_probe_loads_the_all_users_profiles_in_startup_order():
-    """A machine-managed proxy lives in an all-users profile on a domain-joined box and the
-    user's own profile never mentions it, so sourcing only the current-user pair reported no
-    proxy on exactly the locked-down host that has one. Order is part of the fix: the user's
-    profile is entitled to override the machine's, which it only does if it runs last."""
+    """Load all-users profiles first so the user's profile runs last and can override the machine's."""
     from unsloth_cli.commands.studio import _PS_PROXY_PROBE as probe
 
     assert "$PROFILE.AllUsersAllHosts" in probe
@@ -1426,10 +1333,7 @@ def test_the_probe_loads_the_all_users_profiles_in_startup_order():
 
 
 def test_the_probe_clears_profile_defaults_before_it_serializes():
-    """The profile's $PSDefaultParameterValues aims at every cmdlet in the probe, including the
-    two that emit the record. ConvertTo-Json:AsArray = $true is a legitimate setting and it
-    turns the payload into a JSON array, which the reader rejects for not being a dictionary --
-    dropping the caller's proxy on the host that needed it. $out already holds copies."""
+    """Clear profile defaults before serializing; a ConvertTo-Json:AsArray default breaks the reader."""
     from unsloth_cli.commands.studio import _PS_PROXY_PROBE as probe
 
     assert "$PSDefaultParameterValues = @{}" in probe
@@ -1441,10 +1345,7 @@ def test_the_probe_clears_profile_defaults_before_it_serializes():
 
 
 def test_a_script_block_proxy_default_is_evaluated_not_dropped():
-    """{ [uri]$env:CORP_PROXY } is PowerShell's supported form for a dynamic default and
-    Invoke-WebRequest evaluates it per call, so the caller downloads fine while the handoff
-    silently omitted it. Both serializers evaluate the block and carry the RESULT -- executable
-    code must not cross into the child."""
+    """Evaluate a scriptblock proxy default and pass the result; code must not cross into the child."""
     from unsloth_cli.commands.studio import _PS_PROXY_PROBE
 
     assert "[scriptblock]" in _PS_PROXY_PROBE
@@ -1458,10 +1359,7 @@ def test_a_script_block_proxy_default_is_evaluated_not_dropped():
 
 
 def test_an_installer_launch_with_no_proxy_still_skips_the_probe(monkeypatch):
-    """The ABSENCE of the handoff is how a standalone update is recognised. install.ps1 used to
-    remove the variable when it had no proxy, so an installer launch -- including one started
-    with -NoProfile or by the desktop app -- went off and reloaded the very profiles it had
-    deliberately discarded, reapplying a stale proxy during setup."""
+    """A missing handoff variable marks a standalone update; the installer must not clear it."""
     installer = INSTALL_PS1.read_text(encoding = "utf-8")
     handoff = installer[
         installer.index("$previousProxyHandoff = $env:_UNSLOTH_PS_PROXY_DEFAULTS") :
@@ -1503,12 +1401,7 @@ def test_the_profile_probe_shares_one_timeout_across_hosts(monkeypatch):
 
 
 def test_the_probe_child_runs_with_no_profile(monkeypatch):
-    """Without -NoProfile the probe host loads its OWN ConsoleHost profile first: an unrelated
-    profile that prints, rewrites $PSDefaultParameterValues or calls exit got in the way, and it
-    is still not the profile a VS Code caller keeps its defaults in. With -NoProfile nothing has
-    run, and the profiles the caller's session would have loaded ($PROFILE.CurrentUserAllHosts
-    plus its host profile) are dot-sourced by name -- $PROFILE is fully populated under
-    -NoProfile because the paths are computed, not loaded."""
+    """Probe with -NoProfile so an unrelated profile cannot print or exit; dot-source the wanted ones."""
     from unsloth_cli.commands import studio as studio_cmd
 
     seen: list[list[str]] = []
@@ -1526,11 +1419,7 @@ def test_the_probe_child_runs_with_no_profile(monkeypatch):
 
 
 def test_the_proxy_handoff_does_not_outlive_the_installer():
-    """Under the documented `irm ... | iex` path $script: IS the caller's session scope, so a
-    serialized authenticated proxy stayed readable in that console after the installer
-    returned. Cleanup near the setup child covers one exit out of dozens -- -ShortcutsOnly, an
-    argument error, lock contention, a failed dependency install all return earlier -- so the
-    value is held in a FUNCTION-local, which dies with the frame on every path."""
+    """Keep the proxy in a function-local, not $script:, so it dies on every exit path."""
     installer = INSTALL_PS1.read_text(encoding = "utf-8")
 
     assert "$script:UnslothProxyHandoffJson" not in installer

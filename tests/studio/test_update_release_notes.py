@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Contracts for the update popup's release-notes preview.
-
-The popup shows the newest GitHub release's announcement. Two risks are guarded:
-showing a release the maintainers have not published, and showing a body's
-generated sections as though they were the announcement."""
+"""Guards against showing an unpublished release, or generated body sections as the announcement."""
 
 from __future__ import annotations
 
@@ -56,11 +52,7 @@ _IMPORTANT = re.compile(r"^!|!$")
 
 
 def _split_variants(token: str) -> tuple[tuple[str, ...], str]:
-    """A Tailwind class token as (variants, utility), split on top-level colons.
-
-    Depth-aware, because an arbitrary value may carry its own brackets and its
-    own colon: `has-[[data-slot=update-release-notes]]:min-h-[calc(...)]`.
-    """
+    """Splits at colons outside brackets, since an arbitrary Tailwind value may hold its own colon."""
     parts: list[str] = []
     current: list[str] = []
     depth = 0
@@ -85,20 +77,7 @@ def _tokens(source: str) -> list[tuple[tuple[str, ...], str]]:
 
 
 def _applies(source: str, utility: str, *variants: str) -> bool:
-    """Is `utility` written anywhere in `source` under at least `variants`?
-
-    Token-wise, not as a substring. These assertions used to name a run of
-    classes verbatim, so gating a rule (`max-[383px]:has-[...]:min-h-[calc]`)
-    or inserting an unrelated one beside it read as the rule being gone, and
-    #10229 went red on four of them while every rule it named was still there.
-    A utility is the last top-level segment, so a longer utility that merely
-    ends with this one does not count, and variant order is Tailwind's business
-    rather than this test's.
-
-    Name no variants and this asks whether the utility is there under any gate
-    or none, which is what a check for a rule's *absence* wants. A check that a
-    rule is in force needs `_only_under`.
-    """
+    """Token-wise, not substring: a longer utility ending in this one does not match."""
     for token_variants, token_utility in _tokens(source):
         if token_utility == utility and set(variants) <= set(token_variants):
             return True
@@ -106,21 +85,7 @@ def _applies(source: str, utility: str, *variants: str) -> bool:
 
 
 def _only_under(source: str, utility: str, *variants: str) -> bool:
-    """Is `utility` written at least once, and every time under exactly these?
-
-    What a positive layout guarantee needs, and neither half of it is a subset
-    test. An extra gate narrows when the rule is in force, so a floor written
-    `md:has-[...]:min-h-[...]` leaves every width from 384px to the `md`
-    breakpoint with none, the narrow override having stopped at 383px. A
-    second, ungated copy widens it the other way, back to the reserved empty
-    height the gate was added to stop. Both leave the utility present, so both
-    pass an existence check.
-
-    Named with no variants, this is "written, and never gated": an ungated
-    `shrink-0` is the whole guarantee when there are no notes, and
-    `max-[383px]:shrink-0` would satisfy an existence check while leaving the
-    card squeezable at every width but one.
-    """
+    """Written at least once, and every occurrence sits under exactly these variants."""
     found = False
     for token_variants, token_utility in _tokens(source):
         if token_utility != utility:
@@ -132,13 +97,7 @@ def _only_under(source: str, utility: str, *variants: str) -> bool:
 
 
 def _class_const(source: str, name: str) -> str:
-    """The class string of an exported `const NAME = "..."`.
-
-    Comments blanked and anchored on the `export`, like the banner extractors:
-    an old declaration left commented out above the live one would otherwise
-    answer for it, and a stale copy that still reads correctly is exactly how a
-    regression in the live one goes unnoticed.
-    """
+    """Comments are stripped first, so a commented-out old declaration cannot answer for the live one."""
     match = re.search(
         rf'export const {re.escape(name)}\s*=\s*\n?\s*"([^"]*)"', _without_comments(source)
     )
@@ -158,26 +117,14 @@ from jsx_tags import (  # noqa: E402
 
 
 def _class_on_testid(source: str, testid: str) -> str:
-    """The literal class string of the element carrying `data-testid=testid`.
-
-    Anchored on the attribute that names the element rather than on a run of
-    its classes. An anchor built from classes cannot survive one of them being
-    inserted or reordered, which is the failure this file is being fixed for,
-    and it fails by raising rather than by reporting a missing rule.
-    """
+    """Anchored on the data-testid, not on classes, so reordering or inserting a class cannot break it."""
     clean = _without_comments(source)
     start, end = _opening_tag(clean, clean.index(f'data-testid="{testid}"'))
     return _class_value(clean[start:end], testid)
 
 
 def _class_value(tag: str, what: str) -> str:
-    """Every class named by the `className` of `tag`, joined.
-
-    A literal today. Wrapping one in the `cn()` this file already uses renders
-    the same DOM, so it has to read the same rather than being skipped, which
-    would have taken the next element's classes instead and reported every rule
-    on this one as missing.
-    """
+    """Reads className whether it is a literal or a cn() call, which renders the same classes."""
     key = "className="
     assert key in tag, f"{what} carries no className"
     at = tag.index(key) + len(key)
@@ -222,14 +169,7 @@ def _arguments(call: str) -> list[str]:
 
 
 def _always_rendered(expression: str) -> str:
-    """The classes `expression` renders in every state, joined.
-
-    Only an argument that is a bare literal. `cn(open && "x")` renders `x`
-    sometimes and a rule the card must always carry is not satisfied by
-    sometimes; written against a constant, `cn(false && "x")` renders it never,
-    while the text of the class sits there in the file either way. Reading the
-    literals out of the whole expression would call all three the same.
-    """
+    """Only a bare literal counts; a conditional class such as cn(open && ...) is not always rendered."""
     text = expression.strip()
     if text[:1] in _QUOTES and _skip_literal(text, 0) == len(text):
         return text[1:-1]
@@ -320,10 +260,7 @@ class Section:
 
 
 def sections(module, text: str) -> list[Section]:
-    """Every document-level heading in `text`, with the lines beneath it.
-
-    The shipped scanner decides what a heading is; this only groups its events.
-    """
+    """Groups the shipped scanner's events under each heading; it alone decides what is a heading."""
     found: list[Section] = []
     bodies: list[list[str]] = []
     for event in module.scan_blocks(text):
@@ -973,11 +910,7 @@ def test_preview_highlights_the_leading_sentence():
 
 
 def _max_widths(source: str) -> set[str]:
-    """Every `max-w-[...]` in *source*, read at the default UI scale.
-
-    #11648 wrapped these lengths in `calc(Npx*var(--ui-space-scale,1))` so they follow the interface size, which is
-    Npx at the default scale. Read back that way, the contract stays about the width rather than its spelling.
-    """
+    """Reads each max-w length at the default UI scale, unwrapping the calc() that scales it."""
     return {_SCALED_PX.sub(r"\1", width) for width in re.findall(r"max-w-\[([^\]\s\"]+)\]", source)}
 
 
@@ -1437,12 +1370,7 @@ def test_setext_headings_are_release_boundaries(notes_module):
 
 
 def test_a_long_backtick_run_does_not_stall_the_parser(notes_module):
-    """The code-span guard used to backtrack: 20k backticks took over a minute.
-
-    Asked as growth. `< 1.0` is a budget, and this runs in the `-n 4` CPU leg where a
-    second of wall clock says as much about the other three workers as about the parser.
-    Backtracking is superlinear, so 4x the backticks costing ~4x the time is the property.
-    """
+    """Parser time must grow linearly with a long backtick run; backtracking on it is superlinear."""
     assert_linear(
         lambda text: parse_sections(notes_module, text),
         lambda n: "## 1.0\n\n- " + "`" * n + " <!--\n",
@@ -1540,20 +1468,7 @@ _BANNER_ROOT = re.compile(r'data-testid="(?:web|tauri)-update-banner"')
 
 
 def _unpositioned_branch(text: str) -> str:
-    """The `: ...` arm of `positioned ? ... : ...`.
-
-    The two arms are two different elements: `positioned` is the standalone
-    banner, and the rail-facing card is the alternative. Reading both at once
-    would let a rule move from the card to the standalone banner and still
-    satisfy a check about the card. Split at the colon at bracket depth zero
-    and outside any literal, so a Tailwind variant in the first arm
-    (`dark:bg-card`) is not mistaken for the separator.
-
-    Ternary nesting is counted, not just brackets. A ternary inside the first
-    arm has a colon of its own at the same bracket depth, and taking that one
-    returns the tail of the `positioned` arm as though it were the card, so
-    every floor could be asserted against the wrong element.
-    """
+    """The rail-facing arm of the ternary, split at the depth-zero colon, counting nested ternaries."""
     index = text.index("?", text.index("positioned")) + 1
     pending = 1
     depth = 0
@@ -1577,15 +1492,7 @@ def _unpositioned_branch(text: str) -> str:
 
 
 def _card_slot(source: str) -> str:
-    """The rail-facing root of an update card, comments stripped.
-
-    Not one string literal: the root is a `cn()` of several, so an assertion
-    anchored on the first of them cannot see the floor at all. Anchored on the
-    `data-testid` that names the card, so no class has to keep its place for
-    the root to be found, and narrowed to the branch the overlay rail actually
-    renders. Comments go because both files name the very classes under test in
-    prose beside them, and a rule that a comment can satisfy is not tested.
-    """
+    """The card root, found by its data-testid rather than a class, with comments stripped first."""
     clean = _without_comments(source)
     match = _BANNER_ROOT.search(clean)
     assert match, "the update card has lost its data-testid"
@@ -1598,12 +1505,7 @@ def _card_slot(source: str) -> str:
 
 
 def _card_surface(source: str) -> str:
-    """The painted surface: the class string of the card's first child.
-
-    Bounded to that child rather than taken as the next literal `className` in
-    the file, which is the dismiss button's the moment the surface writes its
-    own classes through `cn()` instead.
-    """
+    """The first child's class string, bounded there so a later className cannot be read instead."""
     clean = _without_comments(source)
     match = _BANNER_ROOT.search(clean)
     assert match, "the update card has lost its data-testid"
@@ -1638,16 +1540,7 @@ def _assert_floored(source: str, scaled: str, narrow: str, card: str) -> None:
 
 
 def _assert_floors_itself(source: str, card: str) -> None:
-    """The card keeps room for its header and buttons without naming a height.
-
-    The written-out floor it replaces was a constant against one type size, and
-    #11458 made the spacing inside the card follow the interface font size too,
-    so at the 20px setting the constant came to 209px while the content needed
-    about 301px and the action row was cut. A measured floor cannot go stale
-    that way, but it only exists while the surface declares neither `min-h-0`
-    nor `overflow-hidden`: each of those sets a flex item's automatic minimum
-    size to zero, which is what made a hand-written floor necessary at all.
-    """
+    """The floor is measured, not written, but only holds while min-h-0 and overflow-hidden are absent."""
     root = _card_slot(source)
     surface = _card_surface(source)
     for zeroes_the_floor in ("min-h-0", "overflow-hidden"):
@@ -1670,16 +1563,7 @@ RAIL_TESTID = "overlay-rail"
 
 
 def _corner_rails(provider: str) -> list[str]:
-    """The class strings of the bottom-right overlay rails.
-
-    Anchored on ``data-testid`` rather than on a run of the rail's own classes. The old
-    matcher spelled the corner INTO the pattern - `bottom-0 right-4` - so #11260 moving the
-    rail flush to the edge (`right-0`, with the inset paid as inline px padding) made it
-    match nothing, and four tests across two files failed at once while reporting a missing
-    rail rather than a changed one. The corner is a CLAIM these tests make, so it belongs in
-    an assertion, not in the thing that finds the element to assert about. Same reasoning as
-    _class_on_testid, which this file already grew for exactly this failure.
-    """
+    """Finds rails by data-testid, not by classes, so moving a rail's corner cannot make it unfindable."""
     return [_class_value(tag, RAIL_TESTID) for tag in _rail_openings(provider)]
 
 
@@ -1701,15 +1585,7 @@ _PADS = re.compile(r"p[xytblrse]?-|\[padding[-:]")
 
 
 def _rail_class_tokens(tag: str) -> list[str]:
-    """Every class token the rail's className CAN render, conditionals included.
-
-    _class_value answers what renders in EVERY state, which is what a positive guarantee
-    needs and exactly wrong for a prohibition: `cn("...", compact && "!pl-0")` renders that
-    override whenever compact is true, and an always-rendered reader never sees it. So this
-    one reads the literals out of the whole expression on purpose. The two are not
-    interchangeable, and the asymmetry is the point: "must always have X" and "must never
-    have Y" cannot be answered by the same set.
-    """
+    """Every literal, conditionals included: a prohibition must see overrides that render only sometimes."""
     key = "className="
     at = tag.index(key) + len(key)
     if tag[at] == '"':
@@ -1730,12 +1606,7 @@ def _rail_class_tokens(tag: str) -> list[str]:
 
 
 def _rail_padding(tag: str) -> dict[str, str]:
-    """This rail's padding properties mapped to the constant each one is set from.
-
-    The property-to-constant binding, not merely the presence of some STACK_ name: setting
-    paddingLeft from STACK_CARD_INSET_RIGHT renders a 16px left gutter while the 22px floor
-    below still reads a 28px constant nothing applies, and the shadow clips anyway.
-    """
+    """Maps each padding side to the constant it is set from, so a wrong-constant binding is caught."""
     return {
         prop: const
         for prop, const in re.findall(r"\b(padding(?:Top|Bottom|Left|Right)): (\w+)", tag)
@@ -1750,12 +1621,7 @@ def _rail_style_px(provider: str, name: str) -> int:
 
 
 def _capped_rails(provider: str) -> int:
-    """How many of those rails cap themselves to the viewport.
-
-    The cap is the full viewport and the gutters are paid out of it, as inline px padding,
-    so the cards keep the band they had. Reading the class alone stopped being enough when
-    #11260 moved the gutters out of the class and into the style, so this reads both.
-    """
+    """Counts rails capped to the full viewport; their gutters are inline style, not the class."""
     # `md:max-h-[100dvh]` contains the utility but leaves smaller viewports uncapped.
     # The desktop rail stops below the window chrome; there is none in the browser.
     caps = ("max-h-[100dvh]", "max-h-[calc(100dvh-var(--studio-window-chrome-top,0px))]")
@@ -1763,11 +1629,7 @@ def _capped_rails(provider: str) -> int:
 
 
 def test_the_class_matchers_tell_a_gated_rule_from_an_ungated_one():
-    """The floor assertions are only as strong as these, so they are tested.
-
-    A matcher that quietly says yes is how this file went wrong the first time:
-    the checks read as layout guarantees and were substring searches.
-    """
+    """The matchers must tell a gated rule from an ungated one, since the floor checks rely on them."""
     gated = "max-[383px]:has-[[data-slot=update-release-notes]]:min-h-[calc(1px+2px)]"
     assert _split_variants(gated) == (
         ("max-[383px]", "has-[[data-slot=update-release-notes]]"),
@@ -1821,10 +1683,7 @@ def test_the_class_anchors_do_not_depend_on_any_order():
 
 
 def test_the_overlay_stack_fits_the_viewport():
-    """The card's own cap does not account for a download list stacked beneath
-    it, so the rail carries one of its own. A static cap, not a measured one:
-    a rail whose height and offset are computed from whatever else is on screen
-    is a rail that moves out of its corner (#8082 and the chain after it)."""
+    """A static cap, not a measured one: a cap computed from other overlays moves it off its corner."""
     provider = (FRONTEND / "app/provider.tsx").read_text(encoding = "utf-8")
     # Counted by layer, not literal z-index: the overlay rail reads its depth from Z_LAYER.
     stacks = provider.count("zIndex: Z_LAYER.OVERLAY_STACK")
@@ -1842,12 +1701,7 @@ def test_the_overlay_stack_fits_the_viewport():
 
 
 def test_both_rails_are_still_pinned_to_the_bottom_right_corner():
-    """The corner, asserted rather than assumed by the matcher.
-
-    _corner_rails finds rails by testid now, so it would happily return a rail that had
-    wandered to the top left. This is the claim the old regex used to make implicitly, kept
-    explicit and kept failing for the right reason: it names the rail that moved.
-    """
+    """Corner is asserted here: finding rails by testid alone would return one that had wandered."""
     provider = (FRONTEND / "app/provider.tsx").read_text(encoding = "utf-8")
     rails = _corner_rails(provider)
     assert len(rails) == 2, f"expected the browser and desktop rails, found {len(rails)}"
@@ -1864,14 +1718,7 @@ def test_both_rails_are_still_pinned_to_the_bottom_right_corner():
 
 
 def test_the_rail_gutters_come_out_of_the_cap_and_not_the_cards():
-    """#11260's actual claim, which no class can carry any more.
-
-    The rail caps at the whole viewport and pays its shadow gutters as inline px padding, so
-    the band left for the cards is 100dvh less the two block gutters - the same band they had
-    when the cap was written as calc(100dvh - 8px) and the gutter was 4px a side. px and not a
-    spacing utility because those are rem and would scale the rail off its corner with the
-    user's type size, which is the bug the comment above them is about.
-    """
+    """Gutters are inline px, not rem utilities, so the rail stays in its corner at any type size."""
     provider = (FRONTEND / "app/provider.tsx").read_text(encoding = "utf-8")
     top = _rail_style_px(provider, "STACK_SHADOW_GUTTER_TOP")
     bottom = _rail_style_px(provider, "STACK_SHADOW_GUTTER_BOTTOM")
@@ -1920,10 +1767,7 @@ def test_the_desktop_stack_is_capped_like_the_browser_one():
 
 
 def test_the_rail_offset_is_not_computed():
-    """The rail used to place itself around the boxes in the frame store, so a
-    composer growing by a line or a download row arriving moved it to the middle
-    of the window, and a maximised monitor to the top. Its offset and cap must
-    stay out of JS."""
+    """Offset and cap must not be computed in JS, or the rail drifts when the composer grows."""
     provider = (FRONTEND / "app/provider.tsx").read_text(encoding = "utf-8")
     for banned in ("useStackGeometry", "stackGeometry", "stack.bottom", "stack.maxHeight"):
         assert banned not in provider, f"the rail is placed from JS again ({banned})"
@@ -2010,10 +1854,7 @@ def test_a_lowercase_declaration_is_not_a_raw_block(notes_module):
 
 
 def test_link_resolver_reads_html_containers_the_way_the_others_do():
-    """A `<details>` or `<div>` with no blank line inside is a type 6 block, so
-    its contents are literal and a fence in it is not a fence, which stopped
-    every link below from resolving. The parser and the preview already apply
-    the type 6 and 7 rules, so the resolver has to share them."""
+    """The link resolver must share the parser's HTML block rules, or links in containers go unresolved."""
     links = LINKS.read_text(encoding = "utf-8")
     for source in (PREVIEW, LINKS):
         text = source.read_text(encoding = "utf-8")

@@ -818,19 +818,7 @@ def test_merge_codex_config_fresh():
 
 
 def test_merge_codex_config_raises_the_stream_idle_timeout():
-    """Codex's 300s default cancels the stream while llama-server is still reading.
-
-    llama-server emits nothing at all during prompt processing, so the whole wait counts
-    as idle. Measured on a 2-core CI host: 16.1 tok/s against Codex's several-thousand
-    token preamble is ~460s of silence before the first token exists, and the default
-    trips at 300s. The reconnect then lands on a different parallel slot whose KV cache
-    shares no prefix, so every retry restarts from zero and the turn never completes --
-    a job hung for its full 600s cap with `Reconnecting... 1/5` and one request logged at
-    exactly 300056ms.
-
-    Asserted as a floor rather than an equality: raising it further is fine, and the
-    number is not the contract. Losing it entirely is the regression.
-    """
+    """Provider must set stream_idle_timeout_ms; Codex's 300s default cancels silent prompt processing."""
     provider = _parse_toml(start._merge_codex_config("", BASE))["model_providers"]["unsloth_api"]
     assert "stream_idle_timeout_ms" in provider, (
         "the Codex provider block no longer sets stream_idle_timeout_ms, so Codex falls "
@@ -2426,11 +2414,7 @@ def test_subagent_model_id_pins_the_quant_for_repo_ids(capsys):
 
 
 def test_public_model_id_leaves_repo_ids_alone():
-    """Only a path gets reduced; a repo id must not match some unrelated model.
-
-    Relative and multi-segment paths are covered too: _looks_like_path is defined
-    twice in this module (the WSLENV one wins), so this must use its own classifier.
-    """
+    """Only paths are reduced, never repo ids; _looks_like_path is shadowed by a second definition."""
     assert start._public_model_id("unsloth/gemma-4-E4B-it-GGUF") is None
     assert start._public_model_id("org/model") is None
     assert start._public_model_id("/srv/models/Qwen3-Q4_K_M.gguf") == "Qwen3-Q4_K_M"
@@ -4513,12 +4497,7 @@ def test_load_model_with_progress_fails_on_a_deferred_error(monkeypatch):
     ],
 )
 def test_load_model_with_progress_rejects_a_truncated_padded_body(monkeypatch, body, what):
-    """A proxy that gives up mid-pad leaves a 200 the load never finished under.
-
-    Measured: one byte at t=90s, silence, killed ~125s later, a 200 with an EMPTY body.
-    `_http_json` decodes a blank body as `{}`, so without the check this returned a
-    successful-looking result and the agent connected to whatever was still resident.
-    """
+    """A truncated padded load returns 200 with an empty body; _http_json would read it as {}, so reject."""
 
     def urlopen(request, timeout):
         if request.full_url.endswith("/api/inference/load"):

@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the A/B interleaver.
-
-The balance check is the one worth the most scrutiny: it is a boolean that has to differ between a
-plan where drift cancels and one where it does not, and its first implementation returned True for
-both. A single-rep plan is therefore asserted explicitly rather than left to a parametrisation.
-"""
+"""The balance check must differ between a plan where drift cancels and one where it does not."""
 
 from __future__ import annotations
 

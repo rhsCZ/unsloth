@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every Playwright driver under tests/studio is invoked by some workflow.
-
-These suites are standalone scripts, not pytest files, so nothing collects them:
-a driver runs only because a workflow step or a .github/scripts helper names it.
-Delete that line, or add a driver and forget one, and the suite runs nowhere
-while every job stays green. Two were already in that state when this was
-written, listed below with a reason each.
-
-Same shape as test_ci_shell_suite_coverage.py, which guards tests/sh for the same
-failure: the list of what CI runs drifting behind the directory it runs from.
-"""
+"""Standalone Playwright drivers run only when a workflow names them; this checks every one is named."""
 
 import re
 from fnmatch import fnmatch
@@ -40,23 +30,12 @@ NOT_IN_CI = {
 
 
 def _uncommented(text: str) -> str:
-    """``text`` with ``#`` comments removed, so a disabled command stops counting.
-
-    Commenting an invocation out is how one gets disabled, and this scan reads `run:`
-    bodies verbatim, so `# python tests/studio/x.py` used to match. Shell, YAML and
-    Python all take `#` to end of line.
-    """
+    """Strips comments so a disabled invocation stops counting as coverage."""
     return "\n".join(re.sub(r"(?:^|(?<=\s))#.*", "", line) for line in text.splitlines())
 
 
 def _invoked(name: str, text: str) -> bool:
-    """Whether ``text`` RUNS ``name``, rather than merely mentioning it.
-
-    Substring presence is not coverage: report.py names playwright_chat_ui.py in a
-    result description, so deleting every real invocation could leave this green on
-    prose. Every driver and helper here is run as an argument to an interpreter, so
-    that is what is matched.
-    """
+    """Matches an interpreter invocation of name; a bare substring also hits prose mentions."""
     pattern = (
         rf"(?:^|[\s;&|(])(?:python3?|node|bash|sh)\s+(?:-\S+\s+)*[^\s;&|<>'\"]*{re.escape(name)}\b"
     )
@@ -64,12 +43,7 @@ def _invoked(name: str, text: str) -> bool:
 
 
 def _executable_text(path: Path) -> str:
-    """The parts of a workflow that RUN something: step `run` bodies and `uses` refs.
-
-    Trigger paths say when CI runs, not what it runs. studio-frontend-ci.yml names
-    playwright_strip_ansi_smoke.py in both, so reading the whole file left deleting
-    the step alone undetected.
-    """
+    """Only step run bodies and uses refs; trigger paths name files without running them."""
     document = yaml.safe_load(path.read_text(encoding = "utf-8"))
     if not isinstance(document, dict):
         return ""
@@ -87,12 +61,7 @@ def _executable_text(path: Path) -> str:
 
 
 def _ci_text() -> str:
-    """Everything CI could name a driver from, reachable from something that runs.
-
-    The workflows' executable fields seed the text, and a helper joins only once
-    something already in it names the helper, repeatedly since one helper may call
-    another. A helper no workflow calls is not coverage.
-    """
+    """A helper counts only once something that runs names it, followed transitively through helpers."""
     helpers = [
         path
         for directory in ((REPO / ".github" / "scripts"), (REPO / ".github" / "actions"))
@@ -187,13 +156,7 @@ def test_tool_activity_install_enforces_the_script_allowlist():
 
 
 def test_the_linux_job_still_drives_all_three_browser_engines():
-    """The repo-wide check cannot see this job disappear.
-
-    The Mac and Windows UI workflows name the same helper, so deleting all three calls
-    from the Linux one leaves every guard above green. Asserted against the job, not
-    the file: a step moved back into ui-smoke lands behind the 30-minute limit this
-    change moved it out of.
-    """
+    """Asserted on the job, since repo-wide checks stay green when only this job loses its calls."""
     document = yaml.safe_load(
         (REPO / ".github" / "workflows" / "studio-ui-smoke.yml").read_text(encoding = "utf-8")
     )
@@ -231,14 +194,7 @@ def test_the_linux_job_still_drives_all_three_browser_engines():
 
 
 def test_no_build_gate_sits_behind_a_browser_smoke():
-    """A smoke failure must not decide whether the build gates report.
-
-    Every step carries an implicit `if: success()`, so a job stops at its first failing
-    step and skips the rest. The ANSI smoke is intermittently red, and while it ran ahead
-    of them the build and the three bundle assertions never reported at all on those runs.
-    The smokes each start their own vite dev server and read nothing out of `dist/`, so
-    they belong last. Asserted by step index, since the ordering is the whole guarantee.
-    """
+    """Browser smokes must come after the build gates, since a failing step skips every later one."""
     document = yaml.safe_load(
         (REPO / ".github" / "workflows" / "studio-frontend-ci.yml").read_text(encoding = "utf-8")
     )
@@ -277,13 +233,7 @@ def test_the_scan_reads_the_workflows_it_claims_to():
 
 
 def test_every_smoke_report_is_covered_by_the_failure_upload():
-    """A smoke that fails must have its own diagnostic in the artifact.
-
-    The upload runs `if: failure()`, so the ONE report worth having is the one the
-    smoke that just failed wrote. Four of the five write `logs/playwright-<name>`;
-    the settings smoke writes a JSON report under its own name, so a bare
-    `logs/playwright-*` path uploaded every report except that one.
-    """
+    """A bare logs/playwright-* glob misses the settings smoke's JSON report, so each path is named."""
     workflow = yaml.safe_load(
         (REPO / ".github" / "workflows" / "studio-frontend-ci.yml").read_text(encoding = "utf-8")
     )
@@ -309,13 +259,7 @@ def test_every_smoke_report_is_covered_by_the_failure_upload():
 
 
 def test_a_continue_on_error_smoke_can_still_upload_its_report():
-    """`failure()` cannot see a smoke that is allowed to fail.
-
-    `continue-on-error: true` rewrites a step's CONCLUSION to success while leaving its
-    OUTCOME as failure, so a bare `if: failure()` upload is skipped on exactly the runs
-    where the non-blocking smoke is the only thing that failed, which is when its report
-    is the whole point. Each such smoke must be named in the upload condition.
-    """
+    """continue-on-error hides a smoke's failure from failure(), so name each such smoke in the upload."""
     workflow = yaml.safe_load(
         (REPO / ".github" / "workflows" / "studio-frontend-ci.yml").read_text(encoding = "utf-8")
     )

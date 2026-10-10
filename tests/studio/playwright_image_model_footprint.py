@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Rendered regression for the image-model selector's full disk footprint.
-
-The browser runs the real Vite application. Network data is deterministic so
-the test proves the UI contract without downloading a model or depending on
-live Hugging Face metadata.
-"""
+"""Image-model selector full disk footprint, rendered in Vite with deterministic network data."""
 
 import os
 import re
@@ -178,14 +173,7 @@ def _api_payload(path: str, query: dict[str, list[str]], *, full_footprint: bool
 
 
 def klein_row(page):
-    """The klein row inside the open picker, and nothing else on the page.
-
-    An unscoped search is not specific enough once a download has been started:
-    the hub download panel labels itself "black-forest-labs/FLUX.2-klein-4B ·
-    Required assets", so a page-wide match returns it first and clicking it
-    leaves the picker where it was. The old exact repo-id text never matched
-    that panel, so scoping only became necessary with the pattern.
-    """
+    """Scoped to the open picker menu, since the download panel's label also matches the klein pattern."""
     return page.locator(".unsloth-model-selector-menu").get_by_text(KLEIN_ROW).first
 
 

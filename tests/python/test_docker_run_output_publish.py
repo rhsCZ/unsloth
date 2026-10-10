@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth-run --out` must publish an output the host user can read.
-
-tempfile.mkstemp() creates the staging file 0600, nbconvert writes its result by
-TRUNCATING the same inode, and os.replace is a rename, so that root-owned 0600 is
-carried onto the destination -- and re-running over an existing output replaces that
-file's mode and owner too.
-"""
+"""mkstemp creates the staging file 0600 and os.replace carries that mode and owner onto the output."""
 
 from __future__ import annotations
 

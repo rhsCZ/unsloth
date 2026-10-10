@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""[Windows, Linux, WSL, macOS] x [NVIDIA, AMD/ROCm, CPU-only] for the #7897 fix.
-
-The fix is pure path arithmetic and imports no GPU library, so the GPU axis is an
-invariance check: the stem and its destination must be byte-identical in every
-cell. No per-vendor expectations are invented, because none exist.
-
-UNSLOTH_SIM_GPU (nvidia|rocm|cpu) picks the cell and is applied at import, since the
-spoofs mutate torch globals and cannot be undone in-process. One process per cell.
-The OS axis is monkeypatch-scoped and needs no isolation.
-"""
+"""Stem and destination must match across OS and GPU cells; UNSLOTH_SIM_GPU selects the GPU cell."""
 
 from __future__ import annotations
 

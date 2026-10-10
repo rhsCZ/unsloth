@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A first turn must reach the model adapter with its real thread id.
-
-assistant-ui binds `unstable_threadId` before the thread is persisted, so a first
-turn used to file every run handle under the shared "__default" key. Two of them
-overlapping there is unresolvable after the fact: nothing links a run under that
-key to the id its thread later receives, so the sidebar showed no spinner and Stop
-could not reach either generation.
-
-The link exists earlier. `append()` tracks `threadListItem.initialize()` by the
-user message id, and `createPersistedRunAdapter` already awaits that promise before
-invoking the adapter, so the id is known by the time the run starts. These tests pin
-that the resolved id is carried through rather than discarded.
-"""
+"""First turn must carry its real thread id; otherwise runs file under the shared "__default" key."""
 
 from __future__ import annotations
 

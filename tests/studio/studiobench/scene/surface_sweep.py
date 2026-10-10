@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Drive every registered surface once and take a parity digest of each.
-
-THE ONE RULE. A surface that was not reached records a REASON. Never a bare zero, never a missing
-row, and never a digest of whatever happened to be on screen instead. The failure this whole tool
-is built against is a check that cannot tell "did not run" from "passed", and a sweep is unusually
-good at producing exactly that: navigate to /hub, fail to render, digest the chat page that is
-still mounted underneath, and report a pass. So every row carries `reached`, `reason`, the settle
-observation that decided it, and the root the digest was actually taken from.
-
-WHY THE SWEEP RUNS AGAINST AN EMPTY CHAT. The known state is a fresh `/chat`. Several surface
-roots -- the shell, the sidebar, the active route container's siblings -- contain the keep-alive
-chat page, so a sweep run against a loaded thread would carry that thread into the digest of every
-other surface and any thread difference would flip all of them at once. An empty chat makes the
-surface digests about the surfaces.
-
-WHAT THE DIGEST IS. `window.__sb.parity.capture()`, the same function and the same normalisation
-the film uses at the close of every action window, pointed at the surface's own root by
-surfaces.js. Same function on purpose: a surface digest and an action digest that were produced by
-two implementations could not be compared, and comparing them is the point.
-"""
+"""An unreached surface records a reason, never a bare zero or a digest of the page beneath it."""
 
 from __future__ import annotations
 
@@ -123,11 +104,7 @@ class _Driver:
 
 
 def _row(surface: registry.Surface, cell_id: Optional[str]) -> dict:
-    """A surface row with every mandatory field already present and honest.
-
-    Built up front rather than assembled on the success path, so an exception anywhere below
-    leaves a row that says it did not run instead of a row that is missing.
-    """
+    """Built before the success path runs, so an exception leaves a row that says it did not run."""
     return {
         "row_type": "surface",
         "cell_id": cell_id,
@@ -159,15 +136,7 @@ def sweep(
     settle_timeout_ms: Optional[int] = None,
     surface_budget_ms: Optional[int] = None,
 ) -> tuple[list[dict], dict]:
-    """Drive every registered surface once. Returns `(rows, manifest)`.
-
-    `recorder`, when given, receives each row as it is produced, so a sweep that dies halfway
-    still leaves the surfaces it did reach in the payload.
-
-    The two timeouts are arguments rather than constants only so the unit tests can drive the
-    unreached path without paying eight real seconds per surface for a page that was never going
-    to settle. Every caller in the tool uses the defaults.
-    """
+    """Rows go to recorder as produced, so a sweep that dies halfway keeps the surfaces it reached."""
     settle_ms = SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
     budget_ms = SURFACE_BUDGET_MS if surface_budget_ms is None else surface_budget_ms
     registry.validate_registry()

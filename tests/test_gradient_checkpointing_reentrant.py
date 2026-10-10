@@ -1,25 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Generated RL configs must keep the reentrant gradient checkpoint path.
-
-Unsloth gradient checkpointing needs `use_reentrant=True`. The non-reentrant
-path recomputes every packed forward during backward and compares what each
-pass saved, so a region packed compiled and recomputed eagerly aborts with
-
-    CheckpointError: A different number of tensors was saved during the
-    original forward and recomputation.
-
-Two things push a config to non-reentrant, and only one of them was handled:
-
-  TRL 0.27.0+ sets use_reentrant=False explicitly.
-
-  transformers substitutes {"use_reentrant": False} whenever
-  gradient_checkpointing_kwargs is None, which is what an older TRL leaves.
-
-The second is not hypothetical. GKDConfig turns gradient_checkpointing on by
-default, so knowledge distillation on TRL 0.25.1 reached the non-reentrant path
-without ever asking for gradient checkpointing, and died on a Kaggle 2x T4
-with 81 tensors saved in the forward against 79 in the recomputation.
-"""
+"""RL configs must keep reentrant checkpointing; non-reentrant recompute aborts on compiled regions."""
 
 import re
 import textwrap

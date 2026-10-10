@@ -291,12 +291,7 @@ class TestNoTorchConstant:
 
     @staticmethod
     def _no_manifest():
-        """Pin the manifest tier to "unknown".
-
-        Without this the env-unset cases below read the manifest of whatever venv
-        pytest happens to run in, so the result would depend on the developer's
-        machine rather than on the code under test.
-        """
+        """Pins the manifest tier to unknown, so results do not depend on the venv pytest runs in."""
         return mock.patch.object(
             ips.install_manifest, "recorded_no_torch", lambda *args, **kwargs: None
         )
@@ -363,11 +358,7 @@ class TestNoTorchConstant:
 
     @pytest.mark.parametrize("recorded", (True, False))
     def test_infer_no_torch_reads_the_manifest_when_env_is_unset(self, recorded: bool):
-        """`unsloth studio update` injects no env var, so the venv must remember.
-
-        Without this an update reinstalls torch into a GGUF-only venv, and on
-        Windows reads the missing torch as a stale venv it then fails to delete.
-        """
+        """`unsloth studio update` sets no env var, so the venv manifest is what remembers no-torch."""
         env = os.environ.copy()
         env.pop("UNSLOTH_NO_TORCH", None)
         with (
@@ -587,16 +578,8 @@ class TestInstallPythonStackSubprocessMock:
         ), "triton-kernels.txt should be skipped on macOS even via studio update"
 
     def test_the_harness_never_writes_the_running_venv_root(self):
-        """install_python_stack() drops, marks and rewrites the manifest for real here.
-
-        Only subprocess.run is mocked, so remove_manifest(), set_no_torch_marker() and
-        write_manifest() all execute against Path(sys.prefix), one directory shared by every
-        xdist worker and every subprocess they spawn. A leaked no-torch marker makes every
-        install_python_stack.py subprocess in the run resolve NO_TORCH True at import, which
-        is how the AMD fast-path CLI probe failed on 17 CI runs across 7 branches in one day
-        while passing in isolation. Driven through the real _capture_install, not a rebuilt
-        copy: the property has to hold for the harness that ships in this file.
-        """
+        """Harness must not write sys.prefix, which xdist workers share; a leaked no-torch marker
+        breaks CI."""
         real_root = Path(sys.prefix)
         watched = (
             real_root / ips.install_manifest.MANIFEST_NAME,

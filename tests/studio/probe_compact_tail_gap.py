@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Does a long thread whose LAST messages are compact paint an empty region on the first commit?
-
-The mount window opens on INITIAL_MESSAGES rows. If those rows plus the viewport's bottom spacer
-are shorter than clientHeight -- a compact tail in a tall viewport -- the first painted commit
-cannot fill the screen, and this measures how big the empty band is and how long it lasts.
-
-Measured on a 144-message thread whose last 24 messages are one-word replies: at 900, 1080, 1440,
-1800, 1840 and 1860px of clientHeight there is no band the settled thread does not also have,
-because 16 one-word rows are 1639px and the viewport's own inset and spacer carry that to 1890px.
-Above 1890px there is one -- 10px at 1900, 110px at 2000, 270px at 2160 -- for 287 to 499ms until
-the first widening chunk closes it. See INITIAL_MESSAGES.
-
-Prints and exits 0 on any measurement. Not a gate.
-
-    PM_PORT=5731 PM_ENGINE=chromium PM_HEIGHTS=900,1080,1440 \
-        python3 tests/studio/probe_compact_tail_gap.py
-
-Needs #9016's heavy-thread harness, plus two methods on it: `seedCompactTail(chars, tailMessages)`
-and `gapMetrics()`.
-"""
+"""Probe: does a compact tail leave an empty band on the first commit? Prints only; not a gate."""
 
 from __future__ import annotations
 import json, os, sys, time

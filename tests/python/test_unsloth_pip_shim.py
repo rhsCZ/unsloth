@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""Regression tests for docker/unsloth_pip_shim.py.
-
-Drives main() with UNSLOTH_NB_SHIM=1 and captures the os.execv command, so the
-assertions are on what actually reaches the real pip/uv.
-"""
+"""Asserts on the os.execv command that reaches the real pip or uv, with UNSLOTH_NB_SHIM=1 set."""
 
 from __future__ import annotations
 
@@ -44,11 +40,7 @@ class _Exec(Exception):
 
 
 class _BakedImage:
-    """Stands in for _installed_names() on an image where every bake succeeded.
-
-    Only `in` is asked of the return value, so answering the prefix rule here keeps
-    nvidia-* wheels present too, which a plain set of _KEEP cannot express.
-    """
+    """Fake for `_installed_names()` that answers `in` by prefix, so nvidia-* wheels count as present."""
 
     def __init__(self, mod):
         self._mod = mod
@@ -860,13 +852,7 @@ def test_normalization_does_not_merge_distinct_distributions(shim):
     ],
 )
 def test_dependency_group_flags_are_never_a_silent_no_op(shim, args):
-    """These flags ARE the install target, so treating them as ordinary option/value
-    pairs made the shim find nothing to install and print "ok" having done nothing.
-
-    They are now refused instead of forwarded, because their contents cannot be read
-    and a group holding a same-version local path over a baked package installs over
-    it. The property this test exists for is unchanged either way: never quietly
-    succeed while the requested packages go uninstalled."""
+    """Dependency-group flags are refused, so the shim never reports success while installing nothing."""
     argv = ["pip", "install", *args]
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(shim.sys, "argv", argv)
@@ -1148,11 +1134,7 @@ def test_value_taking_options_before_install_do_not_lose_the_command(shim, monke
 
 
 def test_a_protected_pin_behind_a_value_option_is_still_held(shim, monkeypatch):
-    """The consequence that matters: `torch==9.9` must never reach the real tool.
-
-    Losing the command let it through verbatim; recognising it means torch is a
-    protected target, so the run is filtered down to nothing instead.
-    """
+    """Protected pins behind a value option must still be held: `torch==9.9` must never reach uv."""
     _fake_distributions(monkeypatch, ("torch", "2.11.0"))
     ran = _full_argv(shim, ["uv", "pip", "--directory", "/tmp", "install", "torch==9.9"])
     assert ran is None or "torch==9.9" not in ran, f"the baked torch was replaceable: {ran}"
@@ -1775,10 +1757,7 @@ def test_an_unprotected_direct_reference_still_reaches_the_real_tool(shim, monke
 
 
 def test_an_uppercase_scheme_without_a_double_slash_is_still_classified(shim, monkeypatch):
-    """`GIT+FILE:/path#egg=unsloth` carries no `://`, so the scheme prefix match is the
-    only thing that recognises it as a direct reference at all. Matching that prefix
-    case sensitively let the uppercase spelling fall through to "unknown" and be
-    forwarded."""
+    """Direct references like `GIT+FILE:` lack `://`, so the scheme match must ignore case."""
     _fake_distributions(monkeypatch, ("unsloth", "2026.6.9"))
     spec = "GIT+FILE:/tmp/checkout#egg=unsloth"
     ran = _full_argv(shim, ["pip", "install", spec, "snac"])

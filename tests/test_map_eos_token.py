@@ -1,26 +1,4 @@
-"""Regression test for the map_eos_token argument of get_chat_template.
-
-get_chat_template accepts a public, type-asserted `map_eos_token` argument, but on
-the string-template path it was overwritten by the template's own flag, so an
-explicit map_eos_token = False was silently ignored for every template that sets
-yes_map_eos_token = True (chatml, gemma, gemma_chatml, gemma2, gemma2_chatml).
-
-Honouring the opt-out is only coherent when the template does not rewrite the vocab
-to build its stop word. gemma_chatml and gemma2_chatml *create* their stop word by
-renaming the tokenizer's own eos piece (`{"<eos>": "<|im_end|>"}`), and that rename
-happens whether or not the caller opts out, while the rebuilt tokenizer only carries
-eos_token = stop_word when the mapping is on. Letting the opt-out through for those
-two renames <eos> away and then lets the tokenizer class default re-add it as a new
-out-of-range id. So those keep forcing the mapping, with a warning.
-
-Importing unsloth needs a GPU, so both halves pull the shipped statements out of
-the source with ast, in the same spirit as tests/test_gemma4_chat_template.py
-which extracts the templates from the same file rather than importing unsloth.
-The first half runs the resolution statements over fake tokenizers and checks the
-decision. The second half runs the vocab surgery those decisions gate over a real
-fast tokenizer built in memory, and checks the vocabulary and the eos metadata
-before and after, since the decision is only interesting for what it does to them.
-"""
+"""Honour map_eos_token=False, except gemma_chatml and gemma2_chatml, which rename <eos> regardless."""
 
 import ast
 import os
@@ -157,11 +135,7 @@ def test_opt_out_still_honored_when_the_template_leaves_the_vocab_alone():
 
 
 def test_shipped_templates_still_have_the_shape_the_guard_keys_on():
-    """The guard matches on the template carrying a token_mapping, not on template names.
-
-    If gemma_chatml ever stopped renaming <eos>, the guard would quietly stop firing and
-    the opt-out would start building the broken tokenizer again, so pin the shape here.
-    """
+    """The guard keys on a template's token_mapping, not its name, so pin that shape."""
     namespace = {}
     for node in ast.parse(_source()).body:
         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):

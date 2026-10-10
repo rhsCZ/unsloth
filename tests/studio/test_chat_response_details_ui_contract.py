@@ -32,17 +32,7 @@ _UNREADABLE = "\x00unreadable"
 
 
 def _class_list(source: str, marker: str) -> str | None:
-    """The className of the JSX element whose opening tag contains `marker`.
-
-    The opening tag is found first and the attribute read out of it, rather than matching
-    `marker` and `className` as neighbours. JSX attribute order carries no meaning, so a
-    `ref`, an `aria-*` or a test id inserted between them changes nothing about the element
-    and must not fail a guard that is here to stop unrelated refactors reddening main.
-
-    Comments come out of the whole source first. A commented-out element still contains its
-    own `<`, so slicing from the marker found the tag inside `{/* ... */}` and reported the
-    class list of something the page does not render.
-    """
+    """Comments are stripped first, or a commented-out element matching the marker is read instead."""
     source = _without_block_comments(source)
     start = source.find(marker)
     if start == -1:
@@ -124,21 +114,7 @@ def _split_arguments(body: str) -> list[str]:
 
 
 def _assert_only_shrinks(tokens: list[str], what: str, evidence: str) -> None:
-    """Exactly one min-width utility, unqualified, and it is `min-w-0`.
-
-    An earlier version of this tried to work out which min-width WINS: last in `cn` order,
-    per responsive variant, with `!important` beating an ordinary utility written after it.
-    Every rule it gained was correct and the next one was still missing, because deciding
-    that question properly is tailwind-merge plus the cascade, and a test file is the wrong
-    place to keep a second copy of either.
-
-    So it does not decide. One min-width, no variants, no importance markers, and it has to
-    be the shrinking one. That is stricter than the framework: `min-w-0 md:min-w-0` really
-    does shrink everywhere and is refused anyway. It is refused LOUDLY, saying that this
-    guard does not adjudicate precedence, which is a message someone can act on, and it
-    cannot quietly approve a layout nobody checked. Between a guard that is occasionally
-    inconvenient and one that is occasionally wrong, this picks the first.
-    """
+    """Precedence is not decided: exactly one unqualified min-w-0 passes, and anything else is refused."""
     # min-w-0 is not enough: `shrink-0` or `flex-none` still stops the trigger shrinking.
     pinned = [
         token
@@ -179,16 +155,7 @@ def _is_min_width(token: str) -> bool:
 
 
 def _cn_literals(source: str, anchor: str) -> str | None:
-    """The string literals of the `cn(...)` call containing `anchor`, joined in order.
-
-    `className` itself is expected among the arguments: that is the caller's contribution,
-    read separately. Any OTHER unresolved argument means this cannot say what the element
-    composes to, which is _UNREADABLE rather than silence.
-
-    Comments out first, for the same reason `_class_list` does it: a dead `cn(...)` left in a
-    block comment sits before the live component, so the anchor was found there and this
-    validated classes nothing composes.
-    """
+    """Comments are removed first, or a dead cn(...) in a block comment matches before the live one."""
     source = _without_block_comments(source)
     at = source.find(anchor)
     if at == -1:
@@ -235,11 +202,7 @@ def _opening_tags(source: str, marker: str) -> list[str]:
 
 
 def _opening_tag(source: str, marker: str) -> str | None:
-    """The opening JSX tag beginning at `marker`, brace-aware.
-
-    `[^>]*` ends at the first `>`, and an arrow function in an earlier prop supplies one, so
-    the tag would come back truncated and the props after it invisible.
-    """
+    """Brace-aware: a `>` inside an earlier prop's arrow function would truncate a [^>]* match."""
     opens = source.find(marker)
     if opens == -1:
         return None
@@ -255,31 +218,13 @@ def _opening_tag(source: str, marker: str) -> str | None:
 
 
 def _without_block_comments(source: str) -> str:
-    """The source with comments removed, block and line alike.
-
-    Line comments matter as much as block ones here: everything below locates JSX by
-    searching the text, so a stale `// <ReasoningBody isStreaming={...} ...>` left above the
-    render is found by `_opening_tags` and read as the live element. The contract then
-    describes a tag that renders nothing while the real one has lost both props.
-
-    `(?<!:)` keeps `https://` out of it, which is the one `//` in this file that is not a
-    comment.
-    """
+    """Line comments count too: a stale `// <ReasoningBody>` would be found and read as live."""
     source = re.sub(r"\{?\s*/\*.*?\*/\s*\}?", " ", source, flags = re.S)
     return "\n".join(re.sub(r"(?<!:)//.*$", "", line) for line in source.splitlines())
 
 
 def _spread_overrides(tag: str, attribute: str) -> bool:
-    """True when `tag` spreads props in a position that can beat an explicit `attribute`.
-
-    JSX applies attributes left to right and the last write wins, so `{...props} name={x}`
-    ends with `x` whatever the spread holds, while `name={x} {...props}` does not. Refusing
-    both would make the guard red on a safe refactor that forwards unrelated props, which is
-    a worse failure than the one it is guarding: it stops correct work.
-
-    A tag with no explicit attribute at all is unknown if it spreads anything, since the
-    spread is then the only thing that could be supplying it.
-    """
+    """JSX takes the last write, so only a spread placed after the attribute can override it."""
     # Only spreads at the tag's own attribute level can reach className.
     spreads = []
     depth = 0
@@ -297,29 +242,13 @@ def _spread_overrides(tag: str, attribute: str) -> bool:
 
 
 def _without_comments(tag: str) -> str:
-    """`tag` with commented-out lines removed.
-
-    A prop commented out is a prop that is not passed, and every check here is a substring
-    test, so leaving the text in place lets a disabled prop satisfy the guard that exists to
-    notice it went away. Only a `//` that begins a line counts, so a `//` inside a value is
-    left alone; `/* ... */` is removed wherever it sits, because between two attributes is
-    exactly where it sits when it is being used to switch a prop off.
-    """
+    """Commented-out props are removed, since every check is a substring match that would count them."""
     kept = [line for line in tag.splitlines() if not line.lstrip().startswith("//")]
     return re.sub(r"/\*.*?\*/", " ", "\n".join(kept), flags = re.S)
 
 
 def test_assistant_more_menu_exposes_response_details_action():
-    """The More menu still opens the details sheet. Since #11928 the item lives in
-    MessageMenuTime, beside the response's timestamp, so the action is followed through the
-    prop thread.tsx hands it.
-
-    Deliberately literal about today's wiring: thread.tsx passes an inline callback that opens
-    the sheet and renders the sheet with `open={detailsOpen}`, and the menu item carries both
-    the label and `onSelect={onShowDetails}` on one tag and is not disabled. A refactor that respells either line updates this test with it, which is cheaper and
-    more honest than a hand-written JavaScript reader that tries to accept every equivalent
-    spelling. Comments are removed first, so commented-out wiring does not count.
-    """
+    """Matches today's wiring literally: a refactor that respells it must update this test."""
     src = _without_block_comments(THREAD_TSX.read_text(encoding = "utf-8"))
     assert "MessageResponseDetailsSheet" in src
     assert re.search(
@@ -530,11 +459,7 @@ def test_reasoning_uses_continuous_transcript_without_legacy_height_cap():
 
 
 def test_reasoning_clears_manual_open_on_a_new_stream():
-    """A hand-opened block must not stay pinned open when the stream restarts.
-
-    A nullable manual override outranks the visibility preference for one round;
-    the next stream must return control to that preference.
-    """
+    """A manual open outranks the visibility preference for one round, so a new stream must clear it."""
     src = _without_block_comments(REASONING_TSX.read_text(encoding = "utf-8"))
 
     # The override is identified as the value given to resolveReasoningOpen, not by name.

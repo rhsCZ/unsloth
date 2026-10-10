@@ -11,20 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-"""Drift detectors for unsloth's OWN public surface (top symbols/classmethods the
-unslothai/notebooks tree calls), so a rename or dropped kwarg fires DRIFT DETECTED here.
-
-Call-site counts measured against unslothai/notebooks @ main:
-  FastLanguageModel.from_pretrained   506
-  FastLanguageModel.for_inference     370
-  FastLanguageModel.get_peft_model    304
-  FastVisionModel.for_inference       183
-  FastVisionModel.from_pretrained     176
-  FastVisionModel.get_peft_model       99
-  FastVisionModel.for_training         60
-  FastModel.from_pretrained           103
-  FastModel.get_peft_model             67
-"""
+"""Drift detectors for the public API the notebooks call, so a rename or dropped kwarg fails."""
 
 from __future__ import annotations
 

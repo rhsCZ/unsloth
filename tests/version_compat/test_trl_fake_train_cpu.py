@@ -1,21 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Fake CPU training runs for the Unsloth-patched SFT / GRPO / DPO trainers.
-
-The patch-run canary (test_trl_grpo_fake_run.py) only compiles + inspects the
-generated trainer source. This goes one layer deeper: it actually runs
-`trainer.train()` for a couple of steps on a CPU-only runner, under the CUDA
-spoof, wrapping a plain (tiny, random-weight) HF model in the Unsloth-patched
-trainer. That exercises the real train() loop at runtime -- data collation,
-generation (GRPO), the injected `_get_per_token_logps_and_entropies`, loss,
-backward, optimizer -- so a TRL or transformers change that breaks the loop
-(not just the source structure) surfaces here. No GPU, no meaningful numerics.
-
-What it does NOT cover: Unsloth's Triton/GPU-optimized model kernels (the
-FastLanguageModel fast path) cannot run on CPU, so this validates the
-trainer-transform + orchestration layer with a standard forward, not the
-optimized kernels.
-"""
+"""Runs real train() steps on CPU with a tiny random model; Triton/GPU kernels are not covered."""
 
 from __future__ import annotations
 
@@ -71,14 +56,7 @@ def _is_cuda_dev(d):
 
 
 def _fake_cpu_gpu(mp):
-    """Make this process behave like a GPU-less box, undoably.
-
-    Everything here is a mutation of a global that outlives the module, so it
-    goes through the caller's MonkeyPatch: applied for the duration of this
-    module's tests and reverted afterwards. Applied at import time instead, a
-    GPU test collected from anywhere else in the same session silently gets CPU
-    tensors out of `device = "cuda"` and can pass without testing anything.
-    """
+    """Spoofs a GPU-less box via the caller's MonkeyPatch so it reverts; import-time patching would leak."""
     mp.setattr(torch, "compile", _eager_compile)
 
     # Fallback: let dynamo fall back to eager and skip its stream-capture probe on GPU-less boxes.
@@ -151,12 +129,7 @@ def _fake_cpu_gpu(mp):
 
 @pytest.fixture(scope = "module", autouse = True)
 def _cpu_only_torch():
-    """Hold the GPU-less spoof for this module only.
-
-    Module scoped so it is in place before the per-test `_require_stack` imports
-    unsloth and before any trainer is generated, which is the whole reason the
-    patches used to sit at import time.
-    """
+    """Module-scoped so the spoof is in place before _require_stack imports unsloth and builds trainers."""
     with pytest.MonkeyPatch.context() as mp:
         _fake_cpu_gpu(mp)
         yield mp
@@ -167,22 +140,7 @@ _MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
 
 def _guard_finite_logits(model):
-    """Keep the LM head logits finite so GRPO sampling can't crash.
-
-    ``test_grpo_trains_on_cpu`` samples completions from a tiny, *untrained*
-    random model on CPU. Driven autoregressively -- and nudged by the fake
-    reward's optimizer step between the two train steps -- such a model can emit
-    non-finite logits, so ``torch.multinomial`` inside ``generate()``
-    intermittently raises "probability tensor contains either `inf`, `nan` or
-    element < 0". That is a well-known nondeterministic sampling failure, not an
-    Unsloth/TRL regression: the Trainer already fixes the seed, but CPU reduction
-    order is not bit-reproducible, so the blow-up still surfaces every so often.
-
-    Sanitize the logits to a finite, bounded range (out of place, so autograd
-    stays valid) before they reach the sampler. This test asserts the train loop
-    runs end to end, not the (deliberately meaningless) numerics, so bounding the
-    logits changes nothing it checks while making the run reliable.
-    """
+    """Bounds logits to a finite range so torch.multinomial in GRPO sampling never sees inf or nan."""
 
     def _finite_logits_hook(_module, _inputs, output):
         logits = getattr(output, "logits", None)

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""`workflow-trigger-lint.yml` runs `tests/security` on a four-package runner.
-
-That job has no paths filter, and keeping it cheap is what lets it stay unfiltered, so
-a file there may not import anything in HEAVY at module scope unless the workflow
-`--ignore`s it. The failure is quiet: under `-n 4` xdist does not abort on a collection
-error, so the job stays green while that file's tests stop running entirely.
-"""
+"""Files here must not import HEAVY at module scope; under -n 4 xdist hides the collection error."""
 
 import ast
 import pathlib

@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The HTML constructs the thread's fast copy path is proven against, one per case.
-
-Split out from playwright_thread_fast_copy.py so the table can be read on its own: it is the
-list of things a message can contain that a clipboard might treat differently from
-``Selection.toString()``, and every claim in
-studio/frontend/src/components/assistant-ui/thread-fast-copy.ts about "what the clipboard does"
-was measured by copying these one at a time and pasting the result back.
-
-Grouped by what the driver expects of each:
-
-  ANSWERED   everything not named below. The serialiser must produce the clipboard's own string
-             byte for byte.
-  REFUSED    the form controls. Chromium emits a control's value AND wraps it in block breaks
-             whose shape depends on the control, so the fast path hands the copy back.
-  NO CLIPBOARD  content the engine copies nothing at all for, so there is no string to compare.
-
-Adding a case here widens the proof for free; the driver iterates this dict.
-"""
+"""HTML constructs the fast copy path is proven against, grouped as answered, refused or no-copy."""
 
 from __future__ import annotations
 
@@ -72,11 +55,7 @@ MUST_REFUSE = frozenset({"input_text", "input_password", "input_checkbox", "text
 #: Constructs where the engine copies nothing, so there is no clipboard to compare.
 NO_COPY = frozenset({"user_select_none", "display_none", "visibility_hidden"})
 
-#: A SELECTION THAT LIES ENTIRELY INSIDE THE TRANSFORMED ELEMENT. Its common ancestor is the text
-#: node, so the scope is the transformed element ITSELF, which `querySelectorAll("*")` does not
-#: include. Raised in review against the earlier gate; it applies with more force to a serialiser
-#: that patches the scope's descendants, because the miss produces a wrong string rather than a
-#: slow copy. All three failed before the fix that added the root to the patched set.
+# A selection wholly inside a transformed element needs the element itself in scope.
 INSIDE_SCOPE = {
     "inside a transformed span": (
         '<p><span style="text-transform:uppercase" id="t">transformed heading</span></p>',

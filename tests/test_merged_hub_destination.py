@@ -573,11 +573,7 @@ def test_default_full_finetune_push_uploads_16bit_safetensors(monkeypatch):
 
 
 def test_the_push_names_the_destination_and_not_the_staging_folder(saving, capsys):
-    """The staged save reports the temp folder it wrote, which is deleted moments later.
-
-    A caller asked for a repository, so the repository is what the output has to name; otherwise
-    the last thing printed is a success line pointing at a path that no longer exists.
-    """
+    """Name the requested repository, not the temp staging folder, which is deleted moments later."""
     env, records, _ = saving
     env["unsloth_generic_push_to_hub_merged"](FullModel(), "owner/model", token = "fixture")
     printed = capsys.readouterr().out

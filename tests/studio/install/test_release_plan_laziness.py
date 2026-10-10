@@ -222,11 +222,7 @@ def test_a_403_on_the_deferred_lookup_reaches_the_installer_as_a_fallback(monkey
 
 
 def test_a_pinned_release_resolves_once_even_when_the_walk_back_is_on(monkeypatch):
-    """macOS sets continue_after_fast_path by host, not by whether a tag is pinned.
-
-    A pin names exactly one release, so the download host's answer is the whole
-    answer; falling through would yield it a second time and spend an API call.
-    """
+    """A pinned tag names one release, so falling through after the fast path repeats the same API call."""
     releases = FakeReleases(monkeypatch, cdn_tag = RELEASE_TAGS[0])
     pinned_lookups = []
     monkeypatch.setattr(

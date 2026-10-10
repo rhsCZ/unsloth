@@ -1,8 +1,4 @@
-"""Regression tests for `scripts/check_new_install_scripts.py`.
-
-Lockfiles are tiny dicts in tmp_path; the network_blocker fixture forces the
-scanner's offline path (registry unreachable -> emit finding anyway).
-"""
+"""Tests for scripts/check_new_install_scripts.py; network_blocker forces its offline path."""
 
 from __future__ import annotations
 

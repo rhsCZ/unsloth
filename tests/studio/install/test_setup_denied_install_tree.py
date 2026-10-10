@@ -1,20 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Contract checks for setup.ps1 on an unreadable llama.cpp install tree.
-
-Windows Test-Path raises UnauthorizedAccessException instead of returning
-$false when an ACL denies the probe. setup.ps1 runs under "Stop", so the bare
-probe of the prebuilt metadata aborted setup with a raw "Test-Path : Access is
-denied" and exit code 1, which the desktop app showed as "unsloth studio setup
-failed (exit code 1)".
-
-~/.unsloth/llama.cpp lives beside the app rather than inside it, so a reinstall,
-even to another drive, reused the unreadable folder and failed on the same line.
-The probes now go through Get-PathState / Test-PathQuiet and a denial produces
-an actionable [TAURI:ERROR] message.
-
-Behavioural coverage against a real ACL-denied directory lives in
-tests/studio/test_path_probe_access_denied.ps1.
-"""
+"""Test-Path throws on ACL-denied paths, not false, so setup.ps1 probes use Get-PathState."""
 
 import re
 from pathlib import Path
@@ -25,12 +10,7 @@ SETUP_PS1 = (ROOT / "studio" / "setup.ps1").read_text(encoding = "utf-8")
 
 
 def _denial_reporter() -> str:
-    """The body that owns the denial wording.
-
-    Split out of Exit-PathAccessDenied so install.ps1's preflight, which cannot
-    dot-source this file, can copy it; test_denied_llama_cpp_preflight.py compares
-    the copies.
-    """
+    """install.ps1 cannot dot-source this file, so its preflight carries a copy that a test compares."""
     assert "function Write-PathAccessDenied" in SETUP_PS1
     return SETUP_PS1.split("function Write-PathAccessDenied", 1)[1].split("\nfunction ", 1)[0]
 
@@ -181,10 +161,7 @@ def test_reporting_helpers_tolerate_an_empty_path():
 
 
 def test_local_llama_dir_probes_are_three_state():
-    """--with-llama-cpp-dir pointed at the canonical location reuses whatever is
-    built there so the prebuilt installer cannot replace it. A denied binary read
-    as "nothing built" put that replacement back, which is what the branch exists
-    to prevent."""
+    """A denied probe must not read as nothing built, or the prebuilt installer replaces a local build."""
     assert "$localSrcState = Get-PathState -Path $LocalLlamaCppSrc -PathType Container" in SETUP_PS1
     assert '$localSrcState -eq "Denied"' in SETUP_PS1
     local_block = SETUP_PS1.split("$LocalLlamaCppSrc = $env:UNSLOTH_LOCAL_LLAMA_CPP_DIR", 1)[1]

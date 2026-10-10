@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Refuse new interactive yes/no prompts in the installer and setup scripts.
-
-#7016 added `Open Unsloth Studio in your default browser after launch?
-[Y/n]` and had to be reverted in #8040: extra questions stall a piped
-install and persist an answer nobody can find again. The only preference
-setup may ask about is whether to start Unsloth when it finishes.
-
-Allowlist, not a ban: every prompt in the tree is listed in
-`APPROVED_PROMPTS` with its reason, so a new one fails with instructions
-instead of landing quietly. Two passes catch it: literal `[Y/n]` markers,
-and interactive read sites (shell `read` and `select`, `Read-Host` and
-the console reads, `input()`, `set /p`) for a marker built from a
-variable, as #7016's was. Text only, so it runs on every platform in the
-parity matrix.
-"""
+"""Extra installer prompts stall piped installs; each must be listed in APPROVED_PROMPTS."""
 
 from __future__ import annotations
 
@@ -168,10 +154,7 @@ def _is_interactive_read(
     *,
     loop_input: bool = False,
 ) -> bool:
-    """A read that waits on a person: a prompt option, /dev/tty, `select`, `input()`,
-    `set /p`, or plain inherited stdin. Redirected and loop reads consume a file, not
-    a person. Quoted text is blanked first, so a message naming `Read-Host` is not
-    one."""
+    """Waiting on a person, not a file: /dev/tty, select, input(), set /p, or inherited stdin."""
     code = _blank_strings(line, script)
     if script.endswith(".ps1"):
         return bool(_PWSH_READ.search(code))
@@ -360,10 +343,7 @@ def _nearby_questions(lines: list[str], index: int, *, direction: int) -> list[s
 
 
 def _questions_for_read(lines: list[str], index: int) -> list[str]:
-    """Allowlist keys for a read site. Every question in reach, not just the nearest:
-    one read can serve a branch each, and validating only the closest lets the other
-    branch through. Falls back to the read line so an unlabelled prompt still has to
-    be allowlisted rather than ignored."""
+    """Every nearby question counts, not just the closest, since one read can serve several branches."""
     return _nearby_questions(lines, index, direction = -1) or [
         f"<unlabelled read: {normalise_question(lines[index])}>"
     ]
@@ -492,10 +472,7 @@ def test_every_installer_script_is_scanned():
 
 
 def test_helpers_the_installers_invoke_are_scanned():
-    """Naming the helpers by hand only ever covers the ones we thought of, so read
-    them back out instead: whatever the installers reach, the guard scans. Every
-    scanned script is a source, not just the entry points, so a helper that grows
-    a helper of its own is caught as soon as the first one is listed here."""
+    """Scanned helpers are read from the installers' own calls, not a hand-kept list."""
     referenced = set()
     for script in SCANNED_SCRIPTS:
         path = REPO_ROOT / script

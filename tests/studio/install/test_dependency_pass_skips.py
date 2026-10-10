@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The dependency pass must be idempotent: a second `unsloth studio update` does no
-network work and leaves the install byte-identical.
-
-Every skip is legal only when (a) the previous run recorded that it did this exact work,
-(b) the inputs are byte-identical, and (c) a cheap on-disk check of the output passes.
-This file is the unit half of that; the end-to-end half is
-tests/studio/install/test_update_idempotency.py, which runs a real install.
-
-The direction that matters is asymmetric. A needless install costs seconds. A wrong skip
-ships a venv that answers `-h` and dies on `import structlog`, which is exactly the
-failure the manifest was added to catch -- so every case below that cannot prove the
-work was done asserts that the work runs.
-"""
+"""Skips are legal only with a recorded prior run, identical inputs and a passing on-disk check."""
 
 from __future__ import annotations
 
@@ -433,11 +421,7 @@ def test_a_git_requirement_is_matched_by_ref_not_version(monkeypatch, tmp_path) 
 def test_a_mutable_git_ref_is_evidence_only_while_the_remote_still_points_at_it(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    """release/3.6.x advances without the requirements text changing, and
-    direct_url.json records the commit that landed, not whether the branch still points
-    at it. So the remote is asked (one ls-remote): the same commit is evidence, a moved
-    branch runs the step, and a remote that cannot be reached keeps the installed build
-    rather than failing the whole update over a training speedup."""
+    """A moving git ref is evidence only while the remote still points at the recorded commit."""
     req = tmp_path / "t.txt"
     req.write_text(
         "triton_kernels @ git+https://example.invalid/triton.git@release/3.6.x"
@@ -659,11 +643,7 @@ def test_no_closure_record_is_kept_under_a_callers_no_deps(monkeypatch) -> None:
 
 
 def test_no_closure_record_is_kept_under_a_callers_uv_override(monkeypatch, gated) -> None:
-    """uv applies an override past the pin that asked for the package, so what the pass
-    leaves unmet under one is the override's doing. _plan_pass already refuses evidence
-    for a caller's UV_OVERRIDE, but the pass still writes the manifest at the end: a
-    record kept here would excuse the step that repairs it on every later update, long
-    after the override is gone."""
+    """Unmet requirements under a uv override are the override's doing, so no closure record is kept."""
     _payload, req_root = gated
     monkeypatch.setattr(stack, "_AUDITED_STEPS", {"studio.txt": req_root / "studio.txt"})
     monkeypatch.setattr(stack, "_STEP_RESULTS", {"studio.txt": "ran"})
@@ -762,11 +742,7 @@ def test_a_renamed_file_changes_the_plugin_digest(tmp_path) -> None:
 
 
 def test_what_a_build_writes_into_the_plugin_tree_does_not_move_its_digest(tmp_path) -> None:
-    """Installing the plugin from its directory leaves build/lib/... and
-    src/<name>.egg-info/ beside the sources (setuptools, observed with uv and pip). The
-    first pass after an install saw a tree the install had changed and rebuilt the
-    plugin; offline, that build asked the cache for setuptools and the pass exited 1
-    on a fresh install. Only the sources decide."""
+    """Only the sources decide: build/ and egg-info written by an install must not move the digest."""
     plugin = tmp_path / "data-designer-unstructured-seed"
     (plugin / "src" / "pkg").mkdir(parents = True)
     (plugin / "pyproject.toml").write_text("name = 'x'\n", encoding = "utf-8")
@@ -1018,10 +994,7 @@ def test_a_package_named_only_by_the_flag_is_still_passed() -> None:
 
 
 def test_every_install_entry_point_is_counted() -> None:
-    """`pip check` and the metadata patch are gated on this counter, so an install site that
-    does not increment it makes both skip a venv that just changed. The two repairs were the
-    ones missed: neither goes through pip_install*, and both change the environment.
-    """
+    """Each install entry point must bump the counter, or pip check is skipped on a changed venv."""
     source = STACK_PATH.read_text(encoding = "utf-8")
     tree = ast.parse(source)
     counted = {
@@ -1564,11 +1537,7 @@ def test_a_known_unmet_field_that_is_not_a_mapping_is_ignored(monkeypatch, gated
 
 
 def test_a_requirement_that_is_simply_absent_is_never_a_known_conflict(monkeypatch, gated) -> None:
-    """closure_unmet_requirements names an absent distribution by itself and one outside its
-    specifier as "name version". Only the second can be a conflict nothing can resolve: an
-    absent one is work this step does, and recording it would excuse the install that repairs
-    it on every later update. Reachable whenever the resolver was told to skip dependencies by
-    something no digest covers -- a pip.conf with no-deps, not only the environment."""
+    """An absent distribution is work this step performs, so it is never recorded as a known conflict."""
     _payload, req_root = gated
     monkeypatch.setattr(stack, "_AUDITED_STEPS", {"studio.txt": req_root / "studio.txt"})
     monkeypatch.setattr(stack, "_STEP_RESULTS", {"studio.txt": "ran"})
@@ -2015,12 +1984,7 @@ def test_duplicate_constrained_metadata_is_a_violation_not_an_absence(monkeypatc
 
 @pytest.fixture
 def audited(monkeypatch, tmp_path):
-    """One audited with-deps step, on a host where _effective_requirements really copies.
-
-    Windows and --no-torch hosts filter the file, so the gate and the record read it from
-    disk. The record is an argument to write_manifest, after every install has landed and
-    after the core step may have replaced REQ_ROOT, so the file can be gone or not UTF-8.
-    """
+    """By the time the record is written, the requirements file may be gone or not UTF-8."""
     req_root = tmp_path / "requirements"
     (req_root / "single-env").mkdir(parents = True)
     for name in stack.install_manifest.PASS_INPUT_FILES:
@@ -2087,11 +2051,7 @@ def test_a_triton_requirements_file_that_is_not_utf8_does_not_end_the_step(tmp_p
 
 
 def test_every_uninstall_is_counted() -> None:
-    """A mutation the counter does not see leaves the constraint and closure caches
-    describing a venv that no longer exists, and lets the final `pip check` be skipped
-    right after something was removed. Three sites removed distributions without saying
-    so: the XPU generic-triton swap, the gfx906 bitsandbytes drop and the flash-attn
-    rejection."""
+    """Every uninstall must bump the counter, or the constraint and closure caches go stale."""
     tree = ast.parse(STACK_PATH.read_text(encoding = "utf-8"))
     offenders = []
     for node in ast.walk(tree):
@@ -2139,10 +2099,7 @@ def test_installing_a_flash_attn_wheel_counts_as_an_install_action(monkeypatch) 
 
 
 def test_the_installed_index_is_rebuilt_against_a_fresh_metadata_listing(monkeypatch) -> None:
-    """importlib.metadata memoises directory listings and revalidates them on mtime, which
-    is one-second granular on some filesystems, so a rebuild in the same tick as the
-    install that triggered it can read the listing from before. The gate invalidates
-    before its own on-disk check; _closure_record reaches the index without one."""
+    """Metadata listings are memoised by coarse mtime; rebuild the index only after invalidate_caches()."""
     calls = []
     monkeypatch.setattr(stack, "_CLOSURE_INDEX_CACHE", None)
     monkeypatch.setattr(stack, "_INSTALL_ACTIONS", 0)
@@ -2162,11 +2119,7 @@ def test_the_installed_index_is_rebuilt_against_a_fresh_metadata_listing(monkeyp
 def test_an_unclearable_parked_copy_refuses_before_the_live_manifest_is_dropped(
     monkeypatch, tmp_path
 ) -> None:
-    """A parked path that cannot be removed (a directory on the name, a held handle) used to
-    be found only AFTER remove_manifest took the live manifest away: the pass exited 1, the
-    venv read as half-built and every later update refused at the same point, on an install
-    complete a moment earlier. The refusal now happens while the manifest is still there.
-    """
+    """A parked previous manifest that cannot be cleared must refuse before the live one is dropped."""
     live = tmp_path / stack.install_manifest.MANIFEST_NAME
     live.write_text("{}", encoding = "utf-8")
     parked = tmp_path / stack.install_manifest.PREVIOUS_MANIFEST_NAME
@@ -2186,10 +2139,7 @@ def test_an_unclearable_parked_copy_refuses_before_the_live_manifest_is_dropped(
 
 
 def test_a_temp_copy_that_cannot_be_unlinked_does_not_end_the_pass(audited, monkeypatch) -> None:
-    """The audit's own cleanup runs after the last install and before the manifest write.
-    A Windows sharing violation on its temp copy -- an indexer or scanner holding the file
-    -- used to escape from the `finally` and end the update there, with everything
-    installed and no manifest written."""
+    """A temp copy locked on Windows must not abort the pass after installs, before the manifest write."""
     real = stack.Path.unlink
 
     def _locked(self, *a, **k):

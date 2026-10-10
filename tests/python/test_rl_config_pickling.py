@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression: `torch.save(trainer.args, ...)` must keep working once Unsloth has
-patched a TRL trainer, and the file it writes must stay readable without Unsloth.
-
-`Trainer._save_checkpoint` ends in `torch.save(self.args, os.path.join(output_dir,
-TRAINING_ARGS_NAME))`. Pickle stores a class as `__module__` + `__qualname__` and
-then refuses unless the object living at that path *is* the class. Patching a
-trainer rebinds `<X>Config` at the module the pristine class calls home, which
-breaks that identity for every instance of the pristine class, and the generated
-class used to answer to `Unsloth<X>Trainer.Unsloth<X>Config`, a module that only
-exists beside a compiled cache.
-"""
+"""Patched TRL configs must stay picklable by `torch.save`, and the file must load without Unsloth."""
 
 from __future__ import annotations
 
@@ -36,19 +26,7 @@ def patched():
 
 
 def _make(config_class, output_dir):
-    """Build `config_class` pinned to CPU, asking only for the knobs it declares.
-
-    The precision flags are not decoration. TRL resolves `bf16 = None` to True in
-    `__post_init__`, and transformers then refuses on a machine with no accelerator:
-
-        ValueError: Your setup doesn't support bf16/gpu. You need to assign use_cpu
-        if you want to train the model on CPU.
-
-    None of these tests are about precision or hardware, so a CPU-only runner must
-    not be able to answer them. Filtered against the declared fields rather than
-    passed blind, because the sweep below hands this every `trl.*Config` there is and
-    they do not all take the same three.
-    """
+    """Pins CPU, since TRL turns bf16=None into True and transformers refuses without an accelerator."""
     kwargs = {"output_dir": str(output_dir)}
     declared = (
         {field.name for field in dataclasses.fields(config_class)}
@@ -201,16 +179,8 @@ def test_every_patched_config_pickles_portably(tmp_path):
 
 
 def _assert_the_patch_applied(patched):
-    """Fail by naming the patcher, not by naming what the patcher would have built.
-
-    `_patch_trl_rl_trainers` (unsloth/models/rl.py) swallows a failed source anchor
-    into a warning and returns, leaving `trl.SFTConfig` pristine. Every assertion
-    below then reads the UNPATCHED class and reports something true but useless --
-    `assert 'TrainingArguments' == 'SFTConfig'`, which is just the pristine config's
-    own base. That is how zoo #1192's added `# noqa` comment (fixed in #10854) read
-    from here, and the message pointed at neither repo. Same check, same reason, as
-    `_fake_sft_self` in tests/utils/test_packing.py.
-    """
+    """Names the patcher on failure: a failed patch leaves trl.SFTConfig pristine and the tests
+    misreport."""
     assert getattr(patched, "_unsloth_patched_rl_config", False), (
         f"trl.SFTConfig is {patched.__name__!r} from {patched.__module__!r} but carries "
         "no _unsloth_patched_rl_config, so Unsloth's RL patch fell back and these tests "
@@ -247,14 +217,7 @@ def test_reducer_registration_is_idempotent(patched, tmp_path):
 
 
 def test_a_displaced_sibling_wrapper_is_covered(patched, tmp_path):
-    """TRL's deprecation shims are siblings of the patched class, not its bases.
-
-    `trl.trainer.<x>_config.<X>Config` subclasses the real class in
-    `trl.experimental.<x>`, and the wrapper resolution generates the patched
-    class from that same parent -- so a subclass-only guard skips the shim even
-    though its module attribute has already been taken over, and any instance
-    captured before patching stays unpicklable.
-    """
+    """TRL's shim configs are siblings of the patched class, so a subclass-only guard misses them."""
     import copyreg
 
     from unsloth.models.rl import (
@@ -284,11 +247,8 @@ def test_a_displaced_sibling_wrapper_is_covered(patched, tmp_path):
 
 
 def test_an_unrelated_class_is_not_reduced_through_the_patched_one(patched):
-    """The widening stops at classes whose state the patched class can hold.
-
-    Rebuilding an unrelated class as this one would drop fields silently, which
-    is worse than the PicklingError it avoids.
-    """
+    """Unrelated classes must not be rebuilt as the patched class, which would silently drop their
+    fields."""
     import copyreg
 
     from unsloth.models.rl import _register_config_pickle_fallback

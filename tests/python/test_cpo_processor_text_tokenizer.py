@@ -1,10 +1,4 @@
-"""CPO shares ORPO's row-tokenization replacements (issue #4952).
-
-CPOTrainer reuses ORPO's tokenize/init code, so the ORPO rewriters must also be
-registered for cpo_trainer. The rewriters themselves are covered by
-test_orpo_processor_text_tokenizer.py; here we just check cpo mirrors orpo.
-Static, CPU-only, no torch.
-"""
+"""CPOTrainer reuses ORPO's tokenize code, so cpo_trainer must register the same ORPO rewriters."""
 
 import ast
 import os

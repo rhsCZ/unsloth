@@ -1,51 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What replaces the structural digest when an arm changes what is mounted ON PURPOSE.
-
-`sweep/ui_parity.py` asks "is the same DOM on screen on both arms". For every arm this project has
-run, that is the right question. For an arm that mounts a window of the thread it is the wrong
-one: the answer is no, by construction, on every action, and eighteen red rows that all say the
-same thing are not a finding. Worse, they bury the differences that WOULD be findings.
-
-So this asks the question that survives virtualization: THE DOM IS ALLOWED TO DIFFER, THE
-BEHAVIOUR IS NOT. Five things a user does that stop working first when a list starts unmounting
-rows, plus the scroll extent that every one of them depends on.
-
-  SCROLL EXTENT      the viewport's `scrollHeight` must still describe the whole conversation. A
-                     virtualizer that sizes its spacers correctly reproduces it within a few per
-                     cent; one that simply drops rows produces a scrollbar that lies about how
-                     much thread there is, and every scroll gesture, every jump-to-top and the
-                     scrollbar thumb itself are then wrong. This is the invariant the other four
-                     rest on, so it is checked on every action that carries a census rather than
-                     on one named action.
-  select_all_copy    Ctrl+A then Ctrl+C. The selection is taken over the DOM, so an unmounted
-                     message CANNOT be on the clipboard. This is the one that is not a measurement
-                     artefact and must not be filed as one: a user who copies their conversation
-                     and gets a fraction of it has lost data, and an arm that virtualises without
-                     answering for it has shipped that. It is checked as a coverage fraction of
-                     the thread, and a shortfall is a FAILURE of the arm, not of the harness.
-  select_text        selecting inside the last message. Single-message scope, so it must be
-                     unaffected: if this moves, the arm has changed how a mounted message renders,
-                     which is outside its remit.
-  copy_markdown      the action bar's Copy on the last message. Also single-message scope, also
-                     must not move. It is the control case for select_all_copy: if BOTH moved, the
-                     change is not about what is mounted.
-  thread_reopen      leaving the thread and coming back. The thread must come back the same LENGTH
-                     -- `messages_before == messages_after` on both arms -- because the failure a
-                     windowed mount invites is a reopen that restores only what fits on screen and
-                     loses the rest of the conversation from the store.
-  scroll_after       a scroll gesture against a settled thread. The gesture must still travel what
-                     it commanded. A virtualizer whose row heights are estimated corrects them as
-                     rows are measured, which moves the scroll target under the gesture; if that
-                     correction is large enough to eat the travel, scrolling a long thread is
-                     visibly broken however good the frame rate is.
-
-WHAT THIS IS NOT. It is not a pixel comparison and it is not a substitute for looking at the
-thing. It is the set of behaviours that a windowed mount breaks first, made into readings that can
-be scored from a payload without a browser. An arm that passes all of it can still have changed
-something nobody wrote an invariant for, and that is stated here rather than discovered later.
-"""
+"""Behaviour checks for windowed arms: the DOM may differ by design, but what a user does must not."""
 
 from __future__ import annotations
 
@@ -87,17 +43,7 @@ def _check(
     *,
     required: bool = False,
 ) -> dict:
-    """One invariant's result.
-
-    `required` marks a check WITHOUT WHICH THE REST CANNOT BE READ. It exists because of a hole
-    this file's own tests found: when the treatment's clipboard could not be read back, the
-    coverage check returned `None` (not applicable), the drift check returned `None` (one side
-    missing), the base arm's own readability check returned `True` -- and the pair scored MATCH.
-    An action whose entire subject went unmeasured was reporting that it was fine.
-
-    A required check that could not be read makes the pair NOT COMPARABLE, which is the same rule
-    the digest side already applies and the same principle throughout: silence is not a pass.
-    """
+    """A required check that cannot be read makes the pair NOT COMPARABLE, because silence is not a pass."""
     return {"invariant": name, "ok": ok, "detail": detail, "required": required}
 
 
@@ -125,19 +71,7 @@ def _expect(row: dict, key: str) -> Any:
 
 
 def clipboard_coverage(base_row: dict, treat_row: dict) -> list[dict]:
-    """select_all_copy: did the user's copy carry the whole conversation?
-
-    SCORED ON THE CLIPBOARD, NOT ON THE SELECTION, and the difference is the entire point.
-
-    A windowed mount cannot SELECT what it has not mounted; `Selection.toString()` walks the DOM
-    and the DOM is a window. But it can still COPY it, if the app handles the copy event and
-    serialises from its message store. So a selection that shrank is not evidence of anything on
-    its own, and an alarm wired to it would stay lit on a build that had fixed the data loss --
-    which is how alarms get switched off.
-
-    The base arm's number is not the reference either; the THREAD is. Each arm is asked the same
-    question about itself: is what landed on the clipboard the whole conversation.
-    """
+    """Scores the clipboard, not the selection: unmounted rows cannot be selected but can be copied."""
     out = []
     base_clip = _expect(base_row, "clipboard_chars")
     treat_clip = _expect(treat_row, "clipboard_chars")
@@ -226,19 +160,7 @@ def _same_number(base_row: dict, treat_row: dict, key: str, name: str) -> dict:
 
 
 def _reopen_completed(row: dict) -> Optional[bool]:
-    """Did the reopened thread finish REBUILDING, or does this row not say?
-
-    Three values, and the third is the one that matters. `None` is a row that carries no evidence
-    either way, which is what a payload written before `thread_reopen` waited on
-    runtime/readiness.py looks like -- and back then `messages_after` was read off whatever was on
-    screen when the store published its total, so those rows cannot support the invariant below
-    either.
-
-    `reopen_readiness.ready` first, because it is the gate's OWN verdict on the rebuilt thread.
-    `expect_ok` second: on this action it is `reopen_ms is not None and after == before`, so a true
-    value means the action's own assertion about the rebuild held under whatever gate that checkout
-    applied.
-    """
+    """Whether the reopened thread finished rebuilding; None when the row carries no evidence either way."""
     readiness = _expect(row, "reopen_readiness")
     if isinstance(readiness, dict) and isinstance(readiness.get("ready"), bool):
         return readiness["ready"]
@@ -289,24 +211,7 @@ def thread_survives_reopen(base_row: dict, treat_row: dict) -> list[dict]:
 
 
 def _extent_of(row: dict) -> tuple[Optional[float], bool]:
-    """(the arm's scroll extent as `scroll_extent` measures it, was it reconstructed).
-
-    `expect.bottom` is `scrollHeight - clientHeight`, read by `SCROLL_JS` before the gesture moves
-    anything; `scroll_extent` compares `census.viewport_scroll_height`, which is `scrollHeight`.
-    Same physical quantity offset by a constant, and the constant is not harmless: `_drift` is
-    proportional, so subtracting a shared `clientHeight` AMPLIFIES the drift by `H / (H - C)` --
-    1.087 on the 10,000 px extent and 800 px viewport measured here, so a tolerance applied to
-    `bottom` is 8.7% tighter than the same number applied to the extent, and the two checks print
-    two different percentages for one scrollbar.
-
-    So the extent is reconstructed from `viewport_client_height`, which `scene/dom.js` has recorded
-    in the census all along. `clientHeight` does not change while the viewport scrolls, so reading
-    it from the census and `bottom` from the gesture is not mixing two instants of a moving
-    quantity.
-
-    Falls back to `bottom` when the census does not carry it -- a payload recorded before that
-    field, or a census that failed -- and says which of the two it returned.
-    """
+    """Reconstructs the extent from the census, since comparing bottoms amplifies drift by H/(H-C)."""
     bottom = _expect(row, "bottom")
     if not isinstance(bottom, (int, float)):
         return None, False
@@ -327,22 +232,7 @@ def _bottom_of(row: dict) -> Optional[float]:
 
 
 def _comparable_extents(base_row: dict, treat_row: dict) -> tuple[Any, Any, str]:
-    """The two numbers `scroll_bottom_agrees` compares, and what they are.
-
-    ONE DECISION FOR BOTH ARMS. Reconstructing per arm and comparing whatever each produced puts a
-    `scrollHeight` beside a `bottom`: two arms with an identical 1,200 px `bottom` over an 800 px
-    viewport, one of whose censuses failed, came out 2,000 against 1,200 and BROKEN at 40% drift,
-    with a detail line that said `no client height on both arms` over the mixed pair.
-
-    AND ONLY WHEN THE HEIGHTS AGREE. `clientHeight` is a shared offset only if it is shared. Two
-    arms reporting the same 10,000 px `scrollHeight` at client heights of 800 and 2,000 have
-    bottoms of 9,200 and 8,000 -- 1,200 px less room for the gesture on one of them -- and
-    reconstructing both to 10,000 reports MATCH at 0.0% drift over that. `scroll_extent` already
-    compares the scroll heights; what this check is for is the range the gesture actually had.
-
-    So both arms are reconstructed together or neither is, and a fallback compares the raw bottoms
-    at the same allowance, which is the quantity a differing viewport moves.
-    """
+    """Both arms reconstruct together or not at all, and only when client heights agree."""
     b_ext, b_full = _extent_of(base_row)
     t_ext, t_full = _extent_of(treat_row)
     b_bottom, t_bottom = _bottom_of(base_row), _bottom_of(treat_row)
@@ -434,11 +324,7 @@ INVARIANTS = {
 
 
 def compare_behaviour(base_row: Optional[dict], treat_row: Optional[dict]) -> dict:
-    """One base/treatment action pair, scored on behaviour instead of on structure.
-
-    Returns the same verdict vocabulary the digest comparison uses, so one report can carry both:
-    MATCH, BROKEN, NOT_EXERCISED, NOT_COMPARABLE, NOT_APPLICABLE.
-    """
+    """Uses the digest comparison's verdict vocabulary, so one report can carry both kinds of reading."""
     for label, row in (("base", base_row), ("treatment", treat_row)):
         if not isinstance(row, dict):
             return {

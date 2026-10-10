@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The GitHub refresh must not take a bind-mounted notebook away from its owner.
-
-rename(2) swaps the DIRECTORY ENTRY, so the staged inode's root:root 0644 becomes the
-published file's identity -- and a host-owned file really can be under sync
-management, since first-boot populate adopts one matching the baked template WITHOUT
-copying. `cp -a` onto an existing inode chowns it too; plain `cp` does not.
-"""
+"""rename(2) swaps the dir entry, so a staged root-owned copy would take over a host-owned notebook."""
 
 from __future__ import annotations
 

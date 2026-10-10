@@ -214,13 +214,7 @@ class TestSetupShHardening:
         assert "command -v timeout" in body
 
     def test_cuda_source_build_gated_on_a_real_nvidia_gpu(self, setup_src):
-        """The nvcc search runs twice, and neither pass may fire on a toolkit alone.
-
-        First for a usable card, then after ROCm for a masked one. A card hidden by
-        CUDA_VISIBLE_DEVICES is still a card, and a CPU-only binary built here is
-        activated over the tree for good; but on a mixed host the visible AMD GPU gets
-        its turn first. TestSetupShSourceBuildBackendChoice drives the whole sequence.
-        """
+        """nvcc is searched in one function, twice, and a toolkit alone must never select a CUDA build."""
         anchor = setup_src.find("_select_nvcc() {")
         assert anchor >= 0, "the nvcc search must be one function, not two copies"
         window = setup_src[anchor : setup_src.find('_BUILD_DESC="building"', anchor)]
@@ -475,13 +469,7 @@ class TestSetupShPhysicalNvidiaSurvivesTheMask:
 
 
 class TestSetupShSourceBuildBackendChoice:
-    """The source-build backend decision, driven as the real sequence rather than one gate.
-
-    Three passes in order: usable NVIDIA takes nvcc, then ROCm, then a masked NVIDIA card
-    retries nvcc. The order is the point. A masked card must not take the build from a
-    visible AMD one, but it must still get it when ROCm cannot actually be built, which is
-    what a CPU source build activated permanently over the tree costs.
-    """
+    """Masked NVIDIA is tried after ROCm, so it cannot take the build from a visible AMD GPU."""
 
     @staticmethod
     def _decide(

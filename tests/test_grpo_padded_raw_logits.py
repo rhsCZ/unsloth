@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The GRPO padded loop must survive a forward that returns real logits.
-
-``_get_per_token_logps_and_entropies`` sets ``UNSLOTH_RETURN_HIDDEN_STATES=1``,
-but ``outputs.logits`` only carries hidden states when the forward that ran is
-Unsloth's generated one. Any other forward (a plain transformers model, a
-wrapper, a model Unsloth did not patch) honours the name and returns a real
-``[batch, seq, vocab]`` tensor. Feeding that into the hidden-states helper hits
-the ``lm_head`` matmul with a vocab-wide operand and blows up:
-
-    a and b must have same reduction dim, but got [((s47*s87 + 255)//256), s33] X [1536, 151936]
-
-So both arms of the padded loop dispatch on width: hidden states (last dim ==
-``lm_head.shape[1]``) go through the fused hidden-states helper, real logits go
-straight to the plain log-softmax helper, which skips the ``lm_head`` matmul and
-the scale/softcap (the model forward already applied those).
-
-The loop body is lifted out of the live source with ``ast`` and executed here
-against a stub model, so the test tracks the shipped code instead of a copy of
-it. Everything is tiny and CPU-only; ``unsloth_zoo`` supplies the two helpers
-when it is importable, and eager mirrors stand in when it is not.
-"""
+"""Padded loop dispatches on width: real logits skip the lm_head matmul and scale/softcap."""
 
 from __future__ import annotations
 
@@ -168,11 +148,7 @@ def _eager_chunked_selective_log_softmax(
 
 
 def _load_helpers():
-    """Prefer the shipped helpers; fall back to the eager mirrors above.
-
-    The real ones are ``torch.compile``d, so they are smoke-called once on the
-    shapes this file uses before being accepted.
-    """
+    """Shipped helpers are torch.compiled, so each is smoke-called once on this file's shapes before use."""
     try:
         from unsloth_zoo.rl_replacements import (
             chunked_hidden_states_selective_log_softmax as real_hidden,
@@ -205,11 +181,7 @@ _HELPER_HIDDEN, _HELPER_RAW, _HELPER_SOURCE = _load_helpers()
 
 
 class _StubModel:
-    """A forward whose ``.logits`` is either hidden states or real logits.
-
-    ``logits_to_keep`` is honoured because the VLM arm of the loop passes it and
-    then slices the returned tensor assuming the forward already trimmed it.
-    """
+    """Honours logits_to_keep: the VLM arm passes it and slices assuming the forward already trimmed."""
 
     def __init__(self, embedding, lm_head, returns_hidden_states):
         self.embedding = embedding
@@ -423,11 +395,7 @@ def test_temperature_is_applied_on_both_widths():
 
 @pytest.mark.parametrize("is_vlm", [False, True], ids = ["text", "vlm"])
 def test_raw_logits_skip_scale_and_softcap(is_vlm):
-    """Real logits are final: the model forward already scaled and softcapped them.
-
-    Only the hidden-states helper owns those transforms, because only it does the
-    lm_head matmul that produces unfinished logits.
-    """
+    """Real logits are already scaled and softcapped by the forward; only hidden states still need it."""
     softcapping = 3.0
     data = _make_data()
     with_softcap = _reference_logprobs(data, is_vlm = is_vlm, logit_softcapping = softcapping)

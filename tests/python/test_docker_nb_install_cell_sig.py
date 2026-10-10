@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""An upstream install-cell fix has to reach the container.
-
-`middle_digest` counted the whole generated install cell as boilerplate. Only half
-true: its comments and spacing churn every upstream build, but the package specs do
-not, and a pin bump lives entirely in that cell. SAME does not merely skip the copy,
-it re-records the OLD hash, so such a notebook never converges.
-"""
+"""Install cells hash their specs, not comments or spacing, so a pin bump reaches the container."""
 
 from __future__ import annotations
 
@@ -302,11 +296,7 @@ def test_a_mention_is_not_an_invocation(sig, line):
 
 
 def test_pip3_is_deliberately_absent_from_the_markers(sig):
-    """`!pip3 install` matches no marker, and that predates this change. It is the safe
-    direction: an unrecognised install cell is compared byte for byte, so upstream
-    comment churn costs one extra refresh instead of hiding a spec change. Adding
-    "pip3 install" here would start eliding those cells, so it needs its own decision
-    rather than being tidied in."""
+    """pip3 is absent from the install markers on purpose: unrecognised cells compare byte for byte."""
     assert not any("pip3 install" == m for m in sig._INSTALL_MARKERS)
     assert not sig._is_install_code({"cell_type": "code", "source": ["!pip3 install x\n"]})
 

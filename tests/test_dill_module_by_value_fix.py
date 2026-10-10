@@ -1,35 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""An off-prefix install makes dill pickle whole modules by value.
-
-`dill._dill._is_builtin_module` pickles a module by REFERENCE only if its
-`__file__` starts with a sys prefix, ends with an extension suffix, or contains
-the literal string `site-packages`. `pip install --target <dir>`, a PYTHONPATH
-overlay and a Lambda-style layer satisfy none of the three, so every package
-there is pickled BY VALUE.
-
-`datasets` fingerprints through dill, so on such an install
-`Dataset.from_dict({"text": ["a", "b"]})` walks
-`datasets/utils/_dill.py:_save_arrowTable` -> `create_arrowTable` -> that
-function's globals -> the pyarrow MODULE, and dies on pyarrow's Cython
-`MonthDayNano`, whose `__module__` is `builtins`:
-
-    PicklingError: Can't pickle <class 'MonthDayNano'>:
-        it's not found as builtins.MonthDayNano
-
-Measured against a byte-identical package tree with the DIRECTORY NAME as the
-only variable, on dill 0.3.8 and 0.4.1 alike: the plain `--target` directory
-raised, the copy named `site-packages` returned a fingerprint. datasets 4.3.0
-never reached that path and is unaffected either way; 5.0.1 fails 100% of the
-time.
-
-The tests below reproduce the MECHANISM rather than the package: a two-module
-tree carrying a class that claims `__module__ = "builtins"`, which is the one
-property of `MonthDayNano` that matters here. Real dill, real import machinery,
-real subprocess -- stubbing `sys.modules` would test the stub, and the whole
-bug is about where a file lives on disk.
-"""
+"""Off-prefix installs make dill pickle modules by value, which fails on pyarrow's MonthDayNano."""
 
 import json
 import os
@@ -132,15 +104,7 @@ _DRIVER = textwrap.dedent(
 
 
 def _child_python(tmp_path):
-    """An interpreter whose `sys.prefix` is INSIDE tmp_path.
-
-    Without this the test is at the mercy of where tmp lives: on a box whose
-    virtualenv root is an ancestor of tmp (ours is), the tree would sit under
-    `sys.prefix`, dill would be perfectly happy with it, and all three
-    subprocess tests would pass while reproducing nothing. A throwaway venv
-    beside the overlay makes the overlay off-prefix everywhere, and
-    `--system-site-packages` means dill is still importable without an install.
-    """
+    """Child runs in a throwaway venv beside the overlay, so the overlay is off sys.prefix on any host."""
     root = tmp_path / "venv"
     try:
         import venv as _venv
@@ -212,11 +176,7 @@ def _run_on_hostile_tree(
 
 
 def test_an_off_prefix_install_breaks_dill_without_the_fix(tmp_path):
-    """The negative control, and the reason the fix exists at all.
-
-    If this ever passes, dill has changed its own rule and the patch below is
-    dead weight -- re-measure before deleting it.
-    """
+    """Negative control: dill must still break on an off-prefix install, or the fix is dead weight."""
     got = _run_on_hostile_tree(tmp_path, apply = False)
     assert (
         got["affected"] is True
@@ -235,16 +195,7 @@ def test_the_fix_makes_the_same_tree_picklable(tmp_path):
 
 
 def test_a_co_located_project_module_keeps_its_by_value_state(tmp_path):
-    """P1 from review, executed rather than reasoned about.
-
-    `pip install --target .` and a Lambda deployment bundle put dependencies
-    into the application's OWN directory, so the install root is shared with
-    the user's code. Root containment alone would move `projcfg` to
-    by-reference along with the libraries, its mutable state would leave the
-    `recurse=True` fingerprint, and `datasets` would serve a stale cached
-    result after `projcfg.VALUE` changed. Installed metadata is what tells the
-    two apart, and this asks dill's live predicate which side each landed on.
-    """
+    """Project code sharing the install root stays by value; installed metadata decides which side."""
     got = _run_on_hostile_tree(tmp_path, apply = True)
     assert got["applied"] is True
     assert got["by_reference"] == {
@@ -257,12 +208,7 @@ def test_a_co_located_project_module_keeps_its_by_value_state(tmp_path):
 
 
 def test_a_root_with_no_installed_metadata_is_left_alone(tmp_path):
-    """Nothing there says which files are dependencies, so nothing is widened.
-
-    A hand-assembled vendor directory reaches the same crash, and the honest
-    answer is to decline: the crash is loud and immediate, while guessing would
-    silently pin fingerprints on whatever the user keeps beside it.
-    """
+    """With no installed metadata, decline rather than guess which files are dependencies."""
     got = _run_on_hostile_tree(tmp_path, apply = True, omit_metadata = True)
     assert got["affected"] is True, "the layout is still the hostile one"
     assert (
@@ -299,11 +245,7 @@ def test_an_ordinary_site_packages_install_is_a_no_op():
 
 
 def test_the_widening_only_covers_modules_that_import_back():
-    """Pickling by reference is valid exactly when the unpickler can `import
-    <name>` and get the same object. Everything else keeps dill's by-value
-    behaviour, and `__main__` most of all: `python -m pkg` gives it a real
-    `__spec__`, so a rule reading only `__spec__` would quietly change how
-    dill treats the user's own script."""
+    """Widen only to modules that import back by name; reading __spec__ alone also catches __main__."""
     from unsloth.import_fixes import _dill_module_is_importable_by_name
 
     # Every call carries the install roots and their names; `json` stands in for a library.
@@ -354,12 +296,7 @@ def test_the_widening_only_covers_modules_that_import_back():
 
 
 def _unconditional(body):
-    """Statements that run on EVERY import, one level of `try` included.
-
-    Shared by the rule below and by its negative control on purpose: a control
-    that carries its own copy of the walker passes when the real one regresses,
-    which is the shape of a guard that guards nothing.
-    """
+    """Statements that run on every import, one try level included; shared with the control on purpose."""
     import ast
     for node in body:
         if isinstance(node, ast.Try):
@@ -369,16 +306,7 @@ def _unconditional(body):
 
 
 def test_the_fix_is_called_on_every_import_path():
-    """It lives outside the MLX/GPU branch on purpose: the layout that triggers
-    this is a property of the install, not of the accelerator, and `unsloth`'s
-    `__init__` picks one of those two branches and never both.
-
-    The rule walks only UNCONDITIONAL top-level statements, plus the body of a
-    top-level `try`, which is how every other fix in `__init__` is guarded. An
-    earlier version walked every descendant of each module-body node, so moving
-    the import inside `if _IS_MLX:` still passed -- the exact placement this
-    exists to reject.
-    """
+    """Checks the call is unconditional at top level; moving it under `if _IS_MLX:` must fail."""
     import ast
 
     source = (REPO / "unsloth" / "__init__.py").read_text(encoding = "utf-8")
@@ -430,16 +358,7 @@ def test_that_rule_rejects_a_one_sided_conditional():
 
 
 def test_a_project_module_outside_the_install_root_keeps_its_by_value_state(tmp_path):
-    """P1 from review, and it is a fingerprint-correctness rule rather than a
-    tidiness one.
-
-    A user's own project module normally sits outside site-packages, so dill
-    pickles it BY VALUE and its mutable state participates in a `recurse=True`
-    fingerprint. Widening the predicate for every live module would flip that,
-    and `config.VALUE = 2` would stop changing the fingerprint while `datasets`
-    served a stale cached result. Only modules inside the install root that made
-    the environment dill-hostile are moved back to by-reference.
-    """
+    """Project modules outside the install root stay by value, keeping their state in fingerprints."""
     from unsloth.import_fixes import (
         _dill_install_root,
         _dill_module_is_importable_by_name,
@@ -489,13 +408,7 @@ def test_a_project_module_outside_the_install_root_keeps_its_by_value_state(tmp_
 
 
 def test_only_recorded_files_are_treated_as_dependency_owned(tmp_path):
-    """`_dill_distribution_paths`, driven against a real directory.
-
-    Recorded PATHS, not top-level names. A name cannot separate an installed
-    `google` distribution from a co-located `google/myconfig.py` that nothing
-    installed, and it forces a guess about leading underscores that discards
-    `_soundfile` along with `__pycache__`.
-    """
+    """Only recorded paths are dependency-owned; a top-level name would also claim co-located files."""
     from unsloth.import_fixes import _dill_distribution_paths
 
     root = tmp_path / "target"
@@ -567,13 +480,7 @@ def test_only_recorded_files_are_treated_as_dependency_owned(tmp_path):
 
 
 def test_stripped_bytecode_answers_to_its_recorded_source(tmp_path):
-    """A sourceless install keeps RECORD naming the `.py` it built from.
-
-    `compileall` then deleting the sources leaves `pkg/__init__.pyc` live while
-    the retained wheel RECORD still says `pkg/__init__.py`. An exact match then
-    leaves the installed package by value and the original PicklingError
-    stands, on exactly the stripped layers this patch is for.
-    """
+    """A bytecode-only install must match the .py its RECORD names, or the package stays by value."""
     from unsloth.import_fixes import _dill_module_is_importable_by_name
 
     layer = tmp_path / "layer"
@@ -602,15 +509,7 @@ def test_stripped_bytecode_answers_to_its_recorded_source(tmp_path):
 
 
 def test_a_top_level_package_name_alone_claims_nothing(tmp_path):
-    """`top_level.txt` with no file list can only be honoured for one file.
-
-    `dill` -> `dill.py` is unambiguous. `google` names a directory whose
-    contents the metadata cannot account for, so honouring it would put a
-    co-located `google/myconfig.py` on the dependency side -- the same hole a
-    top-level name leaves anywhere else, arriving through the fallback. The
-    package case is declined, so the worst outcome is the original loud
-    PicklingError rather than a silently pinned fingerprint.
-    """
+    """A package named only in top_level.txt claims nothing; a single-module name maps to its one .py."""
     from unsloth.import_fixes import _dill_distribution_paths
 
     root = tmp_path / "layer"
@@ -702,12 +601,7 @@ def test_metadata_in_one_root_cannot_vouch_for_a_file_in_another(tmp_path):
 
 
 def test_a_bytecode_only_package_still_finds_its_metadata(tmp_path):
-    """`find_spec(...).origin` ends in `__init__.pyc` on a sourceless install.
-
-    Matching `__init__.py` exactly left the root one level too deep, no sibling
-    metadata was found, and the fix declined on exactly the deployments -- a
-    stripped Lambda layer -- it was written for.
-    """
+    """On bytecode-only installs the origin ends in __init__.pyc, not __init__.py; match both."""
     from unsloth.import_fixes import _dill_install_root
 
     # Platform separators: a POSIX literal fails against a drive-qualified Windows path.
@@ -719,14 +613,7 @@ def test_a_bytecode_only_package_still_finds_its_metadata(tmp_path):
 
 
 def test_the_gate_reads_the_literal_path_the_way_dill_does(tmp_path):
-    """dill tests `'site-packages' in module.__file__`, the literal one.
-
-    It resolves the path only for the sys-prefix comparisons. Searching the
-    RESOLVED path here too answered "not affected" for a PYTHONPATH entry that
-    is a symlink into a directory whose name contains site-packages, while dill
-    went on pickling it by value -- and since this gate decides whether dill's
-    own predicate is ever consulted, the crash simply stood.
-    """
+    """Match 'site-packages' against the literal __file__, as dill does; a resolved symlink hides it."""
     from unsloth.import_fixes import _dill_path_pickles_by_value
 
     target = tmp_path / "a-site-packages-cache" / "libs"

@@ -13,13 +13,7 @@
 # limitations under the License.
 
 # http://www.apache.org/licenses/LICENSE-2.0
-"""Pure-CPU, no-network unit tests for prefetch snapshot scoping in unsloth/models/_utils.py.
-
-maybe_prefetch_hf_snapshot warms the HF cache before the in-process load. The warm must cover at
-least what the load reads (else the missing file falls to an unprotected in-process Xet fetch) but
-not pull weights the load never reads. These tests lock the allow/ignore patterns each mode hands
-snapshot_download_with_xet_fallback. The zoo downloader is monkeypatched to capture its kwargs.
-"""
+"""The prefetch warm must cover every file the load reads, but no weights the load never touches."""
 
 import fnmatch
 import sys

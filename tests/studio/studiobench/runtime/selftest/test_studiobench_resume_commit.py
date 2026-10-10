@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A ref is a pointer, so a resume is judged on the COMMIT the ref resolved to.
-
-`prepare_payload` refuses a `--resume` whose configuration differs from the payload's, and every
-axis it compares is a string the caller typed. `--branch main --ab fix` is the same string today
-that it was yesterday; the build behind it is not. `checkout_ref` fetches and resolves the ref
-afresh on every install and RETURNS the commit it landed on, and that return value was thrown
-away, so nothing in the payload ever recorded which build produced its cells.
-
-The result passed every check and was invisible: the completed cells were skipped, the rungs the
-payload still owed were measured on today's build, and `report.assemble_rows` printed the mixture
-under one header naming one ref. `unslothai/main` moves several times a day and a topic branch
-under review moves whenever it is pushed to, so this is the ordinary shape of an interrupted run
-resumed the next morning, not an unusual one.
-
-The commit cannot be known where the other axes are checked -- `prepare_payload` runs BEFORE
-anything is installed, deliberately, so a refusal costs a millisecond rather than two clones and
-two builds. So it is checked at the first moment it exists: after the sides are up, before the
-browser, the pacer and every cell.
-
-`run()` itself is driven, with the seams that leave this process stubbed at the boundary they
-cross. The identity, the payload and the refusal are the shipped ones.
-"""
+"""A resume is judged on the commit the ref resolved to, since a ref string can move between runs."""
 
 from __future__ import annotations
 

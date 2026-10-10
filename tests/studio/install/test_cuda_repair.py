@@ -1,10 +1,4 @@
-"""_ensure_cuda_torch reinstalls CUDA torch when an NVIDIA-host venv carries a ROCm
-build (the pre-fix KFD gpu_id false positive), but leaves healthy CUDA / CPU / ROCm /
-macOS / Windows untouched. Fully mocked -- no GPU required.
-
-Also covers _ensure_expected_torch_flavor, the Windows counterpart: _ensure_cuda_torch
-returns early on Windows because setup.ps1 owns torch there, which left the update path
-with no flavor invariant at all. See the bottom of this file."""
+"""Covers _ensure_cuda_torch and the Windows _ensure_expected_torch_flavor, fully mocked, no GPU."""
 
 import importlib.util
 import inspect
@@ -44,14 +38,7 @@ def _dotted_cuda(tag):
 
 
 def _torch_probe_line(torch_state, cuda_version):
-    """Render the shared probe's "<version>|<hip>|<cuda>" line for a test's
-    "<marker>|<installed_cu>|<release>|<runtime_cu>" shorthand.
-
-    _ensure_cuda_torch now derives the marker from torch.__version__ /
-    torch.version.hip / torch.version.cuda rather than reading a pre-computed
-    marker, so the mock has to emit a self-consistent build: a "cuda" marker
-    means torch.version.cuda is set, which always yields a runtime family.
-    """
+    """The marker is derived from torch.version, so the mock must emit a self-consistent build."""
     marker, installed_cu, release, runtime_cu = (torch_state.split("|") + ["", "", ""])[:4]
     release = release or "2.9.1"
     if marker == "hip":
@@ -119,14 +106,7 @@ def _run_cuda_repair(
     index_url = None,
     probe = False,
 ):
-    """Invoke _ensure_cuda_torch under a fully mocked host; return the pip mock.
-
-    cvd controls CUDA_VISIBLE_DEVICES: None removes it from the env, any string sets it.
-    index_family sets UNSLOTH_TORCH_INDEX_FAMILY (the explicit wheel-index pin).
-    index_url sets UNSLOTH_TORCH_INDEX_URL (the full-URL pin form).
-    compute_caps is what nvidia-smi reports for --query-gpu=compute_cap; machine
-    pins platform.machine() so the architecture policy behaves the same on any test
-    host."""
+    """Mocked host; machine pins platform.machine() so the arch policy is the same on any test host."""
     env = {}
     if rocm_marker:
         env["UNSLOTH_ROCM_TORCH_INSTALLED"] = "1"
@@ -363,12 +343,7 @@ class TestCudaRepairSkips:
 
 
 class TestTorchBackendDerivationFromPin:
-    """The module-level _TORCH_BACKEND derivation (standalone `studio update`
-    with no install.sh-set UNSLOTH_TORCH_BACKEND) must classify the pinned index
-    leaf via _is_cuda_family_leaf (^cu[0-9]), NOT a bare startswith("cu"). A
-    full-override URL ending in /current or /custom must fall through to backend
-    "" (probe the GPU) so _ensure_rocm_torch() still repairs a wrong/CPU torch on
-    AMD hosts, instead of being wrongly branded "cuda" and returning early."""
+    """Pinned leaf needs _is_cuda_family_leaf (^cu[0-9]), not startswith cu; /current must stay empty."""
 
     @staticmethod
     def _derive(env):
@@ -785,11 +760,7 @@ _UNSET = object()
 
 
 def _flavor_probe_stdout(version):
-    """The shared probe's marked line for a literal torch.__version__.
-
-    torch.version.cuda / .hip follow the local label, because a real wheel sets them
-    together and _torch_build_is_gpu reads all three.
-    """
+    """The cuda and hip fields follow the local label, since _torch_build_is_gpu reads all three."""
     match = re.search(r"\+(cu\d+)", version)
     cuda = _dotted_cuda(match.group(1)) if match else ""
     hip = "6.4" if "+rocm" in version else ""
@@ -818,18 +789,7 @@ def _run_flavor_invariant(
     probe_cuda = None,
     probe_hip = None,
 ):
-    """Invoke _ensure_expected_torch_flavor against a fully mocked venv.
-
-    `installed` is torch.__version__ before the pass. `repaired` is what the mocked
-    pip_install leaves behind: None means the reinstall changed nothing, which is the
-    state that must FAIL the update rather than report success.
-
-    `expected_env` sets UNSLOTH_EXPECTED_TORCH_TAG (setup.ps1's handover), `recorded` the
-    flavor read out of the previous manifest, and leaving both None forces the live probe.
-    `disk_label` overrides the on-disk torch/version.py label the wedged-probe path reads.
-
-    Returns (ok, pip_mock).
-    """
+    """repaired=None models a reinstall that changed nothing, which must fail the update."""
     state = {"version": installed}
 
     env = {}
@@ -1151,12 +1111,7 @@ class TestTorchFlavorTagVocabulary:
 
 
 class TestUnknownFamilyPinIsNotOverridden:
-    """An explicit index pin whose leaf names no flavor is applied verbatim at install
-    time, so this pass has no standing to second-guess it. The only expectation it could
-    act on comes from the manifest, i.e. from whatever was installed BEFORE the pin was
-    set, and repairing off that stale tag reinstalls from the public pytorch index --
-    overriding a deliberate package source, and failing outright on an air-gapped host.
-    _ensure_cuda_torch already declines on the same test."""
+    """An unknown-family index pin is applied verbatim, so a stale manifest tag must not override it."""
 
     def test_a_simple_mirror_pin_suppresses_the_manifest_fallback(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -1183,11 +1138,7 @@ class TestUnknownFamilyPinIsNotOverridden:
 
 
 class TestExpectedXpuFlavorIsEnforced:
-    """setup.ps1 publishes "xpu" for an Arc host and installs the XPU trio before handing
-    over, so declining to act on that expectation would leave the invariant carrying an
-    answer it refuses to use. The exposure is identical to the CUDA one: the dependency
-    steps re-resolve torch from PyPI, and _ensure_xpu_torch cannot clean up afterwards
-    because step 13's whole repair set is gated off Windows."""
+    """Expected xpu from setup.ps1 is enforced: dependency steps re-resolve torch from PyPI."""
 
     def test_an_xpu_venv_that_lost_torch_to_pypi_is_repaired(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -1224,12 +1175,7 @@ class TestExpectedXpuFlavorIsEnforced:
         mock_pip.assert_called_once()
 
     def test_rocm_is_delegated_rather_than_rebuilt_here(self):
-        """AMD's Windows wheels live on a per-architecture repo.amd.com index that a
-        generic "rocm" tag cannot name, and setup.ps1 hands over an index URL that still
-        points at /cpu on that path. _ensure_rocm_torch already detects the arch, maps
-        it, and honours an explicit pin, so the repair is delegated to it rather than
-        rebuilt from a guessed URL -- but it IS repaired, because it runs at step 2b,
-        before the dependency steps that can put PyPI's CPU wheel here."""
+        """ROCm is delegated to _ensure_rocm_torch for its per-arch AMD index, before dependency steps."""
         ok, mock_pip = _run_flavor_invariant(
             installed = "2.11.0+cpu",
             repaired = "2.11.0+rocm7.2",
@@ -1256,12 +1202,7 @@ class TestExpectedXpuFlavorIsEnforced:
 
 
 class TestTheDelegatedRocmRepairIsVerifiedByFamily:
-    """_torch_build_is_gpu is family-blind, so it cannot judge a ROCm repair.
-
-    A transient repo.amd.com failure is non-fatal inside _ensure_rocm_torch, and the
-    cu124 wheel it leaves behind passes that check, so the update exited 0 and the
-    manifest recorded "rocm" over an environment that never received it.
-    """
+    """_torch_build_is_gpu is family-blind, so a delegated ROCm repair must be verified by family too."""
 
     def test_a_repair_that_left_a_cuda_wheel_now_fails(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -1305,13 +1246,7 @@ class TestTheDelegatedRocmRepairIsVerifiedByFamily:
 
 
 class TestAPinnedCpuIndexIsEnforcedToo:
-    """UV_TORCH_BACKEND is honoured by the unpinned dependency steps.
-
-    A venv deliberately built against /cpu can therefore come out of them holding a GPU
-    wheel, and the update would record expected_torch_tag: cpu over it. Only a PIN
-    counts: setup.ps1 also publishes "cpu" for a host whose nvidia-smi probe returned
-    nothing, and acting on that would push a healthy cu124 venv down to CPU.
-    """
+    """Only a pinned /cpu index is enforced against a GPU wheel; an empty-probe cpu handover is not."""
 
     def test_a_gpu_wheel_under_a_pinned_cpu_index_is_repaired(self):
         pin = "https://download.pytorch.org/whl/cpu"
@@ -1368,13 +1303,7 @@ class TestAPinnedCpuIndexIsEnforcedToo:
 
 
 class TestWindowsOnArmPreservesCudaOnlyForAnInferredExpectation:
-    """The win_arm64 CUDA shortcut must not swallow an explicit CPU pin.
-
-    Preserving an installed cu* build is right for an expectation DERIVED from the driver:
-    download.pytorch.org publishes no win_arm64 CUDA wheel, so that "repair" resolves
-    nothing. A pin is not a derivation, and /cpu does publish win_arm64 torch and
-    torchvision, so that repair has somewhere to go.
-    """
+    """On win_arm64, keeping a CUDA build only holds for a derived expectation, not a CPU pin."""
 
     _PIN = "https://download.pytorch.org/whl/cpu"
 
@@ -1425,11 +1354,7 @@ class TestWindowsOnArmPreservesCudaOnlyForAnInferredExpectation:
         mock_pip.assert_not_called()
 
     def test_an_emulated_x64_interpreter_on_an_arm64_machine_still_repairs(self):
-        """The machine and the interpreter are separate axes, and the shortcut reads the
-        interpreter. Every Windows on ARM install predating native support runs an
-        emulated x64 python against ordinary win_amd64 wheels from
-        download.pytorch.org, so the repair must reach them exactly as it always did.
-        """
+        """The win_arm64 shortcut keys on the interpreter, so emulated x64 Python on ARM64 still repairs."""
         ok, mock_pip = _run_flavor_invariant(
             installed = "2.9.1+cu118",
             repaired = "2.10.0+cu128",
@@ -1443,12 +1368,7 @@ class TestWindowsOnArmPreservesCudaOnlyForAnInferredExpectation:
 
 
 class TestWindowsOnArmKeepsTheNoTorchaudioException:
-    """No win_arm64 torchaudio wheel is published on any index.
-
-    setup.ps1 drops it from all four of its install trios ($WinArm64NoAudio), so asking
-    for it here would turn a repairable venv into a failed install, and the venv the
-    repair rebuilds could not have been installed in the first place.
-    """
+    """No win_arm64 torchaudio wheel exists on any index, so the repair must not ask for one."""
 
     def test_torchaudio_is_dropped_on_windows_arm64(self):
         ok, mock_pip = _run_flavor_invariant(repaired = "2.10.0+cu124", win_arm64 = True)
@@ -1478,12 +1398,7 @@ class TestWindowsOnArmKeepsTheNoTorchaudioException:
 
 
 class TestTheRequestedFamilyIsVerifiedAfterEveryRepair:
-    """A GPU build is not the same answer as THE GPU build that was asked for.
-
-    A misconfigured mirror can answer a /cu128 request with a cached cu124, rocm or xpu
-    wheel. _torch_build_is_gpu is deliberately family-blind, so the update exited 0 and
-    the manifest recorded the requested tag over a build that never arrived.
-    """
+    """A wrong-family GPU build, such as cu124 for a /cu128 request, must fail the update."""
 
     @pytest.mark.parametrize("landed", ["2.6.0+cu124", "2.11.0+rocm7.2", "2.9.1+xpu"])
     def test_a_wheel_from_the_wrong_family_fails(self, landed):
@@ -1524,13 +1439,7 @@ class TestTheRequestedFamilyIsVerifiedAfterEveryRepair:
 
 
 class TestAnUntaggedGpuWheelIsNotACpuMatch:
-    """_torch_flavor_tag reads every untagged version as "cpu".
-
-    Right for PyPI, wrong for a private index serving an untagged CUDA or ROCm build:
-    under a /cpu pin that wheel compared equal to the expectation, skipped the repair,
-    and was recorded as cpu. The runtime probe already carries the markers that tell
-    them apart.
-    """
+    """An untagged CUDA or ROCm wheel is not a cpu match; the runtime probe markers tell them apart."""
 
     def test_an_untagged_cuda_wheel_under_a_cpu_pin_is_repaired(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -1556,14 +1465,7 @@ class TestAnUntaggedGpuWheelIsNotACpuMatch:
 
 
 class TestAnExplicitPinOutranksTheManifest:
-    """Direct `python install_python_stack.py` on Windows, which the invariant supports.
-
-    The manifest records what a PREVIOUS run installed; a pin is the instruction for
-    THIS one. Resolving the manifest first let a freshly set cu128 pin lose to a stale
-    cu124 record, and _expected_torch_index_url then rejected the cu128 pin as a family
-    mismatch and repaired from the PUBLIC cu124 index -- undoing both the family and the
-    source the user had just chosen.
-    """
+    """A pin is this run's instruction, so it must outrank the manifest's record of an earlier run."""
 
     def test_a_new_family_pin_beats_a_stale_manifest(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -1633,11 +1535,7 @@ class TestAnExplicitPinOutranksTheManifest:
 
 
 class TestExplicitlyPinnedGpuFlavorsAreStillEnforced:
-    """An explicit GPU pin sets _TORCH_BACKEND at import, and an XPU pin additionally
-    reads as an "unknown family" to the shared helper, whose known set predates XPU.
-    Between them those two gates skipped the invariant on exactly the hosts that asked
-    for that GPU family on purpose -- so a later dependency install could put PyPI's CPU
-    wheel there and the update would still report success."""
+    """Explicit GPU pins, XPU included, must be enforced; the unknown-family gate predates XPU."""
 
     def test_a_pinned_xpu_backend_is_enforced_when_it_agrees(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -1686,11 +1584,7 @@ class TestExplicitlyPinnedGpuFlavorsAreStillEnforced:
 
 
 class TestSetupPs1CudaOnDiskFallback:
-    """A wedged NVIDIA driver hangs or faults `import torch` exactly as a faulted HIP
-    runtime does. XPU and ROCm both rescue that venv from torch/version.py on disk; CUDA
-    had no such arm, so the probe-failure chain fell through with a NULL tag, the no-wipe
-    escape could not see a cu* wheel to preserve, and a direct update deleted a healthy
-    CUDA environment before aborting."""
+    """Asserts setup.ps1 keeps the CUDA family from torch/version.py when a wedged driver hangs torch."""
 
     def test_the_classifier_exists_and_keeps_the_family(self):
         assert "function Get-VenvTorchCudaTag" in _SETUP_SRC
@@ -1717,20 +1611,7 @@ if __name__ == "__main__":
 
 
 class TestThePackagesTiedToTheTorchReleaseAreResettled:
-    """A repair that MOVES the torch release invalidates two compiled extensions.
-
-    torchao's cpp extensions are torch-release-specific, and step 4 chose its pin from
-    the torch this repair then replaced: 0.17.0 selected for a 2.11 that the <2.11.0
-    repair spec takes down to 2.10, whose matched build is 0.16.0. Leaving the wrong one
-    installed silently drops to the slow fallback.
-
-    xFormers is stricter: its _C.pyd is linked against one exact (torch, CUDA) pair, and
-    beside any other pair torch.ops.load_library raises, which xformers/_cpp_lib.py
-    downgrades to a log line, so the import "succeeds" with memory-efficient attention,
-    SwiGLU and the sparse ops silently gone. This script never installs xFormers, so
-    removal is the only correct action, and it is what the backend's own resolver
-    already concludes: torch SDPA beats an extension that cannot load.
-    """
+    """A torch release change invalidates torchao and xFormers builds, so they are reselected or removed."""
 
     def _resync(
         self,
@@ -1851,12 +1732,7 @@ class TestThePackagesTiedToTheTorchReleaseAreResettled:
         assert calls["removed"] == []
 
     def test_a_torchao_that_cannot_be_reinstalled_across_a_cuda_major_is_removed(self):
-        """cu124 to cu130 with the torchao source unreachable.
-
-        _select_torchao_spec exists because a torchao compiled for CUDA 12 cannot load its
-        cpp extension under cu130, so leaving the resident one behind completes the update
-        with a package that may fail on import. Same remedy the xFormers arm applies.
-        """
+        """A torchao built for CUDA 12 cannot load under cu130, so an unreachable reinstall removes it."""
         calls = self._resync("2.10.0+cu124", "2.10.0+cu130", torchao_install_fails = True)
         assert calls["torchao"], "the CUDA major moved, so the pin is re-selected"
         assert calls["removed"] == ["torchao"]
@@ -2074,11 +1950,7 @@ class TestTheLinuxRepairRemovesAnXformersItsTorchCannotImport:
 
 
 class TestTheResyncNoticesItsOwnFailures:
-    """Both halves report failure by return value, not by raising.
-
-    Ignoring that let the update write a completion manifest over an incompatible
-    torchao, or over an xFormers whose removal was blocked, with nothing said.
-    """
+    """Both resync halves signal failure by return value, and the caller must check it."""
 
     def _resync_with(
         self,
@@ -2149,11 +2021,7 @@ class TestThePostRepairCheckUsesTheSameRuleAsThePreRepairOne:
             assert stack_mod._installed_flavor_tag_now() == "cpu"
 
     def test_an_untagged_xpu_wheel_does_not_satisfy_a_cpu_expectation(self):
-        """torch.version.xpu is where an untagged source, conda or private-index XPU
-        build carries its runtime -- .hip and .cuda are both empty there. Reading only
-        those two accepted the XPU wheel under a /cpu pin, returned success without
-        replacing it, and then recorded a PINNED cpu flavor for a venv still holding it.
-        """
+        """Untagged XPU builds set only torch.version.xpu, so they must not satisfy a cpu pin."""
         with (
             patch.object(
                 stack_mod,
@@ -2165,10 +2033,7 @@ class TestThePostRepairCheckUsesTheSameRuleAsThePreRepairOne:
             assert stack_mod._installed_flavor_tag_now("cpu") == "xpu"
 
     def test_the_cpu_pin_repair_agrees_with_the_check_that_triggers_it(self):
-        """_ensure_cpu_torch's own GPU-build predicate has to see the untagged XPU build
-        too. Reading only the tag and .hip/.cuda made it return without reinstalling, so
-        the post-repair check saw xpu again and failed the update instead of honouring
-        the pin: the detection improved and the repair did not follow it."""
+        """The cpu repair's GPU predicate must see untagged XPU builds, or the post-repair check fails."""
         source = inspect.getsource(stack_mod._ensure_cpu_torch)
         predicate = source[source.index("_is_gpu_build = ") :]
         predicate = predicate[: predicate.index("if not _is_gpu_build")]
@@ -2185,10 +2050,7 @@ class TestThePostRepairCheckUsesTheSameRuleAsThePreRepairOne:
 
 
 class TestAFailedGpuPinIsNotADeliberateCpuChoice:
-    """setup.ps1 falls back to the CPU index when a pinned ROCm or XPU install fails and
-    publishes the resolved cpu tag, while the original GPU pin is still in the
-    environment. Recording that as pinned makes _expected_cpu_flavor_was_chosen() read a
-    failed install as an intentional one and suppress the repair guidance for good."""
+    """A CPU fallback after a failed GPU pin is not a deliberate choice, so repair guidance still shows."""
 
     @staticmethod
     def _pinned(
@@ -2249,13 +2111,7 @@ class TestAFailedGpuPinIsNotADeliberateCpuChoice:
         assert self._pinned(monkeypatch, "cpu", recorded = ("cpu", True)) is True
 
     def test_a_gpu_request_this_run_retires_the_old_cpu_record(self, monkeypatch):
-        """The record can only speak for a run that said nothing to contradict it.
-
-        A ROCm pin that settled on CPU is the failed-pin case the arms above refuse to call
-        deliberate, and reviving the old CPU provenance underneath them re-records the venv
-        as pinned CPU anyway: the mismatch is then suppressed for good once the requested
-        GPU works.
-        """
+        """A GPU request this run retires an older pinned-CPU record instead of reviving it."""
         assert (
             self._pinned(
                 monkeypatch,
@@ -2277,11 +2133,7 @@ class TestAFailedGpuPinIsNotADeliberateCpuChoice:
         assert stack_mod._expected_torch_flavor_was_pinned("cpu") is True
 
     def test_an_authoritative_url_silences_a_stale_family(self, monkeypatch):
-        """install.sh returns on the URL and never reads the family, so a family that
-        disagrees is dead. An unknown-family corporate /simple URL names no flavor, and
-        falling through to a stale ..._FAMILY=cpu recorded the CPU wheel a GPU-less host
-        legitimately got as DELIBERATE. A later eGPU there gets no mismatch and no repair.
-        """
+        """A URL that names no flavor must not inherit a stale family, or CPU is recorded as deliberate."""
         assert (
             self._pinned(
                 monkeypatch,
@@ -2341,13 +2193,7 @@ class TestTheWindowsXpuTritonSwapReachesADirectRun:
 
 
 class TestTheDelegatedRocmRepairKeepsTheArm64Exception:
-    """_ensure_rocm_torch's Windows branch asked for the full trio unconditionally.
-
-    No win_arm64 torchaudio wheel exists, so the whole trio is unresolvable there. On
-    the delegated path that failure is nonfatal, so the CPU build the repair was meant
-    to replace stays put and the family verification then fails the update -- a worse
-    outcome than the plain trio case, where the failure is at least immediate.
-    """
+    """The Windows ROCm install drops torchaudio on arm64, which has no win_arm64 wheel."""
 
     def test_the_windows_rocm_install_drops_torchaudio_on_arm64(self):
         source = inspect.getsource(stack_mod._ensure_rocm_torch)
@@ -2367,15 +2213,7 @@ class TestTheDelegatedRocmRepairKeepsTheArm64Exception:
 
 
 class TestADefinitiveImportFailureIsNotADriverHang:
-    """setup.ps1's disk-label rescue treated both the same.
-
-    A wedged driver and a truncated torch both leave a +cu* version.py behind. Keeping
-    the venv is right in both cases -- deleting it does not fix a driver, which is the
-    whole point of the rescue (#8335, #7275) -- but only the first means the
-    installation is sound, and the family-matched install below runs with bare
-    requirements and no reinstall flag, so the second could write a completion manifest
-    over a torch that still cannot import.
-    """
+    """setup.ps1 must split a timeout from a definitive import failure before trusting the disk label."""
 
     _SOURCE = (PACKAGE_ROOT / "studio" / "setup.ps1").read_text(encoding = "utf-8")
 
@@ -2404,15 +2242,7 @@ class TestADefinitiveImportFailureIsNotADriverHang:
 
 
 class TestARepairedTorchThatCannotImport:
-    """The verification after a repair, when the new wheel does not load.
-
-    _probe_torch_runtime answers (ran, importable, ...). A torch that RAN and did not
-    import is a definitive answer, not the ambiguity the on-disk fallback exists for:
-    version.py still reports the requested +cu*/+xpu tag from a half-written or DLL-less
-    wheel, so reading it would accept the repair and write a completion manifest over a
-    torch nothing can import. Only a probe that could not run at all (a hung driver) may
-    fall back to disk.
-    """
+    """A torch that ran but would not import is definitive, not a reason to read version.py from disk."""
 
     def _probe(self, monkeypatch, *, ran, importable, version):
         monkeypatch.setattr(
@@ -2474,11 +2304,7 @@ class TestARepairedTorchThatCannotImport:
 
 
 class TestACpuHandoverDoesNotDisarmTheInvariant:
-    """setup.ps1 publishes UNSLOTH_EXPECTED_TORCH_TAG=cpu on an empty nvidia-smi probe, and
-    the invariant used to pass on that tag without ever reading the installed wheel: a venv
-    rebuilt as 2.11.0+cpu was reported as a successful update. The handover is the probe's
-    answer, not a stated choice, so it loses to the manifest but still beats a real pin and
-    is still honoured on a host whose GPU has genuinely gone."""
+    """A cpu handover from an empty GPU probe is still enforced, and the manifest can overrule it."""
 
     def test_a_cpu_handover_is_overruled_by_a_recorded_cuda_flavor(self):
         ok, mock_pip = _run_flavor_invariant(
@@ -2542,11 +2368,7 @@ class TestACpuHandoverDoesNotDisarmTheInvariant:
         assert mock_pip.call_count == 0
 
     def test_the_enforced_tag_reaches_the_manifest(self, monkeypatch):
-        """One resolved tag feeds both the invariant and _recordable_torch_flavor_tag.
-
-        Overriding only the invariant's copy repaired the venv and then wrote "cpu" to the
-        manifest, leaving the next update no CUDA record to fire on: a one-shot fix.
-        """
+        """One resolved tag feeds both the invariant and the manifest record, so the two cannot disagree."""
         monkeypatch.setenv("UNSLOTH_EXPECTED_TORCH_TAG", "cpu")
         monkeypatch.delenv("UNSLOTH_TORCH_INDEX_URL", raising = False)
         monkeypatch.setattr(stack_mod, "_RECORDED_TORCH_TAG", "cu128")
@@ -2558,13 +2380,8 @@ class TestACpuHandoverDoesNotDisarmTheInvariant:
         assert stack_mod._recordable_torch_flavor_tag(resolved) == "cu128"
 
     def test_the_driver_probe_finds_a_windows_nvidia_smi_off_path(self, monkeypatch, tmp_path):
-        """Both probes have to look in the same places.
-
-        _has_usable_nvidia_gpu already probed the Windows fixed locations, so a host with
-        nvidia-smi.exe off PATH answered "GPU present" while the family probe read PATH
-        only, fell back to its cu126 default, and recorded a family the driver never
-        reported. On Blackwell that wheel has no supported kernels.
-        """
+        """Both nvidia-smi probes must search the same Windows locations, or the family defaults to
+        cu126."""
         program_files = tmp_path / "Program Files"
         smi = program_files / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe"
         smi.parent.mkdir(parents = True)
@@ -2587,24 +2404,14 @@ class TestACpuHandoverDoesNotDisarmTheInvariant:
         )
 
     def test_a_which_result_is_trusted_without_an_isfile_check(self, monkeypatch):
-        """shutil.which already proved its result runnable.
-
-        Gating it on os.path.isfile rejects a bare "nvidia-smi" relative to a CWD it does
-        not live in. That is both what a stubbed test double looks like and, on a GPU-free
-        runner with nothing at /usr/bin/nvidia-smi, a silent fall back to the cu126 default.
-        """
+        """shutil.which already proved the path runnable; an isfile check would reject bare nvidia-smi."""
         monkeypatch.setattr(stack_mod, "IS_WINDOWS", False)
         monkeypatch.setattr(stack_mod.shutil, "which", lambda name, *a, **k: "nvidia-smi")
         monkeypatch.setattr(stack_mod.os.path, "isfile", lambda p: "nvidia-smi" not in str(p))
         assert stack_mod._nvidia_smi_path() == "nvidia-smi"
 
     def test_the_family_probe_walks_past_a_stale_candidate(self, monkeypatch, tmp_path):
-        """A stale nvidia-smi on PATH must not decide the family.
-
-        _has_usable_nvidia_gpu already walks past it to the working copy and confirms the
-        GPU; stopping at the stale one here read no version and defaulted to cu126, which
-        on Blackwell has no kernels.
-        """
+        """A stale nvidia-smi on PATH must not decide the family; the probe walks on to the working copy."""
         working = tmp_path / "nvidia-smi.exe"
         working.write_text("")
         monkeypatch.setattr(stack_mod, "IS_WINDOWS", False)
@@ -2631,13 +2438,8 @@ class TestACpuHandoverDoesNotDisarmTheInvariant:
         assert stack_mod._detect_cuda_torch_index_url().endswith("/cu128")
 
     def test_a_banner_without_a_gpu_does_not_decide_the_family(self, monkeypatch, tmp_path):
-        """Exiting 0 with a parseable banner is not enough; -L has to list a GPU.
-
-        A stale copy can print "CUDA Version: 12.6" and enumerate nothing. The presence
-        probe rejects it and walks on to the working copy, and setup.ps1 keeps whichever
-        executable passes Test-NvidiaSmiHasGpu, so accepting it here reads the family off
-        the wrong driver.
-        """
+        """A banner alone is not enough: nvidia-smi -L must list a GPU, or a stale copy decides the
+        family."""
         working = tmp_path / "nvidia-smi.exe"
         working.write_text("")
         monkeypatch.setattr(stack_mod, "IS_WINDOWS", False)

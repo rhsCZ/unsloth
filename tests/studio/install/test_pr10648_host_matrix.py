@@ -1,31 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The host half of the marker fast path, across every OS x accelerator cell (#10648).
-
-``existing_install_current_without_plan`` answers "the install on disk is already what
-this run would produce" without listing a release. ``backend_request`` is ``"auto"`` on
-every automatic install and the release tag does not move when the hardware does, so the
-only thing in that answer that can notice a hardware change is ``host_profile``: recorded
-into the marker at install time and compared for whole-dict equality on every later run.
-
-Without that comparison a box that gains a GPU keeps its CPU bundle, a box whose card or
-driver is gone keeps a CUDA bundle that cannot load, and a box that changes vendor keeps
-an unusable backend -- in each case until the fork happens to publish a new release. Each
-of those is a named test below, per platform, one axis flipped at a time.
-
-Two halves, and they matter equally. The rejection half is above; the acceptance half is
-that every reachable cell must answer True for the UNCHANGED host, or the "rejections"
-below would be proving nothing but a broken fixture. The markers here are therefore
-written by the real ``write_prebuilt_metadata`` against the routed host, so their
-``install_fingerprint`` reproduces; a hand-written marker fails the fingerprint guard and
-would make every case pass for the wrong reason.
-
-Platforms are simulated by constructing ``HostInfo`` (``os.name`` is never patched -- it
-changes ``pathlib``), and the three probes ``host_profile`` reads that a ``HostInfo`` does
-not carry (the CUDA runtime scan, the ROCm runtime version, the torch CUDA preference) are
-pinned per test on the module object, so no test reads this machine's real hardware.
-"""
+"""Fast-path host check: host_profile in the marker is the only field that notices a hardware change."""
 
 from __future__ import annotations
 
@@ -204,13 +180,7 @@ REACHABLE_IDS = [f"{row}-{column}" for row, column in REACHABLE]
 
 
 class Probe:
-    """The hardware answers this run gives, pinned on the loaded module.
-
-    ``host_profile`` reads three things a ``HostInfo`` does not carry -- the CUDA runtime
-    scan, the ROCm runtime version and (for the marker) the torch CUDA preference -- and
-    all three would otherwise read this machine. ``set`` moves them together with the
-    detected host, which is exactly what a hardware change does.
-    """
+    """Pins the three probes host_profile reads that HostInfo lacks, so no test reads real hardware."""
 
     def __init__(self, monkeypatch):
         self.host: "HostInfo | None" = None
@@ -274,10 +244,7 @@ def probe(monkeypatch):
 
 
 def route_for(host: HostInfo, repo: str = PUBLISHED_REPO):
-    """The routed host and repo, the same no-network routing the fast path re-derives.
-
-    ``host`` is passed explicitly rather than left to the patched ``detect_host`` so a
-    fixture can never route one box while the probes answer for another."""
+    """Routes host and repo offline; host is passed explicitly so routing and probes cannot diverge."""
     return ILP.route_backend_request(
         backend = "auto",
         published_repo = repo,
@@ -293,13 +260,7 @@ def install_cell(
     *,
     name: str = "install",
 ) -> Path:
-    """An install tree plus a marker genuinely written for ``cell``'s host.
-
-    The marker goes through the real ``write_prebuilt_metadata`` against the ROUTED host,
-    so its ``install_fingerprint``, ``runtime_files`` and ``host_profile`` are the ones a
-    real install of this bundle on this box would carry. Anything hand-written here would
-    fail the fingerprint guard and make a later "rejected" assertion meaningless.
-    """
+    """Builds an install tree whose marker is written by the real write_prebuilt_metadata."""
     probe.set_from(cell)
     route = route_for(cell.host)
     install_dir = build_install(
@@ -395,15 +356,7 @@ def moved(tmp_path: Path, probe: Probe, cell: Cell, after: HostInfo, **answers) 
 
 
 def assert_reinstall_forced(monkeypatch, install_dir: Path) -> None:
-    """The fast path refuses, and the host profile is the guard that refused.
-
-    A bare ``is False`` would also be satisfied by a broken tree, a moved release tag or a
-    marker that does not add up -- so every hardware transition proves the attribution as
-    well: with the profile comparison neutralised, and nothing else touched, the same call
-    answers True again. That is the install the user would have been left holding.
-
-    Patches last, so no assertion after this one is trustworthy; each caller ends here.
-    """
+    """Asserts the fast path refuses because of host_profile; without that guard it answers True."""
     assert check(install_dir) is False
     recorded = marker_of(install_dir)["host_profile"]
     monkeypatch.setattr(ILP, "host_profile", lambda _host: recorded)
@@ -593,10 +546,8 @@ def test_an_intel_gpu_that_disappeared_is_not_current(tmp_path, probe, monkeypat
 def test_a_physical_nvidia_disappearing_behind_an_intel_gpu_is_not_current(
     tmp_path, probe, monkeypatch, row
 ):
-    """The Vulkan-route gate. The box has an Intel GPU and an NVIDIA card hidden by
-    CUDA_VISIBLE_DEVICES, so has_usable_nvidia is already False and the Intel auto-route is
-    held off by has_physical_nvidia alone. Pull the card and the same run routes to Vulkan
-    -- a transition invisible to every other field in the profile."""
+    """Hidden NVIDIA behind CUDA_VISIBLE_DEVICES still holds the Vulkan route off via
+    has_physical_nvidia."""
     cell = dataclasses.replace(
         _cpu_cell(row),
         host = make_host(
@@ -697,11 +648,7 @@ def test_a_mac_home_directory_restored_onto_apple_silicon_is_not_current(
 
 
 def _assert_everything_but_the_host_still_matches(install_dir: Path, after: HostInfo) -> dict:
-    """Everything the fast path checks APART from the host profile still holds.
-
-    Without this, a "rejected" assertion could be passing because the tree was broken or
-    the release moved, and the host guard could be removed with the tests still green.
-    """
+    """Checks every fast-path condition but host_profile, so a rejection cannot come from another cause."""
     marker = marker_of(install_dir)
     route = route_for(after)
     assert marker["release_tag"] == RELEASE_TAG
@@ -777,10 +724,7 @@ def _tuples_in(value) -> bool:
 def test_a_profile_written_to_a_marker_reads_back_equal_to_a_fresh_one(
     tmp_path, probe, row, column
 ):
-    """Written by one run, compared by the next through json.loads. Whole-dict equality is
-    what the fast path asks, so a single field that does not survive serialisation would
-    send this cell down the full path on every update forever -- with no error, just a
-    permanently slow setup."""
+    """host_profile must survive json round-trip with whole-dict equality, or the fast path never hits."""
     cell = _cell(row, column)
     install_dir = install_cell(tmp_path, probe, cell)
     recorded = marker_of(install_dir)["host_profile"]

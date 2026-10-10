@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every platform branch of ``reveal_in_file_manager``, and how each one fails.
-
-``test_reveal_file_manager.py`` beside this covers WSL and native Linux; this
-completes the matrix with macOS, native Windows, and the failure modes once a
-branch is chosen. Launchers are stubbed and argv asserted exactly, since what
-breaks a path here is a space, comma or non-ASCII splitting one argument in two.
-"""
+"""Argv is asserted exactly: a space, comma or non-ASCII character can split one path into two args."""
 
 from __future__ import annotations
 
@@ -60,11 +54,7 @@ _AWKWARD_NAME = "rapport final, v2 (draft) — 90% ✅"
 
 @pytest.fixture()
 def spawned(monkeypatch):
-    """Record what would have been launched, and launch nothing.
-
-    ``startfile`` is Windows-only, so ``raising = False`` installs it rather
-    than replacing it, which is what exercises that branch from Linux.
-    """
+    """Installs os.startfile with raising=False, since it is Windows-only, so that branch runs on Linux."""
     calls = types.SimpleNamespace(run = [], popen = [], startfile = [], popen_error = None)
 
     def fake_run(cmd, **kwargs):
@@ -303,10 +293,7 @@ class _SwappedForAFile:
 
 @pytest.mark.parametrize("host", ["macos", "windows", "native_linux"])
 def test_a_sandbox_swapped_for_a_file_is_refused_not_revealed(host, spawned, tmp_path, request):
-    """``expect_dir`` is what the sandbox route passes, since a sandbox's parent
-    is the root holding every other chat's. A real file on disk, not a fake:
-    the one ``lstat`` leaves no gap between check and use for a fake to sit in,
-    which is the property under test."""
+    """A real file, not a fake, so the lstat check and the use have no gap for a fake to sit in."""
     request.getfixturevalue(host)
     root = tmp_path / "sandbox"
     root.mkdir(parents = True)
@@ -362,10 +349,7 @@ def test_the_same_swap_is_still_revealed_without_expect_dir(host, spawned, tmp_p
 
 
 def test_a_missing_launcher_is_reported_as_a_missing_launcher(native_linux, spawned, tmp_path):
-    """``xdg-open`` is absent on a headless host, and ``Popen`` then raises
-    ``FileNotFoundError`` for the LAUNCHER just as for a missing target. The
-    helper cannot tell them apart, so this pins the payload as the launcher,
-    which is what lets the route answer 500 rather than "no folder"."""
+    """A missing xdg-open must surface as the launcher in FileNotFoundError, so the route answers 500."""
     spawned.popen_error = FileNotFoundError(2, "No such file or directory", "xdg-open")
     with pytest.raises(FileNotFoundError) as caught:
         path_utils.reveal_in_file_manager(tmp_path)

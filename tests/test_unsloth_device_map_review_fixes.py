@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Four review findings on the opt-in device map, each pinned by the failure it caused.
-
-Kept apart from the other two device-map files because these are regressions, not the
-feature's own contract: every test here fails on the code as it was reviewed.
-
-Extracted with ast so nothing has to import torch's CUDA stack.
-"""
+"""Regression tests for four review findings on the opt-in device map; each fails on the old code."""
 
 import ast
 import os
@@ -158,12 +152,7 @@ def test_every_entry_point_defaults_to_the_marked_value(name):
 
 
 def test_sentence_transformers_hands_the_nested_load_a_plain_value():
-    """It declines planning for itself, then calls FastModel. Passing the marked default on
-    would let that nested load re-upgrade it and split a model ST then pulls onto one card.
-
-    Asserted as the absence of the old process-wide pin as well: os.environ is shared, so
-    that fix reached unrelated loads on other threads.
-    """
+    """Hands the nested FastModel load a plain value, not the marked default, and never pins os.environ."""
     source = open(os.path.join(MODELS, "sentence_transformer.py"), encoding = "utf-8").read()
     assert "device_map = unmarked_device_map(device_map)" in source
     assert (
@@ -175,10 +164,7 @@ def test_sentence_transformers_hands_the_nested_load_a_plain_value():
 
 
 def test_a_caller_supplied_max_memory_does_not_collide_with_the_measured_one():
-    """`max_memory` is a named parameter of the planner, so leaving the caller's copy in
-    the forwarded kwargs raised `TypeError: got multiple values for keyword argument
-    'max_memory'` -- caught by the handler and turned into a silent "sequential", losing
-    both the cap and the plan."""
+    """A caller's max_memory must not also reach the planner through kwargs, which raises a TypeError."""
     planner = _Recorder(plan = _Plan())
     ns = _build(free = {0: 10 * 2**30, 1: 10 * 2**30}, planner = planner)
     resolved = ns["resolve_unsloth_device_map"](
@@ -225,11 +211,7 @@ def test_the_cap_is_read_the_way_accelerate_reads_it(written, expected):
 
 
 def test_the_cap_is_read_without_needing_accelerate_importable():
-    """Reading the budget through `accelerate.utils.modeling.convert_file_size_to_int` made
-    the cap conditional on an import that runs while placement is still being decided: on an
-    install without accelerate, or one that moves the symbol, every budget came back
-    unreadable and the caller's cap was dropped in silence. Found by the cross-platform run,
-    whose runners carry pytest and the Unsloth requirements but no accelerate."""
+    """Read the cap without importing accelerate; a missing install would silently drop max_memory."""
     import builtins
 
     as_bytes = _build()["_as_bytes"]
@@ -329,10 +311,7 @@ def test_the_callers_kwargs_dict_is_not_mutated():
 
 
 def test_the_legacy_diffusion_alias_declines_planning_with_its_own_reason():
-    """`diffusion_gemma` loads only because `_load_diffusion_config` catches AutoConfig's
-    unknown-model error and rewrites the type in memory. The planner is given a name, not a
-    config, so it rebuilds from the checkpoint and hits the same error -- reported as a
-    generic planning failure. It has to say what actually happened."""
+    """The diffusion_gemma alias must decline planning with its own reason, not a generic failure."""
     source = open(os.path.join(MODELS, "diffusion.py"), encoding = "utf-8").read()
     tree = ast.parse(source)
 
@@ -355,11 +334,7 @@ def test_the_legacy_diffusion_alias_declines_planning_with_its_own_reason():
 
 
 def test_the_caller_max_memory_keys_are_the_devices_the_load_may_use():
-    """A caller who writes `{0: ..., 1: ...}` on a four-GPU host is reserving GPUs 2 and 3
-    for something else. accelerate reads a supplied mapping that way -- its
-    `_init_infer_auto_device_map` takes `devices = list(max_memory.keys())` and
-    `get_max_memory` never widens the mapping back out -- so overlaying the caps onto every
-    visible card left the planner free to place weights on the two they had withheld."""
+    """Keys of a caller's max_memory are the only devices the load may use, so never overlay all cards."""
     planner = _Recorder(plan = _Plan())
     ns = _build(
         devices = 4,
@@ -433,10 +408,7 @@ def test_the_marker_still_arrives_at_the_nested_load_as_a_plain_string():
 
 
 def test_a_prequantized_hybrid_checkpoint_declines_rather_than_mis_sizing_mamba():
-    """`merge_quantization_configs` overlays loading attributes for GPTQ/AWQ/... but never
-    for bitsandbytes, so a prequantized checkpoint is sized by the list in its own
-    config.json no matter what the loader passes. The mamba exclusions the load adds
-    afterwards would then be charged at 4bit while the load keeps them dense."""
+    """Prequantized bitsandbytes hybrids decline planning, or Mamba is sized 4bit but kept dense."""
     source = open(os.path.join(MODELS, "llama.py"), encoding = "utf-8").read()
     tree = ast.parse(source)
 

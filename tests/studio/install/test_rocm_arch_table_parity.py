@@ -1,41 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Drift guards for the AMD gfx tables that are duplicated across the installers.
-
-The same three tables are hand-copied into up to seven places each:
-
-  gfx -> AMD index family   install.sh (_amd_arch_index_family_for_gfx)
-                            install.ps1 ($archFamilyMap)
-                            studio/setup.ps1 ($archFamilyMap)
-                            studio/install_python_stack.py (_GFX_TO_AMD_INDEX_ARCH)
-
-  GPU name -> gfx           install.sh (_infer_amd_gfx_arch_from_gpu_name)
-                            install.sh (case "$_gpu_disp_mkt", detection banner + env tip)
-                            studio/setup.sh (_setup_supported_gfx_from_name)
-                            install.ps1 ($nameArchTable)
-                            studio/setup.ps1 ($nameArchTable)
-                            studio/install_python_stack.py (_WIN_GPU_NAME_ARCH_TABLE)
-                            tests/_zoo_rocm_spoof.py (_PROFILES, inverted gfx -> name)
-
-  torch>=2.11 pin allowlist install.sh (case "$_torch_index_leaf")
-                            install.ps1 ($_pinGfx211)
-                            studio/setup.ps1 (Test-RocmPinLeaf211)
-
-Every copy carries a "kept in sync with" comment and nothing enforced it, which is
-how the routing family of bugs kept recurring: #7264 / #7280 (Strix left on the
-generic rocm7.2 index), #7293 / #7300 (fixed in one installer at a time) and #7277
-(RDNA2 gfx1030-1036 added to install.ps1 / setup.ps1 / install_python_stack.py --
-install.sh had to follow separately). Half-applied edits are invisible until an AMD
-user on the missed path gets CPU-only PyTorch.
-
-These tests parse each copy out of its source file and compare them, so a table
-edited in one place fails CI naming the file that was missed.
-
-Counting the copies by hand is itself unreliable -- the in-code "kept in sync
-with" comments claimed four when there were seven -- so TestNoUnregisteredArchTable
-below rediscovers them by scanning the repo instead of trusting this list.
-"""
+"""Drift guards for gfx tables hand-copied across the installers; each copy is parsed and compared."""
 
 import ast
 import fnmatch
@@ -372,11 +338,7 @@ def _name_table_py_literal(path: Path, name: str) -> list:
 
 
 def _spoof_profiles() -> dict[str, str]:
-    """gfx -> marketing name out of tests/_zoo_rocm_spoof.py::_PROFILES.
-
-    Parsed with ast rather than imported: that module spoofs torch.cuda and the
-    AMD identity as an import side effect, which would poison every test sharing
-    the process."""
+    """Parsed with ast: importing the spoof module would spoof torch.cuda for every test in the process."""
     tree = ast.parse(_SPOOF_PY.read_text(encoding = "utf-8"))
     for node in tree.body:
         target = node.target if isinstance(node, ast.AnnAssign) else None
@@ -393,10 +355,7 @@ _SPOOF_DIVERGENCES = {
 
 
 def _resolve(where: str, rows, gpu_name: str) -> str | None:
-    """Shell copies are case globs; the PowerShell and Python copies are both
-    ordered first-match regex tables evaluated case-insensitively, so _match_ps
-    models either one. `where` may be "<file>:<symbol>" for the files that carry
-    the table more than once."""
+    """Shell tables are case globs; PowerShell and Python tables are ordered first-match regexes."""
     return (
         _match_sh(rows, gpu_name)
         if where.split(":")[0].endswith(".sh")
@@ -485,15 +444,7 @@ class TestGpuNameArchParity:
                 assert arch in families, f"{where}: {arch} has no entry in _GFX_TO_AMD_INDEX_ARCH"
 
     def test_every_documented_gpu_resolves_somewhere(self):
-        """The reverse of the AMD check above. That one asks "do the tables get
-        the documented cards right"; this asks "is a documented card missing
-        entirely", which is a silent CPU fallback rather than a wrong id.
-
-        This cannot notice a GPU AMD shipped that nobody transcribed into
-        _AMD_DOCUMENTED_ARCH -- doing that honestly would mean fetching AMD's
-        matrix at test time, which makes the suite non-hermetic and offline
-        runners fail. It does catch a card added to the ground-truth list, or to
-        one installer, without the tables being completed."""
+        """A documented GPU missing from every table silently falls back to CPU, not a wrong id."""
         for gpu_name in sorted(_AMD_DOCUMENTED_ARCH):
             for where, rows in _name_tables().items():
                 assert (
@@ -502,10 +453,7 @@ class TestGpuNameArchParity:
 
 
 class TestSpoofFixtureParity:
-    """tests/_zoo_rocm_spoof.py is the seventh copy of the name/gfx mapping and
-    was outside every drift guard. It is the fixture other ROCm tests build their
-    fake AMD host from, so if it and the installers disagree, those tests exercise
-    a machine that cannot exist."""
+    """Spoof fixture is another copy of the mapping; drift makes other ROCm tests use an impossible host."""
 
     def test_spoof_profiles_parse(self):
         profiles = _spoof_profiles()
@@ -558,14 +506,7 @@ _TABLE_LINE_THRESHOLD = 3
 
 
 def _under_cargo_output(path: Path, root: Path) -> bool:
-    """Whether `path` sits inside a Cargo `target/` directory.
-
-    Not in _SCAN_SKIP_DIRS because "target" is too generic to skip by name alone, so
-    the pairing with a sibling Cargo.toml is what identifies build output. tauri copies
-    install.sh into studio/src-tauri/target/debug/, so without this the guard fails for
-    anyone who ran `cargo build` before pytest, on their own build output rather than on
-    a real copy. CI never saw it because it builds and tests in separate jobs.
-    """
+    """Matches Cargo build output (target/ beside Cargo.toml), since tauri copies install.sh into it."""
     for parent in path.parents:
         if parent == root.parent:
             break
@@ -675,12 +616,7 @@ class TestTorch211PinAllowlistParity:
 
 
 class TestShadowingIntegratedGfxParity:
-    """The shadowing-APU skip (#7776) exists four times now: studio/setup.ps1
-    resolves the arch and builds $ROCmIndexUrl before it ever invokes the Python
-    stack installer, install_llama_prebuilt.py honours setup's repick, and
-    install.sh answers the ROCm-request route on Linux before the Python stack
-    runs at all. Every copy has to agree or one entry point keeps installing the
-    iGPU's wheel family."""
+    """The iGPU skip is in four entry points that must agree, or one keeps installing the iGPU's wheels."""
 
     _STRIX = {"gfx1150", "gfx1151", "gfx1152"}
 
@@ -743,11 +679,7 @@ def _sh_call_site_offsets(source: str, helper: str) -> list[int]:
 
 
 class TestShadowingPreferenceIsApplied:
-    """A table can be in parity while nothing calls the helper that reads it: that was
-    #11143, where studio/setup.sh (all `unsloth studio update` runs) had neither, so
-    install_llama_prebuilt.py had no repick to honour on Linux. These assert the
-    preference is REACHED on each entry point's path, not merely defined in the file.
-    """
+    """Parity is not enough: each entry point must reach the preference helper, not merely define it."""
 
     _VISIBILITY_ENV = ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES")
 

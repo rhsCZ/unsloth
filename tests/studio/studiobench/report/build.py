@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Payload on disk -> scored, rendered summary.
-
-The last mile. Everything either side of it existed: the session layer wrote rows, the scoring
-layer scored readings, the renderer rendered scores. Nothing joined them, so a completed run
-produced a JSONL file and no report.
-
-The one policy decision that lives here: WHICH RUNGS ARE ON THE LADDER. `score_ladder` demands
-every declared rung, present or not, because aggregating over only the rungs that survived is the
-crash-beats-limp bug wearing a different hat. So a rung that was declared for the tier and never
-produced a cell is passed through as INCOMPLETE with the reason, not quietly dropped.
-"""
+"""Rungs declared for the tier but never produced are passed through as INCOMPLETE, never dropped."""
 
 from __future__ import annotations
 

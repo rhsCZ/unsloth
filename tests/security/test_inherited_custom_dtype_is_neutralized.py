@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""An inherited `UNSLOTH_FORCE_CUSTOM_DTYPE` must be harmless to EVERY reader.
-
-`unsloth_zoo==2026.8.15`, which this package's floor resolves to, still `eval`s the
-dtype field, and a version floor cannot fix an already resolved install, so the VALUE
-is rewritten at import. The old reader is reproduced as the one line that matters,
-`eval(field)`. Imported inside each test, for the four-package runner.
-"""
+"""Rewrite an inherited UNSLOTH_FORCE_CUSTOM_DTYPE at import; unsloth_zoo still evals its dtype."""
 
 from __future__ import annotations
 

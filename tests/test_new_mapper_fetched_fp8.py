@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""What ``_get_new_mapper`` hands back to the upgrade probe.
-
-``test_new_mapper_no_global_leak.py`` serves the repo's own ``mapper.py`` as both the
-installed and the fetched source, so it cannot tell the two apart. Two gaps: an fp8
-repo only the FETCHED mapper knows, and a fetched file with no fp8 tables at all, where
-reading them with ``[]`` raises ``KeyError`` and takes the 4bit half down with it.
-
-The last two tests take the ROW branch, which nothing else here covers.
-"""
+"""A fetched mapper with no fp8 tables must not KeyError on [] reads and take the 4bit half down."""
 
 import ast
 import os

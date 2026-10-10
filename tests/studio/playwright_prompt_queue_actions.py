@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Exercise the real queue view: menus, editing, ordering, drag, touch and file drops.
-
-Run after npm ci and Playwright browser installation:
-    python tests/studio/playwright_prompt_queue_actions.py
-PW_ENGINE=webkit selects WebKit. No backend or inference is required.
-"""
+"""Queue view UI checks, no backend needed; PW_ENGINE=webkit selects WebKit."""
 
 import os
 import re

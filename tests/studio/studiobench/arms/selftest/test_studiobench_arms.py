@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the ablation layer.
-
-The arms layer is where a wrong answer is most expensive, because its output is a CAUSAL claim.
-Everything here is a test of a refusal: an arm that drifted must not be quoted, an arm that did
-not fire must not read as no effect, a ladder must not quote a rung on its own, a batch without
-calibration must not run at all, and an armpack that does not match must stop its plane of the
-experiment rather than be skipped quietly.
-"""
+"""Tests are refusals: drifted arms, unfired arms and uncalibrated batches must not be quotable."""
 
 from __future__ import annotations
 
@@ -428,14 +421,7 @@ def test_a_batch_whose_null_arm_drifted_past_the_detection_floor_is_not_quotable
 
 
 def test_a_noisy_batch_stays_quotable_but_only_at_a_coarser_floor():
-    """A noisy machine is not automatically a broken one; it is a machine with a blunt floor.
-
-    The null moves 0.9 ms/update, which swallows the 0.1 and 0.5 spikes entirely. The 2.0 spike
-    still comes back cleanly, so the batch can resolve differences above 2.0 ms/update and
-    nothing below it. Voiding this batch would throw away a usable, coarse measurement; quoting
-    a 0.3 ms difference from it would be inventing one. The detection floor is what keeps the
-    two apart, and every difference is rendered against it.
-    """
+    """A noisy batch stays quotable at a coarser detection floor rather than being voided."""
 
     verdict = evaluate_batch(
         null_deltas = [Measure.read(0.9, "ms/update")],

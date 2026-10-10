@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Extended import-smoke + API surface checks for unsloth + unsloth-zoo
-modules under the CUDA spoof harness.
-
-Walks the full set of modules the public surface depends on (vs the 5 in
-test_unsloth_zoo_imports.py), catching import-time symbol drift, spoof-
-flipped gates (e.g. _IS_MLX on a non-Mac box), and FastModel API drift.
-CPU-only; inherits the _zoo_aggressive_cuda_spoof harness.
-"""
+"""CPU-only import and API checks under the CUDA spoof harness, catching spoof-flipped gates."""
 
 from __future__ import annotations
 

@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""THE INSTRUMENT MUST NOT COST LESS ON THE ARM IT IS SCORING.
-
-`streamcost.js` used to read its denominator out of the DOM:
-`querySelectorAll('[data-role="assistant"]')`, last element, `textContent.length`, at both ends of
-every window. That is O(the whole document) whatever matches, and the file's own note claimed it
-"is identical on both arms of an A/B and cancels in a paired ratio".
-
-It cancels between two arms that mount the same DOM. It does NOT cancel against an arm whose whole
-purpose is to mount less of it: a virtualised thread pays a fraction of the cost, so the
-instrument hands the treatment a saving it never earned, in the direction that flatters the
-hypothesis under test. At 100K the read totalled 289.6 ms per cell, which is not a rounding error
-next to the effects this campaign argues about.
-
-This measures the residual -- the instrument's own cost on a full document minus its cost on a
-windowed one -- for BOTH the old reading and the new one, on the same two pages, in the same run.
-The old one is still exported as `replyCharsDom` for a once-per-cell cross-check, so both can be
-driven side by side and the comparison is a measurement rather than a claim about deleted code.
-
-    python -m pytest tests/studio/studiobench/instruments/selftest/test_studiobench_streamcost_bias.py -q -s
-"""
+"""The old DOM-read denominator cost more on a full thread, handing virtualised arms a false saving."""
 
 from __future__ import annotations
 

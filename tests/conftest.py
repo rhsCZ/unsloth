@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""GPU-free test harness.
-
-unsloth_zoo.device_type calls get_device_type() at import time and raises
-NotImplementedError on CI runners with no CUDA/XPU/HIP. Pre-load it under a
-mocked torch.cuda.is_available()==True so its @cache permanently captures
-"cuda"; on a real accelerator the pre-load is skipped.
-
-Mirrors the conftest harness in unslothai/unsloth-zoo PR #624.
-"""
+"""Pre-load unsloth_zoo.device_type with torch.cuda.is_available mocked, so its @cache captures cuda."""
 
 from __future__ import annotations
 
@@ -46,25 +38,13 @@ os.environ.setdefault("UNSLOTH_NVIDIA_LIBRARY_PROBE", "0")
 
 @pytest.fixture(autouse = True)
 def _contain_installer_venv_root(tmp_path_factory, monkeypatch):
-    """Mechanism: tests/_shared/installer_venv_root.py.
-
-    Imported inside the body because tests/_shared reaches sys.path further down this file,
-    and an autouse fixture must not depend on where in the module it is defined.
-    """
+    """Imported in the body because tests/_shared is added to sys.path further down this file."""
     from installer_venv_root import contain_installer_venv_root
     contain_installer_venv_root(monkeypatch, tmp_path_factory)
 
 
 def _has_real_accelerator() -> bool:
-    """Mechanism: tests/_shared/real_accelerator.py.
-
-    The probe moved there so test modules can ask the same question, and so the
-    answer is recorded once. Calling it here, before the pre-load window below and
-    long before any test module imports the aggressive spoof, is what makes the
-    recorded answer the pre-spoof one for everybody. Kept as a function of this
-    name because tests/python/test_conftest_bitsandbytes_preimport.py reads the
-    `if not _has_real_accelerator():` block out of this file's AST.
-    """
+    """Calls the probe before any spoof; the name is pinned by a test that reads this file's AST."""
     from real_accelerator import has_real_accelerator
     return has_real_accelerator()
 
@@ -168,24 +148,7 @@ def _install_device_type_stub(name: str) -> None:
 
 
 def _preimport_bitsandbytes() -> None:
-    """Bind bitsandbytes against the real torch before the CUDA spoof below.
-
-    `bitsandbytes/__init__.py` runs `if torch.cuda.is_available(): from .backends.cuda
-    import ops`, and that module reads `torch._C._cuda_getCurrentRawStream`, which a
-    CPU-only torch build does not expose. `_preload_device_type` patches
-    `torch.cuda.is_available` to return True, so a bitsandbytes import landing inside
-    that window takes the CUDA branch and dies with AttributeError.
-
-    Python then drops `bitsandbytes` from sys.modules but leaves `bitsandbytes.functional`
-    and the rest of its submodules cached, so the next import re-executes __init__ against
-    those cached submodules, re-binds nothing, and hands back a module with no
-    `.functional`. `unsloth/kernels/utils.py` reads `bnb.functional.get_ptr` at module
-    scope, so every later `import unsloth` in that process dies with
-    "module 'bitsandbytes' has no attribute 'functional'".
-
-    Importing first, outside the window, keeps bitsandbytes on its CPU backend and fully
-    usable. Must stay ahead of the `_preload_device_type` calls below.
-    """
+    """Import bitsandbytes before the CUDA spoof; inside it, a CPU-only torch raises AttributeError."""
     try:
         import bitsandbytes  # noqa: F401
     except Exception:

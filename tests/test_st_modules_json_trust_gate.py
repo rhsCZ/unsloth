@@ -12,14 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A modules.json "type" is untrusted input, not an import target.
-
-`_module_path` fetches modules.json with `hf_hub_download`, so publishing a Hub repo is
-enough; no local access required. See `_resolve_module_class` for the gate being tested.
-
-Offline and CPU-only: the marker package is inert and only appends to a file, which is how
-these tests observe whether an import happened at all.
-"""
+"""modules.json types are untrusted input, not import targets; a Hub publisher controls them."""
 
 import json
 import os
@@ -419,32 +412,14 @@ def test_unreachable_is_tolerated_where_upstream_gates_it_anyway(tmp_path, monke
 
 
 def _patch_download(monkeypatch, replacement):
-    """Replace hf_hub_download in the namespace the method under test actually reads.
-
-    Not by dotted string, and not on whatever sys.modules currently holds. Both of those
-    resolve the module afresh, and tests/vllm_compat/test_extended_module_imports.py pops
-    unsloth.models.sentence_transformer out of sys.modules and re-imports it, so by the
-    time these tests run the name points at a second module object with its own globals
-    dict. The class imported at the top of this file still closes over the first one.
-    Patching the later object left the real hf_hub_download in place, and three tests
-    reached out to the Hub and asserted against a 404 instead of against the fake.
-
-    __globals__ is that first dict by definition, whatever else has been re-imported.
-    """
+    """Patch __globals__ of the method, since a re-imported module leaves a second dict the class
+    ignores."""
     namespace = FastSentenceTransformer._check_delegated_module_config.__globals__
     monkeypatch.setitem(namespace, "hf_hub_download", replacement)
 
 
 def _simulate_pre_six(monkeypatch):
-    """Report sentence-transformers 5.x. The version is the whole simulation.
-
-    This used to delete util.import_module_class as well, because the config check keyed
-    off that attribute. #12444 replaced it with a version test, for the reason the
-    attribute was never a good one: 5.5 exports the helper while its Dense and Router
-    loaders still resolve config class references ungated. Deleting it here meant these
-    tests passed for a reason production did not have, and hid that exact gap. Setting
-    only the version is what makes them exercise the real condition.
-    """
+    """Simulates sentence-transformers 5.x by patching only __version__, so the real config check runs."""
     import sentence_transformers
     monkeypatch.setattr(sentence_transformers, "__version__", "5.2.0", raising = False)
 
@@ -476,17 +451,7 @@ def _delegated_model(tmp_path, activation_function):
 
 
 def test_a_delegated_route_also_checks_the_module_config_class_ref(tmp_path, monkeypatch):
-    """An allowed type is not the whole check.
-
-    Dense is a permitted sentence_transformers class, and below 6.0 its loader resolves and
-    calls whatever activation_function the config names. _load_modules checks this from the
-    files it downloaded; the delegated routes hand the load straight to
-    sentence-transformers, so without this they validated the type and nothing else.
-
-    Hiding import_module_class simulates sentence-transformers < 6, which is where the
-    ungated loader lives; on this branch the config check still keys off that attribute,
-    and #12444 removes the fork so it runs on every version.
-    """
+    """Below 6.0 Dense calls the config's activation_function, so delegated routes must check it too."""
     _simulate_pre_six(monkeypatch)
 
     model = _delegated_model(tmp_path, f"{MARKER}.Thing")
@@ -549,18 +514,7 @@ def test_an_ordinary_embedder_fetches_no_module_configs(tmp_path, monkeypatch):
 
 
 def test_a_recorded_absence_pins_the_commit_the_cache_holds(tmp_path, monkeypatch):
-    """Unreachable, with a recorded absence: pin to the snapshot that absence belongs to.
-
-    "The load can only use the cache too" was the reasoning for returning success with no
-    pin, and it is wrong: this request failed, not every request, so the delegated load
-    can recover and fetch the current branch, which may have gained a module type since
-    the cached answer. The commit is recovered from a file in the same snapshot, so the
-    load matches what was checked, and offline it is what would have been served anyway.
-
-    The lookup also has to read the cache hf_hub_download reads: HUGGINGFACE_HUB_CACHE is
-    the legacy constant and does not follow HF_HUB_CACHE, so naming one of our own
-    searched a different cache and a recorded absence there was missed.
-    """
+    """A recorded absence pins the load to the commit of its snapshot, looked up in HF_HUB_CACHE."""
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     commit = "e" * 40
@@ -600,11 +554,7 @@ def test_a_recorded_absence_pins_the_commit_the_cache_holds(tmp_path, monkeypatc
 
 
 def test_a_recorded_absence_with_no_recoverable_commit_refuses(tmp_path, monkeypatch):
-    """No commit to pin to means no way to make the load match what was checked.
-
-    Fail closed below 6.0, the same rule as every other branch that could not establish an
-    answer.
-    """
+    """With no commit to pin to, refuse below 6.0, where nothing else checks the module type."""
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     monkeypatch.setattr(FastSentenceTransformer, "_module_path", staticmethod(lambda *a, **k: None))
@@ -643,11 +593,7 @@ def test_a_recorded_absence_is_tolerated_where_upstream_gates_it(tmp_path, monke
 
 
 def test_a_module_at_the_repository_root_is_checked_too(tmp_path, monkeypatch):
-    """ "path": "" is the repository root, which sentence-transformers accepts.
-
-    Skipping an empty path left the whole module-config check bypassable by declaring
-    Dense at the root and putting the class ref in the root config.json.
-    """
+    """An empty path means the repository root, which must be checked, not skipped."""
     _simulate_pre_six(monkeypatch)
 
     model = tmp_path / "model"
@@ -668,11 +614,8 @@ def test_a_module_at_the_repository_root_is_checked_too(tmp_path, monkeypatch):
 
 
 def test_an_unreadable_module_config_refuses_rather_than_passing(tmp_path, monkeypatch):
-    """A fetch that fails is not a module without a config.
-
-    Swallowing the error meant the gate recorded "nothing to check" while the load that
-    follows makes its own request, which can succeed and resolve the unchecked name.
-    """
+    """A failed config fetch must refuse, since the load's own request can then resolve an unchecked
+    name."""
     _simulate_pre_six(monkeypatch)
     monkeypatch.setattr(
         FastSentenceTransformer,
@@ -767,12 +710,8 @@ def test_the_module_config_check_is_skipped_where_upstream_gates_it(tmp_path, mo
 
 
 def test_only_the_config_the_loader_reads_is_requested(tmp_path, monkeypatch):
-    """WordEmbeddings.load never opens config.json, so asking for it is a liability.
-
-    With the fetch failing closed, an unnecessary request against a cache that has no
-    recorded 404 for the unused name turned a model the delegated loader could load
-    entirely from cache into a refusal.
-    """
+    """WordEmbeddings never opens config.json, so requesting it can turn a cache-only load into a
+    refusal."""
     _simulate_pre_six(monkeypatch)
     monkeypatch.setattr(
         FastSentenceTransformer,
@@ -871,15 +810,7 @@ def test_router_still_falls_back_to_config_json(tmp_path, monkeypatch):
 
 
 def test_an_empty_router_config_still_checks_the_fallback(tmp_path, monkeypatch):
-    """Router.load falls back on falsey content, not only on a missing file.
-
-    sentence-transformers 5.x Router.load reads its own file and then does
-    `if not config: config = cls.load_config(config_filename = "config.json")`, so an
-    existing but empty router_config.json sends it to config.json and it resolves the
-    `types` it finds there. Stopping at the first file that downloaded meant the gate
-    validated the empty file, never fetched the fallback, and passed on a repository whose
-    config.json names an arbitrary class.
-    """
+    """Router.load falls back to config.json on an empty router_config.json, so the gate checks both."""
     import sentence_transformers
 
     st_models = pytest.importorskip("sentence_transformers.models")
@@ -930,11 +861,8 @@ def test_an_empty_router_config_still_checks_the_fallback(tmp_path, monkeypatch)
 
 
 def test_a_non_empty_config_asks_for_nothing_extra(tmp_path, monkeypatch):
-    """The fallback costs a request only where upstream would take it.
-
-    A real Router config is a non-empty dict, upstream never reaches `if not config`, and
-    the check must not start fetching a second file on every ordinary load.
-    """
+    """The fallback is fetched only when upstream takes it, never for an ordinary non-empty Router
+    config."""
     st_models = pytest.importorskip("sentence_transformers.models")
     if getattr(st_models, "Router", None) is None:
         pytest.skip("this sentence-transformers has no Router")
@@ -970,11 +898,7 @@ def test_a_non_empty_config_asks_for_nothing_extra(tmp_path, monkeypatch):
 
 
 def test_the_validated_commit_is_reported(tmp_path, monkeypatch):
-    """The gate hands back the commit it read, so the load can be pinned to it.
-
-    Validation and the load resolve the branch separately, so a repository that advances
-    between the two is checked on one snapshot and loaded from another.
-    """
+    """Returns the validated commit so the load pins to it, not to a second resolution of the branch."""
     snapshot = tmp_path / "models--acme--embedder" / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents = True)
     (snapshot / "modules.json").write_text(
@@ -999,12 +923,7 @@ def test_the_validated_commit_is_reported(tmp_path, monkeypatch):
 
 
 def test_the_commit_comes_from_the_resolution_that_already_happened(tmp_path, monkeypatch):
-    """_module_path resolves through hf_hub_download, so its snapshot is the live one.
-
-    That is the branch an ordinary load takes, and taking the commit from the path it
-    returns is what makes the pin cost nothing: no second request, and no separate
-    resolution to disagree with.
-    """
+    """Read the pinned commit from the path _module_path already resolved, so the pin costs no request."""
     snapshot = tmp_path / "models--acme--embedder" / "snapshots" / ("b" * 40)
     snapshot.mkdir(parents = True)
     (snapshot / "modules.json").write_text(
@@ -1076,13 +995,8 @@ def test_only_an_immutable_snapshot_is_a_commit(path, expected):
 
 
 def test_the_module_configs_are_read_from_the_validated_snapshot(tmp_path, monkeypatch):
-    """Every config read has to come from the commit modules.json came out of.
-
-    Passing the caller's revision through meant modules.json could resolve commit A while
-    each module config resolved commit B. The caller then pins the load to A, so a clean
-    config in B was validated while A's unchecked value was the one that ran. That inverts
-    the race rather than closing it.
-    """
+    """Every module config must be read from the commit modules.json came from, not the caller's
+    revision."""
     _simulate_pre_six(monkeypatch)
 
     commit = "c" * 40
@@ -1130,15 +1044,7 @@ def test_the_module_configs_are_read_from_the_validated_snapshot(tmp_path, monke
 
 
 def test_a_named_branch_still_resolves_to_a_commit(tmp_path, monkeypatch):
-    """The gate reports a commit even when the caller named a branch.
-
-    That is the input the pin needs, and it held on the previous head too: the bug was the
-    condition at the call site, which discarded this value whenever a revision was given
-    and so left `revision = "main"` racing exactly as a missing revision did. That half is
-    not unit-testable without a full load, and is covered by a traced base-against-head
-    run instead, where base passes "main" to SentenceTransformer and head passes the
-    resolved commit. This test guards the contract the call site depends on.
-    """
+    """A named branch still resolves to a commit the pin can use, even when revision is given."""
     commit = "d" * 40
     snapshot = tmp_path / "models--acme--embedder" / "snapshots" / commit
     snapshot.mkdir(parents = True)
@@ -1196,15 +1102,7 @@ def test_an_immutable_revision_resolves_to_itself(tmp_path, monkeypatch):
 
 
 def test_a_confirmed_absent_modules_json_still_pins_the_load(tmp_path, monkeypatch):
-    """Absence is the thing being validated, so it has to be pinned like a presence.
-
-    And pinned to the commit that answered the 404, read off that response, not from a
-    second resolution of the branch. A second lookup can return a newer commit than the
-    one whose answer was "no modules.json", which pins the load to a snapshot nothing
-    checked: the same inversion as validating one commit and loading another, moved one
-    step along. The hub sends x-repo-commit on the 404, so the exact commit is already in
-    hand and costs no request.
-    """
+    """Pin an absent modules.json to the x-repo-commit of its 404, not a second branch lookup."""
     from huggingface_hub.errors import EntryNotFoundError
 
     commit = "f" * 40
@@ -1234,12 +1132,7 @@ def test_a_confirmed_absent_modules_json_still_pins_the_load(tmp_path, monkeypat
 
 
 def test_a_404_without_a_commit_header_is_tolerated_where_upstream_gates_it(tmp_path, monkeypatch):
-    """From 6.0 upstream refuses the type itself, so an unpinnable absence is not fatal.
-
-    Below 6.0 it is: see the refusal test beside this one. A proxy that strips
-    x-repo-commit, or an older hub whose error carries no response at all, leaves nothing
-    to pin to, and on a version where nothing else checks the type that has to refuse.
-    """
+    """A 404 without x-repo-commit is tolerated from 6.0 on, where upstream itself refuses the type."""
     import sentence_transformers
     from huggingface_hub.errors import EntryNotFoundError
 
@@ -1347,13 +1240,7 @@ def _write_module_config(folder, name, payload):
 
 
 def test_a_literal_activation_on_a_pooling_module_is_not_a_class_ref(tmp_path):
-    """SpladePooling's activation_function is an enum it compares, not a path it imports.
-
-    It lists activation_function in its own config_keys and saves "relu" or "log1p_relu"
-    there, then does `if self.activation_function == "log1p_relu"`. Keying the check on
-    the key name alone refused both values for not starting with "torch.", so no SPLADE
-    sparse model could load without the user turning on remote code for no reason.
-    """
+    """SpladePooling's activation values are enum literals, not class refs, so they are not refused."""
 
     class SpladePooling:
         config_file_name = "config.json"
@@ -1424,13 +1311,7 @@ def test_a_subclass_inherits_its_parents_rules(tmp_path):
 
 
 def test_every_config_driven_import_in_sentence_transformers_has_a_rule():
-    """The scoping is only safe if the list of loaders is complete.
-
-    Asym is an alias of Router from 5.0, so it reports Router's name and is covered by
-    that entry rather than its own. This asserts the set of classes, so a version that
-    adds another config-driven import shows up here as a missing key rather than as a
-    silently unchecked path.
-    """
+    """Asserts the config-driven loader set is complete, so a new one fails as a missing key."""
     covered = set(FastSentenceTransformer._MODULE_CONFIG_CLASS_REFS)
     assert covered == {"Dense", "WordEmbeddings", "Router", "Asym"}
 
@@ -1443,14 +1324,7 @@ def test_every_config_driven_import_in_sentence_transformers_has_a_rule():
 
 
 def test_the_delegated_check_fetches_the_legacy_config_filename(tmp_path, monkeypatch):
-    """A 3.x/4.x WordEmbeddings has no config_file_name, and its loader still reads
-    wordembedding_config.json.
-
-    Asking only for config.json got a 404, left `folders` empty, and passed, after which
-    the delegated loader read the legacy file and imported its tokenizer_class with
-    trust_remote_code=False. The local checker already consults
-    _LEGACY_MODULE_CONFIG_FILES; the delegated one did not.
-    """
+    """Legacy 3.x/4.x WordEmbeddings read wordembedding_config.json; the delegated check must fetch it."""
     _simulate_pre_six(monkeypatch)
 
     class LegacyWordEmbeddings:
@@ -1499,12 +1373,7 @@ def test_the_delegated_check_fetches_the_legacy_config_filename(tmp_path, monkey
 
 
 def test_an_unparseable_manifest_refuses_rather_than_passing(tmp_path, monkeypatch):
-    """The file is in hand and still unreadable, which is not "nothing to check".
-
-    The delegated loader opens the very same path straight afterwards, so a transient read
-    error here followed by a retry that succeeds there would import a type nothing ever
-    looked at. Below 6.0 nothing else checks it, so this refuses.
-    """
+    """An unparseable manifest is unverified, not absent; refuse, since below 6.0 nothing else checks it."""
     _simulate_pre_six(monkeypatch)
 
     broken = tmp_path / "models--acme--embedder" / "snapshots" / ("a" * 40)
@@ -1562,11 +1431,7 @@ def test_a_manifest_that_is_not_a_list_is_not_a_refusal(tmp_path, monkeypatch):
 
 
 def test_a_404_without_a_commit_header_refuses_below_six(tmp_path, monkeypatch):
-    """No commit from the response and none from the caller means no pin is possible.
-
-    The delegated request resolves the branch again and can get one that has since gained
-    a modules.json, so accepting the absence unpinned let that through.
-    """
+    """With no commit from the response or caller nothing is pinned; the branch could move, so refuse."""
     from huggingface_hub.errors import EntryNotFoundError
 
     _simulate_pre_six(monkeypatch)
@@ -1583,11 +1448,7 @@ def test_a_404_without_a_commit_header_refuses_below_six(tmp_path, monkeypatch):
 
 
 def test_an_explicit_commit_needs_no_commit_header(tmp_path, monkeypatch):
-    """A caller who named a commit has already answered the question the header answers.
-
-    The 404 was answered at that commit and there is nothing for a second resolution to
-    disagree with, so this must not refuse for want of a header.
-    """
+    """An explicit commit already pins the 404, so a missing commit header must not refuse the load."""
     from huggingface_hub.errors import EntryNotFoundError
 
     commit = "a" * 40
@@ -1607,12 +1468,7 @@ def test_an_explicit_commit_needs_no_commit_header(tmp_path, monkeypatch):
 
 
 def test_an_unreadable_module_config_refuses_rather_than_skipping(tmp_path, monkeypatch):
-    """A config that is present and unreadable is unverifiable, not absent.
-
-    The loader opens this same path next and its read may succeed, so skipping meant a
-    Dense activation could be imported with nothing having checked it. The refusal the
-    fetch path promised was only ever about the fetch; this is the read.
-    """
+    """A present but unreadable module config is unverifiable, not absent, so it must refuse, not skip."""
     st_models = pytest.importorskip("sentence_transformers.models")
     _simulate_pre_six(monkeypatch)
 

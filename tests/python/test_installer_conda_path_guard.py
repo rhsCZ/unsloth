@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""No installer PATH write may demote an ACTIVE conda environment.
-
-A prepend into the persistent User PATH outlives the activation it was made under, so from
-the next shell on conda resolves binaries and DLLs out of our directory. That is #5871:
-after installing Studio, `conda update --all --yes` leaves the Anaconda base unusable with
-`ImportError: DLL load failed while importing _ctypes`.
-
-One decision function per installer, with every persistent write routed through it, so a
-new call site cannot reintroduce the defect. Asserted here: the decision, that both
-PowerShell installers use it, and that the system-Python installer switch follows it. The
-POSIX half is tests/sh/test_install_conda_path_guard.sh.
-"""
+"""Persistent PATH writes must not demote an active conda env, or later conda loads the wrong DLLs."""
 
 from __future__ import annotations
 
@@ -116,13 +105,7 @@ def test_a_prepend_becomes_an_append_inside_an_active_conda_environment(
 
 @pytest.mark.parametrize("path_label", sorted(_PS_FILES))
 def test_every_persistent_path_write_routes_through_the_guard(path_label: str):
-    """Add-ToUserPath is the only persistent PATH writer, and it must not be bypassable.
-
-    Asserted on the function body rather than on a call site, because the call sites are
-    the thing that keeps changing: install.ps1 prepends the uv destination, the shim
-    directory and the shortcut shim directory, setup.ps1 five more, and a sixth added later
-    must inherit the guard without anyone remembering it exists.
-    """
+    """Add-ToUserPath is the only persistent PATH writer, so every new call site inherits the guard."""
     path, indent = _PS_FILES[path_label]
     body = _function(path, indent, "Add-ToUserPath")
     assert (
@@ -136,16 +119,7 @@ def test_every_persistent_path_write_routes_through_the_guard(path_label: str):
 
 @pytest.mark.parametrize("path_label", sorted(_PS_FILES))
 def test_a_downgraded_prepend_still_repositions_an_existing_front_entry(path_label: str):
-    """Declining to ADD is not the same as declining to DEMOTE.
-
-    A machine that ran the installer once outside conda has our directory at the FRONT of
-    the User PATH. Rerunning inside conda downgrades the Prepend to an Append, but an
-    unconditional "already present, nothing to do" early return leaves that front entry in
-    place, so the run says "conda keeps priority" while #5871 stays armed.
-
-    Structural, because Add-ToUserPath writes through [Microsoft.Win32.Registry], which does
-    not exist off Windows.
-    """
+    """An already-present early return must still reposition a front PATH entry, not leave it there."""
     path, indent = _PS_FILES[path_label]
     body = _function(path, indent, "Add-ToUserPath")
     match = re.search(r"\$alreadyPresent -and \$Position -eq 'Append'([^\)]*)\)", body)
@@ -226,13 +200,7 @@ def test_winget_is_not_the_first_route_inside_an_active_conda_environment():
     ids = ["install.sh", "studio/setup.sh"],
 )
 def test_the_posix_installers_carry_the_same_guard(path: Path, funcs: tuple[str, ...]):
-    """Cross-platform parity, asserted here so the PowerShell and POSIX halves cannot drift.
-
-    The behavioural cases are in tests/sh/test_install_conda_path_guard.sh, which runs the
-    extracted shell functions; this only holds that the guard exists at all, so a rewrite of
-    a PATH persistence block on the POSIX side cannot quietly drop it. Four writers in all:
-    the registry in install.ps1 and setup.ps1, the rc files in install.sh and setup.sh.
-    """
+    """Only checks that the POSIX installers still carry the conda PATH guard; behaviour is in tests/sh/."""
     source = path.read_text(encoding = "utf-8")
     for func in funcs:
         body = re.search(rf"\n{func}\(\) \{{.*?\n\}}\n", source, flags = re.DOTALL)
@@ -633,13 +601,7 @@ def test_every_posix_writer_repositions_a_stale_prepend(path: Path, arms: tuple[
 
 
 def test_the_repoint_pass_runs_before_the_presence_guards():
-    """The guard that skips the writers is satisfied by the very line that needs moving.
-
-    A previous run wrote the prepend, the shell that launched this installer evaluated it,
-    so the directory IS on the login PATH and `_path_has_dir` short-circuits the call. The
-    repointing therefore has to happen ahead of that guard, and it has to add nothing when
-    it gets there.
-    """
+    """The shim repoint must run before the _path_has_dir guard, since the stale prepend satisfies it."""
     source = INSTALL_SH.read_text(encoding = "utf-8")
     shim_guard = source.index('if ! _path_has_dir "$_UNSLOTH_LOGIN_PATH" "$_LOCAL_BIN"')
     shim_repoint = source.index('"~/.local/bin" \'\\.local/bin\' "" repoint')
@@ -706,13 +668,7 @@ _persist_login_path_dir "/opt/unsloth/bin" "/opt/unsloth/bin" "/opt/unsloth/bin"
     ids = ["install.sh", "studio/setup.sh"],
 )
 def test_the_rc_repointer_never_exposes_a_truncated_rc_file(path: Path, tmp_path: Path):
-    """`cat staged > rc` truncates the user's profile before it writes a byte back.
-
-    An interrupt or an I/O error in between leaves a half-written rc file, and the failure
-    branch then deleted the staged copy, which was the only complete one left. The next
-    login sources the wreckage. A rename is atomic: the file is the old one or the new one
-    and never neither, which is asserted here by making the rename itself fail.
-    """
+    """Repoint rc files by atomic rename; never cat staged > rc, which truncates the profile first."""
     rc = tmp_path / "rc"
     original = 'export PATH="$HOME/.local/bin:$PATH"\n# keep me\n'
     rc.write_text(original, encoding = "utf-8")
@@ -732,11 +688,7 @@ def test_the_rc_repointer_never_exposes_a_truncated_rc_file(path: Path, tmp_path
 
 
 def test_the_rc_repointer_keeps_the_permission_bits_it_found(tmp_path: Path):
-    """A 0600 rc file must not come back 0644 because the rename handed it the umask.
-
-    The staged file is created as a COPY for that reason, so it carries the original's bits
-    before a line of it is rewritten.
-    """
+    """The staged rc is a copy, so the rename keeps the original's mode bits instead of the umask."""
     rc = tmp_path / "rc"
     rc.write_text(
         '# Added by Unsloth installer\nexport PATH="$HOME/.local/bin:$PATH"\n',
@@ -762,13 +714,7 @@ def test_the_rc_repointer_keeps_the_permission_bits_it_found(tmp_path: Path):
     ids = ["install.ps1", "studio/setup.ps1"],
 )
 def test_every_stacked_conda_prefix_is_enumerated(path: Path, indent: str):
-    """`conda activate --stack` records the outer environments as CONDA_PREFIX_1, _2, _3,
-    _4 and on, and CONDA_SHLVL counts them.
-
-    A fixed list ending at _3 dropped everything past the fourth environment, so
-    `Refresh-SessionPath` left those prefixes out of the conda front and their entries
-    sorted after Machine and User -- the inverse of the ordering the stack established.
-    """
+    """Count stacked conda prefixes by CONDA_SHLVL: a fixed CONDA_PREFIX_1 to _3 list drops the rest."""
     body = _function(path, indent, "Get-ActiveCondaPrefixes")
     assert "CONDA_SHLVL" in body, body
     assert 'GetEnvironmentVariable("CONDA_PREFIX_$level")' in body, body
@@ -784,13 +730,7 @@ def test_every_stacked_conda_prefix_is_enumerated(path: Path, indent: str):
     ids = ["install.sh", "studio/setup.sh"],
 )
 def test_the_rc_repointer_rewrites_a_line_holding_a_backslash(path: Path, tmp_path: Path):
-    """POSIX awk decodes backslash escapes in a `-v` assignment.
-
-    The writers escape a backslash before building the line, so the value handed to awk was
-    not the value in the file: the literal `grep -qxF` matched, awk matched nothing, and the
-    helper renamed an unchanged file and reported success -- the installer said the stale
-    prepend had been moved while conda was still in front of it.
-    """
+    """awk -v decodes backslash escapes, so an escaped line never matched; the helper reported success."""
     rc = tmp_path / "rc"
     old_line = 'export PATH="/opt/od\\\\d/bin:$PATH"'
     new_line = 'export PATH="$PATH:/opt/od\\\\d/bin"'
@@ -836,13 +776,7 @@ def test_the_standalone_setup_repoints_the_home_relative_prepend_too():
     ids = ["install.sh", "studio/setup.sh"],
 )
 def test_the_rc_repointer_leaves_a_line_the_user_wrote(path: Path, tmp_path: Path):
-    """`export PATH="$HOME/.local/bin:$PATH"` is a line people write by hand all the time.
-
-    Rewriting one moves every executable in that directory behind the rest of PATH for good,
-    in every later shell, conda or not. Both installers write a `# Added by Unsloth ...`
-    comment immediately above the line they add, so that marker is the ownership record and
-    an identical line without it is not ours to touch.
-    """
+    """Rewrite a PATH line only under the Added by Unsloth marker; hand-written copies are the user's."""
     rc = tmp_path / "rc"
     original = "# my own path\n" 'export PATH="$HOME/.local/bin:$PATH"\n' 'alias ll="ls -l"\n'
     rc.write_text(original, encoding = "utf-8")

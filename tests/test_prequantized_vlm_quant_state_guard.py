@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Tests for the pre-quantized quant_state guard (unsloth #9867, #10010, #10017, #10276).
-
-transformers 5.4.0 (PR #44300) merged a submodule's renamings into the parent without
-re-scoping them, so a composite checkpoint's bitsandbytes sidecars renamed to keys the
-model does not have and were dropped and every quantized Linear loads with
-``quant_state = None``. Fixed upstream by PR #45567.
-
-The guard asks the INSTALLED transformers whether it scopes submodule renamings, never a
-version: main reported ``5.3.0.dev0`` at the commit that introduced the defect and
-``5.6.0.dev0`` at the one that fixed it.
-
-Loaded in isolation, no torch, no GPU, no network.
-"""
+"""Probe the installed transformers for renaming scope; dev version numbers do not mark the defect."""
 
 from __future__ import annotations
 
@@ -176,11 +164,7 @@ def _build_fixed_scope_prefix(monkeypatch):
 
 
 def _build_broken_without_core_model_loading(monkeypatch):
-    """The defect with `core_model_loading` unimportable: defensive, not observed.
-
-    Measured on ten real releases both modules need torch and fail together, so the
-    signature check is what would have to carry the answer if upstream ever split them.
-    """
+    """Not observed upstream; the signature check is the backstop if the two modules ever split."""
 
     def extract_weight_conversions_for_model(model):
         return []
@@ -299,17 +283,7 @@ def test_a_fixed_nightly_is_not_told_it_is_broken(import_fixes, monkeypatch, cap
 
 
 def _uninstall_runtime_repair(import_fixes, monkeypatch):
-    """Put the live attribute back to an unpatched function.
-
-    The check is silent once the runtime repair is installed, which is the point: the
-    repair covers exactly these releases, so advising a downgrade would contradict it.
-    These tests are about the message shown when the repair is NOT in effect, so they
-    have to say so rather than depend on whether an earlier test installed it.
-
-    A missing transformers is not an error here: nothing can have installed the repair,
-    so there is nothing to undo, and the caller goes on to install a stand-in module.
-    This file runs with pytest alone.
-    """
+    """Restore the unpatched function, so the message under test shows only when the repair is absent."""
     try:
         from transformers import conversion_mapping
     except Exception:
@@ -459,13 +433,7 @@ def test_warning_is_silent_once_the_runtime_repair_is_installed(import_fixes, mo
 
 
 def test_the_check_is_called_once_and_after_the_repair():
-    """Two calls warned before the repair and could not retract it.
-
-    `_gpu_init` gained a call from this branch's base and a second one after
-    `fix_transformers_composite_prefix_renaming`. On an affected transformers the first
-    emitted the downgrade advice moments before the repair made that advice wrong, and a
-    later silent call cannot unlog it.
-    """
+    """Run the check once, after the composite prefix repair, since a logged warning cannot be retracted."""
     import ast
 
     source = (_ROOT / "unsloth" / "_gpu_init.py").read_text(encoding = "utf-8")

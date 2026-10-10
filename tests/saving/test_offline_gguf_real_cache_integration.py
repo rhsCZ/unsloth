@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Integration tests for #7481 using real cached Gemma weights.
-
-Requires a one-time online download into ``$HF_HOME`` (defaults to a
-``hf_offline_test_cache`` directory under the platform temp dir):
-
-  HF_HOME=<cache> python -c \\
-    "from huggingface_hub import snapshot_download; snapshot_download('unsloth/gemma-3-270m-it-bnb-4bit', cache_dir='<cache>/hub')"
-
-Every test here drives unsloth's own resolver. Resolving through
-``hf_hub_download`` directly would pass with the fix reverted, since that is
-plain huggingface_hub behaviour rather than anything this change touches.
-
-Importing unsloth pulls the whole package graph, which CPU-only hosts cannot
-do, so the suite is gated behind ``UNSLOTH_INTEGRATION_IMPORT=1``.
-"""
+"""Must drive unsloth's resolver; hf_hub_download alone passes even with the fix reverted."""
 
 from __future__ import annotations
 

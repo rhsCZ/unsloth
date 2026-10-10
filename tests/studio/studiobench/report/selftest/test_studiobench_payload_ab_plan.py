@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The `ab_plan` row must survive payload assembly (unsloth#9580).
-
-It used to be filed under `header`, which is collapsed to its FIRST row, so the plan was
-dropped without a word while `record_counts` still reported two header rows.
-"""
+"""ab_plan must not be filed under header, which is collapsed to its first row and drops the plan."""
 
 from __future__ import annotations
 

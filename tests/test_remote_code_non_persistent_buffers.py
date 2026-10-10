@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""transformers 5 builds a model on the meta device and gives each non-persistent buffer
-empty storage for `_init_weights` to fill. Remote code written for 4.x computes those
-buffers (RoPE inv_freq, lightning-attention slopes) in `__init__` and its `_init_weights`
-only touches Linear / Embedding, so Ling-2.6-flash loaded with zero RoPE frequencies and
-zero decay slopes: first-batch loss 5.03 in 16-bit (11.64 in 4-bit, where the storage
-held garbage) against 1.12 for the same model on transformers 4.57.6."""
+"""transformers 5 gives non-persistent buffers empty storage that remote _init_weights must refill."""
 
 import importlib.util
 import math

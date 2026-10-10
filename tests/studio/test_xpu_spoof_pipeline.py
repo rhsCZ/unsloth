@@ -1,19 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Full Intel XPU spoof pipeline: fake torch.xpu on a GPU-less/NVIDIA runner so
-Unsloth's hardware selection + training-device path (detect -> select -> apply ->
-device_map -> cache clear) runs exactly as the CUDA path does, with no real
-Intel hardware. The XPU sibling of tests/_zoo_aggressive_cuda_spoof.py.
-
-State-sensitive: it fresh-imports the Unsloth hardware module under the spoof and
-mutates its module globals, so studio-backend-ci.yml runs it in the isolated
-"Hardware-spoof tests" step (never alongside tests that import hardware).
-
-torch.xpu surface faked here mirrors the PyTorch 2.6+ API hardware.py calls:
-is_available, device_count, current_device, get_device_name,
-get_device_properties(idx).total_memory, memory_allocated/reserved, mem_get_info
-(incl. the Arc B580 / Lunar Lake RuntimeError), is_initialized, synchronize,
-empty_cache, plus torch.version.xpu.
-"""
+"""Fakes torch.xpu on a non-Intel runner; it mutates hardware.py globals, so CI isolates it."""
 
 from __future__ import annotations
 
@@ -38,12 +24,7 @@ def _make_fake_xpu(
     mem_get_info: str = "ok",  # "ok" | "raise" | "absent"
     is_initialized: bool = False,
 ):
-    """Build a fake torch.xpu namespace + a call counter for synchronize/empty_cache.
-
-    mem_get_info: "ok" returns (free, total); "raise" models the Arc B580 / Lunar
-    Lake "device doesn't support querying free memory" RuntimeError; "absent"
-    omits the attribute so the memory_allocated fallback path is exercised.
-    """
+    """mem_get_info modes: ok, raise (Arc B580 / Lunar Lake), or absent to exercise the fallback."""
     total_bytes = int(total_gb * 1024**3)
     used_bytes = int(used_gb * 1024**3)
     calls = {"synchronize": 0, "empty_cache": 0}
@@ -94,12 +75,8 @@ def _import_studio_hardware_module():
 
 @pytest.fixture
 def spoof_xpu(monkeypatch):
-    """Apply a full torch.xpu spoof and return (hardware_module, xpu_call_counter).
-
-    Defaults present an unambiguous "prefer XPU" host: CUDA hidden, a numeric
-    ZE_AFFINITY_MASK, and torch.xpu reporting devices. Override cuda_available /
-    cuda_visible / force_xpu / ze_mask to model hybrid or canary hosts.
-    """
+    """Spoofs torch.xpu: defaults model a prefer-XPU host; keyword overrides model hybrid or canary
+    hosts."""
 
     def _apply(
         *,

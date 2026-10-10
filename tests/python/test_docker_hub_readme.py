@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The Docker Hub page is repository metadata, not something a push writes, so it
-only changes when the publish workflow PATCHes it. These pin that the README in the
-tree describes the images that actually ship and that the sync step cannot report
-success while the page stays stale.
-"""
+"""The Hub page changes only via the publish PATCH, so the sync step must fail if the page is stale."""
 
 from __future__ import annotations
 
@@ -86,15 +82,7 @@ def test_the_hub_readme_explains_the_studio_volume():
 
 
 def _docker_sections(text: str) -> list[str]:
-    """Every `#### Docker` section in the README, not just the first one.
-
-    This used to take `text.index("#### Docker")` and read to the next `####`. The README
-    grew a second Docker heading above the one that carries the run command (a one-line
-    pointer in the install list), and the pins below then read a section that was never
-    meant to hold a `docker run` and failed on main. Which heading comes first is an
-    editing accident, so key on the content instead: the section that runs the image is
-    the one these assertions are about.
-    """
+    """Returns every Docker section: the one with the run command is not always the first."""
     sections = []
     start = text.find("#### Docker")
     while start >= 0:
@@ -214,10 +202,7 @@ def test_the_sync_patches_the_readme_and_confirms_it(sync_job: dict, tmp_path: P
 
 
 def test_the_sync_never_touches_the_legacy_repository_route(sync_job: dict, tmp_path: Path):
-    """Docker Hub rejects every organization access token on
-    /v2/repositories/{owner}/{repo}/ with 403 "token issued from organization access
-    token is not allowed", whatever its scopes; only the namespace-scoped route
-    accepts it. That 403 failed the sync on every publish before this test existed."""
+    """Docker Hub rejects org access tokens on legacy /v2/repositories, so sync uses the namespace route."""
     step = sync_job["steps"][-1]
     _, log = _run_sync(step, tmp_path, live_after_patch = HUB_README.read_text(encoding = "utf-8"))
     assert "/v2/repositories/" not in log

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""``patch_psutil_cpu_freq`` -- Apple Silicon M4+ CPU frequency units (#8519).
-
-psutil <= 7.2.2 divides the pmgr voltage-state tables by 1e6 unconditionally,
-but Apple switched them from Hz to kHz on M4, so ``psutil.cpu_freq()`` comes
-back ~1000x too small. Runs on every OS: the platform is faked, so Linux and
-Windows CI exercise the same paths a Mac would.
-"""
+"""psutil <= 7.2.2 treats Apple M4+ kHz frequency tables as Hz, so cpu_freq reads ~1000x too small."""
 
 from __future__ import annotations
 

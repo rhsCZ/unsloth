@@ -1,9 +1,4 @@
-"""``_get_new_mapper`` must not leak into ``loader_utils`` globals.
-
-It used to ``exec`` the fetched ``mapper.py`` into ``globals()`` with only three names
-prefixed ``NEW_``, so the unrenamed FP8 tables REBOUND the installed ones for the rest
-of the process. The probe is supposed to read, not to swap the mappings out.
-"""
+"""Do not exec the fetched mapper into loader_utils globals, or its FP8 tables rebind installed ones."""
 
 import ast
 import os
@@ -210,11 +205,7 @@ def test_a_redirect_loop_ends(monkeypatch):
 
 
 def test_a_trickled_body_ends_at_the_deadline_not_at_the_chunk_size(monkeypatch):
-    """The per-read check, which is what makes the deadline reachable at all.
-
-    `iter_content` yields only once a whole chunk has ARRIVED and the socket timeout is
-    per read, so the old loop's clock reaches 131_072 seconds before the first check.
-    """
+    """iter_content yields only after a whole chunk arrives, so check the deadline per read."""
     clock = {"now": 0.0}
 
     class _Trickling:

@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Structural cover for the Windows torch-flavor invariant on the update path.
-
-The behavioural tests for _ensure_expected_torch_flavor live in test_cuda_repair.py.
-This file asserts the parts that are not a Python call: that setup.ps1 hands the flavor
-over before it invokes the stack, that setup.ps1 no longer wipes a healthy cu* venv when
-nvidia-smi fails to answer, that the repair specs and the mismatch line stay identical to
-install.ps1's, that the manifest round-trips the flavor, and that none of it reaches the
-Linux/macOS branch of install_python_stack(). Source/AST only -- no Windows required."""
+"""Source/AST checks for the Windows torch-flavor invariant on the update path; no Windows needed."""
 
 import ast
 import importlib.util
@@ -48,22 +41,14 @@ def _line_of(source: str, needle: str) -> int:
 
 
 def _publication_block() -> str:
-    """The whole flavor-publication block, delimited by the section that follows it.
-
-    Sliced by its end marker rather than a character count: a count silently
-    truncates the moment a comment inside the block grows, and a test that reads
-    half the block passes for the wrong reason.
-    """
+    """Sliced between two section markers, since a fixed character count breaks when a comment grows."""
     start = _SETUP_SRC.index("# ── Publish the torch flavor this run settled on ──")
     end = _SETUP_SRC.index("# Ordered heavy dependency installation", start)
     return _SETUP_SRC[start:end]
 
 
 class TestSetupPs1NoWipeEscape:
-    """A direct `studio update` has no rollback copy -- only install.ps1 makes one -- so a
-    wipe there is unrecoverable. Every way the bounded nvidia-smi probe can come back
-    empty on a working NVIDIA box collapses the expected tag to "cpu", and a healthy cu124
-    venv then reads as stale."""
+    """A failed nvidia-smi probe must not wipe a healthy cu* venv; direct updates have no rollback."""
 
     def test_the_escape_sits_ahead_of_the_wipe(self):
         escape = _line_of(_SETUP_SRC, "nvidia-smi did not answer, but this venv holds a")
@@ -126,20 +111,8 @@ class TestSetupPs1PublishesTheFlavor:
         assert "if (-not $NoTorchMode) {" in _publication_block()
 
     def test_unsetting_does_not_depend_on_the_powershell_version(self):
-        """`$env:X = ""` is not a portable unset, so it must not be used here.
-
-        Windows PowerShell 5.1 and PowerShell 7.0-7.4 delete the entry when it is
-        assigned an empty string. PowerShell 7.5 took .NET 9's change and KEEPS the
-        name with an empty value; only $null removes it there. Both spellings still
-        read as unset through the two readers on the Python side, which test
-        truthiness rather than presence, so this is about not shipping a line whose
-        meaning depends on which PowerShell the user happens to have installed.
-        Remove-Item behaves identically on every version.
-
-        Deleting rather than blanking also matters on its own: a value inherited
-        from the caller's shell must not survive a run that decided it cannot name
-        this host's flavor, or the stack enforces a stale expectation.
-        """
+        """Unset with Remove-Item: empty assignment keeps the name on PowerShell 7.5 and deletes it
+        on 5.1."""
         block = _publication_block()
         for name in (
             "UNSLOTH_EXPECTED_TORCH_TAG",
@@ -222,11 +195,7 @@ def _install_stack_ast():
 
 
 def _calls_in(node) -> list:
-    """Every plain function name called under `node`, in source order.
-
-    Depth first, not ast.walk: walk is breadth first, so a nested call reads as if it came
-    after its own siblings and the assertions below would encode the wrong order.
-    """
+    """Depth first, not ast.walk: breadth-first order would place nested calls after their siblings."""
     names = []
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         names.append(node.func.id)
@@ -236,12 +205,7 @@ def _calls_in(node) -> list:
 
 
 def _guards_containing(call_name: str) -> list:
-    """Every TOP-LEVEL `if` in install_python_stack() whose body calls `call_name`.
-
-    Plural on purpose: the four existing repair helpers run at two points (the step-2b
-    check and the step-13 final pass), so a test that took the first match would silently
-    assert about the wrong one. Top level only, or a guard's own nested `if` counts twice.
-    """
+    """Every top-level if calling call_name: repairs run at two points, so one match is not enough."""
     found = [
         node
         for node in _install_stack_ast().body
@@ -303,11 +267,7 @@ class TestStepThirteenWiring:
 
 
 def _base_total(**flags) -> int:
-    """Re-execute install_python_stack()'s step-total arithmetic under given flags.
-
-    Read out of the function rather than duplicated, so a step added without a matching
-    total fails here instead of drawing a progress bar past 100%.
-    """
+    """Lifts the step-total arithmetic from install_python_stack(); a step added without a total fails."""
     lines = _STACK_SRC.splitlines()
     start = next(i for i, line in enumerate(lines) if line.strip().startswith("base_total = "))
     end = next(i for i, line in enumerate(lines) if line.strip().startswith("base_requirements ="))
@@ -472,13 +432,7 @@ class TestTheFlavorProvenance:
 
 
 class TestABrokenTorchForcesItsOwnReinstall:
-    """$script:TorchImportDefinitivelyFailed is raised when the probe reports an import
-    ERROR rather than a timeout, so the wheel on disk is the suspect and not the driver.
-    Every consumer of it lives inside `if (-not $SkipPythonDeps)`, and the XPU and CPU
-    arms did not consult it at all: an unimportable +xpu wheel still reports its on-disk
-    tag as "xpu", so no flavour change is seen, the bounded range is satisfied, and the
-    resolver keeps it. The run then writes a completion manifest over a venv that cannot
-    import torch."""
+    """A definitive import failure forces a reinstall, since the wheel on disk is the suspect."""
 
     def test_the_flag_clears_the_dependency_skip(self):
         clear = _SETUP_SRC.index(
@@ -606,10 +560,7 @@ class TestPinProvenanceMustBeABoolean:
 
 
 def test_the_rocm_arm_forces_a_reinstall_only_when_the_other_arms_would():
-    """The ROCm arm used to pass --force-reinstall unconditionally, so every update on a
-    Windows ROCm venv re-resolved torch, torchvision and torchaudio against the ROCm index
-    and moved their resolved dependencies. It now keys the flag on the same three facts
-    the XPU and CPU arms read."""
+    """The ROCm arm forces --force-reinstall only on the same conditions as the XPU and CPU arms."""
     text = _SETUP_PS1.read_text(encoding = "utf-8")
     start = text.index('substep "installing PyTorch (AMD ROCm, $ROCmGfxArch)..."')
     end = text.index('substep "GPU ROCm PyTorch installed', start)
@@ -636,10 +587,7 @@ def test_the_rocm_arm_forces_a_reinstall_only_when_the_other_arms_would():
 
 
 def test_the_rocm_trio_is_reinstalled_when_the_architecture_index_moves():
-    """The +rocm tag names the family, not the GPU architecture: AMD publishes one index
-    per architecture family, so a changed UNSLOTH_ROCM_GFX_ARCH or a replaced card moves
-    the index while the resident trio still satisfies its pins. The index a trio came
-    from is recorded after each successful install and compared before the fast path."""
+    """The +rocm tag names only the family, so the recorded index is compared to catch an arch change."""
     text = _SETUP_PS1.read_text(encoding = "utf-8")
     force = text.index("$_recordedRocmIndex -ne $_rocmIndexIdentity")
     record = text.index("Set-Content -LiteralPath $script:RocmIndexRecord")
@@ -662,16 +610,7 @@ def test_the_rocm_trio_is_reinstalled_when_the_architecture_index_moves():
 
 
 class TestSetupPs1WindowsOnArmCudaPreservation:
-    """The win_arm64 CUDA shortcut is for an INFERRED expectation, not a stated one.
-
-    It runs ahead of the pin branch that raises $script:PinChangedForceReinstall, and that
-    flag is the only thing that clears $SkipPythonDeps. So without the exemption an
-    explicit pin skipped the dependency pass, install_python_stack.py and every
-    --force-reinstall at once, and `studio update` kept the old CUDA build while reporting
-    success. Exempting only /cpu was not enough: a user moving the venv to their own
-    cu129 mirror is stating an instruction just as much, and the index selection further
-    down is written to let a pin outrank the persisted NVIDIA channel.
-    """
+    """The WoA CUDA shortcut applies only to an inferred expectation, never to an explicit pin."""
 
     _GUARD = "if ((Test-WinArm64Venv) -and $installedTorchTag -and"
 

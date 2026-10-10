@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""Edge-case suite for scripts/check_frontend_dep_removal.py.
-
-Each case patches a copy of package.json to remove/move a dependency,
-runs the checker against the real lockfile, and asserts the verdict.
-Run: `python tests/studio/test_frontend_dep_removal.py` (exit 0 iff all pass).
-"""
+"""Edge-case checks for scripts/check_frontend_dep_removal.py; run as a script, exit 0 iff all pass."""
 
 from __future__ import annotations
 

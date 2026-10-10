@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Rendered cancel/retry regression for staged diffusion downloads.
-
-The browser runs the real Unsloth UI against a deterministic API simulation of
-the reported sequence:
-
-1. Start with the 2.6 GB Klein GGUF already cached.
-2. Stage its missing 8.2 GB companion assets through the Downloads panel.
-3. Cancel, pick the same quant again, and resume only those companion assets.
-4. Load exactly once and observe a short 100% GPU-finalization state that reaches ready.
-
-No model bytes are downloaded and no GPU is required.
-"""
+"""Staged diffusion download cancel and retry in the real UI against simulated APIs; needs no GPU."""
 
 import json
 import os

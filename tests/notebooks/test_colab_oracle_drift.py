@@ -1,21 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Guards the Colab oracle drift tripwire in scripts/notebook_validator.py.
-
-History: `colab-diff --strict` is the daily cron's escalation of the advisory
-PR-time check, and it had two defects that cancelled each other out badly.
-
-  * notebooks-ci.yml ran `refresh-colab` (which overwrites the committed pip
-    snapshot in place) BEFORE the diff, so the pip leg compared upstream
-    against a copy of itself and could never report drift -- the one oracle a
-    rule actually reads.
-  * `refresh-colab` only knew how to fetch pip-freeze, so the apt-list and
-    os-info snapshots had no acknowledgement path at all and drifted until
-    --strict failed on Ubuntu security bumps that nothing can consult.
-
-Net effect: the cron was permanently red for apt churn while blind to 233
-entries of real pip drift. These tests pin both halves of the fix.
-"""
+"""Guards colab-diff --strict; refresh-colab must not overwrite the pip snapshot before the diff."""
 
 from __future__ import annotations
 
@@ -114,10 +99,7 @@ def test_non_rule_oracles_never_fail_strict(oracle, capsys, name, drifted):
 
 
 def test_a_capped_listing_says_how_to_see_the_rest(oracle, capsys):
-    """Every package in the pip oracle is rule-bearing, so an entry the cap elides is one a
-    reviewer may be deciding on. In the drift this was written for, transformers 5.15.0 ->
-    5.16.1 sat past the CHANGED cap and the output read as though it had not moved at all.
-    """
+    """A capped listing must say how to see the rest, as every pip-oracle package is rule-bearing."""
     upstream, snapshot_dir = oracle
     upstream["pip-freeze.gpu.txt"] = "".join(f"pkg{i}=={i}.0\n" for i in range(200)) + PIP
 
@@ -199,10 +181,7 @@ def test_workflow_diffs_before_it_refreshes():
 
 
 def test_refresh_all_is_atomic(oracle, tmp_path, monkeypatch):
-    """A transient failure on the second or third fetch must not leave a
-    mixed-generation directory. pip is fetched first and is the only oracle
-    --strict reads, so a partial write would silence the tripwire on a refresh
-    that actually failed."""
+    """A failed refresh leaves no mixed snapshot set, since a partial pip write would silence --strict."""
     upstream, snapshot_dir = oracle
     for key in upstream:
         upstream[key] = "REFRESHED\n"
@@ -260,23 +239,14 @@ def test_cron_lint_survives_a_strict_drift_failure():
 
 
 def test_a_missing_strict_snapshot_fails_strict(oracle):
-    """An absent snapshot is not "nothing to compare": the rules read it.
-
-    `cmd_colab_diff` detected the missing file and continued before consulting the strict-key
-    declaration, so deleting `colab_os_info.gpu.txt` left `--strict` green while
-    `_colab_python_version` returned None and marker evaluation silently replayed every
-    requirement."""
+    """A missing strict snapshot must fail --strict; the rules read it, so absence is not no drift."""
     _, snapshot_dir = oracle
     (snapshot_dir / nv.COLAB_ORACLE_FILES["os-info-gpu.txt"]).unlink()
     assert _diff(snapshot_dir, strict = True) == 1
 
 
 def test_a_missing_pip_snapshot_fails_strict(oracle):
-    """The rule-bearing pip oracle counts the same way as os-info.
-
-    A separate test rather than a second assertion: `oracle` is function-scoped, so asking for it
-    twice in one test hands back the SAME directory, and the second check would have passed on the
-    first deletion however pip's absence were handled."""
+    """A missing pip snapshot must fail --strict; the oracle fixture hands back one directory per test."""
     _, snapshot_dir = oracle
     (snapshot_dir / nv.COLAB_ORACLE_FILES["pip-freeze.gpu.txt"]).unlink()
     assert _diff(snapshot_dir, strict = True) == 1
@@ -305,12 +275,7 @@ def test_a_strict_key_absent_from_both_oracles_fails_strict(oracle):
 
 
 def test_an_unreadable_strict_value_fails_strict(oracle):
-    """The key being present is not enough; its consumer has to be able to read it.
-
-    `_parse_os_lines` emits a `python` key for any line starting with `Python`, while
-    `_colab_python_version` only accepts `Python <digits>`. An upstream reformat refreshed into the
-    snapshot leaves both sides equal and the key present, so the no-drift return fired while marker
-    evaluation quietly disabled itself."""
+    """A strict value its consumer cannot parse, such as `Python version 3.14`, must fail --strict."""
     upstream, snapshot_dir = oracle
     reformatted = "Python version 3.14\nR version 4.5.3\n"
     upstream["os-info-gpu.txt"] = reformatted
@@ -321,11 +286,7 @@ def test_an_unreadable_strict_value_fails_strict(oracle):
 
 
 def test_an_advisory_oracle_that_will_not_fetch_does_not_fail_the_refresh(oracle, tmp_path, capsys):
-    """apt-list is unreachable: the other two still land and the cron stays green.
-
-    `--all` refused to write anything unless every oracle fetched, so a transient failure on the
-    one oracle no rule reads reddened the daily job and left the pip drift unacknowledged -- the
-    opposite of the disposition colab-diff gives that same file."""
+    """An unfetchable advisory oracle such as apt-list must not block refreshing the other snapshots."""
     upstream, _ = oracle
     real = nv.urllib.request.urlopen
 
@@ -394,11 +355,7 @@ def test_a_refresh_never_acknowledges_a_payload_the_rules_cannot_read(
 
 
 def test_a_failed_write_restores_the_whole_snapshot_set(oracle, tmp_path, monkeypatch, capsys):
-    """A refresh lands as a set or not at all.
-
-    Each write is atomic on its own, but failing part way through left a fresh package list beside
-    a stale Python version, and the workflow's `|| echo` fallback then linted against that mix
-    while reporting it had fallen back to the committed snapshot."""
+    """A failed refresh must restore the whole set, not leave new packages beside a stale Python."""
     upstream, snapshot_dir = oracle
     committed = {
         name: (snapshot_dir / name).read_bytes() for name in nv.COLAB_ORACLE_FILES.values()
@@ -457,11 +414,7 @@ def test_the_seed_list_is_the_one_the_rules_use():
 
 @pytest.mark.parametrize("dropped", SEED_PACKAGES)
 def test_a_pin_file_missing_a_seed_package_is_not_acknowledged(oracle, tmp_path, dropped):
-    """A truncated 200 parses fine and resolves every R-INST rule against nothing.
-
-    Accepting any payload with one readable pin let `refresh-colab --all` overwrite the committed
-    snapshot with it, and the lint that follows then returns early on every rule whose seed package
-    is gone."""
+    """A pin file missing a seed package must be rejected, or the lint silently skips its rules."""
     upstream, _ = oracle
     upstream["pip-freeze.gpu.txt"] = "\n".join(
         line for line in PIP.splitlines() if not line.startswith(f"{dropped}==")
@@ -473,10 +426,7 @@ def test_a_pin_file_missing_a_seed_package_is_not_acknowledged(oracle, tmp_path,
 
 
 def test_a_rollback_survives_a_filesystem_that_is_still_full(oracle, tmp_path, monkeypatch):
-    """Restoring by rewriting the bytes needs the room the failure just proved is missing.
-
-    A second raise mid-rollback left the files written before the failure fresh beside stale ones,
-    which is the mixed generation the rollback exists to prevent."""
+    """Rollback must survive a still-full disk, since rewriting old bytes can fail and mix generations."""
     upstream, snapshot_dir = oracle
     committed = {
         name: (snapshot_dir / name).read_bytes() for name in nv.COLAB_ORACLE_FILES.values()
@@ -505,10 +455,7 @@ def test_a_rollback_survives_a_filesystem_that_is_still_full(oracle, tmp_path, m
 
 
 def test_a_dry_run_install_does_not_undo_a_removal():
-    """`--dry-run` prints what pip would do and changes nothing, here as everywhere else.
-
-    Treating it as a real reinstall reset the removal, so R-INST-005 returned early instead of
-    reporting the dependency the cell really leaves missing."""
+    """A `pip install --dry-run` changes nothing, so it must not undo an earlier uninstall."""
     assert nv._removed_by_cell(
         "!pip uninstall -y tokenizers; pip install --dry-run tokenizers", "tokenizers"
     )
@@ -518,10 +465,7 @@ def test_a_dry_run_install_does_not_undo_a_removal():
 
 
 def test_an_unfetchable_rule_bearing_oracle_fails_strict(oracle, capsys):
-    """Not compared is not "no drift".
-
-    A transient fetch failure only warned and returned success, so the job reported a pass for a
-    check that never ran and the refresh after it fed the lint an oracle nothing had compared."""
+    """An unfetchable rule-bearing oracle must fail --strict; a check that never ran is not a pass."""
     upstream, snapshot_dir = oracle
     real = nv.urllib.request.urlopen
 

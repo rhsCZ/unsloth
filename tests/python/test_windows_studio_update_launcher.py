@@ -152,13 +152,8 @@ def _successful_version_run(calls = None):
 
 
 def _unrunnable_version_run(calls):
-    """What running one of these stubs answers, without running it.
-
-    The launchers in this file are a few bytes behind an MZ, never a real PE image. Handing one to
-    CreateProcess on a Windows desktop can raise the modal "Unsupported 16-Bit Application" dialog,
-    and elsewhere it fails with an exec format error. That failure is the answer the recovery path
-    is exercised against, so it is raised here directly and the file is never started.
-    """
+    """Launcher stubs are not real PEs; CreateProcess can show a 16-bit dialog, so ENOEXEC is raised
+    here."""
 
     def run(argv, **kwargs):
         calls.append((argv, Path(argv[0]).read_bytes()))

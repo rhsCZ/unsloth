@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Deterministic plan-mode routing for the local Claude subagent.
-
-SKILL.md asks the parent model to pick the read-only tool in plan mode, which a
-small local model can forget. The generated plugin also ships a PreToolUse hook
-that reads permission_mode directly, so the editing agent is denied by rule.
-"""
+"""Plan mode is enforced by a PreToolUse hook, since SKILL.md prompting alone is not reliable."""
 
 from __future__ import annotations
 

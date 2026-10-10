@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The two methods the viewport-gap measurement in #9058 drives this harness through.
-
-#9058 targets this page rather than duplicating the harness, and its committed
-`probe_compact_tail_gap.py` preflights for these exact names and exits naming whichever is
-missing. So renaming either one, or dropping a key out of `gapMetrics`, breaks a probe on
-another branch rather than anything here, which is precisely the kind of break nothing local
-would catch.
-"""
+"""Keep the method names and gapMetrics keys; probe_compact_tail_gap.py preflights for them."""
 
 import re
 from pathlib import Path

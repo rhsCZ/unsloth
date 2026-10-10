@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Two Kaggle accounts: the draw, the handover, and the ways this goes quiet.
-
-The failure this whole file is written against is not an exception. It is a
-GREEN run that spent the wrong account, or spent nothing at all and said so in a
-way nobody reads. That is not hypothetical here: the workflows referenced a
-secret that had been deleted, `gate.py` answers a missing credential with a skip
-that exits 0, and both Kaggle workflows were therefore a silent no-op on main
-with every check passing. The first test below is the one that would have caught
-it, so it is written first.
-
-Everything here runs on CPU with no Kaggle quota spent: the client is a stub, so
-the only thing that ever reaches the network in these paths is not reached.
-"""
+"""Two Kaggle accounts: the failure is a green run that spent the wrong account or nothing at all."""
 
 from __future__ import annotations
 
@@ -52,16 +40,7 @@ def _steps(workflow: dict) -> list[tuple[str, str, dict]]:
 
 @pytest.mark.parametrize("path", (NOTEBOOK_WF, STUDIO_WF), ids = ("notebook", "studio"))
 def test_no_workflow_names_a_secret_that_does_not_exist(path):
-    """THE GUARD THIS FILE EXISTS FOR, and it is written from a real outage.
-
-    `KAGGLE_ACCESS_TOKEN_GH` was deleted from the repository. Both workflows
-    still named it, so every step got an empty string, and `gate.py` reads an
-    absent credential as "expected on a fork" and skips with exit 0. Two GPU
-    workflows became a no-op and every check stayed green.
-
-    So the set of Kaggle secrets a workflow may reference is CLOSED, and any
-    name outside it fails here rather than on the next quiet Sunday.
-    """
+    """A workflow may name only the closed set of Kaggle secrets; a deleted one made both no-op."""
     referenced = set(re.findall(r"secrets\.([A-Z0-9_]+)", path.read_text(encoding = "utf-8")))
     kaggle = {s for s in referenced if "KAGGLE" in s}
     assert kaggle == set(gate.DEFAULT_ACCOUNT_ENVS), (
@@ -88,11 +67,7 @@ def test_every_step_that_runs_a_kaggle_script_is_given_a_token(path):
 
 @pytest.mark.parametrize("path", (NOTEBOOK_WF, STUDIO_WF), ids = ("notebook", "studio"))
 def test_only_the_gate_sees_both_accounts(path):
-    """One account per step, everywhere except the one step that chooses.
-
-    A later step holding both tokens could authenticate as either, which is the
-    state the account output exists to make impossible.
-    """
+    """Only the gate step may see both account tokens; a later step holding both could act as either."""
     for job_name, step_name, step in _steps(_wf(path)):
         env = step.get("env") or {}
         tokens = sorted(k for k in env if k.startswith("KAGGLE_API_TOKEN"))
@@ -110,17 +85,7 @@ def test_only_the_gate_sees_both_accounts(path):
 
 @pytest.mark.parametrize("path", (NOTEBOOK_WF, STUDIO_WF), ids = ("notebook", "studio"))
 def test_the_chosen_token_is_INDEXED_and_never_a_ternary(path):
-    """`${{ cond && secrets.A || secrets.B }}` is the shape this must not use.
-
-    An empty or missing first secret makes the `&&` falsy, the `||` hands over
-    the OTHER account's token, and every output beside it still names the first
-    account: the run spends one account and reports another, and the cleanup
-    then looks for its kernels under a username that does not own them.
-
-    Indexing the secrets context with a name carried in the matrix cannot
-    express that state at all, which is why it is required rather than
-    preferred.
-    """
+    """Index secrets by name, never a && || ternary: an empty first secret hands over the other token."""
     for job_name, step_name, step in _steps(_wf(path)):
         env = step.get("env") or {}
         expr = env.get("KAGGLE_API_TOKEN", "")
@@ -154,12 +119,7 @@ def test_no_token_is_ever_a_job_output(path):
     ids = ("notebook", "studio"),
 )
 def test_the_concurrency_group_is_keyed_on_the_account(path, suffix):
-    """Kaggle's 2-session cap is per ACCOUNT, so the lock must be too.
-
-    One group for the whole workflow means every run queues behind every other
-    run whichever account it would spend, and a second account adds no capacity
-    at all -- the run is green, the hours exist, and nothing uses them.
-    """
+    """Kaggle's 2-session cap is per account, so the concurrency group must be keyed per account."""
     groups = [
         (job.get("concurrency") or {}).get("group")
         for job in _wf(path)["jobs"].values()
@@ -186,10 +146,7 @@ def test_the_gpu_job_takes_the_account_through_a_one_element_matrix(path):
 
 @pytest.mark.parametrize("path", (NOTEBOOK_WF, STUDIO_WF), ids = ("notebook", "studio"))
 def test_no_kaggle_username_is_hardcoded_on_the_launch_path(path):
-    """A kernel id is `<owner>/<slug>`. A literal owner belongs to whichever
-    account happened to be first when it was typed, so the other account cannot
-    push under it -- and, worse, cannot DELETE under it, which turns a leak into
-    a log line indistinguishable from a kernel that was already gone."""
+    """A literal kernel owner belongs to one account, so the other cannot push or delete under it."""
     for job_name, step_name, step in _steps(_wf(path)):
         body = step.get("run") or ""
         if "launch.py" not in body:
@@ -203,11 +160,7 @@ def test_no_kaggle_username_is_hardcoded_on_the_launch_path(path):
 
 @pytest.mark.parametrize("path", (NOTEBOOK_WF, STUDIO_WF), ids = ("notebook", "studio"))
 def test_the_recheck_can_actually_stop_the_push(path):
-    """Both workflows re-ask with the account slot in hand, and in BOTH the push
-    is gated on that answer. A measurement that cannot stop anything is a log
-    line, and the Studio leg had exactly that gap: no recheck at all, so a gate
-    answer a whole queue-wait old was the last word before a session was spent.
-    """
+    """Both workflows recheck with the account slot held, and the push is gated on that answer."""
     steps = _steps(_wf(path))
     recheck = [s for _, _, s in steps if s.get("id") == "recheck"]
     assert recheck, f"{path.name} never re-asks the gate with the slot in hand"
@@ -234,15 +187,7 @@ def test_the_split_follows_the_weekly_hours():
 
 
 def test_a_rerun_returns_to_the_same_account(monkeypatch):
-    """Keyed on the run id ALONE. A re-run of a run whose kernels are still in
-    flight must go back to the account that holds them: the other account cannot
-    delete them, so a rerolled attempt strands the first attempt's session.
-
-    The ATTEMPT is varied here rather than just calling twice. Calling twice
-    only proves the function is deterministic, which it would be even if it read
-    `GITHUB_RUN_ATTEMPT` -- that value does not change inside one process, so a
-    mutation adding it survived the earlier version of this test.
-    """
+    """Account choice keys on the run id alone, so a rerun returns to the account holding its kernels."""
     weights = {"1": 60.0, "2": 30.0}
     for run_id in ("1", "17", "912837", "40000000001"):
         picks = set()
@@ -256,20 +201,7 @@ def test_a_rerun_returns_to_the_same_account(monkeypatch):
 
 
 def test_the_account_draw_is_salted_apart_from_the_sampling_draw():
-    """Two decisions off one run id, so they are salted apart.
-
-    STATED PLAINLY BECAUSE IT LIMITS THE CLAIM: the statistical version of this
-    test does not work, and it was tried. Removing the salt leaves `sampled_in`
-    reading `digest % 100` and this draw reading `digest % 1_000_000`, and those
-    are independent enough that the measured share of account 1 among sampled-in
-    runs moved from a 0.0039 gap to a 0.0059 one over 200k ids -- both inside
-    noise. A test asserting independence therefore CANNOT fail on the mutation
-    it exists for, which is a test that only looks like coverage.
-
-    So this asserts the derivation instead: the two draws must not hash the same
-    string. That is checkable, and it keeps the property from being removed by
-    someone who has not measured what removing it does.
-    """
+    """Salt asserted in source: a statistical test of the salt was tried and could not fail on it."""
     source = (CI_DIR / "gate.py").read_text(encoding = "utf-8")
     picked = source.split("def weighted_pick", 1)[1].split("\ndef ", 1)[0]
     assert (
@@ -410,13 +342,8 @@ def _run_launcher(monkeypatch, tmp_path, username, *, user_arg):
 
 
 def test_the_launcher_refuses_a_username_the_token_does_not_own(tmp_path, monkeypatch):
-    """The cross-check behind the matrix, and it must REFUSE rather than log.
-
-    If the selected account and the token ever disagree, every push fails for a
-    reason that reads like a bad notebook -- or succeeds under a name whose
-    kernels this job's cleanup then cannot delete, and the session bills on with
-    nobody watching. Nothing may be pushed in that state.
-    """
+    """Launcher must refuse a username its token does not own, since cleanup could not delete the
+    kernels."""
     code, result, pushed = _run_launcher(monkeypatch, tmp_path, "alice", user_arg = "bob")
     assert pushed == [], "a kernel was pushed under a name the token does not own"
     assert result["verdict"] == "infra"

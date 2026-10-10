@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A class torchao deleted must not end LoRA creation that never touches torchao.
-
-peft's dispatch table keeps the first non-None dispatcher, so one that RAISES ends
-`get_peft_model` for models it does not apply to. Declining for every weight would swap a loud
-bug for a quiet one, since AffineQuantizedTensor is still importable and a weight of that class
-would silently get an ordinary LoRA layer, so the isinstance check is redone against whichever
-classes this torchao ships. A torchao that is BROKEN rather than newer must still raise, which is
-why the two class names are matched rather than the word "torchao".
-"""
+"""A deleted torchao class must not end LoRA creation for models that never touch it."""
 
 import os
 import sys
@@ -107,11 +99,7 @@ class _BlockTorchao:
 
 @pytest.fixture
 def fake_torchao(monkeypatch):
-    """Stand in for torchao with a chosen subset of the two tensor subclasses present.
-
-    torchao 0.18 keeps AffineQuantizedTensor only as an empty stub, so a real instance cannot be
-    built there; these stand in for the classes peft's isinstance check was written against.
-    """
+    """Stub torchao, since torchao 0.18 keeps AffineQuantizedTensor only as an empty stub."""
 
     def build(affine = True, linear_activation = False):
         for name in [k for k in sys.modules if k == "torchao" or k.startswith("torchao.")]:
@@ -387,11 +375,7 @@ def test_a_non_import_error_still_raises(peft_env, fake_torchao):
 
 
 def test_an_import_error_naming_a_class_that_is_still_there_still_raises(peft_env, fake_torchao):
-    """REGRESSION. The name matching is on the MESSAGE, so a failure from elsewhere in the
-    dispatcher that happens to mention one of the classes reached the degraded path with nothing
-    actually missing. That swallowed a real error and re-ran whatever construction had already
-    happened, so the layer was built twice.
-    """
+    """Matching on the message let unrelated errors reach the degraded path and build the layer twice."""
     classes = fake_torchao(affine = True, linear_activation = True)
     built = []
 
@@ -545,10 +529,7 @@ def test_the_degraded_path_still_matches_through_an_unrelated_decorator(peft_env
 
 
 def test_the_patched_dispatcher_still_pickles():
-    """peft objects get pickled for `spawn` workers. `functools.wraps` keeps upstream's
-    `__module__` and `__qualname__` and the patch replaces the attribute those name, so pickle's
-    by-reference lookup lands back on the wrapper. Uses the real peft, since a dispatcher defined
-    in a test function could not show that upstream's qualname still resolves."""
+    """Patched dispatcher must still pickle: functools.wraps keeps the qualname that pickle looks up."""
     import pickle
 
     _require_peft()

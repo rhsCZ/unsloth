@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""CPU-only unit tests for the Kaggle T4 smoke harness.
-
-These cover the logic that decides whether a run passed, whether quota gets
-spent and whether the kernel notebook is well formed: no GPU needed, and all of
-it expensive to discover on a Kaggle session forty minutes later. The training
-payload itself is not exercised here, since it needs a T4.
-"""
+"""CPU-only tests for the Kaggle T4 smoke harness; the training payload itself needs a T4."""
 
 from __future__ import annotations
 
@@ -205,12 +199,7 @@ def _ago(hours):
 
 
 def test_survey_finds_a_running_kernel_hidden_behind_newer_finished_ones():
-    """The exact hole a fixed "12 most recent" bound left open.
-
-    A kernel that started three hours ago and is still running, with forty newer
-    kernels since run and finished. Bounding the scan by COUNT misses it and the
-    push dies at the capacity cap; bounding it by the session ceiling cannot.
-    """
+    """A running kernel older than many newer finished ones must still be found: scan by time, not count."""
     from gate import concurrency_verdict, survey_kernels
 
     kernels = [_FakeKernel(f"u/done{i}", _ago(0.5 + i * 0.01)) for i in range(40)]
@@ -292,12 +281,7 @@ def test_statuses_that_all_come_back_unreadable_are_not_read_as_idle():
 
 
 def test_deleted_kernels_do_not_block_a_readable_idle_account():
-    """Deleted kernels 404 routinely; that must not wedge the gate shut.
-
-    The launcher deletes every kernel it pushes, so a 404 in the window is the
-    ordinary case, and it is not an unknown state: the slot is definitively
-    free.
-    """
+    """A 404 from a deleted kernel means the slot is free, so it must not block an idle account."""
     from gate import concurrency_verdict, survey_kernels
 
     api = _FakeApi(
@@ -309,12 +293,7 @@ def test_deleted_kernels_do_not_block_a_readable_idle_account():
 
 
 def test_one_unreadable_status_stands_the_job_down():
-    """The hole a "only if ALL of them are unreadable" test left open.
-
-    One in-window kernel answering 5xx may be the human session this job yields
-    to: "the ones we could read were idle" says nothing about the one we could
-    not, and proceeding takes the account's last slot.
-    """
+    """One unreadable in-window kernel stands the job down, since it may be a human's session."""
     from gate import concurrency_verdict, survey_kernels
 
     api = _FakeApi(
@@ -364,12 +343,7 @@ def test_the_gate_knows_its_own_kernels_from_a_strangers():
 
 
 def test_the_prefix_the_gate_looks_for_is_the_one_the_launcher_pushes():
-    """Two files name the same string and only one of them creates it.
-
-    If they disagree, the gate silently reclassifies every kernel this workflow
-    launches as somebody else's, and the job stands down forever for a reason no
-    log explains.
-    """
+    """The gate's own-kernel prefix must match what the launcher pushes, or the job stands down forever."""
     import launch
     from gate import OWN_KERNEL_PREFIX
 
@@ -377,13 +351,7 @@ def test_the_prefix_the_gate_looks_for_is_the_one_the_launcher_pushes():
 
 
 def test_a_single_foreign_kernel_stands_the_job_down():
-    """The policy: the account is shared with human use and CI yields.
-
-    Kaggle would allow a second concurrent kernel and this deliberately does not
-    take it while a stranger holds the first. The knob is
-    ALLOWED_IN_FLIGHT_FOREIGN_KERNELS, and its default of 0 is what is under
-    test.
-    """
+    """CI yields to human use: one foreign kernel stands it down; ALLOWED_IN_FLIGHT_FOREIGN_KERNELS is 0."""
     from gate import ALLOWED_IN_FLIGHT_FOREIGN_KERNELS, concurrency_verdict
 
     assert ALLOWED_IN_FLIGHT_FOREIGN_KERNELS == 0
@@ -402,13 +370,7 @@ def test_a_foreign_kernel_blocks_even_when_a_slot_is_free():
 
 
 def test_this_workflows_own_leftovers_still_occupy_slots():
-    """A previous run of this workflow is not a stranger, and not free either.
-
-    Asserted at both widths rather than at whatever the default happens to be,
-    because the default moved: this workflow used to push two kernels and now
-    pushes one, and the property being pinned -- our own in-flight kernels are
-    counted against the cap like anyone else's -- is the same either way.
-    """
+    """A leftover kernel from this workflow still occupies a slot, counted the same as a stranger's."""
     from gate import concurrency_verdict
 
     leftover = "danielhanchen/unsloth-t4-ci-abc"
@@ -419,14 +381,7 @@ def test_this_workflows_own_leftovers_still_occupy_slots():
 
 
 def test_an_idle_account_clears_the_kernel_this_workflow_pushes():
-    """One kernel, carrying all four legs, leaving the second slot for Unsloth.
-
-    This asserted 2, when four legs meant two kernels of two and the notebook
-    leg took the whole account. The legs now queue inside a single kernel, so
-    the same four run in one slot -- and the slot that frees up is the one
-    kaggle-t4-studio-gpu-ci.yml pushes into, which is the point of the change
-    rather than a side effect of it.
-    """
+    """Four legs share one kernel, so this takes one slot and the other is left for the studio workflow."""
     from gate import KERNELS_PER_INVOCATION, concurrency_verdict
 
     assert KERNELS_PER_INVOCATION == 1
@@ -448,15 +403,7 @@ def test_an_idle_account_clears_the_kernel_this_workflow_pushes():
 
 
 def test_a_survey_that_ran_out_of_time_is_not_read_as_an_idle_account():
-    """The survey has to answer inside the job's deadline, not be killed by it.
-
-    Hundreds of status calls, each merely slow rather than hung, outlast the
-    gate job's timeout-minutes: the runner dies, the workflow reports red, and
-    nothing was learned about the code. Giving up on a wall-clock budget turns
-    that into the same incomplete-survey skip the page cap already produces --
-    and the kernels it did read being idle is NOT an answer about the ones it
-    never reached.
-    """
+    """A survey cut short by its wall-clock budget is an incomplete survey, not an idle account."""
     from gate import concurrency_verdict, survey_kernels
 
     ticks = {"t": 0.0}
@@ -555,15 +502,7 @@ def test_a_gate_error_is_a_skip_not_a_failure(monkeypatch, tmp_path):
 
 
 def test_the_gate_bounds_its_network_calls_before_it_makes_one(monkeypatch, tmp_path):
-    """A stalled Kaggle call has to raise, or --soft-fail has nothing to catch.
-
-    The client takes no timeout of its own and Python's default is to block
-    forever, so authenticate(), quota_view() or a status call meeting a dead
-    connection returns to nobody: the job's timeout-minutes kills the runner and
-    the pull request goes red on infrastructure, which this workflow's contract
-    says never happens. The deadline is asserted at the FIRST call, since one
-    set afterwards would leave authentication unbounded.
-    """
+    """The Kaggle client has no timeout, so the socket deadline must be set before the first call."""
     import gate
 
     seen = {}
@@ -580,13 +519,7 @@ def test_the_gate_bounds_its_network_calls_before_it_makes_one(monkeypatch, tmp_
 
 
 def test_the_gate_job_deadline_exceeds_the_gates_own_bound():
-    """The gate must give its own answer, rather than be killed mid-question.
-
-    Its worst case is authentication and the quota read at the socket ceiling
-    each, plus the survey's wall-clock budget and the one call that can still be
-    in flight when the budget expires. The job deadline sits above that with
-    room for checkout and the pip install, or a slow Kaggle reports red.
-    """
+    """The job timeout must exceed the gate's own worst case, so it answers rather than being killed."""
     import gate
 
     # Per account: auth, username and quota at the socket ceiling, then one survey budget shared
@@ -658,11 +591,7 @@ def _run_gate_against(
     *extra,
     survey = None,
 ):
-    """The gate against an account whose quota and kernels read exactly so.
-
-    ``survey`` takes a result or a callable, the callable being how a test says
-    "and this must not be called at all".
-    """
+    """survey is a result, or a callable meaning the survey must not be called at all."""
     import gate
 
     answer = _idle_account() if survey is None else survey
@@ -681,12 +610,7 @@ def _run_gate_against(
 
 
 def test_an_exhausted_weekly_quota_is_the_one_red_stand_down(monkeypatch, tmp_path):
-    """Nonzero, and carrying the sentence verbatim in both places a human reads.
-
-    The numbers ride along rather than replacing it: remaining, total and the
-    refresh time are what tell the reader WHEN it clears, and the API has
-    already handed them over.
-    """
+    """An exhausted quota exits nonzero and prints the sentence verbatim with remaining and refresh time."""
     import gate
 
     code, outputs, summary = _run_gate_against(monkeypatch, tmp_path, EXHAUSTED)
@@ -708,12 +632,7 @@ def test_the_required_sentence_is_the_one_that_was_asked_for():
 
 
 def test_the_exhausted_answer_costs_one_api_call_and_no_kernel(monkeypatch, tmp_path):
-    """Before the survey, so it is a quota read rather than a Kaggle session.
-
-    Answering after the concurrency survey would spend up to SURVEY_BUDGET_SEC
-    of status calls to report that there is nothing left to spend, and the whole
-    point of failing here is that it is the cheap end of the workflow.
-    """
+    """Quota is read before the survey: an exhausted account costs one call, not the whole survey budget."""
 
     def _must_not_survey(api):
         raise AssertionError("the survey ran after the quota was already exhausted")
@@ -753,11 +672,7 @@ def test_a_busy_account_is_still_a_skip(monkeypatch, tmp_path):
 
 
 def test_a_caller_that_asks_for_soft_failure_still_gets_one(monkeypatch, tmp_path):
-    """--soft-fail is a request, and the recheck step makes it.
-
-    It softens the exit code and nothing else: the reason still says what
-    happened, which is what the stale-approval warning quotes.
-    """
+    """--soft-fail softens only the exit code; the reason text still states what happened."""
     import gate
 
     code, outputs, summary = _run_gate_against(monkeypatch, tmp_path, EXHAUSTED, "--soft-fail")
@@ -768,12 +683,7 @@ def test_a_caller_that_asks_for_soft_failure_still_gets_one(monkeypatch, tmp_pat
 
 
 def test_soft_failure_is_asked_for_rather_than_assumed(monkeypatch, tmp_path):
-    """The flag defaulting to on would make the red unreachable.
-
-    It used to default to True, so every invocation looked like a caller that
-    had asked for softness. Nobody can ask for the opposite of a default that is
-    always taken, which is why the three states are distinguished.
-    """
+    """--soft-fail defaults off: a default that is always taken would make the red state unreachable."""
     import gate
 
     unasked = _run_gate_against(monkeypatch, tmp_path / "default", EXHAUSTED)[0]
@@ -791,12 +701,7 @@ def test_soft_failure_is_asked_for_rather_than_assumed(monkeypatch, tmp_path):
 
 
 def _write_reference(path: Path, metrics: list[dict], max_steps: int) -> Path:
-    """A reference file shaped the way a captured one is.
-
-    ``config.max_steps`` is not decoration: check_reference refuses to compare
-    against a file without it, so a helper that omitted it would make every test
-    below a test of that refusal instead.
-    """
+    """Writes config.max_steps too, because check_reference refuses a reference that lacks it."""
     path.write_text(json.dumps({"metrics": metrics, "config": {"max_steps": max_steps}}))
     return path
 
@@ -860,13 +765,7 @@ def test_a_reference_from_a_different_step_count_is_refused(tmp_path):
 
 
 def test_a_step_count_mismatch_is_refused_even_when_the_numbers_agree(tmp_path):
-    """The worst case: identical metrics, so nothing else would object.
-
-    A 10-step reference and a 3-step run whose logged values happen to match
-    sail through the band, the length check and every tolerance in the file.
-    Only the declared step count catches it, which is why it is checked first
-    and returns before a single value is compared.
-    """
+    """Identical metrics pass every tolerance; only the declared max_steps catches a step-count mismatch."""
     from run_t4_smoke import check_reference, reference_failures
 
     metrics = [{"step": 1, "loss": 10.0, "grad_norm": 5.0}]
@@ -953,12 +852,7 @@ def test_the_committed_reference_records_the_step_count_it_was_captured_at():
 
 
 def test_the_workflow_step_count_and_the_payload_default_agree():
-    """Two places state the step count; disagreeing costs a Kaggle session.
-
-    The workflow's input default is what CI runs and the payload's argparse
-    default is what a local reproduction runs, and a reference is valid for one
-    number only.
-    """
+    """Workflow and payload step-count defaults must match: a reference is valid for one number only."""
     import re
 
     from run_t4_smoke import main  # noqa: F401  (import proves it loads)
@@ -1009,11 +903,8 @@ def _perturb(
     abs_floor: float = 0.05,
     factor: float = 0.5,
 ) -> list[dict]:
-    """Move one value by half a band-width more than the band allows.
-
-    Scaled by the same max(|value|, abs_floor) the check uses, so it is out of
-    band wherever on the curve it is applied.
-    """
+    """Shifts one value by a factor scaled by max(|value|, abs_floor), the same scale
+    check_reference uses."""
     out = [dict(m) for m in metrics]
     value = float(out[index][field])
     out[index][field] = value + max(abs(value), abs_floor) * factor
@@ -1021,24 +912,13 @@ def _perturb(
 
 
 def _committed_steps() -> int:
-    """The step count the committed reference was captured at.
-
-    Read from the file rather than hardcoded, so these tests keep testing the
-    numbers after a recapture at a different count instead of failing for a
-    reason that is not a regression.
-    """
+    """Read from the committed reference, so the tests survive a recapture at a different step count."""
     from run_t4_smoke import reference_step_count
     return reference_step_count(_committed_reference())
 
 
 def _committed_env() -> dict:
-    """The card the committed reference was captured on.
-
-    check_reference refuses a reference that names its hardware against a run
-    that cannot name its own, so a comparison against the committed file has to
-    say which card it is standing in for. These tests exercise the band
-    arithmetic, so they stand in for the reference's own.
-    """
+    """Names the committed reference's card: check_reference refuses a named card against an unnamed run."""
     return _committed_reference()["environment"]
 
 
@@ -1060,17 +940,7 @@ def test_the_committed_reference_matches_itself(tmp_path):
 
 
 def test_the_committed_reference_names_the_dataset_it_was_captured_on():
-    """A trace belongs to the rows it was trained on, and says which.
-
-    canary_dataset.jsonl is inside this workflow's own paths filter, so editing
-    it TRIGGERS the run that would then be band-checked against a trace of the
-    previous rows: a small edit passes the tolerance and reports green on a
-    comparison that means nothing, a larger one is reported as a code
-    regression. The reference records a digest of its rows for the same reason
-    it records max_steps, and this is the check that a dataset change cannot
-    land without a recapture -- it runs on the runner, before any Kaggle session
-    is paid for.
-    """
+    """The reference digests its rows, so a canary_dataset.jsonl edit cannot land without a recapture."""
     from run_t4_smoke import dataset_digest
 
     config = _committed_reference().get("config") or {}
@@ -1093,12 +963,7 @@ def test_the_committed_reference_names_the_dataset_it_was_captured_on():
     ["0" * 64, "unreadable:FileNotFoundError"],
 )
 def test_a_reference_captured_on_other_rows_is_refused(observed_digest):
-    """The digest refuses on the same terms max_steps does.
-
-    Including the sentinel an unreadable dataset produces: `dataset_digest`
-    never returns None, because a missing key lands in `config_unchecked` and
-    reads exactly like a comparison that passed.
-    """
+    """dataset_digest never returns None: a missing key lands in config_unchecked and reads as a pass."""
     from run_t4_smoke import check_reference, reference_failures
 
     reference = _committed_reference()
@@ -1119,11 +984,7 @@ def test_a_reference_captured_on_other_rows_is_refused(observed_digest):
 
 
 def test_the_dataset_digest_ignores_formatting_but_not_content(tmp_path):
-    """Reformatting the file is not a new experiment; changing a row is.
-
-    Digesting the raw bytes would force a session-costing recapture for
-    whitespace, which is how a check gets switched off.
-    """
+    """The digest ignores formatting but not row content, so whitespace never forces a recapture."""
     from run_t4_smoke import dataset_digest
 
     rows = [
@@ -1186,13 +1047,7 @@ def test_perturbing_the_committed_reference_turns_the_check_red():
 
 
 def test_whether_the_absolute_floor_is_reached_at_all(tmp_path):
-    """Is the 0.05 floor load-bearing on this trajectory, or decoration?
-
-    The floor only does anything where |reference value| < abs_floor, and the
-    documented justification is that the late steps approach zero. This asserts
-    that against the committed numbers rather than assuming it, so whichever way
-    it comes out the floor behaves as claimed for the values present.
-    """
+    """Checks whether abs_floor ever applies to the committed trace; it only matters for values below it."""
     from run_t4_smoke import check_reference
 
     metrics = _committed_reference()["metrics"]
@@ -1247,12 +1102,7 @@ def test_band_failure_reaches_the_failure_list(tmp_path):
 
 
 def test_a_length_mismatch_is_a_failure_too(tmp_path):
-    """Same declared step count, different number of logged rows.
-
-    That is the trainer logging something other than one row per step: a change
-    in the shape of the evidence, which no tolerance covers and the step-count
-    guard cannot see.
-    """
+    """A row count that differs at equal step count means the log changed shape; no tolerance catches it."""
     from run_t4_smoke import check_reference, reference_failures
 
     ref = _write_reference(tmp_path / "ref.json", [{"step": 1, "loss": 1.0}], max_steps = 2)
@@ -1279,12 +1129,7 @@ def test_matching_nan_grad_norms_are_within_band(tmp_path):
 
 @pytest.mark.parametrize("swap", [False, True])
 def test_a_moved_scaler_skip_pattern_is_out_of_band(tmp_path, swap):
-    """NaN against a number, either way round, must NOT pass silently.
-
-    Left to the arithmetic it would: abs(x - NaN) is NaN and NaN > tol is False,
-    so a step that used to overflow and no longer does sails through the one
-    check meant to notice it.
-    """
+    """NaN against a number must fail: NaN > tol is False, so the arithmetic would let it pass silently."""
     from run_t4_smoke import check_reference
 
     nan = float("nan")
@@ -1327,13 +1172,7 @@ def test_matching_infinite_grad_norms_are_within_band(tmp_path):
     ],
 )
 def test_an_overflow_that_appeared_or_cleared_is_out_of_band(tmp_path, ref_value, obs_value):
-    """Every infinite pairing divides to NaN, and NaN > tol is False.
-
-    abs(inf - 1.0) / inf and abs(inf - inf) / inf are both NaN, so each used to
-    be accepted, and max(worst, NaN) returns worst, so worst_rel recorded
-    nothing odd either. The pairing that matters most reaches here last: a step
-    finite in the reference that now overflows.
-    """
+    """An overflow that appeared or cleared divides to NaN, which the band check accepted as in band."""
     from run_t4_smoke import check_reference
 
     ref = _write_reference(
@@ -1483,13 +1322,7 @@ def test_the_loss_scale_pin_does_nothing_when_not_requested():
 
 
 def test_every_setting_the_child_needs_is_forwarded_to_it():
-    """The cycles run as child processes, and the forwarding list is manual.
-
-    A setting added to train_once but not to that list is silently ignored on
-    the Kaggle run while working perfectly in a single-process local
-    reproduction, the parent never running train_once itself. Derived from the
-    source rather than listed here, so it cannot go stale.
-    """
+    """Settings train_once needs must be forwarded to the child cycle, or the Kaggle run ignores them."""
     import ast
 
     tree = ast.parse((SMOKE_DIR / "run_t4_smoke.py").read_text(encoding = "utf-8"))
@@ -1594,13 +1427,7 @@ def test_built_kernel_is_valid_notebook_json_with_gpu_requested(tmp_path):
 
 
 def test_built_kernel_pins_one_gpu_per_payload_and_isolates_installs(tmp_path):
-    """The three details that previous sweeps proved are load-bearing.
-
-    The venv isolation matters more than it did: the legs deliberately install
-    DIFFERENT library sets into one session, so a shared site-packages would
-    silently make the control and canary legs the same experiment rather than
-    merely risking corruption.
-    """
+    """Legs install different library sets into one session, so each leg needs its own venv."""
     source = "".join("".join(c["source"]) for c in _build(tmp_path)["cells"])
     assert 'env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)' in source
     assert "--seed" in source and "--system-site-packages" in source
@@ -1655,12 +1482,7 @@ def test_the_control_and_canary_legs_differ_only_in_what_they_install(tmp_path):
 
 
 def test_the_control_leg_installs_the_committed_pins_verbatim(tmp_path):
-    """The pin file is expanded at BUILD time, so the notebook states it.
-
-    Reading the file on the kernel instead would leave the built notebook
-    uncheckable without executing it, and the versions a control leg installs
-    are exactly what is worth checking without executing.
-    """
+    """Pins expand at build time, so the notebook states its versions without running anything."""
     from legs import _read_pins
 
     pins = _read_pins(SMOKE_DIR / "pins" / "control.txt")
@@ -1672,12 +1494,7 @@ def test_the_control_leg_installs_the_committed_pins_verbatim(tmp_path):
 
 
 def test_the_canary_leg_upgrades_in_one_resolution_with_the_zoo_requirement(tmp_path):
-    """Upgrading separately would let pip install a version zoo forbids.
-
-    pip warns and installs anyway, so the canary would measure an environment
-    Unsloth never claimed to support and its failures would say nothing about a
-    release.
-    """
+    """Upgrades must share one resolution with the zoo requirement, or pip installs versions zoo forbids."""
     import re
 
     from legs import CANARY_UPGRADES
@@ -1692,13 +1509,7 @@ def test_the_canary_leg_upgrades_in_one_resolution_with_the_zoo_requirement(tmp_
 
 
 def test_the_canary_leg_band_checks_against_nothing(tmp_path):
-    """Two library sets do not produce one fp16 trajectory.
-
-    Band-checking the canary against the control's committed trace would go red
-    on ordinary cross-version drift, which is the noise that gets a check
-    disabled. The canary asserts the version-independent things instead, and
-    those assertions live in the payload rather than here.
-    """
+    """Canary has no reference band, since another library set gives a different fp16 trajectory."""
     from legs import LEGS
 
     assert LEGS["canary"].reference == ""
@@ -1719,13 +1530,7 @@ def test_every_leg_carries_the_version_recorder(tmp_path):
 
 
 def test_every_registered_leg_is_either_carried_or_explicitly_unwired():
-    """A leg run twice halves a session; a leg silently run by nothing is
-    dead code that reads like coverage.
-
-    The only permitted third state is UNWIRED, a leg whose payload is finished
-    and whose environment is not, and it must be declared with a reason so
-    nobody re-derives it from a git log.
-    """
+    """Each leg is carried by exactly one kernel or listed in UNWIRED with a reason, never dropped."""
     from legs import KERNELS, LEGS, MAX_LEGS_PER_KERNEL, UNWIRED
 
     carried = [name for kernel in KERNELS for name in kernel]
@@ -1764,14 +1569,8 @@ def _build_all_paths(tmp_path):
 
 
 def test_generated_cells_compile(tmp_path):
-    """Every generated cell must parse as Python, on every code path.
-
-    Not hypothetical: the reference argument was once generated as a shell
-    fragment (' --reference "..."') spliced into the middle of a Python list
-    literal, making the payload's run cell a SyntaxError. It was on the path the
-    workflow always takes and cost a real Kaggle session to find, because
-    nothing between writing the cell and running it on a T4 ever parsed it.
-    """
+    """Generated cells must parse: a shell fragment spliced into a Python list once cost a Kaggle
+    session."""
     seen = 0
     for path, driver in _build_all_paths(tmp_path).items():
         for name, nb in {"driver": driver, **_payload_notebooks(driver)}.items():
@@ -1783,12 +1582,7 @@ def test_generated_cells_compile(tmp_path):
 
 
 def _undefined_names(source: str, already_bound: set) -> tuple:
-    """Names a cell reads without binding, and the names it binds.
-
-    Deliberately scope-blind: every binding anywhere in the cell counts as
-    available everywhere in it, which yields false negatives and never false
-    positives, the only tolerable direction for a check that gates a launch.
-    """
+    """Any binding counts everywhere in its cell, so it can miss a name but never invent one."""
     import ast
     import builtins
 
@@ -1813,13 +1607,7 @@ def _undefined_names(source: str, already_bound: set) -> tuple:
 
 
 def test_no_generated_cell_reads_a_name_nothing_defines(tmp_path):
-    """Parsing is necessary and not sufficient.
-
-    A template hole that substitutes to a bare identifier parses perfectly and
-    dies at run time with a NameError, costing the same Kaggle session a
-    SyntaxError does. Cells are checked in execution order with earlier
-    bindings carried forward, because that is how a notebook runs.
-    """
+    """Parsing is not enough: an undefined name fails at run time, so cells are checked in order."""
     for path, driver in _build_all_paths(tmp_path).items():
         for nb_name, nb in {"driver": driver, **_payload_notebooks(driver)}.items():
             carried: set = set()
@@ -1839,12 +1627,7 @@ def _drive_run_cell(
     report_text = None,
     stderr = "",
 ):
-    """Execute the generated run cell against a stubbed child process.
-
-    The cell is the only thing standing between a payload that died and a
-    launcher that sees nothing, so it is executed rather than pattern matched.
-    Only the hardcoded /kaggle path is rewritten.
-    """
+    """Executes the generated run cell with a stub child; only the hardcoded /kaggle path is rewritten."""
     import contextlib
     import io
     import types
@@ -1875,14 +1658,7 @@ def _drive_run_cell(
 
 
 def test_the_re_emitted_report_is_one_line_the_launcher_can_parse(tmp_path, monkeypatch):
-    """The recovery path has to survive the file it is recovering.
-
-    Every payload writes t4_smoke_report.json INDENTED and the launcher scans
-    whole lines for the prefix, so echoing the file verbatim handed it a lone
-    `{` to decode. The one case this fallback exists for, the payload's compact
-    line having fallen out of the retained stdout tail, was the one it could not
-    recover.
-    """
+    """The fallback re-emits the report as one line; the launcher scans whole lines, not indented JSON."""
     written = json.dumps(
         {"label": "control", "model": "unsloth/Qwen2.5-0.5B-Instruct", "passed": True},
         indent = 2,
@@ -1898,13 +1674,8 @@ def test_the_re_emitted_report_is_one_line_the_launcher_can_parse(tmp_path, monk
 def test_a_payload_that_crashed_without_a_report_is_reported_as_failed(
     tmp_path, monkeypatch, returncode
 ):
-    """A segfault, an abort or an OOM kill is a VERDICT, not lost evidence.
-
-    No report at all is `infra` at the launcher and one missing report of two is
-    `partial`, both leaving the workflow green, so the hard GPU regressions this
-    job exists to catch were accepted silently while this cell held the
-    definitive nonzero exit status the whole time.
-    """
+    """A crash with no report must count as a failed verdict, not infra or partial, which both exit
+    green."""
     stdout, reports = _drive_run_cell(
         tmp_path, monkeypatch, returncode = returncode, stderr = "CUDA error: an illegal memory access"
     )
@@ -1934,16 +1705,7 @@ def _drive_verify_cell(
     on_module = "transformers",
     pip_check = "",
 ):
-    """Execute the generated verify cell against a stubbed environment.
-
-    The cell is what stands between a leg that cannot run and a launcher that
-    extracts no report for it, and no report is `partial` or `infra`, both of
-    which exit 0. So it is executed rather than pattern matched, like the run
-    cell above.
-
-    torch is stubbed to one healthy card because the GPU probe in the middle of
-    the cell re-raises on anything it dislikes.
-    """
+    """Runs the verify cell against stubbed torch and environment; a missing report would still exit 0."""
     import contextlib
     import importlib
     import io
@@ -1995,18 +1757,8 @@ def _drive_verify_cell(
 def test_a_dependency_that_exits_the_process_on_import_still_leaves_a_verdict(
     tmp_path, monkeypatch
 ):
-    """`sys.exit()` inside an imported package is not an Exception.
-
-    SystemExit derives from BaseException expressly "so that it is not
-    accidentally caught by code that catches Exception", and an accelerator or
-    version guard that calls sys.exit() at import time is how a payload meets
-    one. Uncaught, it aborted this cell before the report below was written,
-    the run cell was never reached, and a leg that reports nothing is `partial`
-    or `infra` at the launcher -- both green. transformers is not a
-    hypothetical carrier either: it defines OptionalDependencyNotAvailable as a
-    BaseException subclass and raises it at module scope, and its own lazy
-    loader re-raises only Exception.
-    """
+    """SystemExit is a BaseException, so an import-time sys.exit escapes the handlers that catch
+    Exception."""
     raised, stdout, reports = _drive_verify_cell(
         tmp_path, monkeypatch, import_raises = SystemExit("no supported accelerator")
     )
@@ -2018,12 +1770,7 @@ def test_a_dependency_that_exits_the_process_on_import_still_leaves_a_verdict(
 
 
 def test_an_interrupted_probe_is_not_reported_as_a_missing_dependency(tmp_path, monkeypatch):
-    """The one BaseException that is not the package's fault.
-
-    KeyboardInterrupt is the runner cancelling the job, and recording it as a
-    broken dependency would make a cancelled run indistinguishable from a
-    regression while stopping the interpreter from exiting.
-    """
+    """KeyboardInterrupt is the runner cancelling, so it must not be recorded as a missing dependency."""
     raised, _stdout, reports = _drive_verify_cell(
         tmp_path, monkeypatch, import_raises = KeyboardInterrupt()
     )
@@ -2032,13 +1779,7 @@ def test_an_interrupted_probe_is_not_reported_as_a_missing_dependency(tmp_path, 
 
 
 def test_a_declared_requirement_the_environment_lacks_is_a_verdict(tmp_path, monkeypatch):
-    """The import probe answers a weaker question than pyproject.toml asks.
-
-    A requirement reached only by a delayed code path is absent all through a
-    green run, so a commit that drops one, or tightens one past what is
-    installed, reached a user at `pip install unsloth` and reached this job not
-    at all -- while pyproject.toml sits in its trigger paths.
-    """
+    """The import probe misses requirements no import reaches, so pip check must also fail the leg."""
     line = "unsloth 2026.8.15 requires nest-asyncio, which is not installed."
     raised, stdout, reports = _drive_verify_cell(tmp_path, monkeypatch, pip_check = line + "\n")
 
@@ -2050,13 +1791,7 @@ def test_a_declared_requirement_the_environment_lacks_is_a_verdict(tmp_path, mon
 
 
 def test_another_distributions_conflict_is_not_this_legs_verdict(tmp_path, monkeypatch):
-    """Only the lines pip attributes to the distribution under test count.
-
-    The line below is one the frontier leg installs ON PURPOSE, and the Kaggle
-    image carries pre-existing conflicts of its own. Reading the exit code, or
-    matching the name loosely, would turn both into a red leg that says nothing
-    about the commit.
-    """
+    """Only pip check lines naming the distribution under test count; other packages' conflicts do not."""
     raised, stdout, reports = _drive_verify_cell(
         tmp_path,
         monkeypatch,
@@ -2070,25 +1805,14 @@ def test_another_distributions_conflict_is_not_this_legs_verdict(tmp_path, monke
 
 
 def test_the_sources_are_materialised_before_the_first_install(tmp_path):
-    """The control leg installs from a pin file carried inside the notebook.
-
-    Materialising last, as an earlier version did, wrote that file after the
-    install needing it. Cheap to assert here, and forty minutes into a Kaggle
-    session everywhere else.
-    """
+    """Sources are written before the first install, which needs the pin file carried in the notebook."""
     payload = _payload_notebooks(_build(tmp_path))["t4_control.ipynb"]
     assert "FILES = {" in _cell(payload, 0)
     assert "pip(group)" in _cell(payload, 1)
 
 
 def test_the_files_the_payload_carries_are_byte_identical_to_the_repo(tmp_path):
-    """Decode the carried blobs the way the kernel will, and compare.
-
-    The payload sources reach the T4 only as gzip+base64 inside a generated
-    cell, so if that encoding drifted the kernel would run something other than
-    what is committed and every downstream assertion would be about the wrong
-    file.
-    """
+    """Carried gzip+base64 files must decode byte-identical to the repo, or the kernel runs other code."""
     import base64
     import gzip
     import re
@@ -2123,13 +1847,8 @@ def test_the_files_the_payload_carries_are_byte_identical_to_the_repo(tmp_path):
 
 
 def test_runtime_paths_are_assembled_from_root_rather_than_interpolated(tmp_path):
-    """The runtime path must be built from ROOT, not left as a literal.
-
-    The first version emitted a doubled-brace "{ROOT}/references/..." inside an
-    ordinary string, so even had it parsed, the child would have been handed a
-    path with a literal brace and reported the reference absent: a band check
-    that silently checks nothing.
-    """
+    """Paths are built from ROOT: a literal {ROOT} made the reference look absent, so nothing was
+    checked."""
     run = _cell(_payload_notebooks(_build(tmp_path))["t4_control.ipynb"], 3)
     assert 'str(ROOT / "references" / "t4_qwen2.5-0.5b.json")' in run
     assert 'str(ROOT / "pins" / "control.txt")' in run
@@ -2137,13 +1856,7 @@ def test_runtime_paths_are_assembled_from_root_rather_than_interpolated(tmp_path
 
 
 def test_the_dependency_probe_imports_unsloth_before_unsloth_zoo(tmp_path):
-    """unsloth_zoo's __init__ refuses to be imported first.
-
-    It ends with `if find_spec("unsloth") is None: raise ImportError(...)`, and
-    on a real T4 that fired on a session where unsloth was installed and
-    imported cleanly a moment later, so probing zoo first reported a dependency
-    missing that was not, and killed the payload.
-    """
+    """Probe unsloth before unsloth_zoo: zoo's __init__ reports unsloth missing when probed first."""
     from legs import LEGS
 
     verify = _cell(_payload_notebooks(_build(tmp_path))["t4_control.ipynb"], 2)
@@ -2153,12 +1866,7 @@ def test_the_dependency_probe_imports_unsloth_before_unsloth_zoo(tmp_path):
 
 
 def test_the_grpo_leg_probes_vllm_before_it_spends_the_session(tmp_path):
-    """vLLM installs cleanly on hardware whose kernels it does not carry.
-
-    The failure is at import or engine construction, tens of gigabytes of
-    download later; naming it in the fail-fast probe turns that into one line in
-    the driver log.
-    """
+    """vLLM can install cleanly on GPUs it has no kernels for, so probe its import before the session."""
     from legs import LEGS
 
     assert "vllm" in LEGS["grpo"].imports
@@ -2167,16 +1875,7 @@ def test_the_grpo_leg_probes_vllm_before_it_spends_the_session(tmp_path):
 
 
 def test_every_leg_resolves_the_dependencies_of_the_package_under_test(tmp_path):
-    """--no-deps on the tested distribution is a resolution it never joins.
-
-    pip enforces the requirements of packages IN a resolution and merely warns
-    about the rest (the frontier leg's comment is the measurement), so with the
-    commit under test outside every one of them, a dependency it adds is never
-    installed and one it tightens is never checked -- and pyproject.toml is in
-    this workflow's trigger paths precisely because it is meant to be. The
-    requirement is built from the template the legs share, so a leg that names
-    its own is caught rather than skipped.
-    """
+    """Every leg resolves the package under test's dependencies: --no-deps would leave them unchecked."""
     from legs import LEGS, PACKAGE_UNDER_TEST, UNSLOTH, expand_install
 
     requirement = UNSLOTH.format(unsloth_ref = "abc123", zoo_ref = "def456")
@@ -2218,19 +1917,7 @@ def _grpo_vllm_pin() -> str:
 
 
 def test_the_grpo_vllm_pin_does_not_replace_the_images_torch():
-    """The single fact three dead probe sessions cost.
-
-    vLLM pins torch exactly, so a release pinning anything but the image's torch
-    makes pip swap torch out while the image's NVIDIA runtime packages, which
-    belong to the OLD torch, are still on the path and still look satisfied. The
-    result imports as `libcusparseLt.so.0: cannot open shared object file` or
-    `libtorch_cuda.so: undefined symbol: ncclCommWindowRegister`, tens of
-    gigabytes of download later.
-
-    So this is not a version preference to bump with the others: moving it off
-    this list reopens that failure, and needs the list re-derived from PyPI
-    rather than widened.
-    """
+    """The vLLM pin must keep the image's torch; another pin swaps it out from under the NVIDIA runtime."""
     assert _grpo_vllm_pin() in VLLM_RELEASES_PINNING_IMAGE_TORCH
 
 
@@ -2243,75 +1930,20 @@ def test_the_grpo_leg_shares_the_image_now_that_it_keeps_the_images_torch():
 
 
 def test_the_grpo_leg_names_its_attention_backend():
-    """sm_75 has no FlashAttention and no FlashInfer, and the xformers backend
-    was deleted in vLLM 0.12.0, so the ladder in vllm/platforms/cuda.py falls
-    through to TRITON_ATTN. Naming it makes a release that reorders or drops it
-    fail loudly rather than quietly select something else."""
+    """Names TRITON_ATTN: sm_75 lacks FlashAttention and FlashInfer, so vLLM's ladder falls through
+    to it."""
     from legs import LEGS
     assert LEGS["grpo"].env.get("VLLM_ATTENTION_BACKEND") == "TRITON_ATTN"
 
 
 def test_the_grpo_leg_disables_flashinfer_at_the_only_layer_that_holds():
-    """Two Kaggle probes died four rungs each on the same flashinfer link, one
-    of them WITH `VLLM_USE_FLASHINFER_SAMPLER=0` already set, because that is
-    not the layer the decision is made at. unsloth_zoo's patch_vllm assigns
-    both vLLM env vars itself during model load:
-
-        vllm_utils.py:2494  VLLM_ATTENTION_BACKEND      = "FLASHINFER"
-        vllm_utils.py:2502  VLLM_USE_FLASHINFER_SAMPLER = "1"
-
-    each behind `elif Version(vllm_version) >= Version("0.11.0")`, which this
-    leg's 0.19.1 pin satisfies. Its guard checks only that nvcc and ninja are
-    present, and on Kaggle both are - the missing piece is the driver stub the
-    compiled objects link against, which that check does not look at. So the
-    two settings above are overwritten before vLLM ever reads them.
-
-    UNSLOTH_VLLM_NO_FLASHINFER is read at vllm_utils.py:2449, ahead of every
-    assignment, and is the only one of the three that survives. Losing it puts
-    the leg straight back on a link that cannot succeed on this image."""
+    """UNSLOTH_VLLM_NO_FLASHINFER is read before patch_vllm overwrites the other flashinfer env vars."""
     from legs import LEGS
     assert LEGS["grpo"].env.get("UNSLOTH_VLLM_NO_FLASHINFER") == "1"
 
 
 def test_the_grpo_leg_removes_flashinfer_and_the_removal_reaches_the_payload(tmp_path):
-    """The env vars were necessary and NOT sufficient, established over four
-    Kaggle ladder probes:
-
-        r1  nothing set                       4/4 rungs fail, cached_ops/sampling
-        r2  VLLM_USE_FLASHINFER_SAMPLER=0     identical failure
-        r3  UNSLOTH_VLLM_NO_FLASHINFER=1      sampling build gone; now fails in
-                                              cached_ops/batch_prefill_with_kv_cache_...
-        r4  uninstall flashinfer              PASSES on the first rung, 11.30 GB
-
-    r3 is the one that proves the remaining gap: the sampler build genuinely
-    stopped, and the failure moved to ATTENTION, which is chosen by
-    VLLM_ATTENTION_BACKEND -- already TRITON_ATTN and confirmed inherited by the
-    rung child -- and which vLLM offers no prefill-specific opt-out for. There
-    was no variable left to set, which is why the package goes instead.
-
-    THE SHIPPED LEG FAILS DIFFERENTLY, and that is the reason this guard is
-    worth keeping rather than a historical note. Removing the uninstall from the
-    leg (unsloth-probe-grpo-noun-05777b, nothing else changed) does NOT
-    reproduce the link error at all -- the leg carries a libcuda shim
-    (run_grpo_t4.py:597, /usr/local/cuda/compat/libcuda.so, since #8440) that
-    the probes lacked. It fails instead with
-
-        AcceleratorError: CUDA error: an illegal memory access was encountered
-
-    which is verbatim the intermittent crash UNWIRED["grpo"] documents from
-    kernels unsloth-t4-ci-70a2f4eb and -c98f14be. With the uninstall the crash
-    has not recurred.
-
-    State the strength honestly: that crash is documented at roughly two failures
-    in three, so a handful of clean runs is suggestive and not proof, and this
-    guard asserts only that the uninstall is PRESENT and REACHES the payload --
-    which removing it demonstrably breaks. It does not claim to have identified
-    the crash's cause.
-
-    Asserted through the BUILT payload rather than off the dataclass: a field
-    nothing emits is a setting that reads like coverage and does nothing, and
-    that is the exact failure mode this file exists to catch.
-    """
+    """Env vars alone were not sufficient for flashinfer; the uninstall must reach the built payload."""
     from legs import LEGS
 
     assert set(LEGS["grpo"].uninstall) >= {"flashinfer-python", "flashinfer-cubin"}
@@ -2333,11 +1965,7 @@ def test_a_leg_with_nothing_to_uninstall_does_not_run_pip_uninstall(tmp_path):
 
 
 def test_the_grpo_leg_asks_for_the_utilization_both_platforms_measured(tmp_path):
-    """0.95 is measured, not requested-and-hoped. Colab (torch 2.11.0) peaked at
-    11.76 GB and Kaggle (torch 2.10.0) at 11.30 GB, both on the FIRST rung of a
-    0.95/0.8/0.6/0.5 ladder and both surviving three sleep/wake cycles, roughly
-    3 GB under a 14.56 GB card. The 0.5 that used to be here came from Qwen3-4B
-    probes and was never measured for the 0.6B this leg trains."""
+    """0.95 utilization was measured on Colab and Kaggle, both fitting on the first rung of the ladder."""
     from legs import LEGS
 
     args = LEGS["grpo"].args
@@ -2371,41 +1999,7 @@ def test_nothing_is_both_wired_and_unwired():
 
 
 def test_an_unwired_note_says_what_is_unknown_or_what_replaced_it():
-    """An unwired leg whose note reads as settled is a leg someone wires without
-    running it.
-
-    THREE reasons a leg is not wired, and they are not the same thing.
-
-    A leg with an open question says STILL UNKNOWN and names it.
-
-    A leg that was REPLACED has nothing unknown about it at all -- frontier is
-    retired because vision_fla_compile asserts everything it did and more --
-    and forcing that note to claim an open question would be a lie in the file
-    that exists to stop lies of exactly that kind.
-
-    A leg that was MEASURED AND REJECTED is the third, added when multi_gpu hit
-    it: the leg passes on hardware and was still held out, because an A/B
-    showed it costing wall clock and breaking another leg. Nothing about it is
-    unknown and nothing replaced it, so the first two categories would both be
-    false. What that note owes the reader instead is the way back in, so it
-    must say WHAT WOULD UNBLOCK IT -- otherwise "rejected" reads as permanent
-    and the measurement behind it is never revisited.
-
-    A leg that is UNDER RE-MEASUREMENT is the fourth, and it exists because a
-    rejection can turn out to rest on a defect somewhere else. multi_gpu was
-    rejected partly for breaking the Default leg; that break was this driver
-    building the leg on the wrong python and installing pyarrow where dill
-    pickles it by value, and it is fixed. Leaving the note reading REJECTED
-    would keep a withdrawn measurement standing as a finding, which is the
-    failure this file exists to catch, and forcing it to read STILL UNKNOWN
-    would throw away everything that IS known. Such a note owes the reader the
-    run that will settle it, by name, so the answer is collectable rather than
-    perpetually pending.
-
-    So the rule is: say which of the four it is, name the superseding leg if it
-    was superseded, name the unblock condition if it was rejected, and name the
-    deciding run if it is being re-measured. A bare note passes none of them.
-    """
+    """Each UNWIRED note states its kind: unknown, superseded, rejected, or re-measuring."""
     from legs import LEGS, UNWIRED
     for name, note in UNWIRED.items():
         if "SUPERSEDED" in note:
@@ -2440,20 +2034,7 @@ def test_an_unwired_note_says_what_is_unknown_or_what_replaced_it():
 
 
 def test_grpo_stays_unwired_while_the_illegal_memory_access_is_open():
-    """This test replaces one that asserted the opposite thing for a wrong reason.
-
-    grpo was given a kernel of its own on the reasoning that sharing a session
-    with gptoss broke it: it failed paired (unsloth-t4-ci-70a2f4eb) and had
-    passed alone (unsloth-t4-ci-53efcc4e), so the pairing looked like the
-    variable. Running it ALONE again (unsloth-t4-ci-c98f14be) reproduced the
-    paired failure exactly, same stack at unsloth_zoo/vllm_utils.py:601 sleep(),
-    same 13.8GB peak, same engine_built false, so one contrasting observation
-    was never enough to blame a shared host.
-
-    The three sessions show an INTERMITTENT illegal memory access: one pass, two
-    failures, identical in every recorded version and at the same peak. A leg
-    passing one session in three tells CI nothing, so it stays unwired until the
-    IMA is understood, and wiring it back without that is what this stops."""
+    """grpo stays unwired: its illegal memory access is intermittent, one pass in three sessions."""
     from legs import KERNELS, UNWIRED
 
     assert "grpo" not in {name for kernel in KERNELS for name in kernel}
@@ -2465,32 +2046,14 @@ def test_grpo_stays_unwired_while_the_illegal_memory_access_is_open():
 
 
 def test_control_and_canary_still_share_a_session():
-    """The opposite constraint, and why the pairing rule is not just 'one leg
-    per kernel'. They are a matched pair -- same image, driver and hour,
-    differing only in library versions -- so splitting them puts an uncontrolled
-    variable between the only two legs whose comparison has to be clean."""
+    """Control and canary share a session as a matched pair; splitting them adds an uncontrolled
+    variable."""
     from legs import KERNELS
     assert any(set(k) >= {"control", "canary"} for k in KERNELS), KERNELS
 
 
 def test_the_grpo_leg_keeps_the_config_that_actually_fit():
-    """Every one of these is load-bearing on a 14.56GB card.
-
-    Two probes with the notebook's own settings (seq 2048, 4 generations, rank
-    32, utilization 0.9) died in the backward at
-    unsloth_zoo/gradient_checkpointing.py:1013, peaking at 15.97GB in 16-bit and
-    19.25GB in 4-bit. The set below passed on kernel unsloth-t4-ci-53efcc4e at
-    13.60GB with reward_std 0.707 at step 2, so restoring any of them to the
-    notebook's value is a session that OOMs, and it fails here instead.
-
-    UTILIZATION IS THE ONE EXCEPTION, raised 0.5 -> 0.95 on measurement. Those
-    probes trained **Qwen3-4B**; this leg trains Qwen3-0.6B, where the
-    activation budget is a different problem entirely. A 0.95/0.8/0.6/0.5 ladder
-    stopped at the FIRST rung on both platforms - Colab peak reserved 11.76GB,
-    Kaggle 11.30GB, three sleep/wake cycles each - roughly 3GB under the card.
-    The other three values are unchanged and still carry the 4B evidence, which
-    is why they are asserted together with this one rather than relaxed with
-    it."""
+    """Notebook values OOM a 14.56GB card; these fit, and utilization 0.95 is the one measured change."""
     from legs import LEGS
 
     args = LEGS["grpo"].args
@@ -2546,13 +2109,7 @@ def test_the_workflow_never_cancels_a_run_that_may_hold_a_kernel():
 
 
 def test_the_band_check_is_on_unless_a_dispatch_turns_it_off():
-    """The band check goes off for exactly two reasons, and both announce it.
-
-    The reference is named by the control leg rather than the workflow, so this
-    asserts the OFF switches: the explicit dispatch input, and the step-count
-    mismatch that would otherwise turn a custom max_steps run red on arithmetic
-    rather than on the code. Both warn.
-    """
+    """The band check is skipped only by an explicit dispatch or a max_steps mismatch, and both warn."""
     source = WORKFLOW.read_text(encoding = "utf-8")
     assert 'if [ "$SKIP_BAND" = "true" ]' in source
     assert "::warning title=Reference band check disabled" in source
@@ -2563,12 +2120,7 @@ def test_the_band_check_is_on_unless_a_dispatch_turns_it_off():
 
 
 def test_applying_the_opt_in_label_can_start_a_run():
-    """The gate advertises the label; the trigger has to subscribe to it.
-
-    GitHub's default pull_request activity types are opened, synchronize and
-    reopened, so without an explicit `types` the advertised override does
-    nothing until an unrelated event fires.
-    """
+    """The labeled activity type must be listed explicitly, or applying the opt-in label starts nothing."""
     wf = _workflow()
     on = wf[True] if True in wf else wf["on"]
     assert "labeled" in on["pull_request"]["types"]
@@ -2577,13 +2129,7 @@ def test_applying_the_opt_in_label_can_start_a_run():
 
 
 def test_only_the_opt_in_label_starts_a_run(monkeypatch, tmp_path):
-    """`labeled` fires for EVERY label, and each run is a fresh draw.
-
-    Worse than the wasted draws: once kaggle-t4-ci is on the pull request it
-    stays in the label list, so every later label of any kind arrives as an
-    override and FORCES a session, while the budget at the top of the workflow
-    counts pull request opens and pushes and no label activity at all.
-    """
+    """Every label event would start a run and force a session, so only the opt-in label may start one."""
     monkeypatch.delenv("KAGGLE_API_TOKEN", raising = False)
     code, outputs = _run_gate(
         monkeypatch,
@@ -2644,14 +2190,8 @@ def test_the_workflow_tells_the_gate_which_label_arrived():
 
 
 def test_a_dispatched_ref_is_resolved_to_one_commit():
-    """A branch name forwarded unchanged is four independent resolutions.
-
-    Every payload pip-installs on the kernel by itself, so `main` can land on a
-    different commit per leg and the control/canary comparison is then between
-    two different Unsloths. The report records a distribution version rather
-    than a commit, so the drift is invisible afterwards too. Same hazard as the
-    zoo pin below, same answer.
-    """
+    """Resolve a dispatched ref to one commit, since each leg pip-installs independently and could
+    diverge."""
     workflow = _workflow()
     steps = workflow["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
@@ -2765,12 +2305,7 @@ def test_the_resolve_step_pins_every_shape_of_ref_it_can_be_given(tmp_path):
 
 
 def test_the_harness_stays_on_the_checked_out_tree_when_a_ref_is_dispatched():
-    """Resolving the INSTALL is not the same as checking that ref out.
-
-    The whole harness arrives with this workflow, so a dispatch naming an older
-    ref has no payloads, no legs.py and no reference to run from. A dispatch
-    varies the package under test; the thing testing it stays fixed.
-    """
+    """A dispatched ref varies only the package under test; the harness stays on the checked-out tree."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
     assert "inputs.unsloth_ref" not in json.dumps(checkout)
@@ -2787,12 +2322,7 @@ def test_packaging_metadata_is_watched_by_both_triggers():
 
 
 def _launcher_constant(name: str) -> int:
-    """One of launch.py's named ceilings, or a failure saying it moved.
-
-    Read by regex rather than imported so the bound below is computed from the
-    source the workflow ships. A renamed constant fails here rather than
-    silently dropping a term out of the arithmetic.
-    """
+    """Reads a named constant from launch.py's source, so a rename fails here instead of dropping a term."""
     launch = (CI_DIR / "launch.py").read_text(encoding = "utf-8")
     match = re.search(rf"^{name} = (\d+)", launch, re.M)
     assert match, f"launch.py no longer defines {name}, so the job deadline cannot be derived"
@@ -2800,12 +2330,7 @@ def _launcher_constant(name: str) -> int:
 
 
 def _one_delete_seconds() -> int:
-    """Wall clock ONE delete_kernel() call can take, retries and backoff in.
-
-    Not one subprocess: a refused delete is retried DELETE_ATTEMPTS times with
-    an exponential gap, because deletion is this workflow's budget control.
-    Counting a single call is what put the old bound at half the truth.
-    """
+    """Worst-case wall clock of one delete_kernel(), counting every retry and the backoff between them."""
     attempts = _launcher_constant("DELETE_ATTEMPTS")
     backoff = _launcher_constant("DELETE_BACKOFF_SEC")
     ceiling = _launcher_constant("DELETE_SUBPROCESS_TIMEOUT_SEC")
@@ -2813,24 +2338,7 @@ def _one_delete_seconds() -> int:
 
 
 def _launcher_worst_case_seconds() -> int:
-    """Wall clock one launch.py invocation can take, from its own constants.
-
-    Every phase that keeps a pushed kernel up is in it, because the two things
-    derived from this number -- the job deadline and the quota the gate reserves
-    -- are both wrong if a phase is left out:
-
-    * push(), per notebook: PUSH_ATTEMPTS attempts at the subprocess ceiling,
-      the backoffs between them, and a _discard() of the previous attempt's slug
-      before each retry.
-    * the polling, which shares ONE deadline with the pushes rather than
-      stacking on them.
-    * the evidence download, one budget for every kernel together.
-    * release(), which deletes every slug every push FILED, not just the
-      accepted one.
-
-    Computed here rather than restated in either caller, so lowering
-    PUSH_ATTEMPTS or a delete ceiling moves both derivations at once.
-    """
+    """Launch.py's worst case: every push retry, the polling, evidence download and release() all count."""
     push_attempts = _launcher_constant("PUSH_ATTEMPTS")
     push_backoff = _launcher_constant("PUSH_BACKOFF_SEC")
     push_ceiling = _launcher_constant("PUSH_SUBPROCESS_TIMEOUT_SEC")
@@ -2861,25 +2369,7 @@ def _kernels_per_invocation() -> int:
 
 
 def test_the_job_deadline_exceeds_the_launchers_worst_case():
-    """A runner killed mid-run takes finish() -> release() with it.
-
-    The launcher's own constants bound how long it can take, and EVERY deletion
-    path counts, both of them retried:
-
-    * push(), per notebook: PUSH_ATTEMPTS attempts at the subprocess ceiling,
-      the backoffs between them, and a _discard() of the previous attempt's slug
-      before each retry.
-    * the polling, which shares one deadline with the pushes rather than
-      stacking on them.
-    * the evidence download.
-    * release(), which deletes every slug every push FILED, not just the
-      accepted one.
-
-    The job timeout has to sit above the total with room for the steps that run
-    before the launcher, or the runner is killed mid-release() and the kernels
-    it pushed keep billing to their own ceiling -- the one outcome this deadline
-    exists to prevent.
-    """
+    """The job timeout must exceed the launcher's worst case, or release() can be killed unfinished."""
     worst = _launcher_worst_case_seconds()
     # An allowance for steps before the launcher; the launcher itself refuses to push without
     # the whole of `worst` left.
@@ -2892,15 +2382,7 @@ def test_the_job_deadline_exceeds_the_launchers_worst_case():
 
 
 def test_the_launcher_agrees_with_the_deadline_about_its_own_worst_case():
-    """The guard and the deadline have to be reading the same number.
-
-    launch.py refuses to push unless ``worst_case_seconds()`` still fits before
-    the job deadline, and that deadline is set from the derivation above. The
-    two are computed independently -- this file walks launch.py's constants out
-    of the source text, the launcher adds them up itself -- so a phase dropped
-    from either one shows up here rather than as a run that pushed with no room
-    to clean up, or one that stood down on every invocation.
-    """
+    """launch.py's own worst-case check and the job deadline are computed independently and must agree."""
     import launch
 
     source = WORKFLOW.read_text(encoding = "utf-8")
@@ -2912,18 +2394,7 @@ def test_the_launcher_agrees_with_the_deadline_about_its_own_worst_case():
 
 
 def test_the_launcher_is_told_when_the_job_is_killed():
-    """The guard is only as good as the deadline it is handed.
-
-    Three things have to hold, and each is a way the guard silently reads
-    optimistic:
-
-    * the start is recorded in the job's FIRST step. Taken after a checkout or a
-      pip install, the computed deadline sits that much later than the real one.
-    * the launcher is actually given it.
-    * the minutes handed over are this job's own timeout-minutes. A job cannot
-      read its own, so the number is restated in the step's environment and
-      asserted equal here; moving one without the other is this test going red.
-    """
+    """The start epoch is recorded in the first step and passed on, matching the job's timeout-minutes."""
     job = _workflow()["jobs"]["t4-smoke"]
     steps = job["steps"]
     assert "JOB_START_EPOCH=$(date +%s)" in steps[0].get("run", ""), (
@@ -2938,22 +2409,7 @@ def test_the_launcher_is_told_when_the_job_is_killed():
 
 
 def test_the_reserved_budget_covers_every_billable_launcher_phase():
-    """What ends a session is the launcher deleting it, not Kaggle's ceiling.
-
-    So the quota the gate reserves has to cover the launcher's WHOLE bound, not
-    the polling window alone. A kernel bills from the moment Kaggle accepts it
-    until a delete is confirmed, which puts the push retries (each one discarding
-    the previous attempt's slug), the evidence phase and release() inside the
-    billable window as surely as the wait is. `2 x --max-wait` counted only the
-    middle one, and a run that spent the other two could bill past the
-    reservation and into the 20h the reserve promises to leave for humans.
-
-    The bound: Kaggle runs at most --kernels sessions for this account at once,
-    each billing its wall clock once (the second T4 of a session is free), so the
-    hours one invocation can bill are at most that many sessions billing for the
-    whole of the launcher's worst case -- the same worst case the job deadline is
-    derived from, computed from launch.py's constants rather than restated.
-    """
+    """--budget-hours must cover the launcher's whole worst case, not just the polling window."""
     source = WORKFLOW.read_text(encoding = "utf-8")
     budgets = {int(b) for b in re.findall(r"--budget-hours (\d+)", source)}
     assert len(budgets) == 1, budgets
@@ -2965,12 +2421,7 @@ def test_the_reserved_budget_covers_every_billable_launcher_phase():
 
 
 def test_the_account_is_rechecked_after_the_concurrency_slot_is_held():
-    """The gate job's survey is stale by the time a queued run gets the slot.
-
-    t4-smoke queues on an account-wide group with cancel-in-progress false, so a
-    second sampled run can wait out the first before pushing, and the quota
-    floor and in-flight survey have to be re-asked with the slot in hand.
-    """
+    """The survey goes stale while a queued run waits for its slot, so it is rechecked on taking it."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     assert "Recheck the Kaggle account" in names
@@ -2985,12 +2436,7 @@ def test_the_account_is_rechecked_after_the_concurrency_slot_is_held():
 
 
 def test_the_exhausted_quota_failure_reaches_the_pull_request():
-    """A red nothing surfaces is the same as no red at all.
-
-    The Decide step is the whole gate job, so anything that swallowed its exit
-    code (continue-on-error, an `|| true`, a downstream always()) would leave the
-    check green while the log said the account was out of hours.
-    """
+    """The gate job cannot swallow the Decide exit code, or an exhausted quota reads as green."""
     jobs = _workflow()["jobs"]
     gate_job = jobs["gate"]
     decide = next(s for s in gate_job["steps"] if s.get("id") == "decide")
@@ -3003,13 +2449,7 @@ def test_the_exhausted_quota_failure_reaches_the_pull_request():
 
 
 def test_the_recheck_stands_down_rather_than_reporting_the_quota_twice():
-    """It runs AFTER approval, with the account slot already held.
-
-    Reaching it means the hours went while this run queued, which is a race lost
-    rather than the week's quota gone, and the gate job would already have said
-    so for a run that was short before it started. So it asks for soft failure
-    and the stale-approval warning below it carries the reason.
-    """
+    """The recheck uses --soft-fail: the gate already reported the quota, so it adds no second red."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     recheck = steps[names.index("Recheck the Kaggle account")]
@@ -3040,17 +2480,8 @@ def test_the_harness_suite_runs_before_any_kernel_is_pushed():
 
 
 def test_the_cpu_torch_wheel_is_installed_before_anything_that_depends_on_it():
-    """Order decides which torch the runner ends up with, silently.
-
-    peft depends on torch, so installing it first lets pip satisfy that from the
-    default index -- the CUDA build and its multi-gigabyte dependency set -- and
-    pip then "prefers to leave the installed version as-is unless --upgrade is
-    specified" (pip.pypa.io/en/stable/cli/pip_install), so the CPU-index line
-    that follows finds the requirement satisfied and installs nothing. The
-    suites still pass, having spent the setup window reserved before the push on
-    wheels this job never uses. version-compat-ci.yml puts CPU torch first for
-    the same reason.
-    """
+    """CPU torch must come first: peft would pull the CUDA build, and pip then leaves that torch in
+    place."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     lines = [
@@ -3070,14 +2501,7 @@ def test_the_cpu_torch_wheel_is_installed_before_anything_that_depends_on_it():
 
 
 def test_every_cpu_suite_in_the_directory_is_collected_by_that_step():
-    """Naming one file leaves the others collected by nothing at all.
-
-    pyproject.toml restricts default discovery to tests/security, so a suite
-    this step does not name is run by no invocation anywhere, and the two suites
-    added after it was written cover the report extraction, the payload
-    verdicts, the reference checks and the per-leg isolation, which is most of
-    what a Kaggle session would otherwise be spent discovering.
-    """
+    """pyproject limits default discovery to tests/security, so each suite here must be named explicitly."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     run = steps[names.index("Test the harness")]["run"]
@@ -3096,12 +2520,7 @@ def test_every_cpu_suite_in_the_directory_is_collected_by_that_step():
 
 
 def test_every_leg_installs_one_pinned_zoo_commit():
-    """A branch name lets control and canary resolve two different commits.
-
-    zoo is not in pins/control.txt either, so the control leg, the one with a
-    committed reference band, would otherwise install whatever main was when its
-    own pip ran.
-    """
+    """Zoo is not in pins/control.txt, so each leg would install whatever main was at its own pip run."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     pins = steps[names.index("Pin the zoo revision")]
@@ -3112,13 +2531,7 @@ def test_every_leg_installs_one_pinned_zoo_commit():
 
 
 def test_an_unresolvable_zoo_commit_stands_the_run_down():
-    """Falling back to the branch name is the behaviour the pin removed.
-
-    Every payload pips independently on the kernel, so `main` lets control and
-    canary resolve two different zoo commits within one session, invalidating
-    the control's reference band and the version attribution both. A run that
-    cannot be made reproducible has nothing to say, so it stands down green.
-    """
+    """A zoo pin that cannot resolve stands the run down; falling back to main lets legs diverge."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     pins = steps[names.index("Pin the zoo revision")]
@@ -3132,15 +2545,7 @@ def test_an_unresolvable_zoo_commit_stands_the_run_down():
 
 
 def test_a_step_count_that_could_only_report_red_stands_the_run_down():
-    """A dispatched max_steps is free text, and the payload is the wrong place
-    to find out.
-
-    Both bad values cost a whole Kaggle session and report the pull request red
-    for the dispatch rather than for the code: a non-integer dies in the
-    payload's argparse, and the generated cell turns that crash into a failing
-    report on purpose, while a count below the fp16 scaler's leading skipped
-    steps applies no optimizer update at all.
-    """
+    """Non-integer, zero or negative max_steps must stand down before a Kaggle session is spent."""
     sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts" / "kaggle_t4_ci"))
     import check_steps
 
@@ -3299,13 +2704,7 @@ def test_an_alternate_spelling_of_the_step_count_keeps_the_reference_band(tmp_pa
 
 
 def test_an_evidence_upload_outage_cannot_colour_the_check_red():
-    """The verdict is Report's; the artifact service does not get a vote.
-
-    An upload step with no continue-on-error fails the job on a transient
-    artifact outage, and the job is what the pull request shows, so a run whose
-    payloads all passed went red for an evidence upload. This file promises red
-    ONLY for a payload that ran and failed its assertions.
-    """
+    """The evidence upload is continue-on-error, so an artifact outage cannot turn the check red."""
     steps = _workflow()["jobs"]["t4-smoke"]["steps"]
     names = [s.get("name") for s in steps]
     upload = steps[names.index("Upload evidence")]
@@ -3334,13 +2733,7 @@ def test_the_harness_and_the_package_under_test_are_one_snapshot():
 
 
 def test_the_workflow_takes_its_kernel_plan_from_the_leg_registry():
-    """Restating the plan in YAML is how the two drift apart.
-
-    The build emits the launcher's --notebook arguments and the expected payload
-    count, so a leg added to legs.py is launched and counted without touching
-    this file. A hardcoded --expect would report "partial" forever after the
-    next leg lands.
-    """
+    """Kernel plan comes from the leg registry via build outputs, so a new leg needs no YAML edit."""
     source = WORKFLOW.read_text(encoding = "utf-8")
     assert "--all-kernels" in source
     assert "${{ steps.build.outputs.notebooks }}" in source
@@ -3404,12 +2797,8 @@ def test_only_a_real_assertion_failure_turns_the_job_red(tmp_path, verdict, repo
 
 
 def test_a_kernel_that_reported_nothing_still_names_its_cause(tmp_path):
-    """The summary alone must say why, without downloading the artifact.
-
-    Kaggle hands the log back as a JSON array of stream records, so the
-    interesting line arrives split across dozens of them, and both real
-    no-report failures so far were legible only after flattening it.
-    """
+    """The summary must name a silent kernel's cause without the artifact, so the Kaggle log is
+    flattened."""
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     (evidence / "launch_result.json").write_text(
@@ -3534,14 +2923,8 @@ def test_the_goal_packages_are_the_ones_this_ci_exists_to_watch():
 
 
 def test_the_packages_the_upgrade_groups_move_are_recorded(tmp_path):
-    """Attribution is the only reason the canary exists.
-
-    The frontier leg installs transformers and trl WITH dependencies, and
-    legs.py records what that resolution moved: datasets, huggingface_hub, and
-    the tokenizers/safetensors ceilings that forced the change. A red leg
-    caused by one of them produced a comparison table in which nothing
-    differed, because the table only listed the packages the leg NAMES.
-    """
+    """Packages an upgrade group moves via dependencies must be in GOAL_PACKAGES, or they go
+    unattributed."""
     from versions import GOAL_PACKAGES
     for package in ("tokenizers", "safetensors", "huggingface_hub", "datasets"):
         assert package in GOAL_PACKAGES, package
@@ -3607,11 +2990,7 @@ def test_a_distribution_whose_name_is_not_its_import_name_is_still_found():
 
 
 def test_a_package_that_is_installed_and_unimportable_is_not_read_as_fine():
-    """vLLM on a card its wheel has no kernels for is exactly this state.
-
-    It has a metadata version and raises on import, so a summary printing the
-    version alone would call the environment healthy.
-    """
+    """Installed metadata is not health: a package that raises on import must be reported as broken."""
     from versions import flatten_versions
 
     flat = flatten_versions(
@@ -3645,12 +3024,7 @@ def test_a_pin_that_did_not_hold_is_a_failure():
 
 
 def test_the_committed_pin_file_parses_and_names_the_canary_set():
-    """The pin file and the canary's upgrade list have to be the same set.
-
-    Otherwise the legs differ in a package the control does not pin, so a canary
-    failure could come from a version the control never fixed, and the "the only
-    difference is the versions" claim goes with it.
-    """
+    """The pin file and canary upgrade list must name the same set, so the legs differ only in versions."""
     sys.path.insert(0, str(CI_DIR))
     from legs import CANARY_UPGRADES
     from versions import load_pins
@@ -3776,12 +3150,7 @@ def test_the_gptoss_leg_passes_on_what_the_probe_measured():
 
 
 def test_a_gptoss_run_that_never_compiled_is_a_failure():
-    """The silent fallback this leg exists to catch.
-
-    Zero captured graphs leaves the loss finite, the model saveable and
-    generation working, so nothing else in the report moves and the leg would
-    report green while covering the eager path only.
-    """
+    """Zero captured graphs must fail: loss, save and generation still pass, hiding an eager-only run."""
     failures_for, report = _shared_setup_1()
     report["compile"] = {
         "available": True,
@@ -3796,13 +3165,7 @@ def test_a_gptoss_run_that_never_compiled_is_a_failure():
 
 
 def test_a_compile_check_with_no_baseline_is_refused_rather_than_assumed():
-    """The pre-training read failed and the post-training one did not.
-
-    No baseline means no subtraction, and the absolute count left behind is the
-    LOADER's, nonzero on this leg before training starts, so falling back to it
-    passed an entirely eager training path in exactly the case where the two
-    cannot be told apart.
-    """
+    """With no baseline the absolute graph count is the loader's and nonzero, so the check is refused."""
     failures_for, report = _shared_setup_1()
     report["compile"] = {
         "available": True,
@@ -3886,12 +3249,8 @@ def test_the_grpo_leg_passes_a_healthy_run_whose_loss_is_zero():
 
 
 def test_a_group_with_no_reward_spread_is_the_failure_that_matters():
-    """reward_std == 0 across every step: identical completions.
-
-    The GRPO advantage is exactly zero in that state, so the optimizer applies
-    nothing while the loss, the step count and the adapter all look ordinary. It
-    is the one bug on this path nothing else would show.
-    """
+    """Zero reward_std gives zero GRPO advantage: the optimizer applies nothing and nothing else
+    flags it."""
     failures_for, report = _shared_setup_3()
     for entry in report["log_history"]:
         entry["reward_std"] = 0.0
@@ -3928,12 +3287,7 @@ def test_the_other_grpo_assertions_fire(mutate, expected):
 
 
 def test_probe_mode_reports_rather_than_judges():
-    """A feasibility probe must come back with evidence, not an exit code.
-
-    Both new payloads take --probe, and it must move failures into
-    `observed_failures` rather than suppress them: a probe that hid what it
-    found would be worse than no probe.
-    """
+    """--probe moves failures into observed_failures; a probe that hid them would be worse than none."""
     import ast
     for name in ("run_gptoss_t4.py", "run_grpo_t4.py"):
         tree = ast.parse((SMOKE_DIR / name).read_text(encoding = "utf-8"))
@@ -3946,16 +3300,7 @@ def test_probe_mode_reports_rather_than_judges():
 
 
 def test_the_launcher_takes_one_notebook_per_kernel():
-    """The launcher stays generic over N kernels, and pushes before it waits.
-
-    This workflow now hands it ONE notebook -- all four legs queue inside a
-    single kernel -- so the push-then-wait ordering below is not currently load
-    bearing for it. It is kept because the launcher is shared with
-    kaggle-t4-studio-gpu-ci.yml and because the property is the expensive one
-    to rediscover: waiting between pushes serialises sessions Kaggle runs
-    happily in parallel, which is what once put an hour between the control leg
-    and the canary leg.
-    """
+    """Pushes precede waits: waiting between pushes serialises sessions Kaggle runs in parallel."""
     import inspect
 
     import launch
@@ -3984,15 +3329,7 @@ def test_the_reports_of_every_kernel_are_gathered(tmp_path):
 
 
 def test_the_log_fallback_reads_kaggles_own_json_record_shape(tmp_path):
-    """The kernel log is the fallback for a run whose executed notebook never
-    came back, and Kaggle does not hand that log back as text.
-
-    `kernels/output` returns `log` as a JSON array of {stream_name, time,
-    data} records, one record per line, so nothing in the file starts with
-    the report prefix and reading it verbatim recovered nothing -- a failed
-    assertion scored as infra. report.py::kernel_log_text and
-    collect_evidence.py::iter_text already flatten it; this one has to too.
-    """
+    """kernels/output returns log as a JSON array of records, so it must be flattened before matching."""
     import launch
 
     records = [
@@ -4188,13 +3525,7 @@ def test_the_traceback_keeps_its_head_as_well_as_its_tail():
 
 
 def test_a_libcuda_the_linker_will_not_search_for_does_not_count(monkeypatch, tmp_path):
-    """The bug this check was rewritten for.
-
-    Kernel unsloth-t4-ci-d0d480b6: an earlier version accepted
-    /usr/local/cuda/compat, found libcuda.so there, reported `already_linkable`
-    and did nothing, and the link failed anyway because compat is not among the
-    -L directories flashinfer passes.
-    """
+    """A libcuda outside flashinfer's -L directories must not count: compat passed, then the link failed."""
     grpo = _grpo_module()
     real_exists = grpo.os.path.exists
 
@@ -4233,18 +3564,7 @@ def test_the_searched_directories_are_the_ones_flashinfer_passes():
 
 
 def test_the_grpo_payload_gives_a_base_model_a_chat_template():
-    """`unsloth/Qwen3-4B-Base` ships none, and TRL raises on the first step.
-
-    Kernel unsloth-t4-ci-27b0dc2e is the first probe that got far enough to find
-    it: the vLLM engine had built, memory was 11.36GB of 14.56, and the trainer
-    was inside `_run_epoch` when `maybe_apply_chat_template` raised
-
-        ValueError: Cannot use chat template functions because
-        tokenizer.chat_template is not set
-
-    The base model is the right choice and is not what to change; GRPO on an
-    instruct model measures the instruct tuning as much as the run.
-    """
+    """Base models ship no chat template and TRL raises without one, so the payload sets one."""
     source = (SMOKE_DIR / "run_grpo_t4.py").read_text(encoding = "utf-8")
     assert "tokenizer.chat_template = (" in source
     assert 'if not getattr(tokenizer, "chat_template", None):' in source
@@ -4278,19 +3598,7 @@ def test_the_chat_template_the_payload_installs_actually_renders():
 
 
 def test_the_frontier_leg_resolves_dependencies_rather_than_skipping_them():
-    """--no-deps is what the first probe got wrong, and it must not come back.
-
-    `--no-deps transformers trl` plus a blanket `--upgrade tokenizers` reached
-    transformers 5.15.0 and trl 1.9.2 (kernel unsloth-t4-ci-bd0c49e5) and then
-    died before running anything, an unbounded upgrade overshooting the ceiling
-    transformers declares:
-
-        tokenizers<=0.23.0,>=0.22.0 is required, but found tokenizers==0.23.1
-        safetensors>=0.8.0 is required, but found safetensors==0.7.0
-
-    Letting pip resolve the dependencies fixes both AND still clears zoo's cap,
-    because pip enforces only the requirements of packages in the resolution.
-    """
+    """--no-deps with a blanket tokenizers upgrade overshot transformers' ceiling; let pip resolve it."""
     sys.path.insert(0, str(CI_DIR))
     import legs
 
@@ -4311,13 +3619,7 @@ def test_the_frontier_leg_resolves_dependencies_rather_than_skipping_them():
 
 
 def test_the_frontier_leg_does_not_carry_the_zoo_requirement():
-    """Naming unsloth_zoo in the same resolution reimposes the cap it evades.
-
-    That is exactly how the canary differs, and it is right to: it measures the
-    supported window. The frontier leg measures past it, and a stray `ZOO` in
-    the upgrade group would silently turn one into the other while every other
-    assertion here still passed.
-    """
+    """Naming unsloth_zoo in frontier's resolution reimposes the cap that frontier measures past."""
     sys.path.insert(0, str(CI_DIR))
     import legs
 
@@ -4332,20 +3634,7 @@ def test_the_frontier_leg_does_not_carry_the_zoo_requirement():
 
 
 def test_frontier_is_retired_in_favour_of_the_leg_that_supersedes_it():
-    """frontier no longer runs, and this used to assert that it did.
-
-    The property it pinned was "there is one kernel and frontier is in it",
-    which mattered when frontier was the cheapest way to cover a
-    latest-everything stack. `vision_fla_compile` covers that stack on a bigger
-    model AND asserts the vendored FLA kernels, the Turing attention choice, a
-    real vision training run, the merged vision export, a Q8_0 GGUF with its
-    mmproj sidecar and inference on the exported file. Everything frontier
-    proved is a subset.
-
-    Rewritten rather than deleted, because the thing worth guarding now is that
-    the retirement was DELIBERATE: a leg that quietly falls out of KERNELS with
-    no entry anywhere is indistinguishable from one dropped by a bad merge.
-    """
+    """Frontier is retired on purpose, superseded by vision_fla_compile; a silent drop must fail."""
     from legs import KERNELS, UNWIRED
 
     assert "frontier" not in {name for kernel in KERNELS for name in kernel}, (
@@ -4366,22 +3655,7 @@ def test_frontier_is_retired_in_favour_of_the_leg_that_supersedes_it():
 
 
 def test_the_pinned_kaggle_client_carries_the_calls_this_workflow_makes():
-    """The pin is load bearing, and 1.7.4.5 could not do the job at all.
-
-    Three things this workflow depends on are absent from older clients, and
-    each fails quietly rather than loudly:
-
-    * `authenticate()` on 1.7.4.5 refuses `KAGGLE_API_TOKEN`, the only
-      credential this workflow has, and demands a kaggle.json nothing writes.
-    * `kaggle kernels delete` landed in 1.7.5.0 (Kaggle/kaggle-cli#762), first
-      released in 1.8.0; before it, argparse answers the release path with
-      `invalid choice: 'delete'` and exit 2.
-    * `quota_view()`, which gate.py reads remaining accelerator hours from,
-      exists only on 2.x; below it the call raises AttributeError into a handler
-      that records "quota unreadable" and lets the run proceed.
-
-    Pinned exactly, and the same version in every job that installs it.
-    """
+    """Kaggle client is pinned: older releases refuse KAGGLE_API_TOKEN and lack delete and quota_view."""
     packaging_version = pytest.importorskip("packaging.version")
     text = WORKFLOW.read_text(encoding = "utf-8")
     pins = re.findall(r"pip install [^\n]*'kaggle==([0-9][^']*)'", text)

@@ -409,10 +409,7 @@ def test_synthetic():
 
 
 def _brute_force_bad_rows(ds, fmt: str) -> set:
-    """Pure-Python ground-truth scanner (no shared code with dataset_none_detect) for independent proof.
-
-    Flags a row bad if any field/turn is None, empty, or whitespace-only; returns bad row indices.
-    """
+    """Independent oracle sharing no code with dataset_none_detect; flags None, empty, or blank fields."""
 
     def _blank(val) -> bool:
         if val is None:

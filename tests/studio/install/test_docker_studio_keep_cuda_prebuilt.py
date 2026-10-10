@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Docker Studio layer must keep the base image's CUDA llama.cpp bundle.
-
-docker/Dockerfile.studio symlinks Studio's llama.cpp dir at the base's baked CUDA bundle
-and then runs install.sh --local. No GPU is visible during an image build, so setup.sh's
-hardware detection resolves the CPU bundle for the host arch and installs it over the CUDA
-one: the published unsloth/unsloth:latest carries whiteouts for libggml-cuda.so on BOTH
-arm64 and amd64, and its UNSLOTH_PREBUILT_INFO.json reads backend: cpu.
-
-Part one pins that root cause on both arches with the real selector. Part two drives the
-fix, setup.sh's _keep_installed_gpu_prebuilt, against real markers on a stubbed aarch64
-host with no working nvidia-smi. Part three pins the wiring that turns the knob on.
-"""
+"""With no GPU at image build time, setup.sh replaces the base image's CUDA llama.cpp with CPU."""
 
 from __future__ import annotations
 
@@ -152,11 +141,7 @@ _ARCH_CASES = [
     ("machine", "cuda_artifact", "cpu_artifact"), _ARCH_CASES, ids = ["arm64", "amd64"]
 )
 def test_a_gpuless_build_host_resolves_the_cpu_bundle(machine, cuda_artifact, cpu_artifact):
-    """The defect: with no GPU visible the selector picks CPU even though CUDA is published.
-
-    This is what install.sh --local runs inside the Docker build, and it is why the CUDA
-    bundle the base baked is overwritten. amd64 is NOT exempt.
-    """
+    """With no GPU visible the selector picks CPU even when CUDA is published, on amd64 too."""
     attempts = _linux_published_attempts(_host(machine), _release([cuda_artifact, cpu_artifact]))
     assert [choice.name for choice in attempts] == [cpu_artifact.asset_name]
     assert [choice.install_kind for choice in attempts] == [cpu_artifact.install_kind]
@@ -222,10 +207,7 @@ fi
 
 
 def _sliced_sh_functions(tmp_path):
-    """_has_local_llama_server + _keep_installed_gpu_prebuilt, sliced out of setup.sh.
-
-    setup.sh runs install steps at load, so the functions are sliced rather than sourced.
-    """
+    """setup.sh runs install steps at load, so functions are sliced out rather than sourced."""
     text = SETUP_SH.read_text(encoding = "utf-8")
     body = ""
     for name in ("_has_local_llama_server() {", "_keep_installed_gpu_prebuilt() {"):

@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""unsloth#409, compiled path: unsloth_zoo.compiler generates its OWN empty-logits sentinel.
-
-`unsloth_compile_transformers()` hands the trainers source text built from
-`compiler._cross_entropy_code`, which carries a second `EmptyLogits` that never goes through
-`unsloth/models/_utils.py`. Fixing the singleton there leaves that copy claiming
-`__dataclass_fields__`, so torch's `_apply_to_tensors` (the FSDP2 mixed-precision output cast)
-still calls `dataclasses.replace` on it and dies. The generated text is read off the installed
-zoo and exec'd, because the module is never importable without an accelerator.
-"""
+"""The zoo's generated code has its own EmptyLogits, which must not claim __dataclass_fields__."""
 
 from __future__ import annotations
 

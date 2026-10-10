@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The leg set the rebuild is specified against, encoded so it cannot drift.
-
-Four legs, each covering a distinct surface, plus GRPO which is deliberately
-not per-PR. These are properties of the SPEC rather than of the code, and they
-are written down here because the alternative is that they live only in a
-conversation: a leg quietly losing its export flag, or being pointed at a
-different model, is invisible in a diff that touches one line of a tuple.
-
-The one that matters most is the export rule. "Export to GGUF / llama.cpp Q8_0
-and run inference on the result" applies to EVERY leg, and Latest_compile was
-missing it for the whole rebuild without anything noticing.
-"""
+"""Pins the leg set as spec properties, so a leg quietly losing its export flag fails a test."""
 
 from __future__ import annotations
 
@@ -63,12 +52,7 @@ def test_the_cheap_legs_export_a_gguf_and_run_it():
 
 
 def test_the_expensive_exports_stay_off():
-    """A removal made for wall-clock reasons has to be visible, or it comes
-    back by accident on the next edit and nobody notices 659 seconds.
-
-    Stated as a rule rather than a comment because the cost is invisible in a
-    green run: an export that reappears makes the suite slower and no redder.
-    """
+    """Wall-clock removals stay off: a re-added export slows the suite without making it go red."""
     back = [n for n in NOT_EXPORTING if "--export-gguf" in legs.LEGS[n].args]
     assert back == [], (
         f"these legs export again: {back}. They were dropped at 310.8s and "
@@ -103,10 +87,7 @@ def test_the_grpo_leg_keeps_the_settings_it_was_measured_with():
 
 
 def test_the_grpo_leg_cannot_share_a_card():
-    """Measured at 13.39-13.40 GB of 14.56 across nine sessions. The directive
-    says the GRPO run must be standalone on one GPU, and the way that is
-    expressed here is a vram_gb the admission scheduler cannot fit a co-tenant
-    beside."""
+    """GRPO measured at 13.39-13.40 GB of 14.56, so its vram_gb must block any co-tenant."""
     assert legs.LEGS["grpo"].vram_gb >= 13.0
 
 
@@ -129,14 +110,7 @@ def test_no_directive_leg_is_scheduled_beside_a_co_tenant_it_cannot_fit():
 
 
 def test_a_wired_leg_never_carries_a_round_placeholder_over_a_gigabyte():
-    """Every placeholder in this file's history was a round number and every
-    measured figure was not: 6.0 against a measured 12.73, 4.0 against 2.84.
-    A leg small enough to co-tenant freely (0.7) is not the risk; a leg that
-    claims whole gigabytes on a 14.56 GB card is.
-
-    UNWIRED legs are exempt by construction -- they are not scheduled, and the
-    note is where the missing measurement is recorded.
-    """
+    """Round VRAM placeholders are flagged: each real measurement recorded here was unrounded."""
     offenders = []
     for name in legs.KERNELS[0]:
         vram = legs.LEGS[name].vram_gb

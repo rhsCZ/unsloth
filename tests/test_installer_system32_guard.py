@@ -321,12 +321,7 @@ def _expand_windows_user(value: str, environ: dict[str, str]) -> str:
 
 
 def _expand_windows_vars(value: str, environ: dict[str, str]) -> str:
-    """The real ntpath.expandvars, against the fake environment.
-
-    Reimplementing it here would test the reimplementation: the guard is given
-    the same function it gets in production, reading the environment the test
-    describes rather than the host's.
-    """
+    """Use the real ntpath.expandvars; a reimplementation would test itself rather than the guard."""
     with mock.patch.dict(os.environ, environ, clear = True):
         return ntpath.expandvars(value)
 
@@ -581,11 +576,7 @@ def test_cli_guard_lands_where_the_desktop_puts_its_children():
 
 
 def test_cli_guard_relocates_when_the_desktop_marks_the_child():
-    """Newer desktop builds set the marker; the argv rules above cover older ones.
-
-    The marker exists for a command shape this CLI does not know yet, so it is
-    tried here with one.
-    """
+    """Newer desktop builds set UNSLOTH_DESKTOP_MANAGED for command shapes the argv rules miss."""
     message, colour, chdir_calls = _guard_outcome(
         r"C:\Windows\System32",
         argv = ["unsloth", "studio", "desktop-handshake", "--json"],

@@ -14,10 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""UNSLOTH_HOME has to mean the same install to the CLI and to the backend: if the two disagree
-the backend writes studio.db, auth and the pid file under <UNSLOTH_HOME>/studio while the CLI
-reads ~/.unsloth/studio.
-"""
+"""CLI and backend must agree on UNSLOTH_HOME, or studio.db is written where the CLI never looks."""
 
 from __future__ import annotations
 
@@ -155,16 +152,7 @@ def test_a_plain_custom_root_still_keeps_llama_cpp_inside_it(tmp_path):
 
 
 def test_a_master_root_the_cli_declined_is_still_told_to_the_backend(tmp_path):
-    """The one root the CLI picks that the backend would not pick for itself.
-
-    install.sh and install.ps1 do not read UNSLOTH_HOME yet, so _resolve_studio_home keeps an
-    exported-but-uninstalled master root off the legacy install that actually exists. That
-    fallback is not custom, and returning early on non-custom exported nothing at all, so
-    studio_root() in the backend went on honouring UNSLOTH_HOME with no install check: the CLI
-    ran the legacy venv while the backend under it wrote studio.db, auth and the pid file to
-    <master>/studio. The other tests here point the master root at an empty directory AND leave
-    the legacy root uninstalled, so the fallback is never entered by them.
-    """
+    """A declined UNSLOTH_HOME must still reach the backend, or the CLI and backend use different roots."""
     home = tmp_path / "home"
     conf = home / ".unsloth" / "studio" / "share" / "studio.conf"
     conf.parent.mkdir(parents = True)
@@ -187,14 +175,7 @@ def test_a_master_root_the_cli_declined_is_still_told_to_the_backend(tmp_path):
 
 
 def test_a_whitespace_studio_home_does_not_defeat_the_export(tmp_path):
-    """The same fallback as above, with an inherited UNSLOTH_STUDIO_HOME of "   ".
-
-    Every resolver strips before deciding, so "   " means unset to _resolve_studio_home and to
-    studio_root alike. The export guard read the raw value, where "   " is truthy, so it left the
-    whitespace in place: the CLI ran the legacy install and the backend under it resolved
-    <master>/studio, which is the split this file exists to prevent. Blank was already covered by
-    the guard; whitespace-only was the shape that got through.
-    """
+    """Export guard must strip whitespace too: every resolver treats a whitespace-only value as unset."""
     home = tmp_path / "home"
     conf = home / ".unsloth" / "studio" / "share" / "studio.conf"
     conf.parent.mkdir(parents = True)

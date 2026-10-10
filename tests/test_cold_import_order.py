@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A cold `import unsloth.save` has to work, whatever imported first.
-
-save.py -> .models.loader_utils -> models/__init__ -> llama -> vision, whose module-scope
-`from ..save import ...` landed back in the half-built save.py. `_gpu_init.py` hid that by
-importing `.models` first, but the MLX branch never reaches it.
-"""
+"""A cold import of unsloth.save must work; vision's module-scope import landed in half-built save.py."""
 
 import ast
 import os

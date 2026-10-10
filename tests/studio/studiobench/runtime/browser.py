@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Browser launch. Reuses `tests/studio/_playwright_robust.py` where it is available.
-
-Playwright is imported LAZILY, inside the functions that need it, so `--help` and `--doctor` work
-on a machine with nothing installed -- which is the first thing an external tester runs and the
-worst possible moment for an ImportError.
-
-`_playwright_robust` is imported the same way and its absence is survivable: the shipped zipapp
-carries a copy of the pieces it needs, but a checkout run gets the real module and therefore the
-real, maintained Chromium flags, the view-transition killer, the wall-clock watchdog and
-`dump_diagnostics`.
-"""
+"""Playwright is imported lazily so --help and --doctor work on a machine with nothing installed."""
 
 from __future__ import annotations
 
@@ -157,14 +147,7 @@ def cdp_metrics(cdp) -> dict:
 
 
 def cdp_counters(before: dict, after: dict) -> dict:
-    """CHROMIUM-ONLY, and every consumer prints `-` off Chromium rather than a zero.
-
-    `LayoutDuration` is the direct read on M3: the autoscroll observer's callback synchronously
-    reads scrollHeight, so forced layout per streamed character shows up here and nowhere else.
-    An earlier harness read it as a FLAT FLOOR that barely moved with thread size, which is
-    exactly what it would look like if the observer never ran -- which, on a fixture with a local
-    adapter and no real DOM mutations, it did not.
-    """
+    """Chromium-only: off Chromium the counters are None and print as a dash, never as zero."""
     if not before or not after:
         return {
             "layout_count": None,

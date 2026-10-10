@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Every loss branch must apply the logit transforms the reference implementation does.
-
-Cohere multiplies by logit_scale, Granite divides by logits_scaling; dropping either
-optimizes a different loss. Pure torch, so it runs on CPU.
-"""
+"""Each fused loss must apply its model's logit scale: Cohere multiplies, Granite divides."""
 
 from __future__ import annotations
 
@@ -102,10 +98,7 @@ def _fused_loss(
 
 
 def _reference_loss(scale, softcapping = 0.0):
-    """Transformers' own order: scale the logits, soft cap, shift, then cross entropy.
-
-    Computed in float64 so the expected value is the arithmetic, not the float32 path.
-    """
+    """Transformers' order: scale, soft cap, shift, cross entropy; computed in float64."""
     logits = F.linear(_hidden_states().double(), _lm_head_weight().double())
     logits = logits * scale
     if softcapping:
@@ -223,11 +216,7 @@ def test_transforms_resolve_without_unsloth_zoo(config, expected, monkeypatch):
     ],
 )
 def test_both_resolver_arms_agree(model_type, fields, monkeypatch):
-    """An old unsloth_zoo must not train a different loss than a new one.
-
-    The fallback arm is only reached when the installed unsloth_zoo predates
-    detect_logit_transforms, which is exactly when nobody would notice it disagreeing.
-    """
+    """Old unsloth_zoo versions take the fallback resolver, which must match the detected transforms."""
 
     def build():
         config = MistralConfig(

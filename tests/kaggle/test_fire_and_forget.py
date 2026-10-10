@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Dispatch and collect: the ways this trades forty minutes for nothing.
-
-The GPU jobs no longer wait for their kernel, buying back 41.5 and 18.7 minutes
-of runner per commit (runs 33479481067 and 33486360729). Every test here aims
-at the one new class of bug, **the result stops arriving and nothing says so**,
-in its four green shapes:
-
-1. the dispatching job reports success and is still the required check, so the
-   check now means "Kaggle accepted a push";
-2. the kernel is never collected, so it bills quota to its ceiling and the
-   commit keeps a status that never resolves;
-3. the collector deletes a kernel before reading it, or one never ours;
-4. the slug loses the commit, so a finished result cannot be attributed.
-
-Everything runs on CPU against stubs; no Kaggle session is spent.
-"""
+"""Guards the ways a dispatched result silently never arrives; all tests run on CPU against stubs."""
 
 from __future__ import annotations
 
@@ -187,10 +172,8 @@ def test_the_slug_still_round_trips_through_slugify():
 
 
 def test_the_gate_still_recognises_a_dispatched_kernel_as_ours():
-    """THE ONE THAT KEEPS THE CONCURRENCY CONTROL WORKING. The GitHub group no
-    longer bounds Kaggle sessions; the gate's survey of slugs carrying
-    OWN_KERNEL_PREFIX does, and without the prefix every push believes the
-    account idle until Kaggle refuses one at its 2-session cap."""
+    """Dispatched slugs need OWN_KERNEL_PREFIX, or the gate thinks the account is idle and Kaggle
+    refuses."""
     import gate
     for kind in ("notebook", "studio"):
         name = launch.slug_name(kind, "abcdef01")
@@ -252,11 +235,7 @@ def test_dispatch_does_not_delete_the_kernel_it_pushed():
 
 
 def test_dispatch_does_not_report_pass():
-    """`dispatched` is not `pass`, and the difference is the whole change.
-
-    Nothing has run when the dispatch returns, so `pass` would be worse than the
-    silent skip this repo has been caught by twice: it looks like a result.
-    """
+    """A dispatch reports dispatched, not pass: nothing has run yet, and pass would read as a result."""
     src = (CI_DIR / "launch.py").read_text(encoding = "utf-8")
     block = src[src.index("if args.dispatch:", src.index('result["slug"] = live[0]')) :]
     block = block[: block.index("return finish()")]
@@ -329,10 +308,7 @@ def test_a_running_kernel_within_its_ceiling_is_left_completely_alone(tmp_path):
 
 
 def test_a_kernel_past_its_ceiling_is_reaped_and_reported(tmp_path, monkeypatch):
-    """THE REASON THE SCHEDULED COLLECTOR EXISTS. Nothing deletes the kernel
-    now, and a wedged one bills to its ceiling unwatched: one here was measured
-    ignoring Kaggle's own `-t` timeout for over two hours. Reported as a failure
-    rather than dropped, or the commit stays pending forever."""
+    """The collector reaps a kernel past its ceiling and reports it, since nothing else deletes it now."""
     deleted = _shared_setup_1(monkeypatch)
     api = _StubApi([], {"me/unsloth-t4-ci-nabcdef01-1111": "RUNNING"})
     entry = {
@@ -598,10 +574,8 @@ def test_a_dispatch_posts_a_pending_status():
 
 
 def test_the_reporters_wait_for_an_EXECUTED_NOTEBOOK_not_just_a_directory():
-    """Measured on run 33628507954, which reported `Kaggle T4 smoke: PARTIAL`
-    for a dispatch where nothing had run: `hashFiles('kaggle_evidence/**')` is
-    true once launch.py writes launch_result.json. The condition has to name
-    what a report is MADE of, an executed notebook."""
+    """Wait on an executed notebook, not hashFiles of a directory, which passes once
+    launch_result.json exists."""
     for path in (NOTEBOOK_WF, STUDIO_WF):
         for _job, name, step in _steps(_wf(path)):
             body = step.get("run") or ""
@@ -652,14 +626,7 @@ _STATUS = {
 
 
 def test_an_abbreviated_sha_is_EXPANDED_before_a_status_is_posted(monkeypatch):
-    """MEASURED AGAINST THE REAL API, and it fails closed in the worst way:
-
-        POST /repos/{o}/{r}/statuses/2ecb19df
-        422 "Sha must be a valid hex object ID"
-
-    The slug carries an abbreviation, so the poster must expand it first or
-    every verdict 422s while the collection quietly succeeds.
-    """
+    """The statuses API rejects an abbreviated SHA with 422, so the poster must expand it first."""
     full = "2ecb19df" + "a" * 32
     calls = _fake_gh(monkeypatch, resolve_to = full)
     outcome = post_statuses.post_all([dict(_STATUS)], "unslothai/unsloth")
@@ -1152,10 +1119,7 @@ def test_the_scheduled_collector_fails_loudly_when_it_cannot_authenticate(
 
 
 def test_an_unconfigured_collector_account_warns_and_passes(tmp_path, monkeypatch, capsys):
-    """The matrix is static, so a repository with one Kaggle account leaves the
-    second secret unset; that leg used to go red every ten minutes for an
-    account that does not exist. An empty token is an absent account, warned
-    about and green; a token present and refused is still red."""
+    """An empty Kaggle token is an absent account: warn and pass, but a token that is refused stays red."""
 
     def _no(*a, **k):
         raise OSError("Could not find kaggle.json")
@@ -1692,10 +1656,7 @@ def test_a_notebook_kernel_without_its_expected_count_is_never_a_pass(tmp_path, 
 
 
 def test_every_gate_budget_covers_the_reaper_window():
-    """Nothing deletes the kernel now, so one that ignores its own timeout bills
-    until the collector reaps it, up to a schedule interval and a job timeout
-    late. The gate admits a run when `remaining >= budget + reserve`, so a
-    budget below that window lets a wedged kernel bill into the reserve."""
+    """A gate budget shorter than the reaper window lets a wedged kernel bill into the reserve."""
     collect_wf = _wf(COLLECT_WF)
     job = collect_wf["jobs"]["collect"]
     on = collect_wf.get("on") or collect_wf.get(True) or {}  # PyYAML reads a bare `on:` as True

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
-"""The 4bit paths in unsloth.kernels.utils (fast_dequantize, fast_gemv, matmul_lora and the
-fast_lora autograd functions) must match bitsandbytes byte for byte, run on whatever stream is
-current, survive CUDA graph capture, and trace under torch.compile without graph breaks.
-
-Every correctness test runs twice: on the NF4 kernels and on the bitsandbytes ctypes fallback
-(UNSLOTH_BNB_TRITON=0).
-"""
+"""4bit kernels must match bitsandbytes byte for byte and trace with no graph breaks, on both paths."""
 
 import pytest
 import torch
@@ -119,10 +113,8 @@ def _(x):
 
 
 def _dynamo_traces_params4bit():
-    """Older Dynamo (torch 2.7) cannot hand a Params4bit weight to any torch.library op (nor call
-    some of its methods) without a graph break, whatever the op does. There the fast_lora paths
-    can only be checked for correctness under torch.compile, not for a single graph. Probed with
-    a throwaway op so a regression in the 4bit ops cannot turn the full-graph checks off."""
+    """Dynamo in torch 2.7 graph-breaks on Params4bit, so fast_lora is only checked for correctness
+    there."""
     if not _TRACES_PARAMS4BIT:
         lin = bnb.nn.Linear4bit(64, 64, bias = False, quant_type = "nf4").to(DEVICE)
         fn = lambda x: x + _passthrough(lin.weight)[0, 0] + lin.weight.t()[0, 0]

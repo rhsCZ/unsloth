@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The Kaggle 20GB message must only fire on failures that are about disk.
-
-It used to fire for every GGUF failure, so an unconvertible architecture, a
-missing tokenizer and a bad quant method all told the user to free up space.
-"""
+"""The Kaggle 20GB message fires only on disk-related GGUF failures, not on every conversion error."""
 
 import os
 import shutil
@@ -36,20 +32,7 @@ _Usage = namedtuple("_Usage", ("total", "used", "free"))
 
 @pytest.fixture
 def plenty_of_free_space(monkeypatch):
-    """State the premise the "not a disk problem" tests are written under.
-
-    `_gguf_failure_looks_like_disk` has a second, independent signal: a
-    filesystem with less than `_DISK_HEADROOM_BYTES` (2GiB) free is a disk
-    failure whatever the exception says. It probes `save_directory` and then
-    `os.getcwd()`, so on a host whose working directory is that full, every
-    "this is NOT a disk problem" test inverts and fails for a reason that has
-    nothing to do with the message it is asserting about.
-
-    Report ample space so the message is the only signal left, which is what
-    those tests are about ("a broken quantizer with 19GB free is not a disk
-    problem", save.py). The real threshold is left alone, so the comparison
-    still runs and a nonsensical headroom would still be caught.
-    """
+    """Report ample free space so the 2GiB headroom check cannot flip the not-a-disk-problem tests."""
     real_disk_usage = shutil.disk_usage
     ample = _Usage(total = 100 * 1024**3, used = 1 * 1024**3, free = 99 * 1024**3)
 
@@ -170,10 +153,7 @@ def test_sigkill_is_recognised_from_the_returncode(code):
 
 
 def test_a_shell_wrapped_137_is_recognised():
-    """llama-quantize runs under `shell = True`, so /bin/sh reports a SIGKILLed
-    child as exit status 137 and never names the signal. unsloth_zoo then
-    re-raises a plain RuntimeError, dropping `returncode`, so the wording is
-    the only thing left."""
+    """With shell = True, a SIGKILLed child shows as exit 137, and the re-raise drops returncode."""
     from unsloth.save import _gguf_child_was_oom_killed
 
     exc = RuntimeError(

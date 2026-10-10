@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the `--secure/--no-secure` Unsloth flag: option registration,
-re-exec/run_server forwarding, the forced 127.0.0.1 bind, and rejection
-alongside --no-cloudflare or before a subcommand. Modeled on
-test_studio_cloudflare_flag.py."""
+"""Tests the --secure/--no-secure flag: forwarding, the forced 127.0.0.1 bind, and its rejections."""
 
 from __future__ import annotations
 

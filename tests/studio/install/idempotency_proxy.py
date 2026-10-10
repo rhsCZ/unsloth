@@ -2,29 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A logging HTTP proxy (CONNECT tunnels plus plain HTTP), stdlib only.
-
-test_update_idempotency.py claims that a second `unsloth studio update` does no network
-work. A claim like that cannot be checked from inside the process being measured, and
-"the update finished quickly" is not evidence: a warm uv cache also finishes quickly,
-and so does a run that fetched three release manifests. So the child gets a proxy as its
-ONLY route out (HTTPS_PROXY/HTTP_PROXY/ALL_PROXY, with 127.0.0.1 in NO_PROXY), and every
-attempt is written down whether it succeeds or not.
-
-There is no TLS interception here and there does not need to be: the destination host,
-the byte counts in each direction and the duration are all recorded from the CONNECT
-line, which is enough to say which hosts a run talked to and how much it moved.
-
-    python idempotency_proxy.py serve --port 0 --log p.jsonl --port-file p.port
-    python idempotency_proxy.py serve --refuse ...       # 403 everything, still log it
-    python idempotency_proxy.py serve --deny-hosts pypi.org,github.com ...
-    python idempotency_proxy.py summary p.jsonl [--since-ts T]
-
---refuse is how offline is MEASURED rather than asserted: the child still has a proxy to
-talk to, every attempt is answered 403 and recorded, so a run that claims to have done
-nothing has to prove it made no connections. --deny-hosts is the same aimed at the
-package hosts alone.
-"""
+"""A logging proxy records every connection attempt, so idempotency and offline runs are measured."""
 
 from __future__ import annotations
 

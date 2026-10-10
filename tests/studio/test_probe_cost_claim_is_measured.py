@@ -1,37 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What a superseded probe matrix costs has to be measured, not read off the timeout.
-
-`runner-pool-probe.yml` carries a rationale for cancelling superseded runs, and that
-rationale is what anyone deciding whether to keep the `concurrency:` block will act on.
-It has already carried two wrong costs: billed minutes, which this repository does not
-pay, and then "holding four of those five for up to ten minutes", which is the value of
-`timeout-minutes:`. That value is the cutoff for a cell that hangs. A cell that works
-holds its runner for about five seconds, because the whole job is one echo.
-
-What is pinned here is deliberately NARROW, and the narrowness is the point. An earlier
-version of this file tried to judge the claim as prose: which verb governed which
-duration, whether a hanging qualifier was positive or denied, whether a subject had one
-holder or two. Round after round of review found ways through it, in both directions,
-and every repair opened new surface. Regular expressions do not read English, and a
-guard that is wrong in the false-positive direction is worse than no guard: it fails CI
-on a rationale that is true.
-
-So two mechanical rules, neither of which needs a parser:
-
-  1. The timeout value is never written as a prose duration. Refer to `timeout-minutes`,
-     which is the value's actual home. Every wrong cost this comment has carried was a
-     prose duration that happened to equal it, and a comment that never writes it cannot
-     make that mistake. The cost is that a true sentence like "a hung cell holds its
-     runner for ten minutes" is refused too; write "until the timeout" instead.
-
-  2. The occupancy figures agree with the measurement beside them. In the sentence that
-     reports the median, every figure is in seconds and within 3x of that median.
-
-Neither rule catches an arbitrary false statement elsewhere in the comment, and this
-file does not pretend to. It catches the two mistakes that were actually made.
-"""
+"""Never write the timeout-minutes value as a prose duration; the median sentence stays in seconds."""
 
 from __future__ import annotations
 
@@ -82,11 +52,7 @@ def _value(text: str) -> int:
 
 
 def _rationale() -> str:
-    """The header comment, which is every comment line above the first key.
-
-    Read as text rather than through yaml: a comment is exactly what a parser drops, and
-    the comment is the whole subject here.
-    """
+    """Reads the header comments as text, since a YAML parser drops exactly the comments this checks."""
     lines = []
     for line in WORKFLOW.read_text(encoding = "utf-8").splitlines():
         stripped = line.strip()
@@ -115,17 +81,7 @@ def test_the_rationale_and_the_timeout_are_both_still_there():
 
 
 def test_the_timeout_value_is_never_written_as_a_prose_duration():
-    """The rule with no exemptions, because every exemption turned out to be a way through.
-
-    "for up to ten minutes" was the original wrong cost. "although the timeout is the
-    cutoff for a hang, a superseded matrix holds its runners for ten minutes" was the
-    next. "a non-hung cell holds its runner for ten minutes" was the one after that.
-    They differ only as English; as a claim about what a working cell costs they are the
-    same sentence, and what they have in common is writing the timeout's value out in
-    prose. The separator is `[\s-]+` for the same reason: "a ten-minute slot cost" is
-    that claim in adjectival form, and a hyphen is a separator here rather than part of
-    a word.
-    """
+    """Bans the timeout value in digits and in words, with hyphens counted as separators."""
     minutes = _timeout_minutes()
     spellings = [str(minutes)]
     if minutes in _AS_A_WORD:

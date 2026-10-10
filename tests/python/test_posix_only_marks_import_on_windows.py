@@ -1,44 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""`os.geteuid` does not exist on Windows, and a `@pytest.mark.skipif` decorator is
-evaluated at COLLECTION. An unguarded one therefore does not skip the test on Windows,
-it raises AttributeError while the module is being imported and takes the whole file's
-collection down with it, which pytest reports as an error for every test in it.
-
-That is invisible to the org CI, which runs the Python suites on Linux only, so it
-surfaces on a Windows runner as a file that suddenly has no tests at all. Found exactly
-that way: tests/python/test_docker_rocm.py errored on a windows-latest staging run while
-Linux and macOS both reported 70 passed.
-
-Two guards are accepted, both already used in the tree, and their POLARITY is checked
-rather than their presence:
-
-    os.name != "posix" or os.geteuid() == 0        short-circuits on Windows
-    os.geteuid() == 0 if hasattr(os, "geteuid")    the conditional form
-
-`os.name == "posix" or os.geteuid() == 0` mentions the same attribute and spares nothing,
-so it is flagged.
-
-A third form in the tree, `getattr(os, "geteuid", lambda: 1)()`, is a guard in itself, but
-only because the fallback is there and can be called: `getattr(os, "geteuid")()` and
-`getattr(os, "geteuid", None)()` both fail on Windows and are treated as the plain lookup.
-`from os import geteuid` fails earlier still, at the import, and counts too. A module
-imported as `import os as _os` is normalised back to `os` before any of this. And nothing else counts as a guard merely for sitting to the
-left of the call, since `is_ci() or os.geteuid() == 0` still raises on Windows every time
-is_ci() is false.
-
-Runtime uses inside a function body are not covered here: they only run on a platform
-the test already reached, and a POSIX-only test that gets that far has a skip of its own.
-A default argument is not a runtime use, because it is evaluated where the `def` is, and
-neither is an annotation in a module without `from __future__ import annotations`. A `def`
-nested inside another function is the other way round: nothing of it is evaluated until
-the outer one runs, so none of it can break collection. Nor is a lambda's body or a
-generator's, though the defaults of the one and the first iterable of the other are.
-
-The scan is deliberately incomplete and silent where it is; `_import_time_expressions`
-says exactly what it models and why everything else is skipped whole.
-"""
+"""An unguarded `os.geteuid` in a decorator or import-time expression raises at collection on Windows."""
 
 from __future__ import annotations
 
@@ -53,10 +16,7 @@ TESTS = REPO_ROOT / "tests"
 
 
 def _is_os_geteuid(node: ast.AST) -> bool:
-    """A lookup of os.geteuid that fails on Windows wherever it appears: the attribute,
-    and the two-argument getattr, which has no fallback and raises the same AttributeError.
-    The three-argument form depends on how it is used, so it is decided in _geteuid_sites,
-    which can see the call around it."""
+    """Matches `os.geteuid` lookups that fail on Windows: the attribute and the two-argument `getattr`."""
     if (
         isinstance(node, ast.Attribute)
         and node.attr == "geteuid"
@@ -248,10 +208,7 @@ def _is_hasattr_geteuid(node: ast.AST) -> bool:
 
 
 def _windows_value(node: ast.AST) -> bool | None:
-    """What this expression is worth ON WINDOWS, or None when that is not decidable
-    from the source. Polarity is the whole point: `os.name != "posix"` spares the call
-    to its right and `os.name == "posix"` does not, and a scan that only looked for the
-    words `os.name` would accept both and pass the failure it exists to catch."""
+    """Windows truth value of an expression, or None; the polarity of `os.name` comparisons matters."""
     if isinstance(node, ast.Constant) and isinstance(node.value, bool):
         return node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -305,14 +262,7 @@ def _spared_on_windows(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
 
 
 def _is_guarded(expr: ast.AST) -> bool:
-    """Whether every `os.geteuid` in this expression is unreachable on Windows.
-
-    Only `os.name` comparisons and `hasattr(os, "geteuid")` decide anything. Nothing
-    else counts for merely sitting to the left of the call: `is_ci() or os.geteuid() == 0`
-    still raises every time is_ci() is false.
-
-    The three-argument `getattr(os, "geteuid", lambda: 1)()` needs no case here: a
-    fallback that can be called means no lookup can fail, so it is not a site at all."""
+    """Only `os.name` comparisons and `hasattr(os, 'geteuid')` guard a call; `is_ci() or ...` does not."""
     parents: dict[ast.AST, ast.AST] = {}
     for node in ast.walk(expr):
         for child in ast.iter_child_nodes(node):
@@ -382,36 +332,8 @@ def _offending_sites(tree: ast.Module):
 
 
 def _import_time_expressions(tree: ast.Module):
-    """Yield the expressions evaluated when the module is imported.
-
-    Walked as statements, not as one flat tree, because control flow decides what runs: a
-    lookup under `if os.name == "posix":` is never reached on Windows, and a function body
-    is never reached at import however deeply it is nested.
-
-    Deliberately incomplete, and silent where it is. Three contexts are modelled, because
-    between them they are where every real case in this tree lives and where the next one
-    will be:
-
-      - the module body and class bodies, statement by statement
-      - `if`, whose branches are taken by the Windows value of the test
-      - a definition's decorators, defaults and eager annotations, wherever it is reached
-
-    Any other compound statement (`try`, `while`, `for`, `with`, `match`) is skipped
-    whole. Modelling those means deciding whether a `try` body can raise, which branch of
-    a `match` Windows takes, whether a `while` runs at all: that is an interpreter, not a
-    lint, and every approximation of it rejects somebody's correct code. A missed lookup
-    three levels inside a module-level `while` is a cost worth paying for a check that
-    never cries wolf. It would not have missed the six sites that started this.
-
-    Two things it does not do, for the same reason. A module-level helper,
-    `def is_root(): return os.geteuid() == 0` called as `ROOT = is_root()`, does fail on
-    Windows and is not reported: finding it means following a call into a definition,
-    which is a different kind of analysis than reading one expression. And a module that
-    writes `os.geteuid = lambda: 0` and then reads it back is reported although it would
-    work, because tracking that means knowing which branch ran, whether the alias was
-    rebound and whether the annotation was deferred. Both are stated rather than
-    approximated; the second fails loudly and is one line to fix in the module that
-    provokes it, and nothing in this tree does."""
+    """Yields import-time expressions; `try`, loops, `with` and `match` are skipped whole, not
+    guessed at."""
     _normalise_os_aliases(tree)
     # PEP 649 makes annotations lazy from 3.14, and requires-python spans both sides.
     eager_annotations = not _has_future_annotations(tree) and not LAZY_ANNOTATIONS
@@ -716,10 +638,7 @@ def test_an_invoked_fallback_lambda_runs_its_body_on_windows():
 
 
 def test_unmodelled_control_flow_is_skipped_whole():
-    """try, while, for, with and match are not modelled, and the scan says nothing about
-    what is inside them rather than guessing. Each of these is code somebody writes, and
-    each needed a different piece of Python semantics to judge: whether the try body can
-    raise, which branch Windows takes, whether the loop runs at all."""
+    """Code under `try`, loops, `with` or `match` is skipped whole rather than guessed at."""
     for source in (
         "try:\n    from os import geteuid\nexcept ImportError:\n    geteuid = None\n",
         'import os\nwhile os.name == "posix":\n    ROOT = os.geteuid() == 0\n',
@@ -844,11 +763,6 @@ def test_an_eager_comprehension_advances_the_generator_it_iterates():
 
 
 def test_a_later_read_of_a_module_written_attribute_is_still_reported():
-    """The scan does not track what a module does to os.geteuid itself: after
-    `os.geteuid = lambda: 0` a read really would work on Windows, and it is still
-    reported. Deliberate, and the loudest failure mode available, since the fix is one
-    line in the module that provoked it. Nothing in this tree does it: the only
-    occurrence, in tests/test_allow_cpu_import_driverless.py, is inside a source string
-    that ast.parse never reaches as code."""
+    """The scan does not track module reassignment of `os.geteuid`, so such reads are reported."""
     assert _flagged("import os\nos.geteuid = lambda: 0\nROOT = os.geteuid() == 0\n")
     assert not _flagged("import os\nos.geteuid = lambda: 0\n")

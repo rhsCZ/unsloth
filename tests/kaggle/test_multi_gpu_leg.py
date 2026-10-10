@@ -1,31 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The multi-card leg: a branch no pinned payload can reach.
-
-``unsloth/kernels/utils.py:170``::
-
-    if DEVICE_COUNT > 1:
-        torch_gpu_device = torch.cuda.device      # a real device switch
-    else:
-        def torch_gpu_device(device): return nullcontext()
-
-``build_kernel.py`` pins every ordinary payload with ``CUDA_VISIBLE_DEVICES``,
-so **every unsloth kernel this CI has ever run took the nullcontext branch** --
-and so did the ``DEVICE_COUNT``-sized ``CUDA_STREAMS`` / ``WEIGHT_BUFFERS`` /
-``ABSMAX_BUFFERS`` arrays, the per-device rotary caches in
-``unsloth/models/llama.py:1838``, and the ``temp_mlp`` device tuples at
-``llama.py:1300``.
-
-The leg is free because the divergence is triggered by VISIBILITY, not by using
-both cards: the model still fits on one, so it co-tenants and the driver
-reserves its 0.7 GB on each card rather than a whole one.
-
-**What these rules deliberately do NOT assert** is that the parameters end up
-spread across both cards. Whether accelerate shards or pins to ``cuda:0`` is
-the open question the leg exists to answer, and a rule written before the
-answer is a rule written to match whatever happens.
-"""
+"""Pinned payloads never reach the DEVICE_COUNT > 1 branch, so this leg leaves both cards visible."""
 
 from __future__ import annotations
 
@@ -69,10 +45,7 @@ def test_the_happy_reading_passes():
 
 
 def test_the_nullcontext_shim_is_the_failure_this_leg_exists_for():
-    """The single most important rule here. A leg that ran on one card, or
-    whose unsloth was imported before the cards were visible, gets the shim --
-    which performs NO device switch -- and would otherwise report a pass for
-    coverage a pinned leg already has."""
+    """A nullcontext shim performs no device switch, so a leg that got it must not pass as coverage."""
     facts = dict(
         GOOD,
         torch_gpu_device_is_real_switch = False,
@@ -137,15 +110,7 @@ def test_a_model_entirely_off_the_gpu_fails():
 
 
 def test_the_spread_across_cards_is_RECORDED_and_not_required():
-    """The open question, and the rule must not pre-empt it.
-
-    Every two-card measurement this repo has is a LOAD and not a train
-    (unsloth-probe-vision-recon-c76ea3 saw a model split 897.7/1017.1 MB and
-    never called a trainer). So a single-card placement passes, a spread
-    passes, and the report carries which happened. When a session answers it,
-    tighten this deliberately rather than discovering the rule was already
-    asserting an answer nobody had.
-    """
+    """Placement across cards is recorded, not asserted, until a session answers the open question."""
     payload = _payload()
     one_card = dict(GOOD, cuda_devices_holding_parameters = ["cuda:0"])
     spread = dict(
@@ -232,12 +197,7 @@ def test_the_leg_is_small_enough_to_co_tenant():
 
 
 def test_the_declaration_is_measured_and_not_copied_from_a_sibling():
-    """`vram_gb` was 0.7 for one commit, copied from the other Qwen legs. It is
-    wrong for this leg specifically -- it holds a CUDA context on BOTH cards --
-    and the repo-wide check could not say so, because it compares against
-    measured_vram.json and this leg was simply absent from it. A guard that
-    passes by finding nothing is the shape this directory keeps being caught
-    by."""
+    """vram_gb must be measured for this leg, since it holds a CUDA context on both cards, not copied."""
     import json
 
     measured = json.loads((SMOKE_DIR / "measured_vram.json").read_text(encoding = "utf-8"))[
@@ -250,11 +210,7 @@ def test_the_declaration_is_measured_and_not_copied_from_a_sibling():
 
 
 def test_it_does_not_export_a_gguf_and_the_reason_is_recorded():
-    """The bundle install_llama_cpp fetches for the notebook legs is the CPU
-    one -- on unsloth-probe-full-concurrent-417238 this model's llama-bench
-    reports `backend CPU` -- so a two-card tensor-split assertion here could
-    not fail. Adding the export anyway would cost ~40s of a thin margin and
-    buy a claim four other legs already make."""
+    """The bundle install_llama_cpp fetches is CPU-only, so a two-card tensor-split check could not fail."""
     leg = legs.LEGS["multi_gpu"]
     assert "--export-gguf" not in leg.args
     source = (ROOT / ".github" / "scripts" / "kaggle_t4_ci" / "legs.py").read_text(encoding = "utf-8")
@@ -312,28 +268,7 @@ def test_the_reservation_is_all_or_nothing():
 
 
 def test_the_contention_is_global_and_the_vram_is_per_card():
-    """The two ledgers track different things, and charging the wrong one to a
-    card has now cost twice.
-
-    `card_load` is memory. An all-card leg really does hold a CUDA context on
-    each card -- 1.2 GB measured on unsloth-probe-multigpu-r2-a280e2 -- so it is
-    charged to every card.
-
-    `card_count` is a proxy for 4-vCPU CONTENTION; `MAX_LEGS_PER_CARD`'s own
-    comment says the legs "contend for CORES long before they contend for
-    memory". An unpinned process contends for those cores without occupying a
-    card, so it counts against the TOTAL bound and against no card in
-    particular.
-
-    Charged per card it was wrong in both available ways. On every card, the
-    driver simulation showed no card holding two legs at once. On ONE card, it
-    decided a placement it had nothing to do with and cost 188.7s on hardware:
-    in unsloth-probe-ab-with-multigpu-6169ca Studio was refused gpu0 (canary
-    plus this leg's count = the cap) and took gpu1, where the 1707s vision leg
-    had ~1080s left, so gpu1 carried both long payloads and gpu0 idled 622.6s.
-    The same kernel without the leg (unsloth-probe-ab-baseline-5leg-20db9c) ran
-    1936.4s with 10.0s and 3.0s of idle.
-    """
+    """Unpinned legs contend for cores, not cards: count them globally, never per card."""
     source = _driver_source()
     body = source.split("def _admit_all(name):")[1].split("def _release_all")[0]
     assert "unpinned_count[0] += 1" in body
@@ -360,14 +295,7 @@ def test_the_all_card_lane_is_joined_with_the_card_workers():
 
 
 def test_a_single_leg_dispatch_still_stands_down_on_one_card():
-    """`expected_gpus = min(len(payloads), SESSION_GPUS)` derives 1 for a
-    one-leg kernel, which is right for every leg but this one.
-
-    An all-card leg on a one-card allocation is an INFRASTRUCTURE fact, and
-    without this it arrives as a payload failure on `device_count() == 2` --
-    the exact confusion the shortfall guard's own comment says it exists to
-    prevent.
-    """
+    """One-leg kernels derive expected_gpus=1, wrong for the all-card leg, so a one-card box is infra."""
     notebooks = build_kernel.build_kernel(
         SMOKE_DIR,
         ("multi_gpu",),
@@ -393,19 +321,7 @@ def test_a_single_leg_dispatch_still_stands_down_on_one_card():
 
 
 def test_the_weights_go_on_one_card_while_both_stay_visible():
-    """The two halves of the leg's configuration, and they pull opposite ways.
-
-    Visibility is what makes unsloth's DEVICE_COUNT > 1 bindings live, so the
-    leg must NOT be pinned. Placement is what makes training work, because a
-    sharded model does not train: on unsloth-probe-multigpu-r1-18beab
-    accelerate split Qwen3-0.6B across both T4s and step 0 died at
-    unsloth/models/llama.py:972 with `index is on cuda:0, different from other
-    tensors on cuda:1`.
-
-    Dropping `--single-device` puts a red in front of every PR for an upstream
-    fault; dropping `all_cards` silently turns the leg into a duplicate of
-    Default. Both are asserted here because either alone reads as configured.
-    """
+    """Both cards stay visible; --single-device stops accelerate sharding weights, which breaks training."""
     leg = legs.LEGS["multi_gpu"]
     assert leg.all_cards is True
     assert "--single-device" in leg.args
@@ -432,13 +348,7 @@ def test_single_device_reaches_the_child_and_sets_a_device_map():
 
 
 def test_a_crash_mid_cycle_still_reports_what_was_measured():
-    """The probe measured everything this leg asserts, logged it in full, and
-    then LOST it: the cycle died in trainer.train(), wrote no report, and the
-    leg reported `multi_gpu: null` while the driver log held every number.
-
-    Reading the report alone said the measurement had not been taken, which is
-    the difference between "we did not look" and "we looked and it was fine".
-    """
+    """A crash in trainer.train() must still report the measurements taken, not a null multi_gpu entry."""
     import ast
 
     source = (SMOKE_DIR / "run_t4_smoke.py").read_text(encoding = "utf-8")

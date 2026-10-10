@@ -1,63 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Unsloth Studio, end to end, on a real CUDA GPU.
-
-Unsloth has no CUDA coverage anywhere in CI. Every Unsloth workflow in this
-repo runs on ``ubuntu-latest``, ``macos-15`` or ``windows-latest``; macOS
-gives Metal some hardware, and the CUDA path is exercised by nothing. The
-existing inference smoke deliberately uses a 270M GGUF *because* it has to
-decode on a CPU. This payload is the other half: it runs Unsloth on a Kaggle
-T4 and asserts the three things that only a GPU can answer.
-
-What it asserts
----------------
-**A. GGUF inference is on the GPU, and tool calling works.** A model is
-loaded with an explicit manual GPU-layer pin and then the payload tries three
-independent ways to catch a CPU fallback -- process-level VRAM from
-nvidia-smi, llama.cpp's own offload line, and device-wide VRAM growth. See
-``gpu_assert.offload_verdict``: "the model returned text" is not evidence,
-and no evidence at all is a failure rather than a pass. Then tool calling,
-through ``/v1/chat/completions`` with ``tool_choice: "required"``, asserting
-the model came back with ``finish_reason == "tool_calls"`` and a parseable
-argument object.
-
-**B. A LoRA training run finishes and leaves an adapter.** Started through
-``POST /api/train/start`` -- the same call Unsloth's own Train button makes --
-and judged on three things, none of which is the phase alone: the run reaches
-phase ``completed``, its ``metric_history`` holds a loss for every step it
-claimed to take, and ``adapter_model.safetensors`` exists on disk above a size
-floor. A run that formats its dataset down to zero rows reaches ``completed``
-too, which is why the step count is checked; a save that silently no-ops
-leaves a config and no weights, which is why the file is checked.
-
-**C. GGUF export runs against a CUDA llama.cpp build and the result loads.**
-The adapter from B is exported to GGUF, the output is checked for the GGUF
-magic rather than merely for existence, and then it is loaded back into
-Unsloth and asked to generate. "It loads" is asserted by loading it, not by
-its file size.
-
-Then the repo's existing ``tests/studio/playwright_chat_ui.py`` is driven
-against the same server, so the browser path is exercised by the driver that
-already exists rather than by new automation. It runs LAST because its final
-phase clicks "Stop server" and asserts the port closes.
-
-Kaggle specifics
-----------------
-``/kaggle/working`` is 19.5 GB and is also what ``kernels output`` ships
-back; the home directory and ``/tmp`` share a ~1 TB overlay. So
-``UNSLOTH_STUDIO_HOME``, the HF cache, the llama.cpp build and every model
-live on the overlay, and only the evidence -- kilobytes of JSON, a log tail
-and screenshots -- is ever written under ``/kaggle/working``.
-
-No credential is printed. The bootstrap password is read from Unsloth's own
-auth directory, handed to ``/api/auth/login``, and never logged, never
-returned, and never written to the report or the evidence bundle.
-
-Usage:
-    python run_studio_gpu.py --outdir /kaggle/working/studio_gpu_out \\
-        --repo-root ~/unsloth --studio-home ~/studio_home
-"""
+"""Unsloth Studio end to end on a real CUDA GPU: GGUF offload, LoRA training, and GGUF export."""
 
 from __future__ import annotations
 
@@ -148,14 +92,7 @@ def log(msg: str) -> None:
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    """Run a command, answering an absent binary the way a failure answers.
-
-    Every caller here judges on ``returncode``, and a box with no nvidia-smi
-    at all -- a session Kaggle handed no driver -- otherwise raised
-    FileNotFoundError out of ``environment()`` inside ``finish()``, so the run
-    ended with a traceback and no report instead of a preflight that says
-    there is no GPU.
-    """
+    """Run a command; a missing binary returns a 127 CompletedProcess instead of raising OSError."""
     try:
         return subprocess.run(cmd, capture_output = True, text = True, **kw)
     except OSError as exc:
@@ -163,22 +100,7 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
 
 
 def visible_device_selector() -> str | None:
-    """CUDA_VISIBLE_DEVICES as an ``nvidia-smi -i`` argument, or None if unset.
-
-    nvidia-smi ignores CUDA_VISIBLE_DEVICES and reports every PHYSICAL card, so both
-    samplers below were device-wide on a two-card host while the payload was pinned to
-    one. An unrelated process starting on the HIDDEN card and taking 200 MiB was then
-    enough to carry a CPU-served run past the memory assertion.
-
-    The entries are passed to `-i` as written, which is the same reading of them that
-    gpu_inventory() already uses to slice nvidia-smi's rows, and matches build_kernel.py
-    setting the variable from the index it admitted the payload on. `-i` also accepts the
-    GPU-UUID form, so a UUID entry needs no mapping here.
-
-    Drivers old enough to take only ONE id reject the list, and both callers read that as
-    "nvidia-smi did not answer" -- no sample rather than a device-wide one, which is the
-    safe direction: it withdraws the fallback ruler instead of widening it.
-    """
+    """CUDA_VISIBLE_DEVICES as an nvidia-smi -i selector; nvidia-smi itself ignores that variable."""
     raw = os.environ.get("CUDA_VISIBLE_DEVICES")
     if raw is None:
         return None
@@ -219,20 +141,7 @@ def nvidia_used_mib() -> float | None:
 
 
 def card_is_shared(apps_before: dict[int, int] | None, listed_before: set[int] | None) -> bool:
-    """Was another CUDA process already on the card when this run launched?
-
-    The device-wide total is the fallback ruler whenever attribution fails, and it is only
-    a measurement of THIS process when this process owns the card. Under --studio-concurrent
-    it does not: a training leg shares it, and that leg both allocates and frees inside the
-    window -- one recorded run read the delta as -182.0 MiB while the server genuinely held
-    2.6 GB. Accepting a +200 MiB device rise there would pass a CPU-served run on memory
-    somebody else allocated.
-
-    Evidence, not configuration: the payload is not told whether it is the concurrent half,
-    but a pid on the card before launch says so. Absence of evidence is left alone -- an
-    ordinary single-payload run has an empty listing and keeps the fallback it needs, which
-    is the whole point of the fallback on parts that report [N/A] for everything.
-    """
+    """True if a pid was on the card before launch; a device-wide VRAM delta then is not this run's."""
     return bool(apps_before) or bool(listed_before)
 
 
@@ -244,28 +153,8 @@ def cli_run_gpu_failure(
     listed_before: set[int] | None = None,
     listed_after: set[int] | None = None,
 ) -> tuple[str | None, dict]:
-    """Did a model actually reach the card? Returns (failure or None, detail).
-
-    WHICH RULER, and this one has now been wrong in both directions.
-
-    The device total is a SHARED reading. On kernel
-    unsloth-probe-studio-full2-815a0c it was sampled too early and read 0.0 MiB
-    on a server that did have the weights; the fix was to sample after a served
-    completion. On unsloth-probe-full-concurrent-417238 it read **-182.0 MiB**
-    -- and the same report carried `compute_apps {"6841": 2628}`, so the model
-    was on the card and 2.6 GB of it. That run was the first with
-    --studio-concurrent, so a training leg shared the card and freed memory
-    inside the window. A shared counter cannot attribute, and subtracting two of
-    its samples is not a measurement of THIS process.
-
-    So the verdict comes off the pids that APPEARED during the window, which is
-    per-process and immune to a co-tenant. A pid already on the card before the
-    launch is excluded, or a co-tenant holding gigabytes would satisfy the claim
-    on its own -- which is the same failure in a new costume.
-
-    The device delta is still recorded, and is still the fallback for an
-    nvidia-smi that answers a total but cannot enumerate processes.
-    """
+    """Judge the card by pids that appeared during the window; the shared device total is only a
+    fallback."""
     detail: dict = {}
     if baseline is not None and settled is not None:
         detail["vram_delta_mib"] = round(settled - baseline, 1)
@@ -343,11 +232,7 @@ def cli_run_gpu_failure(
 
 
 def nvidia_compute_apps_listing() -> tuple[dict[int, int], set[int]] | None:
-    """(pids with a readable figure, every pid listed), or None if nvidia-smi did not answer.
-
-    Both, because the interesting case is the difference: a pid that is listed but has no
-    figure is on the card and unattributable, which is not the same as absent.
-    """
+    """Returns (pids with figures, all listed pids) or None; a listed pid with no figure is on the card."""
     cmd = _scoped(
         ["nvidia-smi", "--query-compute-apps=pid,used_gpu_memory", "--format=csv,noheader,nounits"]
     )
@@ -375,29 +260,8 @@ def nvidia_compute_apps() -> dict[int, int] | None:
 
 
 def wait_for_card_to_settle() -> None:
-    """Block until the driver has finished reclaiming after a server was stopped.
-
-    settled_baseline() already waits for the number to stop falling after an unload,
-    but it talks to a LIVE backend and there is none left after stop_server(). Both
-    halves of that stop are asynchronous: the allocation is returned after the process
-    exits, and the pid keeps being listed for a moment after that. Sampled immediately,
-    the dying llama-server is assert_cli_run's before-launch state -- on a part that
-    reports [N/A] for every process it is the only evidence there is, so card_is_shared()
-    calls the card shared and a run that did reach the GPU comes back "unmeasured rather
-    than proven"; and its retained memory inflates the baseline, so the same run's device
-    delta reads as "served from the CPU".
-
-    Two things have to go quiet, because either alone is satisfied too early. The pid is
-    waited ON: every pid the card carries here is the server just stopped or a genuine
-    co-tenant, so none of THEM may be left -- one arriving afterwards is somebody else's.
-    And the total must hold still across VRAM_SETTLE_QUIET_POLLS intervals, not one: if the
-    pid is already gone at entry and reclaim has not begun, a single flat interval is a
-    stall, not a settled card, and the baseline would carry the old model's allocation.
-
-    A real co-tenant never leaves and spends the whole 30s budget. That is accepted rather
-    than special-cased: a shared card is exactly the run where card_is_shared() withdraws
-    the device-delta fallback anyway, so there is no verdict for the wait to protect there.
-    """
+    """Wait for the stopped server's pids to exit and VRAM to hold still, so the baseline is not
+    inflated."""
     listing = nvidia_compute_apps_listing()
     resident = listing[1] if listing else set()
     previous_mib = nvidia_used_mib()
@@ -419,11 +283,7 @@ def wait_for_card_to_settle() -> None:
 
 
 def visible_device_indices() -> list[int] | None:
-    """The physical card indices CUDA_VISIBLE_DEVICES exposes, or None if unset.
-
-    An empty string is a deliberate "no cards", which is different from unset
-    and must not read as "all of them".
-    """
+    """Physical indices CUDA_VISIBLE_DEVICES exposes, None if unset; an empty value means no cards."""
     raw = os.environ.get("CUDA_VISIBLE_DEVICES")
     if raw is None:
         return None
@@ -441,20 +301,7 @@ def visible_device_indices() -> list[int] | None:
 
 
 def gpu_inventory() -> list[str]:
-    """The cards THIS PROCESS can use, not the cards the box has.
-
-    `nvidia-smi` enumerates PHYSICAL devices and ignores CUDA_VISIBLE_DEVICES,
-    and reading it as "what is available" produced a false claim on kernel
-    unsloth-probe-full-concurrent-417238. build_kernel.py pins every payload
-    with `CUDA_VISIBLE_DEVICES = str(gpu_index)`, and under --studio-concurrent
-    that includes Studio -- so the run recorded `cards_visible: 2` and
-    `tensor_split_over_two_cards: True` for a server that had ONE card, and sent
-    `tensor_split: [1.0, 1.0]` asking llama.cpp to split across a device that
-    was not there. It loaded anyway, so the assertion passed green.
-
-    That field exists precisely to stop a check keeping its name while testing
-    less. It was sized from the wrong instrument and did exactly that.
-    """
+    """Cards this process can use, not all physical ones: nvidia-smi ignores CUDA_VISIBLE_DEVICES."""
     proc = run(
         ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader"],
         timeout = 60,
@@ -469,12 +316,7 @@ def gpu_inventory() -> list[str]:
 
 
 def log_paths(server_log: Path, studio_home: Path) -> list[Path]:
-    """Every file Unsloth or a llama-server child may be writing to.
-
-    llama.cpp's offload line lands in whichever of these the server's stderr
-    was wired to, and which one that is depends on how Unsloth was started, so
-    both are read.
-    """
+    """Every log Unsloth or a llama-server child may write to; the offload line lands in whichever."""
     candidates = [server_log]
     log_dir = studio_home / "logs"
     if log_dir.is_dir():
@@ -483,13 +325,7 @@ def log_paths(server_log: Path, studio_home: Path) -> list[Path]:
 
 
 def log_marks(server_log: Path, studio_home: Path) -> dict[str, int]:
-    """Current size of every log, to read forward from later.
-
-    Taken immediately before a model load so the evidence gathered afterwards
-    belongs to THAT load. Without it, a reload whose own log line never
-    appeared inherited the previous load's ``offloaded N/M layers`` and the
-    verdict passed on evidence from a different model.
-    """
+    """Log sizes taken before a model load, so offload evidence read afterwards belongs to that load."""
     marks: dict[str, int] = {}
     for path in log_paths(server_log, studio_home):
         try:
@@ -506,12 +342,7 @@ def studio_log_text(
     *,
     since: dict[str, int] | None = None,
 ) -> str:
-    """Everything Unsloth and its llama-server children wrote, as one string.
-
-    ``since`` is a ``log_marks()`` snapshot; each file is then read from the
-    offset it had then, so only what this load produced comes back. A file
-    that has since shrunk was rotated or truncated, and is read whole.
-    """
+    """Log text since a log_marks() snapshot, read from each saved offset; a shrunk file is read whole."""
     parts: list[str] = []
     for path in log_paths(server_log, studio_home):
         start = (since or {}).get(str(path), 0)
@@ -529,14 +360,7 @@ def studio_log_text(
 
 
 def llama_server_pids() -> list[int]:
-    """PIDs of the llama-server children Unsloth started, from /proc.
-
-    ``GET /api/inference/status`` does not carry one: ``InferenceStatusResponse``
-    declares neither ``llama_server_pid`` nor ``pid``, and FastAPI drops
-    anything the response model does not declare, so the process-level VRAM
-    probe never had a pid to match and could never contribute evidence.
-    Reading the process table gives it one back.
-    """
+    """PIDs of llama-server children, read from /proc; the status API carries no pid to match."""
     pids: list[int] = []
     proc_root = Path("/proc")
     if not proc_root.is_dir():
@@ -555,18 +379,7 @@ def llama_server_pids() -> list[int]:
 
 
 def llama_server_argvs() -> dict[int, list[str]]:
-    """Full argv of every llama-server child, split on NUL.
-
-    The sibling above throws away everything after argv[0], and for the flags
-    this payload asserts on that is the whole answer. It has to come from the
-    process table: ``GET /api/inference/status`` carries ``tensor_parallel``
-    but its ``tensor_split`` field is documented as the MANUAL-mode ratio and
-    is never written on the auto path, so an auto load reports
-    ``tensor_split: null`` whatever is on the child's command line.
-
-    Split on ``\\x00``, never on whitespace: a model path with a space in it
-    would otherwise become two arguments and shift every index after it.
-    """
+    """Full argv of each llama-server child, split on NUL so a model path with spaces stays one argument."""
     out: dict[int, list[str]] = {}
     proc_root = Path("/proc")
     if not proc_root.is_dir():
@@ -587,12 +400,7 @@ def llama_server_argvs() -> dict[int, list[str]]:
 
 
 def argv_flag(argv: list[str], name: str) -> str | None:
-    """The value of ``name`` in an argv, accepting ``--flag v`` and ``--flag=v``.
-
-    Returns None when absent. Raises on a DUPLICATE, because two spellings of
-    the same flag mean the last one wins and an assertion that read the first
-    would be reporting on a value the server is not using.
-    """
+    """Value of name in argv (--flag v or --flag=v); None if absent, and raises on a duplicate flag."""
     hits: list[str] = []
     for i, token in enumerate(argv):
         if token == name:
@@ -606,11 +414,7 @@ def argv_flag(argv: list[str], name: str) -> str | None:
 
 
 def split_ratio(raw: str | None) -> tuple[float, ...] | None:
-    """A ``--tensor-split`` value as a normalized proportion.
-
-    llama.cpp normalizes the list, so ``3,1`` and ``75,25`` are the same
-    instruction and must compare equal here.
-    """
+    """Normalize a --tensor-split value to proportions, so 3,1 and 75,25 compare equal."""
     if raw is None:
         return None
     try:
@@ -746,15 +550,8 @@ class Payload:
         return self.record("preflight", not failures, detail)
 
     def studio_command(self) -> list[str]:
-        """The `unsloth` entry point of the interpreter running this payload.
-
-        NOT ``shutil.which("unsloth")``. This payload runs under the Unsloth
-        venv's Python and that venv's ``bin`` is not on PATH, so a global
-        ``unsloth`` anywhere on PATH would win the lookup and the run would
-        measure some other installation instead of the checkout under test.
-        The console script sits next to ``sys.executable``; if it is missing,
-        the same interpreter runs the module directly.
-        """
+        """The unsloth script beside sys.executable, not shutil.which, so a global install is not
+        measured."""
         bin_dir = Path(sys.executable).parent
         for name in ("unsloth", "unsloth.exe"):
             candidate = bin_dir / name
@@ -875,20 +672,8 @@ class Payload:
             self.proc.kill()
 
     def settled_baseline(self) -> float | None:
-        """VRAM after anything already loaded has been evicted and freed.
-
-        `POST /load` with `force` unloads the previous model as its first act,
-        so sampling the baseline just before the request puts that release
-        INSIDE the measured window. Run 7 read `device_vram_delta_mib: -1866.0`
-        for the GGUF export probe: a 531 MB model loading while a 3004 MiB chat
-        model left, reported as negative growth and scored as a failure to
-        reach the GPU. The load was fine; the ruler was wrong.
-
-        Unloading first and waiting for the number to stop falling makes the
-        delta measure one thing. Best-effort throughout: an unload that fails
-        leaves the old baseline behaviour rather than aborting the probe, and
-        the delta is only ever evidence, never the sole assertion.
-        """
+        """Unload any loaded model, then wait for VRAM to settle, so the load's delta excludes the
+        eviction."""
         code, body = self.studio.get("/api/inference/status")
         active = None
         if code == 200 and isinstance(body, dict):
@@ -1040,29 +825,7 @@ class Payload:
         return self.record("gpu_inference", not detail["failures"], detail)
 
     def assert_server_flags(self) -> bool:
-        """Reload with a quantized KV cache and a two-card split, and check what
-        was APPLIED rather than what was asked for.
-
-        Studio's own status distinguishes the two, which is the point: it
-        carries `cache_type_kv` for the live server alongside a coverage field
-        and a reason for anything it could not apply. So a request that was
-        silently dropped is visible, and a check that only asserted "the load
-        succeeded" would pass on exactly that.
-
-        `tensor_split` over two T4s is the flag the brief asks about and the
-        one nothing here has ever exercised. The split is sized to the cards
-        that are VISIBLE, because --studio-concurrent pins this half to one
-        card so it can share with a training leg, and the report says which of
-        the two it did: a single-card run records
-        `tensor_split_over_two_cards: false` with a note rather than passing
-        under the same name. A check that keeps its name while quietly testing
-        less is the failure this file exists against.
-
-        The context length is pinned to `--studio-ctx` (2048 by default) rather
-        than left at the model default, because an unconstrained context on a
-        14.56GB card is how a KV-cache test turns into an OOM about something
-        else.
-        """
+        """Reload with KV-cache and tensor_split flags and check what was applied, not what was asked."""
         failures: list[str] = []
         cards = gpu_inventory()
         detail: dict = {"requested": {}, "cards_visible": len(cards)}
@@ -1158,17 +921,7 @@ class Payload:
     _TP_FILE = "studio/backend/core/inference/llama_cpp.py"
 
     def _auto_tp_load(self, ratio: list[float] | None, *, force: bool) -> dict:
-        """One auto-mode tensor-parallel load, and what the child was launched with.
-
-        ``gpu_memory_mode: "auto"`` with ``tensor_parallel: true`` is the exact
-        shape unslothai/unsloth#10355 is about: on two cards of the same size
-        with a model that fits, the planner decides an even share is safe and
-        returns no ratio of its own, and the user's ratio is the only one there
-        is. ``force_reload`` is the real field name -- ``force`` is not on
-        ``LoadRequest`` and pydantic drops it -- so passing it is how this
-        drives a genuine relaunch, and omitting it is how the deduplication
-        half of the check gets a real answer.
-        """
+        """One auto-mode tensor-parallel load; uses force_reload, as LoadRequest silently drops force."""
         body: dict = {
             "model_path": self.args.chat_model,
             "is_lora": False,
@@ -1244,13 +997,8 @@ class Payload:
         ).strip() or f"checkout rc={checkout.returncode} " f"fetch rc={fetch.returncode}"
 
     def _restart_for_leg(self, label: str) -> bool:
-        """Stop Unsloth and bring it back on the code now on disk.
-
-        Restarting is the whole point: ``install.sh --local`` overlays the
-        checkout as an EDITABLE install, so the file swapped above is the file
-        the next process imports -- but only the next one. A leg that reused
-        the running server would be measuring the other revision.
-        """
+        """Restart Unsloth: an editable install only takes effect in a new process, not in a reused
+        server."""
         self.stop_server()
         for _ in range(60):
             if not llama_server_pids():
@@ -1262,23 +1010,7 @@ class Payload:
         return self.authenticate()
 
     def assert_auto_tensor_split(self) -> bool:
-        """The user's per-GPU ratio must reach llama-server in AUTO mode.
-
-        Three things are checked, and the second is the one nothing else here
-        can see:
-
-        1. tensor mode is really on, per ``/api/inference/status``;
-        2. ``--tensor-split`` is on the LIVE child's argv, carrying the
-           proportion that was asked for. Status cannot answer this: its
-           ``tensor_split`` field is the manual-mode ratio and is null on this
-           path whatever the child was launched with;
-        3. the server still serves, with memory on both cards.
-
-        Then deduplication, without ``force_reload``, because a fix that
-        forwards the ratio and then reloads on every identical request has
-        traded one bug for a worse one: an identical repeat must REUSE the
-        server, and a changed ratio must replace it.
-        """
+        """The per-GPU ratio must reach the live llama-server argv in auto mode; status cannot show it."""
         failures: list[str] = []
         cards = gpu_inventory()
         detail: dict = {"cards_visible": len(cards), "legs": {}}
@@ -1400,13 +1132,8 @@ class Payload:
         return self.record("auto_tensor_split", not failures, detail)
 
     def assert_auto_tensor_split_baseline(self) -> bool:
-        """Run the same probe against the merge-base, first.
-
-        This is what makes the head result mean anything. If the base revision
-        ALSO emits the ratio then the defect is not there, the two legs prove
-        nothing about the PR, and the run is void rather than green -- so the
-        rule below is written as "the base must reproduce", not as a pass.
-        """
+        """The merge-base must reproduce the defect, or the head result proves nothing and the run
+        is void."""
         ok, blob = self._checkout_tp_file(self.args.base_sha)
         detail: dict = {"base_sha": self.args.base_sha, "blob": blob}
         if not ok:
@@ -1453,27 +1180,7 @@ class Payload:
         return ok and self._restart_for_leg("head")
 
     def assert_compaction(self) -> bool:
-        """A conversation past the window must COMPACT, and a short one must not.
-
-        The context length is pinned to `--studio-ctx` by `assert_server_flags`
-        immediately above, so this is the one place the payload knows what the
-        window is and can overflow it deliberately.
-
-        Studio reports the fit on the completion itself, as `context_truncated`
-        with `dropped_messages`, so the claim is readable without a browser.
-        The rule is a PAIR, and the second half is what makes the first mean
-        anything:
-
-        * a conversation built past the budget comes back 200 with
-          `dropped_messages > 0` -- it was shortened, not refused;
-        * a two-message conversation comes back with nothing dropped.
-
-        Asserting only the first passes on a server that reports truncation
-        unconditionally, which is indistinguishable from working and is the
-        failure this file keeps being caught by. Asserting only the second
-        passes on a server that never compacts at all and returns a
-        context-length error instead.
-        """
+        """Compaction needs both checks: a long conversation must drop messages and a short one must not."""
         failures: list[str] = []
         detail: dict = {}
 
@@ -1559,24 +1266,7 @@ class Payload:
         return self.record("compaction", not failures, detail)
 
     def assert_api_key(self) -> bool:
-        """Mint an API key and DRIVE it, which is the half that can be wrong.
-
-        Creating a key proves the endpoint returns a string. Whether that
-        string authenticates anything is a separate question, and the answer
-        that matters: an API key Studio issues and then rejects is worse than
-        no API key, because the failure surfaces in a user's integration rather
-        than here.
-
-        Three claims, in order of what each rules out:
-
-        1. the key is minted and returned ONCE (the raw value is not
-           retrievable later, by design);
-        2. a request carrying ONLY that key succeeds -- the session bearer
-           token is set aside for the call, or this would pass on the token and
-           say nothing about the key;
-        3. a request carrying a corrupted key FAILS. Without that, a server
-           that ignores the header entirely passes claim 2.
-        """
+        """Drive a minted API key alone, not the session token; a corrupted key must be refused."""
         failures: list[str] = []
         detail: dict = {}
         raw_key = None
@@ -1676,36 +1366,8 @@ class Payload:
         return self.record("tool_calling", not failures, detail)
 
     def assert_code_execution(self) -> bool:
-        """The python tool must RUN, and the proof is a file on disk.
-
-        `assert_tool_calling` above proves the model can EMIT a call. That is a
-        different claim: a weather tool is never executed by Studio at all, the
-        caller is expected to run it. The local `python` tool is executed by
-        Studio itself, in a per-session sandbox, and the interesting failure is
-        the loop offering the tool and never running it -- which looks
-        identical from the response text, because the model will happily
-        narrate a result it never received.
-
-        So the evidence is not the prose. A token is minted here, the model is
-        asked to write it to a file, and this reads it back out of
-        `<studio home>/sandbox`, where `sandbox_root()` puts the per-session
-        working directories. Nothing in the reply can fake that; only an
-        executed `open(...).write(...)` puts those bytes on this disk.
-
-        Two settings are not incidental and must not be "simplified":
-
-        * `permission_mode = "off"`. `routes/inference.py` REJECTS a local
-          python/terminal tool under `ask`, and under `auto` or an omitted
-          default, with a 400 -- there is no confirmation channel here. The
-          run would fail on configuration and look like a broken tool.
-        * `tool_choice` is left alone. Forcing it would prove the schema is
-          reachable, not that the loop runs what it selected, and the file is
-          the claim either way.
-
-        The filename is not asserted, only the CONTENT: a small local model
-        rewording a path is not a Studio defect, and any file carrying the
-        token was written by code that ran.
-        """
+        """Proof is a token file on disk written by the executed python tool; permission_mode must
+        be off."""
         failures: list[str] = []
         detail: dict = {}
 
@@ -1768,35 +1430,13 @@ class Payload:
         return self.record("code_execution", not failures, detail)
 
     def assert_web_search(self) -> bool:
-        """The web_search tool must be EXECUTED, and the log is where that shows.
-
-        Same shape as `assert_code_execution` and a different instrument,
-        because a web search leaves nothing on disk to read back. Studio logs
-        `execute_tool: name=...` from INSIDE `execute_tool`, so the line is
-        emitted by execution rather than by selection -- a loop that offered
-        the tool and never ran it produces no such line, which is the failure
-        worth catching.
-
-        What is deliberately NOT asserted: that the search returned results.
-        `_web_search` runs an approved engine allowlist through ddgs with no API
-        key, and those engines rate-limiting a Kaggle egress IP is a fact about
-        the day, not a Studio defect. Failing on it would put a red in front of every PR for
-        something no reader could act on. The reply and the result count are
-        recorded so a human can see which happened.
-        """
+        """Execution is shown by the execute_tool: name=web_search log line; search results are not
+        asserted."""
         failures: list[str] = []
         detail: dict = {}
 
-        # TWO attempts, and the second is what makes a failure diagnosable.
-        # `enabled_tools = ["web_search"]` is one name out of ALL_TOOLS, and
-        # `routes/inference.py` also reads a request naming only hosted-tool
-        # names as a provider-hosted ask. Omitting `enabled_tools` selects
-        # every local tool instead, which is a different path through the same
-        # loop. If the first fails and the second executes, the fault is in the
-        # single-name selection; if neither does, the model will not call the
-        # tool however it is offered. Reporting "the loop offered web_search
-        # and never ran it" off one attempt was a guess dressed as a finding:
-        # nothing in that run showed the tool had been offered at all.
+        # Two attempts, one naming web_search and one omitting enabled_tools, to tell selection
+        # faults apart.
         marker = "execute_tool: name=web_search"
         prompt = (
             "Search the web for the current version of the Linux kernel, "
@@ -1951,23 +1591,7 @@ class Payload:
         return self.record("lora_training", not failures, detail)
 
     def install_llama_cpp(self) -> bool:
-        """Put a CUDA llama.cpp under STUDIO_HOME before anything asks for one.
-
-        Four hardware runs reported ``install_kind=None`` and failed the export
-        assertion for it, and the reason was never subtle: nothing had ever
-        installed a llama.cpp at all. The export route falls back to whatever
-        it can find, so the assertion was measuring an absence.
-
-        Its own assertion rather than a step inside the export one, because
-        "the CUDA bundle would not install on this box" and "the CUDA bundle
-        installed and the export against it failed" are different findings and
-        only the second is about exporting.
-
-        A failure here is NOT fatal to the run. The export assertion still
-        executes and still reports the install_kind it found, so a box where
-        the bundle cannot be installed produces the same honest red it did
-        before rather than skipping the export entirely.
-        """
+        """Install a CUDA llama.cpp into STUDIO_HOME as its own check; its failure does not stop the run."""
         detail: dict = {}
         installer = self.repo_root / "studio" / "install_llama_prebuilt.py"
         detail["installer"] = str(installer)
@@ -2165,24 +1789,8 @@ class Payload:
     )
 
     def assert_tabs(self) -> bool:
-        """Every tab's backing endpoint answers.
-
-        This is a smoke and it is honest about being one: it does not click
-        through the UI, it asks each tab's own first request. What it catches
-        is the failure that actually happens -- a route module that raised on
-        import, so the router was never mounted and the tab renders an error
-        the moment it is opened. That is invisible to every other assertion
-        here, all of which touch inference, training and export only.
-
-        A 404 is the specific signal, so it is separated from other statuses
-        in the record rather than folded into "not 200": a 500 is a live route
-        with a broken handler and a 404 is a route that does not exist, and
-        they lead a reader to different places.
-
-        An endpoint answering 200 with a non-object is a failure too. Several
-        of these are declared with a `response_model`, so a bare string or null
-        means something upstream is substituting for the real handler.
-        """
+        """Smoke each tab's first endpoint; 404 (route missing) and 500 (broken handler) are
+        reported apart."""
         failures: list[str] = []
         detail: dict = {"checked": len(self.TAB_ENDPOINTS)}
         results: dict = {}
@@ -2214,30 +1822,8 @@ class Payload:
         return self.record("tabs", not failures, detail)
 
     def assert_lora_vs_base(self, gguf: str | None) -> bool:
-        """The exported model must answer DIFFERENTLY from the base it came from.
-
-        This is the comparison an export check cannot make on its own. The GGUF
-        assertion proves a file was produced, carries the magic, loads on the
-        GPU and generates -- and every one of those is true of an export that
-        silently merged nothing and shipped the base weights. A no-op merge is
-        the regression here, and it is invisible to file size, to the magic and
-        to "it generated text".
-
-        Greedy decoding at temperature 0 makes it visible: identical weights
-        answer identically, so a difference is the adapter.
-
-        **The determinism control is not optional and comes first.** If the
-        SAME weights, loaded twice, do not reproduce their own answer, then a
-        difference between two models says nothing, and this reports that it
-        could not compare rather than passing on the noise. Two loads of the
-        base, then one of the export: the claim is only made once the
-        instrument has been shown to be steady.
-
-        The canary is REPORTED rather than asserted. Studio's training run is a
-        handful of steps and whether that is enough to learn a specific string
-        is a property of the run length, not of the export path -- asserting it
-        would be a red about training tuning wearing an export label.
-        """
+        """Export must answer differently from its base; a base-twice control first rules out
+        nondeterminism."""
         failures: list[str] = []
         detail: dict = {"gguf": gguf}
         prompt = [{"role": "user", "content": "What is the Unsloth Studio Kaggle canary?"}]
@@ -2295,28 +1881,7 @@ class Payload:
         return self.record("lora_vs_base", not failures, detail)
 
     def assert_image_generation(self) -> bool:
-        """The image tab, end to end: load, generate, and download the PNG.
-
-        Last priority and the smallest possible run -- 256x256 (the schema's
-        floor) at 2 steps -- because the claim is that the path executes, not
-        that the picture is good.
-
-        "Nothing errored" is not the check. A diffusion pipeline that fails
-        mid-way still writes a gallery record and still returns 200, and a
-        pipeline whose weights never loaded produces a FLAT image, which is a
-        valid PNG. So the evidence is the file:
-
-        * the bytes start with the PNG magic, so what the download endpoint
-          serves is really a PNG rather than a JSON error with a 200 on it;
-        * the IHDR chunk says 256x256, read out of the header rather than
-          taken from the gallery record -- the record repeats what was asked
-          for, and the file says what was made;
-        * the image is not one flat colour. A pipeline that produced nothing
-          returns a uniform frame, which compresses to almost nothing, so this
-          is checked on the decoded extrema where PIL is available and on a
-          compressed-size floor where it is not. Both are recorded, so a
-          reader can see which one ruled.
-        """
+        """Check the downloaded file itself: PNG magic, 256x256 from its IHDR, and not a flat colour."""
         import urllib.error
         import urllib.request
 
@@ -2450,33 +2015,8 @@ class Payload:
         return self.record("image_generation", not failures, detail)
 
     def assert_cloudflare(self) -> bool:
-        """`unsloth run --cloudflare`: a public URL that serves, and refuses.
-
-        This is the only assertion in the payload that reaches the public
-        internet, so what it claims is deliberately narrow and what it refuses
-        to claim is stated:
-
-        1. cloudflared is fetched and a quick tunnel is established, and the
-           URL printed is a real `*.trycloudflare.com` host rather than the
-           `api.trycloudflare.com` that appears in cloudflared's own FAILURE
-           lines -- that is a live trap, and Studio's own regex carries the
-           same negative lookahead for it;
-        2. the tunnel SERVES: `/api/health` answers through the public URL,
-           which is what separates "a URL was printed" from "a URL that works";
-        3. the tunnel REFUSES an unauthenticated request. A public URL onto a
-           CI machine is only defensible if it is behind auth, and this is the
-           check that says so rather than assuming it.
-
-        `--host 0.0.0.0` is not incidental. Studio raises a quick tunnel for
-        WILDCARD binds; on 127.0.0.1 there is nothing to publish and no URL is
-        printed, which would read as a broken feature.
-
-        A tunnel that cannot be established AT ALL is reported rather than
-        failed, and the reason is carried from the log. Kaggle egress to
-        cloudflared's release host is not something this repo controls, and the
-        directive asks for this "if possible". The narrowness is enforced: the
-        excuse applies only when NO url was printed, and never once one was.
-        """
+        """Public URL must serve health and refuse unauthenticated requests; no URL at all is only
+        reported."""
         failures: list[str] = []
         detail: dict = {}
         port = self.args.port + 2
@@ -2593,32 +2133,7 @@ class Payload:
         return self.record("cloudflare", not failures, detail)
 
     def assert_cli_run(self) -> bool:
-        """`unsloth run`: a model server started from the CLI, driven by its key.
-
-        This is the headless path a user scripts, and nothing in CI covers it.
-        It is a different launch from `unsloth studio`: `run` starts the
-        backend, waits for health, mints an API key IN-PROCESS, and then loads
-        the model over HTTP. Any of those four can break without the others
-        noticing, and the command still prints a banner.
-
-        Four claims, and each rules out a way the previous one passes hollow:
-
-        1. the server becomes healthy on the port it was given;
-        2. the model reaches the GPU -- measured as device VRAM growth across
-           the launch, not as a line in the banner. `--api-only` on a card the
-           chat-UI phase has already emptied makes that delta this launch's;
-        3. the key the command minted AUTHENTICATES a real completion, and the
-           completion is non-empty. A key that is printed and rejected is
-           worse than no key, because the failure surfaces in a user's
-           integration rather than here;
-        4. a CORRUPTED key is refused. Without it, a server ignoring the header
-           entirely passes claim 3.
-
-        `--start-api-key-marker` is how the key is obtained: it prints
-        `UNSLOTH_START_API_KEY: <key>`, which is the mechanism `unsloth start`
-        itself uses. The value is registered as a secret the moment it is read,
-        before anything scrubs a log on the way into the evidence bundle.
-        """
+        """unsloth run: healthy server, VRAM growth on launch, minted key works, corrupted key refused."""
         failures: list[str] = []
         detail: dict = {}
         port = self.args.port + 1
@@ -2851,26 +2366,12 @@ class Payload:
         return self.record("chat_ui_driver", not failures, detail)
 
     def redacted(self, path: Path) -> bytes:
-        """A log file with every credential this run knows about removed.
-
-        Unsloth's startup banner prints the bootstrap password, and the chat
-        driver's own log echoes what it was given. Both files leave this
-        machine as a CI artifact, so both are rewritten on the way out. The
-        replacement is a fixed marker rather than a same-length blank, so the
-        redaction is visible to whoever reads the artifact.
-        """
+        """Scrub credentials from logs before they leave as artifacts, using a visible fixed marker."""
         self.remember_bootstrap()
         return self.scrub(path.read_text(encoding = "utf-8", errors = "replace")).encode("utf-8")
 
     def emit_evidence(self, passed: bool) -> None:
-        """Ship the artifacts back inside the notebook's own cell output.
-
-        The shared launcher collects executed notebooks and the kernel log and
-        nothing else, so a PNG on the Kaggle filesystem is a PNG nobody will
-        ever see. Encoding the bundle into stdout is what gets it home. Logs
-        and the report always travel; screenshots only on failure, because on
-        a pass they are megabytes nobody reads.
-        """
+        """Encode the evidence bundle into stdout, the only path home; screenshots ship only on failure."""
 
         def _pack(*, with_screenshots: bool, log_tail_bytes: int | None = None) -> bytes:
             buf = io.BytesIO()
@@ -2920,15 +2421,7 @@ class Payload:
             print(f"{EVIDENCE_PREFIX}{index + 1}/{len(chunks)} {chunk}", flush = True)
 
     def execute_legs(self) -> int:
-        """Run exactly the assertions ``--legs`` names, in that order.
-
-        The standard run is one shape: install, boot, then everything. A GPU
-        session has a ceiling and a flag-level regression does not need a
-        training run to be answered, so this exists to spend the session on the
-        question being asked. It names the assertions rather than accepting an
-        arbitrary callable, so a typo is a refusal here and not an empty pass
-        forty minutes into a rented session.
-        """
+        """Run only the assertions named by --legs, in order; unknown names are refused up front."""
         available = {
             "auto_tensor_split": self.assert_auto_tensor_split,
             "gpu_inference": self.assert_gpu_inference,

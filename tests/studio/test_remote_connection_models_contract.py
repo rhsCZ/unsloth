@@ -64,20 +64,7 @@ def test_frontend_sync_preserves_local_provider_options():
 
 
 def test_connections_are_hydrated_on_startup():
-    """Renamed from test_chat_page_hydrates_connections_on_startup, because the
-    chat page is no longer where it happens.
-
-    The provider sync moved out of chat-page.tsx into
-    features/credentials/bootstrap.ts, which the ROOT route calls. That is a
-    wider guarantee, not a narrower one: connections now hydrate on any entry
-    into the app rather than only on the chat page. Asserting the old location
-    would fail on a change that improved the thing being asserted, so the
-    assertion follows the call to where it went and pins both halves -- the
-    bootstrap wires the sync, and something actually runs the bootstrap.
-
-    Both halves match CALL sites, not bare names: an import survives deleting
-    the call it feeds, so a name-only assertion passes on a startup that
-    hydrates nothing."""
+    """Matches call sites, not bare names: an import survives after its call is deleted."""
     bootstrap = CREDENTIAL_BOOTSTRAP.read_text(encoding = "utf-8")
     assert "syncExternalProvidersFromBackend(providers" in bootstrap
     root = ROOT_ROUTE.read_text(encoding = "utf-8")

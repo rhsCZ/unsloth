@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""A vision model's saved target_modules is a REGEX, not a list.
-
-PEFT allows `target_modules` to be either, and unsloth writes a regex for
-vision models so the adapter targets the language tower and not the vision
-encoder. Measured on `unsloth-probe-vision-leg-r2-793ec0` (Qwen3.5-2B) and
-again on gemma-4-E2B-it, where the saved value begins
-
-    (?:.*?(?:language|text).*?(?:self_attn|attention|attn|mixer|mlp|...
-
-Comparing that against the list that was REQUESTED reports a difference on
-every vision model, which is correct behaviour being called a defect.
-
-The replacement claim is narrower and still falsifiable: every module name
-asked for must appear in the pattern. A silently dropped projection is still
-caught, which is what this check exists for.
-"""
+"""Vision models save target_modules as a regex, so each requested module name must appear in it."""
 
 from __future__ import annotations
 

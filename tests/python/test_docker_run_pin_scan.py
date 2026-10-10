@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth-run` must take its transformers pin from an install, not from prose.
-
-`_scan` used to regex the ENTIRE source of every code cell, so a commented-out install
-line outranked the model tier and launched the kernel a tier short of the model it was
-about to load -- and no install runs, so the pip shim never corrects it either.
-
-The fix must not narrow the scan too far: most shipped notebooks carry a pin, many on
-the CONTINUATION line of a multi-line `!uv pip install \\` or indented inside the
-`if "COLAB_" not in ...` guard. Those shapes are pinned below verbatim.
-"""
+"""Pin comes from install lines only; a commented-out install once outranked the model tier."""
 
 from __future__ import annotations
 

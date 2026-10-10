@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""First-paint contract for the Images / Video model pickers.
-
-Recommended used to render the Hugging Face listing alone, so a task-scoped
-picker sat on a spinner for a round trip with its curated models already in
-memory, and the bottom spinner stayed up while pages remained rather than while
-one was in flight.
-"""
+"""Task-scoped pickers must show curated models on first paint, not wait on the Hugging Face listing."""
 
 from pathlib import Path
 

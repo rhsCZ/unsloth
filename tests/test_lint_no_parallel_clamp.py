@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Regression suite for scripts/lint_no_parallel_clamp.py.
-
-The lint is what stops #7717 coming back: a rule that flags `max(1, n)` gets
-disabled, and one that misses `n_parallel = 1` protects nothing.
-"""
+"""Pins the lint to flag max(1, n) and n_parallel = 1; a rule that misses the second protects nothing."""
 
 from __future__ import annotations
 

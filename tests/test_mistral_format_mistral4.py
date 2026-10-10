@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Tiny checkpoints written under Mistral's tensor names (as in vLLM's MistralLarge3 mapper
-and the real Large-3 shard headers) load through the view and match the source model.
-The module is exec'd from its file so `import unsloth` (needs an accelerator) is avoided.
-"""
+"""Tiny checkpoints under Mistral's tensor names must load through the view and match the source."""
 
 import importlib.util
 import json

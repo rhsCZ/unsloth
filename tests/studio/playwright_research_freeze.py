@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Main-thread cost of a streaming deep research run (#8483).
-
-The report: on Ubuntu 26.04 under Wayland the desktop app froze on "Writing the report" and
-again while closing the research detail pane -- spinner stopped, nothing clickable, force quit.
-
-What this measures, and what it cannot: Chromium is not the WebKitGTK webview the desktop app
-embeds on Linux, and `studio/src-tauri/src/linux_webkit.rs` takes that webview off the hardware
-DMA-BUF transport on Wayland and on NVIDIA under either display server -- onto shared memory, or
-off accelerated compositing entirely -- where the frame budget is far tighter than anything
-measured here.
-So an absolute pass here does not prove the reporter's machine is fixed. What transfers is the
-*work*: long tasks, forced layouts and style recalcs during the stream, and whether the window
-still takes clicks afterwards. Those are the quantities the fixes move.
-
-It drives smoke-research.html, which mounts the real ResearchActivityPanel and the real
-MarkdownPreview against the real store, so nothing here is a mock of the code under test. Runs
-against a vite dev server; no backend, no auth, no GPU.
-
-Run:
-    python tests/studio/playwright_research_freeze.py
-
-It starts and stops its own vite dev server. Point it at one you already have with
-SMOKE_BASE_URL, or move the port it picks with SMOKE_PORT.
-"""
+"""Streaming research main-thread cost in Chromium; absolute times do not transfer to WebKitGTK."""
 
 from __future__ import annotations
 

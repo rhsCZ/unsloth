@@ -12,24 +12,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""`UNSLOTH_ALLOW_CPU=1` has to survive the import on a driverless host.
-
-A CUDA-built torch with no usable device -- a driverless container, a CI runner,
-a laptop with the runtime and no card -- is exactly what that variable exists
-for. `get_device_type()` deliberately keeps `DEVICE_TYPE` at `"cuda"` there, so
-every `if DEVICE_TYPE == "cuda": torch.cuda.get_device_capability()` at module
-scope runs with nothing to query and raises `RuntimeError: No CUDA GPUs are
-available` out of `_lazy_init()`.
-
-A CPU-only wheel reaches the same branches, because `get_device_type()` answers
-`"cuda"` for the variable before it looks at the torch build. It raises
-`AssertionError: Torch not compiled with CUDA enabled` from the same
-`_lazy_init()` instead, so both spellings count as "asked a device that is not
-there what it can do". That is the build CI's `Repo tests (CPU)` job installs.
-
-The import is process-global and one-shot, so every case here runs in a fresh
-interpreter with `CUDA_VISIBLE_DEVICES=""`.
-"""
+"""UNSLOTH_ALLOW_CPU=1 must survive import on a driverless host; each case needs a fresh interpreter."""
 
 import importlib.util
 import os
@@ -83,20 +66,7 @@ def _run(
 
 
 def _needs_the_cuda_branch():
-    """The guards under test sit behind `DEVICE_TYPE == "cuda"`, and a CPU-only
-    wheel gets there too.
-
-    `get_device_type()` answers `"cuda"` for `UNSLOTH_ALLOW_CPU=1` before it
-    looks at `torch.cuda.is_available()` or at the torch build
-    (`unsloth/device_type.py`), so the CPU wheel CI installs in `Repo tests
-    (CPU)` reaches both new branches -- it just raises
-    "Torch not compiled with CUDA enabled" rather than "No CUDA GPUs are
-    available" when they are missing, which `_NO_DEVICE` now covers. Skipping on
-    that build left the only job that discovers this file reporting four skips.
-
-    MLX is the real exception: there `DEVICE_TYPE` is `"mlx"` and none of this
-    runs. ROCm keeps its own skip because `is_available()` answers from a
-    different runtime there."""
+    """With UNSLOTH_ALLOW_CPU=1 a CPU-only torch also reaches the cuda branch; only MLX and ROCm skip."""
     if importlib.util.find_spec("mlx") is not None:
         pytest.skip("MLX runtime: DEVICE_TYPE is 'mlx', not the cuda branch this covers")
     if getattr(torch.version, "hip", None):
@@ -117,18 +87,7 @@ _IMPORT_ATTEMPT_CODE = """
 
 @pytest.fixture(scope = "module")
 def _import_attempt_result():
-    """One child interpreter, shared by every case that reads the same attempt.
-
-    Three tests below ask different questions of the *same* driverless import:
-    whether unsloth's own files probed a device, whether the import finished, and
-    what it claimed about capability. They ran it three times, and `import unsloth`
-    is ~14s of startup, so two thirds of this file's 55s was the same subprocess
-    over again. The child is read-only from the tests' point of view -- they only
-    inspect its returncode, stdout and stderr -- so one run answers all three.
-
-    Module-scoped rather than session-scoped: nothing outside this file wants it,
-    and a session fixture would keep the CompletedProcess alive for the whole run.
-    """
+    """One child import, shared read-only by the cases that inspect it; module-scoped since it is slow."""
     _needs_the_cuda_branch()
     return _run(_IMPORT_ATTEMPT_CODE, UNSLOTH_ALLOW_CPU = "1")
 
@@ -139,12 +98,7 @@ _TORCH_DIR = str(pathlib.Path(torch.__file__).parent)
 
 
 def _culprit(text):
-    """The deepest traceback frame outside torch: the line that did the asking.
-
-    Every frame above it merely imported the module that asked, so matching on
-    "any frame under this directory" would blame unsloth for an unsloth_zoo
-    probe -- `unsloth/models/_utils.py` is on the import path either way.
-    """
+    """The deepest traceback frame outside torch, the line that asked; frames above it only imported."""
     outside = [f for f in _FRAME.findall(text) if not f.startswith(_TORCH_DIR + os.sep)]
     return outside[-1] if outside else None
 
@@ -237,15 +191,7 @@ _driver.libcuda_dirs = _no_libcuda
 
 
 def test_a_driverless_import_does_not_try_to_repair_cuda_linkage(tmp_path):
-    """`UNSLOTH_ALLOW_CPU=1` says there is no device, so there is no linkage to
-    repair.
-
-    The `except` arm around `libcuda_dirs()` predates this branch and was only
-    reachable with a device present. Left unguarded it now fires on every
-    driverless import: as root it ldconfigs the container's linker cache through
-    an unguarded `ls` subprocess, and otherwise it warns that CUDA is broken on a
-    host the caller already said has no card.
-    """
+    """UNSLOTH_ALLOW_CPU=1 means no device, so a driverless import must not try to repair CUDA linkage."""
     _needs_the_cuda_branch()
     try:
         found = importlib.util.find_spec("triton.backends.nvidia.driver")

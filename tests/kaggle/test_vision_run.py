@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The vision run, and the one way it goes green while testing nothing.
-
-A "vision run" that never puts an image on the GPU is a text run in a costume.
-It trains, its loss falls, its adapter updates, and every assertion a text leg
-makes passes. TRL will produce exactly that state if
-`remove_unused_columns=False` is dropped, because the image column is removed
-before the collator ever sees it.
-
-So the rules are read off a REAL collated batch, and the guards below are
-calibrated to catch the costume rather than the crash.
-"""
+"""Guards a vision run from quietly training on text; `remove_unused_columns=False` must stay set."""
 
 from __future__ import annotations
 
@@ -184,20 +174,7 @@ def test_the_export_does_not_land_in_the_artifact_volume():
 
 
 def test_the_train_dataset_is_a_dataset_and_its_images_stay_pil():
-    """Two failures in one, both measured rather than guessed.
-
-    TRL 1.x rejects a plain list, which is what the notebook passes:
-
-        TypeError: `train_dataset` must be a `Dataset` or `IterableDataset`,
-        got `list`
-
-    And the obvious fix corrupts the data. `Dataset.from_list` Arrow-encodes a
-    nested PIL object into a `{bytes, path}` DICT on the way back out, so the
-    collator receives something that is not an image and nothing says so.
-
-    `with_transform` applies at access time, keeps the column's Image feature,
-    and still satisfies TRL's type check.
-    """
+    """Dataset.from_list turns PIL images into bytes dicts; `with_transform` keeps them as PIL images."""
     from datasets import Dataset as HFDataset
     from PIL import Image
 
@@ -232,16 +209,7 @@ def test_from_list_would_have_corrupted_the_images():
 
 
 def test_a_marker_that_matched_nothing_is_refused_rather_than_answered_no():
-    """Measured on `unsloth-probe-vision-train-r2-8ed253`, and it named the
-    wrong defect. PEFT calls these parameters `lora_B`, with a capital B; the
-    marker was matched against the raw name, so it matched none of the 864 of
-    them and summed to zero both before AND after. The run had trained
-    perfectly well -- loss 1.13 -> 0.56, a merged 4.3 GB export -- and the
-    report said the optimizer applied nothing.
-
-    Zero over zero tensors and zero over 864 tensors are opposite findings and
-    read identically, which is why the count is carried.
-    """
+    """A marker that matches no tensors must be refused; 0 over 0 and 0 over 864 read identically."""
     broken = vision_failures(
         _good(adapter_update = {"before": 0.0, "after": 0.0, "tensors": 0, "changed": False}),
         _args(),
@@ -283,14 +251,7 @@ def test_adapter_sum_finds_the_capital_b_peft_names():
 
 
 def test_the_leg_actually_DRIVES_the_vision_run():
-    """The gap this closes was live for two rounds: `run_vision_t4.py` was in
-    the leg's `files` and nothing ever executed it, so Vision_FLA_compile
-    trained TEXT, asserted kernels, and shipped a payload it never ran.
-
-    A file that is copied and not run is the quietest kind of coverage there
-    is: every guard in this module passed, on a leg where the image path was
-    dead.
-    """
+    """Asserts the leg runs run_vision_t4.py: a file copied but never executed gives false coverage."""
     import sys as _sys
 
     _sys.path.insert(0, str(ROOT / ".github" / "scripts" / "kaggle_t4_ci"))

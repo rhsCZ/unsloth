@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""First-boot population must not claim a commit it did not finish copying.
-
-A `cp -a` that fails is skipped silently and gets no state entry, so phase 1b never
-restores it -- and stamping the commit anyway tells the phase 2 refresh it is already
-synced, so the notebook is gone for good on an offline container.
-
-Driven end to end against the real script with the refresh disabled. The blocked path
-is a plain FILE where a directory has to be, which is ENOTDIR for root too, so this
-cannot silently pass under a root CI container the way a chmod would.
-"""
+"""Do not stamp the commit on a failed copy, or the refresh treats the notebook as synced."""
 
 from __future__ import annotations
 
@@ -434,10 +425,7 @@ def test_every_staged_state_append_is_checked():
 
 
 def test_every_record_tmpstate_call_handles_a_failed_write():
-    """The class that keeps recurring is not the raw append, it is the UNHANDLED
-    record failure. Counting it is not enough on its own: the truncated state is
-    published either way, so the file must also be rolled back or the write retried.
-    Every call site has to say which."""
+    """Every record_tmpstate call must handle a failed write: roll the file back or retry the write."""
     lines = SYNC.read_text(encoding = "utf-8").splitlines()
     exempt = _exempt_lines(lines)
     bare = []

@@ -1,19 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Review follow-ups to the prebuilt marker fast path.
-
-Two defects the marker work exposed, each with the user situation it costs:
-
-  * the llama marker rewriter asked os.chown for the owner as well as the group, which a
-    non-root member of a group-shared install cannot grant. chown is all-or-nothing, so the
-    group was not applied either and os.replace installed the member's primary group,
-    leaving the marker unreadable to everyone else who shares the install. prebuilt_core
-    was fixed for this; the llama writer was not, and this work gave it a new caller
-    (whisper's slim pairing backfill).
-
-  * UNSLOTH_PREBUILT_FULL_CHECK turns the no-network shortcut off for llama and whisper.
-    Node never read it, so the one variable documented as "force a full revalidation" left
-    a third of the runtime answered from its marker.
-"""
+"""Review fixes: llama writer must not chown the owner; Node must honour UNSLOTH_PREBUILT_FULL_CHECK."""
 
 import sys
 from pathlib import Path
@@ -133,11 +119,7 @@ def test_a_marker_rewrite_keeps_the_keys_the_about_tab_renders(tmp_path, monkeyp
 
 
 def test_node_honours_the_full_check_escape_hatch(tmp_path, monkeypatch):
-    """UNSLOTH_PREBUILT_FULL_CHECK is the documented way to force a full revalidation.
-
-    llama and whisper both turn their shortcut off for it. Node did not, so the variable
-    silently covered two of the three runtimes.
-    """
+    """Node must honour UNSLOTH_PREBUILT_FULL_CHECK, which llama and whisper already do."""
     host = _node_host()
     _node_tree(tmp_path, host)
     NODE.write_metadata(tmp_path, version = "24.17.0", asset = "x", sha256 = "y")
@@ -230,12 +212,8 @@ def _load_logic_helpers():
 
 
 def test_a_legacy_marker_is_not_blessed_without_asking_the_loader(tmp_path, monkeypatch, helpers):
-    """A Windows install damaged under a pre-record marker must not have its damage recorded.
-
-    Windows gets neither of the loader preflights below, and a marker with no runtime_files has
-    no digest to fail, so before this the only integrity test was "the file is not zero bytes".
-    The next run would then be compared against the damaged bytes for ever.
-    """
+    """Windows legacy marker must be verified by the loader before blessing, or damage is recorded
+    as good."""
     install_dir, host, plan = _legacy_marker_install(tmp_path, helpers, windows = True)
 
     probed = []
@@ -279,12 +257,7 @@ def test_a_linux_legacy_install_is_covered_by_its_preflight_instead(tmp_path, mo
 
 
 def test_a_marker_that_vanishes_between_the_two_reads_does_not_crash(tmp_path, monkeypatch):
-    """_backfill_fingerprint_inputs reads the marker a second time.
-
-    Another installer swapping the tree in between leaves None, and the old code called
-    .get on it. The backfill has nothing to catch up at that point, so falling out is the
-    answer -- the run that replaced the tree wrote its own marker.
-    """
+    """Backfill must tolerate a marker vanishing between its two reads, not call .get on None."""
     calls = []
 
     class Ops:

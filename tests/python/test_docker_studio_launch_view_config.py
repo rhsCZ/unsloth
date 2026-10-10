@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""The notebook-view paths must survive being written into a Python config.
-
-`studio_launch.sh` appends three settings to `jupyter_lab_config.py` built from
-`UNSLOTH_NOTEBOOKS_VIEW_DIR`. Interpolated straight into a heredoc's string
-literals, a path containing a double quote closed the literal and made the
-config a SyntaxError, so the documented override stopped JupyterLab from
-starting at all; a backslash silently produced a different path, since Python
-reads `\\t` in a literal as a tab. Both characters are legal in a POSIX path.
-
-The generator block is extracted from the shipped script and run for real, then
-the result is compiled and executed the way Jupyter loads it, so the assertions
-are about what Jupyter would actually see rather than about the text.
-"""
+"""A quote in UNSLOTH_NOTEBOOKS_VIEW_DIR made the generated jupyter config a SyntaxError."""
 
 from __future__ import annotations
 

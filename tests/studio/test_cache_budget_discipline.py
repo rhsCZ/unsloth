@@ -1,47 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""No workflow may spend the shared Actions cache budget carelessly.
-
-This repo's Actions cache budget is 50 GiB (not GitHub's 10 GB default), and GitHub evicts
-least-recently-used once it is exceeded. Measured before this file existed, unslothai/unsloth
-held **49.63 GiB across 258 entries -- 99.3% full**, so eviction runs at the margin and every
-new entry displaces an existing one. What fills it is almost entirely redundancy:
-
-    20.74 GiB  duplicate waste: the SAME key held on several refs (42% of the cache)
-                 6.67 GiB   13 copies  setup-python ... python-3.13.15-pip-85e247d7...
-                 6.50 GiB   11 copies  setup-python ... python-3.11.15-pip-85e247d7...
-                 3.83 GiB   10 copies  setup-python ... python-3.12.13-pip-85e247d7...
-                 0.91 GiB    3 copies  ms-playwright-Linux-1.62.0-cfw-v1
-    10.70 GiB  84 entries written and never read again, 10.60 GiB of it setup-python
-    24.01 GiB  198 entries on PR refs, restorable only by re-runs of that same PR
-     0.00 GiB  entries unread for 7+ days -- nothing is idle, the cache is churning
-
-Every one of those duplicated keys already has a copy on `main`, which every PR can restore
-from. The PR-scoped copies are therefore redundant by construction: they buy no hit rate and
-evict the copy that does.
-
-That is a self-reinforcing loop, and the repo had already diagnosed it once for the GGUF
-caches (see the save step in studio-inference-smoke.yml: "PR misses -> downloads -> saves its
-own copy -> evicts main's -> next PR misses"). It reappeared through two doors this file now
-closes.
-
-Both failure modes are silent. Nothing goes red when a cache is evicted; CI just quietly
-re-downloads a 4.6 GB model and everyone assumes that is what it costs.
-
-Door 1 -- saving on a PR ref. `actions/cache` (the read-write form) saves from its post-step
-on every ref. A PR-scoped entry can never be read by anyone except re-runs of that same PR,
-yet it competes for the budget against main's copy, which every PR *can* read. Saves belong
-on main only, via `actions/cache/restore` plus a `github.ref == 'refs/heads/main'` save.
-
-Door 2 -- `cache: 'pip'` on a job that installs almost nothing. `actions/setup-python`
-derives one pip key per interpreter from dependency files across the whole repo, so dozens of
-unrelated jobs share it and race to save under it. The entries measured 666-715 MB, and the
-four interpreter keys between them account for 19.44 GiB of the 20.74 GiB of duplicate waste.
-A job that only pip-installs `huggingface_hub` or `pytest` was paying that for the 0-7s its
-restore step took. Jobs that really do install torch/transformers keep the cache; the rest do
-not.
-"""
+"""Cache budget is shared 50 GiB LRU: PR-ref saves evict main's copies, so only main may save."""
 
 import re
 from pathlib import Path
@@ -154,20 +114,7 @@ _LEAF_MAIN = re.compile(
 
 
 def _restricted_to_main(expr: str) -> bool:
-    """Whether ``expr`` can only be true on ``refs/heads/main``.
-
-    Evaluated over the whole boolean structure. `||` is how a condition GAINS refs, so an
-    OR restricts only if EVERY branch restricts; `&&` narrows, so an AND restricts if ANY
-    branch does. Parentheses are descended into: splitting only the top level accepted
-    `always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')`,
-    which runs on every pull request. Anything negated is refused rather than reasoned
-    about, since `!(github.ref == 'refs/heads/main')` contains a positive main equality
-    and means its exact opposite.
-
-    Structural rather than a substring test because several shapes contain the literal
-    "refs/heads/main" while permitting PR saves, and the failure mode of this guard is a
-    silently refilled cache.
-    """
+    """An OR restricts only if every branch does, an AND if any does; negated expressions are refused."""
     if not expr.strip():
         return False
 
@@ -229,12 +176,7 @@ def test_the_main_only_expression_check_reads_the_expression(expr, restricted):
 
 
 def _composite_actions():
-    """(name, steps) for every composite action in the repo.
-
-    Scanned because the pip cache save now lives in one. A guard that reads only workflow
-    steps would have gone blind to it the moment the logic was factored out, which is the
-    failure mode where a rule quietly stops applying to the thing it was written for.
-    """
+    """Yields every composite action's steps too, so rules still apply once logic is moved into one."""
     for f in sorted((REPO / ".github" / "actions").rglob("action.yml")):
         doc = yaml.safe_load(f.read_text(encoding = "utf-8"))
         if isinstance(doc, dict):
@@ -250,12 +192,7 @@ _REF_SAFE_TRIGGERS = frozenset({"schedule", "repository_dispatch", "workflow_dis
 
 
 def _triggers(doc: dict) -> dict:
-    """A workflow's `on:` block as a mapping, whatever shape it was written in.
-
-    YAML 1.1 reads a bare `on:` key as the boolean True (the Norway problem's cousin), so
-    the key is looked up both ways. `on: push`, `on: [push, workflow_dispatch]` and the
-    mapping form all normalise to a dict here so one reader handles all three.
-    """
+    """Normalises the on: block to a dict; YAML 1.1 parses a bare on: key as True, so both are checked."""
     raw = doc.get("on", doc.get(True))
     if isinstance(raw, str):
         return {raw: None}
@@ -265,23 +202,7 @@ def _triggers(doc: dict) -> dict:
 
 
 def _pull_request_reachable(doc: dict) -> bool:
-    """Whether any pull request can cause this workflow to run.
-
-    The rule below exists because a save on a PR ref writes an entry only re-runs of that
-    same PR can ever restore, while competing for the shared budget against main's copy.
-    That harm needs a pull request to reach the workflow at all. A workflow no pull request
-    can trigger is therefore outside the rule -- but only if that is READ from its `on:`
-    block, never assumed, so the day it grows a `pull_request` trigger it comes straight
-    back under the rule with no one having to remember.
-
-    Conservative in both directions:
-      * a `push` with no `branches` filter runs on every branch pushed to this repo,
-        including the in-repo topic branches most pull requests here are opened from, so
-        it counts as reachable;
-      * a `push` restricted to `main` does not;
-      * anything unrecognised counts as reachable, because the cost of a wrong "exempt"
-        is a silently refilled cache and the cost of a wrong "reachable" is a comment.
-    """
+    """Reachable unless on: proves otherwise; an unfiltered push or unknown trigger counts as reachable."""
     triggers = _triggers(doc)
     if not triggers:
         # No parseable `on:` says nothing, so it is not exempt.
@@ -322,36 +243,14 @@ def _pull_request_reachable(doc: dict) -> bool:
     ],
 )
 def test_the_pull_request_reachability_check_reads_the_trigger_block(on_block, reachable):
-    """The rule below is only as good as this predicate, so the predicate is tested too.
-
-    Mirrors test_the_main_only_expression_check_reads_the_expression above, and for the same
-    reason: the guard's failure mode is silence, so the thing that can make it silent is the
-    thing that most needs its own rows.
-    """
+    """The reachability predicate is tested directly, since a bug in it silently disables the rule."""
     assert _pull_request_reachable({"on": on_block}) is reachable, on_block
     # YAML 1.1 turns a bare `on:` key into True.
     assert _pull_request_reachable({True: on_block}) is reachable, on_block
 
 
 def test_no_workflow_saves_a_cache_on_a_pull_request_ref():
-    """A cache save that can land on a pull request's ref, in anything a pull request reaches.
-
-    Scoped by TRIGGER, not by a list of excused filenames. The rule's harm needs a pull
-    request to reach the workflow: a PR-scoped entry is restorable only by re-runs of that
-    same PR while it evicts main's copy, which every PR can read. A workflow no pull request
-    can run writes no PR-scoped entry, and indicting one was this guard reporting a rule it
-    had not checked -- it read each step's `if:` and never read the workflow's `on:`.
-
-    Deliberately NOT an exemption list keyed on filename. Skipping a whole file would blind
-    this to every OTHER step in it, including a `setup-python` implicit save added later, and
-    the excuse would keep applying after the reason for it had gone. Reading `on:` cannot rot
-    that way: the day a workflow gains a `pull_request` or `pull_request_target` trigger,
-    every cache save in it is indicted on that same commit with nobody having to remember.
-
-    Composite actions stay indicted unconditionally, whatever calls them: an action is used
-    BY workflows, so it has no triggers of its own, and one `uses:`d from a pull_request job
-    saves on the PR's ref exactly as an inline step would.
-    """
+    """Saves on a PR ref are flagged by trigger, not by filename; composite actions are always flagged."""
     offenders = []
     for name, steps in _composite_actions():
         for step in steps:
@@ -386,14 +285,7 @@ def test_no_workflow_saves_a_cache_on_a_pull_request_ref():
 
 
 def test_no_job_uses_setup_pythons_built_in_pip_cache():
-    """The built-in cache cannot be gated, so it is not used here at all any more.
-
-    `actions/setup-python`'s `cache: 'pip'` is the read-write form: it restores in the step
-    and saves from its own post-step, on whatever ref the job ran on, and exposes no
-    condition to stop that. A PR-ref entry is restorable only by re-runs of that same PR, so
-    it buys no hit rate while competing for the shared 50 GiB budget against main's copy,
-    which every PR can read. Use pip-cache-restore plus pip-cache-save instead.
-    """
+    """setup-python cache: 'pip' saves on any ref ungated; use pip-cache-restore and pip-cache-save."""
     offenders = [
         f"{name}:{jid}"
         for name, jid, job in _jobs()
@@ -418,17 +310,7 @@ def _pip_cache_users():
 
 
 def test_only_the_allowlisted_jobs_use_the_pip_cache_actions():
-    """The allowlist has to be enforced against what the workflows DO, not iterated over.
-
-    Every other check in this file is parametrized over PIP_CACHE_JOBS, which means a new
-    job that adds the restore/save pair is simply never visited: it gets a ~700MB entry
-    with no scoping check, no wiring check and no justification, and this file stays green.
-
-    That hole opened when the built-in `cache: 'pip'` went away. The previous guard
-    discovered claimants by scanning for setup-python's `cache:` key, so replacing that
-    mechanism removed the discovery along with it, leaving nine hardcoded names and nothing
-    watching for a tenth.
-    """
+    """Checks real pip cache usage against PIP_CACHE_JOBS, so a new job cannot escape the other checks."""
     extra = _pip_cache_users() - PIP_CACHE_JOBS
     assert not extra, (
         f"these jobs use the pip cache without being listed in PIP_CACHE_JOBS: "
@@ -440,12 +322,7 @@ def test_only_the_allowlisted_jobs_use_the_pip_cache_actions():
 
 
 def test_every_pip_cache_user_actually_installs_something_heavy():
-    """The allowlist records a judgement; this checks the judgement still matches the job.
-
-    A job whose heavy install is later moved elsewhere keeps its cache entry, and nothing
-    else in this file would notice: the name stays in the list and every parametrized check
-    still passes.
-    """
+    """Each PIP_CACHE_JOBS entry must still install something heavy; a thin job should not keep a cache."""
     thin = []
     for name, jid in sorted(_pip_cache_users()):
         job = dict(_workflows())[name]["jobs"][jid]
@@ -474,14 +351,7 @@ def _pip_cache_steps(name, jid):
 
 @pytest.mark.parametrize("name,jid", sorted(PIP_CACHE_JOBS))
 def test_every_pip_cache_scopes_its_key_to_what_it_installs(name, jid):
-    """Without scoping, the key is a hash of dependency files repo-wide.
-
-    That is the second multiplier behind the 19.45 GiB: 16 distinct keys appeared in a
-    week, because any requirements edit anywhere invalidates every interpreter's entry at
-    once and orphans the old ones. Scoping the key to the files a job actually installs
-    from -- or, for the jobs that pin their dependencies inline, to the workflow file that
-    IS the dependency spec -- keeps an unrelated edit from costing ~700MB per interpreter.
-    """
+    """Scope pip cache keys to the files each job installs from, or any requirements edit orphans them."""
     restore, _ = _pip_cache_steps(name, jid)
     assert restore is not None, f"{name}:{jid} no longer restores a pip cache"
     files = [
@@ -494,12 +364,7 @@ def test_every_pip_cache_scopes_its_key_to_what_it_installs(name, jid):
 
 @pytest.mark.parametrize("name,jid", sorted(PIP_CACHE_JOBS))
 def test_every_restored_pip_cache_is_also_saved_and_wired_to_its_restore(name, jid):
-    """A restore with no save fills nothing; a save reading the wrong ids saves nothing.
-
-    Both halves are silent when wrong. The save takes the directory, the key and the
-    hit flag from the restore step's outputs, so a renamed or missing id yields empty
-    inputs and an entry that is never written, with a green job either way.
-    """
+    """A restore without a save fills nothing; a save reading the wrong restore outputs writes nothing."""
     restore, save = _pip_cache_steps(name, jid)
     assert restore is not None and save is not None, (
         f"{name}:{jid} has restore={restore is not None}, save={save is not None}; the "
@@ -531,20 +396,7 @@ def test_the_pip_cache_save_action_is_gated_on_the_default_branch():
 
 
 def test_the_pip_cache_key_carries_the_interpreter_minor_not_its_patch():
-    """
-    A key field more specific than anything the workflows request is pure churn.
-
-    No step in this repo pins a patch version: 53 ask for '3.12' and the one matrix
-    offers '3.11' and '3.13'. So the patch is whatever the hosted image ships that
-    week, and putting it in the key duplicates the ENTIRE cache each time GitHub
-    bumps it. Measured 2026-08-20: two entries alike in everything but 3.12.13 vs
-    3.12.14 held 10.85 and 11.21 GiB, 44% of the 50 GiB budget between them, with the
-    same pairing in 10 of the 12 pip entries.
-
-    Nothing goes red when that happens. The cache simply sits at 99% full and evicts
-    entries someone else was about to read, which is the failure this whole file is
-    about.
-    """
+    """Key on the interpreter minor, not patch: each image bump would duplicate the whole cache."""
     body = (REPO / ".github" / "actions" / "pip-cache-restore" / "action.yml").read_text(
         encoding = "utf-8"
     )
@@ -578,11 +430,7 @@ def test_every_allowed_pip_cache_job_still_exists_and_still_earns_it(name, jid):
 
 
 def test_the_cold_install_lanes_never_restore_a_cache():
-    """These workflows exist to prove a cold install works. A warm one proves nothing.
-
-    They would still pass with a cache in front of them, which is exactly why this is
-    asserted rather than left to review.
-    """
+    """Cold-install lanes must not restore a cache: a warm run proves nothing about a cold install."""
     cold = [
         "clean-machine-install-ci.yml",
         "desktop-app-clean-machine-ci.yml",
@@ -604,12 +452,7 @@ def test_the_cold_install_lanes_never_restore_a_cache():
 
 
 def test_every_setup_python_step_still_pins_an_interpreter():
-    """Guards the edit that produced this file.
-
-    Removing `cache: 'pip'` from an inline-flow mapping (`with: { python-version: '3.12',
-    cache: 'pip' }`) by deleting the line takes the interpreter pin with it, and the job then
-    silently runs on whatever Python the image happens to ship.
-    """
+    """Each setup-python step must pin python-version, or the job silently runs the image's Python."""
     offenders = [
         f"{name}:{jid}"
         for name, jid, job in _jobs()
@@ -620,18 +463,7 @@ def test_every_setup_python_step_still_pins_an_interpreter():
 
 
 def test_a_cache_save_of_downloaded_artifacts_waits_for_the_download_to_succeed():
-    """A partial download saved under an immutable key poisons every later run.
-
-    `playwright install` fetches three engines from a CDN. If it fails part-way, the
-    directory still exists with some of them in it, and a save gated only on `always()`
-    stores that. The key is pinned to the resolved Playwright version, so it does not roll
-    over: every subsequent run restores the partial tree, sees `cache-hit == 'true'`, runs
-    only `install-deps`, and drives a browser that was never downloaded. The UI jobs fail
-    until somebody deletes the entry by hand, and nothing in the log says cache.
-
-    So a save step whose payload is produced by an earlier step must check that step's
-    outcome. `always()` on its own is the bug, not the fix.
-    """
+    """Saves of downloaded artifacts must gate on the download's outcome, since always() stores partials."""
     offenders = []
     for name, jid, job in _jobs():
         if (name, jid) in PARTIAL_SAVE_JOBS:
@@ -659,20 +491,7 @@ def test_a_cache_save_of_downloaded_artifacts_waits_for_the_download_to_succeed(
 
 
 def test_every_cache_key_path_resolves_where_the_job_checked_out():
-    """A key-files glob that matches nothing collapses every job onto one key.
-
-    Three jobs check the repo out under `unsloth/` because they need a second repo beside
-    it (notebooks-ci api-introspect, version-compat-ci zoo-imports-under-spoof and
-    grpo-fake-run), so a path written as if the checkout were at the workspace root
-    resolves to nothing. Under setup-python's built-in cache that was fatal outright
-    ("No file in ... matched to ..."); hashFiles is quieter and simply returns empty, which
-    is why pip-cache-restore fails loudly on an empty hash and why this stays asserted.
-
-    Each entry is resolved against the checkout it belongs to and then globbed, rather than
-    prefix-matched. A prefix check calls `unsloth/.github/workflows/typo.yml` correct
-    because it starts with `unsloth/`, and a job checked out at the workspace root was
-    skipped entirely, so a misspelling there was never examined at all.
-    """
+    """Cache-key globs are resolved under the job's own checkout; a miss hashes empty and collapses keys."""
     offenders = []
     for name, jid, job in _jobs():
         steps = job.get("steps") or []
@@ -729,12 +548,7 @@ def test_every_cache_key_path_resolves_where_the_job_checked_out():
 
 
 def test_no_setup_python_step_declares_a_cache_path_without_a_cache():
-    """Dead config reads as a caching decision that is not in force.
-
-    Removing `cache: 'pip'` and leaving `cache-dependency-path` behind is inert -- the
-    action only reads the path inside its `if (cache && isCacheFeatureAvailable())` branch
-    -- but the next reader sees a scoped cache key and believes the job is cached.
-    """
+    """A leftover cache-dependency-path is inert but reads as a cache that is not in force; remove it."""
     offenders = [
         f"{name}:{jid}"
         for name, jid, job in _jobs()
@@ -750,17 +564,7 @@ def test_no_setup_python_step_declares_a_cache_path_without_a_cache():
 
 
 def test_local_action_references_use_the_nested_checkout_path():
-    """`uses: ./...` resolves from GITHUB_WORKSPACE, not from the workflow file.
-
-    GitHub's own docs put it plainly: if the action checks the repository out to a
-    different location than the workflow, the relative path for a local action has to be
-    updated. Three jobs here check out under `unsloth/` because they need a second repo
-    beside it, so an unprefixed `./.github/actions/...` points at a directory that does not
-    exist and the step fails with "Can't find 'action.yml', 'action.yaml' or 'Dockerfile'".
-
-    Same root cause as the cache-key path check above, one level out: the key paths were
-    fixed for these jobs and the action paths were not.
-    """
+    """Local action paths resolve from GITHUB_WORKSPACE, so a nested checkout must prefix them."""
     offenders = []
     for name, jid, job in _jobs():
         steps = job.get("steps") or []
@@ -794,30 +598,12 @@ PW_ENGINES = ("chromium", "firefox", "webkit")
 
 
 def _uses(step):
-    """A step's `uses`, casefolded: GitHub resolves owner/repo case-insensitively.
-
-    `Actions/Cache/Save@v6` is the same action, so a case-sensitive match let a writer
-    skip these guards. The ref after `@` is case-sensitive but nothing here matches on
-    it, and local `./.github/actions/...` paths are compared raw.
-    """
+    """Casefolded, since GitHub resolves owner/repo case-insensitively; Actions/Cache is actions/cache."""
     return str(step.get("uses", "")).casefold()
 
 
 def _matrix_rows(job) -> list[dict]:
-    """One substitution map per job the matrix can actually produce.
-
-    The base lists are expanded, not just `include`. `ui-smoke` declares its shards in a
-    base `shard: [chat, extra]` and uses `include` only to attach
-    `engines`/`engine_key` to each, so reading `include` alone happens to give the right
-    rows today -- and would silently skip a shard added to the base list without a
-    matching include entry, which GitHub still runs, with those fields empty. The empty
-    engine set then trips the assertion in the caller, which is the point.
-
-    GitHub's own order: expand the base lists, apply `exclude`, then apply `include`.
-    An include merges into a combination when it overwrites none of that combination's
-    original values, so one that names no base key at all merges into EVERY row rather
-    than becoming a row of its own. An include that fits nowhere adds a row.
-    """
+    """Expands base lists, then applies exclude and include in GitHub's order, as Actions does."""
     matrix = (job.get("strategy") or {}).get("matrix") or {}
     if not isinstance(matrix, dict):
         return [{}]
@@ -853,12 +639,7 @@ def _matrix_rows(job) -> list[dict]:
 
 
 def _resolve(text: str, row: dict) -> str:
-    """Substitute this row's `matrix.*` values, leaving every other expression intact.
-
-    `runner.os` and `steps.pw.outputs.version` stay unresolved on purpose: they are
-    identical across these jobs, so leaving them literal makes two keys comparable as
-    strings without pretending to know what the runner will produce.
-    """
+    """Substitutes matrix.* only; runner.os and step outputs stay literal, so keys compare as strings."""
     return _PW_EXPR.sub(lambda m: row.get(m.group(1), m.group(0)), text)
 
 
@@ -866,14 +647,7 @@ _PRIMARY_KEY = re.compile(r"\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.cache-pri
 
 
 def _forwarded_key(key: str, steps: list, row: dict) -> str:
-    """Resolve `steps.<id>.outputs.cache-primary-key` to the key that step restored.
-
-    `actions/cache/restore` re-exports the key it was given under that output, and a save
-    commonly forwards it instead of respelling the string. Comparing the literal would
-    make a forwarding save look like a different key from its own restore -- and matching
-    on the key text alone made the save invisible to this file entirely, so a save later
-    pointed at an unrelated cache step's key would not have been noticed.
-    """
+    """Maps a forwarded cache-primary-key output to its restore key, so a save matches its restore."""
     m = _PRIMARY_KEY.fullmatch(key.strip())
     if not m:
         return key
@@ -918,12 +692,7 @@ def _playwright_jobs():
 
 
 def test_playwright_caches_key_the_same_engines_the_same_way():
-    """One engine set, one key -- in both directions.
-
-    A key naming engines it does not hold is the dangerous direction and is already
-    covered per-shard. This is the wasteful one: two keys holding the same engines means
-    a second copy of the same bytes and a download nobody needed to pay for twice.
-    """
+    """Two Playwright cache keys naming the same engine set means a second copy of the same bytes."""
     by_engines, by_key = {}, {}
     for label, engines, restore, save in _playwright_jobs():
         assert engines, (

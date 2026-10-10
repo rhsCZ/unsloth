@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Seed a thread's bulk mass over REST, and check that seeding is equivalent to streaming.
-
-WHY SEED AT ALL. At the field's own cadence -- 24 characters every 73 milliseconds -- a million
-tokens is three and a half hours of streaming. A benchmark nobody can run measures nothing, so all
-but the last turn is written straight into the store with
-`PUT /api/chat/threads/{id}/messages`, and only the last reply streams.
-
-WHY THE EQUIVALENCE IS CHECKED AND NOT ASSUMED. Seeding takes a different path into the app, and
-reading the shipped code says it is a MATERIALLY different one. A streamed reply arrives as
-`delta.reasoning_content`, is wrapped into `<think>...</think>`, appended to a cumulative buffer,
-and `parseAssistantContent(cumulativeText)` re-parses the whole growing buffer on every delta. Only
-at the end is the parsed parts array persisted. A seeded reply skips all of that: it is written as
-the finished parts array and loaded straight into the runtime, and `<think>` in a stored text part
-is NOT re-parsed on load, because parsing happens only during streaming.
-
-So the two paths should converge on the same DOM and may not. The check is run at the 10K rung,
-where both are affordable, and it compares what the app actually built: the message count, the
-assistant character count, the highlight span count, the reasoning pane count. Rungs above 10K are
-labelled `fidelity: seeded_only` when it fails. That is a FINDING, printed, not a bug to hide --
-it says exactly which of this tool's numbers are about the streaming path and which are about a
-thread that was put there.
-"""
+"""Seeds old turns over REST, skipping the streaming path; equivalence to streaming is checked."""
 
 from __future__ import annotations
 
@@ -43,13 +22,7 @@ def _now_ms() -> int:
 
 
 def _assistant_content(unit: Unit) -> list[dict]:
-    """The stored parts array for an assistant turn.
-
-    A `{"type": "reasoning"}` PART, not `reasoning_content` and not `<think>` inside a text part.
-    There is no reasoning_content column on a stored message, and a text part containing `<think>`
-    is not re-parsed when the thread is loaded, so it would render as literal angle brackets in
-    the visible answer -- a thread that looks wrong and measures the wrong DOM.
-    """
+    """Reasoning must be a `reasoning` part: a `<think>` inside a text part is not re-parsed on load."""
     parts: list[dict] = []
     if unit.reasoning:
         parts.append({"type": "reasoning", "text": unit.reasoning})
@@ -62,13 +35,7 @@ def _assistant_content(unit: Unit) -> list[dict]:
 
 
 def turn_marker(index: int, unit_index: int) -> str:
-    """The exact plain text this harness writes into the user turn at `index`.
-
-    ONE function rather than an f-string in two places, because the readiness gate matches on this
-    string in the DOM. A marker that the seeder writes and the gate looks for in slightly different
-    words is a gate that never passes, and the symptom would be a timeout that looks like a slow
-    app.
-    """
+    """Single source for the user-turn marker: the readiness gate matches this exact string in the DOM."""
     return f"studiobench turn {index}: continue with unit {unit_index}"
 
 
@@ -202,13 +169,7 @@ def compare_signatures(
     seeded: dict,
     tolerance: float = EQUIVALENCE_TOLERANCE,
 ) -> dict:
-    """Are the two paths equivalent on the quantities that scale with content?
-
-    Element count is compared too but is NOT a gate on its own: a streamed reply leaves a usage
-    record and a "thought for N seconds" label a seeded one has no source for, so a handful of
-    elements legitimately differ and gating on exact equality would fail every time for a reason
-    that has nothing to do with fidelity.
-    """
+    """Element count is not gated: a streamed reply has usage and timing labels a seeded one lacks."""
     # Gate on content only: collapsed reasoning panes in seeded threads do not mount their spans.
     keys = ("assistant_messages", "content_code_blocks", "content_spans", "reasoning_panes")
     fields: dict = {}
@@ -270,14 +231,7 @@ def compare_signatures(
 def measure_chars_per_token(
     text: str, base_url: str, auth: Optional[StudioAuth], model_id: str
 ) -> dict:
-    """The MEASURED characters-per-token of this corpus, never an assumed 4.0.
-
-    The rungs are named in tokens and the corpus is built in characters, so the ratio is the thing
-    that makes the two the same claim. It is measured, in this order, from whatever is available,
-    and the SOURCE is reported with the number so a reader can see which one answered. A run that
-    can only fall back to the whitespace estimate says so, rather than printing a ratio that looks
-    like every other run's.
-    """
+    """Measured chars per token, never an assumed 4.0; the answering source is reported with it."""
     sample = text[:200_000]
     if not sample:
         return {

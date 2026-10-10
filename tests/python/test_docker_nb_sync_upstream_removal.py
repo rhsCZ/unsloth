@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""A notebook deleted or renamed upstream has to leave the tree.
-
-The refresh loop walks the CLONE, so a file that vanished upstream is never visited,
-and the state file is then REPLACED by what that loop recorded. The copy we published
-stays on disk with no record, the next refresh reads it as user-owned, and
-unsloth_nb_view.py files it under "Other Notebooks" for good. Upstream deleted 10 and
-renamed 7 nb/ notebooks in the last year, so they accumulate.
-
-Only a file that still hashes to what the sync itself wrote is removed, which is what
-keeps a user's edit safe, so that is asserted here rather than assumed.
-"""
+"""The clone walk never sees upstream deletions; remove only files that still match the synced hash."""
 
 from __future__ import annotations
 

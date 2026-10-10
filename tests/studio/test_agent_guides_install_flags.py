@@ -1,17 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""
-agent-guides-install.sh must not go red because a vendor dropped an option we
-only passed to save time.
-
-The curl|bash installers track the vendor's main branch and exit on any option
-they do not know. On 2026-09-24 hermes-agent rewrote its argument parser without
---no-skills, and every PR's `connection (hermes, stable)` job failed three times
-over with `unknown option: --no-skills` before the agent was ever launched.
-
-These run the script's own curl_bash against a local installer shaped like the
-vendor's, so they need bash and curl but no network.
-"""
+"""Vendor installers exit on unknown options, so a dropped speed-only flag must not turn CI red."""
 
 from __future__ import annotations
 

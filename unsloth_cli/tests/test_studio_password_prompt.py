@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the forced terminal password change before public (tunnel) exposure.
-
-`unsloth studio --secure` / `--cloudflare` (wildcard bind) must, when the admin
-account still has its seeded bootstrap password, prompt for a new password in
-the terminal BEFORE any re-exec or server exists; without a terminal it warns
-and falls back to the backend bootstrap timeout. Modeled on
-test_studio_cloudflare_flag.py.
-"""
+"""The seeded admin password must change before public exposure; no terminal means the timeout."""
 
 from __future__ import annotations
 
@@ -37,12 +30,7 @@ _BASE = ["--model", "unsloth/Qwen3-1.7B-GGUF"]
 
 @pytest.fixture(autouse = True)
 def _no_leaked_unattended_marker(monkeypatch):
-    """Start every test with the unattended marker unset.
-
-    The gate writes it straight into os.environ, right in production (inherited
-    across the re-exec) but wrong in a test process, where it survives into every
-    later test and silently suppresses the prompt they assert on.
-    """
+    """The gate sets the unattended marker in os.environ; left set, it silently suppresses prompts."""
     import unsloth_cli.commands.studio as studio_mod
     monkeypatch.delenv(studio_mod._UNATTENDED_PROMPT_DONE_ENV, raising = False)
 
@@ -71,12 +59,7 @@ _TUNNEL_MATRIX = [
 
 @pytest.mark.parametrize("cloudflare,host,secure,api_only,expected", _TUNNEL_MATRIX)
 def test_launch_publishes_tunnel_matrix(cloudflare, host, secure, api_only, expected):
-    """The narrow predicate. Unchanged, and pinned so it stays that way.
-
-    The strip-and-lockout guards key off this one, and a raw wildcard bind never
-    strips .bootstrap_password, so it must not be pulled in here even though it
-    does now prompt.
-    """
+    """A raw wildcard bind never strips .bootstrap_password, so the tunnel predicate must exclude it."""
     assert (
         _studio()._launch_publishes_tunnel(
             cloudflare = cloudflare, host = host, secure = secure, api_only = api_only
@@ -705,10 +688,7 @@ class _FailingSelectConn:
 
 
 class _FailingCommitConn:
-    """Wrap a real auth connection but raise on commit(), so a fresh install's
-    seeded admin INSERT rolls back on close() -- the seed-committed guarantee the
-    gate depends on is not met, even though _ensure_cli_default_admin already
-    wrote the .bootstrap_password file."""
+    """Wraps a real auth connection; commit() raises, so the seeded admin INSERT rolls back on close."""
 
     def __init__(self, inner):
         self._inner = inner
@@ -1688,17 +1668,7 @@ _EXPOSURE_HOSTS = [
 
 @pytest.mark.parametrize("host", _EXPOSURE_HOSTS)
 def test_cli_and_backend_agree_on_which_hosts_are_exposed(monkeypatch, host):
-    """The parent and the child must classify exposure identically.
-
-    Separate implementations in separate packages (the CLI cannot import the
-    backend), consulted at different moments: the parent before re-exec, the child
-    after. When they disagree the prompt lands in the child, and against an OLDER
-    studio-venv child (supported by the mixed-version path, and with no gate) it
-    lands nowhere and the seeded password is served.
-
-    Measured before the fix: wildcard was False but exposed was True for
-    192.168.1.50, 10.0.0.5, example.com, myhost.local, [::] and 0.0.0.0.0.
-    """
+    """CLI and backend must agree on exposed hosts, or the seeded password can be served unprompted."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -1809,14 +1779,7 @@ class _FdStream:
 
 
 def test_an_unattended_pty_still_launches_a_raw_bind(monkeypatch, tmp_path):
-    """`tmux new -d 'unsloth studio -H 0.0.0.0'` must still start Unsloth.
-
-    A detached pty (tmux/screen/`docker run -dt`) is a real, foreground terminal
-    nobody will ever type into: both streams are ttys and the process owns the
-    terminal, so every interactivity test says "prompt" and the read never
-    returns. The gate runs before any server exists, so undeadlined the launch
-    hangs forever. It must fall back to the bootstrap deadline it already had.
-    """
+    """Detached ptys look interactive but nobody types; the prompt must time out, not hang the launch."""
     studio_mod = _studio()
     events = _install_prompt_env(
         monkeypatch,
@@ -1927,13 +1890,7 @@ def test_read_masked_gives_up_on_a_pty_nobody_types_into(monkeypatch):
 def test_the_exposure_wording_matches_what_will_actually_happen(
     monkeypatch, tmp_path, cloudflare, host, secure, expect_tunnel_wording
 ):
-    """The prompt must not claim a public Cloudflare URL that never starts.
-
-    `--cloudflare -H 192.168.1.50` requests a tunnel that will not start, since a
-    non-secure tunnel needs a wildcard host. Deriving the message from the request
-    rather than the predicate told the operator their credential was about to go
-    on a public URL when it was going on the LAN.
-    """
+    """Prompt wording follows the tunnel predicate, not the request; a LAN bind is not a public URL."""
     studio_mod = _studio()
     monkeypatch.setattr(studio_mod, "_prompt_streams_interactive", lambda: True)
     tunnel = studio_mod._launch_publishes_tunnel(
@@ -2031,13 +1988,7 @@ def test_a_tunnel_ctrl_c_still_aborts(monkeypatch, tmp_path):
 
 
 def test_a_second_cli_gate_does_not_re_wait_the_same_dead_terminal(monkeypatch, tmp_path):
-    """`unsloth studio run` re-execs and re-enters this gate on the SAME pty.
-
-    The parent waits its deadline, nobody types, and it marks the terminal as
-    already tried. Without honouring that the child waits the whole deadline
-    again, so 30s becomes 60s before the backend gate even has its turn, long
-    enough to trip a startup watchdog. Peeked, never popped: run.py consumes it.
-    """
+    """Re-exec'd child must honour the parent's already-tried mark on the same pty; peek, never pop."""
     studio_mod = _studio()
     calls = []
 
@@ -2089,11 +2040,7 @@ def test_the_mark_never_lets_a_tunnel_skip_its_prompt(monkeypatch, tmp_path):
 
 
 def _banner(monkeypatch, tmp_path, args):
-    """Run the gate far enough to capture the banner it prints, then bail out.
-
-    Clears the unattended mark first so one banner assertion cannot inherit the
-    marker from another.
-    """
+    """Clears the unattended marker first, so one banner assertion cannot inherit it from another."""
     import os as _os
 
     studio_mod = _studio()
@@ -2124,11 +2071,7 @@ def test_the_banner_promises_abort_for_every_exposed_bind(monkeypatch, tmp_path)
 
 
 def test_a_concrete_bind_is_not_described_as_every_interface(monkeypatch, tmp_path):
-    """`-H 192.168.1.50` listens on one address, so say so.
-
-    The gate widened to is_external_host, routing concrete non-loopback hosts down
-    the wildcard's path, where they inherited its wording.
-    """
+    """A concrete bind like -H 192.168.1.50 listens on one address; it must not claim every interface."""
     concrete = _banner(monkeypatch, tmp_path, ["-H", "192.168.1.50"])
     assert "on every network interface" not in concrete
     assert "192.168.1.50" in concrete

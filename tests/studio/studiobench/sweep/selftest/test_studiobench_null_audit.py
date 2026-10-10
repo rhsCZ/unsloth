@@ -1,19 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Auditing a null control: was it capable of an opinion, not did it happen to find one.
-
-The gate this file holds exists because the obvious version of it is wrong in the worst
-direction. A CI job that scores a result against `--null` has to know the null control actually
-derived something, since `unstable_set` silently falls back to the DECLARED list when it did not
-and prints "UNSTABLE SET DERIVED" either way. The tempting check is "the measured set is
-non-empty". That check fails on the best null control obtainable -- every action decided, none of
-them differing -- because `derive_unstable` only records an action when something DIFFERED. It
-therefore breaks precisely when the machine is quietest and the measurement is at its best.
-
-So every test here is paired: one where a null control that should pass does, and one where a
-null control that should fail does. The pairing is the point. An audit that only ever passes is
-worse than no audit, because it gets cited.
-"""
+"""The audit asks whether the null was capable of an opinion, not whether it found one."""
 
 from __future__ import annotations
 
@@ -455,13 +442,7 @@ def one_sided_payload(
     reps: tuple[str, ...],
     reason: str = "the control never became visible",
 ) -> Path:
-    """A film where `action` runs on base and cannot be performed on treatment, in `reps`.
-
-    Everything else matches on both arms in both repetitions, so the ONLY thing wrong with this
-    run is that the head build could not open one control. Sixteen filler actions keep the run
-    well above any coverage floor, because "the film barely ran" is the other failure and the two
-    must not be able to stand in for each other.
-    """
+    """Action runs on base but not treatment; filler actions keep the run above any coverage floor."""
     rows: list[dict] = [{"row_type": "run_meta", "tier": "fast"}]
     for rep in ("rep0", "rep1"):
         for arm in ("base", "treatment"):
@@ -637,21 +618,7 @@ def test_a_difference_at_one_rung_does_not_demand_the_null_decide_another(tmp_pa
 
 
 def test_an_interrupted_retry_does_not_inherit_the_completion_it_superseded(tmp_path):
-    """A superseded attempt's `cell` row must not admit the dead retry's action rows.
-
-    `_resume_set` names the path that gets here without anybody doing anything unusual: an A/B
-    pair is re-run WHOLE (`ab.skippable_cells`), so a resume re-runs an arm that had already
-    succeeded. If that retry is interrupted, the payload holds a completed `cell` row and a LATER,
-    unfinished set of action rows under the same deterministic `cell_id`. `latest_attempt_rows`
-    correctly names the retry as the latest, so its rows are the ones scored -- but `completed`
-    was read from the RAW stream, so the guard cleared them on the strength of the completion the
-    attempt before them earned.
-
-    On the null that is the worst direction. One valid repetition plus this half-written one is
-    exactly `min_observations`, so the action is declared unstable at that rung on a reading the
-    run itself threw away, and a real difference in the result then prints under "expected to
-    vary" while the command exits 0.
-    """
+    """An interrupted retry must not inherit the completion of the attempt it superseded."""
     rows: list[dict] = [{"row_type": "run_meta", "tier": "fast"}]
     for arm in ("base", "treatment"):
         cid = f"r100K.{arm}.rep0"
@@ -748,14 +715,7 @@ def _arm_payload(tmp_path: Path, name: str, regress: str | None, self_race: str 
 
 
 def test_the_other_runners_race_does_not_excuse_a_regression_on_this_one(tmp_path, capsys):
-    """The hole the two-runner matrix leaves open, in miniature, and it is not hypothetical.
-
-    On run 32648192384 of this workflow the two arms drew runner ids 1000628315 and 1000628341
-    and started 2m18s apart. The null derived three exemptions; the runner the result was measured
-    on reproduced exactly ONE of them. `reasoning_toggle@r100K` was not on the declared list, so
-    it was excused solely by a race on a machine the result never touched -- and a corroborated
-    head regression there would have shipped green.
-    """
+    """A race seen only on the null's runner must not excuse a regression on the result's runner."""
     null = _arm_payload(tmp_path, "null", regress = None, self_race = "reasoning_toggle")
     result = _arm_payload(tmp_path, "result", regress = "reasoning_toggle", self_race = None)
 
@@ -878,16 +838,7 @@ def _expect_payload(
 
 
 def test_a_control_that_stopped_working_is_not_excused_by_its_digest_exemption(tmp_path, capsys):
-    """The double exemption, and it is the one the declared list makes worst.
-
-    `stop_generation` returns `ran = True, expect_ok = stopped_ms is not None`, so a head on which
-    Stop no longer ends the stream records a row whose `ran` is true and whose digest then differs
-    for the ordinary reason. It is also ON the declared unstable list, so that difference is
-    excused. `compare_rows` read only `ran`, and the result was a user-visible regression --
-    generation cannot be stopped -- passing the gate in both repetitions.
-
-    The assertion is not a digest, so the digest exemption does not reach it.
-    """
+    """A failed assertion is not a digest, so a digest exemption on the action does not reach it."""
     path = _expect_payload(tmp_path, "regressed", "stop_generation", failed_on = "treatment")
     assert "stop_generation" in U.UNSTABLE_ACTIONS
     assert U.report([path], "t", U.UNSTABLE_ACTIONS, min_reps = 2, min_compared = 16) == 1
@@ -958,17 +909,7 @@ def _reversing_expect_payload(tmp_path: Path, name: str, action: str) -> Path:
 
 
 def test_an_assertion_that_blames_a_different_arm_each_time_is_not_corroborated(tmp_path, capsys):
-    """A race that landed on either side is not a build that consistently failed.
-
-    Grouped by action and rung alone, a treatment failure in rep0 and a base failure in rep1 are
-    two distinct repetition labels, so the pair reached `firm` and the job exited 1 reporting
-    "the two builds did not behave the same way" -- directly above its own two lines naming
-    OPPOSITE arms. Neither build failed twice.
-
-    Keyed on the direction they separate, so each side is a single repetition and both print as
-    UNCORROBORATED. The safe direction: this can only ever under-count, and an under-count is
-    visible in the output rather than silent.
-    """
+    """Assertion failures that blame opposite arms in different reps are uncorroborated, not a firm pair."""
     path = _reversing_expect_payload(tmp_path, "reversing", "stop_generation")
     assert U.report([path], "t", U.UNSTABLE_ACTIONS, min_reps = 2, min_compared = 16) == 0
     printed = capsys.readouterr().out
@@ -1025,18 +966,7 @@ def _scope_payload(tmp_path: Path, name: str, actions: tuple[str, ...]) -> Path:
 
 
 def test_a_scoped_action_with_no_rows_in_the_null_is_undecided_not_absent(tmp_path):
-    """The audit's own question, answered by default.
-
-    `audit_null` classified only what `derive_unstable` produced, so a scoped (rung, action) with
-    NO rows in the null payload landed in neither `decided` nor `undecided`. One other scoped
-    action being decided was then enough to return 0 -- and `unstable_set` unions the DECLARED
-    names back in, so `send_turn` was still excused by name and a corroborated result difference
-    on it passed the verdict with zero null-control observation.
-
-    Rows vanish more easily than it looks: the null is collected with `require_complete = True`,
-    so a cell that never finished takes all of its action rows with it and the action stops
-    existing rather than becoming undetermined.
-    """
+    """A scoped action with no rows in the null is undecided, not dropped from the audit."""
     null = _scope_payload(tmp_path, "null", ("settings",))
     result = _scope_payload(tmp_path, "result", ("settings", "send_turn"))
     scope = U.actions_needing_an_excuse([result], 2)
@@ -1074,14 +1004,7 @@ def test_an_action_outside_the_scope_is_not_required_to_exist(tmp_path):
 
 
 def test_a_broken_control_is_not_excused_because_its_digest_varies(tmp_path, capsys):
-    """The exemption that covered nine of the sixteen scheduled actions.
-
-    `keystroke` is on the declared unstable list because "how many keystrokes had landed by the
-    capture deadline is a race" -- a statement about the CAPTURE. It was also being used to
-    excuse the treatment arm being unable to type at all, which is a different claim and the one
-    regression shape that leaves no digest to differ. A composer broken by the head build takes
-    `keystroke` down in both repetitions and the job exited 0.
-    """
+    """keystroke's exemption covers capture timing, not a treatment composer that cannot type at all."""
     path = one_sided_payload(tmp_path, "broken", "keystroke", ("rep0", "rep1"))
     assert "keystroke" in U.UNSTABLE_ACTIONS
     assert "keystroke" not in P.RACY_EXECUTION
@@ -1107,11 +1030,7 @@ def test_every_racy_execution_entry_states_its_mechanism():
 
 
 def test_a_racy_execution_action_is_not_put_in_the_audit_scope(tmp_path):
-    """`report` does not count it, so no excuse can move it and the null owes it nothing.
-
-    Scoped anyway, the null observing the same legitimate stream-timing race made the audit
-    return 1 and failed the workflow on stream timing -- a verdict of 0 with a red job.
-    """
+    """RACY_EXECUTION actions stay out of the audit scope, so a stream-timing race cannot fail the job."""
     path = one_sided_payload(
         tmp_path,
         "racy",
@@ -1155,13 +1074,7 @@ def test_a_control_the_head_cannot_open_is_still_in_the_audit_scope(tmp_path):
 
 
 def test_a_removed_stop_button_is_not_exempt_just_because_stop_generation_can_race(tmp_path):
-    """The exemption has to match the not-run it names, not the action it is filed under.
-
-    `stop_generation` has two not_run paths: nothing was generating (a race with the model) and
-    the stop button being absent (`scene/actions.py:501`, which is the build). Keyed by action
-    name alone, a treatment build that REMOVES the Stop control recorded exactly the one-arm-only
-    regression this category exists to catch and was filed under "expected to vary".
-    """
+    """Exempt only the not_run reason named, not the action; a removed Stop button is a regression."""
     path = one_sided_payload(
         tmp_path,
         "removed",
@@ -1207,16 +1120,7 @@ def streaming_pair_rows(
     treat_scaffold: str | None = None,
     treat_role: str | None = None,
 ) -> list[dict]:
-    """A base/treatment pair captured with message 1 STILL BEING WRITTEN on both arms.
-
-    Modelled on the real `keystroke@r100K` rows from the failing run: both arms streaming, both
-    naming the same message in flight, the same composer control, and the settled half of the
-    thread byte-identical. `base_tail`/`treat_tail` are the digest of the still-arriving message,
-    the only thing wall clock gets to move.
-
-    `treat_settled`, `treat_scaffold` and `treat_role` let the negative controls move something
-    the stream provably cannot reach, and watch the branch decline to fire.
-    """
+    """Pair captured while one message still streams on both arms; only its in-flight tail may differ."""
 
     def side(
         cid: str,

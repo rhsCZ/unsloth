@@ -1,23 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""A rendered duration split across text nodes is still a rendered duration.
-
-THE BUG THIS HOLDS. `normText` has collapsed `295ms` and `3 seconds` to `#T` since it was written,
-and it was still letting wall clock into the digest, because React renders
-`Thought for {n} seconds` as three sibling text nodes and `signature()` normalised each node on its
-own. `normText("3")` sees a bare digit with no unit after it and cannot match, so the number
-survived. A null control -- two arms of a BYTE-IDENTICAL build -- disagreed by that one character
-on `select_all_copy`, `settings`, `thread_reopen` and `delete_message`, none of which is on the
-declared unstable list, so each one read as "this pull request changed the UI".
-
-It was found by diffing the NORMALISED signature text of the two arms rather than their digests
-(`sweep/parity_null_control.py --hunt`), which is the only way the offending bytes were ever going
-to be named instead of guessed at.
-
-Both directions, as everywhere else here: the volatile has to vanish, and the things that share
-its shape have to survive. A normaliser that erased every number split across nodes would hide a
-message count going from 3 to 2, which is content.
-"""
+"""Durations split across React text nodes must still normalise, or wall clock leaks into the digest."""
 
 from __future__ import annotations
 

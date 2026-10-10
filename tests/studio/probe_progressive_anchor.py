@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Does the page move under a reader who scrolls up while a long thread is still widening?
-
-The #9016 re-open action leaves the viewport pinned to the bottom, so it exercises only the branch
-where the autoscroll hook already owns the correction. The branch with no other actor is the
-DETACHED one: the user scrolls up the instant the thread opens and the widening keeps inserting
-messages ABOVE them. If the correction there is wrong, or missing, what they are reading slides
-down the page every widening frame: the regression Open WebUI shipped and reverted
-(open-webui#23990).
-
-The probe re-opens the thread, scrolls up hard on the frame the first row appears, then samples the
-document-space top of a chosen visible message every frame until the thread has converged. A
-correct build holds it still; a broken one shows it walking.
-
-Not a gate. Prints and exits 0 on any measurement; exits non-zero only when the fixture did not
-land, which would mean the numbers describe nothing.
-
-It needs #9016's heavy-thread harness, which is not merged, so on this branch it exits with a
-message naming the three files it is missing rather than running. That is the same dependency
-every measurement in this PR has.
-
-    SMOKE_PORT=5480 python tests/studio/probe_progressive_anchor.py
-"""
+"""Does a detached reader's view slide while a long thread widens above it? Prints only; not a gate."""
 
 from __future__ import annotations
 

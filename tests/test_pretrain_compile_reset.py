@@ -11,15 +11,7 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
-"""The stray-pre-train-forward detector and its torch.compile cache reset.
-
-A grad-enabled forward/backward run before ``trainer.train()`` poisons the
-AOTAutograd backward-graph cache; the detector records it so train() can drop
-that cache. These cover the idempotent-reinstall evidence guard, the reset's
-chain-walk/teardown behaviour, and that the helper is importable at module
-scope (every non-RL training entry point imports it). Runs under the GPU-free
-``tests/conftest.py`` harness.
-"""
+"""A grad-enabled forward before train() poisons the AOTAutograd backward cache; train() resets it."""
 
 from __future__ import annotations
 

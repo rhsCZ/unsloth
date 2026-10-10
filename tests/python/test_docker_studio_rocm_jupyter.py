@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-Present the Unsloth team. See /studio/LICENSE.AGPL-3.0
 
-"""docker/Dockerfile.studio-rocm ships JupyterLab and the notebooks beside Unsloth
-Studio, as unsloth/unsloth:studio does on CUDA, minus its sshd. Dockerfile.studio
-inherits JupyterLab and the notebook tooling from the CUDA core image; the ROCm base
-carries none of that, so the ROCm file installs it itself, and the two can drift
-apart without any build noticing. These pin each piece to the CUDA file it mirrors,
-and the entrypoint hooks the services depend on. Static reads: no AMD GPU, no
-Docker, no network.
-"""
+"""The ROCm base has no JupyterLab or notebook tooling, so each piece is pinned to its CUDA source."""
 
 from __future__ import annotations
 
@@ -111,10 +104,7 @@ NOT_MIRRORED = {
 
 
 def test_the_notebook_runtime_pins_match_the_cuda_core_image():
-    """docker/Dockerfile bakes what the notebooks' install cells declare (soundfile,
-    evaluate, librosa, decord, ...); the shim then keeps those cells from moving the
-    stack. The ROCm image runs the same notebooks, so it carries the same pins, or the
-    AMD-* audio, TTS and vision notebooks fail on their first import here."""
+    """The ROCm image runs the same notebooks, so it must carry the same pins or the AMD notebooks fail."""
     cuda = _read(CUDA_BASE)
     cuda_runs = [
         r for r in _instructions(CUDA_BASE, "RUN") if '"soundfile==' in r or '"decord==' in r
@@ -258,12 +248,7 @@ def test_the_launcher_is_the_command_and_the_ports_are_exposed():
 
 
 def test_login_shells_keep_the_rocm_variables():
-    """studio_launch.sh writes the container's env into /etc/profile.d, filtered by
-    prefix. Nothing here arrives over SSH, but a JupyterLab terminal and `docker exec
-    -it ... bash -l` are both login shells, and `docker run -e` values reach neither
-    otherwise. The image's ROCBLAS_USE_HIPBLASLT and a user's HSA_OVERRIDE_GFX_VERSION
-    have to make it through, or a terminal trains on a different ROCm configuration
-    than the Studio and Jupyter processes."""
+    """Login shells need ROCBLAS_USE_HIPBLASLT and HSA_OVERRIDE_GFX_VERSION kept by the profile.d filter."""
     match = re.search(r'keep\s*=\s*re\.compile\(r"(.*?)"\)', _read(LAUNCH))
     assert match, "the profile.d keep pattern moved"
     keep = re.compile(match.group(1))
@@ -281,10 +266,8 @@ def test_login_shells_keep_the_rocm_variables():
 
 
 def test_the_entrypoint_links_the_studio_home_before_anything_reads_it():
-    """supervisord starts Studio from $UNSLOTH_STUDIO_HOME/bin/unsloth, a link into
-    the app dir that unsloth-studio-home creates; a volume mounted on the home hides
-    the build-time link, so the entrypoint has to run the linker on every start,
-    before the GPU checks that may exit. Mirrors entrypoint.sh on the CUDA image."""
+    """A volume on the home hides the build link, so relinking must precede the GPU checks on every
+    start."""
     body = _read(ENTRYPOINT)
     linker = body.index("/usr/local/bin/unsloth-studio-home")
     assert linker < body.index("Check 1"), "the home link has to precede the GPU checks"

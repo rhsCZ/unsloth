@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Windows on ARM: install.ps1 must not settle for a native ARM64 interpreter.
-
-pyarrow (via datasets) and hf-transfer publish no win_arm64 wheels, so an ARM64
-Python source-builds both and dies minutes into the run. The resolver prefers an
-x64 build of the requested minor and bootstraps one otherwise; the case pinned
-here is the recovery path, where nothing can be downloaded but an x64 build of a
-lower-priority supported minor is already installed.
-"""
+"""On Windows on ARM, prefer x64 Python, as pyarrow and hf-transfer publish no win_arm64 wheels."""
 
 from __future__ import annotations
 
@@ -33,14 +26,7 @@ def _extract(pattern: str, source: str) -> str:
 
 
 def _resolver_script(installed: list[tuple[str, str]], can_download: bool) -> str:
-    """Both production functions verbatim, over a fake set of interpreters.
-
-    Extracted rather than reimplemented so the test cannot drift away from the
-    text install.ps1 actually runs. `installed` is (minor, arch) in py-launcher
-    order, so the first entry for a minor is what a bare `py -3.13` resolves to.
-    The fake interpreters are named `*.exe` and invoked through the call operator,
-    which resolves a string to a function, so no real binary is needed.
-    """
+    """Extracts the real install.ps1 functions verbatim so the test cannot drift from what runs."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     finder = _extract(r"    function Find-CompatiblePython \{.*?\n    \}\n", source)
     installer = _extract(r"    function Install-X64Python \{.*?\n    \}\n", source)
@@ -122,11 +108,7 @@ if ($found) {{ Write-Output "$($found.Version)|$($found.Arch)" }} else {{ Write-
 
 
 def _opt_out_script(installed: list[tuple[str, str]], can_download: bool) -> str:
-    """The same fakes, but ending in the REAL swap resolver rather than a condensed one.
-
-    UNSLOTH_ALLOW_ARM64_PYTHON is read in two places -- the selection and the swap after it
-    -- and the cases below are about both, so the swap cannot be a paraphrase here.
-    """
+    """Uses the real swap resolver: `UNSLOTH_ALLOW_ARM64_PYTHON` is read by selection and by the swap."""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     resolver = _extract(r"    function Resolve-WindowsOnArmX64Python \{.*?\n    \}\n", source)
     base = _resolver_script(installed, can_download)
@@ -172,12 +154,7 @@ def test_the_arm64_opt_out_selects_a_native_interpreter(installed, can_download,
 
 
 def _environment_without_the_arm64_opt_out() -> dict:
-    """These cases are the DEFAULT ARM64 host, which is the one that must prefer x64.
-
-    UNSLOTH_ALLOW_ARM64_PYTHON now reaches the selection rather than only the swap after it,
-    so a developer who happens to have it exported would flip every expectation below and
-    read as a regression in the resolver.
-    """
+    """Strips UNSLOTH_ALLOW_ARM64_PYTHON and CONDA_PREFIX so an exported value cannot flip expectations."""
     environment = os.environ.copy()
     environment.pop("UNSLOTH_ALLOW_ARM64_PYTHON", None)
     # Install-X64Python takes a different branch inside a conda env.

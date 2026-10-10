@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The token recount must price the same system prompt the completion would send.
-
-``createOpenAIStreamAdapter`` appends a Canvas instruction to the outbound system prompt whenever
-the Canvas pill is on -- render_html wording when the model can call the tool, the fenced-HTML
-fallback otherwise. Neither is a tool schema, so the server cannot add it back from the flags
-``buildLocalTokenCountExtras`` sends. Same for reasoning: llama-server layers a request's
-``chat_template_kwargs`` over the load-time ``--chat-template-kwargs``, so a count sending none
-renders the template in whatever mode the model was LOADED in. Either way the count reads low.
-
-The builders, both instruction constants and the shared effort clamp are sliced verbatim out of
-the studio sources and run under ``node`` (see ``_node_harness``).
-"""
+"""Recount must price the Canvas prompt and reasoning kwargs the completion sends, or it reads low."""
 
 from __future__ import annotations
 
@@ -57,13 +46,7 @@ def _outbound_builder() -> str:
 
 
 def _extras_builder() -> str:
-    """buildLocalTokenCountExtras, the tool flags the count sends, and the Auto-inject
-    resolution it shares with the request build.
-
-    Joined on blank lines, not concatenated: a slice that starts on the previous slice's
-    closing brace is not a declaration _harness_bindings can see, so resolve_dependencies
-    pulls its own copy and node refuses the duplicate.
-    """
+    """Joined on blank lines, else a slice starting on the previous brace is not seen as a declaration."""
     parts = [
         read(MODEL_SIZE).split("\n", 2)[2],
         slice_between(
@@ -385,12 +368,7 @@ TOOLS_ON_RAG_OFF = (
     ids = ["unpersisted_new_chat", "persisted_thread"],
 )
 def test_the_count_sends_the_thread_id_at_top_level_even_with_rag_off(thread_id, expected):
-    """`_select_request_tools` reads `payload.thread_id`, not the one inside `rag_scope`.
-
-    An archived thread puts `search_conversation` and its compaction nudge in the prompt,
-    so a count that only ever nests the id under a RAG scope under-reports every archived
-    conversation whose Docs pill is off, and the bar claims room the completion lacks.
-    """
+    """Thread id is read from top level, not the RAG scope, or archived threads are under-counted."""
     out = _run(
         textwrap.dedent(
             f"""

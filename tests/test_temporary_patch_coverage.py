@@ -13,28 +13,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""A temporary patch that stops applying has to be caught, not just logged.
-
-`_run_temporary_patches` calls each entry of `TEMPORARY_PATCHES` inside
-`except Exception` and emits `logger.warning`, so `import unsloth` survives a
-patch that blows up (#3130 ended the import outright on a `SyntaxError` from
-one). The cost of that is a silent one: a patch can rot away against a new
-transformers and every job stays green, because the only trace is a warning
-line nobody asserts on.
-
-The gate here reads the outcome that `_run_temporary_patches` now records and
-fails on any patch that RAISED.
-
-Why not assert a list of patch names, or a count. Which patches apply depends
-entirely on what is installed. `patch_gemma4_moe` has nothing to attach itself
-to on transformers 4.57.6 and returns without doing anything; the MoE
-quantization patches check `is_transformers_v5_moe_quantization_available()`
-first and decline on v4. A name list or a count would go red on the 4.57.6 leg
-of the matrix for patches that are behaving exactly as designed, and would need
-editing every time a patch is added. So the question asked is not "did patch X
-apply" but "did any patch raise", which is version independent: declining
-cleanly is a normal return, raising never is.
-"""
+"""Fails on any temporary patch that raised; declining cleanly is a normal return, not a failure."""
 
 import ast
 import gc
@@ -108,13 +87,7 @@ def _spawn(code, **extra_env):
 
 
 def _collect(injection = ""):
-    """The real import, in a fresh interpreter, reported as plain data.
-
-    A host with no accelerator at all cannot finish `import unsloth` without
-    `UNSLOTH_ALLOW_CPU=1`, and CI's CPU job is exactly that. Retrying on that
-    one symptom rather than probing the host keeps this free of any assumption
-    about which accelerator (or operating system) is present.
-    """
+    """Retries with UNSLOTH_ALLOW_CPU=1 only on the no-accelerator symptom, so no host or OS is probed."""
     code = _CHILD.format(injection = injection, begin = _BEGIN, end = _END)
     result = _spawn(code)
     if result.returncode != 0 and any(m in result.stderr for m in _NO_ACCELERATOR):

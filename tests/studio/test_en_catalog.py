@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`_en_catalog.en_string` resolves the key it is asked for, and every key the drivers ask for exists.
-
-The drivers look controls up by `en_string(...)` in browser jobs that take minutes to reach the
-lookup. A key renamed in en.ts would surface there as a locator timeout; checked here, it fails in
-a second with the key's name.
-"""
+"""A key renamed in en.ts would otherwise show up as a locator timeout minutes into a browser job."""
 
 from __future__ import annotations
 
@@ -228,16 +223,7 @@ DRIVER_STEPS = {
 
 
 def test_the_composer_workflow_runs_on_a_catalog_only_change():
-    """Both browser drivers find their controls through `_en_catalog.py`, and this workflow is
-    the one that runs them. A PR that changes only the reader has to run it too.
-
-    Deliberately literal rather than an evaluator of Actions expressions and shell: the reader
-    is listed by name in `pull_request.paths` with no other filter; every catalog driver is
-    in `DRIVER_STEPS`; and each runs from a step whose `if:` is exactly the pinned one, on a
-    matrix leg that exists, as exactly the pinned command line (so `|| true`, an `echo` of it,
-    or any other respelling fails). A workflow restructured some other way updates this test
-    with it.
-    """
+    """Matches the workflow literally, not by evaluating it, so a restructure must update this test."""
     import yaml
 
     workflow = yaml.safe_load(COMPOSER_WORKFLOW.read_text(encoding = "utf-8"))

@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""Studio installs of a committed package-lock.json go through `npm ci`, never `npm install`.
-
-`npm install` rewrites the lockfile when package.json drifts from it and installs whatever
-the drift asks for, so the audited lockfile stops being what gets installed.
-"""
+"""Use npm ci for committed lockfiles: npm install rewrites the lock when package.json drifts."""
 
 import re
 from pathlib import Path

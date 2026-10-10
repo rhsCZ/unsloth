@@ -1439,12 +1439,7 @@ def _write_usable_install(root: Path, marker: bytes) -> None:
 def test_retention_keeps_a_known_good_install_over_an_unvalidated_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Two failed updates in a row must not trade the last good install for a stub.
-
-    Attempt 1 leaves an unusable tree at install_dir that cleanup cannot remove, so
-    attempt 2 moves exactly that tree into the new rollback path. Capping retention on
-    the newer path alone would delete the only llama.cpp the user still has.
-    """
+    """Two failed updates must not replace the last known-good install with a stub."""
     good = b"GOOD-LLAMA-CPP\n"
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
@@ -2416,12 +2411,7 @@ def test_install_prebuilt_falls_back_to_older_release_plan(
 
 
 def _write_entrypoints(install_dir: Path) -> None:
-    """The two entrypoints, executable, in both the places a caller looks.
-
-    Executable because a real extraction leaves them so, and because
-    existing_install_matches_choice now asks _entrypoint_is_runnable rather than
-    exists(): a tree it keeps but installed_runtime_health rejects is a repair loop.
-    """
+    """Reuse checks runnability, not existence, so the entrypoints must be executable."""
     runtime_dir = install_dir / "build" / "bin"
     runtime_dir.mkdir(parents = True, exist_ok = True)
     for directory in (install_dir, runtime_dir):
@@ -2703,10 +2693,7 @@ def test_existing_install_matches_plan_windows_cuda_unpaired_skips_cudart_check(
 
 
 def test_arch_fields_do_not_change_the_install_fingerprint(tmp_path: Path):
-    """gfx_target/mapped_targets must be invisible to the fingerprint (#7624): the
-    same asset with the same sha256 is the same install whether or not the marker
-    names its built archs, and leaking them in would stale every existing ROCm install
-    the moment this shipped. Inverse of the cudart-pair test below."""
+    """gfx_target and mapped_targets stay out of the fingerprint, or every ROCm install goes stale."""
     choice_kwargs = dict(
         repo = "unslothai/llama.cpp",
         tag = "release-1",
@@ -2827,10 +2814,7 @@ def test_reused_install_backfills_the_arch_coverage(tmp_path: Path):
 
 
 def test_a_reused_bundle_records_whether_it_is_this_runs_fallback(tmp_path: Path):
-    """Attempt ordering moves with the recorded torch runtime preference. A reuse of a
-    later candidate after the preferred one failed is a fallback, and a marker still
-    saying False would let the no-network pre-check keep it on every update with the
-    preferred bundle never retried; a preferred bundle reused clears an old True."""
+    """A reused fallback must be recorded as one, or the no-network check keeps it forever."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
     marker_path = install_dir / "UNSLOTH_PREBUILT_INFO.json"
@@ -2930,10 +2914,7 @@ def test_every_reuse_path_syncs_the_arch_coverage():
 
 @pytest.mark.parametrize("visual_server", [True, False], ids = ["present", "missing"])
 def test_a_published_bundle_owes_its_visual_server(tmp_path, monkeypatch, visual_server):
-    """The marker's source label decides, exactly as on the canonical reuse path.
-    runtime_payload_health_groups only adds llama-diffusion-gemma-visual-server for a published
-    bundle, so omitting the label let an incomplete published Vulkan tree read as validated.
-    setup.sh's source build has its own target for the binary, so exit 2 is a recovery here."""
+    """A published bundle must carry its source label, or an incomplete Vulkan tree reads as valid."""
     _listing_failure(monkeypatch, linux_host)
     install_dir = _complete_existing_llama_install(
         tmp_path, backend = "vulkan", source = "published", visual_server = visual_server
@@ -2960,10 +2941,7 @@ def test_an_upstream_bundle_does_not_owe_a_visual_server(tmp_path, monkeypatch):
 
 
 def test_a_reused_install_backfills_the_paired_runtime_asset(tmp_path: Path):
-    """An install predating runtime_asset only gains it on the reuse path. The pairing is in
-    install_fingerprint, but that is a hash: the kept-install payload check reads the field, so
-    without this backfill a paired Windows CUDA tree stays "pair-less" forever and its cudart
-    trio is never required."""
+    """Reuse backfills runtime_asset on older installs, or its cudart trio is never required."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
     marker_path = install_dir / "UNSLOTH_PREBUILT_INFO.json"
@@ -3756,13 +3734,7 @@ def test_existing_install_matches_choice_fails_when_install_tree_incomplete_maco
 
 
 def test_existing_macos_install_that_cannot_load_is_not_reused(tmp_path: Path, monkeypatch):
-    """A bundle that dyld refuses must not be accepted just because its fingerprint matches.
-
-    A bundle that cannot load is usually ALREADY installed by the time the installer
-    learns to reject it, and the reuse check ran the Linux preflight only, so re-running
-    the installer saw a matching fingerprint, kept the broken tree and failed at first
-    launch again.
-    """
+    """A macOS install that dyld refuses must not be reused just because its fingerprint matches."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
     write_macos_install_shape(install_dir)
@@ -4889,12 +4861,7 @@ def test_setup_scripts_unexpected_exit_branch_never_sets_source_build():
     ids = ["rate-limit", "bad-payload", "urlerror", "timeout"],
 )
 def test_release_listing_failure_exits_fallback_not_error(tmp_path, monkeypatch, error):
-    """A network problem while listing releases must ask for a source build.
-
-    The setup scripts only source build on EXIT_FALLBACK, so anything escaping as
-    EXIT_ERROR hard-fails the whole install for a transient condition. A source build
-    clones over git, not api.github.com, and succeeds while the API is rate limited.
-    """
+    """Listing failures must exit EXIT_FALLBACK: source builds clone over git, not the GitHub API."""
 
     def boom(*args, **kwargs):
         raise error
@@ -4913,12 +4880,7 @@ def test_release_listing_failure_exits_fallback_not_error(tmp_path, monkeypatch,
 
 
 def test_multiline_fallback_reason_logs_one_prefixed_line_each(tmp_path, monkeypatch, capsys):
-    """Every line of the reason has to carry the component prefix.
-
-    The preflight failure lists one binary per line, and the unprefixed system
-    report follows immediately, so a reader (the Studio updater) can only tell
-    the reason's continuation lines from the report by that prefix.
-    """
+    """Each reason line keeps the component prefix so the updater can tell it from the system report."""
 
     def boom(*args, **kwargs):
         raise INSTALL_LLAMA_PREBUILT.PrebuiltFallback(
@@ -5453,12 +5415,7 @@ def test_release_listing_failure_does_not_ignore_an_explicit_version(
     ids = ["typeerror", "attributeerror", "nameerror", "emfile", "enomem", "eacces"],
 )
 def test_release_listing_code_defect_stays_exit_error(tmp_path, monkeypatch, error):
-    """A defect in the resolver is an installer bug, not a transient condition.
-
-    It must not buy a multi-minute source build under a message that blames the
-    network. Only OSError/RuntimeError/ValueError -- the shapes a transport or
-    payload failure actually takes -- are reclassified as a fallback.
-    """
+    """A code defect in the listing stays EXIT_ERROR; only transport-style errors become a fallback."""
 
     def boom(*args, **kwargs):
         raise error
@@ -5474,12 +5431,7 @@ def test_release_listing_code_defect_stays_exit_error(tmp_path, monkeypatch, err
 
 
 def test_release_listing_enospc_still_exits_no_space(tmp_path, monkeypatch):
-    """A full disk must reach EXIT_NO_SPACE, never a source build.
-
-    ENOSPC is a plain OSError, which the transport catch deliberately does not
-    claim, so it escapes install_prebuilt and __main__ classifies it. Assert the
-    same way __main__ does, so this stays a real end-to-end guarantee.
-    """
+    """A full disk must exit EXIT_NO_SPACE, never fall back to a source build."""
 
     def boom(*args, **kwargs):
         raise OSError(errno.ENOSPC, "No space left on device")
@@ -5521,11 +5473,7 @@ def test_fallback_survives_a_failing_system_report(tmp_path, monkeypatch):
 
 
 def test_marker_sync_strands_no_temp_file_when_the_first_write_fails(tmp_path, monkeypatch):
-    """ENOSPC during write/flush/fsync must not leave a partial .tmp- behind.
-
-    A full volume would otherwise accumulate one stranded temp file per setup
-    attempt, right next to the marker they are named after.
-    """
+    """ENOSPC during a marker write must not strand a .tmp- file beside the marker."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
     marker = install_dir / "UNSLOTH_PREBUILT_INFO.json"
@@ -5573,11 +5521,7 @@ def _checksums(tree, repo = "unslothai/llama.cpp"):
 
 
 def test_recorded_ggml_tree_only_for_binaries_from_that_release():
-    """The fork's tree describes the fork's own bundles, not a ggml-org archive.
-
-    A fork plan can install an approved upstream archive instead; recording the
-    fork tree there would pair a slim whisper bundle against upstream ggml.
-    """
+    """Only the fork's own bundles carry the fork's ggml tree; an upstream archive must not record it."""
 
     def choice(repo):
         return asset_choice(
@@ -5600,11 +5544,7 @@ def test_recorded_ggml_tree_only_for_binaries_from_that_release():
 
 
 def test_reused_install_backfills_the_ggml_tree(tmp_path):
-    """An install made before ggml_tree existed must gain it on reuse.
-
-    write_prebuilt_metadata only runs on a real install, so without this the marker stays
-    tree-less forever and slim whisper pairing falls back to the "-mix-" suffix.
-    """
+    """Reuse must backfill ggml_tree, or slim whisper pairing falls back to the -mix- suffix forever."""
     install_dir = tmp_path / "llama.cpp"
     (install_dir / "build" / "bin").mkdir(parents = True)
     marker = install_dir / "UNSLOTH_PREBUILT_INFO.json"
@@ -5657,12 +5597,7 @@ def test_marker_sync_preserves_the_marker_mode(tmp_path, mode):
 
 
 def test_marker_sync_leaves_a_valid_marker_intact_when_the_write_fails(tmp_path, monkeypatch):
-    """A failed refresh must never truncate the marker.
-
-    An in-place retry opens the valid marker with truncation, so an ENOSPC or
-    I/O error mid-write would strand a partial UNSLOTH_PREBUILT_INFO.json and
-    later updates would stop recognising the install.
-    """
+    """A failed marker refresh must leave the valid marker intact, never a truncated partial file."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
     marker = install_dir / "UNSLOTH_PREBUILT_INFO.json"
@@ -5681,11 +5616,7 @@ def test_marker_sync_leaves_a_valid_marker_intact_when_the_write_fails(tmp_path,
 
 
 def test_python_runtime_dirs_skips_an_inaccessible_glob_result(monkeypatch, tmp_path):
-    """A readable site-packages root with a denied child must not abort discovery.
-
-    The parent lists fine and the entry underneath is denied; guarding only the root
-    would leave the strict dedupe on the return to raise anyway.
-    """
+    """A denied entry under a readable site-packages root is skipped rather than aborting discovery."""
     root = tmp_path / "site-packages"
     good = root / "torch" / "lib"
     good.mkdir(parents = True)
@@ -5832,13 +5763,7 @@ def _sync_ggml_tree(install_dir, tree):
     ],
 )
 def test_marker_sync_survives_a_read_only_marker(tmp_path, kwargs, install_kind, field, expected):
-    """A shared or admin-owned install must not fail setup on a marker rewrite.
-
-    Re-recording the run's selection (force_cpu, the legacy backend field, the recorded
-    choice) happens on the existing-install reuse path. The read was guarded, the write
-    was not, so a read-only marker raised PermissionError as EXIT_ERROR, which no longer
-    falls back to a source build and would abort the whole install.
-    """
+    """A read-only marker must not fail setup: the rewrite needs the same guard as the read."""
     install_dir = tmp_path / "llama.cpp"
     install_dir.mkdir()
     marker = install_dir / "UNSLOTH_PREBUILT_INFO.json"
@@ -6325,12 +6250,7 @@ def _release(
 
 
 def test_the_api_only_escape_hatch_uses_the_api_notion_of_latest(tmp_path, monkeypatch):
-    """UNSLOTH_LLAMA_DISABLE_DOWNLOAD_HOST_RESOLVE asks for the API path.
-
-    Declining outright would make the escape hatch mean "never skip", which is not what
-    it says: it asks for the API's answer, so give it the API's answer -- ordered by
-    published_at, exactly as iter_release_payloads_by_time orders it.
-    """
+    """The API-only escape hatch answers latest from the API, ordered by published_at."""
     install_dir = _current_install(tmp_path, monkeypatch)
     monkeypatch.setenv("UNSLOTH_LLAMA_DISABLE_DOWNLOAD_HOST_RESOLVE", "1")
 
@@ -6371,11 +6291,7 @@ def test_the_api_only_escape_hatch_uses_the_api_notion_of_latest(tmp_path, monke
 
 
 def test_a_custom_repo_is_answered_the_way_the_selector_orders_it(tmp_path, monkeypatch):
-    """iter_resolved_published_releases takes the download-host fast path for the
-    default repo only; any other repo's releases are ordered by published_at through
-    the API. A pre-check that followed /releases/latest for such a repo could stay
-    current forever while the selector wanted the newer release GitHub never marked
-    latest."""
+    """A custom repo must be ordered by published_at through the API, not by /releases/latest."""
     install_dir = _current_install(tmp_path, monkeypatch, published_repo = "someone/llama.cpp")
 
     def boom(_repo):
@@ -6732,10 +6648,7 @@ def test_the_backfill_never_overwrites_evidence_a_run_already_recorded(tmp_path,
 
 
 def test_the_reuse_path_refreshes_a_stale_host_profile(tmp_path, monkeypatch):
-    """The profile is this run's own probe of the box the reuse was decided on. If the
-    reuse path left it alone after a hardware change, the mismatch would send every
-    later update down the full path: only the no-network check reads the profile, and
-    nothing else would ever write it again."""
+    """Reuse must refresh a stale host profile, or every later update takes the full path."""
     install_dir = _current_install(
         tmp_path, monkeypatch, install_host = linux_host(**_CUDA_HOST_FIELDS)
     )
@@ -6927,10 +6840,7 @@ def test_the_api_latest_lookup_scans_the_pages_the_selector_scans(monkeypatch):
 
 
 def test_latest_on_an_older_mac_expects_the_pinned_upstream_fallback(monkeypatch):
-    """The selector rewrites "latest" for the upstream repo on a Mac below the floor to
-    the pinned fallback release; the marker check expects that release too, so a current
-    pinned install takes the fast path instead of repeating the release work on every
-    update."""
+    """On an older Mac, latest is the pinned fallback release, so a current install takes the fast path."""
     host = macos_host(macos_version = (15, 5))
     monkeypatch.setattr(
         INSTALL_LLAMA_PREBUILT,
@@ -7143,10 +7053,7 @@ def test_the_host_profile_records_the_rocm_runtime_the_upstream_selector_reads(m
 
 
 def test_the_marker_fast_path_accepts_a_recorded_macos_walk_back():
-    """On a Mac below the newest bundle's OS floor the planner installs an older
-    release and records the one it skipped. The no-network re-check asks for the
-    newest release, so it must read that record rather than fail every such install
-    into the full path; a newer release than the recorded one still does."""
+    """A recorded macOS walk-back satisfies the check, but a release newer than the record does not."""
     met = INSTALL_LLAMA_PREBUILT._release_expectation_met
     marker = {"release_tag": "r1", "walked_back_from": "r2", "walked_back_on_macos": "14.7"}
     mac = macos_host(macos_version = (14, 7))

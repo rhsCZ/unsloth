@@ -1,7 +1,4 @@
-"""Regression test for unslothai/unsloth#4631: xformers must not be blanket-disabled
-on sm_120 GPUs where its kernel actually runs (a ~57% attention-memory saving over the
-SDPA packed-mask fallback). The gate now probes the real op instead of guessing by the
-compute-capability major version."""
+"""The xformers gate probes the real op, not the compute-capability major version."""
 
 import pytest
 from real_accelerator import (

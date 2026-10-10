@@ -1,50 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The symbol bridge: recover react-dom function names without measuring a dev build.
-
-THE PROBLEM, stated exactly. React ships `cjs/react-dom-client.production.js`
-and `cjs/react-dom-profiling.profiling.js` ALREADY MINIFIED. Vite never sees the
-original identifiers, so `keep_fnames` has nothing to keep and a source map maps
-`Zk` to the character offset in react-dom's own pre-minified file where `Zk` is
-also what it is called. Source maps and `keep_fnames` recover OUR component
-names beautifully and recover nothing at all inside react-dom. The original name
-really is `Zk`. This is not a build misconfiguration and no build flag fixes it.
-
-THE SOLUTION. React's DEVELOPMENT build has real names. Use it strictly as a
-DICTIONARY and never as a measurement, because a dev build has different code,
-different fast paths, extra warnings and different allocation behaviour: a
-millisecond measured there describes a program nobody ships.
-
-The join key is the EXACT CALL-COUNT VECTOR. Run the identical fixture at two or
-three small rungs against both builds under precise coverage, and for each
-function record `(count at rung 1, count at rung 2, ...)`. Invocation counts are
-a semantic invariant across build modes: `cloneChildFibers` is called the same
-number of times whichever bundle you loaded, because it is called once per
-sibling per render either way, and that is a property of the algorithm rather
-than of the minifier. So a function with vector `(340, 3400, 34000)` in dev and
-a function with the same vector in prod are the same function.
-
-THE THREE WAYS THIS GOES WRONG, each closed by a rule below:
-
-1. **Collisions.** Many trivial functions share a vector, especially small
-   integers like `(1, 1, 1)`. A vector that is not UNIQUE WITHIN ITS OWN BUILD
-   is unusable, so it is recorded as ambiguous and never guessed. This is the
-   rule that keeps the bridge honest, and it discards a lot.
-2. **A bridge that is confidently wrong.** Validated against ANCHORS: our own
-   app components are independently named on BOTH sides through source maps, so
-   they must map to themselves. If any anchor maps to something else, the whole
-   bridge is discarded and the run degrades to unnamed frames with
-   `symbol_bridge: failed`. Not the bad anchor, the WHOLE bridge, because a
-   bridge that mislabels one function it can check will mislabel others it
-   cannot.
-3. **Dev timings leaking.** `assert_no_measurements` refuses any float in the
-   persisted artefact, and the artefact schema carries no duration fields at all.
-
-The result is persisted as `symbols/react-dom@<version>-<bundle-sha>.json`. The
-bundle SHA is part of the key because a bridge is only valid for the exact bytes
-it was built against; a new build renames everything.
-"""
+"""React ships pre-minified, so dev build names are joined to prod by exact call-count vectors."""
 
 from __future__ import annotations
 
@@ -201,12 +158,7 @@ class Bridge:
 
 
 def assert_no_measurements(payload: Any, path: str = "bridge") -> None:
-    """Refuse any float anywhere in a bridge artefact.
-
-    The dev build is a dictionary, never a measurement. This is the mechanical
-    guarantee behind that sentence: the artefact can hold names and integers and
-    nothing else, so there is no field a duration could sit in even by accident.
-    """
+    """Dev timings must not persist: the artefact holds only names and integers, so no float can enter."""
     if isinstance(payload, bool):
         return
     if isinstance(payload, float):
@@ -234,16 +186,7 @@ def vectors_from_snapshots(
     *,
     url_filter: str | None = None,
 ) -> list[FunctionVector]:
-    """Turn one build's per-rung coverage snapshots into count vectors.
-
-    `snapshots` are `instruments.coverage.CoverageSnapshot` objects in RUNG
-    ORDER, and the order must be identical for both builds or the vectors
-    describe different experiments and every match is spurious.
-
-    A function missing from a rung contributes a 0 at that position rather than
-    being dropped, because "never called at the small rung" is itself part of
-    the signature.
-    """
+    """Snapshots must share rung order across both builds; a function missing at a rung contributes 0."""
     if not snapshots:
         return []
     per_rung: list[dict[tuple[str, int, int], Any]] = []
@@ -309,14 +252,7 @@ def build_bridge(
     react_url_filter: str | None = None,
     anchor_url_filter: str | None = None,
 ) -> Bridge:
-    """Match prod functions to dev names by exact call-count vector equality.
-
-    `anchor_names` are functions that are independently named on BOTH sides,
-    which in practice means our own app components: source maps and `keep_fnames`
-    recover those in the production build, and the development build has them
-    too. They are the control. If an anchor does not map to itself the bridge is
-    discarded whole.
-    """
+    """Anchors are named on both sides, so each must map to itself or the whole bridge is discarded."""
     if len(dev_snapshots) != len(prod_snapshots):
         return Bridge(
             status = FAILED,

@@ -359,13 +359,7 @@ def test_install_prebuilt_short_circuits_when_version_matches(tmp_path: Path, mo
 
 
 def test_a_matching_install_beside_a_running_installer_still_exits_0(tmp_path: Path, monkeypatch):
-    """End to end, through install_prebuilt, with a REAL lock file held by a live PID.
-
-    The whole exit code is the thing under test: the record is an optimisation, and a
-    legacy install that cannot write it because another installer is running must still
-    report the install current. Exit 3 is fatal in setup.sh, so getting this wrong turns
-    "Studio was already installed" into a failed launch on the first update after upgrading.
-    """
+    """Failing to write the record under a live lock must still exit 0; exit 3 is fatal in setup.sh."""
     host = _host("linux", "x64")
     install_dir = tmp_path / "node"
     install_dir.mkdir()
@@ -1036,10 +1030,7 @@ def test_replace_does_not_blame_a_scanner_for_access_denied(monkeypatch, tmp_pat
 
 
 def test_replace_keeps_the_scanner_message_for_a_sharing_violation(monkeypatch, tmp_path, capsys):
-    """WinError 32 is unambiguous, so its wording is untouched.
-
-    Parity guard: passes with and without the #9928 change.
-    """
+    """WinError 32 is unambiguous, so its scanner message wording is kept as-is on a sharing violation."""
     monkeypatch.setattr(M.os, "name", "nt")
     monkeypatch.setattr(M.time, "sleep", lambda _s: None)
     monkeypatch.setattr(M.os, "replace", lambda s, d: (_ for _ in ()).throw(_oserror(32)))
@@ -1132,11 +1123,7 @@ def test_a_denial_without_a_filename_still_exits_denied(capsys, tmp_path):
 
 
 def _real_node_tree(root: Path, host) -> None:
-    """The two files existing_install_matches spawns, as real bytes on disk.
-
-    The execute bit is not decoration: the recorded fast path refuses a node it could not
-    run, so a tree built without it never reaches the short circuit under test.
-    """
+    """Real node and npm-cli files, executable; the recorded fast path refuses a node it could not run."""
     node = M.node_binary_path(root, host)
     npm = M.npm_cli_path(root, host)
     node.parent.mkdir(parents = True, exist_ok = True)
@@ -1175,11 +1162,7 @@ def _runnable_node_tree(
     version = "v24.17.0",
     npm = "11.0.0",
 ) -> Path:
-    """A node that really executes, so the probes under test are real subprocess runs.
-
-    _run_node invokes the node binary for BOTH probes -- `node -v` and, through it, npm-cli.js
-    -- which is the whole reason the record is allowed to skip only the first.
-    """
+    """Runnable node: _run_node execs node for both probes, so the record may skip only the first."""
     node = M.node_binary_path(root, host)
     npm_cli = M.npm_cli_path(root, host)
     node.parent.mkdir(parents = True, exist_ok = True)
@@ -1356,12 +1339,8 @@ def test_an_execute_bit_is_not_demanded_of_the_npm_launcher(tmp_path: Path, monk
 
 
 def test_a_recorded_install_whose_npm_tree_was_gutted_is_not_a_match(tmp_path: Path, monkeypatch):
-    """The record covers npm-cli.js, a launcher that bootstraps ../lib/cli.js.
-
-    Deleting npm/lib/cli.js leaves the recorded launcher byte for byte identical while
-    `npm --version` fails, so nothing about the record can notice it. That is why the npm
-    probe is still paid on the recorded path, and this pins that it is.
-    """
+    """The record cannot see a gutted npm/lib/cli.js, so the npm probe is still paid on the recorded
+    path."""
     host = _host("linux", "x64")
     _real_node_tree(tmp_path, host)
     cli_js = M.npm_cli_path(tmp_path, host).parent.parent / "lib" / "cli.js"
@@ -1409,13 +1388,7 @@ def test_the_record_survives_an_unwritable_marker(tmp_path: Path):
 
 
 def test_a_failed_marker_refresh_leaves_the_old_marker_intact(tmp_path: Path, monkeypatch):
-    """The read-modify-write rewrites a marker that already describes a good install.
-
-    A truncated one reads as "no install" (load_metadata returns None on a parse
-    error), so a crash or a full disk mid-write would retire a working 110 MB runtime
-    and buy a full re-download. The replace is atomic: the marker is either the one
-    that was there or the new one, never half of either.
-    """
+    """Marker rewrites must be atomic: a truncated marker reads as no install and forces a re-download."""
     host = _host("linux", "x64")
     _real_node_tree(tmp_path, host)
     M.write_metadata(tmp_path, version = "24.17.0", asset = "x", sha256 = "y")
@@ -1524,10 +1497,7 @@ def test_a_marker_refresh_keeps_the_marker_readable_to_other_users(tmp_path: Pat
 def test_the_pre_lock_record_is_written_under_the_lock_and_only_over_the_marker_it_read(
     tmp_path: Path, monkeypatch
 ):
-    """The pre-lock check in install_prebuilt records the spawns it just paid for. That
-    record is a read-modify-write of the marker, so it takes the install lock for the
-    write and goes ahead only if the marker is still the one it read: a concurrent
-    installer that swapped a new tree in between must keep its own marker."""
+    """The pre-lock record takes the install lock and writes only if the marker is still the one it read."""
     host = _host("linux", "x64")
     _real_node_tree(tmp_path, host)
     M.write_metadata(tmp_path, version = "24.17.0", asset = "x", sha256 = "y")
@@ -1600,14 +1570,7 @@ def test_a_refreshed_marker_keeps_its_owner_and_group(tmp_path, monkeypatch):
 
 
 def test_a_busy_install_lock_keeps_the_verified_install(tmp_path, monkeypatch):
-    """Busy says nothing about the tree. The evidence that another installer replaced it is
-    the marker no longer being the one that was read, and that check answers False on its own.
-
-    Answering False for a lock that was merely busy would send a legacy install -- the one
-    case that has a record to write -- on to the outer install lock, which the same holder
-    also fails. A first launch beside a running installer would then exit busy, where the
-    path before this record reported the install current and exited 0.
-    """
+    """A busy install lock is not evidence of a swap; only a changed marker is, so the install stays."""
     waited = {}
 
     def busy(_path, *, timeout = None):

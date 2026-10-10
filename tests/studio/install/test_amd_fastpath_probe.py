@@ -351,11 +351,7 @@ def test_stacked_masks_that_all_select_are_not_a_hidden_host(monkeypatch):
 
 @pytest.mark.parametrize("cuda", ["", "-1"])
 def test_a_set_hip_mask_shadows_the_cuda_alias(monkeypatch, cuda):
-    """CUDA_VISIBLE_DEVICES is HIP's alias, not a layer under it (_pick_visible_index).
-
-    Hiding NVIDIA with CUDA_VISIBLE_DEVICES=-1 while pinning HIP is a real mixed-host
-    pattern: the HIP mask wins, so the GPU is visible and the wheel repairable.
-    """
+    """A set HIP mask shadows CUDA_VISIBLE_DEVICES, which is HIP's alias rather than a layer under it."""
     _host(
         monkeypatch,
         torch = ("2.9.0+cpu", ""),
@@ -379,10 +375,7 @@ def test_an_nvidia_host_keeps_the_fast_path(monkeypatch):
 
 
 def test_an_nvidia_host_with_an_inferable_amd_arch_keeps_the_fast_path(monkeypatch):
-    """_infer_linux_amd_gfx_arch never checks NVIDIA, so this gate carries the host.
-
-    Without it the preflight forces a pass that _ensure_rocm_torch then refuses.
-    """
+    """_infer_linux_amd_gfx_arch never checks NVIDIA, so the NVIDIA gate must keep the fast path off."""
     _host(
         monkeypatch,
         torch = ("2.9.0+cpu", ""),
@@ -457,12 +450,7 @@ def _run_cli(
 
 
 def _decision(result):
-    """The CLI's own account of which input produced its exit code.
-
-    Exit 1 alone is five states (no-torch venv, resolved backend, non-ROCm pin, absent or
-    masked AMD host, unreadable torch), so the code cannot say which it saw. Asserting the
-    line back against the code keeps the diagnostic from drifting.
-    """
+    """Exit 1 covers several states, so the CLI prints which input decided it; this checks that line."""
     stdout = result.stdout.decode(errors = "replace")
     marked = [
         line.strip()
@@ -503,10 +491,7 @@ def test_the_cli_reports_keep_the_fast_path_as_a_non_zero_exit(env_name, safe_pa
     [("2.9.0+cpu", None, 0), ("2.9.0+rocm6.4", "6.4.43483", 1)],
 )
 def test_the_cli_answers_end_to_end_over_a_stub_torch(tmp_path, version, hip, expected):
-    """Exit 0 is the only side that moves setup.sh, so drive it for real.
-
-    A ROCm pin skips the hardware gates, leaving the wheel family as the only input.
-    """
+    """Drives the CLI end to end over a stub torch, as exit 0 is the only outcome that moves setup.sh."""
     (tmp_path / "torch.py").write_text(
         "import types\n"
         f"__version__ = {version!r}\n"
@@ -635,12 +620,7 @@ def _rocm_torch(
     owns_sdk = None,
     **kw,
 ):
-    """A host whose torch IS a ROCm build.
-
-    ``family`` is the per-arch family it reads back as; None means unknowable.
-    ``owns_sdk`` is whether torch requires AMD's rocm[libraries], separating a generic wheel
-    (False, no family to read) from a per-arch install whose family will not read back.
-    """
+    """Sets up a ROCm-build torch host; owns_sdk says whether torch requires the rocm[libraries] SDK."""
     _host(monkeypatch, torch = ("2.11.0+rocm7.13.0", "7.13"), **kw)
     _owns = family is not None if owns_sdk is None else owns_sdk
     monkeypatch.setattr(stack, "_torch_requires_rocm_sdk", lambda: _owns)

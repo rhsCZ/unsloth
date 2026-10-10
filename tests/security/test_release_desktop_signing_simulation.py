@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Windows signing binary is executed with the release signing secrets.
-
-test_release_desktop_signing.py asserts on the workflow text; this file runs the
-two step bodies, so a change that reads fine but stops failing closed is caught.
-The bodies are extracted, never retyped, then wrapped and invoked the way the
-runner does (ScriptHandlerHelpers.cs prepends `$ErrorActionPreference = 'stop'`
-and appends the $LASTEXITCODE propagation, then runs `pwsh -command ". '<f>'"`).
-That wrapper is what makes `exit 1` mean "the release stops" here too.
-
-A local HTTP server stands in for the release asset, so tampered, truncated and
-unreachable downloads are deterministic and offline.
-
-Needs pwsh. Checks that need a bare name to resolve to a `.exe` need Windows
-PATHEXT; UNSLOTH_NETWORK_TESTS=1 also pulls the real pinned asset.
-"""
+"""Runs extracted signing steps under pwsh against a local HTTP stand-in for the release asset."""
 
 import functools
 import hashlib
@@ -315,12 +301,7 @@ def _fake_on_path(directory, name, script):
 
 
 def _real_exe_on_path(directory, source):
-    """Put a genuinely runnable executable at the verified name.
-
-    A shebang script cannot stand in: PATHEXT resolves a bare name only to a real
-    `.exe`, which is also what the verify step compares against. The branch under
-    test decides which real binary is borrowed.
-    """
+    """A shebang script cannot stand in, since PATHEXT resolves a bare name only to a real .exe."""
     directory.mkdir(parents = True, exist_ok = True)
     target = directory / "trusted-signing-cli.exe"
     shutil.copy2(source, target)

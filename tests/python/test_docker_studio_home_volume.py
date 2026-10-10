@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""The Studio image splits Studio's code from its data.
-
-Studio keeps one root for both: the venv, source tree and Node next to auth/,
-studio.db, outputs/ and exports/. Without a volume on it, `docker rm` lost every
-account, chat and trained model; with one, the volume kept the first image's code and
-every later image ran that old Studio. The image now keeps the code in
-$UNSLOTH_STUDIO_APP and links it into $UNSLOTH_STUDIO_HOME, which the entrypoint
-repairs at every start. Whatever is in the way is kept aside, never deleted, so a
-volume can also go back to an older image.
-"""
+"""Code lives in $UNSLOTH_STUDIO_APP, linked into the home at every start; obstacles are kept aside."""
 
 import os
 import re
@@ -503,10 +494,7 @@ def test_a_src_lost_between_the_updaters_two_renames_is_put_back(tmp_path):
 
 
 def test_a_killed_updates_record_is_recovered_before_studio_starts(tmp_path):
-    """SIGKILL after the swap and the package replacement: no trap ran, so the record
-    unsloth-studio-update keeps beside src is still there at the next container start.
-    The linker hands it to the updater's --recover, with the home it just linked,
-    before supervisord starts Studio on the unverified tree."""
+    """A SIGKILLed update leaves its record beside src; the linker runs --recover before Studio starts."""
     app = _app(tmp_path)
     (app / ".src-prev.k9x2Qa").mkdir()
     (app / ".src-update.rollback").write_text("-e file:///opt/prev-src\n")
@@ -565,12 +553,7 @@ def test_the_code_moves_in_the_same_layer_that_installs_it():
 
 
 def test_the_uv_cache_goes_with_the_code_and_cache_stays_data():
-    """install.sh and setup.sh default the uv cache to $STUDIO_HOME/cache/uv only when
-    UV_CACHE_DIR is unset; the venv hardlinks into it (9 GB). Studio's runtime caches
-    (download-resume manifests, llama slots, dataset caches) also live under cache/, so
-    linking the whole directory into the app dir would have deleted a volume's runtime
-    state on upgrade and sent new state into the container layer. The image points uv
-    at the app dir before the install RUN and leaves cache/ in the home."""
+    """cache/ holds runtime state, so UV_CACHE_DIR must point into the app dir, not the home."""
     body = STUDIO_DF.read_text(encoding = "utf-8")
     env_block = body[
         body.index("ENV UNSLOTH_STUDIO_HOME=") : body.index(
@@ -603,10 +586,7 @@ def test_the_entrypoint_relinks_before_it_touches_the_studio_venv_and_stops_on_f
 
 
 def test_the_in_app_updates_know_the_images_code_tree():
-    """whisper.cpp is discovered through the Studio home, where the linker leaves a link
-    into the app dir, and the updater reads a linked component dir as the user's own
-    checkout and offers nothing. It tells the two apart by the same variable the image
-    sets, so the name must not drift apart from the image's."""
+    """Updater reads UNSLOTH_STUDIO_APP to spot the image's code tree, so the name must match the image."""
     flow = (REPO / "studio" / "backend" / "utils" / "prebuilt" / "update_flow.py").read_text(
         encoding = "utf-8"
     )

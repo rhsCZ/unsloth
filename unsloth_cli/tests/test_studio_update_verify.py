@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth studio update` must not report success on a damaged install.
-
-pip considers a distribution with intact metadata already satisfied, so an
-update reinstalls nothing when a package's files are damaged. Before this check
-it printed "Unsloth Studio Installed" and exited 0 while Unsloth died at boot
-with `cannot import name 'Depends' from 'fastapi'` -- and a missing-package
-check could not have caught it, because `import fastapi` still succeeded.
-
-The detector is exercised against real distribution metadata written to a temp
-tree, not a mock, because the two things that make it work (RECORD is parsed
-directly, and only shrinkage counts) are exactly the things a mock would hide.
-"""
+"""Update must not report success on a damaged install; pip reinstalls nothing with intact metadata."""
 
 from __future__ import annotations
 
@@ -45,11 +34,7 @@ def _make_dist(
     record_sizes = None,
     version: str = "1.0",
 ):
-    """Install `files` under `site` and write a dist-info RECORD describing them.
-
-    `record_sizes` overrides the size RECORD claims, which is how damage is
-    simulated without having to corrupt anything after the fact.
-    """
+    """record_sizes sets the sizes RECORD claims, simulating damage without corrupting any file."""
     info = site / f"{name}-{version}.dist-info"
     info.mkdir(parents = True, exist_ok = True)
     (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")

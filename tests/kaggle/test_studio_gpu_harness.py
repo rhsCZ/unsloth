@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""CPU-only unit tests for the Kaggle Unsloth GPU harness.
-
-The payload itself needs a GPU, a browser and an Unsloth install, and none of
-that runs here. What does run is everything that decides whether a green tick
-means anything: the GPU-offload verdict, the polling predicates that separate
-"finished" from "has not started", the adapter check, the generated kernel
-notebook, the evidence transport, and the budget numbers in the workflow
-header matching the flags underneath them.
-
-Modules under .github/scripts/kaggle_studio_ci are imported by explicit path
-rather than by putting that directory on sys.path: it contains a report.py
-and a build_kernel.py, so does .github/scripts/kaggle_t4_ci, and
-test_t4_smoke_harness.py puts the latter on sys.path for the whole session.
-Whichever ran first would win.
-"""
+"""Imports by path: kaggle_t4_ci and kaggle_studio_ci both ship report.py and build_kernel.py."""
 
 from __future__ import annotations
 
@@ -142,15 +128,7 @@ def test_a_cpu_only_log_reports_no_device_buffer():
 
 
 def test_a_cuda_bundle_is_recognised_from_its_marker(tmp_path):
-    """Written against a marker the installer actually produces.
-
-    This test used to write ``{"install_kind": "linux-cuda"}`` and assert it
-    came back, which is how the bug survived: the marker on disk has no
-    install_kind key, so the assertion agreed with the payload about a field
-    neither of them was reading from reality. Six hardware runs reported
-    install_kind=None with a working CUDA llama.cpp installed, and this test
-    was green for all six.
-    """
+    """The installer's marker has no install_kind key, so the fixture must use the real marker shape."""
     marker = tmp_path / "UNSLOTH_PREBUILT_INFO.json"
     marker.write_text(
         json.dumps(
@@ -721,12 +699,7 @@ def test_chunks_are_reassembled_in_order_regardless_of_the_order_seen():
 
 
 def test_a_truncated_duplicate_does_not_overwrite_the_complete_chunk(tmp_path):
-    """The executed notebook and the kernel log are two copies of one stdout.
-    When Kaggle cuts the log inside a chunk line, the survivor still parses as
-    `i/n <payload>`, so overwriting on every sighting replaced the notebook's
-    complete chunk with the log's partial one. Every index was then present,
-    the missing-chunk guard passed, and the bundle died in base64 with the
-    complete source sitting on disk."""
+    """A log copy of a chunk can be cut short; it must not overwrite the complete notebook copy."""
     blob = _bundle({"studio_gpu_report.json": b'{"passed": true}', "shot.png": b"\x89PNG"})
     lines = _chunk_lines(blob)
     assert len(lines) > 2, "need a chunk that is neither first nor last"
@@ -793,21 +766,7 @@ def test_the_workflow_never_cancels_a_run_that_may_hold_a_kernel():
 
 
 def test_the_two_kaggle_legs_fit_the_account_side_by_side():
-    """One kernel each, against a 2-kernel per-ACCOUNT cap, so they can overlap.
-
-    They used to SHARE a concurrency group, because the notebook leg pushed two
-    kernels and took both of Kaggle's slots: this leg would have raced the cap
-    and lost its push, so it had to queue behind instead. The cost was that it
-    queued behind the whole notebook JOB even though the account was free again
-    the moment that job's kernels finished -- measured, run 32607617804 waited
-    about 40 minutes on run 32607621452.
-
-    The notebook leg now packs its four legs into one kernel. So the invariant
-    worth holding is no longer "same group" but the arithmetic that made the
-    same group necessary: what each leg PUSHES has to sum to within the cap.
-    Separate groups plus one kernel each is exactly 2 of 2, with no headroom,
-    which is why this asserts the sum rather than the group names.
-    """
+    """The two legs' pushes must sum within the 2-kernel per-account cap, not share a concurrency group."""
     yaml = pytest.importorskip("yaml")
     # Read gate.py as text: both kaggle CI dirs ship a `report` module, and importing either would
     # decide `import report` for every later test in the process.
@@ -884,16 +843,7 @@ def test_the_sampling_rate_matches_the_arithmetic_in_the_header():
 
 
 def test_studio_is_sampled_harder_than_the_notebook_leg():
-    """Harder on every axis the budget is denominated in -- launches, hours
-    and share of the allowance -- and LOWER on the one axis that looks like
-    the answer, the percentage.
-
-    The inversion is structural, so it is asserted rather than tolerated. A
-    point of rate costs ~570 x 0.01 GPU-h here against ~58 x 0.01 there, and
-    a future edit that "fixes" the percentages to agree would either starve
-    the notebook leg or blow the account. If that edit is ever the right one,
-    this test is where the reasoning has to be argued with.
-    """
+    """Studio is sampled harder on launches, hours and budget share, but lower on percentage, by design."""
     studio = WORKFLOW.read_text(encoding = "utf-8")
     notebook = (REPO_ROOT / ".github" / "workflows" / "kaggle-t4-notebook-ci.yml").read_text(
         encoding = "utf-8"
@@ -1096,10 +1046,7 @@ def _login_ok(must_change):
 
 
 def test_login_retires_a_bootstrap_password_studio_says_must_change():
-    """The failure this exists for: the first hardware run authenticated fine and
-    then got 403 "Password change required" from /api/inference/load and
-    /api/train/start, so inference, tool calling, training and export were all
-    unmeasured behind a login step that reported success."""
+    """A bootstrap password left unretired makes load and train return 403, so login must retire it."""
     studio = _RecordingStudio(
         [
             _login_ok(True),
@@ -1150,11 +1097,7 @@ def test_a_password_change_without_a_token_is_refused():
 
 
 def test_the_session_remembers_which_password_is_current():
-    """The Playwright driver rotates the password itself and asserts the old one
-    stops working, so it needs whatever the session is CURRENTLY authenticated
-    by. Reading the seeded file instead is how kernel unsloth-t4-ci-9ddd8ae4
-    failed the driver with "the bootstrap password is gone" in the same run
-    where retiring it fixed inference, tool calling and training."""
+    """The UI driver needs the password the session is currently authenticated by, not the seeded file."""
     changed = _RecordingStudio([_login_ok(True), (200, {"access_token": "t2"})])
     changed.login("bootstrap-secret")
     assert changed.password not in (None, "", "bootstrap-secret")
@@ -1166,20 +1109,7 @@ def test_the_session_remembers_which_password_is_current():
 
 
 def test_the_ui_driver_gets_a_freshly_seeded_account():
-    """The API path and the UI driver want OPPOSITE auth states, so the payload
-    has to re-seed between them.
-
-    authenticate() retires the bootstrap password to get past Unsloth's forced
-    change; the driver's first UI step waits for #new-password on that very
-    form. Three hardware runs walked the whole cycle -- 412345d2 failed the API
-    assertions on the gate, 9ddd8ae4 fixed those and failed the driver on a
-    stale password, the next failed the driver on the form being gone. The fix
-    is a restart, because start_server() removes $STUDIO_HOME/auth and that is
-    what re-seeds the bootstrap password.
-
-    Asserted on the source rather than by running it: the restart is the whole
-    fix, and a refactor that drops it would put the payload straight back to a
-    driver that cannot find the form."""
+    """The API and UI driver need opposite auth states; start_server() removes auth to reseed it."""
     source = (PAYLOAD_DIR / "run_studio_gpu.py").read_text(encoding = "utf-8")
     body = source[source.index("def assert_chat_ui") :]
     body = body[: body.index("\n    def ")] if "\n    def " in body else body
@@ -1196,12 +1126,7 @@ def test_the_ui_driver_gets_a_freshly_seeded_account():
 
 
 def test_the_driver_subprocess_timeout_does_not_track_the_ui_wall_budget():
-    """The parent must not out-race the watchdog it is a backstop for.
-
-    `ui_wall_timeout + 300` was the looser of the two only while that budget bounded the
-    whole run. It bounds silence now, so the backstop has to come from the total instead.
-
-    Asserted on the source because reaching the call needs a live server."""
+    """The driver's subprocess backstop must be keyed to the total budget, not ui_wall_timeout + 300."""
     source = (PAYLOAD_DIR / "run_studio_gpu.py").read_text(encoding = "utf-8")
     body = source[source.index("def assert_chat_ui") :]
     body = body[: body.index("\n    def ")] if "\n    def " in body else body
@@ -1220,12 +1145,7 @@ def test_the_driver_subprocess_timeout_does_not_track_the_ui_wall_budget():
 # install_llama_prebuilt.py resolves a linux-cuda bundle on x64 CUDA hosts; it must actually
 # be installed under STUDIO_HOME or the export assertion fails.
 def _load_payload():
-    """Import run_studio_gpu under a private name.
-
-    The module runs a CLI at import time only under __main__, so importing it
-    is safe, but it must not collide with the copy test_t4_smoke_harness puts
-    on sys.path.
-    """
+    """Loads the payload under a private module name so it cannot collide with the copy on sys.path."""
     spec = importlib.util.spec_from_file_location(
         "_studio_gpu_payload_under_test", PAYLOAD_DIR / "run_studio_gpu.py"
     )
@@ -1259,13 +1179,7 @@ def _session(module, tmp_path, **overrides):
 
 
 def test_the_llama_cpp_install_actually_invokes_the_installer(tmp_path, monkeypatch):
-    """Exercises the call, not just its source text.
-
-    `run()` in this payload already applies capture_output and text, so passing
-    either again is a TypeError -- and one that only appears on hardware, since
-    every other test here reads the file rather than calling it. That is exactly
-    how it got written wrong the first time.
-    """
+    """run() already sets capture_output and text, so passing either again is a TypeError on hardware."""
     module = _load_payload()
     session = _session(module, tmp_path)
     installer = session.repo_root / "studio" / "install_llama_prebuilt.py"
@@ -1301,12 +1215,7 @@ def test_the_llama_cpp_install_actually_invokes_the_installer(tmp_path, monkeypa
 
 
 def test_a_successful_installer_that_picks_a_cpu_bundle_is_still_a_failure(tmp_path, monkeypatch):
-    """The selection regression this leg exists to catch.
-
-    Worded separately from "the installer failed", because a CPU bundle chosen
-    ON PURPOSE by a working installer on a CUDA box is a different bug from an
-    installer that could not run.
-    """
+    """A CPU bundle picked on a CUDA box is a selection bug, separate from an installer that failed."""
     module = _load_payload()
     session = _session(module, tmp_path)
     installer = session.repo_root / "studio" / "install_llama_prebuilt.py"
@@ -1327,11 +1236,8 @@ def test_a_successful_installer_that_picks_a_cpu_bundle_is_still_a_failure(tmp_p
 
 
 def test_a_failed_llama_cpp_install_does_not_stop_the_run():
-    """Every other assertion still has to execute and report.
-
-    A box where the bundle will not install should produce the same honest
-    export red it did before, not a run that stops at the install.
-    """
+    """A failed llama.cpp install must not stop the run, so the other assertions still execute and
+    report."""
     source = (PAYLOAD_DIR / "run_studio_gpu.py").read_text(encoding = "utf-8")
     body = source[source.index("def execute(self)") :]
     body = body[: body.index("\n    def ")]
@@ -1345,15 +1251,8 @@ def test_a_failed_llama_cpp_install_does_not_stop_the_run():
 
 
 def test_the_llama_cpp_marker_falls_back_to_the_canonical_location(tmp_path, monkeypatch):
-    """Five runs reported install_kind=None with a llama.cpp sitting on disk.
-
-    install.sh --local puts one at ~/.unsloth/llama.cpp, which is what
-    install_llama_prebuilt.py's own default resolves to, and this payload read
-    STUDIO_HOME/llama.cpp -- a path nothing ever wrote to. The installer said
-    as much when asked to install again: "existing llama.cpp install already
-    matches selected release b10360-mix-87da1a2; skipping download and
-    install", while the directory it was pointed at stayed empty.
-    """
+    """The llama.cpp marker falls back to ~/.unsloth/llama.cpp, where install.sh --local actually
+    puts it."""
     module = _load_payload()
     fake_home = tmp_path / "home"
     canonical = fake_home / ".unsloth" / "llama.cpp"
@@ -1403,14 +1302,7 @@ def test_no_llama_cpp_anywhere_is_still_reported_as_absent(tmp_path, monkeypatch
 
 
 def test_the_marker_never_carried_an_install_kind(tmp_path):
-    """The bug behind six runs of install_kind=None, pinned.
-
-    install_llama_prebuilt.py writes `install_kind` only into the JSON its
-    resolver prints to stdout. The marker it writes to disk records asset, tag,
-    runtime_line, coverage_class and bundle_profile. Reading `install_kind`
-    from the marker therefore answered None for every bundle on every box,
-    including a working CUDA one, and the export assertion failed on that.
-    """
+    """install_kind is printed to stdout, never written to the marker, so reading it there yields None."""
     module = _load_payload()
     marker = tmp_path / "UNSLOTH_PREBUILT_INFO.json"
     marker.write_text(
@@ -1492,12 +1384,7 @@ def _baseline_session(
 
 
 def test_the_baseline_waits_for_the_old_model_to_actually_leave(tmp_path, monkeypatch):
-    """The run-7 shape, in miniature.
-
-    A 3004 MiB chat model is resident; the probe about to run loads a 531 MB
-    GGUF. Sampling before the unload gave -1866.0 and scored the load as
-    never reaching the GPU. The baseline must be taken after the fall.
-    """
+    """Sample the baseline only after the old model unloads, or the load reads as a negative delta."""
     module = _load_payload()
     session = _baseline_session(
         module, tmp_path, {"model_identifier": "chat.gguf"}, [4000.0, 2600.0, 1000.0, 996.0, 996.0]
@@ -1568,10 +1455,7 @@ def test_no_nvidia_smi_at_all_is_not_a_crash(tmp_path, monkeypatch):
 
 
 def test_the_status_fields_read_are_fields_the_response_really_has(tmp_path):
-    """Run 8's fix ran and did nothing, because it read model_path / model /
-    active_model_name off a response that carries none of them. Bind the names
-    to InferenceStatusResponse itself, so a rename or another guess fails here
-    instead of on hardware forty minutes later."""
+    """Status fields read must exist on InferenceStatusResponse, so a guessed name fails here."""
     import re
 
     model_src = (REPO_ROOT / "studio" / "backend" / "models" / "inference.py").read_text(
@@ -2036,10 +1920,8 @@ def _cell_source(driver: dict, needle: str) -> str:
 
 
 def test_a_failing_install_under_test_reports_a_failure_rather_than_infra(tmp_path):
-    """`install.sh --local` raising SystemExit left papermill with no
-    T4_SMOKE_REPORT, the launcher called that `infra` and the reporter exited
-    0 -- so this workflow passed exactly the installer regressions its path
-    filter selects for."""
+    """A failing install must report failure, not infra, or the workflow passes the regressions it
+    guards."""
     driver = _build(tmp_path)
     payload_source = _payload_source(driver)
     fail_report_src = (
@@ -2093,10 +1975,8 @@ def test_an_install_that_leaves_no_interpreter_is_also_a_failure(tmp_path):
 
 
 def _run_verify_cell(driver: dict, tmp_path, *, probe: dict, host_gpus: list[str]):
-    """Execute the generated dependency-probe cell against a fake venv + nvidia-smi.
-
-    Returns every ``T4_SMOKE_REPORT`` the cell published.
-    """
+    """Runs the generated probe cell against a fake venv and nvidia-smi; returns the reports it
+    published."""
     payload_source = _payload_source(driver)
     fail_report_src = (
         "def fail_report" + payload_source.split("def fail_report", 1)[1].split("\n\ndef ", 1)[0]
@@ -2315,27 +2195,7 @@ def test_a_box_without_nvidia_smi_reports_no_gpu_rather_than_crashing(tmp_path, 
 
 
 def test_the_kaggle_client_is_new_enough_to_read_the_only_credential_we_have():
-    """A client that cannot read KAGGLE_API_TOKEN makes this workflow report green forever.
-
-    The gate is handed exactly one credential, KAGGLE_API_TOKEN, and nothing in
-    the workflow or under .github/scripts/kaggle_t4_ci writes a kaggle.json. On
-    2.x, authenticate() tries _authenticate_with_access_token() first, which
-    reaches kagglesdk.get_access_token_from_env() and reads that variable. On
-    1.7.4.5 it does not: KAGGLE_API_TOKEN appears only in
-    kagglesdk/kaggle_http_client.py, whose own header says that client "is not
-    currently usable by the CLI", so authenticate() falls through to
-    read_config_file() and raises IOError, which IS OSError on Python 3.
-
-    That error is not loud. gate.py turns any error into a skip unless
-    --no-soft-fail is passed, and a skip exits 0, so the run is green with the
-    GPU job skipped: identical on the surface to the ~95% of invocations the
-    5% sampler declines. Observed on run 32605377065, dispatched with
-    force=true to bypass the sampler, which still reported
-    "could not authenticate to Kaggle: OSError" and a green workflow.
-
-    The notebook leg has carried this guard since it was written; this leg had
-    no equivalent and sat on 1.7.4.5, so it had never authenticated once.
-    """
+    """Kaggle 1.7.4.5 cannot read KAGGLE_API_TOKEN, and the resulting OSError becomes a green skip."""
     packaging_version = pytest.importorskip("packaging.version")
     pins = re.findall(
         r"pip install [^\n]*'kaggle==([0-9][^']*)'", WORKFLOW.read_text(encoding = "utf-8")
@@ -2346,19 +2206,7 @@ def test_the_kaggle_client_is_new_enough_to_read_the_only_credential_we_have():
 
 
 def test_no_studio_assertion_is_wired_to_a_constant_branch():
-    """A repo-wide version of the guard that caught five vacuous guards at once.
-
-    Every rule in the Studio payload was, at some point, protected by a test
-    that asserted "the failure message appears in the source". That is
-    satisfied by `if False:` sitting above an untouched message, so disabling a
-    rule outright left its test green. Five mutations survived that way in one
-    sitting.
-
-    A constant test in an `assert_*` method means a branch that can never be
-    taken, or one always taken. Neither is something a check has any business
-    doing, and this catches it for every assertion at once rather than one test
-    at a time.
-    """
+    """A constant test in an assert method is a branch that can never be taken or always taken."""
     import ast
 
     src = (
@@ -2379,16 +2227,8 @@ def test_no_studio_assertion_is_wired_to_a_constant_branch():
 
 
 def test_every_assertion_carries_its_own_wall_clock():
-    """Studio is the longest payload in the kernel and had no breakdown.
-
-    On unsloth-probe-full-concurrent-417238 `studio_test` ran 1487.5s -- the
-    single largest item on the critical path -- and the report carried 19
-    assertions with no timing on any of them, so "where does Studio's time go"
-    could only be answered by buying another session.
-
-    Driven rather than grepped: a rule that only checked for a `time.time()`
-    call passes on a payload that computes the number and drops it.
-    """
+    """Each Studio assertion needs its own wall clock, or the longest payload's time cannot be
+    attributed."""
     import importlib.util
     import types
 
@@ -2417,14 +2257,7 @@ def test_every_assertion_carries_its_own_wall_clock():
 
 
 class TestAMixedListingIsNotProofOfCpu:
-    """A readable row on one GPU keeps the mapping nonempty, hiding an [N/A] server.
-
-    The all-[N/A] guard fires only when NOTHING parsed. On a box with a TCC card whose
-    process reports a figure and a WDDM or unified-memory card where the newly launched
-    server reports [N/A], the mapping is nonempty, the guard stays quiet, and the server's
-    pid is simply missing -- so nothing "appeared" and the harness failed a run whose model
-    was on the card the whole time.
-    """
+    """A readable row on one GPU must not hide an [N/A] server, which may still be on the card."""
 
     @staticmethod
     def _verdict(**kwargs):
@@ -2526,14 +2359,7 @@ class TestTheListingNamesItsPids:
 
 
 class TestASharedCardIsNotMeasuredByItsTotal:
-    """The device total only measures THIS process when THIS process owns the card.
-
-    Under --studio-concurrent a training leg shares it and both allocates and frees inside
-    the window: one recorded run read the delta as -182.0 MiB while the server genuinely
-    held 2.6 GB. Accepting a +200 MiB rise there would pass a CPU-served run on memory
-    somebody else allocated, so a fallback to the total is refused when anything was on the
-    card before the launch.
-    """
+    """A shared card's device total cannot prove this run used the GPU, so the fallback is refused."""
 
     @staticmethod
     def _verdict(**kwargs):
@@ -2612,13 +2438,7 @@ class TestASharedCardIsNotMeasuredByItsTotal:
 
 
 class TestTheSamplesAreScopedToTheVisibleCard:
-    """nvidia-smi ignores CUDA_VISIBLE_DEVICES and answers for every PHYSICAL card.
-
-    Kaggle offers a two-GPU T4 session and build_kernel.py pins each payload to one card,
-    so both samplers were reading the whole box. An unrelated process starting on the
-    HIDDEN card and taking 200 MiB was then enough evidence for the device-wide delta to
-    carry a CPU-served run past the memory assertion.
-    """
+    """nvidia-smi ignores CUDA_VISIBLE_DEVICES, so samples must be filtered to the visible card."""
 
     @staticmethod
     def _selector(value):
@@ -2693,10 +2513,7 @@ class TestTheSamplesAreScopedToTheVisibleCard:
 
 
 class TestTheServerIsStoppedBeforeTheCliBaselineRegardlessOfSkipUi:
-    """assert_chat_ui ends by stopping the Studio server, so with --skip-ui nothing did, and
-    the still-running llama-server sat in assert_cli_run's before-launch listing. On parts that
-    report [N/A] per process that pid read as a co-tenant, the device-delta fallback was
-    refused, and a GPU-backed run came back "unmeasured rather than proven"."""
+    """Stop the server before the CLI baseline even with --skip-ui, or its pid reads as a co-tenant."""
 
     def test_stop_server_precedes_the_cli_assertion_unconditionally(self):
         text = Path(run_studio_gpu.__file__).read_text(encoding = "utf-8")
@@ -2721,11 +2538,7 @@ class TestTheServerIsStoppedBeforeTheCliBaselineRegardlessOfSkipUi:
 
 
 class TestTheCardIsGivenTimeToSettleAfterAStop:
-    """A terminated llama-server keeps its allocation, and keeps being LISTED, for a moment
-    after it exits. Sampled straight away that pid is assert_cli_run's before-launch state:
-    card_is_shared() withdraws the device-delta fallback and a GPU-backed run reports
-    "unmeasured rather than proven", which is the false red this PR set out to remove.
-    """
+    """A stopped llama-server stays listed briefly, so the card must be polled until it settles."""
 
     @staticmethod
     def _settle(samples):
@@ -2806,23 +2619,14 @@ class TestTheCardIsGivenTimeToSettleAfterAStop:
 
 
 class TestTheTwoRulersAreReadInTheRightOrder:
-    """Which pids count as new, and which reading is allowed to overrule which.
-
-    Both of these are the mixed listing, where one new pid carries a figure and another
-    does not, and both come out of splitting "listed" from "attributed": the split is only
-    half applied unless the exclusion uses it too, and the weaker ruler must not be allowed
-    to contradict the stronger one.
-    """
+    """Per-process readings outrank the device total, which must never overrule an attributed pid."""
 
     @staticmethod
     def _verdict(**kwargs):
         return run_studio_gpu.cli_run_gpu_failure(**kwargs)
 
     def test_a_flat_device_total_does_not_disprove_an_attributed_process(self):
-        """2.6 GiB read off pid 222 is not a CPU-served run because pid 333 was also new
-        and unreadable. The total is a shared counter and cannot outrank a direct reading;
-        which of the two is the server is still unknown, so this hedges rather than passes.
-        """
+        """A flat device total cannot disprove an attributed pid, since the total is a shared counter."""
         failure, detail = self._verdict(
             apps_before = {},
             apps_after = {222: 2600},

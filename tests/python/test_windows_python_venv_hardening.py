@@ -31,11 +31,7 @@ def _extract(pattern: str, source: str) -> str:
 
 
 def _link_dir(link: Path, target: Path) -> None:
-    """Directory link, without needing SeCreateSymbolicLinkPrivilege on Windows.
-
-    A junction is also the reparse point a Windows venv actually runs into, so this
-    is the faithful construct there rather than a stand-in.
-    """
+    """A junction on Windows needs no SeCreateSymbolicLinkPrivilege, and is the reparse point venvs use."""
     if os.name == "nt":
         subprocess.run(
             ["cmd", "/c", "mklink", "/J", str(link), str(target)],
@@ -64,13 +60,7 @@ def _run_powershell(shell: str, script: str, env: dict[str, str]) -> str:
 
 
 def _assert_same_text(actual: str, expected: str, note: str) -> None:
-    """`actual == expected`, but a mismatch names the codepoints that differ.
-
-    A bare `==` between two paths that differ in one accented character is unreadable in
-    CI: pytest renders its diff through the same stdout that mangled the string, so on a
-    non-UTF-8 console one side comes back as U+FFFD and the report accuses the half that
-    was right. Codepoints survive any code page, so they are what gets printed.
-    """
+    """Names differing codepoints on mismatch, since a non-UTF-8 console mangles pytest's path diff."""
     if actual == expected:
         return
     head = len(os.path.commonprefix([actual, expected]))

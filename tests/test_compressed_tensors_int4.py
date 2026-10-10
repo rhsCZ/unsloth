@@ -11,12 +11,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""compressed-tensors INT4 / INT8 kept packed: exact decode kernels and the default load route.
-
-The kernels are checked against compressed-tensors' own ``decompress`` (bit for bit) and a dense
-matmul; the route loads a tiny packed Llama (built by test_compressed_tensors_bnb) and compares
-it with the same checkpoint decompressed to bf16 on disk.
-"""
+"""Packed INT4/INT8 decode kernels must match compressed-tensors' own decompress bit for bit."""
 
 import copy
 import itertools

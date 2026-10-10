@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The llama.cpp mismatch gate and the llama.cpp selector have to agree, or updates churn.
-
-Before reinstalling, setup.ps1 deletes the existing llama.cpp tree when its recorded
-`install_kind` is not in the set the gate considers correct for this host; then
-install_llama_prebuilt.py picks a bundle. Nothing makes those two agree, and a disagreement
-is permanent: every update deletes the tree and refetches the identical bundle, forever, on
-a working host. The only relationship that matters is "the kind the selector installs is one
-the gate accepts", so that is asserted directly, over the product of what either side
-branches on, rather than the text of either.
-
-Both churning combinations this found are on Windows ARM64 and invisible from an x64 box:
-
-  * NVIDIA. The gate expected windows-cuda; on an ARM64 venv the selector installs
-    windows-arm64. That is every Windows ARM64 machine with an NVIDIA GPU.
-  * ROCm. No ROCm bundle exists for Windows ARM64 at all, so the selector falls through to
-    the ARM64 CPU bundle while the gate still expected windows-rocm or windows-hip.
-
-Offline. direct_upstream_release_plan takes a release dict, and the gate's own block is lifted
-out of setup.ps1 and run with only its inputs replaced.
-"""
+"""Selector's install kind must pass setup.ps1's mismatch gate, or every update deletes and refetches."""
 
 from __future__ import annotations
 

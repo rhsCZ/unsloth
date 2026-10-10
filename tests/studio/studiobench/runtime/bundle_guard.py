@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Refuse to benchmark a development build.
-
-A Vite dev server MANUFACTURES the symptom this tool exists to find. React's development build
-does per-render bookkeeping the production build does not, and the measured inflation is about
-3.2x on exactly the axis under investigation. A number taken against it is not a smaller version
-of the truth, it is a different phenomenon with the same units, and it would confirm any
-hypothesis you brought to it.
-
-TWO independent checks, because either alone has a hole.
-
-1. **`/@vite/client` answers 200.** Only a dev server serves that path. Cheap, decisive, and it
-   catches a dev server even when the entry asset happens to look fine.
-
-2. **`bundleType: 0` in the SAME chunk as `rendererPackageName: "react-dom"`.** React's renderer
-   registers itself with the DevTools hook carrying a `bundleType`, 0 for production and 1 for
-   development. It has to be read from the same chunk as the `react-dom` marker: a large app
-   bundle contains several renderers' worth of strings, and `bundleType:1` from some other
-   package proves nothing about react-dom.
-
-**Do NOT grep for `jsxDEV`.** It false-positives. `hast-util-to-jsx-runtime`, which Streamdown
-pulls in and which is in every production bundle of this app, ships its own option guard naming
-`jsxDEV` as a supported entry point. A `jsxDEV` grep therefore fails a perfectly good production
-build, and the natural response to a gate that fails on a correct build is to switch the gate off.
-"""
+"""React dev builds inflate render cost, so the gate refuses them by two independent checks."""
 
 from __future__ import annotations
 
@@ -79,16 +56,7 @@ def _get(url: str, timeout: float = 20.0) -> tuple[int, bytes, str]:
 
 
 def _is_vite_client(status: int, body: bytes, content_type: str) -> bool:
-    """A 200 alone does NOT mean a dev server, and assuming it does breaks the gate.
-
-    Unsloth serves its built frontend as a single-page app, so ANY unknown path returns 200 with
-    `index.html` -- measured here against two production Unsloth instances, both of which answered 200 to
-    `/@vite/client` and were failed as dev servers by the first version of this check. A gate that
-    fails every correct build is a gate someone turns off.
-
-    A real Vite dev server serves that path as a JavaScript module. So the probe is: 200, AND the
-    body is script rather than the SPA's HTML fallback.
-    """
+    """A 200 alone proves nothing: the SPA serves index.html for any path, so the body must be script."""
     if status != 200 or not body:
         return False
     head = body[:512].lstrip().lower()

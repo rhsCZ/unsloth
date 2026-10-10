@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Shared descriptor-parameterized tests for studio/prebuilt_core.py.
-
-Runs the component-agnostic core against BOTH shipped descriptors -- the real
-whisper descriptor exported by install_whisper_prebuilt and a llama-flavored
-descriptor built here the way a hypothetical third ggml-family component would
-plug in (descriptor only, no installer module). Covers os/arch selection,
-checksum fail-closed behavior, extraction guards, the resolver payload, and the
-ops monkeypatch seam, so a new component gets this coverage for free.
-
-The llama installer's shipped release-plan machinery is intentionally NOT
-routed through the generic flow (its characterization suites pin it); the
-llama descriptor here exercises the canonical dialect a future migration
-would use, including the "no fallback backend -> report no prebuilt" policy.
-"""
+"""Component-agnostic prebuilt_core tests run against whisper's and a llama-flavored descriptor."""
 
 import contextlib
 import http.client
@@ -1040,10 +1027,7 @@ def test_a_download_that_drops_once_is_retried_to_completion(monkeypatch, tmp_pa
 
 
 def test_a_settle_does_not_hold_a_finished_launch_for_the_install_timeout(tmp_path):
-    """The catch-up runs on the FIRST update after an upgrade, for every existing user, and
-    it writes fields whose only effect is to spare the next run some work. A box where
-    another installer is running must not wait five minutes for that: it asks briefly, gives
-    up, logs, and reports the install it already validated."""
+    """A busy lock makes the settle give up quickly, not wait out the install timeout."""
     install_dir = tmp_path / "component"
     install_dir.mkdir()
     server = install_dir / "server"
@@ -1081,10 +1065,7 @@ def test_a_settle_does_not_hold_a_finished_launch_for_the_install_timeout(tmp_pa
 
 
 def test_a_kept_install_that_changes_under_the_lock_is_re_validated(tmp_path):
-    """The pre-lock keep re-checks the install under the lock before settling its marker.
-    A concurrent installer that swapped the tree in between makes that re-check fail, and
-    the keep then falls through to the locked path instead of reporting the release it
-    just saw replaced as installed."""
+    """A keep that changed under the lock must fall through to full re-validation, not report success."""
     install_dir = tmp_path / "component"
     install_dir.mkdir()
     server = install_dir / "server"

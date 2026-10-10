@@ -1,36 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Exact invocation counts via `Profiler.startPreciseCoverage`.
-
-This is the only non-statistical instrument in the tool. A CPU profile says "a
-frame was on the stack for 12% of samples"; precise coverage says "this function
-was entered exactly 4,110 times". That integer is what turns
-
-    36% of TaskDuration is unnamed script
-
-into
-
-    cloneChildFibers ran exactly 4,110 times = 6 renders x 685 blocks
-
-and the second statement is falsifiable against a structural quantity we
-measured separately. That is the whole point of the layer.
-
-THE COST, STATED UP FRONT: precise coverage makes V8 keep count-collecting
-bytecode alive, which suppresses the optimising tiers for covered functions.
-Every timing taken while coverage is on is therefore wrong, and wrong in a
-direction that varies per function. So this module DISCARDS TIME BY
-CONSTRUCTION: `CoverageSnapshot` carries no durations, and the only values it
-exposes across the boundary are integers. There is no flag to turn that off,
-because the moment a millisecond from this arm reaches a table, every number
-next to it becomes unsafe.
-
-`detailed: false` asks for function-level granularity rather than per-block
-ranges. The first range of a function covers the whole function, so its `count`
-is the invocation count of the function itself; block granularity would give a
-larger, less interpretable set of ranges and a much bigger payload for no gain
-here.
-"""
+"""Exact call counts via Profiler.startPreciseCoverage. Timings are discarded: coverage skews them."""
 
 from __future__ import annotations
 
@@ -54,12 +25,8 @@ class FunctionCount:
 
     @property
     def key(self) -> tuple[str, int, int]:
-        """Identity within one build.
-
-        Keyed on script and byte offsets, not on name. Minified code reuses
-        names aggressively and gives many functions no name at all, so a
-        name-keyed map silently merges unrelated functions.
-        """
+        """Keyed on script and byte offsets, since minified code reuses names and a name key merges
+        functions."""
         return (self.script_id, self.start_offset, self.end_offset)
 
     def label(self) -> str:
@@ -69,10 +36,7 @@ class FunctionCount:
 
 @dataclass
 class CoverageSnapshot:
-    """Counts taken between two `takePreciseCoverage` calls.
-
-    Deliberately has no time fields. Not "unused time fields": none.
-    """
+    """Call counts only, with no time fields; coverage skews timings, so none are carried."""
 
     functions: list[FunctionCount] = field(default_factory = list)
     script_urls: dict[str, str] = field(default_factory = dict)
@@ -136,14 +100,7 @@ def _parse(result: dict[str, Any]) -> CoverageSnapshot:
 
 
 class PreciseCoverage:
-    """Bracket a window with exact call counts.
-
-    Usage is deliberately two-phase. `takePreciseCoverage` returns counts
-    accumulated since coverage started, not since the last call, so a window is
-    measured as the difference of two snapshots. Reporting an absolute snapshot
-    as if it were a window is how "this ran 4,110 times during the stream"
-    becomes "this ran 4,110 times since the page loaded".
-    """
+    """takePreciseCoverage counts since coverage started, so a window is the difference of two snapshots."""
 
     def __init__(
         self,
@@ -204,13 +161,7 @@ class PreciseCoverage:
 
 
 def diff(before: CoverageSnapshot, after: CoverageSnapshot) -> CoverageSnapshot:
-    """Counts accrued between two absolute snapshots.
-
-    A function present in `after` but not in `before` is a script compiled
-    inside the window; its full count belongs to the window. A count that went
-    DOWN is impossible for a monotonic counter and means the two snapshots came
-    from different coverage sessions, so it fails rather than clamping.
-    """
+    """A count that drops means the two snapshots came from different sessions; diff raises, not clamps."""
     prev = before.by_key()
     out = CoverageSnapshot(is_delta = True, script_urls = dict(after.script_urls))
     for f in after.functions:
@@ -237,14 +188,7 @@ def diff(before: CoverageSnapshot, after: CoverageSnapshot) -> CoverageSnapshot:
 
 
 def assert_integers_only(payload: dict[str, Any]) -> None:
-    """Refuse to let a coverage-arm float reach a report.
-
-    Timings from a coverage arm are meaningless because optimised code is
-    suppressed. This is the boundary guard: it is called on anything derived
-    from a coverage run before it is written out, and it raises on any
-    non-integral number. It is a cheap check that makes a silent category error
-    into a loud one.
-    """
+    """Raises on any non-integer number, so a timing from a coverage arm cannot reach a report silently."""
 
     def check(node: Any, path: str) -> None:
         if isinstance(node, bool):
@@ -267,13 +211,7 @@ def assert_integers_only(payload: dict[str, Any]) -> None:
 
 
 def counts_for(snapshot: CoverageSnapshot, names: Iterable[str]) -> dict[str, int]:
-    """Total exact calls per function NAME.
-
-    Names are summed across every function carrying them, and the caller is told
-    how many distinct functions contributed, because "React has three functions
-    called `Zk`" is a fact the caller needs in order to know whether the number
-    means anything.
-    """
+    """Sums calls over every function sharing a name; names are not unique in minified code."""
     out: dict[str, int] = {}
     for name in names:
         matches = snapshot.find(name)

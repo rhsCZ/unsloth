@@ -1,15 +1,4 @@
-"""`import unsloth` must survive a missing bitsandbytes.
-
-device_type.py already tells the user "bitsandbytes is not installed - 4bit QLoRA
-unallowed, but 16bit and full finetuning works", and the gfx906 install path
-(#7354) deliberately removes the generic wheel because it carries no gfx906
-kernels. Any module-level `import bitsandbytes` on the import chain turns that
-into an unimportable package instead.
-
-peft's 4bit LoRA layer is exported only when bnb is importable, so
-`from peft.tuners.lora import Linear4bit` fails on the same hosts and is checked
-here too.
-"""
+"""A module-level bitsandbytes import on the import chain breaks import unsloth on hosts without bnb."""
 
 # Path | None needs this on Python 3.9.
 from __future__ import annotations
@@ -50,11 +39,8 @@ def _allow_bitsandbytes_gated(test: ast.expr) -> bool:
 
 
 def _scan(path: Path, module: str):
-    """Yield (lineno, source) for unguarded top-level imports.
-
-    Imports inside a `try`, or under an ALLOW_BITSANDBYTES branch, are guarded.
-    Other `if` bodies are not: the condition may well be true on a host without bnb.
-    """
+    """Only try blocks and ALLOW_BITSANDBYTES branches guard an import; plain ifs may be true
+    without bnb."""
     is_package = path.name == "__init__.py"
     package = module if is_package else module.rpartition(".")[0]
     tree = ast.parse(path.read_text(encoding = "utf-8"))

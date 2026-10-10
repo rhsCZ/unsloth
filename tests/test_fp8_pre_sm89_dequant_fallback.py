@@ -1,16 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""The block dequant fallback must divert on exactly the GPUs triton cannot compile fp8e4nv for.
-
-triton adds fp8e4nv (torch.float8_e4m3fn) to its supported dtypes at compute capability >= 89
-(third_party/nvidia/backend/compiler.py), so sm80 has to take the torch path or it raises
-instead of falling back. sm89 -- 4090, L40S, L4 -- is on the supported side of that line, and a
-major-only "< 9" test silently drops all of Ada onto a path that costs several times the memory.
-
-The capability is monkeypatched and the triton entry point is stubbed, so the routing cases run
-on any CUDA GPU including the pre-sm89 ones under discussion, which cannot compile the kernel
-they are asserted to select. Only the value comparison needs real fp8 hardware, and it skips.
-"""
+"""Route to torch below sm89, not below 9, so Ada stays on triton; triton needs sm89 for fp8e4nv."""
 
 import pytest
 import torch
@@ -48,14 +38,7 @@ def _route(
     scale,
     hip = None,
 ):
-    """Return "triton" or "torch" for a simulated device.
-
-    The kernel is stubbed rather than wrapped: these cases assert which branch is chosen, and
-    letting the real one run would need a GPU that can compile fp8e4nv, so every "routes to
-    triton" case would fail on exactly the pre-sm89 cards this file is about. Values are
-    covered separately by test_fallback_matches_the_triton_kernel_bit_for_bit, which skips
-    when the hardware cannot run both sides.
-    """
+    """Stubs the kernel so only the chosen branch is asserted; values come from a separate test."""
     from unsloth.kernels import fp8
 
     calls = []

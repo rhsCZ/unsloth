@@ -1,34 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""THE "NEW CHAT" CONTROL WAS NEVER COVERED. It was never HOVERED.
-
-`thread_reopen` reported NOT RUN on every run, with two diagnostics that were both accurate and
-both pointed the wrong way:
-
-    button[aria-label="New chat"] was not clickable: TimeoutError;
-    no point on the control hit-tests to it
-
-That reads like an overlay, or a collapsed sidebar, or a zero-size button, and it was none of
-them. Asking the live app directly returned a control that is 20x20 at (243, 319), `visibility:
-visible`, `display: flex`, one instance, nothing drawn over it -- and `pointer-events: none` with
-`opacity: 0`. Unsloth styles it as a hover-revealed action:
-
-    .sidebar-header-action { opacity-0 pointer-events-none }
-    .group\\/sidebar-header:hover .sidebar-header-action { opacity-100 pointer-events-auto }
-
-With no mouse over the header the button is laid out, passes every actionability check Playwright
-makes, and is transparent to every hit test. So `click()` waited out its timeout, the hit-test
-spread found no reachable point, and the harness substituted `page.goto` -- timing a full document
-navigation as though it were the client-side subtree rebuild the action exists to measure.
-
-The fixture below is the app's rule, not an approximation of it. Both halves are asserted: that
-the un-hovered control really is unreachable (otherwise the test proves nothing and would pass
-without the fix), and that hovering makes it clickable through the production
-`_click_or_navigate` path.
-
-    python -m pytest tests/studio/studiobench/scene/selftest/test_studiobench_hover_reveal_live.py -q
-"""
+"""New chat is hover-revealed, pointer-events none until hovered; the click must hover first."""
 
 from __future__ import annotations
 
@@ -152,11 +125,8 @@ def test_hovering_reveals_the_control_and_returns_a_point_on_it(page):
 
 
 def test_the_action_clicks_the_control_instead_of_substituting_a_navigation(page):
-    """THE BEHAVIOUR THAT CHANGED, end to end through the production path.
-
-    Before the fix this returned `path == "navigate"`, and `thread_reopen` correctly refused to
-    score it -- so the action reported NOT RUN on every single run.
-    """
+    """The action clicks the control rather than substituting page.goto, which thread_reopen would
+    refuse."""
     got = A._click_or_navigate(_ctx(page), SELECTOR, FALLBACK_URL)
     assert got.path == "click", got.reason
     assert got.navigated is False

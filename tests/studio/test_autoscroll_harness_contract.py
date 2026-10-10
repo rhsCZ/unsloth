@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The two #8483 harnesses must read every guard they record.
-
-Both files measure in a browser and then decide pass/fail in `main()`. A metric that is recorded
-but never compared is how a harness goes false-green: it keeps reporting the number that would
-have caught the regression while exiting 0. Three shipped that way already (an unasserted rAF
-budget, an unasserted click count, and the two guards below), so the rule is pinned here rather
-than left to review.
-"""
+"""The two autoscroll harnesses must compare every metric they record, or they go false-green."""
 
 import ast
 import types
@@ -22,22 +15,7 @@ STUDIO_TESTS = ROOT / "tests" / "studio"
 
 
 def _require_playwright_page():
-    """
-    Skip unless `from playwright.sync_api import Page` would actually work.
-
-    Two weaker guards were tried and both let this through. Checking the
-    top-level package passes because "playwright" resolves as a namespace
-    directory on the Repo tests (CPU) runner; checking "playwright.sync_api"
-    passes too, because that resolves as a namespace package as well. Only the
-    symbol the harnesses import is a real test of whether the import below can
-    succeed, so that is what is checked, and it is checked the way the harness
-    does it. The failure mode is a skip condition reported as
-
-      ImportError: cannot import name 'Page' from 'playwright.sync_api'
-      (unknown location)
-
-    on every branch, which costs an investigation each time it is seen.
-    """
+    """Test the symbol the harness imports, since a bare playwright package imports as a namespace."""
     sync_api = pytest.importorskip("playwright.sync_api")
     if not hasattr(sync_api, "Page"):
         pytest.skip(

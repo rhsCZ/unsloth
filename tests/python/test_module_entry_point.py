@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""`python -m unsloth_cli` must be the console script, byte for byte.
-
-Windows materialises the `unsloth` entry point as a generated, unsigned
-`unsloth.exe`, and an Application Control policy (AppLocker / WDAC / Smart App
-Control) denies it while the signed interpreter beside it keeps running, so the
-installer, the desktop app and locked-down users all need a route to the CLI
-that does not go through that executable (issue #8490).
-
-Two such routes exist and both must behave exactly like the console script,
-because everything above them assumes the swap is invisible:
-
-  * ``python -X utf8 -m unsloth_cli`` -- the public, documented one.
-  * ``python -X utf8 -c "<trampoline>"`` -- the internal one, used by
-    install.ps1, studio/src-tauri and the `studio run` respawn. It is spelled
-    out here rather than imported so a silent edit to the constant on either
-    side of the language boundary fails this test.
-
-`sys.argv[0] = 'unsloth'` is what buys that equivalence: unsloth_cli/__init__
-gates its entry-point behaviour (UTF-8 streams, the `-np<N>` rewrite) on the
-basename of argv[0], and typer/click derive the program name printed in every
-usage and error string from it.
-"""
+"""Module routes replace unsloth.exe, which Application Control blocks; argv[0] must stay 'unsloth'."""
 
 from __future__ import annotations
 
@@ -57,18 +36,7 @@ _REPO_PACKAGE = _REPO_ROOT / "unsloth_cli"
 
 
 def _installed_package_dir() -> Path | None:
-    """Where a child interpreter's `import unsloth_cli` actually lands.
-
-    The trampoline strips the working directory from sys.path, so a child
-    resolves the INSTALLED package and never this checkout by way of the cwd.
-    When the two differ, the subprocess cases below would be testing a released
-    wheel rather than the tree under test, so they skip instead of failing for
-    the wrong reason. The in-process and source-contract cases still run
-    everywhere.
-
-    The probe therefore has to strip the cwd exactly as the trampoline does, or
-    it would answer for a search path the tests never use.
-    """
+    """Probe must strip the cwd from sys.path as the trampoline does, or it checks the wrong search path."""
     probe = _run(
         [
             *INTERPRETER,
@@ -176,19 +144,7 @@ def test_the_program_name_is_unsloth_not_the_launcher(argv_builder):
 
 
 def test_the_attached_np_short_is_still_canonicalised(monkeypatch):
-    """`-np8` must reach typer as `-np 8`, not click's `-n -p 8`.
-
-    This is the one thing a naive __main__.py silently loses. The gate in
-    unsloth_cli/__init__ keys on argv[0], and `-m` imports the package to find
-    __main__, so the gate has already run and seen "-m" before __main__ can fix
-    argv[0]. The damage is quiet and severe: click reads `-np8` as `-n -p 8` and
-    `-p` is --port, so `unsloth studio run -np8` was observed serving on port 8
-    instead of 8888 with the parallel count dropped.
-
-    Driven in-process because the outward symptom is a bound socket: only a
-    started server reveals the wrong port, and the argv the CLI is handed is the
-    same fact one step earlier.
-    """
+    """`-np8` must become `-np 8` before typer; click otherwise reads `-p` as --port, moving the port."""
     import runpy
 
     import unsloth_cli
@@ -245,13 +201,7 @@ def test_help_matches_the_console_script_under_a_narrow_encoding(argv_builder):
 
 
 def test_the_module_entry_source_keeps_its_two_load_bearing_details():
-    """Runs everywhere, including where the subprocess cases skip.
-
-    The parity cases above need this checkout installed, so on a machine holding
-    a released wheel they would go quiet and a deleted __main__.py or a dropped
-    prog_name would sail through. Both details are invisible at a glance and
-    each has already been shipped wrong once, so pin them in the source too.
-    """
+    """Checks __main__.py's argv[0] and import order as source text, so it runs even when parity skips."""
     source = (_REPO_PACKAGE / "__main__.py").read_text(encoding = "utf-8")
 
     argv_assignment = source.find('sys.argv[0] = "unsloth"')
@@ -298,15 +248,7 @@ def test_the_advertised_module_route_ignores_a_shadowing_directory(tmp_path):
 
 
 def test_every_advertised_module_route_is_isolated():
-    """Runs everywhere: the commands we print must not lose their -I.
-
-    Source-contract, because they live in hint text rather than in code we can call,
-    and a copy that drops the flag reintroduces the shadowing silently.
-
-    Only the three that name the MANAGED interpreter. -I implies -s, so it hides a
-    `pip install --user` install from itself; __main__.py's docstring documents that
-    case and offers the -c bootstrap instead, so it is not held to this rule.
-    """
+    """Advertised commands naming the managed interpreter must keep `-I`, or a user-site copy shadows it."""
     advertised = {
         "studio/backend/routes/auth.py",
         "studio/backend/run.py",
@@ -323,13 +265,7 @@ def test_every_advertised_module_route_is_isolated():
 
 
 def test_the_module_docstring_documents_the_user_site_exception():
-    """-I implies -s, so the advertised form cannot see a --user install.
-
-    Measured: with the package in the user site, `python -m unsloth_cli` runs and
-    `python -I -m unsloth_cli` reports "No module named unsloth_cli". Anyone hitting
-    that has a launcher under %APPDATA% -- exactly the user-writable location a
-    default AppLocker policy denies -- so it is the population this route exists for.
-    """
+    """`-I` implies `-s`, so a --user install is invisible to the advertised `-I -m` form."""
     source = (_REPO_PACKAGE / "__main__.py").read_text(encoding = "utf-8")
     assert "pip install --user" in source
     assert "-I implies -s" in source
@@ -392,13 +328,7 @@ def test_the_working_directory_is_still_stripped_without_safe_path(tmp_path):
 
 
 def test_the_stream_reconfigure_happens_once_per_process(monkeypatch):
-    """The console script reaches it twice; the streams must only move once.
-
-    Off Windows the guard inside cannot short-circuit, because encoding = None
-    deliberately keeps the caller's encoding, so the second call reconfigured a
-    C-locale console again and flushed it again. Harmless, but it is a difference
-    from what the console script did before this file grew a second entry route.
-    """
+    """Both entry routes reach stream setup; off Windows its guard cannot stop a second reconfigure."""
     import unsloth_cli
 
     calls = []

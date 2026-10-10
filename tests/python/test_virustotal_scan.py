@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the advisory VirusTotal release asset scan.
-
-The scan is a sweep of the bundles `publish-release` uploaded, run in the
-`virustotal-scan` job after it. Those bundles are attached to a draft on the
-default dispatch and to a published release otherwise, which is why neither the
-job nor the summary heading claims a publication. It is not a gate and cannot
-hold a release back; Defender in the build job is the fail-closed check.
-
-Offline by design: every test injects a fake transport, so the suite never spends
-the account's 500/day quota and never uploads a build. The two behaviours worth
-protecting are the ones a release depends on:
-
-  - a missing API key must skip, never fail, or a contributor without the org
-    secret cannot publish at all,
-  - the bundles are 41-46 MB, over the 32 MB cap on `POST /files`, so the upload
-    must go through `GET /files/upload_url`. A regression to the plain endpoint
-    would fail on every asset.
-"""
+"""Bundles over the 32 MB cap must upload via `GET /files/upload_url`; a missing key must skip."""
 
 from __future__ import annotations
 
@@ -516,11 +499,7 @@ class TestRenderMarkdown:
 
 
 class TestFailClosedOnMalformedLookup:
-    """A 200 whose body does not parse must not be read as 'never seen'.
-
-    Returning None there is indistinguishable from a 404 and uploads the bundle,
-    which is an unnecessary disclosure of an unreleased build.
-    """
+    """An unparseable 200 must not be read as never seen, or the unreleased bundle is uploaded."""
 
     def test_malformed_200_does_not_upload(self, tmp_path):
         bundle = tmp_path / "draft.exe"
@@ -594,11 +573,7 @@ class TestDeadlineIsNotOverrunByThrottling:
 
 
 class TestSocketBudgetIsClampedToTheDeadline:
-    """The per-call socket timeout has to respect the scan deadline.
-
-    Otherwise a call that starts just before the deadline still blocks for the
-    full socket timeout and eats the cushion the step needs to write its summary.
-    """
+    """Socket timeouts are clamped to the scan deadline, or a late call eats the summary cushion."""
 
     def test_socket_timeout_is_clamped_to_remaining_budget(self):
         client, transport = _client({"x.example": (200, b"{}")})
@@ -622,11 +597,7 @@ class TestSocketBudgetIsClampedToTheDeadline:
 
 
 class TestMalformedUploadAcknowledgement:
-    """An accepted upload whose ack did not parse is a failed attempt.
-
-    Raising straight out reports the asset unavailable after we already paid the
-    disclosure cost of sending the bundle.
-    """
+    """An unparseable ack after an accepted upload is a failed attempt to retry, not an immediate error."""
 
     def test_malformed_ack_retries_with_a_fresh_signed_url(self, tmp_path):
         bundle = tmp_path / "big.exe"
@@ -843,20 +814,8 @@ class TestRetryBackoffRespectsTheDeadline:
 
 
 class TestWorkflowOrdering:
-    """The scan is a post-publish sweep, and the wiring that makes it run must hold.
-
-    There is no pre-publish gate here and there never was one that could block a
-    release: the scan is advisory by design (Defender in the build job is the
-    fail-closed check for Windows), and since #8194 it runs in its own
-    `virustotal-scan` job after `publish-release` rather than inline before the
-    upload. The bundles are already public by the time it runs.
-
-    What is still worth pinning is that the sweep cannot be quietly lost. A
-    deleted job, a dropped `needs`, an `if:` that never fires, a missing script
-    checkout or a `|| true` around the invocation would each leave the release
-    scanned by nothing while the workflow stayed green. The tests below assert
-    each of those against the workflow YAML.
-    """
+    """A dropped `needs`, a dead `if:` or a `|| true` would leave releases unscanned while CI stays
+    green."""
 
     def _workflow(self):
         yaml = pytest.importorskip("yaml")
@@ -888,11 +847,8 @@ class TestWorkflowOrdering:
 
     @staticmethod
     def _runner_temp(path):
-        """Normalise the three spellings of the runner temp dir to one token.
-
-        `with:` uses `${{ runner.temp }}` and `run:` uses `$RUNNER_TEMP`, so two
-        paths can name one directory and still compare unequal.
-        """
+        """Maps the spellings of the runner temp dir to one token, since `with:` and `run:` use
+        different ones."""
         normalised = " ".join(str(path).split())
         for spelling in ("${{ runner.temp }}", "${RUNNER_TEMP}", "$RUNNER_TEMP"):
             normalised = normalised.replace(spelling, "<RUNNER_TEMP>")

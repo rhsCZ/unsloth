@@ -1,31 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""
-The Mac bundle now carries four workflows' worth of phases in one job.
-
-Concurrent macOS jobs are capped at 5 account-wide and that pool is shared with
-unslothai/unsloth-zoo, so the queue, not the execution, is what a macOS slot
-costs: measured over the last 8 green main runs, the UI job executed 1154s
-behind a 17438s queue and the inference job 402s behind a 13252s queue. Folding
-the second into the first returns a slot.
-
-What that buys in queue it risks in isolation. Four phases that used to be four
-runners are now steps in one job, sharing a filesystem, a port space, an
-`$GITHUB_ENV` and a step-outcome graph. Each of the tests below is a way two
-phases can quietly stop testing what their name says while the job stays green:
-
-  - two phases on one port, where the second talks to the first's server;
-  - two phases on one log file, where the second erases the evidence of the
-    first's failure before the artifact upload runs;
-  - a phase with no `if:`, which inherits an implicit `success()` that now means
-    "every step of every earlier phase passed" rather than "the install worked";
-  - the uninstall phase stopping being last, which would leave the phases after
-    it with no Unsloth installed.
-
-None of those is loud. Ports and logs collide silently, an implicit `success()`
-reports as a skip rather than a failure, and a phase running after the uninstall
-fails with an error that names neither the uninstall nor the ordering.
-"""
+"""Folding phases into one macOS job shares ports, logs and outcomes, so each hazard is pinned."""
 
 from __future__ import annotations
 
@@ -42,14 +17,7 @@ BOOT_SCRIPT = REPO / ".github" / "scripts" / "boot-studio-api-only.sh"
 
 
 def _boot_defaults() -> tuple[str, str]:
-    """
-    The log path and PID variable boot-studio-api-only.sh uses when not told.
-
-    Read from the script rather than written down here, because the whole point
-    of the scan below is that an omitted `--log` is invisible: the collision this
-    guard exists to catch was two phases both taking this default, and neither
-    workflow line mentioned a file at all.
-    """
+    """Reads LOG and PID_VAR defaults from boot-studio-api-only.sh, since an omitted --log is invisible."""
     src = BOOT_SCRIPT.read_text(encoding = "utf-8")
     log = re.search(r'^LOG="([^"]+)"', src, flags = re.M)
     pid = re.search(r'^PID_VAR="([^"]+)"', src, flags = re.M)
@@ -85,13 +53,7 @@ def _script(step: dict) -> str:
 
 
 def _phase_starts(steps: list[dict]) -> list[int]:
-    """
-    Indices of the steps that boot a server, which is what delimits a phase.
-
-    Matched on "boot Unsloth" rather than "boot": several steps in this job are
-    named "Pass bootstrap password ...", and treating one of those as a phase
-    boundary splits a phase in half and reports its own port as a collision.
-    """
+    """Phase starts match 'boot unsloth' only; 'Pass bootstrap password' steps would split a phase."""
     names = [str(s.get("name") or "") for s in steps]
     boots = [i for i, n in enumerate(names) if "boot unsloth" in n.lower()]
     assert boots, "no server boot step found; every scan below would be vacuous"
@@ -126,11 +88,7 @@ def test_the_bundle_still_carries_every_phase(steps: list[dict]) -> None:
 
 
 def test_the_uninstall_phase_runs_last(steps: list[dict]) -> None:
-    """
-    It uninstalls Unsloth and asserts the machine is clean, which is the teardown
-    for the whole job. Anything needing an install after it fails for a reason
-    that names neither the uninstall nor the ordering.
-    """
+    """The uninstall step must be last in the job, or later steps run with no Unsloth installed."""
     names = [str(s.get("name") or "") for s in steps]
     uninstall = next(i for i, n in enumerate(names) if n == "Uninstall and verify clean")
     after = [n for n in names[uninstall + 1 :] if n]
@@ -142,13 +100,8 @@ def test_the_uninstall_phase_runs_last(steps: list[dict]) -> None:
 
 
 def test_no_two_phases_bind_the_same_port(steps: list[dict]) -> None:
-    """
-    The phases boot servers in sequence and each kills its own, so a shared port
-    is harmless only for as long as the step order stays exactly as it is. That
-    is a property of the ordering, and the ordering is the thing an edit changes.
-    A phase that finds a previous phase's server still listening does not error:
-    it connects, and tests the wrong model.
-    """
+    """A shared port is harmless only in step order; a leftover server makes a phase test the wrong
+    model."""
     # Group by phase: one phase names its port in several steps.
     starts = _phase_starts(steps)
     by_phase: dict[str, set[int]] = defaultdict(set)
@@ -168,11 +121,7 @@ def test_no_two_phases_bind_the_same_port(steps: list[dict]) -> None:
 
 
 def test_no_two_phases_write_the_same_server_log(steps: list[dict]) -> None:
-    """
-    The artifact upload publishes these by name. Two phases sharing one path means
-    the later phase truncates the earlier one's log, so a run that went red in an
-    early phase uploads the log of a later phase that passed.
-    """
+    """A shared server log path lets a later phase truncate the earlier phase's log before upload."""
     # Grouped by phase: the health wait is given the log path to read, not write.
     starts = _phase_starts(steps)
     default_log, _ = _boot_defaults()
@@ -197,13 +146,7 @@ def test_no_two_phases_write_the_same_server_log(steps: list[dict]) -> None:
 
 
 def test_every_absorbed_phase_step_says_when_it_runs(steps: list[dict]) -> None:
-    """
-    A step with no `if:` gets an implicit `success()`, which is job-wide. When these
-    phases were their own workflows that meant "the install worked". Bundled behind
-    the UI and API phases it means "and every Playwright test passed", so one flaky
-    browser run silently drops all the inference coverage -- as a skip, which reads
-    green.
-    """
+    """Without an explicit `if:` a step gets a job-wide implicit success(), so one flaky run skips it."""
     names = [str(s.get("name") or "") for s in steps]
     start = names.index("Phase 1 environment")
     end = names.index("First update should be a no-op (prebuilt already validated)")
@@ -217,11 +160,7 @@ def test_every_absorbed_phase_step_says_when_it_runs(steps: list[dict]) -> None:
 
 
 def test_the_absorbed_phases_keep_the_host_offload_opt_out(job: dict) -> None:
-    """
-    Set at job level so a phase added later inherits it. Without it the load
-    returns HTTP 400 and the probe reports an unexpected status several layers
-    from the cause -- which is how the first draft of this bundle broke.
-    """
+    """Set at job level so later phases inherit the opt-out; without it the load returns HTTP 400."""
     assert (job.get("env") or {}).get("UNSLOTH_ALLOW_HOST_OFFLOAD") == "1", (
         "the bundled Mac job no longer opts out of the #8883 host-offload guard. "
         "GitHub's macOS runners have a paravirtual Metal device, so every phase here "

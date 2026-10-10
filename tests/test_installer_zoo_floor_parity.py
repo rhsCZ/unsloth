@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The installer's `--no-deps` unsloth-zoo specs are a floor in their own right, so they must
-match pyproject.toml's.
-
-`uv pip install --no-deps` never reads unsloth's metadata, so on those paths the
-`unsloth-zoo>=...` written on the command line is the ONLY thing deciding which zoo the user
-ends up with. When pyproject.toml moves and the installers do not, a no-torch install happily
-resolves a zoo that pyproject.toml already rejects, and the defect the floor was raised for is
-still shipped. That is not hypothetical: main carried `unsloth-zoo>=2026.9.3` in the
-installers while pyproject.toml said `>=2026.9.4`.
-
-The with-deps sites are deliberately NOT checked. There the resolver intersects the
-command-line spec with unsloth's own metadata, so pyproject.toml is already the binding floor
-and a lower spec on the command line changes nothing.
-
-Reads files only, so this runs on the Windows and macOS runners too.
-"""
+"""Installer --no-deps unsloth-zoo floors must match pyproject.toml; uv never reads unsloth metadata."""
 
 from __future__ import annotations
 

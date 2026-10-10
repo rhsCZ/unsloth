@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""create_stopping_criteria must not assume CUDA.
-
-Before the fix these failed with a cuda/cpu device mismatch, and at construction on a
-non-CUDA build.
-"""
+"""create_stopping_criteria must not assume CUDA; non-CUDA builds failed at construction."""
 
 import types
 

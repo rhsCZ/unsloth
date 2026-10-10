@@ -1,36 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""NULL and SPIKE: the two arms that decide whether any other arm in the batch may be quoted.
-
-An ablation harness has two failure modes that look exactly like results.
-
-    IDENTICAL WHERE IT SHOULD DIFFER. Every arm reads the same. That is reported as "no mechanism
-    dominates", when what actually happened is that the instrument cannot resolve anything at
-    this magnitude. The SPIKE arm settles it: a known d milliseconds of work is injected, and if
-    the instrument cannot see d, it could not have seen the mechanism either.
-
-    DIFFERENT WHERE IT SHOULD NOT. Two identical configurations read 12% apart, and every arm in
-    the batch inherits that 12% as apparent signal. The NULL arm settles it: the same build is
-    run twice under two different arm ids, and whatever spread that produces is the noise floor
-    for this batch on this machine.
-
-BOTH ARE NON-DROPPABLE, IN EVERY BATCH. Not once at the start of the session, not on the tester's
-machine last week. In every batch, because the thing they measure -- the machine's current
-ability to resolve a difference -- changes with thermal state, with background load, and with
-which browser build got installed this morning.
-
-THE RULE: one arm must read the SAME and one arm must read DIFFERENT, or nothing in that batch is
-quotable. Not "quotable with a caveat". A batch where the null control drifted and a batch where
-the spike went unseen are both batches in which the numbers are unrelated to the app.
-
-WHAT GETS PRINTED. The RECOVERY FRACTION (observed delta divided by the milliseconds actually
-burned, measured inside the page rather than assumed from the requested d) and the DETECTION
-FLOOR (the smallest injected cost this batch could actually see). A recovery fraction of 0.4 says
-the instrument sees 40% of what is there, which means every ablation number in the batch is an
-underestimate by a factor the reader can now apply. That is a far more useful thing to print than
-a confidence interval on a number whose scale is unverified.
-"""
+"""NULL and SPIKE run in every batch; if either misreads, nothing in that batch is quotable."""
 
 from __future__ import annotations
 
@@ -113,14 +84,7 @@ def spike_init_script(spike_ms: float) -> str:
 
 
 def null_arm(arm_id: str = "NULL", *, reference_id: str = "shipping") -> Arm:
-    """A byte-identical rebuild under a different arm id. It must read EQUAL.
-
-    Nothing about the build changes. The arm exists so that the harness measures the same thing
-    twice under two labels and has to admit how far apart the two answers came out. Its potency
-    counter is deliberately trivial (the run happened at all), because there is no treatment to
-    detect: a NULL arm that "did not fire" is a NULL arm that did not run, which is caught by the
-    session count rather than by a knob.
-    """
+    """A byte-identical rebuild under another arm id, which must read EQUAL; its spread measures noise."""
 
     return Arm(
         arm_id = arm_id,
@@ -265,18 +229,7 @@ class CalibrationVerdict:
 def evaluate_batch(
     *, null_deltas: Sequence[Measure], spike_observations: Sequence[Mapping[str, Any]]
 ) -> CalibrationVerdict:
-    """Decide whether this batch may be quoted at all.
-
-    `null_deltas` are the differences between each NULL arm and its reference, in ms per update.
-    `spike_observations` is one mapping per spike arm with keys `spike_ms`, `burned_ms_per_update`
-    (a Measure, read from inside the page) and `observed_delta` (a Measure).
-
-    The noise floor is the largest absolute NULL delta. The detection floor is the smallest spike
-    that was RECOVERED, where recovered means the observed delta both cleared the noise floor and
-    landed within a factor of two of what was actually burned. A batch where no spike was
-    recovered has no detection floor and is not quotable: the instrument is blind at every
-    magnitude tested, and an arm reading "no difference" in that batch is not evidence.
-    """
+    """Noise floor is the largest NULL delta; a batch with no recovered spike is not quotable."""
 
     usable_nulls = [m for m in null_deltas if m.has_reading]
     if not usable_nulls:

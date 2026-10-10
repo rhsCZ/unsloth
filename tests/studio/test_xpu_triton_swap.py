@@ -1,25 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Generic Triton must not shadow torch's XPU Triton.
-
-Both distributions own the top-level ``triton`` package, and resolving unsloth against a
-pinned ``+xpu`` torch pulls both (uv reports ``pytorch-triton-xpu 3.5.0`` alongside
-``triton 3.7.1``), so the CUDA-oriented build can land last and ``torch.compile`` then loads
-the wrong library on an Intel GPU.
-
-The swap lives in ``install_python_stack.py`` rather than ``install.sh`` because install.sh
-runs setup.sh, which runs this module: one copy covers the fresh install and
-``unsloth studio update``, which never touches install.sh.
-
-Three things here are easy to get wrong and are asserted by execution rather than by reading:
-
-* the ORDER. Fetch, then uninstall, then install. Uninstalling last deletes the shared paths
-  the XPU build just wrote, because those paths are in generic triton's own RECORD.
-* the venv has no pip. ``uv venv`` is created without ``--seed``, so a fresh venv cannot run
-  ``pip download`` at all, and without a bootstrap the swap silently never happens.
-* the pin is ONE-SHOT. ``UNSLOTH_TORCH_INDEX_FAMILY=xpu ./install.sh`` leaves nothing behind
-  in the environment, so a later plain ``unsloth studio update`` must recognise the installed
-  ``+xpu`` wheel instead. See TestTheInstalledWheelIsThePin.
-"""
+"""Generic triton must not shadow torch's XPU Triton; the swap runs fetch, uninstall, then install."""
 
 import os
 import subprocess
@@ -35,11 +15,7 @@ STACK = REPO / "studio/install_python_stack.py"
 
 
 def _load_real_index_env_scrub():
-    """The module's OWN _install_env_for_cmd, so the scrub is executed, not re-implemented.
-
-    It is defined below the slice the swap comes from, so it is pulled in separately rather
-    than stubbed -- a hand-written copy here would agree with a broken original forever.
-    """
+    """Pulls in the module's real _install_env_for_cmd, so the scrub is executed, not re-implemented."""
     import ast as _ast
     import atexit as _atexit
     import functools as _functools
@@ -347,14 +323,7 @@ class TestFailedSwapIsNotSurvivable:
 
 
 class TestTheInstalledWheelIsThePin:
-    """`UNSLOTH_TORCH_INDEX_FAMILY=xpu ./install.sh` is a ONE-SHOT pin.
-
-    It is gone from the environment by the next plain `unsloth studio update`, yet that
-    update's dependency pass can pull generic triton back in (unsloth declares triton as a
-    core dep). Gating the swap on the pin alone therefore leaves every already-installed
-    XPU venv shadowed forever. The +xpu wheel on disk is the durable signal, and setup.sh
-    already raises the bitsandbytes floor off exactly that.
-    """
+    """The installed +xpu wheel is the durable signal; the UNSLOTH_TORCH_INDEX_FAMILY pin is one-shot."""
 
     def test_swaps_with_no_pin_when_torch_is_the_xpu_wheel(self, monkeypatch, tmp_path):
         log = _run(
@@ -402,14 +371,7 @@ class TestTheInstalledWheelIsThePin:
 
 
 class TestTheFetchIgnoresTheUsersIndexEnvironment:
-    """`pip download` honours PIP_* exactly like `pip install`, and that breaks the pin.
-
-    PIP_NO_INDEX makes pip ignore --index-url outright, and PIP_EXTRA_INDEX_URL /
-    PIP_FIND_LINKS are consulted IN ADDITION to it. Either the fetch fails, leaving generic
-    triton shadowing the XPU build, or the wheel arrives from an index the pin never named.
-    Every other pinned install in this file already routes through _install_env_for_cmd; this
-    one is a raw subprocess.run, so it has to ask for the same scrub explicitly.
-    """
+    """pip download honours PIP_* like pip install, so the fetch must scrub them or the pin breaks."""
 
     @pytest.mark.parametrize(
         "var, value",
@@ -459,14 +421,7 @@ class TestTheFetchIgnoresTheUsersIndexEnvironment:
 
 
 class TestADeadDriverIsNotAFlavourMismatch:
-    """A wedged `import torch` under a SUPPORTED +xpu wheel is a driver, not a bad wheel.
-
-    _ensure_xpu_torch used to read every inconclusive probe as "repair", and it runs at two
-    repair points: on a stalled Arc host that is two 90-second hangs plus two force-reinstalls
-    of the whole multi-gigabyte trio, every single update, fixing nothing. The disk answers
-    the question the probe cannot, so an unsupported or missing wheel still repairs while a
-    supported one gets the driver warning.
-    """
+    """A hung import torch on a supported +xpu wheel is a driver fault: warn, don't force-reinstall it."""
 
     @pytest.mark.parametrize(
         "label, supported",
@@ -537,13 +492,7 @@ def test_the_swap_is_wired_in_at_every_repair_point():
 
 
 def test_the_swap_runs_after_every_torch_migration():
-    """Order, not just presence.
-
-    The swap keys off the INSTALLED +xpu label. Run between two migrations, an explicit CPU pin
-    over an XPU venv gets XPU triton installed and then torch replaced with the CPU build under
-    it: a CPU environment whose top-level triton package is the XPU implementation, with its
-    declared generic triton gone. Asserted on the AST so a reflow cannot fake it.
-    """
+    """Must run after every torch migration: a CPU pin over an XPU venv otherwise strands XPU triton."""
     import ast as _ast
 
     def _migration_call(statement):
@@ -594,13 +543,7 @@ def test_install_sh_does_not_carry_a_second_copy():
 
 
 class TestCpuRepairSeesAnXpuWheel:
-    """An explicit CPU pin must be able to replace a +xpu wheel.
-
-    `_ensure_cpu_torch` classifies the installed build and returns early on "already a CPU
-    build". An XPU wheel sets neither `torch.version.cuda` nor `.hip`, so before this it read
-    as CPU and the pin was silently ignored. The predicate is executed here, not re-implemented:
-    it is pulled out of the module source so a future edit to it is what this test sees.
-    """
+    """An XPU wheel sets neither torch.version.cuda nor .hip, so it reads as CPU and the pin is ignored."""
 
     @staticmethod
     def _classify(
@@ -664,12 +607,7 @@ class TestCpuRepairSeesAnXpuWheel:
 
 
 class TestCpuPinSurvivesAWedgedImport:
-    """A hung `import torch` must not turn an explicit CPU pin into a no-op.
-
-    The classifier probe has a 90s timeout, and on a wedged Intel driver `import torch` blocks
-    in the SYCL runtime until it fires -- which is exactly the host the pin is meant to
-    rescue. Returning there meant the one case that needed the repair never got it.
-    """
+    """A wedged import torch must not turn an explicit CPU pin into a no-op; that is when repair matters."""
 
     @staticmethod
     def _fn(name):

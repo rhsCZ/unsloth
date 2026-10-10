@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""`grouped_gemm(gather_indices = None)` must survive when nothing permutes.
-
-The signature defaults `gather_indices` to None and the wrapper only asserts it
-is present when `permute_x` or `permute_y` is set, but it then normalised it
-with an unconditional `gather_indices.view(-1)`, so the documented default died
-with `AttributeError: 'NoneType' object has no attribute 'view'` (#8627). The
-same unconditional dereference sat in `grouped_gemm_dX`, which reads
-`gather_indices.shape[0]` to size dX, so the backward pass failed identically
-once the forward was fixed.
-
-Calling the kernel on activations that are already in expert-contiguous order is
-a documented use of `permute_x = False`, and none of the three Triton kernels
-touch `gather_indices_ptr` outside their `PERMUTE_X or PERMUTE_Y` branches, so
-the caller should not have to pass a `torch.arange` the kernel never reads.
-"""
+"""gather_indices may be None when nothing permutes; forward and dX must not dereference it."""
 
 import sys
 from pathlib import Path

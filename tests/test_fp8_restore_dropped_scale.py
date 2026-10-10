@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Restoring dropped block-fp8 `weight_scale_inv` tensors on load (#6200).
-
-Some block-scale fp8 checkpoints leave a Linear (e.g. `mlp.gate_proj`) unconverted, so its raw
-quantized values land in a plain bf16 weight and its `weight_scale_inv` is dropped, producing a
-garbage un-scaled weight. `_restore_dropped_fp8_scales` dequantizes such orphaned weights in place
-using the scale from the checkpoint. Runs offline on CPU with synthetic checkpoints.
-"""
+"""Dequantizes block-fp8 Linears a checkpoint left unconverted, using its dropped weight_scale_inv."""
 
 import json
 import os

@@ -40,19 +40,7 @@ def _step(workflow, job, name):
 
 
 def test_the_release_build_restores_but_never_saves_the_rust_cache():
-    """No platform may save, because this job holds the signing credentials.
-
-    Windows was already restore-only, to keep a long target-cache upload from blocking
-    the publisher once the signed artifacts were ready. Every leg is restore-only now
-    for a security reason instead: GitHub lets pull requests restore caches written on
-    the default branch, so this was the only job in the organisation where a run holding
-    TAURI_SIGNING_PRIVATE_KEY, APPLE_* and AZURE_* wrote a cache a contributor could
-    read. That is the 2026-09-21 cargo-miri shape, where miri serialised the whole
-    environment under target/ and CI cached it.
-
-    A `save-if` that names a platform is what this guards against: it reads as a
-    performance knob, and the next platform added inherits saving by default.
-    """
+    """The release build must never save its Rust cache, since the job holds the signing credentials."""
     cache = _step(_workflow(), "build", "Rust cache")
     assert cache["with"]["workspaces"] == "studio/src-tauri -> target"
     assert cache["with"]["save-if"] is False, (
@@ -379,12 +367,7 @@ def test_a_missing_debian_arm64_signature_prevents_manifest_publication(tmp_path
 
 
 def test_the_two_linux_legs_never_stage_the_same_asset_name(tmp_path):
-    """Both Linux legs bundle a deb and its signature.
-
-    publish-release merges every leg's artifact into one flat directory, so a shared name
-    is an overwrite rather than a clash: x64 users would get the arm64 signature and their
-    in-app update would fail verification, with nothing red anywhere.
-    """
+    """Linux legs need distinct asset names, since publish-release merges them into one directory."""
     staged = {}
     for artifact, arch in (("linux-x64", "amd64"), ("linux-arm64", "arm64")):
         leg = tmp_path / artifact
@@ -515,10 +498,7 @@ def _stage_windows_leg(workflow, tmp_path: Path, artifact: str) -> list[str]:
 
 
 def test_the_two_windows_legs_never_stage_the_same_asset_name(tmp_path):
-    """publish-release downloads every leg's artifact into one directory with
-    merge-multiple, so if both Windows legs staged Unsloth-Desktop-Windows.exe one
-    would silently overwrite the other and the release would ship one architecture
-    twice. The x64 name is also load bearing: it is the published download link."""
+    """Windows legs need distinct names: merge-multiple overwrites; the x64 name is the download link."""
     workflow = _workflow()
     x64 = _stage_windows_leg(workflow, tmp_path, "windows-x64")
     arm64 = _stage_windows_leg(workflow, tmp_path, "windows-arm64")
@@ -532,11 +512,7 @@ def test_the_two_windows_legs_never_stage_the_same_asset_name(tmp_path):
 
 
 def test_no_matrix_leg_shares_a_fixed_artifact_name_with_another(tmp_path):
-    """upload-artifact v4 and later refuse a duplicate name within a run, so a step with a
-    literal name that more than one leg reaches fails the second leg outright and takes the
-    release with it. Two Windows legs on the same `windows-latest` platform make
-    `matrix.platform` too coarse to gate such a step; only `matrix.artifact` is unique.
-    """
+    """upload-artifact v4 rejects duplicate names in a run, so only matrix.artifact is unique."""
     workflow = _workflow()
     legs = {
         entry["artifact"] for entry in workflow["jobs"]["build"]["strategy"]["matrix"]["include"]
@@ -557,10 +533,7 @@ def test_no_matrix_leg_shares_a_fixed_artifact_name_with_another(tmp_path):
 
 
 def test_the_updater_manifest_points_windows_arm64_at_its_own_bundle(tmp_path):
-    """Tauri looks an update up by {os}-{arch}. Without a windows-aarch64 entry an
-    ARM64 install either never sees an update, or takes the x86_64 one and replaces a
-    native install with an emulated build. Both Windows bundles end in .exe.sig, so
-    this also pins the selection: the two entries must not collapse onto one file."""
+    """Tauri looks up updates by os-arch, so windows-aarch64 needs its own entry, not the x86_64 one."""
     workflow = _workflow()
     result, _ = _run_create_release(workflow, tmp_path)
     assert result.returncode == 0, result.stderr
@@ -717,15 +690,7 @@ def _guarded_bodies(script, header):
 
 
 def test_dead_defender_cmdlets_do_not_skip_the_bundle_scan():
-    """Dead cmdlets must not read as "no scanner"; only a dead engine may.
-
-    The escape hatch added for a one-off runner incident became the permanent
-    path: the Defender WMI provider and service RPC endpoint have been down on
-    every Windows runner since 2026-08-06, so `Get-MpComputerStatus` throws and
-    three releases shipped unscanned. MpCmdRun.exe answers independently of the
-    cmdlets, so an unavailable cmdlet surface may only cost the configuration
-    checks, never the scan itself.
-    """
+    """Unavailable Defender cmdlets may only skip config checks, never the MpCmdRun scan itself."""
     scan = _step(_workflow(), "build", "Scan Windows bundles with Defender")["run"]
 
     unavailable = scan.split("$cmdletsDown = [bool]$unavailable", 1)
@@ -782,15 +747,7 @@ def test_dead_defender_cmdlets_do_not_skip_the_bundle_scan():
 
 
 def test_a_sample_quarantined_mid_scan_passes_the_positive_control():
-    """A sample that vanishes during the scan is a live engine, not a missing one.
-
-    Defender remediates asynchronously and MpCmdRun opening the sample is itself
-    the trigger, so the write can succeed, `Test-Path` can see the file, and
-    real-time protection can quarantine it mid-scan. MpCmdRun then reports no
-    threat, `$controlPassed` stays false, and with the cmdlets down the skip branch
-    exits 0, publishing every bundle unscanned on a runner whose scanner just
-    proved itself. Only a sample that survives means no scanner.
-    """
+    """A sample quarantined mid-scan means a live engine; only a surviving sample proves no scanner."""
     scan = _step(_workflow(), "build", "Scan Windows bundles with Defender")["run"]
 
     body = _guarded_bodies(scan, "if (Test-Path $eicarPath) {")[0]

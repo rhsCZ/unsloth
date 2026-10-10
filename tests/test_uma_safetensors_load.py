@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
-"""Unit tests for the UMA safetensors clone-then-move fast load.
-
-The module loads in isolation with a fake ``transformers.modeling_utils``. The
-CUDA correctness check needs a GPU; gating, passthrough, idempotency and opt-out
-are GPU-free. The gate is lazy (wrapper-time), so the wrapper installs
-everywhere and passes through when it's off.
-"""
+"""Tests the UMA safetensors fast load; the gate is read at wrapper time, so off means passthrough."""
 
 from __future__ import annotations
 

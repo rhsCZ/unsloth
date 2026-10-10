@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A ref is a branch, a tag OR a commit, and the installer has to take all three.
-
-CONTRIBUTING-perf.md tells a reader to measure an already-merged change as `merge commit` against
-`merge commit^1`. Both of those are commit shas, and `git clone --branch <sha>` resolves against
-the remote's advertised branches and tags: it exits with `Remote branch <sha> not found in upstream
-origin` before anything is installed. The reused-clone path was broken the same way by
-`reset --hard origin/<sha>`, which is not a name that exists either.
-
-Run against a local repository over the filesystem, so the test needs no network.
-
-    python -m pytest tests/studio/studiobench/runtime/selftest/test_studiobench_lifecycle_refs.py
-"""
+"""Installer refs may be a branch, tag or commit sha; `git clone --branch` rejects a sha."""
 
 from __future__ import annotations
 

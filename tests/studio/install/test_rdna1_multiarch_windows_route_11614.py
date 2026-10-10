@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""RDNA 1 on Windows installs from AMD's multi-arch index (unslothai/unsloth#11614).
-
-gfx1010/1011/1012 route there in every spelling and nothing else does; the trio is pinned
-to one release tag below the Windows torch ceiling; the name tables claim RDNA 1 as
-supported; the PowerShell installers carry the same arches and tag.
-"""
+"""gfx1010/1011/1012 on Windows route to AMD's multi-arch index, pinned below the torch ceiling."""
 
 import importlib.util
 import re
@@ -242,10 +237,7 @@ class TestPowerShellMirrorsThePin:
 
 
 class TestTheWindowsRepairSiteRunsForRdna1:
-    """The `studio update` repair in _ensure_rocm_torch reaches the multi-arch trio for a
-    gfx1010 host whose venv holds a CPU torch. Exercised end to end because the message
-    there once called _bare_gfx(), a name the function later rebinds as a local, and no
-    test ran that line."""
+    """End-to-end because the repair message once called _bare_gfx(), a name rebound later as a local."""
 
     def test_a_gfx1010_host_on_cpu_torch_installs_the_multiarch_trio(self, monkeypatch):
         from unittest.mock import MagicMock, patch

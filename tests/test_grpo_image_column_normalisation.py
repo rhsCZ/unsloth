@@ -112,10 +112,7 @@ def test_guard_names_the_column_and_the_issue():
 
 
 def test_the_guard_reads_every_row_not_only_the_first():
-    """One list cell anywhere puts that row's images and placeholders out of step, and a
-    dataset mixing a bare image with a list is exactly the shape that puts the list somewhere
-    other than row 0. Reading only `inputs[0]` would let it through to the processor, which is
-    the outcome this guard exists to replace."""
+    """A list cell in any row desyncs images from placeholders, so every row must be checked."""
     a, b = _Img("a"), _Img("b")
     for rows in (
         [{"image": [a, b]}, {"image": a}],
@@ -312,10 +309,7 @@ class _VllmTrainer:
 
 
 def test_the_guard_refuses_a_multi_image_row_only_in_legacy_vllm_server_mode():
-    """A legacy TRL's vLLM server path hands the raw cells to VLLMClient.generate, which does
-    `[pil_to_base64(img) for img in images]` over the top level entries, so a cell holding two
-    images reaches `list.save(...)`. Colocate mode and the no vLLM path both go through the
-    processor, which this change fixed, so they must keep working."""
+    """Legacy vLLM server mode passes raw cells to VLLMClient.generate, so list cells reach list.save()."""
     a, b = _Img("a"), _Img("b")
     rows = [{"image": [a, b]}, {"image": a}]
 

@@ -13,22 +13,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""Version skew that used to surface deep in a forward pass, named at import.
-
-Three reports, one shape: pip installs a combination it has no specifier to
-reject, and the user sees an error from the wrong layer.
-
-#8933: transformers 5.10 beside a torch without `torch.float8_e8m0fnu`, so
-`import unsloth` ended on a bare `AttributeError: module 'torch' has no
-attribute 'float8_e8m0fnu'`.
-
-#2760: a repackaged triton whose CUDA driver shim includes Python.h without
-defining PY_SSIZE_T_CLEAN, so the first kernel launch raised `SystemError:
-PY_SSIZE_T_CLEAN macro must be defined for '#' formats`.
-
-#3130: one temporary patch raised a SyntaxError and took `import unsloth` down
-with it, because the caller tolerated only ValueError and TypeError.
-"""
+"""pip installs version combinations no specifier rejects, so unsloth names the skew at import."""
 
 import ast
 import pathlib
@@ -46,12 +31,7 @@ _UNSLOTH = pathlib.Path(import_fixes.__file__).resolve().parent
 
 
 def _access_from(module_name, attribute):
-    """Read `torch.<attribute>` from a frame that belongs to `module_name`.
-
-    The fix keys off the module the ACCESS was made from, so the frame has to be
-    real; a call through a helper defined in this file would be attributed to
-    the test.
-    """
+    """The fix keys off the module the access came from, so the frame must be real."""
     import torch
 
     module = types.ModuleType(module_name)
@@ -95,11 +75,7 @@ def test_a_dependency_reaching_for_a_missing_dtype_gets_the_upgrade(patched_torc
 
 
 def test_an_unknown_attribute_is_diagnosed_without_prescribing_a_direction(patched_torch):
-    """The table names the release; it is not the gate. A dtype added after this release
-    must still be diagnosed, but an absent attribute is not evidence that torch is the
-    older half: an older dependency reaching for a RETIRED torch API lands here too, and
-    telling that user to upgrade torch is the opposite remedy. So the no-floor branch
-    names both directions and prescribes neither."""
+    """An unknown torch attribute may mean a retired API, not old torch, so name both directions."""
     with pytest.raises(import_fixes.UnslothTorchTooOldError) as raised:
         _access_from("transformers.integrations.finegrained_fp8", "unsloth_future_dtype")
 
@@ -148,12 +124,7 @@ def test_user_and_torch_frames_are_left_exactly_as_torch_wrote_them(patched_torc
 def test_the_upgrade_names_the_accelerator_it_found(
     patched_torch, monkeypatch, torch_version, family
 ):
-    """pip's --index-url defaults to pypi.org, which ships one build per release: the
-    default CUDA one. So an unqualified upgrade silently moves a ROCm or XPU user off
-    their accelerator, and the message has to say so. It must NOT paste the installed
-    tag into --index-url: each index carries only the releases built for it, and the
-    reported torch 2.6.0+cu124 case would then get a command with no candidate at all
-    (download.pytorch.org/whl/cu124 stops at torch 2.6.0; 2.7 shipped on cu126/cu128)."""
+    """Never paste the installed tag into --index-url; that index may carry no candidate to upgrade to."""
     monkeypatch.setattr(patched_torch, "__version__", torch_version)
 
     with pytest.raises(import_fixes.UnslothTorchTooOldError) as raised:
@@ -177,10 +148,7 @@ def test_the_upgrade_names_the_accelerator_it_found(
 def test_a_vendor_rocm_torch_is_sent_back_to_its_own_source(
     patched_torch, monkeypatch, torch_version
 ):
-    """unsloth's own AMD extras install torch-2.10.0+rocm7.2.0.lw.gitb6ee5fde straight from
-    repo.radeon.com. That tag is no index name, so there is no --index-url that would keep
-    the accelerator, and an unqualified upgrade would put the default CUDA build over a
-    working Radeon one. Naming the source is the only advice that holds."""
+    """A vendor ROCm torch has no index name, so advise its own source, not the default CUDA build."""
     monkeypatch.setattr(patched_torch, "__version__", torch_version)
 
     with pytest.raises(import_fixes.UnslothTorchTooOldError) as raised:
@@ -268,15 +236,7 @@ def test_hasattr_and_getattr_default_are_unaffected(patched_torch):
 
 
 def test_a_failed_probe_does_not_re_read_the_installed_metadata(patched_torch, monkeypatch):
-    """A missing attribute is not always fatal, so the wrapper has to stay cheap.
-
-    `hasattr(torch, name)` and `getattr(torch, name, default)` are how these same
-    libraries feature-probe, and both reach the wrapper. Resolving a distribution
-    version walks sys.path and costs about 850 microseconds on a normal install,
-    which is a thousand times a failed lookup, so it is asked once per package and
-    remembered. Counted rather than timed: a timing threshold on a shared runner is
-    a flake.
-    """
+    """Missing attributes are routine feature probes, so the version lookup is cached per package."""
     calls = []
 
     def counting_version(package):
@@ -355,10 +315,7 @@ def test_the_diagnosis_is_installed_before_anything_imports_transformers():
 
 
 def test_the_rocm_id_table_is_configured_before_torch_is_imported():
-    """`patch_torch_missing_attribute_error` imports torch, so it has to come after the
-    ROCm table. `configure_amdgpu_asic_id_table_path` sets AMDGPU_ASIC_ID_TABLE_PATH, which
-    is how ROCm resolves AMD device names, and a torch that has already brought up libdrm
-    would not see the discovered table."""
+    """The ASIC id table must be configured before torch imports, or an already-loaded libdrm misses it."""
     source = (_UNSLOTH / "_gpu_init.py").read_text(encoding = "utf-8")
     table = source.find("configure_amdgpu_asic_id_table_path()")
     install = source.find("patch_torch_missing_attribute_error()")
@@ -502,10 +459,7 @@ def test_a_shim_with_no_hash_format_is_not_named(monkeypatch, tmp_path):
     ids = ["block", "line"],
 )
 def test_a_hash_format_only_in_a_comment_is_not_a_finding(monkeypatch, tmp_path, comment):
-    """A repackaged shim can keep the old call around as a comment. The compiler never
-    sees it, so the active parser is the one without a '#' and the first kernel launch
-    does not fail. Naming it would promise a failure that cannot happen and recommend a
-    force reinstall for nothing."""
+    """A hash format that only appears in a comment is not a finding; the compiler never sees it."""
     source = comment + "\n" + _UNGUARDED_SHIM.replace('"ss#ii"', '"sslii"')
     spec, _ = _fake_triton(tmp_path, source)
     monkeypatch.setattr(sys, "version_info", (3, 12, 3))
@@ -640,10 +594,7 @@ def test_the_installed_triton_is_not_flagged():
     ],
 )
 def test_the_macro_only_counts_when_it_is_in_effect(monkeypatch, tmp_path, prefix, suffix, named):
-    """CPython requires the define BEFORE Python.h. A comment, an `#undef`, a string
-    literal and a define placed after the include all leave the '#' formats unsafe, so
-    the substring test that accepted them suppressed the warning on a shim that still
-    dies at the first kernel launch."""
+    """Macro counts only if defined before Python.h; a comment, undef, string or later define does not."""
     spec, driver = _fake_triton(tmp_path, prefix + _UNGUARDED_SHIM + suffix)
     monkeypatch.setattr(sys, "version_info", (3, 12, 3))
     monkeypatch.setattr(import_fixes.importlib.util, "find_spec", lambda name: spec)
@@ -653,10 +604,8 @@ def test_the_macro_only_counts_when_it_is_in_effect(monkeypatch, tmp_path, prefi
 
 
 def test_the_reinstall_command_names_the_distribution_that_owns_triton(monkeypatch, tmp_path):
-    """triton-windows, pytorch-triton-rocm and pytorch-triton-xpu all provide the
-    `triton` import name, so `importlib.metadata.version("triton")` raises on them (the
-    "unknown" version) and `pip install --force-reinstall triton` installs a CUDA build
-    over a platform one instead of repairing it."""
+    """Platform triton wheels share the triton import name, so a forced reinstall installs the CUDA
+    build."""
     spec, _driver = _fake_triton(tmp_path, _UNGUARDED_SHIM)
     monkeypatch.setattr(sys, "version_info", (3, 12, 3))
     monkeypatch.setattr(import_fixes.importlib.util, "find_spec", lambda name: spec)
@@ -774,11 +723,7 @@ def _isolated_run_temporary_patches(
     logger,
     outcomes = None,
 ):
-    """`_run_temporary_patches` alone, with its module globals supplied.
-
-    Loading it out of the file rather than importing unsloth.models._utils keeps
-    this a test of the control flow and not of a full model-stack import.
-    """
+    """Loads _run_temporary_patches from source, testing control flow without a full model-stack import."""
     path = _UNSLOTH / "models" / "_utils.py"
     source = path.read_text(encoding = "utf-8")
     tree = ast.parse(source)
@@ -866,10 +811,7 @@ def test_a_callable_with_no_readable_signature_is_still_called():
 def test_the_provider_lookup_still_works_without_packages_distributions(
     monkeypatch, installed, version
 ):
-    """`importlib.metadata.packages_distributions` is Python 3.10+, and pyproject still
-    admits 3.9. There the import raises, the mapping comes back empty, and the message
-    used to report `triton==unknown` and recommend the CUDA `triton` over the platform
-    build, which is the exact substitution this helper exists to prevent."""
+    """Python 3.9 lacks packages_distributions; the provider lookup must not fall back to plain triton."""
     import importlib.metadata as metadata
 
     def _absent():
@@ -905,10 +847,7 @@ def test_the_provider_fallback_reports_unknown_when_nothing_is_installed(monkeyp
 
 
 def test_the_mlx_branch_installs_the_torch_diagnosis():
-    """_gpu_init.py is the only other installation site and the MLX branch never reaches
-    it, so an Apple Silicon host with the old-torch/new-transformers pair would get the
-    bare AttributeError this PR exists to replace. The branch already mirrors three other
-    _gpu_init fixes for exactly this reason."""
+    """The MLX branch skips _gpu_init.py, so it must install the torch-too-old diagnosis itself."""
     source = (_UNSLOTH / "__init__.py").read_text(encoding = "utf-8")
     mlx_branch = source[source.index("if _IS_MLX:") : source.index("import unsloth_zoo")]
     assert "patch_torch_missing_attribute_error" in mlx_branch, (
@@ -944,12 +883,7 @@ def _fake_distribution(files_by_name):
     "order", [["triton", "pytorch-triton-xpu"], ["pytorch-triton-xpu", "triton"]]
 )
 def test_the_provider_that_ships_the_offending_file_is_the_one_named(monkeypatch, tmp_path, order):
-    """Providers coexist: install_python_stack.py's _ensure_xpu_triton documents generic
-    triton beside pytorch-triton-xpu on the same paths, and packages_distributions reports
-    both without saying which one wrote the file. Taking the first entry can name the CUDA
-    provider for an XPU install and hand the user a command that replaces the Triton that
-    works -- the substitution this helper exists to avoid. The answer must not depend on
-    the order the mapping happens to return."""
+    """Providers can share paths, so name the one that shipped the offending file, not the first listed."""
     driver = tmp_path / "backends" / "intel" / "driver.c"
     driver.parent.mkdir(parents = True)
     driver.write_text("x", encoding = "utf-8")
@@ -1013,13 +947,7 @@ def test_a_file_claimed_by_two_providers_is_settled_by_torchs_backend(monkeypatc
     ids = ["stale-first", "current-first"],
 )
 def test_a_rename_leftover_is_settled_by_what_torch_requires(monkeypatch, tmp_path, order):
-    """Both spellings name the backend, so the family rule cannot separate them.
-
-    An upgrade to a torch that installs `triton-xpu` leaves `pytorch-triton-xpu`'s
-    dist-info behind, both RECORDs claim the driver, and recommending the stale one would
-    install it over the provider this torch actually requires. torch declares that name
-    itself, which is the only record that settles it.
-    """
+    """A leftover dist-info from a rename claims the same driver; torch's own requirement decides."""
     driver = tmp_path / "backends" / "intel" / "driver.c"
     driver.parent.mkdir(parents = True)
     driver.write_text("x", encoding = "utf-8")
@@ -1111,13 +1039,7 @@ def test_an_unownable_path_falls_back_to_the_previous_answer(monkeypatch, tmp_pa
 
 
 def test_the_upgrade_moves_the_companions_that_pin_torch_exactly(patched_torch, monkeypatch):
-    """`pip install --upgrade` upgrades the packages it is given and nothing else.
-
-    Every torchvision wheel requires an exact `torch==X.Y.Z`, so naming torch alone moves
-    torch and leaves the torchvision built against the old one: the "operator
-    torchvision::nms does not exist" mismatch that `_torchvision_repair_command` in this
-    same file exists to repair, created by following the remedy.
-    """
+    """Upgrade torchvision with torch: wheels pin torch exactly, else torchvision::nms breaks."""
     monkeypatch.setattr(
         import_fixes,
         "importlib_version",

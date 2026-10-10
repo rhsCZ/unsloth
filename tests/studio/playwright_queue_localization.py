@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Queue view localization and the editor's send-shortcut chord; no backend needed.
-
-Run: python tests/studio/playwright_queue_localization.py
-PW_ENGINE=webkit selects WebKit.
-"""
+"""No backend needed; checks queue view localization and the editor's send-shortcut chord."""
 
 import os
 from playwright.sync_api import expect, sync_playwright

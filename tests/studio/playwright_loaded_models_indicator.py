@@ -1,28 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Cross-browser checks for the loaded-models indicator.
-
-The four /status endpoints are stubbed with page.route, so this runs on any
-host: no GPU, no model download, no llama.cpp build. That is the point -- the
-payload shapes the card has to survive come from hardware most CI runners do not
-have (AMD reporting itself as "cuda", Apple's "mps", the sd.cpp engine that omits
-model_kind), and stubbing is the only way to exercise all of them anywhere.
-
-What genuinely needs a real engine, and is therefore checked here rather than in
-the node suite:
-
-  * the position restore. The card is position:fixed and stores absolute
-    viewport coordinates, so one saved on a wide monitor lands off screen on a
-    laptop -- taking its own drag handle and collapse button with it. That needs
-    a real ResizeObserver, a real layout and a real localStorage.
-  * pointer capture during a drag.
-  * that polling actually stops when the preference is off.
-
-Run: BASE_URL, STUDIO_OLD_PW and STUDIO_NEW_PW as the other suites take them.
-STUDIO_PLAYWRIGHT_BROWSER selects chromium (also Chrome/Edge/WebView2),
-firefox, or webkit (also Safari and the Linux WebKitGTK Tauri embeds).
-"""
+"""Loaded-models card on stubbed /status; position restore, drag and polling need a real engine."""
 
 from __future__ import annotations
 
@@ -91,11 +70,7 @@ def step(s: str) -> None:
 
 
 def appears_within(page, selector: str, window_ms: int) -> bool:
-    """Watch a window in which `selector` must NOT show up; True the moment it does.
-
-    The window keeps its full length when nothing happens, which is what a "stays closed" or
-    "no card" check asserts, but a card that does appear ends it at once instead of at the end.
-    """
+    """Returns True as soon as selector attaches; a False after the full window means it stayed absent."""
     try:
         page.wait_for_selector(selector, state = "attached", timeout = window_ms)
     except Exception:
@@ -104,11 +79,7 @@ def appears_within(page, selector: str, window_ms: int) -> bool:
 
 
 def watch(page, predicate, window_s: float, what: str) -> None:
-    """Poll `predicate` for up to `window_s`, returning early once it is true; never raises.
-
-    The caller's own check() decides pass or fail from the state afterwards, so a timeout here
-    is not a verdict. Polls through the page so the stubbed-route handlers keep running.
-    """
+    """Polls through the page so stubbed routes keep running; a timeout here is not a verdict."""
     try:
         wait_until(predicate, timeout_s = window_s, what = what, interval_s = 0.1, page = page)
     except TimeoutError:
@@ -270,19 +241,7 @@ def why_no_card(
     waited: str = "",
     reads_before: int | None = None,
 ) -> str:
-    """What the page actually looked like when a presence check went the wrong way.
-
-    "FAILED: card survives /hub" reports only that the assertion failed, which is the one thing already known. These
-    are the states that separate the causes, and each one names a different bug: a redirect or a route that never
-    resolved (pathname), an SPA that never mounted (root_children 0), an auth slip that the /login guard in `boot`
-    cannot catch on a mid-suite navigation (auth_token), a preference that was not seeded (show_pref), a poll that
-    never fired (status_reads), and a bundle that threw (console).
-
-    `Runtime.status_reads` counts every read since boot, so the raw total says nothing about the page that just
-    failed: a route whose poll never fired still reports whatever boot and the earlier routes accumulated. Callers
-    that navigate pass the count they took before the navigation and the report names the reads THIS page issued,
-    scoped the same way `console_errors` already is.
-    """
+    """Explains a failed presence check; status reads count only from the caller's pre-navigation mark."""
 
     def probe(expression: str):
         try:
@@ -312,14 +271,7 @@ def why_no_card(
 
 
 def await_selector(page, selector: str, timeout: int) -> str:
-    """Wait, and name what ended the wait rather than swallowing it.
-
-    The exception has to be swallowed -- the caller's own presence assertion is what decides pass or fail, so raising
-    here would turn a product verdict into a traceback. But swallowing it ANONYMOUSLY conflates two different
-    outcomes: a TimeoutError means the card really was not there within the budget, while anything else (a closed
-    target, a navigation error) means the run failed for a reason that has nothing to do with the card. Returning the
-    name lets the detail below say which.
-    """
+    """Returns what ended a failed wait, so a timeout is told apart from a closed page or other error."""
     try:
         page.wait_for_selector(selector, timeout = timeout)
     except Exception as exc:
@@ -339,17 +291,7 @@ def await_selector_state(page, selector: str, state: str, timeout: int) -> str:
 
 
 def counted(page, selector: str) -> int | None:
-    """Attached nodes matching `selector`, or None when the page cannot be asked.
-
-    The point of naming what ended a wait is lost if the next line re-raises it. A closed
-    target or a navigation error fails `await_selector` and then fails `locator.count()` the
-    same way, so the caller never reached its own `check()` and the diagnostic it had just
-    collected went unprinted, replaced by the traceback this file exists to avoid.
-
-    None is not zero and must not be read as it: zero is a page that answered and had no
-    card, None is a page that could not answer, and only the first is a verdict about the
-    card.
-    """
+    """Returns None, not zero, when the page cannot answer; zero means it answered and had no match."""
     try:
         return page.locator(selector).count()
     except Exception:

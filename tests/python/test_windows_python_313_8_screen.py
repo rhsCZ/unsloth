@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Windows must not build the venv on a CPython that cannot import torch.
-
-CPython 3.13.8 carries python/cpython#139783: inspect.getsourcelines() drops a
-function body when a decorator is followed by a comment, which is the shape of
-the @_overload_method blocks torch/nn/modules/rnn.py parses at import time, so
-`import torch` raises IndentationError (#7803).
-
-Windows reaches such an interpreter differently from install.sh: uv is handed a
-resolved path rather than a version, so it never picks the patch itself, but
-Find-CompatiblePython matches on the *minor* version and would happily return an
-already-installed 3.13.8. Remove-SkippedPython is what turns that into "not
-found", so the caller installs $PythonFallbackFullVersion instead.
-
-The function is extracted from install.ps1 and executed under pwsh rather than
-reimplemented, so the test cannot drift from the text the installer runs.
-"""
+"""CPython 3.13.8 breaks import torch (inspect drops bodies); Remove-SkippedPython must screen it."""
 
 from __future__ import annotations
 
@@ -47,11 +32,7 @@ def _extract(pattern: str) -> str:
 
 
 def _blocks() -> tuple:
-    """The skip list and the screen, straight out of install.ps1.
-
-    Hoisted out of the f-strings below: a backslash inside an f-string expression
-    is a syntax error before 3.12, and this repo is 3.9+ (ruff targets py311).
-    """
+    """Hoisted out of f-strings, since a backslash in an f-string expression fails before Python 3.12."""
     return (
         _extract(
             r"    # Patch releases the stack cannot run.*?"

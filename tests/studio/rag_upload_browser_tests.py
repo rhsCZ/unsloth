@@ -37,11 +37,7 @@ def wait_state(predicate):
 
 
 def _snapshot(page):
-    """What the page and the fixture server held when a case failed.
-
-    A wait that expires reports only its own timeout, which says nothing about which side
-    stopped: the upload never posted, the stream never ended, or the rows were dropped.
-    """
+    """Capture page and fixture state on failure; a timed-out wait does not show which side stalled."""
     snapshot = {}
     try:
         snapshot["page"] = page.evaluate(

@@ -14,12 +14,7 @@ from tests.version_compat._fetch import fetch_text, first_match, function_params
 
 
 def _super_init_call(source: str, class_name: str) -> ast.Call | None:
-    """The ``super().__init__(...)`` Call node inside ``class_name``'s __init__.
-
-    Parsed rather than grepped: a substring search over the class body also sees the
-    names quoted in the legacy_kwargs table, so it passes whether or not the real call
-    uses keywords.
-    """
+    """Found by AST, not grep: a substring search also matches the legacy_kwargs table's quoted names."""
     for node in ast.walk(ast.parse(source)):
         if not (isinstance(node, ast.ClassDef) and node.name == class_name):
             continue
@@ -257,17 +252,7 @@ def test_bnb_version_parseable(tag: str):
 
 
 def test_bnb_optimizer2state_options_are_not_passed_positionally(tag: str):
-    """QGaLoreAdamW8bit must not pass percentile_clipping / block_wise by position.
-
-    bitsandbytes 0.50.0 removed both from Optimizer2State.__init__ (PR #1871), so positions
-    10 and 11 became max_unorm and skip_zeros. Arity still matched, nothing raised, and the
-    optimiser silently received max_unorm=100 / skip_zeros=True. Since Q-GaLore zeroes
-    p.data before the update, param_norm was 0, the unorm clip scaled every update to 0 and
-    projected parameters stopped moving entirely.
-
-    Checked here rather than at runtime because the failure is invisible on the installed
-    version alone: it needs the signature from a version the test environment does not have.
-    """
+    """Pass percentile_clipping and block_wise by keyword; bnb 0.50 shifted their positions silently."""
     src = fetch_text(
         "bitsandbytes-foundation/bitsandbytes",
         tag,

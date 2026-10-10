@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Production chrome/overlay regression scene, with Tauri IPC stubbed.
-
-Runs its own Vite server, or uses SMOKE_URL when supplied.
-Set SMOKE_EVIDENCE_DIR to keep screenshots and measured facts.
-SMOKE_EXPECT_BLUR=0 captures the same scene against the unmodified base.
-No backend, inference, or real native window actions are used.
-"""
+"""Chrome/overlay scene with Tauri IPC stubbed; SMOKE_EXPECT_BLUR=0 captures the unmodified base."""
 
 import json
 import os

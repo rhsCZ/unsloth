@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Source contracts for the "stop running chats" confirmation.
-
-The dialog is what a user reads before losing in-flight work, so two things have
-to hold: it counts conversations rather than generation handles, and it describes
-what confirming actually does. There is no frontend test runner in this repo, so
-these read the source the way the other frontend contracts here do.
-"""
+"""The stop-running-chats dialog counts conversations, not generation handles, and says what it does."""
 
 from __future__ import annotations
 

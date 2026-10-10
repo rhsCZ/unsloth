@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A reply that never finished is a FAILED cell, not a completed one carrying a note.
-
-`_drain_stream` reports rather than raises -- "wait for the run to end, or say plainly that it did
-not" -- and the value it reported was written to `row["stream"]` and read by nothing. No gate, no
-report column, no `--assert-liveness` check, no exit code. So the state this tool exists to catch,
-the app still generating three times past its own cadence AND 120 s beyond that with the whole
-film already run, came back as `completed: true`, `ok` in the summary and exit 0, with the cell's
-actions and its frame windows scored and paired into the A/B ratio against an arm that DID finish.
-
-That is the crash-beats-limp rule inverted: a build that cannot finish reads as a build that had
-nothing to say. Every other "it would not do what it claimed" in this harness already fails --
-`stop_generation` that never stops sets `expect_ok = False`, an action that did not run is a
-liveness problem -- and this was the one that did not.
-
-Driven through the shipped `CellRunner.run` and `_run_inner`, with the seams that leave this
-process stubbed where they cross it. `_drain_stream` itself is the REAL one, over a real loop on a
-fake clock, so what it returns is observed rather than asserted from a table.
-"""
+"""A reply that never finished streaming must fail the cell, not complete it with a note."""
 
 from __future__ import annotations
 
@@ -94,12 +77,7 @@ class _Page:
 
 
 class _Pacer:
-    """A pacer that serves, in full, whatever it was asked to load.
-
-    It synthesises one completed `StreamStats` per `load`, which is what a healthy cell produces:
-    the planned-stream check in `_run_inner` reads those, so a stub that recorded nothing would
-    fail every cell here for a reason this file is not about.
-    """
+    """A stub pacer that completes every load in full; the planned-stream check reads its StreamStats."""
 
     def __init__(self, expected_ms: float) -> None:
         self.expected_ms = expected_ms
@@ -146,11 +124,7 @@ SCENE_ACTIONS = (
 
 
 class _SceneRunner:
-    """The film, reduced to the rows a film writes: three timed actions and one frame window.
-
-    It writes them through the recorder the shipped `SceneRunner` is handed, so the scoring path
-    below is the real one reading real rows rather than a table this test asserts against itself.
-    """
+    """A stub scene runner writing three timed actions and one frame window to the real recorder."""
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
@@ -194,14 +168,7 @@ class _SceneRunner:
 
 
 def _seed(plan):
-    """What `Seeder.seed` hands back. Zero messages, so the thread wait is the empty-page one.
-
-    The two markers are `None` for the same reason `messages` is 0: the readiness gate takes the
-    empty-page path here, and a marker it never asserts on must not be invented. They are PRESENT
-    rather than absent because `SeededThread` declares them and `_wait_for_thread` reads
-    `last_marker` unconditionally; a stub without them fails on the attribute instead of on the
-    behaviour these tests are about.
-    """
+    """Zero messages, and present-but-None markers: _wait_for_thread reads last_marker unconditionally."""
 
     return types.SimpleNamespace(
         thread_id = "t1",

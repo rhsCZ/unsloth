@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The payload scan behind `studio_install_damaged`.
-
-Both directions: real damage has to be seen, and the trees our own setup
-rewrites must not be mistaken for it, since a false positive repairs a healthy
-venv on every run.
-"""
+"""Payload scan for studio_install_damaged: real damage is seen, our own rewritten trees are not."""
 
 import csv
 import io
@@ -657,11 +652,8 @@ def _installer_helper_probe() -> str:
     ids = ["absent-keeps-the-fast-path", "truncated-forces-repair", "raises-forces-repair"],
 )
 def test_an_unimportable_helper_forces_the_dependency_pass(tmp_path, contents, expected):
-    """The one file whose damage silences every check that follows it.
-
-    Absent keeps the old escape: telling it from an old tree needs a RECORD walk
-    here, and the CLI reports it as studio_install_manifest_missing anyway.
-    """
+    """An unimportable helper must force the dependency pass, since its damage silences every later
+    check."""
     import subprocess
 
     script_dir = tmp_path / "studio"

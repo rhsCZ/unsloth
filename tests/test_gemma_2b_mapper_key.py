@@ -1,16 +1,4 @@
-"""Regression test for the duplicate ``unsloth/gemma-2b-bnb-4bit`` key in
-``unsloth/models/mapper.py``.
-
-The 4bit instruction-tuned Gemma 2B entry was accidentally keyed with the base
-model's repo name, so ``__INT_TO_FLOAT_MAPPER`` held two identical
-``unsloth/gemma-2b-bnb-4bit`` keys. Python keeps only the last value for a
-duplicate literal key, so the base 4bit repo resolved to the *instruct* model,
-the base model lost its reverse (4x-faster) mapping, and
-``unsloth/gemma-2b-it-bnb-4bit`` was never registered at all.
-
-``mapper.py`` has no imports, so we exec it directly and inspect the built
-mappers without importing ``unsloth`` (which requires a GPU).
-"""
+"""A duplicate gemma-2b-bnb-4bit key made the base model resolve to the instruct model."""
 
 import os
 

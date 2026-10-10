@@ -1,13 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""The AMD ROCm image's host-side plumbing: `docker/run.sh --rocm`,
-`docker/build.sh --rocm`, and the container entrypoint's refusal paths.
-
-None of these need an AMD GPU. run.sh and build.sh are driven with a recording
-`docker` stub and a staged /dev tree (the UNSLOTH_DEV_ROOT idiom); the
-entrypoint is driven the same way with stub `rocm-smi` and `python` binaries,
-so every message a user can hit before torch loads is checked here.
-"""
+"""Drives run.sh, build.sh and the entrypoint with stub docker, rocm-smi and python: no AMD GPU."""
 
 import os
 import shutil
@@ -881,11 +874,8 @@ class TestRocmEntrypoint:
         assert 'UNSLOTH_ROCM_GFX_ARCH="${ROCM_GFX}"' in install
 
     def test_the_studio_image_is_published_from_the_base_digest_with_the_same_refs(self):
-        """docker/Dockerfile.studio-rocm is built by the same run as the base, on the
-        base by digest (a tag can already be a newer run's) with the refs the base
-        baked, and takes the base's tags with a -studio leaf under the same gates.
-        Neither tag set moves until both digests exist: a :latest that moved while the
-        Studio build then failed would leave :studio on the previous base."""
+        """Neither tag set moves until both digests exist, so a failed Studio build cannot strand
+        :studio."""
         import yaml
 
         wf = yaml.safe_load(open(_WORKFLOW, encoding = "utf-8"))

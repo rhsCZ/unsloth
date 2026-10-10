@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""studio/setup.sh and unsloth_cli must answer the same question the same way.
-
-The contract this branch adds is that `unsloth studio update` reuses the cache the install
-recorded, and it is implemented twice: once in POSIX shell for a standalone `bash
-studio/setup.sh`, once in Python for the CLI and the desktop updater. Whenever the two
-disagree about one cache directory, one of them picks a cache the other would have rejected,
-which is the divergence the branch exists to remove.
-
-tests/python/test_cross_platform_parity.py pins the SOURCE of the installers against each
-other. This pins BEHAVIOUR: it runs both real implementations over the same fixtures and
-fails on any disagreement. Every rule here was added to one side and missed on the other at
-least once during review, which is why the check is a test rather than a convention.
-"""
+"""`studio/setup.sh` and `unsloth_cli` must pick the same uv cache, so both run over the same fixtures."""
 
 from __future__ import annotations
 

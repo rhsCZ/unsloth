@@ -1,9 +1,4 @@
-"""CPU-only AST checks on the export API surface in save.py / _compressed_quantize.py.
-
-These catch wiring regressions - a save_method that stops dispatching, a public method that
-stops being attached to the model, or an export subprocess that becomes shell-unsafe - without
-importing torch or touching a GPU. Pure `ast`, so they run in milliseconds on CPU-only CI.
-"""
+"""Pure ast checks of export wiring, so they run on CPU-only CI without importing torch."""
 
 from __future__ import annotations
 

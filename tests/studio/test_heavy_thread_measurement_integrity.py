@@ -1,33 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The heavy-thread harness must not report a number it did not measure.
-
-`test_heavy_thread_harness_contract.py` pins the SHAPE of the harness: every recorded metric is
-printed, no verdict rests on a Chromium-only counter. This file pins its ARITHMETIC and its
-ORDERING, which is the other way a measurement harness goes false-green: it drives the page, it
-prints a plausible table, and the numbers in it are of something else.
-
-Five defects this file exists to keep out, each one previously live:
-
-  * the frame recorder deciding which action a scheduled callback belongs to from a shared
-    `running` flag, so an action that starts before the previous action's rAF has fired inherits
-    that callback, charges the between-action gap to itself as a frame, and runs two recorder
-    loops from then on;
-  * `median()` dropping a null repetition instead of failing on it, which turns "the menu never
-    opened once in three tries" into a clean three-repetition median;
-  * a settle loop that timed out being indistinguishable, in the table and in the verdict, from a
-    metric the engine does not support;
-  * `menu open+close ms` being the sum of two independently double-rAF-floored timings while only
-    one floor was subtracted from it;
-  * the per-repetition fixture rebuild waiting for the syntax highlighter BEFORE mounting the tool
-    result panes it has to highlight, and never restoring the message the delete action destroys.
-
-The browser-side pieces run under node against the harness's own JS, sliced out of the Python
-source verbatim, on a virtual clock: the frame pump is explicit, so "the next action began before
-the previous action's callback fired" is a deterministic interleaving rather than a race someone
-has to be lucky to catch.
-"""
+"""Pins arithmetic and ordering: the harness must not print plausible numbers it did not measure."""
 
 from __future__ import annotations
 
@@ -51,19 +25,7 @@ HARNESS_SOURCE = (Path(__file__).resolve().parent / "playwright_heavy_thread.py"
 
 
 def _sync_api_stub() -> types.ModuleType:
-    """A `playwright.sync_api` that answers for every name a harness may import off it.
-
-    The stub lands in `sys.modules` at collection time and stays there for the rest of the
-    session, so it is not just this file's import that reads it: any later test that imports a
-    harness gets these names instead of the real package's. A stub that spelled out only the
-    names THIS file's harness needs therefore broke the others -- `playwright_strip_ansi_smoke`
-    also imports `Page` and `expect`, and got `cannot import name 'Page' from
-    'playwright.sync_api' (unknown location)` in the CPU job, from a stub two files away.
-
-    Every name resolves to a callable that raises, so the stub can satisfy an import without a
-    harness quietly measuring a browser that is not there. Dunders are left to fail: pytest and
-    inspect probe those, and answering them makes the stub look like a package.
-    """
+    """Stub that answers any playwright.sync_api name with a raising callable; dunders left to fail."""
     module = types.ModuleType("playwright.sync_api")
 
     def __getattr__(name: str):
@@ -81,17 +43,7 @@ def _sync_api_stub() -> types.ModuleType:
 
 
 def _load_harness():
-    """Import the harness module without needing a browser.
-
-    The module imports `playwright.sync_api` at the top for `sync_playwright`, which nothing in
-    this file calls. Stubbing it keeps these tests runnable in the CPU test job, where the
-    Playwright package is not installed, rather than skipping the arithmetic along with the
-    browser.
-
-    The probe imports the name off the submodule rather than the top-level package: a partial
-    install leaves `playwright` importable while `playwright.sync_api` resolves to an empty
-    namespace, which is the same failure with a longer traceback.
-    """
+    """Stubs playwright.sync_api so the CPU job, which lacks Playwright, can import the harness."""
     os.environ.setdefault("PW_ART_DIR", str(TEMP_ROOT / "artifacts"))
     if "playwright.sync_api" not in sys.modules:
         try:
@@ -612,12 +564,7 @@ class StubLocator:
 
 
 class StubPage:
-    """Records the order of the calls one_repetition() makes, and nothing else.
-
-    The question this answers is an ORDERING one -- does the highlighter gate run after the panes
-    it has to highlight are mounted, and is the destroyed message put back before the next action
-    measures the thread -- so a call log is the whole instrument.
-    """
+    """A call log of one_repetition(): the test asks about ordering, so the log is the whole instrument."""
 
     ACTION_METRICS = {
         "metrics": {"wall_ms": 1.0, "frames": 1, "worst_frame_ms": 1.0},
@@ -743,15 +690,7 @@ def floor_row(
 
 
 def test_reopen_subtracts_only_the_observation_floor() -> None:
-    """A CONSTANT, and one. Reopen is driven by a React state update, so the count check straight
-    after openThread() always still sees the unmounted tree and the loop always waits out one
-    paint before a finished reopen can be observed at all. That wait is the instrument.
-
-    Every further wait is not. The poll shares the rAF queue with the application's own commits,
-    so on a progressive-mount build those waits are the application mounting rows and the time in
-    them is real convergence latency. Reading the measured `paintWaits` here subtracted all of
-    them, which is a subtraction that grows with thread size and differs between the two arms of
-    a comparison -- it removed ~800ms from one arm's 300K cell and ~33ms from the other's."""
+    """Reopen subtracts only its one observation wait; later paint waits are real mount latency."""
     floored = HARNESS.declared_floor("reopen ms")
     assert not callable(floored), "reopen ms reads its floor from the row again"
     assert floored == 1 == HARNESS.REOPEN_OBSERVATION_FLOOR, floored
@@ -763,10 +702,7 @@ def test_a_matching_floor_declaration_is_accepted() -> None:
 
 
 def test_a_multi_commit_reopen_is_not_a_mis_declared_floor() -> None:
-    """The progressive mount window mounts a long thread over several frames, so `ms` -- which
-    runs until messageCount() reaches `before` -- spans one paint wait per widening commit. Ten is
-    an ordinary reading at 100K, not a harness fault, and reporting it as one stops the run after
-    every measurement has already been taken."""
+    """A progressive mount spans one paint wait per widening commit, so ten waits is not a harness fault."""
     assert HARNESS.floor_declaration_problems(floor_row(10)) == []
 
 
@@ -779,12 +715,7 @@ def test_subtracting_a_floor_the_reopen_never_paid_is_a_failure() -> None:
 
 
 def test_the_progressive_mount_frames_stay_in_the_reopen_number() -> None:
-    """End to end, and the regression this file exists to hold.
-
-    Two arms of one comparison at the same size: a single-commit build that pays one wait and a
-    progressive-mount build that pays twenty-four for the same 220 messages. Subtracting the
-    measured count made the slower arm read as the faster one. Only the shared observation floor
-    comes out, so the arms stay ordered the way the clock ordered them."""
+    """Only the shared observation floor is subtracted, so the two arms keep the order the clock gave."""
     pick = next(p for name, p, _f in HARNESS.GROWTH_AXES if name == "reopen ms")
     floored = HARNESS.declared_floor("reopen ms")
 
@@ -1214,23 +1145,14 @@ def test_whole_window_axes_use_the_measured_floor(name) -> None:
 
 
 def test_reopen_is_a_partial_window_axis_with_a_constant_floor() -> None:
-    """Reopen is the third kind, and it is neither of the two below.
-
-    `ms` is measured from `reopenStarted`, so it does not span the recorder window and cannot take
-    the window's `paint_waits`. It cannot take its own `paintWaits` either, because that count is
-    a property of how many frames the APPLICATION took to mount, which is the thing the axis is
-    measuring. What it carries is one observation wait, always, on every build.
-    """
+    """Reopen ms spans no recorder window, so it takes one constant observation wait, not window waits."""
     floored = axis_floor("reopen ms")
     assert not callable(floored), "reopen ms reads a per-row wait count again"
     assert floored == HARNESS.REOPEN_OBSERVATION_FLOOR == 1, floored
 
 
 def test_the_reopen_wall_axis_does_not_take_the_window_count_either() -> None:
-    """`reopen wall ms` spans the close loop and the reopen loop, so the window's `paint_waits`
-    carries the progressive mount's commit frames for the same reason `reopen ms` does. Its
-    honest floor is the two terminal observation waits, one per loop. Every other action keeps
-    the measured window count, where those waits really are harness idle between driven steps."""
+    """Reopen wall ms's honest floor is its two terminal observation waits, not the window's count."""
     floored = axis_floor("reopen wall ms")
     assert not callable(floored), "reopen wall ms reads the window count again"
     assert floored == 2, floored
@@ -1239,14 +1161,7 @@ def test_the_reopen_wall_axis_does_not_take_the_window_count_either() -> None:
 
 @pytest.mark.parametrize("name", ("jump painted ms", "menu open+close ms"))
 def test_partial_window_axes_keep_their_declared_floor(name) -> None:
-    """The other half of the rule, and it is not symmetry for its own sake.
-
-    `paintedMs` starts at a mark taken after `begin()` and spans one wait while the jump's window
-    holds two. `MENU_JS` awaits no paint at all, so the window count is zero while its two floors
-    are real, coming from `settle()` reading the pre-MutationObserver state on entry. Applying the
-    window count to either would subtract a floor the number never contained, or remove one that
-    it did.
-    """
+    """Partial-window axes keep their own declared floor; the window count does not match their waits."""
     assert not callable(
         axis_floor(name)
     ), f"{name} was given the whole-window floor, which it does not carry"

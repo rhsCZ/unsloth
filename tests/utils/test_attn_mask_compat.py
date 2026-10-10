@@ -240,24 +240,7 @@ def test_repo_has_no_direct_deprecated_imports():
 
 
 def test_import_falls_back_when_is_tracing_missing():
-    """Regression for Codex review on PR #6880.
-
-    The compat module imports `is_tracing` from `transformers.utils.import_utils`,
-    but that symbol is only exported from transformers >= 5.0.0. It is absent
-    from every 4.x release, including the declared `transformers>=4.51.3` floor
-    and the 4.57.6 pin used by tests/version_compat, so the fallback below is
-    the live path across the whole 4.x half of the supported range.
-
-    Reload the module with `is_tracing` removed from the namespace and confirm
-    the local fallback is used. The fallback must mirror the legacy
-    `transformers==4.51.3` inline expression
-    (``torch.jit.is_tracing() or isinstance(tensor, torch.fx.Proxy) or
-    is_torchdynamo_compiling()``) so the data-dependent ``torch.all(...)``
-    branches in the mask helpers continue to be skipped during JIT trace,
-    symbolic trace, and Dynamo compilation — otherwise tracing/exporting
-    these models on transformers 4.51.x either fails on proxy control flow
-    or bakes the wrong SDPA causal-mask path.
-    """
+    """is_tracing is absent before transformers 5.0, so the fallback must mirror the 4.51.3 inline check."""
     fake_import_utils = types.ModuleType("transformers.utils.import_utils")
 
     def _is_torchdynamo_compiling() -> bool:

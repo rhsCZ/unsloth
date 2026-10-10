@@ -1,30 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The keystroke metric must not drop the keystroke it exists to catch.
-
-`collect()` used to be called after a FIXED 200 ms wait, so a keystroke whose paint had not
-resolved by that moment was simply absent from the samples. The keystroke that has not painted yet
-is the SLOWEST one, so the reading systematically omitted its own worst case: measured against the
-real `input.js`, a 500 ms keystroke vanished from a reading whose max was 20 ms. The action still
-reported success, because the only thing it checked was that the composer's value had grown by the
-number of characters typed.
-
-That inverts under the condition the metric exists to detect -- a build that makes typing worse has
-more unpainted keystrokes at the drain, so it drops more of its slowest samples and reads FASTER --
-and `keystroke_p95_ms` is the highest-weight metric in the scoring table. It also feeds the
-null-treatment control, so an artificially tight reading there tightens the noise floor that every
-later comparison on that machine is judged against.
-
-The remedy is not a bigger constant, which has the same defect on a slower machine or a heavier
-rung. The wait ends when the WORK ends: the driver polls `settled()` until nothing is in flight,
-bounded only so a wedged renderer cannot eat the slot, and the reading then has to account for
-every keystroke the instrument saw before it may be quoted.
-
-Two levels. The JS half runs the shipped `input.js` under node over a controlled clock, so the
-paint that is still in flight really is in flight. The Python half drives the shipped `keystroke`
-action and asserts what a reader ends up with.
-"""
+"""Keystroke sampling waits until input settles, since a fixed delay drops the slowest keystrokes."""
 
 from __future__ import annotations
 

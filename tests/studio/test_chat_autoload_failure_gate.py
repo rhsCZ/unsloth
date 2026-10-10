@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A failed auto-load of a cached model must not become a Hub download.
-
-Runs the real ``autoLoadSmallestModel`` from chat-adapter.ts under node with the module boundary
-stubbed, so these assert behaviour, not source text. The sweep's catches are parameterless, so a
-cached repo whose load rejected fell through to fetching an unrelated default model.
-"""
+"""A failed cached auto-load must not fall through to a Hub download of an unrelated default model."""
 
 import json
 import os
@@ -1706,10 +1701,7 @@ def test_a_cached_safetensors_repo_is_still_auto_loaded():
 
 @pytest.mark.parametrize("broken", ["ggufRepos", "modelRepos"])
 def test_an_hf_cache_row_is_used_when_the_cached_lookup_fails(broken):
-    """/api/hub/local also reports hf_cache rows, which autoload normally skips
-    as duplicates. When a cached list fails they are the only evidence left, and
-    dropping them ended the send with no model at all, since the gap also blocks
-    the default."""
+    """hf_cache rows are the only evidence left when the cached list fails, so they must not be dropped."""
     row = "{ ...LOCAL_GGUF, source: 'hf_cache' }"
     out = _run(f"scenario({{ {broken}: 'throw', localModels: [{row}] }})")
 
@@ -1761,10 +1753,7 @@ def test_a_safetensors_twin_survives_a_gguf_row_with_no_loadable_quant():
 
 
 def test_a_legacy_gguf_row_without_model_format_loads_as_gguf():
-    """model_format is optional, so an older backend omits it on a direct .gguf
-    row. The source builder did not fall back to the suffix, so the row became a
-    Transformers source: /load got the safetensors context length instead of 0
-    and the remembered kind was wrong."""
+    """An older backend omits model_format, so the builder must fall back to the .gguf suffix."""
     row = "{ ...LOCAL_GGUF, model_format: undefined }"
     out = _run(f"scenario({{ localModels: [{row}] }})")
 
@@ -1775,11 +1764,7 @@ def test_a_legacy_gguf_row_without_model_format_loads_as_gguf():
 
 @pytest.mark.parametrize("fmt", ["'unknown'", "undefined"])
 def test_an_unclassified_local_row_is_never_auto_loaded(fmt):
-    """The gate was a denylist, so a row the backend could not classify passed
-    it: "unknown" is what the backend sends when it cannot tell, and an older one
-    omits the field. Either way the row may be the pickle checkpoint the
-    exclusions exist to keep out, and a directory gives no suffix to tell them
-    apart, so this fails closed."""
+    """Unclassified rows are refused, since one may be a pickle checkpoint that a denylist let through."""
     row = f"{{ ...LOCAL_GGUF, id: 'x', load_id: '/models/x', path: '/models/x', model_format: {fmt} }}"
     out = _run(f"scenario({{ localModels: [{row}] }})")
 

@@ -47,10 +47,7 @@ def sun_path_max() -> int:
 
 
 def browser_tmpdir() -> Path:
-    """A fresh TMPDIR short enough for Chrome's socket, never under the checkout.
-
-    The system temp dir is used when it fits. An inherited TMPDIR that is too long, or that sits
-    inside the checkout, falls back to /tmp, the one short path every POSIX host has."""
+    """Fresh temp dir short enough for Chrome's socket, never inside the checkout; falls back to /tmp."""
     root = Path(__file__).resolve().parents[2]
     made = Path(tempfile.mkdtemp(prefix = "uqv-"))
     if os.name == "nt" or (

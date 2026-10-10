@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the integrity gates in `instruments/selfcheck.py`.
-
-These live under `arms/selftest/` rather than beside the module because `instruments/` is shared
-with the layer that owns the frame recorder, and this layer owns only `selfcheck.py` inside it.
-
-Every gate is tested in BOTH directions. The passing direction is the easy half and the one that
-gets written; the failing direction is the half that matters, because a gate that cannot fail is
-decoration, and the whole point of this file is that a failure ABORTS the run rather than
-appearing as a caveat under a table.
-"""
+"""Every integrity gate is tested in both directions, since a gate that cannot fail is decoration."""
 
 from __future__ import annotations
 

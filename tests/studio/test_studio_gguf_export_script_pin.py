@@ -1,17 +1,4 @@
-"""Unsloth GGUF export pins convert_hf_to_gguf.py for the conversion and takes the pin
-back afterwards, with a once-per-process warning fallback when unsloth_zoo lacks the
-local-script resolver.
-
-The pin used to be an ``os.environ.setdefault`` that was never unwound. unsloth_zoo reads
-UNSLOTH_LLAMA_CPP_SCRIPTS_DIR as the user's own choice: it outranks
-UNSLOTH_LLAMA_CPP_CONVERTER_TAG, and it exempts the converter from the
-UNSLOTH_CONVERTER_SCAN_STRICT refusal. Neither is true of a directory Studio pinned for
-its own routing, so the pin now goes through unsloth_zoo's internal_scripts_dir_pin and is
-scoped to the conversion.
-
-The behaviour cases below execute the real helper, lifted out of export.py with ast, rather
-than a copy written here: a hand-written copy of the block passes whatever the block does.
-"""
+"""The converter pin is scoped to the conversion via internal_scripts_dir_pin, never left set."""
 
 from __future__ import annotations
 

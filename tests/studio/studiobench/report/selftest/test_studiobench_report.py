@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the report layer: incremental payload, and the editorial policy.
-
-Two things are being tested here and they fail in different ways. The payload writer fails by
-losing evidence, which is invisible until the run that mattered is the one that crashed. The
-renderer fails by printing something true next to something misleading, which is invisible
-forever.
-"""
+"""Payload writer loses evidence on a crash; renderer prints true things beside misleading ones."""
 
 from __future__ import annotations
 
@@ -244,12 +238,8 @@ def _gated_cell_rows(
 
 
 def test_a_cell_that_lost_its_thread_is_scored_incomplete_rather_than_green():
-    """REGRESSION. The ladder is ABSOLUTE: there is no second arm to contradict a cheap cell.
-
-    `thread_complete` is advisory where it is emitted, so the cell reaches the report
-    `completed=True` with a full set of timings that are cheaper for exactly the wrong reason, and
-    the rung was scored against fixed anchors and came out green and fast.
-    """
+    """A cell that lost its thread must score INCOMPLETE, not green; there is no second arm to
+    compare it to."""
     from studiobench.report.build import _completion_by_rung
 
     got = _completion_by_rung(_gated_cell_rows("thread_complete", False))
@@ -330,13 +320,7 @@ def test_the_floor_table_drops_a_gate_failed_cell():
 
 
 def test_an_absent_sampler_is_not_read_as_a_cell_that_lost_the_stream():
-    """REGRESSION. `_read_follow` returns `{"follow_attempted": False}` when the page-side sampler
-    is not installed, and the gate then reports `passed: False` because `pinned` is None.
-
-    That is an absent instrument, not a film that went wrong. Read as fatal it marked EVERY cell of
-    every run unusable anywhere the sampler is missing, which is a far larger blast radius than the
-    defect being closed, and it zeroed the ladder for a reason that says nothing about the build.
-    """
+    """An absent sampler (follow_attempted False) is an unmeasured instrument, not a lost stream."""
     from studiobench.report.build import _completion_by_rung
 
     rows = _gated_cell_rows("follows_the_stream", False)
@@ -398,12 +382,8 @@ def test_an_ordinary_ratio_is_still_printed_bare():
 
 
 def test_a_missing_viewport_is_not_waived_as_an_absent_instrument():
-    """REGRESSION. `probe_attempted: False` has two producers and only one is an absent instrument.
-
-    `window.__sb.dom is not installed` is the harness not being loaded. `no thread viewport` is the
-    ARM missing the surface the film measures, and waiving it let a real defect ride the instrument
-    allowance -- a cell with no scroller was admitted, scrolled nothing, and was scored.
-    """
+    """A missing thread viewport is a defect in the arm, so it must not be waived as an absent
+    instrument."""
     from studiobench.report.build import _completion_by_rung
 
     rows = _gated_cell_rows("thread_complete", False)

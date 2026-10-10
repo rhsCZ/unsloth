@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""End-to-end MLX smoke test on real Apple Silicon (multi-process driver).
-
-`train` overfits gemma-3-270m-it on one row for 30 steps and saves
-lora/merged_16bit/gguf; `reload` reopens each format in a fresh process.
-GGUF + LoRA reload fixes land in unslothai/unsloth-zoo#627. Metal's
-reduction-order nondeterminism makes loss assertions bounds, not exact.
-Apple-Silicon only; invoked from .github/workflows/mlx-ci.yml.
-"""
+"""MLX smoke test on Apple Silicon; loss is checked as bounds, since Metal's reduction order varies."""
 
 from __future__ import annotations
 
@@ -124,11 +117,7 @@ def _compute_loss_and_grad_norm(model, tokenizer, text: str) -> tuple[float, flo
 
 
 def _teacher_forced_completion_loss(model, tokenizer, prompt: str, completion: str) -> float:
-    """Mean teacher-forced next-token CE on `completion` given `prompt`.
-
-    Decouples the memorisation check from flaky greedy-decode geometry:
-    asserts *what* the model memorised, not just that loss is low.
-    """
+    """Mean next-token CE on completion given prompt; checks memorisation without flaky greedy decoding."""
     import mlx.core as mx
     import mlx.nn as nn
 
@@ -485,12 +474,7 @@ def cmd_reload(args) -> int:
 
 
 def _find_llama_cli() -> Path | None:
-    """Locate the llama-cli binary save_pretrained_gguf built.
-
-    save_pretrained_gguf installs llama.cpp under unsloth_zoo's LLAMA_CPP_DEFAULT_DIR
-    ($UNSLOTH_LLAMA_CPP_PATH or ~/.unsloth/llama.cpp), not the working directory, so
-    search there first and keep the CWD-relative layout as a fallback.
-    """
+    """llama.cpp is installed under UNSLOTH_LLAMA_CPP_PATH or ~/.unsloth/llama.cpp, not the CWD."""
     bases: list[Path] = []
     env_dir = os.environ.get("UNSLOTH_LLAMA_CPP_PATH")
     if env_dir:

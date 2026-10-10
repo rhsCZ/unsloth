@@ -1,26 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""Guard the grad-accumulation loss-normalisation contract across TRL versions.
-
-Three components each decide "is this loss already token-count normalised?", and
-they must agree:
-
-  * unsloth_zoo `_unsloth_get_batch_samples` decides from the forward signature.
-  * The loss divides by num_items_in_batch when it is not None. Both
-    `unsloth_fused_ce_loss` and TRL's `_chunked_cross_entropy_loss` do this
-    without consulting `model_accepts_loss_kwargs`.
-  * transformers `training_step` divides by grad-accum when
-    `not self.model_accepts_loss_kwargs or num_items_in_batch is None`.
-
-When a model class sets `accepts_loss_kwargs = False` (gemma3, qwen-vl,
-paligemma, glm4v) and the loss still divides by the token count, loss and grads
-are silently scaled 1/GA. Nothing raises; the effective LR is just GA times too
-small. Regressed when TRL 1.7.0 defaulted SFT to "chunked_nll" (trl#5846):
-clean on 0.22.2-1.6.0, reproducible from 1.4.0 by opting in explicitly.
-
-Source/AST checks only, no GPU and no downloads, so they run in the CPU job that
-already exercises TRL latest and TRL git main.
-"""
+"""Three components must agree on token-count loss normalisation, or grads silently scale by 1/GA."""
 
 from __future__ import annotations
 
@@ -70,13 +50,7 @@ def test_sft_loss_type_default_is_nll_after_unsloth_patch():
 
 
 def _loss_type_field(cfg_cls):
-    """TRL's `loss_type` dataclass field, or None if this TRL has no such field.
-
-    `hasattr(cfg_cls, "loss_type")` is NOT equivalent and was the bug here: from trl 0.21
-    DPOConfig declares the field with a `default_factory`, which leaves no class attribute,
-    so the hasattr form skipped DPO entirely on every recent TRL while still claiming to
-    check it.
-    """
+    """Reads the dataclass field; hasattr misses default_factory fields, which leave no class attribute."""
     import dataclasses
     return next((f for f in dataclasses.fields(cfg_cls) if f.name == "loss_type"), None)
 
@@ -91,19 +65,7 @@ def _pristine_config_cls(cfg_cls):
 
 
 def test_loss_type_replacement_did_not_leak_to_other_trainers():
-    """loss_type is an unrelated field in DPO/KTO/GRPO; the global dict hits all.
-
-    The expectation is split rather than one literal dict, because the two halves are
-    different claims and only one of them is version-independent:
-
-      * GRPO is unsloth's own default (rl.py): TRL's `dapo` from 0.22, `bnpo` before it.
-      * DPO and KTO are RELATIVE to pristine TRL, because the claim is that unsloth does
-        not touch them at all. Their values are TRL's own and change between releases:
-        trl 0.18.2 declares `DPOConfig.loss_type = "sigmoid"` as a plain default, while
-        trl 0.24.0 declares it with `default_factory=["sigmoid"]` that `__post_init__`
-        resolves back to the string. A hardcoded `["sigmoid"]` matched neither instance;
-        it matched the 0.24 field default only, and the hasattr skip above hid that.
-    """
+    """DPO and KTO loss_type are checked against pristine TRL, whose default changes between releases."""
     import unsloth  # noqa: F401
     import trl
 
@@ -158,12 +120,7 @@ def test_explicit_loss_type_still_wins():
 
 
 def _trl_resolves(wanted):
-    """What TRL itself makes of an explicit loss_type, so only Unsloth's own rewrites count.
-
-    TRL 1.15 deprecated "chunked_nll" as an alias of "nll" and rewrites it in its own
-    __post_init__, announcing that with a FutureWarning naming the old value. Read the
-    alias from that warning rather than from a version number.
-    """
+    """Reads the chunked_nll to nll alias from TRL's FutureWarning, not from a version number."""
     import warnings
 
     pristine = _pristine_sft_config_cls()
@@ -215,12 +172,7 @@ def _pristine_sft_config_cls():
 
 
 def test_pristine_trl_sft_config_default_is_nll_too():
-    """`from trl import SFTConfig` before `import unsloth` keeps TRL's own class.
-
-    Patching only rebinds the module aliases, so that caller never sees the
-    generated subclass and would still build a chunked_nll config and hand it to
-    the patched trainer. The same ordering is covered by the padding-free tests.
-    """
+    """Importing SFTConfig before unsloth keeps TRL's own class, whose default must also be nll."""
     import unsloth  # noqa: F401  must precede trl
 
     pristine = _pristine_sft_config_cls()
@@ -254,13 +206,7 @@ def test_pristine_trl_sft_config_keeps_an_explicit_loss_type():
 
 
 def test_dataclass_field_default_is_nll_for_hfargumentparser():
-    """`HfArgumentParser` reads the field, not the `__init__` default.
-
-    It builds one argparse argument per `dataclasses.fields()` entry and always
-    passes the value through, so a field left at TRL's unresolved `None` sends
-    `loss_type = None` into `__post_init__` and comes back out as chunked_nll
-    however the `__init__` default reads.
-    """
+    """HfArgumentParser passes the field value through, so the dataclass field default must be nll."""
     import dataclasses
 
     import unsloth  # noqa: F401

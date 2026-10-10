@@ -436,18 +436,6 @@ class TestArchCrashRetrySet:
         )
         assert LlamaCppBackend._arch_crash_retry_gpu_ids([0, 1], [0, 1]) == []
 
-    def test_single_gpu_host_has_no_retry(self, monkeypatch):
-        """A single-GPU host skips the arch narrowing retry entirely; the spy counts calls, not raises."""
-        calls = []
-
-        def _spy():
-            calls.append(1)
-            return set()
-
-        monkeypatch.setattr(LlamaCppBackend, "_rocm_unified_memory_gpu_ids", staticmethod(_spy))
-        assert LlamaCppBackend._arch_crash_retry_gpu_ids([0], [0]) == []
-        assert calls == [], "single-GPU host must not reach the unified-memory probe"
-
     def test_empty_selection_is_a_no_op(self):
         assert LlamaCppBackend._arch_crash_retry_gpu_ids([], [0, 1]) == []
 

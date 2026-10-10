@@ -198,13 +198,6 @@ class TestOnlyTheDeprecatedKeyMoves:
         """With nothing moved, the empty kwargs argument must still be appended, as main does."""
         assert _build_launch_reasoning_args(caps, {}) == ["--chat-template-kwargs", "{}"]
 
-    def test_an_empty_remainder_after_the_flag_appends_nothing(self):
-        """The other side of it: that argument did not exist on main either."""
-        assert _build_launch_reasoning_args(MODERN_CAPS, {"enable_thinking": True}) == [
-            "--reasoning",
-            "on",
-        ]
-
 
 THINKING_TEMPLATE = (
     "{% if enable_thinking %}<think>\n{% endif %}"

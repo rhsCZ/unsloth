@@ -42,6 +42,7 @@ from .mistral_format import (
     prepare_mistral_format_checkpoint,
 )
 from .lora_init import adapter_used_fast_pissa, fast_lora_init, record_fast_pissa
+from ..tokenizers_v1 import tokenizers_v1_on_return
 from .loader_utils import (
     DEFAULT_DEVICE_MAP,
     OFFLOAD_EMBEDDING_AUTO,
@@ -943,6 +944,7 @@ def _vllm_unavailable_error():
 
 class FastLanguageModel(FastLlamaModel):
     @staticmethod
+    @tokenizers_v1_on_return
     @_offline_aware_load
     @mistral_format_redirect
     @track_explicit_4bit_request
@@ -1762,6 +1764,7 @@ from ..kernels import (
 )
 from .vision import FastBaseModel, _is_text_seq2seq_config
 from .diffusion import FastDiffusionModel, is_diffusion_model_type
+from .diffusion_profiles import resolve_diffusion_profile
 from transformers import (
     AutoModelForCausalLM,
 )
@@ -1800,6 +1803,7 @@ class FastModel(FastBaseModel):
         return FastBaseModel.for_training(model, use_gradient_checkpointing)
 
     @staticmethod
+    @tokenizers_v1_on_return
     @_restore_load_scoped_env
     @_offline_aware_load
     @mistral_format_redirect
@@ -2096,11 +2100,15 @@ class FastModel(FastBaseModel):
                 device_map_planner_kwargs = device_map_planner_kwargs,
                 trust_remote_code = trust_remote_code,
                 revision = base_revision,
+                **({"config": user_config} if user_config is not None else {}),
                 **kwargs,
             )
             # Stamp False rather than let the trainer read whatever an earlier load wrote.
             model = _mark_forced_float32(model, False)
             model = _mark_full_finetuning(model, full_finetuning)
+            # This early return skips the re-enable at the end of from_pretrained.
+            if not was_disabled:
+                enable_progress_bars()
             return _mark_requested_float32(model, user_float32), tokenizer
 
         try:
@@ -2217,8 +2225,23 @@ class FastModel(FastBaseModel):
             )
             fast_inference = False
 
-        # Text-diffusion models skip Unsloth's autoregressive patching and load the unmodified HF model.
-        if is_diffusion_model_type(model_types):
+        # Text-diffusion models (DiffusionGemma) take a transformers-only slow path: a custom block-diffusion generate over a novel backbone, so Unsloth's autoregressive kernel/compile patching is skipped and the unmodified HF model is loaded, keeping 4bit/8bit and PEFT LoRA.
+        # Remote-code checkpoints can report their backbone's type (Nemotron-Labs-Diffusion says "nemotron"), so also match the raw config.
+        diffusion_config = model_config
+        if diffusion_config is None and peft_config is not None:
+            try:
+                diffusion_config = AutoConfig.from_pretrained(
+                    peft_config.base_model_name_or_path,
+                    token = token,
+                    trust_remote_code = trust_remote_code,
+                    local_files_only = local_files_only,
+                )
+            except Exception:
+                diffusion_config = None
+        if (
+            is_diffusion_model_type(model_types)
+            or resolve_diffusion_profile(diffusion_config) is not None
+        ):
             return _dispatch_diffusion()
 
         lowered_model_name = model_name.lower()

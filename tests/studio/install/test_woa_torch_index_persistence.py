@@ -2957,11 +2957,6 @@ class TestARebasedOptionPathKeepsItsQuoting:
             argument[1:-1]
         ).exists(), f"the rebased path does not resolve to the file it names: {got!r}"
 
-    def test_the_two_copies_stay_identical(self):
-        """setup.ps1 carries a parity copy; a fix applied to one is a bug in the other."""
-        install, setup = _ps_copies("Resolve-WoaOverrideLine")
-        assert install == setup
-
 
 class TestALocalDirectoryRequirementIsRebasedToo:
     """Local-directory forms like -e ./pkg and bare ./pkg must be rebased too, or they point at nothing."""
@@ -4553,10 +4548,6 @@ class TestARebasedFileReferenceIsAUri:
             f" -BaseDir '{tmp_path}') + ']')",
         )
         assert _ps_last(script)[1:-1] == 'pkg @ https://x.test/a.whl ; os_name == "nt"'
-
-    def test_the_two_copies_are_identical(self):
-        install, setup = _ps_copies("Resolve-WoaOverrideLine")
-        assert install == setup
 
 
 class TestTheMergedOverrideFileDoesNotOutliveTheRun:

@@ -28,7 +28,6 @@ def _cfg(**kw):
     return DiffusionLoraConfig(**base)
 
 
-# ── config ───────────────────────────────────────────────────────────────────
 def test_sampling_is_off_by_default():
     cfg = _cfg().normalized()
     assert cfg.sample_every == 0 and cfg.sample_prompts == ()
@@ -102,7 +101,6 @@ def test_sampling_is_not_part_of_resume_identity():
     assert a == b
 
 
-# ── plan ─────────────────────────────────────────────────────────────────────
 def test_plan_defaults_to_instance_prompt_then_first_caption(tmp_path):
     cfg = _cfg(output_dir = str(tmp_path), sample_every = 5, instance_prompt = "sks dog").normalized()
     plan = ds.plan_samples(cfg, "z-image", ["cap one", "cap two"])
@@ -145,7 +143,6 @@ def test_sample_path_regex_rejects(bad):
     assert not ds.SAMPLE_PATH_RE.match(bad)
 
 
-# ── RNG isolation ────────────────────────────────────────────────────────────
 def test_isolated_sampling_restores_global_rng(tmp_path):
     plan = ds.plan_samples(
         _cfg(output_dir = str(tmp_path), sample_every = 1).normalized(), "z-image", ["c"]
@@ -160,7 +157,6 @@ def test_isolated_sampling_restores_global_rng(tmp_path):
         assert not torch.is_grad_enabled()
     assert torch.equal(torch.rand(8), expected)
     assert random.getstate() == py_state
-    # Fixed seed: the same noise every round.
     assert torch.equal(noise, ds.initial_noise(plan, 0, (1, 4, 8, 8), "cpu"))
     assert not torch.equal(noise, ds.initial_noise(plan, 1, (1, 4, 8, 8), "cpu"))
 
@@ -222,7 +218,6 @@ def test_euler_flow_sample_recovers_target_with_exact_velocity(tmp_path):
         assert torch.allclose(out, x0, atol = 1e-5)
 
 
-# ── files ────────────────────────────────────────────────────────────────────
 def test_round_saves_pngs_and_emits_event(tmp_path):
     plan = ds.plan_samples(
         _cfg(output_dir = str(tmp_path), sample_every = 1, sample_prompts = ("a", "b")).normalized(),
@@ -272,7 +267,6 @@ def test_thinning_deletes_the_evicted_files(tmp_path):
     assert len(listed) < _SAMPLES_CAP + 1 and on_disk == listed
 
 
-# ── service state + record ───────────────────────────────────────────────────
 def test_service_folds_sample_events_and_persists(monkeypatch, tmp_path):
     import core.training.diffusion_training_service as dts
 
@@ -329,7 +323,6 @@ def test_sample_list_is_bounded():
     assert len(steps) <= _SAMPLES_CAP and steps[0] == 0 and steps[-1] == 1999
 
 
-# ── route ────────────────────────────────────────────────────────────────────
 @pytest.fixture
 def sample_client(monkeypatch, tmp_path):
     import core.training.diffusion_training_service as dts
@@ -414,7 +407,6 @@ def test_route_serves_live_job_and_hides_it_from_other_accounts(sample_client, m
     assert sample_client.client.get(url, params = q).status_code == 404
 
 
-# ── per-family CFG + schedules (diffusers 0.41 pipelines) ──────────────────────
 def test_cfg_combination_matches_each_pipeline():
     c = torch.randn(1, 16, 1, 8, 8, generator = torch.Generator().manual_seed(1))
     u = torch.randn(1, 16, 1, 8, 8, generator = torch.Generator().manual_seed(2))
@@ -472,7 +464,6 @@ def test_fixed_mu_reaches_the_schedule():
     assert torch.allclose(got, ref.sigmas.float())
 
 
-# ── stop during a round ──────────────────────────────────────────────────────
 def test_stop_between_prompts_ends_the_round_keeping_finished_images(tmp_path):
     plan = ds.plan_samples(
         _cfg(output_dir = str(tmp_path), sample_every = 1, sample_prompts = ("a", "b", "c")).normalized(),
@@ -537,9 +528,7 @@ def test_trainers_latch_a_stop_seen_mid_round_and_render_a_resume_baseline(modul
     import inspect
 
     src = inspect.getsource(importlib.import_module(f"core.training.{module}"))
-    # The stop poll drains the request; a round that saw it must hand it to the loop.
     assert "stop_now = stop_latched" in src and "if stop_latched:" in src
-    # A resumed run renders its baseline at the restored step, after restore_resume_state.
     assert src.index("_sample(resumed)") > src.index("restore_resume_state(")
 
 

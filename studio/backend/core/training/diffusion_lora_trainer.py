@@ -660,7 +660,6 @@ def run_diffusion_lora_training(
             except Exception:  # noqa: BLE001
                 pass
             if resumed < cfg.train_steps:
-                # Baseline: step 0, or the step a resume restored.
                 _sample(resumed)
 
         for opt_step in range(resumed, cfg.train_steps):

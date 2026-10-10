@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for local GGUF ``model_format`` classification (PR #6364 follow-up).
-
-Suffixless GGUF folders (custom folders / LM Studio) carry no ``-GGUF`` name
-hint, so the scanners must surface ``model_format = "gguf"`` for the UI to route
-them through the GGUF load path. The rule, shared by ``_dir_model_format`` and
-``_scan_models_dir``: a directory is GGUF-format when it holds ``.gguf`` files
-and no non-GGUF weights (``.safetensors`` / ``.bin``); a stray ``config.json``
-must not disqualify it.
-
-No GPU/network: only file names and sizes are inspected.
-"""
+"""A folder counts as GGUF when it has .gguf files and no .safetensors or .bin weights."""
 
 from __future__ import annotations
 
@@ -874,12 +864,7 @@ def test_local_gguf_task_skips_online_only_contents(tmp_path, monkeypatch):
 
 
 def test_local_classification_never_opens_an_online_only_gguf(tmp_path, monkeypatch):
-    """The whole probe, not just the task half.
-
-    ``_local_model_classification`` falls through to the audio-type probe whenever the task
-    comes back None, which for a placeholder is every time, and that probe reads an
-    architecture of its own. Asserting on ``_local_model_task`` alone leaves the listing
-    hydrating exactly the files it stopped classifying, a folder row once per sibling."""
+    """Online-only GGUF placeholders must never be opened, including by the audio-type fallback probe."""
     from utils.models import gguf_metadata
 
     single = _touch(tmp_path / "single" / "generic-Q4_K_M.gguf")
@@ -973,10 +958,7 @@ def test_an_unhydrated_denoiser_keeps_the_picker_that_would_hydrate_it(tmp_path,
 
 
 def test_an_ancestor_directory_does_not_name_an_unhydrated_gguf(tmp_path, monkeypatch):
-    """A filesystem row's id is its whole path, and family detection matches a keyword in any
-    segment of it. With an architecture that mismatch only picks the wrong family; for a
-    placeholder the name is the entire case, so a shelf named after a family would file every
-    chat GGUF stored under it as an image or video model."""
+    """An ancestor folder named after a model family must not classify an unhydrated GGUF placeholder."""
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("placeholder contents were read to classify it")
@@ -1130,11 +1112,7 @@ def test_local_task_ignores_family_token_in_parent_path(tmp_path):
 
 
 def test_a_modular_pipeline_root_counts_as_a_pipeline_index(tmp_path):
-    """A Modular Diffusers pipeline carries ``modular_model_index.json`` and NO
-    ``model_index.json``, which is the pair the video loader accepts. Recognising only the
-    conventional index hid such a root from the picker and let the publisher walk descend into it
-    and offer its components as separate, unusable models. The hub scanner
-    (``local_inventory._is_diffusers_pipeline_dir``) makes the same test and has its own case."""
+    """A modular_model_index.json alone marks a pipeline root, else its components are offered as models."""
     from routes.models import _local_pipeline_index
 
     modular = tmp_path / "modular"
@@ -1157,14 +1135,7 @@ def test_a_modular_pipeline_root_counts_as_a_pipeline_index(tmp_path):
 
 
 def test_a_single_file_video_repo_is_flagged_diffusers(monkeypatch):
-    """_local_is_diffusers asks detect_video_family; _repo_is_diffusers must ask it too.
-
-    A cached single-file video checkpoint with no pipeline index gets no task from
-    _cached_repo_task (it returns None for an untrusted or unbuildable video family), so if
-    the diffusers flag is also missing, an inconclusive transformer config leaves can_chat
-    set -- and that is every gate the chat picker has. The video weights would be offered to
-    the text loader.
-    """
+    """Single-file video repos need detect_video_family too, or their weights reach the text chat picker."""
     from types import SimpleNamespace
 
     from core.inference.video_families import detect_video_family
@@ -1179,10 +1150,7 @@ def test_a_single_file_video_repo_is_flagged_diffusers(monkeypatch):
 
 
 def test_adapter_base_is_found_in_the_cache_root_holding_the_adapter(tmp_path):
-    """An adapter listed from a legacy or previously configured root has its base cached in
-    that SAME root. Probing only the active root answered None, and None is inconclusive,
-    which leaves the adapter chat-capable -- so a Whisper LoRA reached the chat picker.
-    """
+    """Adapter bases are probed in the adapter's own cache root, else the adapter stays chat-capable."""
     import json
 
     from hub.services.models.common import _base_transformers_can_chat, _hub_cache_root_of

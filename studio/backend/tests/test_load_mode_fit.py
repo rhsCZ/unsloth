@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the fit-driven ``--load-mode`` pick.
-
-Pins the predicate behind it: a load that fits in VRAM, or in VRAM plus host RAM,
-takes ``none`` and llama.cpp's async pinned-buffer loader; anything larger, or
-anything that cannot be priced, keeps ``auto`` and its mapping.
-"""
+"""Unit tests for the fit-driven --load-mode pick: none when the load fits VRAM or VRAM plus RAM."""
 
 from __future__ import annotations
 

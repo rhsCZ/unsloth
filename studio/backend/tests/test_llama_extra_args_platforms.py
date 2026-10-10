@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The extra-arguments pass-through across every platform and accelerator.
-
-Unsloth emits a different command on each of these: CUDA, ROCm and Vulkan take
-different offload flags, Metal takes none of them, and Windows spells the binary
-and the paths differently. The claim this suite has to defend is the same on all of
-them, and it is a claim about what does NOT change:
-
-  with the box empty, the command is byte-identical to the one Unsloth emitted
-  before this feature existed.
-
-The matrix is the Cartesian product of the platforms Unsloth ships on and the
-accelerators it detects, driven through the real ``load_model`` with the command
-captured at the Popen boundary.
-"""
+"""Extra-args pass-through across every platform and accelerator: an empty box yields the old command."""
 
 from __future__ import annotations
 
@@ -51,14 +38,7 @@ MATRIX = [pytest.param(p, a, id = f"{p[0]}-{a[0]}") for p in PLATFORMS for a in 
 
 
 def _apply_platform(monkeypatch, platform) -> None:
-    """Move the seams the launch path actually branches on.
-
-    Only ``sys.platform`` and the WSL markers: patching ``os.name`` as well swaps
-    pathlib's flavour mid-run, so the harness's own tmp GGUF stops resolving and
-    every assertion below becomes a lie about a file that was never opened. The
-    authoritative Windows and macOS signal is the per-OS CI matrix on real runners;
-    this is the branch coverage that can be had on one host.
-    """
+    """Patch only sys.platform and WSL markers; patching os.name too breaks pathlib mid-run."""
     _label, sys_platform, _os_name, wsl_release = platform
     import platform as _platform
     import sys as _sys

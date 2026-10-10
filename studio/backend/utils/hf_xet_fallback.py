@@ -47,12 +47,7 @@ _load_lock = threading.RLock()
 
 
 def _gpu_present() -> bool:
-    """Whether this host has a usable accelerator, decided WITHOUT importing unsloth_zoo.
-
-    Only torch is consulted (already imported by the time any download helper runs), and any
-    failure answers False so a genuinely torch-less host keeps the light-init retry below.
-    MPS does not count: unsloth_zoo's full init rejects it, so the light path is the only one there.
-    """
+    """Torch only, with no unsloth_zoo import; MPS does not count, since zoo's full init rejects it."""
     try:
         import torch
     except Exception:  # noqa: BLE001 -- no torch at all: the light path is the right one
@@ -162,14 +157,7 @@ def _reset_optional_module_cache() -> None:
 
 
 def _load_optional(module_name: str) -> Any:
-    """Import an optional shared Xet helper module (health / tuning), or return ``None``.
-
-    Separate from ``_load_shared``: these modules exist only in newer unsloth_zoo, and an Unsloth
-    pinned to an older one must keep downloading without the preflight verdict or buffer caps.
-    The GPU-init retry matters most here: ``unsloth_zoo.__init__`` runs torch accelerator detection
-    and raises ``NotImplementedError`` on a CPU-only host, which is precisely the small machine
-    whose RAM these caps protect, so without the retry they switch off where they are needed.
-    """
+    """Newer-zoo only; the GPU-init retry matters since zoo raises NotImplementedError on CPU-only hosts."""
     import importlib
     import os as _os
 
@@ -271,43 +259,19 @@ def _xet_health_from(module: Any, **kwargs: Any) -> Any:
 
 
 def cached_xet_health(**kwargs: Any) -> Any:
-    """Return Zoo's Xet verdict only when its health module is already loaded.
-
-    Capability reads use this path so opening Hub cannot initialize Unsloth Zoo. A real
-    download calls :func:`xet_health`, which loads the optional module and populates this cache.
-
-    Read without ``_load_lock`` on purpose. Taking it made this "already loaded?" question wait
-    on whatever import another thread was holding it for -- a torch-loading `import unsloth_zoo`
-    that runs for seconds -- so the one path guaranteed never to load Zoo was the one blocked by
-    loading it. A dict lookup keyed by a plain string is atomic under the GIL, and the only
-    writers publish a fully-built module (or ``None``) in a single assignment, so the worst
-    outcome is reading the pre-import value and correctly answering "not loaded yet".
-    """
+    """Peeks at Zoo's Xet verdict without loading it or taking _load_lock, which a slow import holds."""
     module = _optional_modules.get("unsloth_zoo.hf_xet_health", _UNTRIED)
     return None if module is _UNTRIED else _xet_health_from(module, **kwargs)
 
 
 def xet_health(**kwargs: Any) -> Any:
-    """Load and query Zoo's Xet verdict for an actual download decision.
-
-    ``None`` means "no opinion": callers keep their default (Xet), they do not downgrade.
-    Read-only capability requests use :func:`cached_xet_health` instead.
-    """
+    """Loads Zoo's Xet verdict to decide a download; None means no opinion and keeps Xet."""
     module = _load_optional("unsloth_zoo.hf_xet_health")
     return _xet_health_from(module, **kwargs)
 
 
 def xet_health_is_forced(health: Any) -> bool:
-    """Is *health* an operator override rather than a measurement of this machine?
-
-    ``unsloth_zoo.hf_xet_health`` stamps ``source = "forced"`` on exactly the two env-var verdicts:
-    ``UNSLOTH_DISABLE_XET`` / ``UNSLOTH_STABLE_DOWNLOADS`` / ``HF_HUB_DISABLE_XET`` turning Xet OFF,
-    and ``UNSLOTH_FORCE_XET`` turning it ON. Callers already honour the off switches by returning
-    early, so this exists for the on switch: the free-RAM gate must stand down for it, or Unsloth
-    ships an escape hatch that only works in one direction.
-
-    Anything unreadable (an older zoo whose verdict has no ``source``, a test double) answers False,
-    which leaves the RAM gate in force -- the safe default."""
+    """True for an env-var override verdict, so the free-RAM gate stands down when Xet is forced on."""
     return health is not None and str(getattr(health, "source", "")) == "forced"
 
 
@@ -337,19 +301,7 @@ def xet_env_overrides() -> "dict[str, str]":
 
 
 def apply_xet_env(env: dict, cache_dir: "Optional[str]" = None) -> "Optional[dict[str, str]]":
-    """Let unsloth_zoo size a download worker's ``HF_XET_*`` in *env*, in place.
-
-    Returns what it wrote, or ``None`` when the installed zoo has no opinion, which is the caller's
-    signal to fall back. ``fail_fast`` suits a supervised child: our Xet -> HTTP ladder acts on the
-    failure, so short Xet timeouts are right here and wrong process-wide.
-
-    *env* is a copy of this process's environment, which already carries the zoo's import-time
-    sizing, and applying is setdefault: on a zoo that can resize we recompute for *cache_dir*
-    instead, so a backend whose cache has since moved does not hand the worker the old volume's
-    numbers. Older zoos keep the previous behaviour.
-
-    The zoo sizes from TOTAL RAM, which cannot see a model already loaded, so the result passes
-    through :func:`clamp_to_available_ram` before it reaches the worker."""
+    """Zoo sizes HF_XET_* in env in place, from total RAM, so clamp_to_available_ram must follow."""
     module = _load_optional("unsloth_zoo.hf_xet_tuning")
     if module is None or not hasattr(module, "apply_xet_env"):
         return None
@@ -394,13 +346,7 @@ _pending_reservation = threading.local()
 
 
 def _pid_alive(pid: int) -> bool:
-    """Is *pid* still running? Platform-aware, because this probe must not have side effects.
-
-    NOT ``os.kill(pid, 0)``: on Windows CPython maps every signal other than ``CTRL_C_EVENT`` /
-    ``CTRL_BREAK_EVENT`` onto ``TerminateProcess(handle, sig)``, so signal 0 would KILL the download
-    worker this ledger is merely asking about. ``utils.process_lifetime`` already carries the
-    handle-based probe (``OpenProcess`` + ``WaitForSingleObject``); reuse it rather than growing a
-    second copy that can drift."""
+    """Never os.kill(pid, 0): on Windows it terminates the process; uses process_lifetime's probe."""
     try:
         from utils.process_lifetime import _pid_alive as _platform_pid_alive
         return bool(_platform_pid_alive(pid))
@@ -421,14 +367,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _worker_rss(pid: int) -> int:
-    """Physical RAM *pid* already holds, or ``0`` when it cannot be read.
-
-    ``rss`` is psutil's portable field: RES on Linux, resident size on macOS, ``WorkingSetSize`` on
-    Windows. All three are physical pages, which is the same quantity ``virtual_memory().available``
-    has already been reduced by, so it is the right thing to credit against a promise.
-
-    Zero on any failure (no psutil, the worker exited between the liveness probe and here, Windows
-    ``AccessDenied``), which reserves the whole promise -- the conservative pre-credit behaviour."""
+    """Physical RAM the pid already holds via psutil rss; 0 on failure, which reserves the whole promise."""
     try:
         import psutil  # noqa: PLC0415 - optional, and only on the ledger path
         return max(0, int(psutil.Process(pid).memory_info().rss))
@@ -437,15 +376,7 @@ def _worker_rss(pid: int) -> int:
 
 
 def _live_reserved_locked() -> int:
-    """Bytes promised to live workers that are NOT YET RESIDENT, pruning anything finished or never
-    spawned.
-
-    A promise covers the gap between sizing and allocation. The hf_xet buffer is an adjustable
-    semaphore, so the worker draws on it as terms arrive rather than allocating it up front; every
-    byte it has drawn is already missing from ``available``. Subtracting the whole promise from that
-    reading charges the resident part a second time, which is why the credit is capped at the
-    promise: a fully materialized worker contributes nothing further, a freshly spawned one still
-    contributes all of it."""
+    """Promised bytes not yet resident; capped at the promise so resident RAM is not charged twice."""
     now = time.monotonic()
     total = 0
     for token, entry in list(_budget_reservations.items()):
@@ -502,24 +433,7 @@ def clamp_to_available_ram(
     cache_dir: "Optional[str]" = None,
     module: Any = None,
 ) -> "dict[str, str]":
-    """Shrink a zoo-sized ``HF_XET_*`` budget that free RAM cannot afford. Returns what *env* holds.
-
-    hf_xet's reconstruction buffers are the worker's RSS, not reclaimable page cache. Sized from
-    total RAM, a download started while a 27B GGUF is resident asks for the same multi-GB budget it
-    would on an idle box, and the two together are the swap (issue #9032).
-
-    A clamp, not a second sizing formula: the zoo keeps deciding, this only hands it a smaller
-    machine, so the two cannot drift. Three properties:
-
-    - Free when there is headroom: a budget that fits returns untouched.
-    - Only keys the zoo wrote are rewritten, so an explicit user setting survives. A user-set
-      ``HF_XET_HIGH_PERFORMANCE`` makes the zoo drop its caps, leaving no budget key to clamp.
-    - Unmeasurable RAM, or a zoo too old to report it, leaves the download alone.
-
-    Whatever budget ends up in force is reserved for this thread's imminent spawn, so siblings
-    starting in the same window size against the remainder instead of against the same snapshot.
-    ``bind_worker_budget`` ties that reservation to the worker's pid.
-    """
+    """Shrinks zoo-written HF_XET_* budgets to free RAM; user-set keys and unreadable RAM are left as is."""
     if module is None:
         module = _load_optional("unsloth_zoo.hf_xet_tuning")
     overrides = getattr(module, "xet_env_overrides", None)
@@ -599,10 +513,7 @@ def clamp_to_available_ram(
 
 
 def available_ram_bytes() -> "tuple[Optional[int], int]":
-    """``(free RAM right now, the floor Xet wants)``; ``(None, floor)`` when RAM is unmeasurable.
-
-    Both numbers are the zoo's. It just compares its floor against TOTAL RAM, which cannot see a
-    loaded model; exposing them here lets the transport choice apply the same rule to free RAM."""
+    """Free RAM and Xet's floor; free RAM is None when unmeasurable, unlike the zoo's total-RAM check."""
     module = _load_optional("unsloth_zoo.hf_xet_tuning")
     floor = int(getattr(module, "MIN_XET_RAM_BYTES", 4_000_000_000) or 4_000_000_000)
     profile_of = getattr(module, "system_profile", None)
@@ -618,22 +529,7 @@ def available_ram_bytes() -> "tuple[Optional[int], int]":
 
 
 def free_ram_pressure_reason() -> "Optional[str]":
-    """Why a download should take HTTP right now, or ``None`` to leave Xet alone.
-
-    The zoo refuses Xet below ``MIN_XET_RAM_BYTES`` but measures TOTAL RAM, so the check passes on a
-    32 GB box down to 2 GB free because a 27B GGUF is loaded (issue #9032). Same rule and threshold,
-    asked of free RAM. Buffers are clamped separately; this catches the host where even the clamped
-    floor will not fit.
-
-    One rule with two callers, which must agree: the capabilities probe resolves what the UI submits
-    as an explicit transport, and ``resolve_auto_use_xet`` covers an API caller that sends "auto".
-    Unmeasurable RAM is not evidence of pressure, so anything unreadable keeps Xet.
-
-    RAM promised to running downloads but not yet resident is subtracted, so the Nth concurrent
-    download is sent to HTTP rather than handed Xet's floor. The clamp alone cannot bound that: its
-    budget bottoms out at the floor, so enough simultaneous workers would still add up past free
-    RAM. Only the unclaimed remainder, since whatever a worker has already taken is missing from
-    this reading already (see ``_live_reserved_locked``)."""
+    """Tests the zoo's Xet RAM floor against free RAM, minus unresident worker promises; None keeps Xet."""
     try:
         available, floor = available_ram_bytes()
         if available is not None:
@@ -652,22 +548,12 @@ def free_ram_pressure_reason() -> "Optional[str]":
 
 
 def child_should_disable_xet(config: dict) -> bool:
-    """Single source of truth for the per-worker Xet env flip (mirrors
-    ``unsloth_zoo.hf_xet_fallback.child_should_disable_xet``). Deliberately lightweight: importing or
-    calling it must NOT pull in unsloth_zoo/transformers, so the worker can decide before activating
-    the transformers sidecar (see the module docstring)."""
+    """Per-worker Xet flip; must not import unsloth_zoo or transformers, so the worker decides early."""
     return bool(config.get("disable_xet"))
 
 
 def is_data_phase_stall(message: str) -> bool:
-    """Whether a watchdog verdict fired AFTER bytes had flowed (mirrors
-    ``unsloth_zoo.hf_xet_fallback.is_data_phase_stall``).
-
-    "did not start" is the pre-first-byte trip, as likely slow metadata or a cache lock as a broken
-    Xet; the others mean the transfer moved and then wedged, which a fresh worker recovers from. The
-    lifecycle decides both whether to spend another Xet worker and whether to charge a health
-    failure on this one rule, so the two cannot disagree. Local for the same reason as
-    ``child_should_disable_xet``: the stall path must not depend on the heavy import."""
+    """Whether the watchdog fired after bytes flowed; a pre-first-byte trip is not a data-phase stall."""
     return "did not start" not in (message or "")
 
 
@@ -809,22 +695,12 @@ def gpu_init_override_active() -> bool:
 
 
 def env_override_barrier() -> Any:
-    """Context manager a caller holds across a spawn so no loader can be mid-override.
-
-    Spawn children inherit the parent's live ``os.environ`` and there is no env dict to filter, so
-    the only way to keep UNSLOTH_ZOO_DISABLE_GPU_INIT out of a worker is that no loader has it set
-    when the child is created. Loaders never spawn, so holding this with the spawn lock cannot
-    deadlock, and ``_load_optional`` memoises so the window opens at most once per module per
-    process.
-    """
+    """Hold across a spawn so no loader is mid-override, since children inherit the live os.environ."""
     return _load_lock
 
 
 def _supported_kwargs(fn: Any, kwargs: "dict[str, Any]") -> "dict[str, Any]":
-    """Drop kwargs *fn* does not accept; pass everything through if it takes ``**kwargs``.
-
-    Uninspectable callables (C functions, some test doubles) also pass through unchanged.
-    """
+    """Filters kwargs to fn's signature; uninspectable callables get them all unchanged."""
     import inspect
 
     try:
@@ -837,23 +713,7 @@ def _supported_kwargs(fn: Any, kwargs: "dict[str, Any]") -> "dict[str, Any]":
 
 
 def start_watchdog(**kwargs: Any) -> Any:
-    """Shared stall watchdog, minus any kwarg the INSTALLED unsloth_zoo does not accept.
-
-    Load-bearing version-skew adapter: the supported floor (2026.8.1) has no ``connect_timeout`` or
-    ``heartbeat_interval`` and no ``**kwargs``, so passing one raises TypeError into the caller's
-    ``except Exception`` -- the watchdog then never starts and a stalled Xet worker is never killed
-    or retried over HTTP. That is the feature entirely off, not degraded. Filtering keeps newer
-    knobs live on a newer zoo and makes the NEXT new kwarg a no-op instead of a repeat of this bug.
-
-    Dropping the pre-byte budget on 2026.8.1 costs little: huggingface_hub opens the ``.incomplete``
-    BEFORE calling ``xet_get`` (``file_download.py`` opens ``incomplete_path`` and calls ``xet_get``
-    inside that ``with``) and the floor counts a partial by presence, not size, so a hf_xet hang
-    still trips the floor's 180s data clock. Verified against the released wheel: wedged inside
-    ``xet_get`` trips, wedged before the open does not. The uncovered window is the metadata phase,
-    where ``snapshot_download`` calls ``repo_info`` with no timeout. That gap predates this shim;
-    the connect clock closes it only once a zoo carrying it ships, and passing the kwarg early would
-    not close it, it would disable the watchdog outright.
-    """
+    """Drops kwargs the installed zoo lacks; passing one raises TypeError and the watchdog never starts."""
     impl = _shared.start_watchdog if _load_shared() else _degraded_start_watchdog
     return impl(**_supported_kwargs(impl, kwargs))
 
@@ -964,29 +824,7 @@ def hf_hub_download_with_xet_fallback(
     local_files_only: bool = False,
     gguf_header_delta: bool = False,
 ) -> str:
-    """Single-file download via the shared fallback with Unsloth's marker-aware HTTP-retry prep.
-    ``force_download`` re-fetches a newer blob over a cached one (Unsloth's model-update path).
-
-    ``local_files_only`` resolves from the cache and never from the network, raising
-    huggingface_hub's ``LocalEntryNotFoundError`` on a miss. It deliberately BYPASSES the shared
-    fallback rather than forwarding the kwarg: that ladder exists only to recover a wedged
-    network transfer, so with no transfer permitted there is nothing to watch, and -- decisively
-    -- ``start_watchdog``-style version skew means an older installed ``unsloth_zoo`` could drop
-    an unrecognised kwarg on the floor. A dropped ``local_files_only`` DOWNLOADS, which is the one
-    outcome this parameter exists to prevent, so it must not depend on the installed zoo.
-
-    ``reuse_other_cache_root`` (opt-in) resolves a file cached ONLY under huggingface_hub's
-    import-time root through that root. Unsloth's cache folder is a setting, so after it changes every
-    cached asset is invisible to a call pinned to the new root: GBs re-download, and a gated base with
-    no valid token 401s even though the bytes are there and the preflight (which checks both roots)
-    already cleared it. Routed THROUGH the other root rather than returned raw, so the ref still
-    resolves and a republished file is picked up; the blob is reused, and offline/401
-    hf_hub_download keeps the failed HEAD and serves the cached pointer. Off for
-    ``force_download``, whose point is to re-fetch.
-
-    ``gguf_header_delta`` (opt-in, Images / Video GGUF loads only) rebuilds a GGUF whose new revision changed only its
-    header from the cached older copy (``hub.utils.gguf_header_delta``); no network unless that file is missing for
-    the target commit and an older snapshot holds it."""
+    """local_files_only bypasses the fallback so an older zoo cannot drop it and start a download."""
     if cache_dir is None:
         from utils.hf_cache_settings import get_hf_cache_paths
         cache_dir = str(get_hf_cache_paths().hub_cache)

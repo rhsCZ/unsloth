@@ -116,13 +116,7 @@ def split_shard_paths(path: str) -> Optional[list[str]]:
 
 
 def layout_from_gguf(path: str, *, all_shards: bool = False) -> ModelLayout:
-    """Read ``path`` into a :class:`ModelLayout`.
-
-    Returns an incomplete layout (``complete = False``) rather than raising when
-    anything required is missing, so a surprising GGUF makes the planner abstain
-    instead of failing a load that llama.cpp would have handled.
-    ``all_shards`` reads every sibling shard; all of them must be present.
-    """
+    """Returns an incomplete layout rather than raising, so the planner abstains on a surprising GGUF."""
     try:
         from gguf import GGUFReader
         readers = [GGUFReader(path)]
@@ -281,14 +275,7 @@ def _layout_from_readers(readers) -> ModelLayout:
 
 
 def spill_pattern_for(layout: ModelLayout, indices: Optional[list[int]] = None) -> str:
-    """The anchored ``-ot`` pattern matching the spillable FFN of ``indices``.
-
-    Anchored because llama.cpp matches with ``std::regex_search``: an unanchored
-    ``output\\.weight`` also matches every ``blk.N.attn_output.weight``, which
-    silently moves 16 attention projections nobody asked to move. The trailing
-    ``\\.weight$`` likewise keeps ``ffn_(up|gate|down)\\.`` from matching
-    ``ffn_gate_inp.weight``.
-    """
+    """Anchored: llama.cpp uses regex_search, so an unanchored pattern also moves attention tensors."""
     # Must match _MOE_EXPERT_RE, or the plan credits bytes the pattern never moves
     body = "ffn_(up|gate|down|gate_up)_(exps|chexps)" if layout.is_moe else "ffn_(up|gate|down)"
     if indices is None:

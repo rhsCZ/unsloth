@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Opt-in media auto-switch: the name resolver and the switch it drives.
-
-The local-model scan is replaced with fixture entries pointing at real (empty) files, and
-the load routes with fakes, so these exercise resolution, the drain/load sequencing and the
-error envelopes without torch, diffusers, weights or a GPU.
-"""
+"""Scan and load routes are faked, so the switch's ordering runs without torch, weights or a GPU."""
 
 from __future__ import annotations
 
@@ -42,11 +37,7 @@ import core.inference.video as video_module
 
 
 def _a_real_video_family(name = "wan2.2-ti2v-5b"):
-    """A real ``VideoFamily``, for tests that just need the route to carry one.
-
-    A bare ``object()`` stands in for a forty-field frozen dataclass, so the first field
-    nobody hand-copied fails the test on an AttributeError about nothing it asserts.
-    """
+    """A real VideoFamily: a bare stub would fail on an unrelated AttributeError for any new field."""
     from core.inference.video_families import detect_video_family
 
     fam = detect_video_family("", override = name)
@@ -55,17 +46,7 @@ def _a_real_video_family(name = "wan2.2-ti2v-5b"):
 
 
 def _video_load_backend(**overrides):
-    """A real ``VideoBackend`` with only the asserted methods replaced.
-
-    Every other call the route makes runs the real implementation, which for the load
-    route's preflight and reservation helpers is pure registry resolution: no hub, no GPU,
-    no weights, and ``__init__`` only allocates locks. A hand-rolled stub instead needs
-    extending every time the route grows a call, and until it is, unrelated tests fail on a
-    missing attribute rather than on what they assert.
-
-    ``overrides`` are checked against the class, so a stub for a method that does not exist
-    fails loudly instead of quietly never being called.
-    """
+    """A real VideoBackend with only the overridden methods replaced; unknown override names fail loudly."""
     from core.inference.video import VideoBackend
 
     unknown = sorted(name for name in overrides if not hasattr(VideoBackend, name))
@@ -119,11 +100,7 @@ def _gguf_image_info(
 
 
 def _hf_cache_repo(root, repo_id, *, files):
-    """A minimal HF cache repo: ``models--org--name/snapshots/<sha>/<file> -> ../../blobs/<sha>``.
-
-    The symlinks are the point. Both bugs this layout covers only appear once the files are
-    links into ``blobs/`` and the entry path is the repo root rather than the snapshot.
-    """
+    """Entries must be symlinks into blobs/ under the repo root; both bugs need that layout."""
     sha = "a" * 40
     repo_dir = root / f"models--{repo_id.replace('/', '--')}"
     snapshot = repo_dir / "snapshots" / sha
@@ -162,14 +139,7 @@ def enabled(monkeypatch):
 
 @pytest.fixture
 def takes_the_gpu(monkeypatch):
-    """Pin the load to the GPU-taking path instead of inheriting the host's device.
-
-    Whether the switch waits on chat and on the other media backend, and which gates it holds,
-    is decided by ``load_takes_the_gpu`` -- so a test about that wait reads the running host
-    unless it says otherwise, and passes on a CUDA box while failing on every CPU-only CI
-    runner. Both bindings, like the CPU test below: the drain sizes its wait with one, the
-    switch decides on the gpu lock with the other.
-    """
+    """Pins load_takes_the_gpu to True in both bindings, so results don't depend on a host GPU."""
     monkeypatch.setattr(backends, "load_takes_the_gpu", lambda: True)
     monkeypatch.setattr(mas, "load_takes_the_gpu", lambda: True)
 
@@ -1077,13 +1047,7 @@ def test_a_local_video_pipeline_is_still_planned(h3_modular, enabled, backend, l
 
 
 def test_every_backend_call_the_video_route_makes_exists_on_the_backend():
-    """``backend.<name>`` in routes/video.py must name something ``VideoBackend`` has.
-
-    ``get_video_backend()`` is untyped at the call site, so a method renamed on the class or
-    misspelled in the route is no syntax error, no lint finding, and invisible to any double
-    stubbing the old name. It is an AttributeError on a real load, and the route's own tests
-    mock the backend out. Read off the parse tree, not the text.
-    """
+    """Route calls to backend.<name> must exist on VideoBackend; mocked route tests would never notice."""
     import ast
     import inspect
 

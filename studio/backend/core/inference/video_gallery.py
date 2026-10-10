@@ -209,12 +209,7 @@ def first_frame_webp(
     max_pixels: Optional[int] = None,
     max_height: Optional[int] = None,
 ) -> bytes:
-    """The first frame of a clip (a file or an open binary stream), at most `width` wide and
-    `max_height` tall (four widths unless given), as WebP.
-
-    ``container`` forces the demuxer instead of probing for one, and then nothing but the stream
-    itself is read: a probed HLS or concat playlist names other files to open. ``max_pixels``
-    refuses a frame larger than that before it is decoded."""
+    """First frame as WebP; a forced container reads only the stream, not files a probed playlist names."""
     import io
 
     try:
@@ -256,14 +251,7 @@ def first_frame_webp(
 
 
 def transcode_to_file(video_id: str, fmt: str) -> Optional[Path]:
-    """Re-encode a stored MP4 for the Download menu into a TEMP FILE and return its path, or None
-    when the id doesn't resolve. Raises RuntimeError on missing codec/deps (route 501s). The caller
-    owns the file and must delete it after serving.
-
-    A file rather than a buffer because the request caps allow 2048x2048 x 1024 frames: a VP9
-    export of a clip that size runs to hundreds of MB, and holding it as one ``bytes`` (then again
-    in the response) let a couple of concurrent export clicks exhaust the process. The MP4 route
-    already streams from disk; this makes the transcodes behave the same way."""
+    """Transcode an owned clip to a temp file, not memory, since VP9 exports can run to hundreds of MB."""
     # only transcode an Unsloth-owned clip, so a guessed stem for a foreign MP4 cannot be re-encoded out
     path = owned_video_path(video_id)
     if path is None:
@@ -469,10 +457,7 @@ def get_record(video_id: str) -> Optional[dict[str, Any]]:
 
 
 def owned_video_path(video_id: str) -> Optional[Path]:
-    """Resolve an id to its MP4 only when it is an Unsloth-owned clip (a readable sidecar), else
-    None. The serve and export routes use this instead of video_path() so a guessed stem for a
-    hand-dropped/orphan MP4 -- which list_videos/delete/clear already treat as not ours -- can't
-    be streamed or transcoded out. Mirrors the delete/clear ownership guard."""
+    """Owned clips only (readable sidecar); a guessed stem for a hand-dropped MP4 must not be streamed."""
     path = video_path(video_id)
     if path is None or _read_meta(_sidecar_path(video_id)) is None:
         return None
@@ -493,19 +478,7 @@ def list_videos(
     valid: Optional[Callable[[dict[str, Any]], bool]] = None,
     archived: bool = False,
 ) -> list[dict[str, Any]]:
-    """A window of videos for infinite scroll: pinned first (most recently pinned leading), then
-    newest-first by MP4 mtime (or the manual key once dragged).
-
-    mtime is a cheap stat ~= generation order; only the window's sidecars are read. limit=None
-    returns everything from ``offset`` on. A file without its pair is skipped.
-
-    ``archived`` selects WHICH shelf to page over, it does not widen one: False lists only active
-    clips, True lists only archived ones. The archived section needs its own scrollable page.
-
-    ``valid`` (optional) filters records BEFORE pagination, so ``offset`` / ``limit`` and has_more
-    all count over the accepted-record domain. Pass the route's schema validator: a sidecar that
-    parses as JSON but fails the response schema would otherwise be counted here yet dropped after
-    slicing, stalling infinite scroll."""
+    """Pinned then newest-first; valid filters run before slicing so has_more counts accepted clips."""
     try:
         paths = list(gallery_dir().glob("*.mp4"))
     except OSError:
@@ -612,17 +585,7 @@ def delete(video_id: str) -> bool:
 
 
 def clear(include_archived: bool = False, *, return_ids: bool = False) -> int | list[str]:
-    """Delete owned gallery pairs and return their count, or their ids when requested.
-
-    Archived clips are SPARED by default: archiving is how a user sets something aside, so a
-    "clear the gallery" action that destroyed the archive would defeat it. Pass
-    include_archived=True to remove those too.
-
-    Raises FlagsUnavailable when the archive has to be spared but the flag store cannot be read.
-    Fail CLOSED: read() answers "nothing is archived" for an unreadable store, which here would
-    quietly delete the very archive this promises to keep.
-
-    Foreign/orphan MP4s are preserved: list_videos already hides them, so clear must not destroy them."""
+    """Delete owned clips, sparing archived ones unless asked; fail closed if flags are unreadable."""
     removed = 0
     directory = gallery_dir()
     # Hold the flag lock across read-then-delete or a mid-loop archive is deleted after success.

@@ -625,11 +625,7 @@ def resolve_fit_max_seq_length(override: dict[str, Any], *, is_gguf: bool) -> Op
 
 
 def model_override_load_kwargs(override: dict[str, Any], *, is_gguf: bool) -> dict[str, Any]:
-    """Map remembered settings onto the same load options used by the picker.
-
-    GGUF and optional engines accept explicit GPU selection. The default
-    safetensors backend uses automatic placement and must not inherit that pin.
-    """
+    """Default safetensors loads use automatic placement and must not inherit a remembered GPU pin."""
     if not override:
         return {}
     kwargs: dict[str, Any] = {}

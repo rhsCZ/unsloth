@@ -308,10 +308,7 @@ _SCAN_IMAGE_MIN_PIXELS = 1_000_000
 
 
 def _image_covers_a_corner(doc, number: int) -> bool:
-    """True when a scan-sized raster image overlaps one of the 10pt page corners pymupdf4llm
-    renders to guess the background colour. That render decodes the whole image in one C call
-    holding the GIL (~2 s per JPEG2000 scan page), starving the server's event loop until the
-    desktop watchdog kills it (#13094)."""
+    """True when a scan-sized image covers a corner pymupdf4llm samples, since that render holds the GIL."""
     try:
         import fitz
 
@@ -450,10 +447,7 @@ def _pdf(
 
 
 def parse_pdf_bytes(data: bytes, *, max_pages: int | None = None) -> tuple[list[Page], int]:
-    """Extract PDF pages from an in-memory download using the ingestion parser.
-
-    Returns the (capped) pages plus the document's full page count, so a caller
-    that set ``max_pages`` can tell a fully-read short PDF from a truncated one."""
+    """Returns capped pages plus the full page count, so a max_pages cut differs from a short PDF."""
     pages, _images, total_pages = _pdf(data, want_images = False, max_pages = max_pages)
     return pages, total_pages
 
@@ -516,10 +510,7 @@ def pages_with_figures(
     min_side: float = 40.0,
     exclude_pages: set[int] | None = None,
 ) -> list[int]:
-    """1-based page numbers with a qualifying figure region, capped at ``max_pages``;
-    drives figure tiling. ``exclude_pages`` (1-based) are skipped: those are the pages
-    OCR already transcribed whole, so tiling them would duplicate the vision work. Any
-    failure yields []."""
+    """1-based pages with a figure region, for tiling; exclude_pages, already OCR'd whole, are skipped."""
     exclude = exclude_pages or set()
     try:
         import pymupdf
@@ -619,10 +610,7 @@ def render_pdf_pages(
     *,
     dpi: int = 150,
 ) -> dict[int, bytes]:
-    """Render whole PDF pages (given as 1-based numbers) to PNG bytes, keyed by
-    page number. Backs scanned-page OCR. Any failure yields ``{}`` (or skips that
-    page), never an exception.
-    """
+    """Renders whole 1-based pages to PNG for scanned-page OCR; failures skip the page, never raise."""
     wanted = {int(n) for n in page_numbers}
     if not wanted:
         return {}
@@ -799,10 +787,7 @@ def _docx_paragraph_text(paragraph) -> str:
 
 
 def _docx_table_rows(table) -> list[str]:
-    """Each row as pipe-joined cell text (the locator splits anchors on pipes).
-    Columns stay aligned to the layout grid (merged cells fill their spanned slots,
-    skipped leading/trailing grid columns become empty fields). Cells are walked in
-    document order so a nested table, and any text after it, flattens in place."""
+    """Cells joined by pipes, aligned to the layout grid; the locator splits anchors on pipes."""
     from docx.table import Table
     from docx.text.paragraph import Paragraph
 

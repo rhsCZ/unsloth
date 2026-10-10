@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the OpenAI Responses-API citation marker rewriter.
-
-The stream interleaves text deltas with ``\\ue200cite\\ue202SOURCE_ID\\ue201``
-markers. The rewriter resolves each to `[N](URL)` once the annotation arrives
-and drops it otherwise; the URL list still flows to Sources via
-`_record_url_citation`.
-
-Reference: https://developers.openai.com/api/docs/guides/citation-formatting
-"""
+"""Tests for the Responses citation rewriter: markers become [N](URL) once annotated, else dropped."""
 
 import pytest
 

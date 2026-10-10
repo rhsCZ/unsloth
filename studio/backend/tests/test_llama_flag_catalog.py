@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The flag catalogue the extra-arguments editor validates against.
-
-The catalogue comes from the INSTALLED binary's ``--help``, not a list shipped with
-Unsloth, because a custom or newer llama.cpp is exactly the case where a bundled list
-would reject a flag that works. These tests pin the two things the editor depends on:
-that a failed probe is reported as unverifiable rather than as "no such flag", and
-that the managed list it explains rejections with cannot drift from the validator.
-"""
+"""Flags come from the installed binary's --help; a failed probe is unverifiable, not a missing flag."""
 
 from __future__ import annotations
 

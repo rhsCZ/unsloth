@@ -40,14 +40,7 @@ def hf_env_offline() -> bool:
 
 
 def anonymous_and_offline(hf_token, *, repo_id: Optional[str] = None) -> bool:
-    """The one condition under which a Hub-reaching request can only be answered by disk.
-
-    ``token=False`` denies authentication, not the cache: offline, huggingface_hub and datasets
-    both resolve a previously downloaded private repo without ever authorizing. Guarded at the
-    route entry, since each per-call-site fix only moved the boundary to the next reader. Given
-    a repo id the shared cached-read rule applies rather than a blanket refusal: a PUBLIC repo
-    was always readable, and one not on the disk has nothing to leak.
-    """
+    """token=False denies auth, not the cache: offline, a downloaded private repo resolves from disk."""
     from hub.utils.hf_tokens import cached_read_refused, is_anonymous
 
     if not is_anonymous(hf_token):
@@ -674,10 +667,7 @@ def active_hf_cache_loadable_snapshot(repo_id: str) -> Optional[Path]:
 
 
 def active_hf_cache_repo_spelling(repo_id: str) -> Optional[str]:
-    """The spelling ``repo_id`` is actually cached under in the active cache, or None.
-
-    The Hub is case insensitive, the cache directories it creates are not, and huggingface_hub keys the directory on the id verbatim, so one checkpoint sits under whichever spelling first asked for it (huggingface/huggingface_hub#3838). Returning the spelling rather than a bool is what lets a caller LOAD the copy it found: asking for any other casing downloads it again.
-    """
+    """Cache dirs are case-sensitive while the Hub is not, so return the cached spelling to load it."""
     if active_hf_cache_loadable_snapshot(repo_id) is not None:
         return repo_id
     try:
@@ -810,10 +800,7 @@ def log_and_http_error(
     log = None,
     headers: Optional[dict] = None,
 ):
-    """Log ``error`` in full server-side and return an ``HTTPException`` whose ``detail`` is only ``public_message``, never the raw exception text.
-
-    Usage:  raise log_and_http_error(e, 500, "Failed to start training")
-    """
+    """Logs the full error server-side; HTTPException detail carries only public_message, never raw text."""
     from fastapi import HTTPException
 
     # 4xx: one warning, no traceback (rejected saves flooded the log); 5xx keeps the traceback.
@@ -827,14 +814,6 @@ def log_and_http_error(
 
 @contextmanager
 def without_hf_auth():
-    """
-    Temporarily disable HuggingFace authentication.
-
-    Usage:
-        with without_hf_auth():
-            # Code that should run without cached tokens
-            model_info(model_name, token=None)
-    """
     saved_env = {}
     env_vars = ["HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HF_HOME"]
     for var in env_vars:
@@ -919,13 +898,6 @@ def is_hf_authentication_error(error: Exception) -> bool:
 
 
 def format_error_message(error: Exception, model_name: str) -> str:
-    """
-    Format a user-friendly error message for common load issues.
-
-    Args:
-        error: The exception that occurred
-        model_name: Name of the model being loaded
-    """
     missing = modelscope_missing(error)
     if missing:
         return missing

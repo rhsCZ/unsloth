@@ -65,10 +65,7 @@ _VOID_TAGS = frozenset(
 
 
 def _style_hides_element(style: str) -> bool:
-    """True when an inline ``style`` sets ``display:none`` / ``visibility:hidden``.
-
-    Parsed per property so an unrelated value that merely contains ``none`` is
-    not misread as hidden."""
+    """Each declaration is checked alone, so a value that merely contains none is not read as hidden."""
     lowered = style.lower()
     if "none" not in lowered and "hidden" not in lowered:
         return False
@@ -86,10 +83,7 @@ def _style_hides_element(style: str) -> bool:
 
 
 def _is_hidden_element(attr_dict: dict) -> bool:
-    """True when the element is not rendered: ``hidden`` attribute,
-    ``aria-hidden="true"``, or an inline ``style`` hiding it. Such JS-only
-    placeholders ship in the HTML but must not reach the output. ``hidden`` is
-    enumerated: any present value (even ``hidden="false"``) means not rendered."""
+    """Any present hidden attribute counts, even hidden=false, since presence alone means not rendered."""
     if "hidden" in attr_dict:
         return True
     if (attr_dict.get("aria-hidden") or "").strip().lower() == "true":
@@ -106,12 +100,7 @@ def _span_attr(attr_dict: dict, name: str) -> int:
 
 
 def _is_aria_heading(attr_dict: dict) -> bool:
-    """True for ``role="heading"``, which titles a page just as ``h1``-``h6`` does.
-
-    ``role`` is a token list authors use for fallbacks (``role="future-role
-    heading"``), so any token counts. WAI-ARIA takes the first token naming a
-    real role, which would need the whole role table; matching anywhere is the
-    safe direction, since keeping a stray title beats dropping a real one."""
+    """Any role token counts: WAI-ARIA's first-token rule needs the full role table, so match loosely."""
     return "heading" in (attr_dict.get("role") or "").lower().split()
 
 
@@ -269,10 +258,7 @@ class _HeaderFrame:
         closed_by_own_tag: bool,
         strip: bool | None = None,
     ) -> str:
-        """The buffer, or only its headings when the header is link furniture.
-
-        Without a matching ``</header>`` the header may have adopted the page
-        body, so keep it whole."""
+        """Without a closing ``</header>`` the header may have adopted the page body; keep it whole."""
         self.stripped = False
         if not closed_by_own_tag:
             return "".join(self.parts)
@@ -471,10 +457,7 @@ class _MarkdownRenderer(HTMLParser):
         self._bq_stack: list[list[str]] = []
 
     def _nested_buffer_open(self, frame: _HeaderFrame) -> bool:
-        """True when a side buffer opened *inside* *frame* still holds content.
-
-        Such a buffer emits into the frame when it closes; an enclosing one
-        (already open at ``<header>``) must not capture it."""
+        """An enclosing buffer opened before the header must not capture the frame's content."""
         if self._in_link:
             return self._link_seq != frame.outer_link_seq
         if self._in_cell:
@@ -743,13 +726,8 @@ class _MarkdownRenderer(HTMLParser):
         del self._open_tags[index:]
 
     def _close_implicit(self, tag: str) -> None:
-        """HTML5 optional-end-tag recovery for a start tag about to open.
-
-        Pops each implicitly-closed ancestor (and its hidden marks), scanning the
-        whole stack so an open ``<p>``/``<li>`` still closes under an unclosed inline
-        ``<span>``. Stops at a ``_CLOSE_BARRIERS`` container so recovery never crosses
-        a nested list/table/dl and leaks the outer item's hidden content. Runs even
-        for skipped ``<nav>``/``<footer>``, which also close ``<p>``."""
+        """Recovery stops at ``_CLOSE_BARRIERS`` containers so an outer item's hidden content cannot
+        leak."""
         if not self._closable_open:
             return
         barriers = _CLOSE_BARRIERS.get(tag, ())
@@ -800,10 +778,8 @@ class _MarkdownRenderer(HTMLParser):
             closed_by_own_tag = False
 
     def _finalize_nested_buffers(self, frame: _HeaderFrame) -> None:
-        """Close side buffers opened inside *frame* whose end tags the page omitted.
-
-        Their content is the header's, so it has to land in the frame before the
-        strip is judged; otherwise it is emitted afterwards and escapes."""
+        """Content must reach the frame before the strip is judged, or it is emitted afterwards and
+        escapes."""
         if self._in_link and self._link_seq != frame.outer_link_seq:
             frame.link_chars += self._link_header_chars
             self._finish_link()
@@ -1239,11 +1215,7 @@ _BOILERPLATE_NORMALIZED = frozenset(
 
 
 def _line_is_boilerplate(line: str) -> bool:
-    """True only when a whole line is composed of known furniture phrases.
-
-    Splits on sentence terminators and requires every segment to be furniture, so a
-    line stacking several phrases is dropped while prose that merely quotes one is
-    kept (its other words leave a non-furniture segment)."""
+    """Every sentence segment must be furniture, so prose that merely quotes one phrase is kept."""
     normalized = re.sub(r"\s+", " ", line).strip().casefold()
     if not normalized:
         return False
@@ -1265,10 +1237,7 @@ def _fence_state(line: str, fence: int) -> int:
 
 
 def _strip_boilerplate_lines(text: str, site_links: SiteLinks | None = None) -> str:
-    """Drop short lines that consist entirely of known page-furniture phrases.
-
-    Fenced code blocks are preserved verbatim: boilerplate never renders
-    inside ``<pre>``, while READMEs legitimately quote error strings."""
+    """Fenced code is kept verbatim: boilerplate never renders in pre, and READMEs quote error strings."""
     out: list[str] = []
     fence = 0
     for line in text.split("\n"):

@@ -139,10 +139,7 @@ class LocationUnavailable(OSError):
 
 
 def mount_point(path: Path) -> Optional[str]:
-    """The mount point `path` is under when that is not the system disk's root: a drive or share
-    mounted at a fixed folder (/mnt/usb, /media/me/Drive, a Windows mounted folder). None for a
-    folder on the system disk, or on a drive with a letter or volume of its own, which goes away
-    whole when it is unplugged."""
+    """A fixed-folder mount point; None for the system disk or a lettered drive, which goes away whole."""
     for candidate in (path, *path.parents):
         try:
             if os.path.ismount(candidate):
@@ -172,10 +169,7 @@ def _source_available(entry: dict) -> bool:
 
 
 def _in_use(entry: dict) -> Optional[Path]:
-    """The folder `entry` saves into now: its own, or, while a move cut short waits for the drive
-    it was moving onto, the folder the files were leaving, where those not moved yet still are.
-    That stays in use until the move is taken up again, even once the drive is back: the chosen
-    folder alone would hide what the folder standing in holds. None while neither is there."""
+    """While a move waits for its drive, the folder it leaves stays in use even after the drive returns."""
     source = entry.get("moving_from")
     standing_in = bool(source) and _source_available(entry) and Path(source).is_dir()
     if standing_in and entry.get("waiting"):

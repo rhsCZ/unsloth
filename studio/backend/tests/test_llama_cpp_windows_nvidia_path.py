@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for the Windows pip-nvidia DLL dir resolver.
-
-Unsloth installs torch with bundled CUDA wheels (nvidia-cuda-runtime-cu13,
-nvidia-cublas-cu13, etc.) and the prebuilt llama-server.exe must find those
-DLLs at runtime to load CUDA. Mirrors the Linux LD_LIBRARY_PATH block.
-See unslothai/unsloth#5106.
-"""
+"""Tests the Windows resolver for pip-installed NVIDIA DLL dirs that llama-server.exe needs for CUDA."""
 
 from __future__ import annotations
 

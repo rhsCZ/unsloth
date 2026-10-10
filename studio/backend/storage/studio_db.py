@@ -97,13 +97,7 @@ def _is_wsl_windows_system_path(path: str) -> bool:
 
 
 def is_denied_system_path(path: str) -> bool:
-    """True if *path* is, or descends from, a denied system directory.
-
-    Mirrors the denylist add_scan_folder() enforces at registration, so the browser refuses /etc,
-    /proc, C:\\Windows and the like even when the allowlist holds a broad root. The /run carve-out
-    keeps Linux removable-media mounts browseable. Expects an already-resolved (realpath) path so
-    symlinks cannot escape into a denied subtree.
-    """
+    """Expects a realpath-resolved path, so a symlink cannot escape into a denied system subtree."""
     system = platform.system()
     fold = system == "Darwin" and macos_volume_ignores_case(path)
     if system == "Windows":
@@ -335,11 +329,7 @@ _INVENTORY_UPDATE_TRIGGER_SQL = f"""
 
 
 def _replace_inventory_update_trigger(conn: sqlite3.Connection) -> None:
-    """Swap the unscoped trigger for the scoped one, safely for concurrent openers. DDL does not open a
-    transaction under sqlite3's legacy transaction control, only DML does, so a bare DROP + CREATE
-    pair can interleave across processes as drop/drop/create/create and the second CREATE raises out
-    of `get_connection`. Hence: skip when already scoped, hold the writer lock across the pair, IF
-    NOT EXISTS on top."""
+    """DDL opens no transaction under legacy sqlite3, so DROP + CREATE must run under the writer lock."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
         (_INVENTORY_UPDATE_TRIGGER,),
@@ -1316,16 +1306,7 @@ _CONTENDED_BUSY_TIMEOUT_SECONDS = 30.0
 
 
 def _apply_wal_synchronous(conn: sqlite3.Connection) -> None:
-    """Drop to synchronous=NORMAL, but only while the file is really in WAL mode. Under WAL, sqlite
-    still defaults to synchronous=FULL, which fsyncs on every commit while holding the writer lock:
-    on a machine whose disk is busy one commit blocked for 37s, and every other writer spent that
-    window timing out with "database is locked". NORMAL is sqlite's own recommended pairing for WAL:
-    it can lose the last transactions to a host power loss, but the database is never corrupted and
-    commits stay durable across an application crash. The WAL check is not decoration. `PRAGMA
-    journal_mode=WAL` silently declines on filesystems without proper shared-memory support (network
-    shares, some FUSE and container-mounted paths), leaving the file on a rollback journal where
-    NORMAL drops the very fsync that keeps it consistent. Those installs keep FULL. journal_mode is
-    persistent in the file, so this reads what is in force rather than what was requested."""
+    """Use NORMAL only when journal_mode reads back as WAL; WAL silently declines on some filesystems."""
     try:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     except (sqlite3.Error, TypeError, IndexError):
@@ -2329,13 +2310,7 @@ def _write_chat_thread_settings_in_conn(
     writer: Optional[str] = None,
     keep_unreadable = None,
 ) -> Optional[bool]:
-    """The snapshot write itself, on a connection whose transaction the caller owns. None when the row
-    is gone. True when it wrote, False when an older write from the same writer was refused; both
-    leave the caller's transaction usable. The all-or-nothing the caller wants is about FAILURE: a
-    rejected metadata precondition must not leave the settings committed, and a missing row must
-    write nothing. A refusal is not a failure: this writer has already landed a newer snapshot, so
-    the row holds what it wanted either way, and rolling the metadata back would drop a rename the
-    client sent in the same PATCH and got a 200 for."""
+    """None for a missing row, False for a refused older write; the caller's transaction stays usable."""
     row = conn.execute(
         "SELECT settings_json, settings_seqs FROM chat_threads WHERE id = ?",
         (id,),
@@ -2383,17 +2358,7 @@ def write_chat_thread_settings(
     writer: Optional[str] = None,
     keep_unreadable = None,
 ) -> Optional[dict]:
-    """Write a thread's settings snapshot, reading and merging in one transaction. Doing the read in
-    the route and the write here lets two requests on the same thread both turn a partial patch into
-    a full replacement built from the same stale snapshot, and the second one lands on top. `writer`
-    and `seq` order the writes, and only ever against the same writer's own earlier ones: a write is
-    dropped when it comes from the writer whose snapshot is already stored and carries a seq no
-    newer than it. Two browsers are never compared, since their counters have nothing to do with
-    each other and the one behind would have every edit silently refused. Within one writer the
-    ordering is real: an aborted fetch does not stop a handler already started.
-    `keep_unreadable(stored) -> dict` names the part of the stored snapshot the caller could not
-    read, which a replacement carries forward rather than deleting. Passed in rather than imported
-    so this module stays free of the wire models."""
+    """Read and merge in one BEGIN IMMEDIATE transaction; seq only orders writes from the same writer."""
     conn = get_connection()
     try:
         # IMMEDIATE takes the write lock up front, so the read below cannot be overtaken.
@@ -2638,14 +2603,7 @@ def delete_chat_threads(ids: list[str]) -> list[str]:
 
 
 def unreaped_clear_operation_image_ids(operation_id: Optional[str]) -> Optional[set]:
-    """The ids a recorded clear was responsible for but never reaped, or None. None means there is
-    nothing for a replay to finish: no such operation, a row from a build that did not record the
-    snapshot, or a reap that already completed. A replay must never reap on a guess, since the
-    images of chats created since the original clear are NOT its to take. Exists because the reap
-    runs after the clear's transaction commits, behind seconds of archive and sandbox cleanup.
-    Killed in that window, the operation is recorded and the thumbnails of every deleted chat are
-    still on disk, and the retry that follows would skip the one cleanup that had not run. Those
-    files say what was searched for, so leaving them is the worse failure."""
+    """Returns the ids a recorded clear never reaped, or None; a replay must never reap on a guess."""
     if operation_id is None:
         return None
     try:
@@ -2673,11 +2631,8 @@ def unreaped_clear_operation_image_ids(operation_id: Optional[str]) -> Optional[
 def record_clear_operation_reap_scope(
     operation_id: Optional[str], image_ids: Optional[set]
 ) -> None:
-    """Persist what this clear's reap is responsible for, before it runs. Written as its own statement
-    rather than in the clear's INSERT: the snapshot is taken immediately after that transaction
-    commits, and moving the commit later to include it would widen the window where a concurrent
-    retry sees no ledger row at all. A None snapshot means "clear everything", which no replay may
-    repeat blindly, so it is stored as an explicit absence."""
+    """Kept as its own statement so the clear's commit stays early; None is stored as an explicit
+    absence."""
     if operation_id is None:
         return
     try:
@@ -2744,19 +2699,7 @@ def clear_chat_history_with_replay_status(
     operation_id: Optional[str] = None,
     include_chat_generation_runs: bool = False,
 ) -> "tuple[list[str], list[str], bool] | tuple[list[str], list[str], list[str], bool]":
-    """`clear_chat_history`, plus whether this call replayed a recorded outcome. Returns (thread ids
-    removed, research runs cascaded, replayed), optionally including active chat generation run ids
-    before the replay flag. The first two are taken inside the same transaction: another process can
-    add a thread between a listing and this call, its sandbox has to be cleaned up too, and after
-    the cascade nothing can tell the supervisor which runs to stop. `replayed` comes from that same
-    transaction because it cannot be established outside one. Two requests carrying the same
-    operation id can both read an unrecorded ledger before either commits, so both would conclude
-    they performed the clear; BEGIN IMMEDIATE then serialises them and the loser silently replays. A
-    caller trusting the outside read would run the second request's cleanup of global, non-id-keyed
-    state (the thumbnail cache) against threads created since the winner committed. That is exactly
-    the retry the operation id exists to make safe: the frontend reissues the same id when its first
-    attempt times out, and Starlette does not cancel the handler the client hung up on, so both
-    really are in flight at once."""
+    """Reads removed ids and the replayed flag in one BEGIN IMMEDIATE, so a racing retry replays."""
     conn = get_connection(_CONTENDED_BUSY_TIMEOUT_SECONDS)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -2824,12 +2767,7 @@ def count_chat_threads() -> int:
 
 
 def _unretire_project_rag_scope(project_id: str) -> None:
-    """Give a recreated project id back its RAG scope (#10567).
-
-    Runs after the Studio row commits and under the scope lock the delete route purges in, so a
-    purged tombstone left by a racing delete is cleared instead of disabling RAG for good. The
-    owner is re-read under the lock: a delete that won it must keep its tombstone.
-    """
+    """Re-reads the owner under the scope lock; a delete that won the race keeps its tombstone."""
     from utils.paths import rag_db_path
     try:
         if not rag_db_path().exists():
@@ -3224,10 +3162,7 @@ def _server_managed_message_ids(conn: sqlite3.Connection, thread_id: str) -> set
 def _surviving_parent_id(
     conn: sqlite3.Connection, thread_id: str, message_id: str, pruned: set
 ) -> "str | None":
-    """The stored ancestor a message relinks to once `pruned` is deleted, or None at the root. Walking
-    the stored chain server side is what makes the relink allowance safe: the expected parent is
-    derived from rows the server already holds, so a client cannot smuggle an arbitrary link past
-    the guard by claiming its old parent went away."""
+    """Walks the stored chain server side so a client cannot smuggle a parent past the relink guard."""
     seen = {message_id}
     row = conn.execute(
         "SELECT parent_id FROM chat_messages WHERE thread_id = ? AND id = ?",
@@ -4065,11 +4000,7 @@ def _fork_boundary_reseat(conn, thread_id: str, pruned: set):
 def _surviving_visible_ancestor(
     conn: sqlite3.Connection, thread_id: str, message_id: str, pruned: set
 ) -> "str | None":
-    """The nearest ancestor of `message_id` that survives `pruned` and paints a row.
-
-    The divider rides the row it names, so an ancestor the thread renders as nothing cannot
-    carry it; landing there loses the divider as surely as landing on a deleted row does.
-    None when no visible inherited history is left, which is a boundary to clear."""
+    """Skips ancestors that render as nothing, since a divider on one is lost; None if none remain."""
     seen = {message_id}
     candidate = _surviving_parent_id(conn, thread_id, message_id, pruned)
     while candidate is not None and candidate not in seen:
@@ -4174,14 +4105,7 @@ def _title_family(conn: sqlite3.Connection, base: str) -> list[tuple[str, str]]:
 
 
 def fork_base_of(src: Mapping) -> str:
-    """The name a fork of `src` numbers from.
-
-    A generated title carries the base it was built from, so "Notes (1)" gives "Notes"
-    however its family fares later: the source can be deleted or renamed and the next
-    fork is still "Notes (2)". Anything else numbers from its whole title, which is what
-    keeps a chat the user named "Budget (2026)" out of the suffix rule. The base is
-    cleared on rename, so a fork renamed to "Report (2026)" lands there too.
-    """
+    """Forks keep numbering from the stored base after the source is renamed or deleted."""
     stored = (src["fork_title_base"] or "").strip()
     return stored or (src["title"] or "").strip()
 
@@ -4207,10 +4131,8 @@ def fork_chat_thread(
     created_at: int,
     id_factory,
 ) -> Optional[dict]:
-    """Atomically clone thread + ancestor msgs `[root..branch_message_id]` into a new thread. Returns
-    the new thread dict (with messages copied) or None if source missing. Reset both code-exec
-    container ids; the per-provider snapshot is handled by the route layer. `id_factory()` produces
-    fresh message uuids, injected for testability."""
+    """Clones the thread and ancestor messages in one transaction, resetting both code-exec
+    container ids."""
     from storage.research_runs_db import ACTIVE_STATUSES as active_research_statuses
 
     conn = get_connection()
@@ -4506,10 +4428,7 @@ def _chat_attachment_text_bytes(attachment: dict) -> Optional[int]:
 
 
 def _chat_attachment_size_bytes(attachment: dict) -> Optional[int]:
-    """Approximate stored size of one attachment's content parts. Image, audio and file (video)
-    parts hold base64 payloads (decoded bytes ~= 3/4 of the encoded length); text parts count their
-    character length. None when there is no sizable content. A document whose original file is kept
-    counts that file instead of its extracted text."""
+    """Base64 media counts at 3/4 of encoded length; a document with its original kept counts that file."""
     original_size = chat_originals.attachment_size(attachment)
     if original_size is not None:
         return original_size
@@ -4847,10 +4766,7 @@ def delete_chat_attachment(message_id: str, attachment_id: str) -> bool:
 
 
 def count_chat_messages_for_threads(thread_ids: list[str]) -> dict[str, int]:
-    """User and assistant messages per thread on its newest branch, without reading bodies.
-
-    Mirrors the frontend's ``summarizeChatMessages``. Unknown ids count 0.
-    """
+    """Mirrors the frontend's summarizeChatMessages without reading bodies; unknown ids count 0."""
     unique_thread_ids = list(dict.fromkeys(thread_ids))
     rows_by_thread: dict[str, list[tuple[str, Optional[str], str, int]]] = {
         tid: [] for tid in unique_thread_ids
@@ -4953,10 +4869,7 @@ def compare_and_set_app_setting(
     *,
     absent: tuple[str, ...] = (),
 ) -> bool:
-    """Write ``value`` to ``key`` only while it still holds ``expected`` and no key in ``absent``
-    is set. A read-then-upsert cannot express "clear this flag": another save committing in the
-    gap is silently reverted by the write that follows it. Comparing inside one immediate
-    transaction makes a losing update a no-op instead. Returns whether the write happened."""
+    """Compares inside one BEGIN IMMEDIATE, so a racing save is not reverted by a read-then-write."""
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -5030,30 +4943,7 @@ def upsert_app_setting_map_entry(
     ambiguous_field: str | None = None,
     delete_if_entry_equals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Set (or delete, when entry_value is falsy) one sub-entry of a dict-valued app setting,
-    atomically under BEGIN IMMEDIATE so concurrent writers to other sub-entries cannot drop each
-    other's updates. ``fill_absent_fields`` writes only what is missing: the entry is created when
-    absent, and otherwise gains the fields it does not hold while every stored value is left as it
-    is. The read and the write share this transaction, so a caller that read the map earlier cannot
-    replace a value written since. Used by the one-time localStorage backfill, whose contract is
-    that the server copy is the newer authority: an upgraded install can hold an entry with only the
-    fields an older release knew while this browser holds the rest, and entry-level skipping would
-    strand them. ``coupled_fields`` names groups that only mean anything together. Field-by-field
-    filling would take a qualifier from this browser and leave the value it qualifies as the server
-    wrote it: a stored ``gpu_ids`` in one index space, relabelled with the other space's
-    ``gpu_index_kind``, points at a different GPU while looking stored. A group any part of which is
-    held is skipped whole.
-
-    ``keep_first_writer`` leaves an entry that already exists as it is, and with
-    ``ambiguous_field`` also collapses that one field to None when the stored value differs from
-    the incoming one. The comparison happens inside this transaction on purpose: a caller that
-    read the map first and decided outside it loses the race it is there to detect, since two
-    writers can both read "absent" and then each write its own value, and the last one wins with
-    an attribution that is no longer true.
-
-    ``delete_if_entry_equals`` removes the entry only when it is still exactly the one the
-    caller wrote, which is how a writer takes back a record for a call that then failed without
-    taking back a later writer's."""
+    """Atomic under BEGIN IMMEDIATE so writers to other sub-entries cannot drop each other's updates."""
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")

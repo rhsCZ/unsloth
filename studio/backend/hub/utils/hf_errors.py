@@ -18,11 +18,7 @@ def not_on_modelscope(repo: str) -> str:
 
 
 def modelscope_missing(error: object, repo: Optional[str] = None) -> Optional[str]:
-    """The ModelScope adapter's missing-repo sentence carried by an error chain or text, else None.
-
-    `datasets` drops the Hub's message for a missing dataset, so when no link carries the
-    sentence and `repo` is given, a DatasetNotFoundError under the ModelScope source answers for it.
-    """
+    """datasets drops the missing-repo sentence, so a ModelScope DatasetNotFoundError stands in for it."""
     links: dict[int, object] = {}
     pending = [error]
     while pending:

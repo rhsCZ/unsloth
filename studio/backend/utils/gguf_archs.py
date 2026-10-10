@@ -26,11 +26,7 @@ _VOCODER_MARKERS = ("--model-vocoder", "cannot be used as llm")
 
 
 def is_speech_gguf_architecture(architecture: Optional[str]) -> bool:
-    """Whether ``general.architecture`` names something only a TTS runtime can decode.
-
-    Case- and space-insensitive, like every other architecture comparison here. ``None`` and the
-    empty string are NOT speech: a GGUF declaring no architecture is unknown, and every caller
-    fails open on unknown."""
+    """None and empty are not speech, but unknown: every caller fails open on an unknown architecture."""
     if not architecture:
         return False
     normalized = architecture.strip().lower()

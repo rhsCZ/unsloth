@@ -1,18 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""End-to-end MCP session behaviour against a real server over Streamable HTTP.
-
-Everything else in the MCP suite runs against a fake client that takes a url and
-discards the headers, so nothing there observes a real HTTP request. These start
-a real MCP server on 127.0.0.1 and ask it what it saw.
-
-Oracle: fastmcp negotiates sessionless Streamable HTTP here, so there is no
-Mcp-Session-Id to follow and Context.session_id is a fresh UUID per request
-(checked with a held-open client). The server therefore keys its state on the
-client's TCP connection, which is what a stateful server's per-connection state
-behaves like: a held-open client sees its own notes, separate clients do not.
-"""
+"""fastmcp here is sessionless, so the server keys its state on each held-open TCP connection."""
 
 from __future__ import annotations
 
@@ -340,12 +329,7 @@ def test_an_oauth_server_is_never_cached(server):
 
 
 def test_state_survives_a_long_run_of_calls_in_one_chat(server):
-    """The property the shared session actually buys, held over many calls.
-
-    Deliberately not asserted as a socket count: how many TCP connections a
-    fastmcp client keeps open is a pooling detail that differs by version (3.0.2
-    opens far more than 4.0.0 for the same work), and the MCP spec makes every
-    JSON-RPC message its own POST regardless. Server-side state is the invariant."""
+    """Asserts server-side state, not socket counts, since pooling differs by fastmcp version."""
     _call(server, "save_note", {"text": "note-0"}, scope = SCOPE)
     for i in range(1, 10):
         _call(server, "save_note", {"text": f"note-{i}"}, scope = SCOPE)

@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""routes/llama.py: the source_build field is exposed and the handlers run the
-(now subprocess-touching) detection off the event loop via a worker thread.
-
-The route file is loaded standalone with a stubbed auth dependency so the test
-does not pull the whole routes package (matplotlib-heavy training router) and
-works in a minimal env.
-"""
+"""routes/llama.py tests: source_build is exposed, and blocking detection runs in a worker thread."""
 
 from __future__ import annotations
 

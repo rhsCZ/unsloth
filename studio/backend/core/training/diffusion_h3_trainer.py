@@ -128,11 +128,7 @@ def _shifted_sigma(u: float, shift: float) -> float:
 
 
 def _assert_component_grid(pipe: Any) -> None:
-    """Check the constants in ``diffusion_h3_clips`` against the loaded components.
-
-    Those constants drive the packed layout, and a wrong one produces a silently misaligned
-    sequence rather than an exception, so they are asserted against the checkpoint that is
-    actually loaded instead of trusted."""
+    """A wrong layout constant misaligns the sequence silently, so check it against the loaded VAEs."""
     vae = getattr(pipe, "vae", None)
     audio_vae = getattr(pipe, "audio_vae", None)
     actual = {}
@@ -156,12 +152,7 @@ def _assert_component_grid(pipe: Any) -> None:
 
 
 def _load_conditioners(cfg, device):
-    """Build the modular pipeline and load ONLY the conditioning components.
-
-    ``ModularPipeline.from_pretrained`` without ``workflow=`` keeps the whole block graph (a
-    ``workflow=`` prunes it statically and cannot be undone), and ``load_components(names=...)``
-    then fetches exactly the components named -- so the transformer is never even downloaded at
-    this phase, let alone resident."""
+    """Loads only the named conditioning components; the transformer is never downloaded in this phase."""
     import torch
     from diffusers import ModularPipeline
 
@@ -192,12 +183,7 @@ def _load_conditioners(cfg, device):
 
 
 def _encode_prompt(pipe, caption: str, device) -> Any:
-    """One caption -> the ``(1, num_tokens, 5120)`` hidden state H3 conditions on.
-
-    The presentation is the prompt verbatim: no chat template, no special tokens. The stack is
-    called through ``text_encoder.model`` because H3 reads ``hidden_states[50]`` and never uses
-    the language-model head, whose vocabulary-wide projection is all the top-level forward would
-    add."""
+    """Calls text_encoder.model directly: H3 reads hidden_states[50] and never needs the LM head."""
     import torch
 
     token_ids = pipe.tokenizer(caption, add_special_tokens = False)["input_ids"]
@@ -229,15 +215,7 @@ def _encode_prompt(pipe, caption: str, device) -> Any:
 
 
 def _encode_video_stats(vae, frames, device) -> tuple[Any, Any]:
-    """Encode one clip's frames to the normalised posterior's affine ``(A, B)`` pair.
-
-    ``frames`` is the uint8 ``(F, H, W, 3)`` array ``decode_clip`` returns. The recipe is the
-    released model's: ImageNet-normalise the pixels, encode, and normalise the latent by the
-    VAE's ``latents_mean`` / ``latents_std``. Caching ``(A, B)`` rather than a sample keeps a
-    fresh posterior draw available at every step without the VAE resident, exactly as the DiT
-    trainer's latent cache does. The reference's float16 rounding of the SAMPLE is not applied:
-    it is a conditioning-anchor reproducibility device (it makes a keyframe encode
-    bit-identical), and rounding a training target only removes signal."""
+    """Caches the affine (A, B) pair, not a sample; no float16 rounding, which would only drop signal."""
     import torch
 
     pixels = torch.from_numpy(frames).to(device)
@@ -256,12 +234,7 @@ def _encode_video_stats(vae, frames, device) -> tuple[Any, Any]:
 
 
 def _encode_audio_latents(audio_vae, waveform, device) -> Any:
-    """Encode one clip's stereo soundtrack to normalised audio latents ``(2, 32, n)``.
-
-    The audio VAE is mono, so the two stereo channels go through as two batch items -- the same
-    boundary the decoder crosses in reverse. MiniMax-H3 consumes the posterior MEAN and never
-    evaluates the ``logs_proj`` head, so the audio target is deterministic and no affine pair is
-    cached for it."""
+    """The audio VAE is mono, so the two stereo channels are encoded as two batch items."""
     import torch
 
     samples = torch.from_numpy(waveform).to(device).unsqueeze(1)
@@ -323,11 +296,7 @@ def _build_layout(
     patch: tuple[int, int, int],
     device,
 ):
-    """The packed ``[text | audio | video]`` layout for one training sample.
-
-    Built by the pipeline's own ``@staticmethod`` so the trainer and the sampler cannot drift:
-    the rotary grid, the row order and the modality tags are a checkpoint contract, and a
-    reimplementation that agreed today would not stay agreeing."""
+    """Uses the pipeline's own staticmethod, since row order and rotary grid are a checkpoint contract."""
     import torch
     from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3PrepareLayoutStep
 
@@ -364,10 +333,7 @@ def _build_layout(
 
 
 def _row_timesteps(layout, num_text_tokens: int, t_video: float, t_audio: float, device):
-    """The transformer's ``(timestep, timestep_indices)`` pair for one step.
-
-    Also the pipeline's own ``@staticmethod``: one forward serves rows at different noise
-    levels, and which row is at which level is the layout's business, not the loop's."""
+    """Uses the pipeline's own staticmethod, since one forward serves rows at different noise levels."""
     from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
 
     timestep, timestep_indices = MiniMaxH3SetTimestepsStep.build_row_timesteps(
@@ -390,22 +356,7 @@ def _save_lora(
     layers: dict,
     adapter_config: Optional[dict] = None,
 ) -> None:
-    """Write the adapter as ``pytorch_lora_weights.safetensors``.
-
-    Diffusers ships no ``MiniMaxH3LoraLoaderMixin``, so there is no
-    ``MiniMaxH3Pipeline.save_lora_weights`` to route through and no
-    ``pipe.load_lora_weights`` to read it back. The file this writes is nonetheless the
-    ordinary diffusers single-file layout with the ``transformer.`` prefix every mixin uses, so
-    it loads with ``transformer.load_lora_adapter(path, prefix="transformer")`` today and will
-    load with ``load_lora_weights`` unchanged the day that mixin lands.
-
-    ``adapter_config`` is the PEFT config, written as safetensors metadata in the layout
-    ``_save_lora_weights`` uses: the JSON under ``lora_adapter_metadata``, every key packed with
-    the same ``transformer.`` prefix, because ``load_lora_adapter`` strips the prefix off the
-    metadata exactly as it does off the tensors. Without it the loader falls through to
-    ``get_peft_kwargs``, which reads the rank off the B matrices and then sets
-    ``lora_alpha = r`` -- so an adapter trained at rank 16 / alpha 32 came back at half the
-    strength it was trained with, silently."""
+    """adapter_config goes in the metadata, else the loader sets lora_alpha = r, changing its scale."""
     import json
 
     from safetensors.torch import save_file

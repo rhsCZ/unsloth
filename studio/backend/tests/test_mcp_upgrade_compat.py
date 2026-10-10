@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What an existing Studio install keeps when the MCP session cache stops being
-stdio-only: the close entry point, the session-cap environment variable, and the
-fastmcp surface this code actually depends on.
-
-Studio declares fastmcp>=3.0.2 with no upper bound and no lockfile, so a released
-install resolves to whatever is newest. Anything asserted about fastmcp here is
-asserted against the installed version, not a mock.
-"""
+"""Studio's fastmcp>=3.0.2 has no upper bound or lockfile, so these check the installed version."""
 
 from __future__ import annotations
 

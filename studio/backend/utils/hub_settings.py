@@ -209,12 +209,7 @@ def _effective_env(settings: HubSettings) -> tuple[dict[str, str | None], str]:
 
 
 def apply_hub_settings() -> None:
-    """Point this process, and every worker it spawns from now on, at the saved endpoints.
-
-    Safe before huggingface_hub is imported (startup) and after (a save): the
-    library reads the endpoint once at import, so its copies are refreshed too.
-    Workers already running keep the endpoint they started with.
-    """
+    """Safe before or after huggingface_hub import; running workers keep the endpoint they started with."""
     global _operator_endpoints, _saved_only_endpoints
     with _apply_lock:
         if _operator_endpoints is None:

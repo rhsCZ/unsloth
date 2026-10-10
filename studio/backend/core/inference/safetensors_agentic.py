@@ -124,11 +124,7 @@ def _is_rehearsal_prefix(
     *,
     unrestricted: bool = False,
 ) -> bool:
-    """True if ``stripped`` is a (possibly partial) prefix of a ``NAME[ARGS]``
-    rehearsal split across chunks (``web_search`` then ``[ARGS]{...}``). A space
-    means prose. Unrestricted mode accepts any identifier; else NAME must be active. Either
-    way NAME must be markerless-promotable, so a bare execution-class name streams as prose
-    instead of being held for a call that never comes."""
+    """Names that are not markerless-promotable stream as prose rather than being held for a call."""
     if not stripped or any(ch.isspace() for ch in stripped):
         return False
     if unrestricted:
@@ -151,12 +147,7 @@ def _held_rehearsal_tail_len(
     *,
     unrestricted: bool = False,
 ) -> int:
-    """Length of a trailing bare tool-name token that may be a split rehearsal call
-    (``...web_search`` with ``[ARGS]{...}`` still to arrive), so STREAMING can hold it
-    instead of leaking the name. Returns 0 for ordinary prose.
-
-    A trailing bare-Gemma ``call:NAME{..`` is held the same way: the signal scan only sees it
-    once its ``{`` arrives, so the prefix would otherwise stream ahead of the call."""
+    """Also holds a trailing call:NAME{ prefix: the signal scan only sees it once the brace arrives."""
     i = len(text)
     while i > 0 and not text[i - 1].isspace():
         i -= 1
@@ -181,10 +172,7 @@ def _rehearsal_name_start(
     *,
     unrestricted: bool = False,
 ) -> int:
-    """For an ``[ARGS]`` signal at ``signal_pos``, return the start of the preceding
-    bare tool-name token (``NAME[ARGS]``), else ``signal_pos`` unchanged when the
-    signal is not ``[ARGS]`` or NAME is not markerless-promotable. Draining on a name the
-    parser will not promote would withhold the turn for a call that never comes."""
+    """Draining on a name the parser will not promote would hold the turn for a call that never comes."""
     if not candidate.startswith("[ARGS]", signal_pos):
         return signal_pos
     j = signal_pos
@@ -206,17 +194,7 @@ def _earliest_tool_signal(
     start: int = 0,
     streaming: bool = False,
 ) -> int:
-    """Index where the turn's first genuine tool-call boundary begins, or -1.
-
-    Non-``[ARGS]`` markup wins on first occurrence. An ``[ARGS]`` hit is a rehearsal
-    only when an active tool name (any name in unrestricted mode) precedes it, so a
-    literal ``foo[ARGS]`` in prose is skipped rather than draining the turn; for a
-    real ``NAME[ARGS]`` the boundary is pulled back to NAME.
-
-    A marker inside a ``<think>`` / ``[THINK]`` block is NOT a boundary: the parser masks
-    reasoning spans, so draining on one stopped the stream at the marker and a cancel then
-    lost every token after it, including the visible answer past the block. The scan resumes
-    past such a span, with ``floor`` rejecting the look-behind that would re-find it."""
+    """Markers inside <think> or [THINK] are not boundaries; draining there drops the visible answer."""
     think_spans = None
     floor = 0
     while True:
@@ -271,12 +249,7 @@ def _has_genuine_tool_signal(
     *,
     unrestricted: bool = False,
 ) -> bool:
-    """True when ``candidate`` holds a genuine tool-call boundary for one of ``signals``.
-
-    Non-``[ARGS]`` markers count on a substring hit; an ``[ARGS]`` hit is genuine only
-    when an active tool name (any in unrestricted mode) precedes it. Mirrors the
-    ``_earliest_tool_signal`` name-gating so BUFFERING / end-of-stream checks do not
-    drain inactive-name prose."""
+    """An [ARGS] hit counts only after an active tool name, so buffering does not drain ordinary prose."""
     for sig in signals:
         if sig == "[ARGS]":
             if (
@@ -299,16 +272,7 @@ def strip_tool_markup_streaming(
     tool_protocol_active: bool = False,
     enabled_tool_names: Optional[set] = None,
 ) -> str:
-    """Strip open-ended tool XML from display text without trimming whitespace.
-
-    Mirrors the parser-side ``strip_tool_markup`` segment scan (minus the final trim) so
-    streaming and final display agree: balanced strips first (nested JSON removed whole),
-    then the guarded function-XML / GLM scans that close at each call's REAL terminator so
-    literal markup inside argument values is data and trailing prose survives. Reasoning
-    ``<think>`` / ``[THINK]`` blocks are preserved verbatim (a rehearsed call inside one must
-    not be deleted, else the cumulative text shrinks then regrows). ``enabled_tool_names``
-    keeps an inactive-name ``foo[ARGS]{..}`` / ``call:NAME{..}`` example visible (it is prose,
-    not a call), matching the parse / detection active-tool gate."""
+    """Reasoning blocks are kept verbatim, else the cumulative text shrinks then regrows while streaming."""
     if not (auto_heal_tool_calls or tool_protocol_active):
         return text
 
@@ -368,14 +332,7 @@ def _reprompt_intent_text(
     reasoning_prefilled: bool = False,
     visible_only: bool = False,
 ) -> str:
-    """Return visible answer text for the plan-without-action classifier.
-
-    Safetensors reasoning shares the cumulative text channel with the answer.
-    Forward-looking phrases inside ``<think>`` / ``[THINK]`` are private
-    planning, not a user-visible promise to call a tool. Match GGUF's behavior:
-    classify visible content when present and fall back to reasoning only for a
-    reasoning-only stall. ``visible_only`` drops that fallback and returns "" instead.
-    """
+    """Forward-looking words in <think> blocks are private planning, so only visible text is classified."""
     prefilled_reasoning = ""
     if reasoning_prefilled:
         close = _THINK_CLOSE_RE.search(text)
@@ -423,12 +380,7 @@ _REHEARSAL_RENDER_NAME_RE = re.compile(r"(?<!\[CALL_ID\])\b([\w-]+)\[ARGS\]\s*(?
 
 
 def _first_detected_tool_name(content: str) -> Optional[str]:
-    """Return the first clearly resolved tool name, or None while incomplete.
-
-    Covers every serialization the loop executes (XML ``<function=>`` / ``<tool_call>``,
-    Mistral ``[TOOL_CALLS]``, rehearsal ``NAME[ARGS]``); the earliest marker wins so a
-    render_html marker inside another call's argument is treated as data. Markers inside
-    a ``<think>`` / ``[THINK]`` block are dropped since the parser skips them."""
+    """The earliest marker wins; markers inside <think> or [THINK] blocks are skipped."""
     think_spans = _think_spans_outside_tool_markup(content)
     _think_starts = [s for s, _e in think_spans]
 
@@ -509,11 +461,7 @@ def _tool_event_provenance(**flags: object) -> dict[str, object]:
 
 
 def _accepts_kwarg(func: Callable[..., str], name: str) -> bool:
-    """Whether an injectable ``execute_tool`` supports the keyword ``name``.
-
-    The loop's ``execute_tool`` is a parameter (tests inject fakes), so forward
-    an optional kwarg only when the callable declares it or takes ``**kwargs``.
-    """
+    """Forward a kwarg only when the callable declares it or takes **kwargs; tests inject fakes."""
     try:
         sig = inspect.signature(func)
     except (TypeError, ValueError):
@@ -568,23 +516,7 @@ def _spent_prompt_tokens(
     generation_stats_holder: Optional[dict],
     prompt_dense_tokens: int,
 ) -> int:
-    """Tokens the next prompt already owes, from the count the last turn reported.
-
-    The backend tokenises the turn's prompt to run it and ships that count on gen_done, tool
-    catalogue included, so the only part left to estimate is what the loop appended afterwards: this
-    turn's assistant text and the results of any tool already run in the same batch. Estimating that
-    tail alone is what stops a long English preamble being charged several times what it costs.
-
-    An exact recount is not available: this loop runs in the PARENT process and
-    `InferenceOrchestrator.models` mirrors the worker's model_info, which carries no tokenizer, so
-    counting again would mean a round trip into the worker between every tool call.
-
-    Without a report the estimate covers the whole thread, as it did before. Dense because four
-    characters per token undercounts CJK and emoji by about half (measured on an 81-message CJK
-    chat: 1295 estimated against 2737 real, reporting 1777 tokens of room where 335 remained). Never
-    floored to zero, which reaches the tool as "there is no room left to search earlier
-    conversation" and switches recall off on exactly the tight windows that need it.
-    """
+    """Estimates only the tail appended since the last reported prompt count; never floored to zero."""
     stats = (generation_stats_holder or {}).get("stats")
     usage = stats.get("usage") if isinstance(stats, dict) else None
     prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
@@ -625,26 +557,7 @@ def run_safetensors_tool_loop(
     caller_image_indexes: "tuple[int, ...]" = (),
     context_fitter: Optional[Callable[[list, list, list], dict]] = None,
 ) -> Generator[dict, None, None]:
-    """Drive an agentic tool loop on top of a cumulative-text generator.
-
-    ``single_turn(messages)`` must yield cumulative assistant text (each yield is a snapshot of all
-    tokens so far). The loop buffers each turn's leading chars to decide whether a tool call is
-    coming, drains the rest of the turn silently once a call marker appears, executes each tool via
-    ``execute_tool``, appends the assistant tool-call message and tool result, and re-enters
-    ``single_turn``. After ``max_tool_iterations`` turns without a final answer it asks once more
-    with no tools.
-
-    Yields event dicts matching the GGUF path:
-
-    * ``{"type": "status", "text": ...}`` -- empty string clears the badge.
-
-    * ``{"type": "content", "text": ...}`` -- cumulative cleaned text for the current turn (consumer
-    diffs against its own ``prev_text`` cursor).
-
-    * ``{"type": "tool_start", "tool_name", "tool_call_id", "arguments"}``
-
-    * ``{"type": "tool_end", "tool_name", "tool_call_id", "result"}``
-    """
+    """Yields status, content, tool_start and tool_end event dicts; content is cumulative text per turn."""
     if mcp_image is not None:
         from core.inference.mcp_image import note_attached_image
         from core.inference.tools import mcp_image_targets
@@ -792,15 +705,8 @@ def run_safetensors_tool_loop(
             return _streaming_stripper.strip(_strip_mistral_reasoning(text))
 
         def _cancelled_buffer_text() -> str:
-            """Display text a cancel would otherwise drop, in any state.
-
-            BUFFERING holds a blocked call, which is prose the parser never executes, so
-            returning before the resolution below loses text the stream never sent. STREAMING
-            withholds its own tail: ``cal`` may still become ``call:`` and a bare tool name
-            may still become a rehearsal, so both are kept out of ``last_emitted`` until the
-            next snapshot settles them, and a cancel arriving first lost them too. The strip
-            is the final one, which removes promotable markup, so an aborted real call
-            contributes only its surrounding prose."""
+            """Returns held text a cancel would drop, including the streaming tail not yet in
+            last_emitted."""
             # BUFFERING check misses bare-JSON/Gemma branches that drain without folding.
             held = cumulative_display + ("" if buffer_in_display else content_buffer)
             if not held:

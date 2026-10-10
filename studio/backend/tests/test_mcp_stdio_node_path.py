@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""stdio MCP servers get the managed Node bin dir on PATH.
-
-Run from studio/backend:  python -m pytest tests/test_mcp_stdio_node_path.py -q
-"""
-
 import os
 import shutil
 import sys
@@ -47,11 +42,7 @@ def managed_node(tmp_path, monkeypatch):
 
 @pytest.fixture
 def runtime_free_dir(tmp_path):
-    """A base PATH that resolves no runtime on every host. Real system dirs cannot be used
-    for this: a developer machine with Node in /usr/bin resolves a complete toolchain there,
-    so path_with_managed_node returns it unchanged and a prepend assertion fails, while a CI
-    image without Node passes. The empty dir makes the outcome depend on the managed install
-    under test rather than on what the host happens to ship."""
+    """Base PATH is an empty dir: a system dir with Node would let the host, not the test, decide."""
     base = tmp_path / "runtime-free"
     base.mkdir()
     return base
@@ -285,10 +276,7 @@ def test_client_spawns_managed_npx_by_full_path(managed_node, monkeypatch, tmp_p
 
 
 def test_runtime_free_dir_resolves_nothing(runtime_free_dir):
-    """Pins the precondition the prepend tests below rely on. Asserting against a real
-    system dir like /usr/bin instead would make them read the host: where it ships a
-    Node the base PATH already resolves a runtime, so path_with_managed_node correctly
-    returns it unchanged and the prepend assertions flip."""
+    """The runtime-free dir must resolve no usable Node, the precondition the prepend tests rely on."""
     assert node_runtime._path_has_usable_node(str(runtime_free_dir)) is False
     assert node_runtime._path_has_usable_node(str(runtime_free_dir), require_npm = False) is False
 
@@ -656,10 +644,7 @@ def test_npx_server_still_needs_npx_on_a_node_only_path(
 
 
 def test_npx_server_keeps_a_path_with_npx_but_no_npm(managed_node_install, monkeypatch, tmp_path):
-    """A curated PATH exposing node and npx without a separate npm launcher runs npx fine:
-    npx-cli.js delegates in-process to the npm it ships with and never looks up an ``npm``
-    executable. Demanding one would prepend the managed dir and silently swap the
-    configured toolchain for a different npx, changing package resolution."""
+    """A curated PATH with npx but no npm launcher is kept: npx runs its bundled npm in-process."""
     curated = tmp_path / "curated"
     curated.mkdir()
     _make_executable(curated, "node")

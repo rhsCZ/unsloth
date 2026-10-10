@@ -285,14 +285,7 @@ def _meta_path(image_id: str) -> Path:
 
 
 def _persist_entry(image_id: str, entry: dict[str, Any], generation: int) -> None:
-    """Keep an id resolvable across a restart.
-
-    The envelope in saved chat history carries ids, not URLs, and the browser only
-    asks for a thumbnail once it nears the viewport -- so a picture that was never
-    scrolled to has no bytes on disk, and the in-memory registry does not survive the
-    process. Reopening that chat used to 404 forever. This is the same information the
-    cached JPEG already reveals, and `clear_cache` removes both together.
-    """
+    """Saved chats hold ids and the in-memory registry dies on restart, so the entry is written to disk."""
     try:
         payload = json.dumps(
             {
@@ -401,12 +394,7 @@ def _fetch_thumbnail_bytes(url: str, website_policy: dict | None = None) -> byte
 
 
 def _drop_if_cleared(image_id: str) -> bool:
-    """False while a clear's leftover files for this id are still on disk.
-
-    The unlink is retried on the way through: the process that had the JPEG open
-    has usually let go by the next request, and once both files are gone the id is
-    ordinary again -- nothing resolves it, so it 404s like any other unknown one.
-    """
+    """Returns False while leftover files remain; a retried unlink succeeds once the holder lets go."""
     state = _account_state()
     with _registry_lock:
         if image_id not in state._cleared_unservable:
@@ -478,12 +466,7 @@ def thumbnail_bytes(image_id: str) -> bytes | None:
 
 
 def registered_image_ids() -> set[str] | None:
-    """Every id a clear starting now would be responsible for, in memory and on disk.
-
-    Taken before the caller's slow work so the reap that follows can be limited to it.
-    A clear is global while the chat delete it accompanies is not, so anything that
-    registers after this snapshot belongs to a chat the delete is keeping.
-    """
+    """Taken before slow work; a clear's reap is bounded to these ids, so later registrations survive."""
     state = _account_state()
     ids: set[str] = set()
     with _registry_lock:
@@ -497,26 +480,7 @@ def registered_image_ids() -> set[str] | None:
 
 
 def snapshot_and_fence_registrations() -> set[str] | None:
-    """``registered_image_ids``, plus a fence closing the window it opens.
-
-    Bounding the reap to a snapshot means anything registered after it is spared. The
-    reasoning was that such an image belongs to a chat created since, which the clear is
-    keeping -- but a lookup already running when the clear started belongs to an answer the
-    clear is DELETING, and it publishes into that same window. `/search-images/lookup` is
-    the plain case: it carries no thread, so no cancellation reaches it, and it samples the
-    cache generation on entry, before the reap moves it. Its images then survived Clear all
-    with their sidecars, which say what was searched for.
-
-    Bumping the generation HERE, at the clear boundary rather than at the reap seconds
-    later, refuses exactly those: ``register_images`` compares against the generation its
-    caller sampled, so work that started before this moment publishes nothing. Work that
-    starts after samples the new value, registers normally, and is spared as intended.
-
-    The bump is inside the same lock as the registry read, so a registration cannot slip
-    between being missed by the snapshot and being caught by the fence. It does not abort
-    in-flight FETCHES: those are keyed per id now, and a bare generation move is not one of
-    the signals they read.
-    """
+    """Bumps the generation under the snapshot's lock, so lookups begun before the clear publish nothing."""
     state = _account_state()
     ids: set[str] = set()
     with _registry_lock:
@@ -542,16 +506,7 @@ def _reaped_since_locked(image_id: str, generation: int) -> bool:
 
 
 def clear_cache(only_ids: set[str] | None = None) -> None:
-    """Drop registered images and their cached bytes. Called when the user clears all
-    chats: the thumbnails say what was searched for.
-
-    ``only_ids`` limits the reap to a snapshot taken before the caller's slow work, so
-    an image registered meanwhile -- by another tab or the LAN listener, for a chat the
-    clear is not deleting -- keeps its bytes instead of 404ing out of ``thumbnail_bytes``.
-    The generation still bumps either way -- ``register_images`` compares against it to
-    refuse a registration racing a clear -- but the in-flight fetch check is per id, so a
-    spared image's fetch is left alone. Aborting it would 404 a card that never retries.
-    """
+    """Reap limited to only_ids; the generation still bumps so racing registrations are refused."""
     state = _account_state()
     # Unlinks under the lock so an in-flight fetch cannot write between the bump and the delete.
     with _registry_lock:

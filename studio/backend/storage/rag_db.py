@@ -66,14 +66,7 @@ def _warn_unavailable_once(exc: BaseException | None = None) -> None:
 
 
 def rag_available() -> bool:
-    """Whether RAG can actually run in this process. RAG_AVAILABLE only records that ``import
-    sqlite_vec`` worked. The vec0 native library it loads is a separate file, and a venv can have
-    the package without it (the common macOS case), which nothing finds out until a connection
-    tries. So try, unless one already got through: a machine where RAG works answers from the flag
-    instead of opening a second connection per request, and a machine where it does not pays the
-    same failed connect it paid before, quietly. A genuine database error (locked, corrupt, bad
-    schema) is not an answer to this question, so it propagates instead of being reported as "RAG is
-    off here"."""
+    """RAG_AVAILABLE only proves the import, so the vec0 library is probed; real DB errors propagate."""
     if not RAG_AVAILABLE:
         return False
     if _extension_loaded:
@@ -355,10 +348,7 @@ def vec_table_dim(conn: sqlite3.Connection) -> int | None:
 
 
 def ensure_vec(conn: sqlite3.Connection, dim: int) -> None:
-    """Create the dense ``chunks_vec`` table once the embedding dim is known (vec0 bakes it into the column
-    type). A width change (embedding model switched in Settings) drops the table: the old vectors live in a
-    foreign space and would only block inserts, while lexical search keeps serving old chunks until they are
-    re-uploaded."""
+    """A width change drops chunks_vec, since old vectors would block inserts from a foreign space."""
     existing = vec_table_dim(conn)
     if existing is not None and existing != int(dim):
         logger.warning(

@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Edge-case tests for the OpenAI Responses citation marker rewriter.
-
-Covers multi-source markers, source+locator, marker SPLIT across SSE deltas,
-unterminated tails at end-of-stream, multiple markers per delta, late
-annotation ordering, and idempotency.
-
-Reference: https://developers.openai.com/api/docs/guides/citation-formatting
-"""
-
 import importlib
 
 

@@ -101,12 +101,7 @@ def stream_error_from_chunk(chunk: Any) -> Optional[LlamaStreamError]:
 
 
 def error_message_from_chunk(chunk: Any) -> Optional[str]:
-    """The server's own error text from a streamed chunk, or None if it is not an error.
-
-    Accepts the two shapes llama-server emits: ``{"error": {"message": ...}}`` and a bare
-    ``{"error": "..."}``. A chunk carrying an ``error`` key with neither shape is still an
-    error, so it returns the empty string rather than None; only a non-error chunk is None.
-    """
+    """An error key of any other shape returns the empty string, not None, since it is still an error."""
     if not isinstance(chunk, dict) or "error" not in chunk:
         return None
     error = chunk["error"]
@@ -136,16 +131,7 @@ def is_context_oversize(message: Optional[str]) -> bool:
 
 
 def describe_stream_error(message: Optional[str], *, prefix: str = "") -> str:
-    """A user-facing sentence for a mid-stream failure.
-
-    Starvation gets the explanation above, because the server's own wording ("Context size
-    has been exceeded") reads as though the request was too long and sends the user off to
-    shorten a conversation that was never the problem. An oversize refusal already names
-    both token counts, so it is kept verbatim and only gains the remedy. Anything else is
-    passed through unchanged: it is the only information there is, and replacing it with a
-    fixed string is what made these undiagnosable. ``prefix`` names the caller ("Deep
-    Research") where the surrounding UI does not already.
-    """
+    """Starvation gets its own text: the server's context-size wording blames the request's length."""
     if is_kv_starvation(message):
         body = KV_STARVATION_MESSAGE
     elif is_context_oversize(message):

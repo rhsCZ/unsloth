@@ -199,13 +199,7 @@ class ChatThread(BaseModel):
 
 
 def thread_from_row(row: dict) -> ChatThread:
-    """Build a ChatThread from a DATABASE row, tolerating a snapshot it cannot read. `settings` is the
-    first strictly validated nested model Unsloth builds out of the database rather than off the
-    wire, and a stored snapshot outlives the build that wrote it: a newer Unsloth adding a setting,
-    widening an enum or raising a bound writes a blob this one rejects. Refusing it here 500s the
-    chat on open and takes the entire history export with it. Only the read is forgiving: the wire
-    contract stays strict in both directions and the row is left untouched, so upgrading again
-    restores whatever this build had to drop."""
+    """Read a stored settings snapshot leniently: a newer build's fields must not 500 the chat on open."""
     settings = row.get("settings")
     if isinstance(settings, dict):
         row = {**row, "settings": readable_thread_settings(settings)}
@@ -231,21 +225,13 @@ def readable_thread_settings(settings: dict) -> Optional[dict]:
 
 
 def _unreadable_thread_settings(stored: dict) -> dict:
-    """The part of a stored snapshot this build cannot validate, and so must not delete. An older
-    Unsloth opening a database a newer one wrote drops the fields it cannot read, and a blind
-    replacement would make that loss permanent, so a write carries forward everything the writer
-    could not have known about: unknown keys, and known keys holding rejected values."""
+    """Carry unvalidatable stored settings forward on write, so an older build cannot erase newer fields."""
     readable = readable_thread_settings(stored) or {}
     return {k: v for k, v in stored.items() if k not in readable}
 
 
 def _settings_write_from_patch(patch: dict) -> Optional[dict]:
-    """Take `settings` / `settingsPatch` out of `patch` and describe the write they ask for. `settings`
-    replaces the snapshot, `settingsPatch` applies only the fields it names, for a client that knows
-    what changed but not what else the row holds. The result is handed to storage rather than
-    executed here: the read, the merge and the guarded metadata write have to be one transaction, or
-    two tabs each build a replacement from the same stale row, or a rejected precondition returns
-    409 having already committed the settings."""
+    """Returns the write for storage to execute atomically, so concurrent tabs cannot merge a stale row."""
     replace = "settings" in patch
     merge = "settingsPatch" in patch
     seq = patch.pop("settingsSeq", None)
@@ -768,10 +754,7 @@ def _cancel_research_runs(request: Request, run_ids: list[str]) -> None:
 
 
 def _cancel_active_generations(thread_ids: list[str]) -> None:
-    """Stop any generation still running for these threads. The sandbox goes with the thread, but a
-    request that has not reached the executor yet would dispatch its tool call afterwards, recreate
-    the folder, and write files no chat can reach. The in-flight guard only covers calls already
-    inside the executor. Best effort."""
+    """Stop generations not yet in the executor, so a late tool call cannot recreate a deleted sandbox."""
     if not thread_ids:
         return
     try:
@@ -978,10 +961,7 @@ _AUDIO_FORMAT_MEDIA_TYPES = {
 
 
 def _safe_image_media_type(media_type: str) -> str:
-    """Clamp a data-URL media type to something inert to render. Imported chats store image parts
-    verbatim, so the embedded type can be text/html or image/svg+xml; echoing those would execute
-    markup with the app origin when opened. Anything not a plain raster type downloads as bytes
-    instead."""
+    """Only plain raster types are echoed; imported text/html or SVG would run with the app origin."""
     lowered = media_type.strip().lower()
     if lowered.startswith("image/") and lowered != "image/svg+xml":
         return lowered
@@ -1502,21 +1482,8 @@ async def clear_history(
     )
 
     def _clear_rows() -> tuple[list[str], list[str], list[str], bool, Optional[set]]:
-        """The clear, and the image snapshot the reap will be bounded to.
-
-        Both in ONE threadpool call, so there is no await between them. Split across two,
-        the event loop can run another request in the gap: a chat created there survives
-        the transaction, but its images register before the snapshot and the reap takes
-        them, leaving its cards 404ing out of thumbnail_bytes.
-
-        Narrowed, NOT closed, and the difference is worth stating. Another worker thread can
-        still register between the commit and the read a few instructions later, and only one
-        thing would truly close that: holding ``_registry_lock`` across the transaction. That
-        lock is what every image registration in the process takes, and this transaction is a
-        BEGIN IMMEDIATE that waits out contention for seconds, so paying for it means stalling
-        every search in every chat for the length of a clear. The window bought back is a few
-        instructions wide and its cost is one chat's thumbnails re-fetching. Not worth it.
-        """
+        """One threadpool call for clear and snapshot: an await between lets a new chat's images get
+        reaped."""
         if payload is None:
             cleared, cleared_runs, cleared_chat_runs = clear_chat_history(
                 include_chat_generation_runs = True

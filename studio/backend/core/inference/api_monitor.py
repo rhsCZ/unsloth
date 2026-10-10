@@ -346,12 +346,8 @@ class ApiMonitor:
             self._terminal_callback = callback
 
     def acquire_terminal_callback(self, callback: TerminalCallback) -> str:
-        """Register a callback owned by one lifespan and return its lease token.
-
-        Only the newest live lease is notified, so overlapping lifespans do not
-        duplicate durable receipts. Releasing an older lease cannot disable a
-        newer owner, while releasing the newer one falls back to the older.
-        """
+        """Only the newest live lease is notified, so overlapping lifespans do not write duplicate
+        receipts."""
         lease = uuid.uuid4().hex
         with self._lock:
             self._terminal_callback_leases[lease] = callback
@@ -423,16 +419,7 @@ class ApiMonitor:
         via_api_key: bool = False,
         subject: Optional[str] = None,
     ) -> str:
-        """Record a model load/unload alongside the request traffic that caused it.
-
-        ``running=True`` opens the row for the caller to close with :meth:`finish` /
-        :meth:`fail`; an unload is terminal on arrival. Rows are shared (visible to
-        every subject) and share the request retention budget.
-
-        ``subject`` names the caller whose request drove this, which is what
-        ``via_api_key`` is reported to; it does not narrow who sees the row. Pass it
-        whenever ``via_api_key`` is set, or the attribution reaches nobody.
-        """
+        """Pass ``subject`` whenever ``via_api_key`` is set, or the attribution reaches nobody."""
         if not self._enabled:
             return ""
         now = time.time()
@@ -724,11 +711,8 @@ class ApiMonitor:
         *,
         decoded: bool = True,
     ) -> None:
-        """Stamp TTFT for deltas with no reply text, e.g. reasoning tokens.
-
-        ``decoded = False`` for output the model did not generate (a tool card), which
-        starts the clock the user sees but must not start the token-rate clock.
-        """
+        """``decoded=False`` is for output the model did not generate: starts TTFT, not the token-
+        rate clock."""
         if not entry_id:
             return
         now = time.monotonic()
@@ -786,13 +770,7 @@ class ApiMonitor:
             _advance_updated_at(entry)
 
     def note_stop_reason(self, entry_id: Optional[str], reason: Optional[str]) -> None:
-        """Record one choice's finish reason, without publishing it yet.
-
-        The row carries a single stop reason, so it only describes the request once every
-        choice has reported one. An n > 1 stream finishes its choices in separate chunks,
-        so publishing here would state a request-level verdict from the first one and
-        retract it when a later choice disagrees. :meth:`finish` resolves it instead.
-        """
+        """Not published here: with n > 1 a later choice can disagree, so finish() resolves it."""
         if not entry_id or not reason:
             return
         with self._lock:
@@ -804,13 +782,7 @@ class ApiMonitor:
 
     @staticmethod
     def _settle_stop_reason_locked(entry: ApiMonitorEntry, completed: bool) -> None:
-        """Fix the row's stop reason as it becomes terminal.
-
-        Only a completed request has one: a cancelled or failed stream stopped for that
-        reason, so any natural reason recorded on the way describes what it was doing
-        rather than how it ended. Clearing here catches the direct ``set_perf`` writers
-        too, which several streams reach before the cancellation is stamped.
-        """
+        """Only a completed request keeps its stop reason; a cancelled or failed stream clears it."""
         if not completed:
             entry.stop_reason = None
             return
@@ -1028,12 +1000,7 @@ class ApiMonitor:
             )
 
     def clear(self, *, subject: Optional[str] = None) -> None:
-        """Drop recorded entries. ``subject`` limits the wipe to one caller's.
-
-        Every other read on this class is subject-scoped, so an unscoped clear
-        would let one user erase another's history (and zero their active count
-        mid-generation). Callers that genuinely mean "everything" pass None.
-        """
+        """Scoped to ``subject``: an unscoped clear would let one user erase every other user's history."""
         with self._lock:
             if subject is None:
                 self._entries.clear()
@@ -1060,11 +1027,7 @@ class ApiMonitor:
         return entry.subject == subject and entry.account_id == current_account_id()
 
     def _attributed(self, entry: ApiMonitorEntry, subject: Optional[str]) -> bool:
-        """Whether *subject* is the caller this row's API traffic belongs to.
-
-        Only they should have the overlay pop open for it. An unscoped read (no
-        subject: internal callers and tests) sees the row's own flag.
-        """
+        """Unscoped reads (no subject) see the row's own flag; the overlay is for its owner only."""
         if subject is None:
             return True
         return entry.subject == subject and entry.account_id == current_account_id()

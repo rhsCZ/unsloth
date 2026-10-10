@@ -18,10 +18,7 @@ from core.inference.tool_loop_controller import is_tool_error
 
 
 def openai_finish_to_anthropic_stop(finish_reason, had_tool_calls = False) -> str:
-    """Map an OpenAI finish_reason to an Anthropic stop_reason.
-    'length' -> 'max_tokens' (truncation wins even mid tool call, so a cut-off
-    tool call isn't mislabeled tool_use); tool_calls / had_tool_calls -> 'tool_use';
-    'stop_sequence' -> 'stop_sequence'; 'stop'/None/unknown -> 'end_turn'."""
+    """Truncation wins over tool use: a tool call cut off at max_tokens may have incomplete arguments."""
     # Truncation wins: a tool call cut at max_tokens may have incomplete arguments.
     if finish_reason == "length":
         return "max_tokens"
@@ -124,14 +121,7 @@ def anthropic_reference_block_text(block: dict) -> str:
 
 
 def _anthropic_image_block_to_openai_part(block: dict) -> Optional[dict]:
-    """Translate one Anthropic ``image`` block to an OpenAI ``image_url`` part.
-
-    Accepts both source shapes:
-      - ``{"type": "base64", "media_type": "image/jpeg", "data": "..."}``
-      - ``{"type": "url", "url": "https://..."}``
-
-    Returns ``None`` when the source is malformed so the caller can skip it.
-    """
+    """Accepts base64 or url image sources; returns None for a malformed source so the caller skips it."""
     source = block.get("source")
     if not isinstance(source, dict):
         return None
@@ -167,21 +157,7 @@ def anthropic_messages_to_openai(
     preserve_thinking: bool = False,
     tool_result_images: bool = True,
 ) -> list[dict]:
-    """Convert Anthropic messages + system to OpenAI-format message dicts.
-
-    User messages with ``image`` blocks are emitted as OpenAI multimodal
-    content arrays (``[{type: "text", ...}, {type: "image_url", ...}]``) so
-    they flow through llama-server's native vision pathway.
-
-    ``tool_result_images=False`` turns tool-result images into a text note for a
-    text-only model; clients resend history, so rejecting would fail every later turn.
-
-    ``preserve_thinking`` keeps replayed assistant ``thinking`` blocks as
-    ``reasoning_content`` on the converted message, so templates that render
-    historical reasoning (Qwen3.6-style ``preserve_thinking``) actually receive
-    it; otherwise thinking is dropped from the prompt. ``redacted_thinking``
-    carries only ciphertext and is always dropped.
-    """
+    """``tool_result_images=False`` turns tool images into text: rejecting would fail every resent turn."""
     result: list[dict] = []
 
     if system:
@@ -337,10 +313,7 @@ def anthropic_messages_to_openai(
 
 
 def fold_tool_results_into_user(messages: list[dict]) -> list[dict]:
-    """Rewrite ``role="tool"`` as user turns: Gemma 2 / 3 have no tool role and
-    check alternation by index parity, so one makes llama-server 400 the whole
-    request. Shape mirrors minja's ``polyfill_tool_responses``.
-    """
+    """Gemma 2/3 have no tool role and check alternation by index parity, so llama-server would 400."""
     out: list[dict] = []
     call_names: dict[str, str] = {}
     for msg in messages:
@@ -541,19 +514,7 @@ def anthropic_tools_to_openai(tools: list) -> list[dict]:
 
 
 def anthropic_tool_choice_to_openai(tc: Any) -> Any:
-    """Translate Anthropic `tool_choice` into OpenAI `tool_choice`.
-
-    Anthropic formats (all dict shapes with a ``type`` discriminator):
-
-    - ``{"type": "auto"}``                       → ``"auto"``
-    - ``{"type": "any"}``                        → ``"required"``
-    - ``{"type": "none"}``                       → ``"none"``
-    - ``{"type": "tool", "name": "get_weather"}``
-          → ``{"type": "function", "function": {"name": "get_weather"}}``
-
-    Returns ``None`` for ``None`` or any unrecognized shape (caller falls
-    back to its own default, typically ``"auto"``).
-    """
+    """Returns None for an unrecognized shape, so the caller falls back to its own default, usually auto."""
     if tc is None:
         return None
     if not isinstance(tc, dict):
@@ -591,11 +552,7 @@ def _message_delta_usage(usage: Optional[dict]) -> dict:
 
 
 def _partial_tag_suffix_len(text: str, tag: str) -> int:
-    """Length of the longest proper prefix of ``tag`` that ends ``text``.
-
-    A streamed delta can cut a ``<think>`` tag anywhere; the caller holds that
-    suffix back until the next delta settles whether it was markup or prose.
-    """
+    """A streamed delta can split a ``<think>`` tag anywhere; the caller holds back this suffix."""
     for k in range(min(len(text), len(tag) - 1), 0, -1):
         if text.endswith(tag[:k]):
             return k
@@ -1062,12 +1019,7 @@ class AnthropicPassthroughEmitter:
         *,
         disable_parallel_tool_use: bool = False,
     ) -> None:
-        """Promote text-form tool calls in streamed content to tool_use blocks.
-
-        Only calls naming a tool in ``allowed_tools`` (the client's declared
-        tools) are promoted; everything else streams as text exactly as before.
-        Never enabled for Unsloth's own tool loop.
-        """
+        """Only tools in ``allowed_tools`` are promoted; never enabled for Unsloth's own tool loop."""
         from core.inference.passthrough_healing import StreamToolCallHealer
 
         self._healer = StreamToolCallHealer(allowed_tools, tools)

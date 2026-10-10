@@ -29,19 +29,7 @@ _SEM_FAILCRITICALERRORS = 0x0001
 
 
 def _igpu_flags_and_names(base, lib, count: int) -> tuple[list[bool], list[str], list[bool]]:
-    """Per-device integrated-GPU flags, descriptions, and whether the type was READ.
-
-    The Vulkan reg enumerates devices in the same order as
-    ``ggml_backend_vk_get_device_memory`` (each context uses ``ctx->device =
-    i``), so reg index == device ordinal. Returns all-False / empty-name on any
-    failure so the reader never over-caps a discrete card and the memory
-    readings still get through.
-
-    The third list says whether each flag is an ANSWER. Without it "not integrated"
-    and "could not tell" are the same value, which is safe for a caller that only
-    skips a page-lock and wrong for one choosing a loader: a DirectIO decision taken
-    on an unread type buffers an iGPU's host-backed weights.
-    """
+    """Third list marks flags actually read: a DirectIO choice on an unread type buffers iGPU weights."""
     flags = [False] * count
     names = [""] * count
     known = [False] * count

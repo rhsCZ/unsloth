@@ -123,12 +123,7 @@ def resolve_ggml_model_id(model: Optional[str]) -> str:
 
 
 def _managed_whisper_cpp_dir() -> Path:
-    """`<UNSLOTH_HOME>/whisper.cpp` when set, else `<STUDIO_HOME>/whisper.cpp` in custom mode,
-    else `~/.unsloth/whisper.cpp`.
-
-    Mirrors `managed_node_dir` / `_find_llama_server_binary` so managed runtimes
-    share one parent directory.
-    """
+    """Mirrors managed_node_dir so managed runtimes share one parent directory; falls back to ~/.unsloth."""
     legacy = Path.home() / ".unsloth" / "whisper.cpp"
     try:
         from utils.paths.storage_roots import studio_root, unsloth_home
@@ -203,12 +198,7 @@ def _whisper_install_marker(binary: str) -> Optional[dict]:
 
 
 def slim_runtime_intact(binary: str) -> bool:
-    """True unless the marker says slim and the linked ggml runtime is missing
-    beside the server. New markers record the exact wired filenames
-    (linked_libraries), all of which must be present; legacy markers without the
-    field fall back to the per-OS core ggml name globs. A broken slim install
-    reads as engine-unavailable (reinstall via `unsloth studio update`), never a
-    crash at load."""
+    """All linked runtime files must be present; a broken slim install reads as engine-unavailable."""
     lookup = lookup_marker(binary)
     marker = lookup.marker
     if lookup.invalid or marker is None:
@@ -339,10 +329,7 @@ _dedupe_existing_dirs = dedupe_existing_dirs
 
 
 def _whisper_server_child_env(binary: str) -> dict[str, str]:
-    """Env for the whisper-server subprocess: secrets scrubbed, home/profile vars
-    repointed at a managed scratch dir (a downloaded binary must not see the real
-    home's token caches), co-located libs on the loader path, WSL system HIP first
-    on WSL2 ROCm."""
+    """Scrubs secrets and points the home vars at a scratch dir so the binary cannot read token caches."""
     binary = str(Path(binary).resolve())
     env = scrub_env(os.environ)
     isolate_home(env, str(_managed_whisper_cpp_dir() / ".child_home"))
@@ -480,10 +467,7 @@ class _GgmlDownloadState:
         model_id: Optional[str] = None,
         download_id: Optional[str] = None,
     ) -> bool:
-        """Stop an in-flight download. False when none was running.
-
-        The partial blob stays cached, so a restart resumes from it.
-        """
+        """Partial blobs stay cached, so a restarted download resumes from them."""
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 return False
@@ -509,12 +493,7 @@ class _GgmlDownloadState:
         hub_cache: Optional[Path] = None,
         revision: Optional[str] = None,
     ) -> Optional[int]:
-        """Count this file across partial, finalized, and snapshot locations.
-
-        status() captures these under the lock and passes them in: reading them
-        here would let a run that starts mid-probe pair its bytes with the total
-        of the run that just ended.
-        """
+        """Callers pass values captured under the lock, so a run starting mid-probe cannot mix totals."""
         try:
             model_id = model_id if model_id is not None else self._model_id
             etag = etag if etag is not None else self._etag
@@ -833,12 +812,8 @@ class GgmlSttSidecar:
             forget_pid(process.pid)
 
     def _holds_expected_model(self, expected: Optional[str]) -> bool:
-        """Whether the resident model is the one the caller claimed. Call under ``_lock``.
-
-        A caller that owns a specific model must not release whatever happens to be
-        resident: another surface can switch the engine between the ownership check and
-        the request reaching the sidecar.
-        """
+        """Compared under the lock: another surface can switch the resident model before the release
+        arrives."""
         if expected is None:
             return True
         current = self._model_id
@@ -856,12 +831,7 @@ class GgmlSttSidecar:
         wait: bool = True,
         expected_model: Optional[str] = None,
     ) -> None:
-        """Release the resident model. ``wait=False`` skips a sidecar mid-request.
-
-        `transcribe` holds ``_lock`` across the whole round trip, so a caller releasing
-        engines it does not own must not block behind one. ``expected_model`` scopes the
-        release to one model, compared under the lock.
-        """
+        """Transcription holds the lock throughout, so wait=False lets a non-owner skip a busy sidecar."""
         if not self._lock.acquire(blocking = wait):
             return
         try:
@@ -879,14 +849,8 @@ class GgmlSttSidecar:
 
     @contextmanager
     def update_maintenance(self) -> Iterator[bool]:
-        """Block new loads while the managed whisper.cpp tree is replaced.
-
-        The flag is published before waiting for an existing transcription to
-        release ``_lock``. Holding that lock across the yielded installer phase
-        prevents Windows from relocking the executable and prevents every host
-        from starting a process against a partially swapped tree. The yielded
-        value records whether a warm model had to be unloaded.
-        """
+        """Publishes the flag before waiting on the lock, so no load can start against a half-
+        swapped tree."""
         self._update_in_progress = True
         try:
             with self._lock:
@@ -932,12 +896,7 @@ class GgmlSttSidecar:
 
     @staticmethod
     def _reserve_free_port() -> tuple[socket.socket, int]:
-        """Bind an ephemeral port and keep the socket held.
-
-        The caller closes the reservation immediately before spawning
-        whisper-server, shrinking the window in which another local process
-        could bind the port. SO_REUSEADDR lets the child rebind right after.
-        """
+        """Held open until the caller closes it just before spawn, to shrink the race window."""
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", 0))
@@ -958,13 +917,8 @@ class GgmlSttSidecar:
         request_cancel_event: Optional[threading.Event] = None,
         device: Optional[str] = None,
     ) -> None:
-        """Start (or switch) whisper-server for the requested curated model.
-
-        ``device`` is the user's audio device preference; ``cpu`` starts the server
-        with ``--no-gpu``, the same flag training and a CPU-only install already use.
-        ``None`` is no opinion: it keeps the running server's placement, so a
-        caller that never sends one cannot restart it onto the other device.
-        """
+        """A None device keeps the running server's placement, so a caller that sends none cannot
+        move it."""
         from core.inference.audio_device import audio_device_forces_cpu
 
         if request_cancel_event is not None and request_cancel_event.is_set():
@@ -1130,11 +1084,8 @@ class GgmlSttSidecar:
         fast: bool = False,
         cancel_event: Optional[threading.Event] = None,
     ) -> dict:
-        """Transcribe encoded audio bytes via whisper-server.
-
-        Accepts any container PyAV can decode (same validation and caps as the
-        Transformers sidecar). Returns {text, language, duration, model}.
-        """
+        """Accepts any container PyAV decodes, under the same validation and caps as the
+        Transformers sidecar."""
         self._raise_if_update_in_progress()
         ensure_engine_available()
         model_id = resolve_ggml_model_id(model)

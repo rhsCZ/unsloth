@@ -1,42 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The Load-Model memory estimate across every platform and accelerator Unsloth ships on.
-
-``test_memory_estimate.py`` proves the arithmetic on one host; this file asks whether
-the same number comes out, and stays internally consistent, when the host changes. The
-estimate reads three host-shaped seams -- ``sys.platform``, the probed inference
-inventory, and whether the llama.cpp build is Vulkan -- and each moves a different arm
-of the placement split. The matrix is the four platforms by six accelerators, driven
-through the real route on synthetic headers; nothing downloads, loads or launches.
-
-Not "the number equals N", which a self-consistent wrong estimator also passes. The
-properties such an estimator cannot satisfy:
-
-* the itemization SUMS to the total exactly, in integers (see ``_itemized_sum``);
-* ``gpu_bytes <= total_bytes``, every cell;
-* ``weights_bytes`` does not move with the context slider. The load-bearing one: the
-  weights term is the context term SUBTRACTED out of ``_estimate_gguf_required_gb``, so
-  drift here means the two arms stopped naming the same bytes;
-* ``kv_bytes`` non-decreasing in ``n_ctx``;
-* ``drafter_runtime_gpu_bytes <= drafter_runtime_bytes``;
-* no negative field;
-* a probed-empty inventory reports ``gpu_bytes == 0``;
-* moving bytes off the GPU never shrinks the TOTAL -- on unified memory that is the
-  whole claim, since an offloaded byte is not a freed byte;
-* ``layer_count`` survives an unsizable KV, or ``--gpu-layers 0`` reads fully resident.
-
-Plus one tripwire per cell: nothing here may reach
-``LlamaCppBackend._apple_metal_memory_budget_bytes``, whose bare ``import mlx.core``
-aborts the process at the C level on macOS once torch is imported -- an abort no
-``try``/``except`` catches. A panel firing on every slider tick must not be able to
-take the server down, so it is checked rather than reasoned about.
-
-The honest limit: this runs on Linux. ``sys.platform``, ``platform.system()`` and
-``platform.machine()`` are moved; the kernel, filesystem semantics, the real
-Metal/HIP/Vulkan runtimes and the real device probes are not. Branch coverage of the
-estimator's host-shaped decisions, not a substitute for the per-OS CI matrix.
-"""
+"""Estimate invariants hold on every platform and accelerator; only host seams move, nothing launches."""
 
 from __future__ import annotations
 
@@ -150,18 +115,7 @@ _CPU_ONLY = "cpu-only"
 
 
 def _reachable(platform_label: str, accelerator_label: str) -> bool:
-    """Whether this (platform, accelerator) pair can physically exist.
-
-    One exclusion, stated rather than dropped: apple-unified is Apple Silicon's Metal
-    unified memory, which only exists under Darwin. (Asahi Linux runs on Apple Silicon,
-    but Studio's is_apple_silicon() is `platform.system() == "Darwin"`, so there the
-    estimate takes the Linux arm, already covered by linux/cpu-only.)
-
-    Everything else is kept, including the three discrete-vendor cells on macOS --
-    legacy shapes, an Intel Mac with an eGPU or a pre-10.14 CUDA build, and the
-    estimator contains no code forbidding them. What they assert is "Darwin plus a
-    non-empty probed inventory", which is the shape a Mac reports.
-    """
+    """Apple unified memory exists only under Darwin, so that pair is excluded; every other cell is kept."""
     return accelerator_label != _UNIFIED or platform_label == "macos"
 
 
@@ -176,13 +130,7 @@ assert len(MATRIX) == 4 * 6 - 3 == 21
 
 
 def _snapshot(memory) -> tuple:
-    """A ``main._system_gpu_cache`` shaped exactly as main.py fills it.
-
-    Patched at the SOURCE rather than over ``_cached_inference_devices``, so the cell
-    exercises the real reader -- including the "not `or None`" rule that keeps an empty
-    probed list distinct from an unfilled snapshot, which is the whole mechanism behind
-    the CPU-only placement.
-    """
+    """Fills the real main._system_gpu_cache, keeping an empty probed list distinct from unfilled."""
     devices = [
         {"index": index, "memory_total_gb": round(total / 1024, 2), "vram_free_gb": free / 1024}
         for index, free, total in memory
@@ -192,14 +140,7 @@ def _snapshot(memory) -> tuple:
 
 
 def _apply_cell(monkeypatch, platform_row, accelerator_row) -> None:
-    """Move every host-shaped seam this endpoint reads, and nothing else.
-
-    NEVER ``os.name``: it swaps pathlib's flavour mid-run, the synthetic GGUFs on
-    tmp_path stop resolving, and every byte asserted below becomes a claim about a file
-    that was never opened. Documented at test_llama_extra_args_platforms.py:59-63 and
-    test_slot_refit_platform_matrix.py:107. ``sys.platform``, ``platform.system()``,
-    ``platform.machine()`` and WSL_DISTRO_NAME are the whole toolkit.
-    """
+    """Patch only host seams; never os.name, which swaps pathlib's flavour and breaks tmp_path files."""
     platform_label = platform_row[0]
     accelerator_label, vulkan, memory = accelerator_row
 
@@ -276,12 +217,7 @@ def _apply_cell(monkeypatch, platform_row, accelerator_row) -> None:
 
 @pytest.fixture(autouse = True)
 def _clear_estimate_caches():
-    """Both module caches are TTL'd, not per-request, so they leak across cells.
-
-    ``_estimate_files_cache`` is keyed on the config and NOT on the context, which is
-    the behaviour under test elsewhere -- so an entry left by another cell would satisfy
-    an assertion here that the cell never actually computed.
-    """
+    """Both module caches outlive a cell, so clear them each time or stale entries satisfy assertions."""
     ri._estimate_files_cache.clear()
     ri._estimate_config_cache.clear()
     yield
@@ -291,19 +227,8 @@ def _clear_estimate_caches():
 
 @pytest.fixture(autouse = True)
 def _metal_budget_tripwire(monkeypatch):
-    """NOTHING on this path may call ``_apple_metal_memory_budget_bytes``.
-
-    Its body is a bare ``import mlx.core`` (core/inference/llama_cpp.py:7816). On macOS,
-    importing MLX after torch has been imported aborts the process at the C level, and a
-    C-level abort is not an exception: no ``try``/``except`` anywhere up the stack can
-    catch it. ``/api/inference/estimate-memory`` fires on every tick of the context
-    slider, so one reachable call there is a settings panel that kills the server.
-
-    Recorded rather than raised, because a raise would be swallowed by one of the broad
-    ``except Exception`` handlers on this path and the tripwire would report nothing.
-    The recorder returns 0, which is the off-Apple-Silicon answer, so a cell that DOES
-    reach it still completes and is still reported.
-    """
+    """Never reach _apple_metal_memory_budget_bytes: its bare mlx.core import aborts the process on
+    macOS."""
     calls: list[str] = []
 
     def _tripwire() -> int:
@@ -343,11 +268,7 @@ _DENSE_PAD_DIVISOR = 12
 
 
 def _try_make_sparse(handle) -> bool:
-    """Mark an open file sparse. True on any filesystem that needs no marking.
-
-    Windows only: FSCTL_SET_SPARSE has to be issued before the file is extended, or
-    the extension is already committed. Everything else holes-punches on truncate().
-    """
+    """Windows needs FSCTL_SET_SPARSE before extending the file, or the extension is committed in full."""
     if os.name != "nt" and not os.environ.get("FORCE_DENSE_PAD"):
         return True
     try:
@@ -408,11 +329,7 @@ def _config(gguf_path: str, **overrides) -> SimpleNamespace:
 
 @pytest.fixture(scope = "module")
 def shapes(tmp_path_factory):
-    """Every model shape the estimator has a distinct arm for, built once.
-
-    Module scope because these are ten sparse files and twenty-one cells; per-test
-    rebuild is pure overhead, and nothing below mutates them.
-    """
+    """Module scope: the ten sparse shapes are reused across cells, and nothing below mutates them."""
     root = tmp_path_factory.mktemp("platform-matrix-shapes")
     built: dict[str, tuple[str, SimpleNamespace]] = {}
 
@@ -540,13 +457,7 @@ CONTEXTS = (4096, 32768, 131072)
 
 
 def _price(shapes, shape_name: str, **kwargs):
-    """The real ``POST /api/inference/estimate-memory`` handler, auth dependency aside.
-
-    The route, not ``_gguf_memory_breakdown``, because the invariants below are claims
-    about the RESPONSE: a breakdown that sums correctly and a route that drops one of
-    its terms on the way into the model are different bugs, and only this call sees the
-    second one.
-    """
+    """Goes through the real route: the invariants are claims about the response, not the breakdown."""
     gguf_path, config = shapes[shape_name]
     spec = _SPEC_SHAPES.get(shape_name)
     if spec is not None:
@@ -575,17 +486,7 @@ _NON_NEGATIVE = (*_ITEMS, "drafter_runtime_gpu_bytes", "total_bytes", "gpu_bytes
 
 
 def _itemized_sum(response) -> int:
-    """The itemization, summed. FIVE terms, not four.
-
-    The PR body says "the four items now sum to Total exactly". That is true of every
-    shape without a vision projector and false of every shape with one:
-    ``projector_runtime_bytes`` is a fifth line, it is inside ``total_bytes``
-    (routes/inference.py, ``runtime_bytes``), and the panel renders it as its own row
-    (model-config-page.tsx:1103). Summing four here would have made the vision cell
-    fail by exactly the projector's buffers, which is a wrong test rather than a found
-    bug -- so the sum is five, and the four-term claim is checked separately, once, in
-    test_platform_matrix_the_itemization_is_five_terms_not_four.
-    """
+    """The itemization sums five terms: projector_runtime_bytes is a fifth line inside total_bytes."""
     return sum(getattr(response, item) for item in _ITEMS)
 
 
@@ -632,12 +533,7 @@ def _assert_core_invariants(
 def test_platform_matrix_every_shape_is_internally_consistent(
     monkeypatch, shapes, platform, accelerator
 ):
-    """One cell, every model shape, every context: the answer holds together.
-
-    This is the bulk of the matrix -- 10 shapes x 3 contexts per cell -- and it asserts
-    only properties, never magnitudes. A sum that is off by one byte, a GPU share above
-    the total, or a negative field is caught here on whichever host produced it.
-    """
+    """Asserts properties, never magnitudes: a sum off by one byte or a GPU share above total fails."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
 
@@ -652,14 +548,7 @@ def test_platform_matrix_every_shape_is_internally_consistent(
 def test_platform_matrix_weights_do_not_move_with_the_context_slider(
     monkeypatch, shapes, platform, accelerator
 ):
-    """The load-bearing one.
-
-    ``weights_bytes`` is not measured. It is derived by subtracting the context term
-    back out of ``_estimate_gguf_required_gb``, so it is only correct while the term
-    subtracted is the same term that was added. Any drift as ``n_ctx`` moves means the
-    two arms have come unpaired, and the weights row silently absorbs part of the KV
-    cache -- in either direction, on any host.
-    """
+    """weights_bytes is derived by subtracting the context term, so it must not move as n_ctx changes."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
 
@@ -687,14 +576,7 @@ def test_platform_matrix_weights_do_not_move_with_the_context_slider(
 def test_platform_matrix_settings_do_not_break_the_itemization(
     monkeypatch, shapes, platform, accelerator
 ):
-    """The settings a user actually moves, on every host.
-
-    Each of these reaches a different arm: the cache dtype rescales the KV term, slots
-    rescale both KV and the compute buffers, ``--no-kv-offload`` moves the cache out of
-    the GPU figure without leaving the total, manual layers rescale only the main
-    weight, and a tensor split replicates the flat buffers per device. The invariants
-    are the same ones; the point is that no setting breaks them.
-    """
+    """Each common setting reaches a different arm of the split, and none may break the itemization."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
 
@@ -724,18 +606,7 @@ def test_platform_matrix_settings_do_not_break_the_itemization(
 def test_platform_matrix_an_offloaded_byte_is_never_a_freed_byte(
     monkeypatch, shapes, platform, accelerator
 ):
-    """Moving bytes off the GPU changes where they are, never how many there are.
-
-    ``total_bytes`` is aggregate memory: GPU, host RAM or a unified pool. So
-    ``--gpu-layers 0`` and ``--no-kv-offload`` may only ever move bytes out of
-    ``gpu_bytes``; a total that shrinks with them is the panel telling a user that
-    offloading made memory disappear.
-
-    On the apple-unified cell this is the entire claim rather than a nicety: there is
-    one pool, so a byte moved off the GPU is still occupying the same RAM. A row that
-    reported a smaller total under an offload would be advertising headroom that does
-    not exist on the machine that has the least of it.
-    """
+    """Offloading moves bytes out of gpu_bytes, never total_bytes, since an offloaded byte is not freed."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
 
@@ -769,13 +640,7 @@ def test_platform_matrix_an_offloaded_byte_is_never_a_freed_byte(
 def test_platform_matrix_a_probed_empty_inventory_shows_no_gpu_footprint(
     monkeypatch, shapes, platform, accelerator
 ):
-    """``gpu_bytes == 0`` exactly on the cells that have no GPU, and only those.
-
-    A probe that RAN and found nothing is the evidence; an unfilled snapshot is not
-    absence, and the CUDA count is zero on every Vulkan and ROCm-via-Vulkan host that
-    has plenty of GPU. Getting this wrong put a multi-gigabyte GPU figure against a
-    capacity of zero on CPU-only Linux and Windows boxes.
-    """
+    """gpu_bytes is zero only where a probe ran and found no GPU; an unfilled snapshot is not absence."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
     cpu_only = accelerator[0] == _CPU_ONLY
@@ -803,14 +668,7 @@ def test_platform_matrix_a_probed_empty_inventory_shows_no_gpu_footprint(
 def test_platform_matrix_an_unsizable_kv_still_carries_its_layer_count(
     monkeypatch, shapes, platform, accelerator
 ):
-    """A pure-SSM header sizes no cache and must still report ``block_count``.
-
-    llama.cpp reads the attention head counts with ``required = false`` while
-    ``block_count`` is required, so every Mamba, Mamba2 and RWKV model reaches this path
-    legitimately. Without the layer count ``_gguf_offloaded_layer_fraction`` has no
-    denominator, answers 1.0, and a manual ``--gpu-layers 0`` on that whole family reads
-    as a fully GPU-resident load -- the direction that calls an impossible load a fit.
-    """
+    """A pure-SSM header must still report block_count, or the offloaded layer fraction defaults to 1.0."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
 
@@ -847,14 +705,7 @@ def test_platform_matrix_an_unreadable_header_answers_without_inventing_a_cache(
 
 
 def test_platform_matrix_the_itemization_is_five_terms_not_four(monkeypatch, shapes):
-    """The PR body's "the four items now sum to Total exactly" is one term short.
-
-    Four terms do sum to the total on every shape without a vision projector. With one,
-    ``projector_runtime_bytes`` is a fifth line -- inside ``total_bytes``, rendered as
-    its own row by the panel -- and the four-term sum misses it by exactly the encoder's
-    buffers. Pinned here so the wording and the arithmetic cannot drift apart again:
-    the arithmetic is right, the sentence is stale.
-    """
+    """Four terms sum to the total only without a vision projector; projector_runtime_bytes is the fifth."""
     _apply_cell(monkeypatch, PLATFORMS[0], ACCELERATORS[0])
 
     ri._estimate_files_cache.clear()
@@ -880,16 +731,7 @@ def test_platform_matrix_the_itemization_is_five_terms_not_four(monkeypatch, sha
 def test_platform_matrix_the_metal_budget_is_never_reached(
     monkeypatch, shapes, platform, accelerator, _metal_budget_tripwire
 ):
-    """The tripwire, asserted per cell rather than reasoned about.
-
-    Driven hard on purpose: every shape, the Apple-shaped context settings, and the
-    paravirtual detector deliberately RESTORED. The backend conftest pins
-    ``_metal_device_is_paravirtual`` to False on both ``core.inference.llama_cpp`` and
-    ``routes.inference`` (tests/conftest.py:296-314) so the suite is host independent,
-    which also masks whichever Apple arms consult it. On the apple-unified cell that
-    would be assuming the answer, so it is put back -- both values -- and the tripwire
-    is asked again with it live.
-    """
+    """The conftest pins _metal_device_is_paravirtual to False, masking Apple arms; restore it here."""
     _apply_cell(monkeypatch, platform, accelerator)
     apple = accelerator[0] == _UNIFIED
 
@@ -924,18 +766,7 @@ def test_platform_matrix_the_metal_budget_is_never_reached(
 
 
 def test_platform_matrix_the_platform_label_alone_changes_nothing(monkeypatch, shapes):
-    """Linux, WSL2, Windows and macOS price an identical load identically.
-
-    Worth asserting rather than assuming, because it is the finding this matrix
-    actually produced: the estimate reads the HOST, not the operating system. Sweeping
-    all 21 cells collapses them to three behaviours -- one device, two devices, and no
-    device -- and ``sys.platform`` is in none of them.
-
-    That is the right design (bytes are bytes, and a GGUF header does not change shape
-    on Windows), so this test is the net under it: the day someone adds a per-OS arm to
-    this endpoint, it fails here and has to be justified, rather than shipping to three
-    platforms that nobody could test.
-    """
+    """The estimate reads the host, not the OS, so the platform label alone must change no answer."""
     answers = {}
     for platform_row in PLATFORMS:
         for accelerator_row in ACCELERATORS:
@@ -970,18 +801,7 @@ def test_platform_matrix_the_platform_label_alone_changes_nothing(monkeypatch, s
 def test_platform_matrix_the_probed_inventory_owns_the_split_on_a_vulkan_build(
     monkeypatch, shapes, platform, accelerator
 ):
-    """A Vulkan build enumerates no CUDA devices, and that is not evidence of no GPU.
-
-    This is the one seam where vendor genuinely changes the answer, and it only shows
-    up in the combination a real Vulkan host produces: two devices in the probed
-    inventory and a CUDA count of ZERO, because torch cannot see a Vulkan card. If
-    ``_tensor_split_possible`` asked the CUDA count there it would refuse the split on a
-    machine with two cards, and price per-device compute buffers for a launch that
-    replicates them -- gigabytes apart on the figure the fit verdict reads.
-
-    Asserted on every cell, including the non-Vulkan ones, where the CUDA count is the
-    right thing to ask and a zero really does mean no split.
-    """
+    """A Vulkan build sees zero CUDA devices, so the split decision must trust the probed inventory."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
     vulkan = accelerator[1]
@@ -1021,19 +841,7 @@ def test_platform_matrix_the_probed_inventory_owns_the_split_on_a_vulkan_build(
 def test_platform_matrix_the_tensor_latch_lookup_runs_on_every_cell(
     monkeypatch, shapes, platform, accelerator
 ):
-    """Every cell really asks the tensor latches, rather than failing open past them.
-
-    ``_tensor_latches_allow_a_split`` is wrapped in a fail-open ``except Exception``:
-    anything that raises inside it answers "a split is allowed" and logs at debug. That
-    is the right behaviour in production and a trap in a matrix, because a cell where
-    the lookup EXPLODES is indistinguishable from a cell where it ran and said yes --
-    both are green, and only one of them tested anything.
-
-    It is not hypothetical. Before the binary was pinned in ``_apply_cell``, all six
-    Windows cells took the exception arm on every single request, because a simulated
-    ``sys.platform == "win32"`` sends ``shutil.which`` into ``_winapi`` and there is no
-    ``_winapi`` on Linux. This test is what noticed, and it is what keeps it noticed.
-    """
+    """_tensor_latches_allow_a_split swallows errors as allowed, so each cell must prove it ran."""
     _apply_cell(monkeypatch, platform, accelerator)
     cell = f"{platform[0]}-{accelerator[0]}"
 

@@ -1,29 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Tests for the Load-Model memory estimate (POST /api/inference/estimate-memory).
-
-Guards the pieces the estimate is assembled from and the properties that make it safe
-to put a number in front of a user:
-
-* ``_gguf_runtime_bytes`` -- KV + compute, itemized. The load-bearing case is a header
-  without the attention dims: ``kv_estimable = False`` with ``kv_bytes == 0``, since a
-  UI reading that zero as "no cache" is worse than showing nothing.
-* ``_estimate_gguf_kv_gb`` -- a thin wrapper over it now, and still the training
-  guard's input, so its value must stay the old sum exactly.
-* ``_gguf_offloaded_layer_fraction`` -- Auto is deliberately 1.0, not a guess.
-* ``_gguf_resident_file_gb`` / ``_gguf_memory_breakdown`` -- weights come from
-  subtracting the context term out of ``_estimate_gguf_required_gb``; the observable
-  that the arms are paired is that weights do not move with the context slider.
-* ``_localized_estimate_config`` -- without it a cached repo priced itself through a
-  ``paths-info`` call. Both halves pinned: the copy takes the local arm, the cached
-  original is not mutated.
-* ``_estimate_token_fingerprint`` -- both TTL caches are keyed per token.
-* the route -- the "cannot size this" answers, and an Ollama manifest ref refused
-  before anything is materialized.
-
-No GPU, no network, no model load: every GGUF here is a synthetic header on tmp_path.
-"""
+"""Load-Model memory estimate tests (POST /api/inference/estimate-memory) on synthetic GGUF headers."""
 
 import inspect
 import json
@@ -104,12 +82,7 @@ _GIB = 1024**3
 
 @pytest.fixture(autouse = True)
 def _clear_estimate_caches():
-    """Both module caches are TTL'd, not per-request, so they leak across tests.
-
-    ``_estimate_files_cache`` is keyed on the config identity and NOT on the
-    context, which is exactly the behaviour under test -- so a stale entry from
-    an earlier test would silently satisfy an assertion here.
-    """
+    """Both module caches outlive a test, so clear them each time or stale entries satisfy assertions."""
     ri._estimate_files_cache.clear()
     ri._estimate_config_cache.clear()
     yield
@@ -148,11 +121,7 @@ def _write_gguf_with_embeddings(
     fields: dict,
     name: str = "model.gguf",
 ) -> str:
-    """A weight file carrying ``token_embd.weight``, as every real one does.
-
-    ``_make_gguf_bytes`` writes metadata and no tensors, which is a file the launch
-    would refuse to pass as ``--model-draft`` and the estimate therefore never charges.
-    """
+    """Carries token_embd.weight like real weights; metadata-only drafts are refused, not charged."""
     import numpy as np
     from gguf import GGUFWriter
 
@@ -175,11 +144,7 @@ def gqa_gguf(tmp_path) -> str:
 
 @pytest.fixture
 def dimless_gguf(tmp_path) -> str:
-    """A header carrying a layer count and nothing the KV formula can use.
-
-    Real GGUFs like this exist (truncated / minimal metadata), and they are the
-    whole reason ``kv_estimable`` is a separate field.
-    """
+    """A layer count with no KV dims, as real truncated GGUFs have; why kv_estimable is its own field."""
     return _write_gguf(tmp_path, "qwen3", {"block_count": 12}, name = "dimless.gguf")
 
 
@@ -269,14 +234,8 @@ class TestGgufRuntimeBytes:
         assert ri._gguf_offloaded_layer_fraction("manual", 0, runtime.layer_count) == 0.0
 
     def test_a_recurrent_model_keeps_its_layer_count(self, tmp_path):
-        """The unsizable-KV path is reached by whole model families, not just stubs.
-
-        llama.cpp reads the attention head counts with ``required = false`` while
-        block_count and embedding_length are required, so every pure SSM model --
-        Mamba, Mamba2, RWKV -- loads with a layer count and no attention dims, which is
-        what ``_can_estimate_kv`` rejects. Dropping the count there reported a manual
-        --gpu-layers 0 as fully GPU-resident on all of them.
-        """
+        """Pure SSM models (Mamba, RWKV) have a layer count but no attention dims, so the count must
+        be kept."""
         mamba = _write_gguf(
             tmp_path,
             "mamba",
@@ -303,12 +262,7 @@ class TestGgufRuntimeBytes:
 
 
 class TestKvGbWrapperCompatibility:
-    """``_estimate_gguf_kv_gb`` is the training admission guard's entry point.
-
-    It is now a wrapper, so the refactor is only correct if it still returns
-    exactly the old scalar: (KV + compute) in GB. Anything else silently moves
-    the threshold at which chat is refused during a training run.
-    """
+    """Training admission guard reads this scalar: it must stay exactly (KV + compute) in GB."""
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -333,12 +287,8 @@ class TestKvGbWrapperCompatibility:
         assert ri._estimate_gguf_kv_gb(dimless_gguf, 32768) == 0.0
 
     def test_the_guard_keeps_the_larger_context_the_panel_does_not(self, gqa_gguf):
-        """A smaller ``-c`` in the extras is what the launch runs, not what the
-        guard reserves against. The guard deliberately takes the maximum, since a
-        request that later drops the flag must not have been admitted against the
-        smaller cache; the panel is quoting a number to a user and takes the launch
-        value (``resolve_requested_ctx``, load_model's own resolver).
-        """
+        """The panel quotes the smaller -c the launch runs; the guard reserves the larger context
+        instead."""
         smaller = ["-c", "8192"]
         guard = ri._gguf_runtime_bytes(gqa_gguf, 131072, smaller)
         panel = ri._gguf_runtime_bytes(gqa_gguf, 131072, smaller, ctx_last_wins = True)
@@ -535,12 +485,7 @@ class TestMemoryBreakdown:
 
 
 def _repo_config(**overrides) -> ModelConfig:
-    """A config shaped the way ``from_identifier`` leaves a REPOSITORY GGUF.
-
-    ``gguf_file`` is None even when the weights are already in the HF cache --
-    that field is filled in by the download path, not by resolution -- which is
-    precisely the state that used to send the estimate to the network.
-    """
+    """Repo GGUF with gguf_file None even when cached; the estimate must not fetch the network for it."""
     fields = dict(
         identifier = "org/model-GGUF",
         display_name = "model (Q4_K_M)",
@@ -1489,13 +1434,7 @@ class TestInt8PrefillAvailabilityRoute:
 
 
 class TestParallelSlotResolution:
-    """Blank Parallel Slots means the server default, not one.
-
-    /load resolves the field through ``_resolve_parallel_slots`` and normally
-    inherits ``app.state.llama_parallel_slots`` (four in a standard launch). Pricing
-    one slot for the default UI state underestimated both the KV cache and the
-    slot-scaled compute buffers, which is the configuration most people load.
-    """
+    """Blank Parallel Slots means the server default (four in a standard launch), so price it, not one."""
 
     @pytest.fixture(autouse = True)
     def _local_model(self, monkeypatch, gqa_gguf):
@@ -1548,13 +1487,7 @@ class TestParallelSlotResolution:
 
 
 class TestNativeLeaseOperation:
-    """The route must verify leases under the operation the client can mint.
-
-    Leases are signed for one operation and ``_validate_payload`` compares it
-    exactly. "estimate-memory" is not a mintable ``NativePathOperation``, so
-    verifying under that name rejected every picked or drag-dropped GGUF and the
-    row never appeared for them.
-    """
+    """Leases are signed per operation and must be verified under a mintable name, not estimate-memory."""
 
     def test_the_route_verifies_the_validate_model_grant(self, monkeypatch):
         seen = {}
@@ -1587,12 +1520,7 @@ from core.inference.llama_cpp import (  # noqa: E402
 
 
 class TestDrafterAccounting:
-    """A separate drafter costs more than its file.
-
-    The loader budgets its KV cache and rollback state through
-    ``_estimate_mtp_overhead_bytes``, which grows with context exactly as the target's
-    cache does. Charging only the file made speculation look nearly free.
-    """
+    """A drafter costs its KV cache and rollback state too, which grow with context, not only its file."""
 
     @pytest.fixture
     def config(self, gqa_gguf, tmp_path):
@@ -1722,12 +1650,8 @@ _HYBRID_FIELDS = {
 
 
 class TestBlankDraftDepth:
-    """Draft Tokens left blank is the launcher's default, not zero.
-
-    ``_build_speculative_flags`` emits its own depth when the field is unset, and
-    ``_estimate_mtp_overhead_bytes`` scales the Hybrid-Mamba rollback state by it, so
-    pricing zero dropped that allocation from both the total and the GPU figure.
-    """
+    """Blank Draft Tokens is the launcher's default depth, so pricing it as zero drops the rollback
+    state."""
 
     @pytest.fixture
     def hybrid(self, tmp_path) -> str:
@@ -1819,13 +1743,7 @@ class TestBlankDraftDepth:
 
 
 class TestQuantSubdirCompanions:
-    """A cached repo that files each quant under its own directory.
-
-    ``snapshot/UD-Q4_K_XL/model-00001-of-00002.gguf`` with ``mmproj-*.gguf`` and the
-    drafter at ``snapshot/`` is the standard Hugging Face layout for any quant over the
-    per-file limit. Passing the weight's own parent as ``search_root`` gave the
-    detectors nothing to walk up to, so the projector went uncounted.
-    """
+    """Projector and drafter sit at the snapshot root above the quant dir, so search must walk up to it."""
 
     def test_a_projector_at_the_snapshot_root_is_found(self, tmp_path):
         quant_dir = tmp_path / "UD-Q4_K_XL"
@@ -1903,13 +1821,8 @@ class TestDrafterEdgeCases:
 
 
 class TestSpeculativeModeTerms:
-    """A separate drafter is not an MTP head, and the two are not placed together.
-
-    ``_estimate_mtp_overhead_bytes`` defaults to charging both target-side terms
-    because an unsure caller should over-reserve. The loader does not stay unsure: it
-    derives them from the engaged mode. Defaulting here charged DSpark and DFlash a
-    second full copy of an MLA target's KV, which the mode never allocates.
-    """
+    """Target-side terms follow the engaged mode; defaulting to both bills DSpark/DFlash a second KV
+    copy."""
 
     @pytest.fixture
     def mla(self, tmp_path) -> str:
@@ -2062,11 +1975,7 @@ class TestSpeculativeModeTerms:
 
 
 class TestLaunchShapedPricing:
-    """Three places the panel priced a launch the loader would not perform.
-
-    Each is the same shape: a setting resolved one way in ``load_model`` and another
-    way here, where the difference is large enough to flip the verdict.
-    """
+    """Each case is a setting the panel resolves differently from load_model, enough to flip the verdict."""
 
     @pytest.fixture
     def swa(self, tmp_path) -> str:
@@ -2121,13 +2030,8 @@ class TestLaunchShapedPricing:
         assert windowed.drafter_runtime_bytes > windowed.kv_bytes - windowed.kv_checkpoint_bytes
 
     def test_a_cpu_device_selection_takes_the_weights_off_the_gpu(self, spec_config, swa):
-        """``--device none`` runs on the CPU whatever the layer count says.
-
-        The loader's residency gate asks ``_device_selection_is_cpu`` before it looks at
-        -ngl for exactly this reason. The estimate read Auto as fully GPU-resident and
-        charged the whole footprint to VRAM, which is a GPU-exceeds warning for a load
-        that touches no GPU at all.
-        """
+        """--device none keeps weights off the GPU whatever -ngl says, as the loader's residency
+        gate does."""
         priced = dict(n_ctx = 32768, cache_type_kv = "f16")
         on_gpu = ri._gguf_memory_breakdown(spec_config, swa, **priced)
         for flag in (["--device", "none"], ["--device", "cpu"], ["-dev", "none"]):
@@ -2137,15 +2041,7 @@ class TestLaunchShapedPricing:
         assert on_gpu.gpu_bytes > 0
 
     def test_context_checkpoints_are_charged_to_the_host_not_the_gpu(self, spec_config, swa):
-        """Checkpoints are host RAM, so they belong in the total and not in gpu_bytes.
-
-        llama.cpp holds each one in ``common_prompt_checkpoint``'s
-        ``std::vector<uint8_t>`` buffers, on the host heap and bounded by
-        ``--cache-ram``; Studio's own load schema says "Each costs host memory". They
-        are inside ``kv_bytes`` because that is what the training guard budgets, so the
-        GPU figure has to take them back out. Priced into VRAM, the default 32 per slot
-        warned about GPU pressure the launch never creates.
-        """
+        """Context checkpoints live in host RAM (--cache-ram): count them in total_bytes, not gpu_bytes."""
         priced = dict(n_ctx = 131072, cache_type_kv = "f16")
         none = ri._gguf_memory_breakdown(spec_config, swa, ctx_checkpoints = 0, **priced)
         many = ri._gguf_memory_breakdown(spec_config, swa, ctx_checkpoints = 8, **priced)
@@ -2283,12 +2179,7 @@ class TestLaunchShapedPricing:
 
 
 class TestInheritedEnvironment:
-    """What the CHILD inherits, which is not always what the panel was told.
-
-    ``_child_spec_env`` is the rule: the launch scrubs LLAMA_ARG_SPEC_* whenever
-    Unsloth owns the spec block, and keeps it when the extras do. The projector has no
-    such scrub at all, so an inherited one loads even through --no-mmproj.
-    """
+    """The child inherits LLAMA_ARG_SPEC_* the panel never saw, and the projector path scrubs none."""
 
     @pytest.fixture
     def bare(self, gqa_gguf):
@@ -2467,15 +2358,7 @@ class TestManualNormalizationAndRemoteDrafters:
 
 
 class TestSpeculationOffChargesNoDrafter:
-    """Modes whose launch never emits ``--model-draft`` must not be billed for one.
-
-    ``_build_speculative_flags`` returns out of three before reaching the flag: "off"
-    immediately, "ngram-simple" and "ngram" after their ``--spec-type``. The resident-
-    file resolution appended ``gguf_mtp_file`` for every mode that was not DSpark or
-    DFlash, so selecting OFF could ADD gigabytes -- the opposite of what the control
-    does. Driven through the real resolution: the breakdown's own tests stub the files
-    term wholesale and would pass either way.
-    """
+    """Modes that never emit --model-draft (OFF, ngram-simple, ngram) must not be charged a drafter file."""
 
     @pytest.fixture
     def config_with_a_sidecar(self, tmp_path):
@@ -2510,13 +2393,7 @@ class TestSpeculationOffChargesNoDrafter:
 
 
 class TestAnUnloadableSidecarIsNotCharged:
-    """A drafter the launch drops must not be priced, or the guard refuses a load that fits.
-
-    ``load_model`` drops a ``mtp-*.gguf`` carrying neither ``token_embd.weight`` nor
-    ``nextn_shared_target_tensors``, since llama-server opens a draft model as a
-    complete model. Charging it here is VRAM the launch never asks for, and the
-    chat-load admission guard turns that into a 409 against a running training job.
-    """
+    """An mtp-*.gguf lacking token_embd.weight and nextn_shared_target_tensors is dropped, not priced."""
 
     def _config(self, tmp_path, sidecar):
         home = tmp_path / sidecar.stem
@@ -2564,13 +2441,7 @@ class TestAnUnloadableSidecarIsNotCharged:
 
 
 class TestAProjectorOverrideIsTheOneCharged:
-    """``--mmproj`` in Advanced Arguments last-wins, so it is the file that opens.
-
-    ``load_model`` emits Studio's resolved projector and appends the extras after it,
-    so the child opens the user's. Both the resident-file total and the encoder's
-    runtime allowance read only the configured projector, which billed a file the
-    launch never opens and let a possibly much larger custom one through free.
-    """
+    """A --mmproj in Advanced Arguments overrides Studio's projector (last wins), so price the one used."""
 
     @pytest.fixture
     def vision_config(self, tmp_path):
@@ -2615,14 +2486,7 @@ class TestAProjectorOverrideIsTheOneCharged:
 
 
 class TestAnEmbeddedMtpHeadIsPriced:
-    """A NextN head is a drafter with no file, and it still allocates a draft cache.
-
-    Nothing is charged in the weights for it, so `_charged_drafter_path` returns None
-    and the entire runtime-sizing block was skipped. `_estimate_mtp_overhead_bytes`
-    documents this case explicitly (``drafter_path=None``, ``draft_weights_bytes=0``)
-    and sizes the head from ``nextn_predict_layers``, so the allocation was knowable
-    and simply not asked for.
-    """
+    """An embedded NextN head has no file but allocates a draft cache, sized from nextn_predict_layers."""
 
     @pytest.fixture
     def nextn_model(self, tmp_path):
@@ -2674,16 +2538,8 @@ class TestAnEmbeddedMtpHeadIsPriced:
         assert priced.drafter_runtime_bytes == 0
 
     def test_a_draft_pin_does_not_move_the_embedded_head(self, nextn_model):
-        """--spec-draft-ngl 0 does not switch the head off, and does not move it either.
-
-        Both flags carry ``params.speculative.n_gpu_layers`` / ``.devices``, which
-        llama.cpp copies in only on the ``has_draft`` path; an embedded head has no
-        draft model to load and takes ``llama_init_from_model(model_tgt)``, keeping the
-        target's placement, as ``_extra_args_draft_offloaded_to_cpu`` documents and
-        ``_draft_cpu_no_embedded`` enforces. So it is still allocated AND still on the
-        card: gating the sizing on the pin dropped it from both figures, placing it in
-        host RAM dropped it from the GPU one, and both turn an overflow into a fit.
-        """
+        """--spec-draft-ngl 0 neither disables nor moves an embedded head, keeping the target's
+        placement."""
         gguf, config = nextn_model
         unpinned = ri._gguf_memory_breakdown(config, gguf, n_ctx = 131072)
         assert unpinned is not None
@@ -2696,14 +2552,7 @@ class TestAnEmbeddedMtpHeadIsPriced:
             assert pinned.drafter_runtime_bytes == unpinned.drafter_runtime_bytes, pin
 
     def test_a_cpu_placed_target_takes_the_embedded_head_with_it(self, nextn_model):
-        """The other half of the same rule: it follows the target DOWN as well as up.
-
-        An embedded head has no file, so host_drafter_bytes is 0 and the drafter is
-        GPU-resident by default. That default is only right while the target is: the
-        head is part of the target's tensors and llama.cpp gives it the target's
-        context, so at --gpu-layers 0 its cache is in host RAM. Charging it to VRAM
-        there raised a multi-gigabyte warning about a card the load never touches.
-        """
+        """An embedded head follows a CPU-placed target: at --gpu-layers 0 its cache belongs in host RAM."""
         gguf, config = nextn_model
         on_cpu = ri._gguf_memory_breakdown(
             config, gguf, n_ctx = 131072, gpu_memory_mode = "manual", gpu_layers = 0
@@ -2714,15 +2563,7 @@ class TestAnEmbeddedMtpHeadIsPriced:
 
 
 class TestACpuOnlyHostShowsNoGpuFootprint:
-    """An Auto load on a machine with no GPU runs in host RAM, and must read that way.
-
-    CPU placement was detected only from an explicit --device or its env twin, so a
-    plain Auto request on a CPU-only Linux or Windows box was priced fully GPU-resident
-    -- a multi-gigabyte GPU figure against a capacity of zero.
-
-    The evidence has to be a probe that RAN. An unfilled snapshot is not absence, and
-    the CUDA count is zero on every Vulkan host, so neither may move the weights.
-    """
+    """CPU placement needs a probe that ran; an unfilled snapshot or a zero CUDA count is not evidence."""
 
     @pytest.fixture
     def priced(self, tmp_path):
@@ -2763,14 +2604,7 @@ class TestACpuOnlyHostShowsNoGpuFootprint:
 
 
 class TestAnInheritedContextIsPriced:
-    """``LLAMA_ARG_CTX_SIZE`` is what the child runs at when nothing else sets a length.
-
-    The launch drops an inherited context only when it is ZERO and the auto-layers path
-    needs --fit to run; a positive one is left alone as a legitimate way to set the
-    length. The estimate fell straight through to the header's native context, so a 4k
-    environment on a 262k model priced the KV cache 64x too large and refused loads that
-    run comfortably.
-    """
+    """A positive inherited LLAMA_ARG_CTX_SIZE is the child's length, so the estimate must read it."""
 
     @pytest.fixture
     def wide(self, tmp_path):
@@ -2813,13 +2647,7 @@ class TestAnInheritedContextIsPriced:
     def test_an_explicit_zero_asks_for_native_and_beats_the_environment(
         self, wide, monkeypatch, flag
     ):
-        """ "-c 0" REQUESTS the native context; it is not the absence of a request.
-
-        llama.cpp parses the environment before argv, so the explicit zero wins at the
-        child. Folding it in with "nothing was set" let an inherited 4k answer for a
-        launch that opens at the header's 262k -- the KV cache understated 64x, in the
-        direction that says "fits".
-        """
+        """An explicit -c 0 requests native context and beats an inherited LLAMA_ARG_CTX_SIZE."""
         gguf, config = wide
         monkeypatch.setenv("LLAMA_ARG_CTX_SIZE", "4096")
         out = ri._gguf_memory_breakdown(config, gguf, n_ctx = 0, llama_extra_args = flag)
@@ -3000,10 +2828,8 @@ class TestAnAutoContextIsMarkedShrinkable:
 
     @pytest.mark.parametrize("selected_gpu_ids", [None, [0, 1]])
     def test_tensor_mode_takes_the_layer_fallback_floor(self, wide, monkeypatch, selected_gpu_ids):
-        """Tensor mode falls back to a layer split on conditions only the launch sees, which
-        opens at the layer floor and replicates compute buffers per device. The fallback keeps
-        every card the tensor launch had, picked automatically or not, so the floor is priced
-        as that layer split whenever it needs more than tensor mode."""
+        """Tensor mode falls back to a layer split at launch; the floor is priced as that split when
+        larger."""
         devices = [(0, 0, 0), (1, 0, 0)]
         monkeypatch.setattr(ri, "_cached_inference_devices", lambda: devices)
         monkeypatch.setattr(ri, "_tensor_split_possible", lambda ids: True)
@@ -3051,13 +2877,7 @@ class TestTheContextFloorFollowsThePlacementPath:
 
 
 class TestTheResolutionTriesOfflineFirst:
-    """A repo already on this disk is priced without asking the Hub.
-
-    The on-disk gate has established the files are here and everything downstream reads
-    local files, but `from_identifier` still ran `detect_gguf_model_remote` and
-    `list_gguf_variants`, an `hf_model_info` each. On a route the panel fires on every
-    settings change that is two Hub round trips per cache miss.
-    """
+    """A repo already on disk must be priced offline, so resolution tries forced-offline first."""
 
     def test_the_first_attempt_runs_under_forced_offline(self, tmp_path, monkeypatch):
         gguf = _write_gguf(tmp_path, "qwen3", _GQA_FIELDS)
@@ -3117,12 +2937,7 @@ class TestTheResolutionTriesOfflineFirst:
 
 
 class TestTheEmbeddedHeadIsChargedOnlyWhenItEngages:
-    """Every no-MTP outcome ``_build_speculative_flags`` has, asked of the estimate.
-
-    An embedded head has no file, so nothing about it is visible in the weights and an
-    over-charge is invisible too: it just makes the row read several GB high and can
-    refuse a load that runs. These are the launches that allocate no head at all.
-    """
+    """An embedded head has no file, so an over-charge is invisible; no-MTP launches must allocate none."""
 
     def _config(self, gguf, identifier):
         return SimpleNamespace(
@@ -3169,11 +2984,7 @@ class TestTheEmbeddedHeadIsChargedOnlyWhenItEngages:
 
     @pytest.mark.parametrize("mode", [None, "mtp"])
     def test_a_binary_that_cannot_run_mtp_is_not_charged_for_it(self, head, monkeypatch, mode):
-        """No mtp_token means --spec-default launches, whatever the mode asked for.
-
-        Unlike the size and MLA drops this is a hard incompatibility, so it applies to
-        a forced request too.
-        """
+        """No mtp_token means a --spec-default launch, whatever the mode asked, even when forced."""
         monkeypatch.setattr(
             ri.LlamaCppBackend,
             "probe_server_capabilities",
@@ -3206,11 +3017,8 @@ class TestTheEmbeddedHeadIsChargedOnlyWhenItEngages:
 
     @pytest.mark.parametrize("spec", ["draft-mtp", "mtp"])
     def test_extras_asking_for_mtp_engage_the_embedded_head(self, head, spec):
-        """The child honours the extras, and on a NextN GGUF that IS the embedded head.
-
-        There is no drafter file, so nothing in the weights would ever hint at it: the
-        draft cache and the target-side state were simply absent from the total.
-        """
+        """Extras asking for MTP engage the embedded head on a NextN GGUF; its cache must count in
+        the total."""
         out = ri._gguf_memory_breakdown(
             self._config(head, "org/Qwen3-8B"),
             head,
@@ -3231,14 +3039,7 @@ class TestTheEmbeddedHeadIsChargedOnlyWhenItEngages:
 
 
 class TestTheCpuOnlyCheckIsActuallyReachable:
-    """Driven through the real snapshot, not through a stubbed helper.
-
-    The first version of the CPU-only fix was inert: `_cached_inference_devices` ended
-    in `or None`, so the empty list a probed CPU-only host produces arrived as the same
-    value as a snapshot nobody had filled, and the check for it could never fire. Its
-    unit tests passed because they replaced `_cached_inference_devices` itself, which
-    is the one thing that could not be wrong. These stub the snapshot instead.
-    """
+    """Uses the real snapshot: a trailing or None made an empty CPU-only probe look unfilled."""
 
     @pytest.fixture
     def snapshot(self, monkeypatch):
@@ -3292,14 +3093,7 @@ class TestTheCpuOnlyCheckIsActuallyReachable:
 
 
 class TestDraftCacheTypePrecedence:
-    """extras beat the panel field beat the inherited environment.
-
-    That is launch order: the field goes on argv, argv beats the LLAMA_ARG_* twin, and
-    the extras are appended after argv and beat both. `_extra_args_draft_cache_types`
-    falls back to the env by DEFAULT, so asking it once and then `or`-ing the field on
-    gave the environment precedence over the control -- an inherited q4 priced against
-    an f16 the child would really allocate, undercounting a context-scaled cache.
-    """
+    """Launch order decides: extras beat the panel field, which beats the inherited environment."""
 
     @pytest.fixture
     def spec(self, tmp_path, monkeypatch):
@@ -3380,14 +3174,7 @@ class TestDraftCacheTypePrecedence:
 
 
 class TestTheTensorSplitLatchesAreHonoured:
-    """load_model consults two in-process latches before it plans; so must the price.
-
-    Both silently turn the launch into a layer split, and the two shapes cost different
-    amounts: tensor replicates a flat buffer per device, a layer split multiplies the
-    context-linear term instead. On two cards that is gigabytes apart, which is enough
-    to move the verdict, so pricing tensor after a latch is set is a wrong number for a
-    launch that will not happen.
-    """
+    """load_model consults two in-process latches before planning, so the price must consult them too."""
 
     @pytest.fixture
     def two_card(self, tmp_path, monkeypatch):
@@ -3467,14 +3254,7 @@ class TestTheTensorSplitLatchesAreHonoured:
 
 
 class TestInheritedRemoteFilesAreMarkedUnsized:
-    """A file the child fetches, that this route may not fetch to weigh, is a floor.
-
-    Both arrive through the environment and both are preserved for the launch:
-    LLAMA_ARG_SPEC_DRAFT_HF_REPO (kept by _child_spec_env once the extras own the spec
-    block) and LLAMA_ARG_MMPROJ_URL. Sizing either needs a network call this route is
-    documented not to make, so the honest answer is a marked lower bound rather than a
-    silently missing multi-gigabyte file.
-    """
+    """Inherited remote files cannot be sized without a network call, so report a marked lower bound."""
 
     @pytest.fixture
     def plain(self, tmp_path, monkeypatch):
@@ -3540,11 +3320,8 @@ class TestFourMoreLaunchNormalizations:
         )
 
     def test_a_gpu_pin_beats_a_stale_device_flag(self, basic):
-        """The pin names cards; the launch strips whatever contradicted it.
-
-        Without this, a --device none left in Advanced Arguments made a pinned load
-        report no GPU footprint at all, which is the fit verdict inverted.
-        """
+        """A GPU pin overrides a stale --device flag, since the launch strips the flag that
+        contradicts it."""
         gguf, config = basic
         cpu_flag = ["--device", "none"]
         unpinned = ri._gguf_memory_breakdown(config, gguf, n_ctx = 8192, llama_extra_args = cpu_flag)

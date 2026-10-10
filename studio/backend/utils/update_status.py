@@ -64,12 +64,7 @@ def reset_update_status_cache() -> None:
 
 
 def detect_install_source() -> str:
-    """Return a coarse install source without exposing local paths.
-
-    Conservative: PEP 610 local/vcs metadata wins. Legacy source
-    installs count as local only when package files resolve outside
-    site-packages/dist-packages and under a Git checkout.
-    """
+    """Coarse install source without local paths; PEP 610 metadata wins, then a git-checkout check."""
     try:
         dist = distribution(PACKAGE_NAME)
     except PackageNotFoundError:

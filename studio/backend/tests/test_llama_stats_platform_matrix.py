@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Simulation suite: the engine stats poller across platforms, backends and bad input.
-
-The poller reads llama-server /metrics over loopback HTTP and nothing else, so the
-platform and GPU axes reduce to "what does this build's /metrics look like". These
-walk the [Windows, Linux, WSL, macOS] x [NVIDIA, AMD/ROCm, Vulkan, CPU] product as
-metric payloads, plus the malformed and hostile bodies a daemon thread must survive
-without dying.
-"""
+"""Engine stats poller fed fake /metrics payloads for each platform and GPU, plus malformed bodies."""
 
 from __future__ import annotations
 
@@ -79,11 +72,7 @@ BACKENDS = ["cuda", "rocm", "vulkan", "cpu"]
 
 @pytest.mark.parametrize("platform,backend", list(itertools.product(PLATFORMS, BACKENDS)))
 def test_healthy_generation_is_never_flagged_on_any_platform(platform, backend, monkeypatch):
-    """The signature that matters is identical everywhere: llama-server freezes the
-    token counters for the whole of a healthy generation and only n_decode_total moves.
-
-    A build that reported a stall here would cancel real work on that platform.
-    """
+    """Token counters stay frozen during healthy generation, so only n_decode_total may signal progress."""
     monkeypatch.setattr(sys, "platform", platform.replace("-wsl", ""))
     snaps = [
         {

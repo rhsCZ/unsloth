@@ -52,21 +52,14 @@ _UNAVAILABLE_DETAIL = "RAG is unavailable: the sqlite-vec extension could not be
 
 
 def _require_rag() -> None:
-    """Gate an endpoint on RAG being runnable here. Covers both halves of unavailable: sqlite-vec never
-    imported, and it imported but its native library will not load. 503 with a stated reason rather
-    than the 500 plus traceback a raising connection would produce, and rag_db's warn-once keeps the
-    log quiet however often this fires."""
+    """Returns 503 with a stated reason, not the 500 and traceback a raising connection would produce."""
     if not rag_db.rag_available():
         raise HTTPException(status_code = 503, detail = _UNAVAILABLE_DETAIL)
 
 
 @contextmanager
 def _rag_unavailable_as_503(cleanup_path: str | None = None) -> Iterator[None]:
-    """Report RagExtensionUnavailable as the same 503, wherever it is raised. _require_rag() has
-    normally answered for the session already; this closes the window where the very first request
-    is the one that discovers the missing library, and it reaches the connections ingestion opens
-    for itself. ``cleanup_path`` removes an upload that was saved before the failure, so nothing is
-    orphaned in the uploads root. Real database errors are left alone."""
+    """Maps RagExtensionUnavailable to 503 anywhere, removing the upload that cleanup_path names."""
     try:
         yield
     except rag_db.RagExtensionUnavailable as exc:
@@ -81,10 +74,7 @@ def _rag_connection() -> sqlite3.Connection:
 
 
 def _availability(available: bool) -> dict:
-    """Availability marker carried by the KB list, the one response that degrades rather than erroring.
-    Additive: a client that only reads the list is unaffected, one that reads this can say "RAG cannot run here"
-    instead of showing an empty page that looks ready to use and offering a Create that can only 503.
-    """
+    """Marks the KB list as degraded rather than erroring, so the UI can say RAG cannot run here."""
     return {
         "ragAvailable": available,
         "ragUnavailableReason": None if available else _UNAVAILABLE_DETAIL,
@@ -125,11 +115,7 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _persist_upload_stream(source, filename: str, *, empty_detail: str) -> tuple[str, str, str]:
-    """Copy a validated document stream into the managed uploads root.
-
-    Returns ``(stored_path, filename, content_hash)``; the digest spares ingestion a
-    second full read of the file.
-    """
+    """Returns the content hash so ingestion does not need a second full read of the file."""
     ext = os.path.splitext(filename)[1].lower()
     if ext not in config.UPLOAD_EXTS:
         raise HTTPException(
@@ -178,11 +164,7 @@ def _save_upload(file: UploadFile) -> tuple[str, str, str]:
 
 
 def _save_native_path_upload(lease: str) -> tuple[str, str, str]:
-    """Persist a desktop drop; returns (stored_path, filename, content_hash).
-
-    The webview never gets to name a path directly: Rust signs the path it saw and we
-    re-verify + re-stat that grant here before reading a byte.
-    """
+    """The webview names no path; the Rust-signed lease is re-verified before a single byte is read."""
     from utils.native_path_leases import NativePathLeaseError, verify_native_path_lease
 
     try:

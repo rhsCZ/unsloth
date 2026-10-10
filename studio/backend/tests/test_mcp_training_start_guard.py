@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""End-to-end coverage for the MCP `start_training` inference guard.
-
-PR #9434 made the MCP tool call POST /training/start with via_api_key = True, so
-an MCP agent can no longer unload the chat model out from under a live stream.
-The PR shipped only a forwarding assertion; these tests drive the real route (and
-the real MCP tool) against a simulated in-flight inference request.
-"""
+"""MCP start_training sets via_api_key, so an agent cannot unload the chat model under a live stream."""
 
 import asyncio
 import importlib.util
@@ -241,11 +235,7 @@ def test_a_fresh_start_request_id_recovers(monkeypatch):
 
 
 def test_a_resolved_start_request_id_still_replays_under_the_guard(monkeypatch):
-    """The transient guard must not swallow the idempotent replay.
-
-    An agent that retries an ACCEPTED start (its first response was lost) while an
-    unrelated inference request is in flight has to hear "your job is queued", not a
-    fresh 409 telling it the start never happened."""
+    """An accepted start's retry replays its result while the inference guard is active, not a 409."""
     route = _load_training_route("training_route_guard_replay_test")
     backend = _arm(monkeypatch, route, inflight = 1)
 
@@ -264,10 +254,7 @@ def test_a_resolved_start_request_id_still_replays_under_the_guard(monkeypatch):
 
 
 def test_a_cancelled_start_request_id_replays_and_keeps_its_tombstone(monkeypatch):
-    """A retry blocked by the guard must still refresh the cancellation tombstone.
-
-    Otherwise the tombstone expires mid-inference and the next retry reserves the id
-    afresh and spawns the very run the user cancelled."""
+    """A guard-blocked retry must refresh the cancellation tombstone, or the cancelled run can respawn."""
     import time
 
     from core.training import training as training_module

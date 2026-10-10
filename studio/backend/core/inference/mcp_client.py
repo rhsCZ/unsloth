@@ -215,11 +215,7 @@ def parse_stdio_command(address: str) -> list[str]:
 
 
 def join_stdio_command(parts: list[str]) -> str:
-    """Inverse of parse_stdio_command: join argv into a single command string that
-    parse_stdio_command() splits back into ``parts`` on this platform. Config files (issue #5936)
-    carry structured command + args; storage holds one string in the url field. Windows uses
-    list2cmdline so spaced/backslash paths round-trip through the posix=False quote-strip; posix
-    uses shlex."""
+    """Inverse of parse_stdio_command: list2cmdline on Windows so paths round-trip, shlex.join elsewhere."""
     if sys.platform == "win32":
         return subprocess.list2cmdline(parts)
     return shlex.join(parts)
@@ -255,18 +251,7 @@ def _session_log_id(url: str) -> str:
 
 
 def stdio_mcp_enabled() -> bool:
-    """stdio MCP servers spawn local processes as the backend user (bypassing the sandbox), so allowed
-    only when the host is the user's own machine. On startup a loopback bind defaults
-    UNSLOTH_STUDIO_ALLOW_STDIO_MCP=1 (see utils.host_policy.apply_stdio_mcp_loopback_default, called
-    from run.py); the Tauri app does the same. Off for Colab and any network (0.0.0.0) bind unless
-    an operator sets the var out-of-band; set it to 0 to force-disable.
-
-    When stdio is on only because of that loopback auto-default, an explicit `unsloth studio run
-    --disable-tools` turns it back off (a local stdio command is server-side code execution). An
-    explicit operator opt-in via the env var still wins, including the documented `=1` network
-    opt-in, where the process tool policy is False merely by the external-host default, not by
-    choice.
-    """
+    """stdio MCP spawns local processes outside the sandbox, so it is gated to the user's own machine."""
     if _managed_mcp_restricted():
         return False
     if os.environ.get("UNSLOTH_STUDIO_ALLOW_STDIO_MCP") != "1":
@@ -280,11 +265,7 @@ def stdio_mcp_enabled() -> bool:
 
 
 def stdio_mcp_disabled_reason() -> str:
-    """User-facing reason local commands are off, mirroring stdio_mcp_enabled().
-
-    Telling a user whose gate is suspended by an active tunnel to set
-    UNSLOTH_STUDIO_ALLOW_STDIO_MCP=1 would re-enable local command execution on
-    a published API, so the suspended cases must name their actual cause."""
+    """Must name the actual cause: the env var would enable local commands on a published API."""
     if _managed_mcp_restricted():
         return "Only the installation owner may register local-command MCP servers."
     from state.tool_policy import get_tool_policy
@@ -406,10 +387,7 @@ def _oauth(
 
 
 async def clear_oauth_tokens_async(url: str) -> None:
-    """Drop any persisted OAuth tokens for ``url``. fastmcp keys tokens by MCP URL, so on server
-    delete / URL change / OAuth disable we must clear them, else re-registering the same URL
-    reuses the old account's token. Best-effort: store / OAuth failures must not 500 the delete /
-    update route."""
+    """fastmcp keys tokens by URL, so re-registering a URL would reuse the old account's token."""
     try:
         await _oauth(url).token_storage_adapter.clear()
     except Exception as exc:  # noqa: BLE001
@@ -445,13 +423,7 @@ def _command_selects_runtime(command: Optional[str]) -> bool:
 
 
 def _runtime_requirements(command: Optional[str]) -> tuple[bool, bool]:
-    """``(needs npm, needs npx)`` for argv[0]. Each launcher asks only for what it runs, so an
-    unrelated missing launcher cannot shadow a good runtime: node needs neither, npm needs npm,
-    and npx needs npx alone -- npx never shells out to an ``npm`` executable, its npx-cli.js
-    delegates in-process to the npm library it ships with, so a PATH exposing node and npx
-    without a separate npm runs it fine and must be left alone. A pathed npm/npx is already
-    located and only needs a node for its shebang, so it does not require a second copy of itself
-    on PATH either."""
+    """Each launcher checks only what it runs, so npx never needs a separate npm executable on PATH."""
     name = _launcher_name(command) if command is not None else None
     if name == "node":
         return False, False
@@ -667,10 +639,7 @@ _MAX_SESSIONS = _max_sessions_from_env()
 
 
 def _connect_window(url: str, timeout: Optional[float]) -> Optional[float]:
-    """How long connecting may take, out of the caller's remaining budget. stdio keeps the
-    cold-start cap: a first run may download a package before the server says anything. HTTP has
-    no such phase, and capping it would reject connections the caller explicitly allowed time
-    for, which is what the one-shot path it replaced always did."""
+    """Only stdio gets the cold-start cap, since its first run may download a package; HTTP does not."""
     if timeout is None or not is_stdio(url):
         return timeout
     return min(timeout, _STDIO_CONNECT_TIMEOUT)
@@ -697,13 +666,7 @@ def _is_tool_error(exc: BaseException) -> bool:
 
 
 def _is_protocol_error(exc: BaseException) -> bool:
-    """A JSON-RPC error response, as opposed to a broken connection. A FastMCP server answers an
-    unknown tool or bad arguments with a result carrying is_error, but the MCP spec also lets a
-    server report those as a protocol error, and plenty of non-FastMCP servers do. fastmcp
-    surfaces that as MCPError (McpError before the rename) carrying the ErrorData the server
-    sent. Receiving it proves the connection is working, so retiring the session over it would
-    throw away the chat's server-side state for a mistyped tool name. The caller still marks the
-    session for a probe before reuse."""
+    """A JSON-RPC error proves the connection is alive, so it must not retire the session."""
     for module, name in (
         ("mcp.shared.exceptions", "MCPError"),
         ("mcp.shared.exceptions", "McpError"),
@@ -720,14 +683,7 @@ def _is_protocol_error(exc: BaseException) -> bool:
 
 
 def _transport_dead(session) -> bool:
-    """Best-effort, version-adaptive liveness probe for a cached client. ``Client.is_connected()``
-    only checks a session object exists, not that the subprocess (or the server's HTTP session)
-    is alive, so it is never used here. Returns True only when the transport is positively gone;
-    unknown returns False (the call surfaces it). Only the stdio transport answers:
-    ``_is_session_dead``/``_connect_task`` are ``StdioTransport`` internals, and neither
-    ``StreamableHttpTransport`` nor ``SSETransport`` has ever carried them (checked on fastmcp
-    3.0.2 and 4.0.0). For HTTP this returns "unknown" every time, which is why an idle HTTP
-    session is re-proved with tools/list instead -- see _needs_idle_recheck."""
+    """Only stdio can prove a transport dead; HTTP always reads unknown, so this returns False there."""
     client = getattr(session, "client", None)
     if client is None:
         return True
@@ -750,13 +706,7 @@ def _transport_dead(session) -> bool:
 
 
 def _needs_idle_recheck(session, idle_for: float, remaining: Optional[float]) -> bool:
-    """Whether an idle HTTP session must prove itself before the next dispatch. A server MAY drop an
-    HTTP session whenever it likes, and the client only learns on the next request, which would
-    surface as a failed tool call the user has to retry by hand. stdio is exempt: _transport_dead
-    answers there, and a live subprocess does not expire on its own. Skipped when the caller
-    cannot afford it: the probe exists to save someone a failed call, so spending their whole
-    budget on it (tool_call_timeout goes down to 1s) would cause the very failure it is meant to
-    avoid."""
+    """Idle HTTP sessions are re-proved, since a server may drop one silently; stdio is exempt."""
     if is_stdio(session.url):
         return False
     # Negative = this borrower just connected it; the handshake is proof enough.
@@ -771,17 +721,7 @@ def _session_responsive(
     cancel_event = None,
     timeout_is_fatal: bool = True,
 ) -> bool:
-    """Whether a session left dirty by an abandoned call can be reused: the server must answer inside
-    ``budget`` (the caller's remaining deadline). Proves the server is alive, not that the abandoned
-    call finished -- MCP requests are concurrent. Probes with a raw single-page tools/list: ping
-    answers "Method not found" on a modern-era connection, and list_tools() auto-paginates up to 250
-    pages.
-
-    ``timeout_is_fatal`` separates the two callers. A dirty session is under suspicion, so silence
-    within the window condemns it. An idle one is only being spot-checked: a slow answer says
-    nothing about whether the transport is gone, and retiring it there would throw away the very
-    state this cache exists to keep. Only a definite failure retires that one.
-    """
+    """Silence from a dirty session condemns it; an idle one is retired only on a definite failure."""
     client = session.client
     if client is None:
         return False
@@ -1018,10 +958,7 @@ def _session_key(url: str, headers: Optional[dict], scope: Optional[str]) -> tup
 
 
 def _checkout_session(key: tuple) -> tuple[Optional[_McpSession], float]:
-    """Returns the session and how long it had been unused, measured before last_used is refreshed.
-    The idle gap is returned rather than stored on the session because HTTP borrowers run
-    concurrently: a second checkout would otherwise overwrite the first one's gap with a
-    near-zero value and talk it out of proving a session that really had gone stale."""
+    """Returns the idle gap, not stored on the session, since concurrent borrowers would overwrite it."""
     session = _mcp_sessions.get(key)
     if session is not None and session.is_connected():
         now = time.monotonic()
@@ -1073,10 +1010,7 @@ def _get_session(
     config_check,
     use_oauth: bool = False,
 ) -> tuple[_McpSession, float]:
-    """``deadline`` is the caller's absolute monotonic budget (None = no limit): the key-lock wait
-    and the connect share it, so a slow startup can't stack full timeout windows (see
-    _call_session_tool). Returns the session and this borrower's idle gap (negative when we
-    connected it ourselves), which only the borrower may act on -- see _checkout_session."""
+    """Key-lock wait and connect share one absolute deadline, so slow startups cannot stack timeouts."""
     global _mcp_reaper_started
     key = _session_key(url, headers, scope)
     with _mcp_sessions_lock:
@@ -1266,18 +1200,7 @@ def close_mcp_sessions(
 
 
 def _close_all(sessions: list) -> None:
-    """Close sessions in parallel.
-
-    Serially, each unresponsive transport can burn _SESSION_CLOSE_TIMEOUT plus the thread join
-    before the next one starts. This runs on the request thread when a server is edited or deleted,
-    and a popular HTTP server now holds a session per chat rather than one overall, so a serial
-    close could stall that route for minutes.
-
-    Fanned out _MAX_CLOSE_THREADS wide rather than one thread per session. The cache is allowed to
-    overshoot _MAX_SESSIONS while every session in it is busy, so the list handed here has no fixed
-    length, and a shutdown is the worst moment to ask the process for an unbounded number of
-    threads.
-    """
+    """Closes at most _MAX_CLOSE_THREADS at once; serial closes could stall a request for minutes."""
     if not sessions:
         return
     if len(sessions) == 1:
@@ -1306,25 +1229,7 @@ def _close_all(sessions: list) -> None:
 
 
 def _close_detached(sessions: list) -> None:
-    """Hand sessions nobody is waiting on to the cleanup worker.
-
-    Used for LRU victims and for the deferred close of a retired session: those belong to another
-    scope or to a call that has already ended, while the thread holding them is in the middle of
-    serving a tool call on its own deadline and an unresponsive transport costs
-    _SESSION_CLOSE_TIMEOUT to shut down.
-
-    One worker rather than a thread per session: nobody is waiting on these, so closing them one at
-    a time is fine, and a run of new chat scopes against a server that hangs on shutdown then cannot
-    spawn threads without bound. close_mcp_sessions stays synchronous and drains this queue, because
-    its caller (a server edit, or atexit) does need the teardown to have happened.
-
-    Past _MAX_PENDING_CLOSES the overflow is closed on the caller instead. A queue that keeps
-    growing means the server is shutting down slower than chats are opening, and every waiting
-    session still holds its own loop thread and connection, so the queue has to be bounded as well
-    as the cache. Making the caller wait is the backpressure that stops it: unpleasant, but the same
-    thing that happened before any of this was deferred, and only once the deferral has already
-    failed to keep up.
-    """
+    """One worker, not a thread per session; past _MAX_PENDING_CLOSES the caller closes the overflow."""
     global _mcp_cleanup_worker
     if not sessions:
         return
@@ -1372,11 +1277,7 @@ close_stdio_sessions = close_mcp_sessions
 
 
 def _reset_after_fork() -> None:
-    """Drop everything the child inherited from the parent's cache. Only the forking thread survives
-    a fork, so every session's loop thread is gone while its client still reports connected. A
-    child that checked one out would wait on a loop that will never run, and _transport_dead
-    cannot see it for HTTP. Nothing here is closed: those objects belong to the parent, which is
-    still using them."""
+    """Only the forking thread survives a fork, so inherited session loops are dead; close nothing."""
     global _mcp_reaper_started, _mcp_connects_in_flight, _mcp_sessions_lock
     global _mcp_cleanup_lock, _mcp_cleanup_worker
     # Replaced: a lock held at fork belongs to a thread that does not exist in the child.
@@ -1630,11 +1531,7 @@ _MEDIA_TYPE = re.compile(r"^image/[a-z0-9][a-z0-9!#$%&'^_`|~.+-]*$")
 
 
 def _uri_mime(uri: Any) -> Optional[str]:
-    """Guess a media type from the part of a URI that names the resource. mimetypes only stopped
-    reading the query and fragment in 3.11.9 / 3.12.3 / 3.13 (CPython gh-117217), and on older
-    supported interpreters 'gen.png?download=1' guessed nothing while 'download?name=gen.png'
-    guessed image/png. Dropping both keeps every interpreter in agreement. The scheme stays so a
-    data: URI still resolves; a bare host goes, since a host name is not a file name."""
+    """Drops query and fragment so every Python guesses the same type; the scheme stays for data: URIs."""
     split = urlsplit(str(uri))
     cleaned = urlunsplit((split.scheme, split.netloc if split.path else "", split.path, "", ""))
     return mimetypes.guess_type(cleaned, strict = False)[0]
@@ -1844,10 +1741,7 @@ async def _race_tool_call(
     cancel_event,
     unwind_timeout: float = 0.0,
 ) -> Any:
-    """Await ``call_coro`` under ``timeout``, polling ``cancel_event`` so a /cancel POST interrupts
-    even mid-network-read. ``unwind_timeout`` waits up to that long for a cancelled call to
-    finish unwinding; only callers that hand the client back to a cache need it (one-shot clients
-    are discarded anyway)."""
+    """Polls cancel_event alongside the call, so a /cancel interrupts a read already in flight."""
 
     async def _watch_cancel() -> None:
         while cancel_event is not None and not cancel_event.is_set():
@@ -2026,22 +1920,7 @@ def call_tool_sync(
     ui_resource_uri: Optional[str] = None,
     **oauth,
 ) -> str:
-    """Call one MCP tool and return its flattened text/image result. Never raises: every failure comes
-    back as an "Error: ..." string for the model.
-
-    Which transport path runs depends on ``scope`` (an opaque per-chat key) and ``use_oauth``. stdio
-    always goes through the session machinery, and without a scope it still gets a private ephemeral
-    session that is closed afterwards, so no browser or cookie state leaks between requests. HTTP
-    reuses a cached session only when it has a scope AND OAuth is off, so a server that keeps state
-    between calls keeps it for the whole chat. OAuth HTTP, and HTTP without a scope, connect once
-    and disconnect, exactly as before sessions were shared: refreshing a token on a long-lived
-    shared connection is not something this code can do safely yet.
-
-    ``timeout`` is one budget covering connect and call together. ``cancel_event`` aborts an
-    in-flight call. ``config_check`` re-reads the server row so a call that raced an edit or delete
-    cannot dispatch on the stale configuration. ``ui_resource_uri`` appends the frontend-only
-    __MCP_UI__ envelope.
-    """
+    """Never raises: failures return as Error strings; OAuth or scope-less HTTP connects once per call."""
 
     async def _one_shot() -> Any:
         async with _client(url, headers, use_oauth, **oauth) as client:

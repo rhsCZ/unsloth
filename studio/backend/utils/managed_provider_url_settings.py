@@ -65,12 +65,7 @@ def private_urls_locked_by_environment() -> bool:
 
 
 def get_managed_private_provider_urls_allowed() -> bool:
-    """Whether a managed account may use a provider base URL that resolves to a private address.
-
-    Installation-wide, so it is read from the owner's store whoever is asking. A missing setting
-    keeps the refusal that shipped, and a read failure fails closed: an unreadable settings DB must
-    not quietly widen what a managed account can dial.
-    """
+    """Installation-wide, so read from the owner's store; an unreadable store fails closed."""
     # Before the cache: the strict answer is never the held one.
     if private_urls_locked_by_environment():
         return False

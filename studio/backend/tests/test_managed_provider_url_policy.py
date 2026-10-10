@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The owner's switch for managed-account provider base URLs on private addresses (#11382).
-
-Default off, so every installation keeps the refusal that shipped. Turned on, the three places that
-enforce it -- the validator, the pinned transport and the recipe egress guard -- all stand down
-together, because a connection that saves and then fails at send time is worse than one that never
-saved. Cloud metadata endpoints stay refused either way, and the shared-host environment opt-in
-outranks the switch.
-"""
+"""Private provider URLs stay refused by default; the switch relaxes all three checks together."""
 
 import threading
 

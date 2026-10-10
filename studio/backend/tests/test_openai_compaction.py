@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for OpenAI Responses API context_management wiring.
-
-OpenAI's Responses API supports server-side compaction via
-``context_management: [{type:"compaction", compact_threshold:N}]``. No
-beta header, no dated version pin; the threshold is silently accepted and
-compaction runs when the rendered prompt crosses it.
-
-These pin: the body shape when threshold is set on cloud OpenAI, the
-silent no-op on non-cloud base URLs, and the omitted-threshold
-pass-through.
-"""
+"""Tests for context_management compaction: sent on cloud OpenAI only, a no-op on other base URLs."""
 
 import asyncio
 import json

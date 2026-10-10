@@ -179,12 +179,7 @@ def _native_audio_security_targets_or_error(
 
 
 def _recorded_local_base(model_name) -> "tuple[str | None, bool]":
-    """``(base, needs_hub)`` for the base this checkpoint records on disk.
-
-    Delegates to the resolver's own disk reads so the gate cannot drift from what
-    activation later resolves. Fail closed: an unavailable reader counts as needing the
-    Hub, since skipping a needed probe costs the retry backoff the probe exists to avoid.
-    """
+    """Reuses the resolver's disk reads; an unavailable reader counts as needing the Hub (fails closed)."""
     try:
         _ensure_backend_on_path()
         from utils.transformers_version import recorded_local_base
@@ -194,11 +189,7 @@ def _recorded_local_base(model_name) -> "tuple[str | None, bool]":
 
 
 def _hub_targets_are_local(*targets) -> bool:
-    """True when every non-empty target is a local path, so nothing here needs the Hub.
-
-    Fail closed: an unresolvable target, or an unavailable is_local_path, counts as remote,
-    since skipping a needed probe costs the retry backoff it exists to avoid.
-    """
+    """True when every non-empty target is local; an unresolvable one counts as remote, failing closed."""
     try:
         _ensure_backend_on_path()
         from utils.paths import is_local_path
@@ -297,14 +288,7 @@ _NEMOTRON_TRUST_SUBSTRINGS = ("nemotron_h", "nemotron-h", "nemotron-3-nano")
 
 
 def _needs_nemotron_trust(model_name: str, hf_token: str | None = None) -> bool:
-    """Whether *model_name* is a NemotronH/Nano model that needs trust_remote_code.
-
-    NemotronH/Nano have config-parsing bugs that require it. Must NOT match
-    Llama-Nemotron (standard Llama arch), so also require the unsloth/ or nvidia/
-    namespace, and a genuine first-party Hub repo (not a local path or a spoof
-    name starting with "unsloth/"). The repo check is authenticated so private
-    first-party repos still resolve, and runs only after the cheap checks pass.
-    """
+    """Requires an unsloth/ or nvidia/ prefix so Llama-Nemotron (standard Llama arch) is not matched."""
     mn = model_name.lower()
     if not (
         any(sub in mn for sub in _NEMOTRON_TRUST_SUBSTRINGS)
@@ -318,13 +302,7 @@ def _needs_nemotron_trust(model_name: str, hf_token: str | None = None) -> bool:
 
 
 def _resolve_lora_4bit(mc, load_in_4bit: bool) -> bool:
-    """Reconcile load_in_4bit with a LoRA adapter's recorded training method.
-
-    A recorded unsloth_load_in_4bit wins; otherwise lora -> base is full precision
-    (4bit off); qlora -> base is quantized (4bit on); unknown method -> force off
-    only when the base is not a -bnb-4bit repo.
-    A missing or unreadable adapter_config.json leaves the value unchanged.
-    """
+    """A recorded unsloth_load_in_4bit wins; otherwise lora means full precision and qlora means 4-bit."""
     from utils.models.checkpoints import is_full_finetune_output
 
     if load_in_4bit and not mc.is_lora and is_full_finetune_output(mc.path):
@@ -374,11 +352,7 @@ def _resolve_lora_4bit(mc, load_in_4bit: bool) -> bool:
 
 
 def _ensure_ssm_kernels(targets: list, resp_queue: Any) -> bool:
-    """Install the SSM kernels the given model(s) lazy-import in from_pretrained; no-op for
-    non-SSM models, idempotent. Returns True on success; on a fatal mamba-ssm failure sends a
-    'loaded' failure response and returns False. Call BEFORE importing transformers, which
-    snapshots its optional-backend gates at import (a later install may not be picked up).
-    """
+    """Call before importing transformers, which snapshots its optional-backend gates at import."""
     try:
         from utils.ssm_runtime import ensure_ssm_runtime
     except Exception as exc:
@@ -416,15 +390,7 @@ def _run_security_gates(
     compute_subdirs: bool = True,
     subject: str | None = None,
 ) -> bool:
-    """Malware + (when trust_remote_code) remote-code consent gates over *targets*
-    (model + base). Sends the matching 'loaded' failure and returns False if blocked; True
-    when every target is clear.
-
-    ``compute_subdirs=False`` keeps the gate transformers-free (``security_load_subdirs``
-    imports ``model_config`` -> ``transformers``, which would snapshot optional-backend
-    availability before the SSM kernels are installed): used for the pre-import preflight,
-    where ``_handle_load`` re-runs the authoritative gate with full subdir scoping.
-    """
+    """compute_subdirs=False keeps the preflight from importing transformers before SSM kernels install."""
     targets = list(dict.fromkeys(t for t in targets if t))
 
     # Poisoned pickles deserialize even without trust_remote_code: scan every load (LoRA: the base).
@@ -886,16 +852,7 @@ def _drain_skip_generate(
     *,
     audio: bool = False,
 ) -> bool:
-    """Skip a generate queued behind a cancelled one during an unload.
-
-    The parent sets ``drain_event`` for the whole unload. Because the parent's
-    per-token ``cancel_event`` is cleared at the start of every generate, a cancel
-    set while this generate was still queued would otherwise be lost when it is
-    dequeued. If the drain is in effect, emit an immediate terminal response
-    (``gen_done`` or ``audio_error``) so the parent's mailbox drains fast and the
-    switch stays fast, and report the generate was skipped so the caller does not
-    clear the cancel or run it.
-    """
+    """Skips a queued generate during unload, since a cancel set while queued would be lost otherwise."""
     if drain_event is None or not drain_event.is_set():
         return False
     request_id = cmd.get("request_id", "")
@@ -997,12 +954,7 @@ def _abandon_one(cmd: dict, resp_queue: Any) -> None:
 
 
 def _prepare_generate_audio(cmd, resp_queue: Any, cancel_event, drain_event) -> bool:
-    """Clear stale cancellation and acknowledge when this TTS command owns the worker.
-
-    The durable unload drain is checked on both sides of the clear so an unload
-    landing in that window skips TTS instead of having its shared cancel erased.
-    The parent does not signal request cancellation until it receives audio_started.
-    """
+    """Checks the unload drain on both sides of the cancel clear so a racing unload's cancel survives."""
     if _drain_skip_generate(cmd, resp_queue, drain_event, audio = True):
         return False
     cancel_event.clear()
@@ -1023,13 +975,7 @@ def _backend_declares(
     name: str,
     method: str = "generate_chat_response",
 ) -> bool:
-    """Whether this backend's *method* declares *name*.
-
-    A signature check, not a capability claim: a backend honoring the option
-    through **kwargs would read as False here. That is accurate for the backends
-    that ship today, and failing closed costs the option -- an ignored seed, or
-    a request sampled without its penalty -- never a crash.
-    """
+    """A signature check, not a capability claim: a **kwargs backend reads False, which fails closed."""
     generate = getattr(backend, method, None)
     if generate is None:
         return False
@@ -1105,12 +1051,7 @@ def _generation_kwargs(backend, cmd: dict, cancel_event) -> dict:
 
 
 def _handle_generate(backend, cmd: dict, resp_queue: Any, cancel_event) -> None:
-    """Handle a generate command: stream tokens back via resp_queue.
-
-    cancel_event is asked between tokens; what it answers for depends on the caller --
-    the batching loop passes something reading both the record and the shared event, the
-    one-at-a-time loop the shared event alone. Nothing is asked during the prefill.
-    """
+    """cancel_event is polled between tokens, never during prefill; its meaning depends on the caller."""
     request_id = cmd.get("request_id", "")
 
     try:
@@ -1651,10 +1592,7 @@ def _audio_runtime(backend) -> dict:
 
 
 def _handle_generate_audio(backend, cmd: dict, resp_queue: Any, cancel_event) -> None:
-    """Handle TTS audio generation — returns WAV bytes + sample_rate.
-
-    A separation returns the paths of the stems it wrote under the route's ``output_dir``
-    instead: hundreds of megabytes of audio never cross the queue."""
+    """A separation returns stem paths under output_dir, so audio never crosses the queue."""
     request_id = cmd.get("request_id", "")
     try:
         logger.info("Starting audio generation for request_id=%s", request_id)
@@ -1878,23 +1816,7 @@ def run_inference_process(
     stop_ledger = None,
     pending_teardowns = None,
 ) -> None:
-    """Subprocess entrypoint. Persistent — runs the command loop until shutdown.
-
-    Args:
-        cmd_queue: mp.Queue for receiving commands from parent.
-        resp_queue: mp.Queue for sending responses to parent.
-        cancel_event: mp.Event the parent sets to cancel generation.
-        config: Initial configuration dict with model info.
-        drain_event: mp.Event the parent sets for the duration of an unload. Unlike
-            cancel_event (cleared at the start of every generate), it is never cleared
-            here, so a generate still queued behind a cancelled one is skipped rather
-            than run — the cancel survives the queue handoff.
-        stop_ledger: StopLedger in shared memory naming the requests the parent has
-            stopped. Read rather than received: a reply decoding beside others is stopped
-            by name, and a queue put is not readable the moment it returns.
-        pending_teardowns: counts the commands that end everything on their way here, so a
-            held command is answered rather than run in front of one. Read, for the same reason.
-    """
+    """Runs the command loop until shutdown; drain_event is never cleared, so cancels survive the queue."""
     _apply_worker_hf_token_environment(config)
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["PYTHONWARNINGS"] = "ignore"

@@ -51,11 +51,7 @@ WARNINGS_MEMBER = "EXPORT_WARNINGS.txt"
 
 
 def _safe_basename(label: str) -> str:
-    """The filename out of a label, with no way to reach a directory.
-
-    Both separators, not `Path(label).name`: a Windows-shaped label read on
-    POSIX keeps its backslashes, which some extractors treat as a path.
-    """
+    """Strips both separators, since on POSIX Path(label).name keeps Windows backslashes in the name."""
     name = label.replace("\\", "/").rsplit("/", 1)[-1].strip()
     # A newline would forge an entry in EXPORT_WARNINGS.txt.
     name = "".join(
@@ -69,15 +65,7 @@ def _safe_basename(label: str) -> str:
 
 
 def _member_name(family: str, label: str, used: set[str]) -> str:
-    """`family/basename`, made unique against everything already in the ZIP.
-
-    A duplicated member extracts as whichever entry the tool reaches last,
-    silently losing the other. The key is case-folded because the volume the
-    archive is EXTRACTED on decides what collides: Windows and default APFS
-    treat `Server.log` and `server.log` as one name. `.lower()` not
-    `.casefold()`, which over-folds for filenames (Turkish dotless i, sharp s);
-    only the KEY is folded, the member keeps its real name.
-    """
+    """Collision key is lower-cased: a case-insensitive volume would merge Server.log and server.log."""
     base = _safe_basename(label)
     candidate = f"{family}/{base}"
     if candidate.lower() not in used:
@@ -97,35 +85,7 @@ def _member_name(family: str, label: str, used: set[str]) -> str:
 
 
 def _open_verified(path: str) -> tuple[IO[bytes], int]:
-    """Open a source without ever following a link, and prove what we opened.
-
-    The walk in `debug_log_sources` already refuses a symlink whose target
-    escapes the log directory, but that check ran at enumeration time; anything
-    can replace the entry before this open. So: lstat first and refuse a
-    non-regular file, open with O_NOFOLLOW, then fstat the DESCRIPTOR and
-    require it to be the same regular file. The fstat-versus-lstat compare is
-    the part that matters -- it is taken on the handle we are about to read, so
-    a swap after it cannot redirect us. `LogSource` carries no device or inode,
-    so the pre-open lstat here is the newest identity we have; that narrows the
-    window between enumeration and open without closing it entirely.
-
-    Returns the handle and its raw descriptor.
-
-    One residual, on Windows only, that this cannot close. `O_NOFOLLOW` is
-    POSIX-only, so the `getattr` above collapses to 0 there and the open follows
-    whatever the entry is. A true symlink is still refused -- CPython sets
-    `S_IFLNK` for a reparse point whose tag is `IO_REPARSE_TAG_SYMLINK`, and a
-    junction resolves to a directory and fails `S_ISREG`. But for any OTHER file
-    reparse tag (AppExecLink, a OneDrive placeholder, dedup), `win32_xstat` falls
-    back to traversing, so `before` describes the TARGET, the flagless open
-    reaches the same target, and the device/inode compare matches. Closing that
-    needs `CreateFileW` with `FILE_FLAG_OPEN_REPARSE_POINT`, which `os.open`
-    cannot express. It is bounded rather than open: `debug_log_sources` resolves
-    every entry with `realpath` and refuses a target outside the log directory,
-    so only the enumeration-to-open window is exposed -- and anyone who can write
-    to that directory can already hard-link a file into it, which no platform
-    here refuses.
-    """
+    """Checks the opened descriptor against the pre-open lstat; a swap after the open cannot redirect it."""
     before = os.stat(path, follow_symlinks = False)
     if not stat.S_ISREG(before.st_mode):
         raise OSError(errno.ELOOP, "not a regular file")
@@ -151,13 +111,7 @@ def _open_verified(path: str) -> tuple[IO[bytes], int]:
 
 
 def _redact_record(raw: bytes) -> str:
-    """One record, masked, or refused if the redactor cannot read it.
-
-    `errors="replace"` is unsafe: a UTF-16 log decoded as UTF-8 keeps a NUL
-    between every character, so `HF_TOKEN=hf_...` stops matching every masking
-    rule and is copied through in the clear. PowerShell redirection writes
-    UTF-16LE by default. A record that cannot be masked must not ship.
-    """
+    """UTF-16 records are refused, since decoding them leniently stops HF_TOKEN from being masked."""
     if b"\x00" in raw:
         return UNREADABLE_MARKER
     try:
@@ -168,15 +122,8 @@ def _redact_record(raw: bytes) -> str:
 
 
 def _seek_to_tail(handle: IO[bytes], fd: int, allowance: int) -> tuple[int, int]:
-    """Position at the last `allowance` bytes, on a record boundary.
-
-    Returns the bytes skipped (0 if the whole file fits) and the size, read from
-    the descriptor about to be used rather than re-stat'd later.
-
-    The boundary is not cosmetic: `redact_log_text` is anchored on a key beside
-    its value, so a read starting mid-record can emit a credential whose key was
-    in the skipped part. Whatever the seek lands inside is dropped.
-    """
+    """Drops whatever the seek lands inside, since redaction keys on a credential's name beside its
+    value."""
     size = os.fstat(fd).st_size
     if size <= allowance:
         return 0, size
@@ -202,20 +149,7 @@ def _seek_to_tail(handle: IO[bytes], fd: int, allowance: int) -> tuple[int, int]
 
 
 def _redacted_records(handle: IO[bytes], fd: int, limit: int, deadline: float) -> Iterator[str]:
-    """Every line of one log, masked, in bounded chunks, stopping after `limit`.
-
-    Never `handle.read()`: a runner log can be gigabytes.
-
-    `limit` is a different bound from the seek that positioned this read. The
-    seek says where to start; a log being APPENDED to has no end, so without a
-    ceiling the loop follows the writer -- on the session log, which is live by
-    definition while someone is exporting it.
-
-    `deadline` is per RECORD. Per source overruns because one pathological file
-    blows the whole build (the redactor's cost is quadratic in what it is
-    handed); per chunk overruns because one 256 KiB chunk holds thousands of
-    records.
-    """
+    """Stops at limit because a log being appended to has no end; deadline is per record, not per source."""
     buffer = b""
     start = handle.tell()
     consumed = start
@@ -268,13 +202,7 @@ def _redacted_records(handle: IO[bytes], fd: int, limit: int, deadline: float) -
 def _newest_first_across_families(
     sources: list[debug_log_sources.LogSource],
 ) -> list[debug_log_sources.LogSource]:
-    """Round-robin the families instead of draining them one at a time.
-
-    Consumed in `list_sources` order, a large session log spends the whole byte
-    budget on the server family and the bundle arrives with no runner logs --
-    usually the half that explains the problem. Round-robin means the budget
-    runs out on the oldest attempts rather than on a whole category.
-    """
+    """Round-robins the families so a large log cannot spend the whole byte budget before the others."""
     by_family: dict[str, list[debug_log_sources.LogSource]] = {}
     for source in sources:
         by_family.setdefault(source.family, []).append(source)
@@ -287,11 +215,8 @@ def _newest_first_across_families(
 
 
 def _warning_line(member: str, exc: BaseException) -> str:
-    """One failed source, named by its member, never by its path.
-
-    Not `str(exc)`: `OSError.__str__` appends the filename, which would put a
-    host path into the archive -- the one thing member names avoid.
-    """
+    """Names the member, never the path: str(exc) on an OSError appends the filename, leaking a host
+    path."""
     code = getattr(exc, "errno", None)
     return redact_log_text(
         f"{member}: {type(exc).__name__} (errno {code if code is not None else 'unknown'})"
@@ -299,10 +224,7 @@ def _warning_line(member: str, exc: BaseException) -> str:
 
 
 def build_log_archive() -> tempfile.SpooledTemporaryFile:
-    """Every allowlisted log, redacted, as a ZIP rewound to its start.
-
-    The caller owns the returned file and must close it.
-    """
+    """Caller owns the returned file and must close it; the ZIP is rewound to its start."""
     output = tempfile.SpooledTemporaryFile(max_size = SPOOL_MAX_BYTES, mode = "w+b")
     try:
         warnings: list[str] = []

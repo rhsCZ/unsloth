@@ -63,12 +63,7 @@ def pasted_text_body(text: str) -> str:
 
 
 def message_text_with_pastes(message: Any) -> str:
-    """Text of a message including any pasted attachment bodies.
-
-    A paste above the composer's threshold is sent as an attachment rather than
-    inline, so `content_to_text` alone reads a paste-only turn as empty. Other
-    attachment types are left out: they were never part of a message's text.
-    """
+    """Includes pasted attachment bodies, since a paste-only turn reads as empty from content alone."""
     if not isinstance(message, dict):
         return ""
     parts = [content_to_text(message.get("content"))]

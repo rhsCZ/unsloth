@@ -344,10 +344,7 @@ def rebind_cancelled(
     assistant_message_id: str | None,
     config: dict[str, Any],
 ) -> dict | None:
-    """Re-point the thread's stopped run at a newer message, or return None. A thread holds one Deep
-    Research run for its lifetime, so a run the user stopped would otherwise refuse every later
-    question in that chat. Stopping kept nothing, so the same run is reset and pointed at the new
-    message instead of a second one being created."""
+    """A thread keeps one Deep Research run, so a stopped run is reset and reused for the next message."""
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -862,10 +859,7 @@ _CLAIMABLE_SQL = """SELECT r.id FROM research_runs r
 
 
 def _has_claimable(now: int) -> bool:
-    """Read-only probe for claimable work, taking no write lock. The supervisor polls twice a second forever and
-    almost every poll finds nothing, so opening BEGIN IMMEDIATE first meant an idle Studio held the writer lock
-    2x/second and any slow writer elsewhere became a stream of "database is locked" here.
-    """
+    """Read-only, so the twice-a-second idle poll never takes the writer lock."""
     conn = get_connection()
     try:
         return conn.execute(_CLAIMABLE_SQL, (now,)).fetchone() is not None

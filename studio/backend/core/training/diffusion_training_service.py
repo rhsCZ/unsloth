@@ -49,11 +49,7 @@ _TERMINAL = ("complete", "error")
 
 
 def _finite_or_none(value: Any) -> Optional[float]:
-    """Coerce a numeric progress field to a finite float, or None. A divergent run (or a
-    grad clip that returns inf) can push loss / grad_norm to NaN or +/-Infinity, and those
-    are invalid in strict JSON -- FastAPI's encoder would emit the JS-only NaN/Infinity
-    tokens that break a strict client parse. Nulling them here (the single service ingestion
-    point both trainers feed) keeps every status snapshot and persisted record JSON-safe."""
+    """NaN and Infinity are invalid in strict JSON, so non-finite values become None here."""
     if value is None:
         return None
     try:
@@ -177,16 +173,7 @@ def _resume_fields(
     source_checkpoint: Optional[str] = None,
     source_created_at: Optional[float] = None,
 ) -> dict[str, Any]:
-    """``can_resume`` / ``checkpoint_step`` / ``resume_blocked_reason`` for a run, read from the
-    checkpoints that are actually on disk.
-
-    Derived, not trusted: a persisted record is a snapshot of the moment the run ended, but the user
-    can delete the output folder afterwards. ``started_at`` fences off bundles an EARLIER run of the
-    same adapter name left in the same folder, and ``ended_at`` fences off the ones a LATER run put
-    there after this one finished. ``write_error`` is the run's own report that a checkpoint write
-    failed; that is sticky and blocks resume (mirroring the MLX trainer's ``resume_blocked``),
-    because whatever older state is on disk predates the adapter that was published. Never raises.
-    """
+    """Derived from disk, since the user can delete the output folder; a write_error blocks resume."""
     try:
         from core.training.diffusion_checkpoint import describe_resume_state
         state = describe_resume_state(
@@ -219,11 +206,7 @@ def _resume_fields(
 
 
 def _refresh_resume_state(rec: dict) -> dict:
-    """Re-derive a persisted record's resume fields from the checkpoints on disk, in place.
-
-    Also backfills ``output_dir`` from the stored config for a record written before that field
-    existed: the UI replays that path as ``resume_from_checkpoint``, so reporting ``can_resume``
-    without it would enable an action the client then refuses on its own."""
+    """Backfills output_dir for old records, else can_resume would enable a resume the client refuses."""
     config = rec.get("config")
     output_dir = rec.get("output_dir") or (
         config.get("output_dir") if isinstance(config, dict) else None
@@ -300,12 +283,7 @@ def get_diffusion_run(job_id: str) -> Optional[dict]:
 
 
 def _restate_live_job(rec: dict) -> dict:
-    """Undo the interim record's pessimism for the job that is still running, in place.
-
-    An interim record is written as interrupted because that is the outcome if Unsloth never
-    comes back. While the process IS still here and still on that job, the honest answer is
-    running -- and reporting it as errored would offer a Resume for a directory the live run is
-    writing into."""
+    """A live job reports running, not the interim interrupted state, so Resume is not offered."""
     global _service
     service = _service
     if service is None:
@@ -387,14 +365,7 @@ def _append_metric(
     video_loss: Any = None,
     audio_loss: Any = None,
 ) -> None:
-    """Append one (step, loss, lr, grad_norm, video_loss, audio_loss) point to the bounded
-    history arrays on ``state``.
-
-    Only records finite, positive-step points (mirrors the LLM trainer, which logs history
-    only for step > 0 with a real loss). When the arrays hit ``_METRIC_CAP`` they are
-    decimated in place (keep every other point) so appends stay bounded without losing the
-    curve's shape. Everything but loss may be None (kept as None so those series can be sparse
-    while staying index-aligned with ``steps``)."""
+    """Only finite, positive-step points are kept; at the cap, every other point is dropped."""
     try:
         istep = int(step)
     except (TypeError, ValueError):
@@ -424,14 +395,7 @@ def _append_metric(
 
 
 def _resolved_total_steps(state: dict[str, Any], cfg: dict[str, Any]) -> int:
-    """The step target this run was actually going to reach.
-
-    ``train_steps`` is only meaningful when the run was NOT configured by epochs: the request
-    model defaults it to 500 and ``num_epochs`` overrides it, so falling back to it in epoch
-    mode invents a target the run never had -- a 600-step checkpoint of a run resolved to 1000
-    then reads as 600/500 and the resume is refused. Zero is honest there, and the checkpoint
-    manifest's own target (written with the resolved count) answers instead.
-    """
+    """In epoch mode train_steps is a stale request default, so return 0 and let the manifest answer."""
     live = int(state.get("total_steps") or 0)
     if live:
         return live
@@ -533,16 +497,8 @@ class DiffusionTrainingService:
 
     @contextlib.contextmanager
     def dataset_mutation(self):
-        """Hold the dataset interlock for one mutation, refusing if a run owns the dataset.
-
-        The route layer used to check ``is_active()`` and only then hand the filesystem work to a
-        thread, so a ``/diffusion/start`` could reserve inside that gap: the caption or the image
-        then changed underneath a preflight or a live trainer, which is what the immutability rule
-        exists to prevent. Registering the mutation under the same lock ``reserve()`` uses closes
-        it from both sides -- this raises once a start is committed, and ``reserve()`` raises while
-        a mutation is open, so neither waits on the other (a start must never block on a
-        minutes-long dataset import).
-        """
+        """Registers under reserve()'s lock, closing the gap between an is_active() check and the
+        mutation."""
         with self._lock:
             if self._reserved or (self._proc is not None and self._proc.is_alive()):
                 raise TrainingActiveError(
@@ -558,19 +514,7 @@ class DiffusionTrainingService:
 
     @contextlib.contextmanager
     def gpu_load_admission(self):
-        """Hold the GPU-admission interlock across a load's guard -> arbiter -> registration.
-
-        The load guards read ``is_active()`` and only THEN acquire the arbiter and register the
-        load, so a start reserving inside that gap freed residents the load had not registered yet
-        and the trainer came up beside a brand-new pipeline. Registering the admission under the
-        same lock ``reserve()`` uses closes it from both sides, exactly like ``dataset_mutation``:
-        this raises once a start is reserved or running, and ``reserve()`` raises while an admission
-        is open, so neither waits on the other.
-
-        The span is deliberately short: ``begin_load`` returns as soon as the load is registered,
-        and from that point ``_free_gpu_for_diffusion_training`` preempts the in-flight load, so
-        holding this for the whole load would block starts for minutes to no purpose.
-        """
+        """Held only until the load registers, because a start preempts an in-flight load from then on."""
         with self._lock:
             if self._reserved or (self._proc is not None and self._proc.is_alive()):
                 raise TrainingActiveError(
@@ -827,18 +771,7 @@ class DiffusionTrainingService:
             self._state["resumed_source_created_at"] = manifest.get("created_at")
 
     def _apply_discard_intent(self, *, delete: bool = True) -> None:
-        """Carry out a stop-without-saving the child could not report itself.
-
-        The trainer does this on its own completion path; a child that OOMs, is killed, or dies on
-        the current step never gets there. Blocking the resume is the visible half; the bundles are
-        the other one, and they hold optimizer and scheduler state, are sizeable, and have no delete
-        path in the UI once the run is marked discarded.
-
-        ``delete`` False is the case where the child DID get there. Its cleanup restores any bundle
-        this run wrote over, so the paths remembered here no longer name this run's bundles, and
-        deleting them then destroys the predecessor that was just handed back. The state half still
-        applies either way.
-        """
+        """Keep bundles when the child already ran cleanup: its restore put back a predecessor's bundle."""
         if account_is_retired():
             delete = False
         with self._lock:
@@ -858,15 +791,7 @@ class DiffusionTrainingService:
             pass
 
     def _persist_run_record(self, *, interim: bool = False) -> None:
-        """Best-effort JSON record of the finished run (summary + scrubbed config + the
-        bounded metric logs) into the studio runs directory. Never fatal: history is a
-        convenience, not part of the training contract.
-
-        ``interim`` writes the same record for a run that is still going, which is what makes a
-        checkpoint survive Unsloth itself dying: the bundle is on disk but only a terminal event
-        used to write the JSON that Previous runs and its Resume action are built from. The
-        status recorded is the one that is true if nothing else ever happens -- the run was
-        interrupted -- and the terminal write replaces it in place."""
+        """Interim mode records the run as interrupted, so a checkpoint survives if Unsloth itself dies."""
         if account_is_retired():
             return
         try:
@@ -941,9 +866,7 @@ class DiffusionTrainingService:
         ev: dict[str, Any],
         proc: Any = None,
     ) -> None:
-        """Fold one trainer event into the status snapshot. Pure state update -- unit
-        tested by feeding events directly. ``proc`` (when given) fences a stale pump:
-        an event from a superseded job's process must not touch the current job's
+        """Events from a superseded job's process are ignored, so a stale pump cannot touch current
         state."""
         etype = ev.get("type")
         with self._lock:

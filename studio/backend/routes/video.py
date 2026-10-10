@@ -107,10 +107,7 @@ def _derived_h3_task(gguf_filename: Optional[str], kind: str) -> Optional[str]:
 
 
 def _guard_video_load_against_training() -> None:
-    """Refuse loading a video model while a training run is active. Unlike chat, a video pipeline's VRAM can't be
-    cheaply estimated before the load, so the load is refused outright rather than fit-checked. No-op when
-    training is inactive or its state can't be read. Raises HTTP 409. Mirrors the image load's
-    _guard_diffusion_load_against_training."""
+    """Video VRAM cannot be estimated up front, so any active training run refuses the load with a 409."""
     from core.training import get_training_backend
 
     try:
@@ -567,11 +564,7 @@ async def generate_video(
     )
 
     def _refuse_unservable_request(pick) -> None:
-        """Judge the request against the family being switched TO, before it evicts anything.
-        begin_generate judges it against the loaded family under the lock, which is what makes the
-        answer race-proof, but by then a request no model could have served has already cost the
-        resident pipeline and a multi-minute load. The same rules, applied to the target's family
-        and MiniMax-H3 partition, both of which the pick already determines."""
+        """Checks the request against the target family before any eviction or multi-minute load."""
         from core.inference.media_model_index import expected_partition
         from core.inference.video import _detect_load_family, resolve_video_model_kind
         from core.inference.video_minimax_h3 import is_h3_native
@@ -1400,10 +1393,7 @@ def _sync_jobs() -> None:
 
 
 def _await_generate_settled(video_id: str, timeout: float = _DELETE_SETTLE_TIMEOUT_S) -> bool:
-    """Block until the run started for ``video_id`` is no longer in flight. Bounded, so a wedged
-    backend cannot hold the request open. Returns False when the wait expired with the run still
-    live: the caller must not report a deletion it could not observe, or the worker commits its
-    sidecar afterwards and the clip reappears through retrieve/list."""
+    """Returns False if the run is still live at timeout; the worker would later commit its sidecar."""
     from core.inference.video import get_video_backend
 
     backend = get_video_backend()

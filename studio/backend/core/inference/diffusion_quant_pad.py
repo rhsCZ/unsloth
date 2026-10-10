@@ -37,12 +37,7 @@ DEFAULT_PAD_TO = 32
 
 
 def _weight_tensors(module: Any) -> tuple:
-    """The weight objects a granularity/layout probe should look at, most specific first.
-
-    ``quantize_`` assigns ``nn.Parameter(subclass_tensor)``, and Parameter.__new__ returns the
-    SUBCLASS itself for a non-plain tensor, so the attributes normally sit on ``weight``. A build
-    that produced a real Parameter wrapper instead would hide them one level down, hence ``.data``
-    as a second look."""
+    """Attributes sit on weight itself for torchao subclasses; check .data too for a wrapping Parameter."""
     weight = getattr(module, "weight", None)
     if weight is None:
         return ()
@@ -51,30 +46,14 @@ def _weight_tensors(module: Any) -> tuple:
 
 
 def is_quantized_linear(module: Any) -> bool:
-    """True when ``module``'s weight is a torchao tensor subclass rather than a plain tensor.
-
-    A dense Linear needs no padding (``F.linear`` has no row floor), so callers use this to skip
-    one rather than to fail on it."""
+    """Dense Linears need no row padding (F.linear has no row floor), so callers skip rather than fail."""
     if not isinstance(module, nn.Linear):
         return False
     return any(hasattr(t, "__tensor_flatten__") for t in _weight_tensors(module))
 
 
 def activation_granularity_is_per_row(module: Any) -> Optional[bool]:
-    """Whether ``module`` quantizes ACTIVATIONS per row. None when it cannot be determined.
-
-    torchao spells this two ways depending on the tensor generation, and neither is a public
-    accessor, so both are probed and an unrecognised layout answers None (the caller treats that
-    as "unproven" and refuses, rather than assuming):
-
-      * v2 tensors (``Float8Tensor`` and friends) carry ``act_quant_kwargs.granularity``, which
-        is a ``PerRow`` instance for the per-row configs.
-      * v1 ``LinearActivationQuantizedTensor`` (what ``Int8DynamicActivationInt8WeightConfig``
-        produces today) carries the activation quantizer as ``input_quant_func``; the per-row
-        one is ``_int8_symm_per_token_reduced_range_quant``. Note that this holds regardless of
-        the config's ``granularity=`` argument, which sets the WEIGHT granularity -- so the
-        function name is the only honest signal here.
-    """
+    """Probes both torchao layouts; v1 uses the quantiser name, as granularity= sets the weight side."""
     for tensor in _weight_tensors(module):
         kwargs = getattr(tensor, "act_quant_kwargs", None)
         granularity = getattr(kwargs, "granularity", None)
@@ -143,11 +122,7 @@ class PadToMinM(nn.Module):
             return getattr(inner, name)
 
     def state_dict(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
-        """Emit the inner Linear's tensors under the WRAPPER's prefix, hiding the ``inner.`` level.
-
-        ``nn.Module.state_dict`` recurses by calling each child's ``state_dict``, so overriding it
-        here is enough to keep a checkpoint written from a wrapped transformer loadable by an
-        unwrapped one. The wrapper owns no tensors of its own, so there is nothing else to emit."""
+        """Drops the inner. key level, so a wrapped model's checkpoint loads into an unwrapped one."""
         destination = kwargs.pop("destination", args[0] if args else None)
         prefix = kwargs.pop("prefix", args[1] if len(args) > 1 else "")
         keep_vars = kwargs.pop("keep_vars", args[2] if len(args) > 2 else False)
@@ -166,12 +141,7 @@ class PadToMinM(nn.Module):
         unexpected_keys: list,
         error_msgs: list,
     ) -> None:
-        """Accept the unwrapped key names ``state_dict`` above writes, and hand them to ``inner``.
-
-        Rewrites ``<prefix>weight`` to ``<prefix>inner.weight`` in place, before
-        ``nn.Module.load_state_dict``'s recursion descends into ``inner``, so a state dict saved
-        from an UNWRAPPED transformer loads into a wrapped one. Keys already carrying ``inner.``
-        are left alone, so a dict written by an older build still loads."""
+        """Maps unwrapped keys to inner. before recursion, so unwrapped checkpoints load into wrappers."""
         for key in [k for k in state_dict if k.startswith(prefix)]:
             leaf = key[len(prefix) :]
             if not leaf or leaf.startswith("inner."):
@@ -264,12 +234,7 @@ def padding_is_bitwise_exact(
     *,
     pad_to: int = DEFAULT_PAD_TO,
 ) -> bool:
-    """Run ``module`` at ``m`` rows with and without padding and report bitwise equality.
-
-    The direct form of the property the granularity check infers. Used by the tests; too costly
-    for a per-module load-time gate on a 300-Linear DiT, and it cannot replace the granularity
-    check anyway (replicating row 0 leaves a per-tensor AMAX unchanged, so a per-tensor amax
-    scheme would pass this while a percentile-calibrated one would not)."""
+    """Test-only: too costly for a per-module load gate, and it cannot replace the granularity check."""
     weight = getattr(module, "weight", None)
     device = getattr(weight, "device", "cpu")
     dtype = getattr(weight, "dtype", torch.bfloat16)
@@ -288,15 +253,7 @@ def wrap_small_m_linears(
     pad_to: Optional[int] = DEFAULT_PAD_TO,
     require_per_row: bool = True,
 ) -> tuple[str, ...]:
-    """Replace each Linear named in ``fqns`` with a ``PadToMinM`` around it; return those wrapped.
-
-    Surgical by construction: only the fqns handed in are touched, so a DiT's hundreds of
-    large-M block linears keep their unwrapped fast path and cannot pay for this.
-
-    A Linear that is NOT quantized is skipped (dense ``F.linear`` has no row floor to clear), as
-    is one already wrapped. A QUANTIZED Linear whose activation granularity cannot be proven per
-    row raises ``RuntimeError``: see the module docstring for why silence is the wrong answer.
-    """
+    """Wraps only the named Linears; a quantised one whose activation granularity is unproven raises."""
     done: list[str] = []
     for fqn in sorted(set(fqns)):
         parent_name, _, leaf = fqn.rpartition(".")

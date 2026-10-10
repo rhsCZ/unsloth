@@ -80,11 +80,7 @@ def load(
 
 
 def _model_is_downloaded(engine: str, model: str) -> bool:
-    """True only when the load is certain not to be turned away for a missing checkpoint.
-
-    Deliberately conservative: any doubt, including an import or lookup failure, answers
-    False so the caller keeps the ordering that cannot lose a resident engine.
-    """
+    """Any doubt, including an import or lookup failure, answers False, so a resident engine is kept."""
     try:
         if engine == "mtmd":
             from core.inference import stt_mtmd_sidecar
@@ -135,11 +131,7 @@ def unload(
 
 
 def resident() -> dict:
-    """What dictation currently holds, for the shared inference status.
-
-    Never raises: a sidecar that cannot even be imported reports nothing rather
-    than taking the status endpoint down with it.
-    """
+    """Never raises: a sidecar that cannot be imported reports nothing rather than break status."""
     for engine in STT_ENGINES:
         try:
             sidecar = sidecar_for(engine)

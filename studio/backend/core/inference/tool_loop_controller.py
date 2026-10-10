@@ -52,17 +52,7 @@ _STRICT_JSON_DECODER = json.JSONDecoder(parse_constant = _reject_json_constant)
 
 
 def _looks_like_broken_json(raw: str) -> bool:
-    """Whether this text was MEANT to be a JSON object and stopped before finishing.
-
-    Opening with a bracket is necessary but not sufficient, and treating it as sufficient
-    was wrong in both directions: `{not json at all` is a bare string a model sent for a
-    single-argument tool, and healing it into that argument is the right answer, while
-    `{"code":"html = ...` is a call cut off mid-stream that must not become the program.
-
-    What separates them is WHERE the decode fails. A call that was cut off runs out of
-    input -- either inside a string that never closes, or at the very end of what arrived.
-    Text that merely opens with a brace fails earlier, with input still to go.
-    """
+    """A cut-off call runs out of input; text that merely starts with a brace fails with input left."""
     text = raw.strip()
     if not text.startswith(("{", "[")):
         return False
@@ -108,15 +98,7 @@ def _single_string_argument(function: Mapping) -> "str | None":
 
 
 def _healable_keys_from_schemas() -> "dict[str, str]":
-    """Built-in tool -> its single required string argument, for the tools that have one.
-
-    Derived from the schemas rather than hand-listed. The map above was hand-kept, so it
-    silently went stale the moment a tool was added: `edit_file` landed with three
-    required arguments and no entry, and every unparseable call to it was healed into a
-    "query" key that only exists on the search tools. A schema-derived answer cannot rot
-    the same way -- a new tool is either single-string and healable, or it is not and says
-    so.
-    """
+    """Derived from the schemas, so a new tool cannot silently go stale in a hand-kept map."""
     try:
         from core.inference.tools import ALL_TOOLS  # noqa: PLC0415 -- cycle at import time
     except Exception:  # noqa: BLE001 -- healing must never break a chat
@@ -143,13 +125,7 @@ _HEAL_ARG_CACHE: "dict[str, str] | None" = None
 
 
 def _heal_arg_key(tool_name: str, tool_schemas = None) -> "str | None":
-    """The argument a bare string should become, or None when there isn't one.
-
-    ``tool_schemas`` is the REQUEST's tool array. MCP tools are discovered at runtime and
-    so are absent from `ALL_TOOLS`; without them an MCP tool with one required string
-    argument lost the auto-healing every other single-string tool has, and a bare string
-    reached `execute_tool` as the unparsed sentinel instead.
-    """
+    """MCP tools are absent from ALL_TOOLS, so the request's tool_schemas must also be read."""
     global _HEAL_ARG_CACHE
     if tool_name in _CANONICAL_HEAL_ARG:
         return _CANONICAL_HEAL_ARG[tool_name]
@@ -163,12 +139,7 @@ def _heal_arg_key(tool_name: str, tool_schemas = None) -> "str | None":
 
 
 def _unreadable_arguments_summary(fragment: str) -> dict[str, str]:
-    """What stands in for a call whose arguments never finished arriving.
-
-    Small and parseable on purpose. The replayed `arguments` of an assistant tool call is
-    read as JSON by the server rendering the template, so anything that does not parse
-    fails the whole request rather than just that call.
-    """
+    """Must stay parseable JSON: a replayed arguments field that does not parse fails the whole request."""
     return {
         "error": (f"arguments were cut off after {len(fragment)} characters and could not be read")
     }
@@ -189,11 +160,7 @@ class CoercedArguments:
 
 
 def canonical_arguments_text(arguments: Any) -> str:
-    """The one JSON encoding of an argument mapping, so the card and the replay agree.
-
-    Not sorted: the replay must match the token sequence already in the prompt cache (#10791).
-    `canonical_tool_call_key` keeps its own sorted key for dedup.
-    """
+    """Not sorted on purpose: the replay must match the token sequence already in the prompt cache."""
     return json.dumps(arguments, ensure_ascii = False, sort_keys = False, separators = (",", ":"))
 
 
@@ -234,13 +201,8 @@ class ToolCallDecision:
 
     @property
     def unparsed_fragment(self) -> "str | None":
-        """The raw text of a call whose JSON could not be read, if this is one.
-
-        `UNPARSED_ARGUMENTS_KEY` is plumbing between the coercion and `execute_tool`, and
-        it escaped into both places a caller looks: the tool card showed the user
-        `{"__unsloth_unparsed_arguments__": ...}`, and the replayed assistant turn taught
-        the model a key no tool declares. Both boundaries go through here instead.
-        """
+        """Internal UNPARSED_ARGUMENTS_KEY must not leak to the card or replay, so both boundaries
+        use this."""
         if isinstance(self.arguments, Mapping) and UNPARSED_ARGUMENTS_KEY in self.arguments:
             return str(self.arguments.get(UNPARSED_ARGUMENTS_KEY) or "")
         return None
@@ -307,13 +269,7 @@ class ToolCallCompletion:
         return self.model_message()
 
     def model_message(self) -> dict[str, Any]:
-        """Return the internal message appended before the next generation.
-
-        Executed calls keep the existing OpenAI-compatible ``role=tool``
-        continuation. No-op controller decisions are not real tool output, so
-        they are fed back as a hidden user nudge rather than a normal tool
-        result.
-        """
+        """No-op decisions are not tool output, so they return as a hidden user nudge, not role=tool."""
         if not self.executed:
             return {"role": "user", "content": self.result}
 
@@ -330,12 +286,7 @@ class ToolCallCompletion:
         return message
 
     def mcp_images(self) -> list[dict]:
-        """Images returned by an MCP server or the sandbox image viewer.
-
-        The envelope is a plain suffix, so any tool whose output happens to end in
-        one -- terminal output, a fetched page -- would otherwise have its bytes
-        decoded and attached as model image input.
-        """
+        """Only MCP and image-viewer tools yield images; a plain suffix elsewhere would attach bytes."""
         if not self.executed or not is_image_tool(self.decision.tool_name):
             return []
         return split_mcp_images(self.result)[1]
@@ -481,10 +432,7 @@ def _readable(spec: Any) -> bool:
 
 
 def _read_schema(spec: Any) -> "tuple[Any, str | None, bool]":
-    """The subschema to read against, its one declared type, and whether it admits null;
-    ``(None, ...)`` leaves it alone. A union collapses to its single non-null branch, so
-    every branch must name one: reading the integer branch of ``anyOf: [{integer}, {$ref}]``
-    would turn ``"001"`` into 1."""
+    """A union reads only if every branch names a type; else an integer branch would turn "001" into 1."""
     spec = unrelaxed(spec)
     if not _readable(spec):
         return None, None, False
@@ -634,13 +582,7 @@ def coerce_arguments_by_schema(
     *,
     repair: bool = False,
 ) -> dict:
-    """Arguments with each string value that declares a non-string type read as that type.
-
-    A tool-call parser is given tool NAMES, never schemas, so an XML-form parameter is stored
-    as raw text: ``replace_all`` reaches the tool as ``"false"``, and ``bool("false")`` is
-    True. A container's text IS its JSON; a scalar's carries no type, so it is read only
-    where its spelling names the declared type. Anything else keeps its text.
-    """
+    """XML values arrive as raw text, so "false" is read per the schema; bool("false") is True."""
     if not isinstance(properties, Mapping) or not properties:
         return dict(arguments)
     return {k: _coerce_by_property(v, properties.get(k), 0, repair) for k, v in arguments.items()}
@@ -674,11 +616,7 @@ def coerce_tool_arguments(
     tool_name: str = "",
     tool_schemas = None,
 ) -> CoercedArguments:
-    """Normalize model-emitted ``function.arguments`` to a dictionary.
-
-    Typing against ``tool_schemas`` is not gated on ``heal``: healing invents structure the
-    model never sent, while reading a value as its schema declares it is the tool's contract.
-    """
+    """Schema typing is not gated on heal: healing invents structure, the schema is the tool's contract."""
     properties = _declared_properties(tool_name, tool_schemas) if tool_name else None
     if isinstance(raw_args, Mapping):
         return CoercedArguments(
@@ -798,11 +736,7 @@ def status_for_tool(tool_name: str, arguments: Mapping[str, Any]) -> str:
 
 
 def awaiting_approval_status(tool_name: str) -> str:
-    """Status text for a call parked on the approval prompt.
-
-    It has not started, so reporting "Running ..." with a climbing timer reads
-    as a hang.
-    """
+    """Not started yet, so a Running status with a climbing timer would read as a hang."""
     if tool_name == "python":
         return "Waiting for approval: Python"
     if tool_name == "terminal":
@@ -839,11 +773,7 @@ def _strip_mcp_ui_suffix(result: str) -> str:
 
 
 def _strip_files_sentinel(result: str) -> str:
-    """Drop a trailing ``__FILES__`` envelope, and only that.
-
-    Validated rather than split on sight: a tool whose own output contains the
-    literal text would otherwise lose everything after it.
-    """
+    """Validated, not split on sight, so a tool quoting the marker does not lose the rest."""
     marker = "\n__FILES__:"
     start = result.rfind(marker)
     if start == -1:
@@ -872,22 +802,7 @@ def _is_file_entry(entry: object) -> bool:
 
 
 def _strip_images_sentinel(result: str) -> str:
-    """Drop the trailing ``__IMAGES__`` envelopes, and only those.
-
-    Validated rather than split on sight, like the two above and like
-    ``studio_tool_loop._carries_image_sentinel``: a tool whose own output quotes
-    the marker would otherwise lose everything after it while the card the user
-    reads still shows the whole result.
-
-    Every envelope, not just the last: a Gemini ``code_execution`` turn that drew
-    two figures stacks one per ``inlineData`` part, and stopping after the last
-    would replay the earlier plot's whole base64 data URI to the model.
-
-    Walked by index and cut once at the end. Re-partitioning the shortened string
-    each time copies it again, which is quadratic in the number of markers, and an
-    MCP server answering with 80,000 of them is 1.3 MB of text that held this
-    thread for seconds.
-    """
+    """Validated envelopes only; every one is stripped, and cut once so long MCP output stays linear."""
     marker = "\n__IMAGES__:"
     end = len(result)
     cut = -1
@@ -909,18 +824,7 @@ def _strip_images_sentinel(result: str) -> str:
 
 
 def _strip_rag_sources_sentinel(result: str) -> str:
-    """Drop a trailing ``__RAG_SOURCES__`` source map, and only that.
-
-    The retrieval tools append ``RAG_SOURCES_SENTINEL`` plus a JSON list; a
-    result that merely mentions the marker is text.
-
-    Deliberately unbounded, like the walk above. Each source record repeats its whole
-    chunk, and ``search_knowledge_base`` takes the model's ``top_k`` without a ceiling,
-    so a real map has no size worth calling suspicious -- and one refused for being big
-    is a frontend-only blob left in the model's context, which ``_fit_result_to_room``
-    would then truncate into malformed JSON. What keeps unbounded MCP text away from
-    this decode is the gate on the emitting tools, not a length.
-    """
+    """Deliberately unbounded: size is no guard, since the gate on the emitting tools keeps MCP text out."""
     head, sep, payload = result.rpartition("\n__RAG_SOURCES__:")
     if not sep:
         return result
@@ -970,13 +874,7 @@ def strip_result_for_model(
     *,
     redact: bool = True,
 ) -> str:
-    """Remove frontend-only sentinels (image paths, RAG source map) and mask Studio credentials
-    before feeding the result back to the model.
-
-    ``redact = False`` is for the one caller that needs the strip to stay suffix-only
-    (`tools._split_frontend_suffix` re-derives the removed envelope from `startswith`); masking
-    rewrites bytes inside the body, which that comparison cannot survive. That path feeds the model
-    through `model_message` afterwards, so the mask is applied either way."""
+    """redact=False keeps the strip suffix-only for _split_frontend_suffix, which masking would break."""
     if tool_name is None or tool_name == "web_search":
         from .search_images import strip_images_suffix
         result = strip_images_suffix(result)
@@ -995,20 +893,12 @@ def strip_result_for_model(
 
 
 def deferred_nudge_text(msgs: Sequence[dict]) -> str:
-    """Join a batch's no-op nudges into one deduped body.
-
-    Callers that keep the feedback inside the tool exchange need the text
-    without the ``role=user`` wrapper, so both forms stay in sync here.
-    """
+    """Body text without the role=user wrapper, so the in-exchange and user-message forms stay in sync."""
     return "\n\n".join(dict.fromkeys(msg["content"] for msg in msgs))
 
 
 def append_deferred_nudges(conversation: list, msgs: Sequence[dict]) -> None:
-    """Append a batch's no-op nudges as one deduped ``role=user`` message.
-
-    Deferred to after the batch's tool results so a no-op never splits an
-    assistant's ``tool_calls`` from their ``role=tool`` results.
-    """
+    """Appended after the tool results, so a nudge never splits tool_calls from their role=tool replies."""
     if msgs:
         conversation.append({"role": "user", "content": deferred_nudge_text(msgs)})
 
@@ -1216,11 +1106,7 @@ class ToolLoopController:
         provisional: bool = False,
         allowed_tool_names: Collection[str] | None = None,
     ) -> ToolCallDecision:
-        """Reclassify a call after a pre-execution normalizer changed its arguments.
-
-        The decision's replay, status and duplicate key must all describe the arguments that
-        execute. A second preparation keeps the ordinary controller rules as the source of truth.
-        """
+        """Replay, status and duplicate key must describe the arguments that actually execute."""
         tool_call = decision.as_assistant_tool_call()
         if decision.card_call_id:
             tool_call["card_id"] = decision.card_call_id

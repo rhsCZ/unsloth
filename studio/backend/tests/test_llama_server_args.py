@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the llama-server pass-through args validator.
-
-The validator is the boundary between user CLI/HTTP input and the
-llama-server subprocess. These tests pin denylist behaviour so it doesn't
-regress when new managed flags are added.
-"""
+"""Unit tests for the llama-server pass-through args validator, pinning denylist behaviour."""
 
 from __future__ import annotations
 
@@ -1370,10 +1365,7 @@ def test_an_effective_lock_survives_the_pageable_rewrite(argv, expect_tokens):
 
 
 def test_the_env_twin_of_a_shadowed_lock_goes_too():
-    """llama.cpp reads LLAMA_ARG_* before argv and the negative alias after the
-    affirmative one, so LLAMA_ARG_MLOCK=1 beside LLAMA_ARG_NO_MMAP is shadowed exactly
-    as the argv pair is. Leaving the var behind locks the child through the environment
-    with nothing in the argv to show it."""
+    """An env LLAMA_ARG_MLOCK beside LLAMA_ARG_NO_MMAP is shadowed like its argv pair, so strip it too."""
     env = {"LLAMA_ARG_MLOCK": "1", "LLAMA_ARG_NO_MMAP": "1"}
     assert _lsa.resolve_effective_memory_state([], env) == (False, True)
 
@@ -1386,10 +1378,7 @@ def test_the_env_twin_of_a_shadowed_lock_goes_too():
 
 
 def test_the_env_mapped_lock_mode_shadowed_by_an_argv_selector_goes_too():
-    """The env half of the mapped spelling. llama.cpp reads LLAMA_ARG_* before argv,
-    so an inherited LLAMA_ARG_LOAD_MODE=mmap+mlock followed by --no-mmap on the command
-    line is shadowed exactly as the all-argv pair is, and leaving the var behind locks
-    the restored mapping through the environment with nothing in the argv to show it."""
+    """An env LLAMA_ARG_LOAD_MODE shadowed by an argv --no-mmap still locks the child; strip it too."""
     env = {"LLAMA_ARG_LOAD_MODE": "mmap+mlock"}
     assert _lsa.resolve_effective_memory_state(["--no-mmap"], env) == (False, True)
 
@@ -1404,10 +1393,7 @@ def test_the_env_mapped_lock_mode_shadowed_by_an_argv_selector_goes_too():
 
 
 def test_an_unshadowed_mapped_lock_is_left_entirely_alone():
-    """The control that keeps the strip above scoped. ``mmap+mlock`` on its own already
-    maps, so it holds no full unmapped copy and is not this override's business: it must
-    come back untouched and, with nothing rewritten, report no override at all. Without
-    that, a launch that was always pageable would be reported as having been remapped."""
+    """An unshadowed mmap+mlock already maps, so it must be left untouched and reported as no override."""
     argv = ["--load-mode", "mmap+mlock"]
     assert _lsa.resolve_effective_memory_state(argv) == (True, False)
 

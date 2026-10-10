@@ -118,11 +118,7 @@ _UV_CACHE_MARKER = "uv-cache-dir"
 
 
 def _recorded_uv_cache() -> Optional[Path]:
-    """The uv cache the installer recorded, which updates keep filling.
-
-    Parsed as unsloth_cli's _with_studio_uv_cache parses it: one record, one
-    trailing delimiter, and no expanduser, since uv makes a literal "~" dir.
-    """
+    """Read the way unsloth_cli parses it: no expanduser, since uv makes a literal ~ directory."""
     try:
         from utils.paths.storage_roots import cache_root
         recorded = (cache_root() / _UV_CACHE_MARKER).read_text(
@@ -153,12 +149,7 @@ _probe_lock = threading.Lock()
 
 
 def _probe_tool_cache_dir(name: str, command: list[str]) -> Optional[Path]:
-    """Ask a package manager where its own cache is.
-
-    ``cache-dir`` in pip.conf and ``cache`` in .npmrc move it, no environment
-    variable carries either, and Studio's invocations of both honour them.
-    Reimplementing pip's five config kinds or npm's chain would drift.
-    """
+    """Asks the tool itself, since pip.conf and .npmrc can move the cache with no environment variable."""
     from utils.child_stdio import utf8_child_env
     with _probe_lock:
         if name in _probed_cache_dirs:
@@ -224,13 +215,7 @@ def _hf_paths():
 
 
 def _hf_homes() -> list[Path]:
-    """Every cache home this install has been pointed at, for PROTECTION only.
-
-    Never for deletion: an API key may append to that history through
-    ``PUT /api/settings/hugging-face-cache`` while the purge route refuses one,
-    so resolving a purge root through it would let a caller that cannot delete
-    choose what a later clear takes. Protecting extra locations is safe.
-    """
+    """For protection only: an API key can append to this history, so it must never pick a purge root."""
     from utils.hf_cache_settings import known_hf_cache_homes
     return list(known_hf_cache_homes())
 
@@ -379,12 +364,7 @@ def _unsloth_compiled_dirs() -> list[Path]:
 
 
 def _measure_unsloth_compiled() -> tuple[int, int]:
-    """Size only what a clear would actually remove.
-
-    A directory Unsloth created goes whole; one it merely wrote into keeps
-    everything but the generated modules, so counting all of it would promise
-    space the clear cannot free.
-    """
+    """Counts only what a clear removes: directories Unsloth made whole, the rest only generated modules."""
     from utils.cache_cleanup import _cleanable_cache_dirs
 
     total = 0
@@ -399,13 +379,7 @@ def _measure_unsloth_compiled() -> tuple[int, int]:
 
 
 def _compiled_cache_refusal() -> Optional[str]:
-    """Why the compiled cache cannot be emptied, or None.
-
-    Its own gate, because the clear runs through cache_cleanup rather than by
-    emptying a root, and it is all-or-nothing across the directories it owns, so
-    one of them failing stops the whole clear. describe_cache asks too: a row
-    that offers a button this will refuse is worse than one that says why.
-    """
+    """Its own gate: the clear is all-or-nothing across the directories it owns, so one refusal stops it."""
     from utils.cache_cleanup import _cleanable_cache_dirs
 
     protected = protected_paths()
@@ -422,13 +396,7 @@ def _compiled_cache_refusal() -> Optional[str]:
 
 
 def _purge_unsloth_compiled() -> PurgeOutcome:
-    """Clear the compiled cache through the module that owns it.
-
-    cache_cleanup already knows which of these directories Unsloth created and
-    which merely hold files it generated, and it serializes against a sibling
-    backend that may be compiling right now. Re-deriving either here would give
-    this install a second, weaker answer.
-    """
+    """Delegates to cache_cleanup, which knows what Unsloth created and serializes with sibling backends."""
     from utils.cache_cleanup import (
         LOCK_BUSY,
         _cleanable_cache_dirs,
@@ -514,13 +482,7 @@ def _safe_resolve(path: Path) -> Optional[Path]:
 
 
 def _is_junction(path: Path | str) -> bool:
-    """True for a Windows directory junction or volume mount point.
-
-    The same hazard as a symlink and not the same test: since 3.8 only
-    IO_REPARSE_TAG_SYMLINK sets S_IFLNK, so is_symlink() is False for a junction
-    while realpath() follows it, and UV_CACHE_DIR pointed at one would have the
-    TARGET emptied. os.path.isjunction is 3.12+ and this package supports 3.9.
-    """
+    """On Windows is_symlink() is False for a junction, yet realpath follows it, so check it separately."""
     isjunction = getattr(os.path, "isjunction", None)
     if isjunction is not None:
         try:
@@ -537,13 +499,7 @@ def _is_junction(path: Path | str) -> bool:
 
 
 def protected_paths() -> set[Path]:
-    """Locations a purge must never delete, nor delete anything containing them.
-
-    User data, not caches: the databases, the token, projects, datasets,
-    outputs, exports, and the managed asset homes. The Hugging Face cache HOME
-    is here while its ``hub`` child is purgeable, because the home also holds
-    the access token.
-    """
+    """User data, never purged; the Hugging Face home stays protected because it holds the access token."""
     from utils.paths.storage_roots import (
         assets_root,
         auth_db_path,
@@ -607,13 +563,7 @@ def protected_paths() -> set[Path]:
 
 
 def protected_trees() -> set[Path]:
-    """Directories nothing inside may be deleted, however a variable is pointed.
-
-    ``protected_paths`` stops a root that IS or CONTAINS user data; this stops a
-    root BENEATH it, which is what an inherited ``TRITON_CACHE_DIR`` pointing
-    into the projects folder would be. The studio home and the Hugging Face
-    cache home are deliberately absent: real caches live inside both.
-    """
+    """Refuses a cache root beneath user data, e.g. TRITON_CACHE_DIR inside projects."""
     from utils.paths.storage_roots import (
         assets_root,
         auth_root,
@@ -666,14 +616,7 @@ def _is_within(child: Path, parent: Path) -> bool:
 
 
 def sheltered_roots(exclude_key: Optional[str] = None) -> dict[Path, str]:
-    """Resolved roots another key's clear must not empty, mapped to why.
-
-    An opt-in cache and a pattern-limited one for the same reason: their own
-    clear is narrower than emptying the directory, so swallowing them whole
-    takes what that clear was written to keep. Nothing stops a variable from
-    putting either inside another cache (``MPLCONFIGDIR=/cache/uv/matplotlib``
-    under ``UV_CACHE_DIR=/cache/uv``). The key being cleared is excluded.
-    """
+    """Roots another key's clear must not empty: emptying one takes what its narrower clear keeps."""
     roots: dict[Path, str] = {}
     for definition in CACHE_DEFINITIONS:
         if definition.key == exclude_key:
@@ -698,11 +641,7 @@ def assert_purgeable_root(
     trees: Optional[set[Path]] = None,
     keep: Optional[dict[Path, str]] = None,
 ) -> Path:
-    """Return the real path of *root*, or raise if emptying it is not allowed.
-
-    The one gate every deletion here goes through, answering from the resolved
-    directory so a variable pointed at a symlink cannot smuggle in a target.
-    """
+    """Judges the resolved directory, so a variable pointed at a symlink cannot smuggle in a target."""
     protected = protected_paths() if protected is None else protected
     trees = protected_trees() if trees is None else trees
     raw = Path(root)
@@ -792,11 +731,7 @@ def _descendable(entry: os.DirEntry) -> bool:
 
 
 def _measure_tree(path: Path, ledger: LinkLedger) -> int:
-    """Record every file below *path* in *ledger* and return the entry count.
-
-    The size is not returned: a multi-link inode's contribution is not known until every root
-    has been walked, so only the ledger can answer that, and only at the end.
-    """
+    """Size is left to the ledger: a multi-link inode's cost is only known after every root is walked."""
     count = 0
     stack = [path]
     while stack:
@@ -1015,11 +950,7 @@ def _total_disk_bytes() -> Optional[int]:
 def _remove_entry(
     entry: os.DirEntry, root: Path, outcome: PurgeOutcome, ledger: LinkLedger, survivors: LinkLedger
 ) -> None:
-    """Remove one top-level entry, recording what it would free rather than adding it up here.
-
-    The freed total is read off the ledger once the whole root is done: an inode still linked
-    from outside frees nothing, and whether that is so cannot be decided one entry at a time.
-    """
+    """Freed bytes come from the ledger after the root: an inode still linked from outside frees nothing."""
     path = Path(entry.path)
     try:
         if entry.is_symlink():
@@ -1082,12 +1013,7 @@ _PURGE_BUSY = "Cancel the active downloads before clearing this cache."
 
 
 def _reserve_downloads(key: str) -> tuple[list, Optional[str]]:
-    """Hold every download registry that writes into this cache, or say why not.
-
-    A reservation and not a look, for the reason the per-repository deletes call
-    begin_delete: a worker can claim between a check and the rmtree. A registry
-    this cannot reach does not block the purge, or an import would kill the button.
-    """
+    """Reserves rather than checks: a worker could claim the cache between the check and the rmtree."""
     kinds = _DOWNLOAD_REGISTRIES.get(key)
     if not kinds:
         return [], None
@@ -1149,17 +1075,7 @@ def _any_training_active() -> bool:
 
 
 def _uv_symlink_refusal() -> Optional[str]:
-    """Refuse the uv cache when an installed environment is linked into it, not copied from it.
-
-    uv's own `uv help sync` warns that clearing the cache under UV_LINK_MODE=symlink "will break
-    all installed packages": the environment's files are not copies, they are links into this
-    cache. That turns a bulk clear, which is meant to cost a re-download at worst, into a broken
-    install, so the cache is refused rather than offered.
-
-    Two cheap answers, no walk. The mode this process would use, and the evidence on disk: a
-    top-level entry in the running interpreter's site-packages that is a symlink into one of the
-    uv cache roots. uv links at that level, so the directory's own entries are enough.
-    """
+    """Refuse the uv cache when installs are symlinked into it, since clearing it would break them."""
     if (os.environ.get("UV_LINK_MODE") or "").strip().lower() == "symlink":
         return "uv is set to link packages from this cache; clearing it would break them."
     try:
@@ -1202,16 +1118,7 @@ def _training_refusal(key: str) -> Optional[str]:
 
 
 def _inference_refusal(key: str) -> Optional[str]:
-    """Refuse a model-cache clear while an inference backend is holding cached weights.
-
-    Deleting ONE repo already runs these guards (hub/services/models/deletion.py), and emptying
-    the whole cache is every repo at once, so skipping them here was the wider action with the
-    weaker check. sd.cpp re-reads its companion VAE and text-encoder files for every generation,
-    so this breaks a model that was loaded long before the clear, not only one mid-load.
-
-    Fails CLOSED on a query that raises, as the per-repo path does: not being able to tell
-    whether weights are in use is not permission to unlink them.
-    """
+    """Refuses a model-cache clear while a backend holds weights; fails closed if the check raises."""
     if key not in _WORKER_SENSITIVE_KEYS:
         return None
     try:
@@ -1298,24 +1205,13 @@ def _invalidate_hf_scans() -> None:
 
 
 def invalidate_hf_rooted_sizes() -> None:
-    """Forget the sizes measured under the previous Hugging Face root.
-
-    The memo above is keyed by cache key, not by path, so moving the Models Folder leaves
-    three entries describing directories nobody reads any more. A browser hides that by
-    forcing a refresh off the inventory-version event, but an API-key caller is allowed to
-    change the folder and read the inventory while being forbidden refresh=true, and would
-    see the old root's figures for the rest of the TTL with no way to ask again.
-    """
+    """Memo is keyed by cache key, not path, so a moved Models Folder leaves stale sizes for the TTL."""
     for key in _HF_ROOTED_KEYS:
         invalidate_cache_size(key)
 
 
 def purge_caches(keys: Iterable[str]) -> dict:
-    """Empty each named cache, then report what the inventory looks like after.
-
-    Unknown keys raise before anything is deleted, so a request that names one
-    cache this build does not have changes nothing at all.
-    """
+    """Unknown keys raise before any deletion, so a request naming one unknown cache changes nothing."""
     requested = [str(key) for key in keys]
     if not requested:
         raise ValueError("Choose at least one cache to clear.")

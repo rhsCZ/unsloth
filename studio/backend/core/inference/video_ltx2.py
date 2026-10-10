@@ -717,10 +717,7 @@ def checkpoint_variant(checkpoint_path: Path | str) -> str:
 
 
 def ltx23_extras_files(checkpoint_path: Path | str) -> tuple[str, ...]:
-    """The companion files in ``LTX23_EXTRAS_REPO`` a 2.3 checkpoint loads alongside itself.
-
-    Same variant rule as the assembly, so the download plan stages exactly what the load reads
-    (they are otherwise fetched inline, outside the panel's progress, cancel and disk preflight)."""
+    """Companion files a 2.3 checkpoint loads, picked by the assembly's variant rule so the plan matches."""
     variant = checkpoint_variant(checkpoint_path)
     return tuple(
         template.format(variant = variant)
@@ -1122,11 +1119,7 @@ def install_stg_compile_adapter(transformer: Any) -> int:
 
 
 def ltx23_verbatim_sigmas(pipe: Any) -> Any:
-    """Context manager neutralising the scheduler transforms that re-shape even explicit
-    ``sigmas`` (FlowMatchEulerDiscreteScheduler applies dynamic time-shift and the
-    shift_terminal stretch to caller-provided lists): dynamic shifting off, shift 1.0
-    (identity), no terminal stretch, restored on exit. Without this the calibrated curve
-    above would arrive at the DiT distorted (its 0.421875 tail clamped to 0.1)."""
+    """Disable scheduler sigma rewrites (dynamic shift, terminal stretch) so sigmas pass through intact."""
     import contextlib
 
     @contextlib.contextmanager
@@ -1208,10 +1201,7 @@ def load_ltx23_comfy_transformer(
     target: Any = None,
     logger: Any = None,
 ) -> Any:
-    """The LTX-2.3 DiT of a ComfyUI-quantized single file, for ``load_ltx23_pipeline(transformer_override=...)``.
-
-    Reads only the DiT keys (the assembly reads the connectors, VAEs and vocoder from the same file), applies the
-    2.3 pre-rename and the stock converter, and keeps int8 / fp8 codes where ``load_comfy_quant_transformer`` can."""
+    """LTX-2.3 DiT from a ComfyUI-quantized file: reads only DiT keys and keeps int8 / fp8 codes."""
     from diffusers import LTX2VideoTransformer3DModel
 
     from .diffusion_comfy_quant import load_comfy_quant_transformer
@@ -1529,22 +1519,7 @@ def _assemble_ltx23_pipeline(
     device: Optional[Any] = None,
     text_encoder_device: Optional[Any] = None,
 ) -> Any:
-    """Full LTX-2.3 pipeline from a single-file/GGUF checkpoint. Assembled per-component
-    (constructor, not from_pretrained) because the base model_index pins LTX2Vocoder while 2.3
-    needs LTX2VocoderWithBWE, which the type gate would reject.
-
-    ``text_encoder`` supplies an already-built encoder (the caller's pre-cast fp8 Gemma3);
-    None builds it dense from the base repo. Because the assembly bypasses
-    ``from_pretrained``, this is the only way an fp8 request reaches the 2.3 path.
-
-    ``local_files_only`` is a load nobody asked for. Because the assembly bypasses
-    ``from_pretrained`` it also bypasses the caller's guarded ``pipe_kwargs``, and it is handed the
-    base REPO ID rather than a staged snapshot (the 2.3 snapshot lacks the base VAEs, so
-    ``_base_local_dir`` is deliberately None here), so without the flag the base config, the
-    scheduler, the tokenizer, the dense Gemma3 encoder and the companion VAE/vocoder artifacts are
-    all fetched by a load that promised to fetch nothing.
-
-    ``device`` / ``text_encoder_device`` (resident plans only) read the checkpoint / build the Gemma3 encoder there."""
+    """Assembled per component, bypassing from_pretrained, so local_files_only must be passed explicitly."""
     import transformers
 
     from .ltx2_import_compat import ensure_ltx2_pipelines_importable

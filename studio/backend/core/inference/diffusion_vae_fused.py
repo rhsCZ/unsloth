@@ -630,10 +630,7 @@ def rms_norm_act(
     replicate_pad: Optional[tuple] = None,
     back: int = 0,
 ) -> Any:
-    """``cat([cache or zeros] -> front frames, silu?(rms_norm(x + in_bias)))`` along T, one channels-last_3d tensor.
-
-    ``replicate_pad=(ph, pw)``: HunyuanVideo-1.5 replicate padding instead (``cache`` must be None); ``back`` repeats the
-    last frame (LTX-2)."""
+    """Replicate padding (HunyuanVideo-1.5) takes no cache; back repeats the last frame (LTX-2)."""
     torch = _torch()
     if replicate_pad is not None and cache is not None:
         raise ValueError("replicate padding takes no cache")
@@ -970,10 +967,7 @@ def _guard(
     logger: Any,
     oom_stock: bool = False,
 ) -> None:
-    """``module.forward = fast`` until it raises something ``stock`` does not; then stock for good.
-
-    Causal-cache state is snapshotted and restored before the stock retry so a half-failed fast path cannot desync
-    the decode. ``oom_stock``: an OOM retries stock for that call only."""
+    """Falls back to stock for good once fast raises what stock does not; OOM retries stock for one call."""
 
     def forward(*args, **kwargs):
         if getattr(module, "_unsloth_vae_fused_failed", False):

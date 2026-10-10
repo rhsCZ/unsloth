@@ -62,12 +62,7 @@ def _persist_bootstrap_password(password: str) -> None:
 
 
 def _normalise_bootstrap_file(raw: bytes, password: str) -> None:
-    """Append the LF a pre-newline release left off. Append-only, and only when the file is exactly the
-    credential: clear_bootstrap_password() may unlink or (when unlink fails, notably on Windows
-    while this descriptor is open) truncate through another descriptor after we read, so a rewrite
-    could restore revoked plaintext. An append cannot: worst case is a lone terminator over a
-    cleared file, which strips back to no bootstrap password. Pre-newline releases wrote no
-    terminator at all, so that is the only shape in the wild."""
+    """Append-only: a rewrite could restore revoked plaintext after clear_bootstrap_password() runs."""
     if raw != password.encode("utf-8"):
         return
 
@@ -180,10 +175,7 @@ def clear_bootstrap_password() -> None:
 
 
 def _hash_token(token: str) -> str:
-    """SHA-256 hash helper for refresh token storage. Plain SHA-256 is intentional: refresh tokens are
-    384-bit random strings, so a slow KDF adds no security while costing per-refresh latency. API
-    keys use the separate ``_pbkdf2_api_key`` helper, only to satisfy CodeQL's
-    ``py/weak-sensitive-data-hashing`` query."""
+    """Plain SHA-256 is deliberate: refresh tokens are 384-bit random, so a slow KDF buys nothing."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
@@ -947,10 +939,7 @@ def get_or_create_credential_encryption_key() -> bytes:
 
 
 def compute_identity_proof(nonce: bytes, host: str, port: int) -> str:
-    """HMAC-SHA256 proof that the caller holds this install's identity secret, bound to the loopback
-    address and port the connection landed on. A proof relayed from an Unsloth on a different
-    address or port was computed for that other endpoint and will not match the one the client
-    dialed."""
+    """HMAC bound to the connection's host and port, so a proof relayed from another endpoint fails."""
     try:
         host = ipaddress.ip_address(host).compressed
     except ValueError:
@@ -1023,24 +1012,14 @@ _DESKTOP_SECRET_BODY = re.compile(r"\A[A-Za-z0-9_-]{64}\Z")
 
 
 def desktop_secret_is_well_formed(raw_secret: str) -> bool:
-    """Whether a candidate has the one shape :func:`create_desktop_secret` mints.
-
-    Syntactic only: a candidate that passes this still has to match the stored hash. It is separate
-    from validation, and cheap, because the desktop shell posts a deliberately invalid secret to
-    /api/auth/desktop-login to learn from the 401 that the backend is one it can manage. That probe
-    must cost no KDF and no rate-limit budget, or a live app throttles itself out of its own
-    backend.
-    """
+    """Syntax only and KDF-free, so the desktop shell's invalid-secret probe costs no rate-limit budget."""
     if not isinstance(raw_secret, str) or not raw_secret.startswith(DESKTOP_SECRET_PREFIX):
         return False
     return _DESKTOP_SECRET_BODY.match(raw_secret[len(DESKTOP_SECRET_PREFIX) :]) is not None
 
 
 def _pbkdf2_api_key(raw_key: str) -> str:
-    """PBKDF2-HMAC-SHA256 an API key with a persistent server-side salt. For API-key storage ONLY, not
-    refresh tokens: the slow KDF is only to appease CodeQL's ``py/weak-sensitive-data-hashing``
-    query, since API keys are random 128-bit tokens. The salt lives in ``app_secrets`` so dumping
-    ``api_keys`` alone cannot derive hashes."""
+    """API-key only; salt in ``app_secrets`` means dumping ``api_keys`` alone cannot derive hashes."""
     salt = _get_or_create_api_key_pbkdf2_salt()
     dk = hashlib.pbkdf2_hmac(
         "sha256",
@@ -1233,12 +1212,7 @@ _admin_created_this_process = False
 
 
 def admin_created_this_process() -> bool:
-    """Whether this process seeded the admin account, whoever called first.
-
-    run_server's pre-bind password gate calls ensure_default_admin() itself on a tunnel
-    launch, so by the time the lifespan calls it the answer is already False and a
-    first-boot check keyed on that return value silently does nothing.
-    """
+    """Use this, not ensure_default_admin()'s return value: an earlier caller may already have seeded it."""
     return _admin_created_this_process
 
 
@@ -1273,15 +1247,7 @@ def update_password(
     expect_password_hash: Optional[str] = None,
     preserve_desktop_secret: bool = False,
 ) -> Optional[str]:
-    """Update password, clear first-login requirement, rotate JWT secret. Returns the new JWT secret,
-    or None when nothing was updated. Callers that mint tokens must sign with the returned secret:
-    re-reading it would pick up a reset that landed between this commit and the mint.
-    ``revoke_refresh_tokens`` deletes the user's refresh tokens in the SAME transaction, since a
-    separate delete could fail after the password commit and leave a pre-change token able to mint
-    access tokens. ``expect_password_hash`` makes the write conditional on the credential the caller
-    verified still being current, returning False when it moved underneath.
-    ``preserve_desktop_secret`` keeps the local desktop credential valid, for a caller that already
-    authenticated as the desktop app and would otherwise break its own auto-auth."""
+    """Mint tokens with the returned JWT secret; re-reading could pick up a reset made after commit."""
     from .hashing import hash_password
 
     salt, pwd_hash = hash_password(new_password)
@@ -1332,13 +1298,7 @@ def save_refresh_token(
     is_desktop: bool = False,
     secret_gen: Optional[str] = None,
 ) -> None:
-    """
-    Store a hashed refresh token with its associated username and expiry.
-
-    ``secret_gen`` binds the token to a credential version; it defaults to the
-    current one, and callers that already verified a credential must pass the
-    version they verified rather than let this re-read a rotated one.
-    """
+    """Callers that verified a credential pass its ``secret_gen``; the default may re-read a rotated one."""
     token_hash = _fenced_hash(_hash_token(token), username)
     conn = get_connection()
     try:
@@ -1357,11 +1317,7 @@ def save_refresh_token(
 
 
 def consume_refresh_token(token: str) -> Optional[Tuple[str, bool, str]]:
-    """Atomically validate-and-delete a refresh token for single-use rotation. DELETE RETURNING fuses
-    validate and delete into one statement so two concurrent refresh requests cannot both consume
-    the same token. Returns ``(username, is_desktop, jwt_secret)``; the caller must mint the
-    replacement tokens against that secret so a rotation landing mid-refresh cannot issue a
-    post-rotation session from a pre-rotation token."""
+    """DELETE RETURNING makes validate-and-delete atomic, so two refreshes cannot both use one token."""
     token_hash = _hash_token(token)
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
@@ -1477,10 +1433,7 @@ def create_desktop_secret() -> str:
 
 
 def validate_desktop_secret_with_credential(raw_secret: str) -> Optional[Tuple[str, str]]:
-    """Validate the desktop secret and return ``(username, jwt_secret)``. Both reads share one
-    transaction so the returned secret is the credential version the desktop secret was checked
-    against; a reset landing mid-request then invalidates the tokens minted from it rather than
-    blessing them."""
+    """Both reads share one transaction, so the returned secret is the version the check used."""
     # Shape check before KDF: unauthenticated callers must not buy KDF work.
     if not desktop_secret_is_well_formed(raw_secret):
         return None
@@ -1535,12 +1488,7 @@ def create_api_key(
     expect_gen: Optional[str] = None,
     account_id: Optional[str] = None,
 ) -> Tuple[str, dict]:
-    """Create a new API key for *username*. Returns ``(raw_key, row_dict)`` where *raw_key* is shown to
-    the user exactly once; the database only stores the PBKDF2 hash. Pass ``internal=True`` for keys
-    minted by workflows that should not appear in user-facing listings. ``expect_gen`` ties the
-    insert to the credential generation the request authenticated under, so a session revoked by a
-    concurrent password reset cannot mint a key that outlives it. Raises ``CredentialRotated`` if it
-    moved."""
+    """``expect_gen`` fences the insert so a password reset cannot mint a key that outlives it."""
     raw_key = API_KEY_PREFIX + secrets.token_hex(16)
     key_hash = _fenced_hash(_pbkdf2_api_key(raw_key), username)
     key_prefix = raw_key[len(API_KEY_PREFIX) : len(API_KEY_PREFIX) + 8]
@@ -1672,10 +1620,7 @@ def revoke_internal_api_key(key_id: int) -> bool:
 
 
 def is_internal_api_key(raw_key: str) -> bool:
-    """Whether *raw_key* is a workflow-minted internal key rather than a user's own. Lets
-    request-scoped code tell Unsloth's own background work from a third party using Unsloth as an
-    API server. Memoized, because this runs on the event loop for every API-key request and a key's
-    origin is fixed when it is minted."""
+    """Memoized: it runs on the event loop per API-key request, and a key's origin never changes."""
     if not raw_key.startswith(API_KEY_PREFIX):
         return False
     cache_id = _api_key_cache_id(raw_key)
@@ -1705,14 +1650,7 @@ def is_internal_api_key(raw_key: str) -> bool:
 
 
 def internal_api_key_name(raw_key: str) -> Optional[str]:
-    """The workflow name *raw_key* was minted under, or ``None`` if it is not internal.
-    ``is_internal_api_key`` answers "is this Unsloth's own key", which is far too coarse for
-    authorization: a data-recipe key runs inside a recipe the user authored, so treating it as equal
-    to the Deep Research hop would let that recipe spend any saved cloud credential. The name is
-    fixed when the key is minted and is the only durable thing separating the two. Deliberately not
-    memoized: this is read on the external-provider path once per request, and a stale answer would
-    be a stale authorization. The PBKDF2 derivation comes from the shared hash cache when it is
-    warm."""
+    """Authorization should use this, not is_internal_api_key, which is too coarse; not memoized."""
     if not raw_key.startswith(API_KEY_PREFIX):
         return None
     cache_id = _api_key_cache_id(raw_key)

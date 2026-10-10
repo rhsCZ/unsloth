@@ -379,12 +379,8 @@ def read_default_chat_template(
         _api = HfApi(token = hf_token)
 
         def _this_file_is_cached(rel: str) -> bool:
-            """THIS file at this revision, not merely a directory for the repo.
-
-            What the download could serve from disk is the one candidate template, so a
-            snapshot holding only weights can answer nothing and refusing it costs an
-            authorized caller a template the Hub would have given it. Fails closed.
-            """
+            """Check the one file at this revision, not just the repo dir; a weights-only snapshot
+            must not pass."""
             try:
                 from huggingface_hub import try_to_load_from_cache
 

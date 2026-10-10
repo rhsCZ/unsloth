@@ -119,13 +119,7 @@ class HostProfile:
             return 1.0
 
         def rate(threads: float) -> float:
-            """ms per GiB, taking whichever fit is more expensive at this size.
-
-            The two fits cross: the one-machine sweep wins at large thread
-            counts, the cross-machine one at small. Taking the max keeps the
-            reference host's own validated numbers while refusing to quote a
-            small host the throughput of a server.
-            """
+            """Takes the costlier of two fits, so a small host is not quoted a server's throughput."""
             return max(
                 _THREAD_PARALLEL_MS_PER_GIB / threads + _THREAD_SERIAL_MS_PER_GIB,
                 _CROSS_HOST_PARALLEL_MS_PER_GIB / threads + _CROSS_HOST_SERIAL_MS_PER_GIB,
@@ -144,13 +138,7 @@ class Placement:
 
 
 def generation_penalty_ms(placement: Placement, host: HostProfile | None = None) -> float:
-    """Extra milliseconds per generated token, versus everything resident.
-
-    Additive in TIME across groups, plus a contention term when more than one
-    group is spilled. Returns 0.0 for a fully resident placement, and for any
-    placement on a unified-memory host, where moving a tensor between "VRAM"
-    and "RAM" does not change which chips hold it.
-    """
+    """Extra ms per generated token versus everything resident; zero on unified-memory hosts."""
     host = host or HostProfile()
     if host.unified_memory:
         return 0.0
@@ -178,22 +166,7 @@ def prefill_penalty_ms_per_token(
     n_ubatch: int = 512,
     host: HostProfile | None = None,
 ) -> float:
-    """Extra milliseconds per PROMPT token during prefill.
-
-    Uses FULL bytes, not activated bytes: a 512-token ubatch selects
-    essentially every expert at least once, so sparsity buys nothing here. This
-    is the term that makes MoE's prefill penalty WORSE than a dense model's even
-    though its generation penalty is much better.
-
-    The weights are copied once per ubatch and reused across every token in it,
-    so the per-token cost falls as ``n_ubatch`` rises -- the amortisation that
-    makes prefill so much cheaper than generation per byte moved.
-
-    ``host`` is accepted and used only for ``unified_memory``: this regime runs
-    on the GPU with the weights copied in, so it is bound by the link and NOT by
-    host cores. That asymmetry against generation is the point, so callers pass
-    the same profile to both and let each use what applies.
-    """
+    """Uses full bytes, not activated ones, since a 512-token ubatch selects nearly every expert anyway."""
     host = host or HostProfile()
     if host.unified_memory:
         return 0.0
@@ -212,17 +185,7 @@ def rank(
     n_prompt: int = 0,
     n_ubatch: int = 512,
 ) -> list[tuple[Placement, float]]:
-    """Sort placements cheapest first for a workload of a given shape.
-
-    Both terms are milliseconds for the WHOLE request, so they are commensurate:
-    ``n_prompt`` tokens of prefill plus ``n_generated`` tokens of decode. A long
-    prompt with a short reply and a short prompt with a long reply are genuinely
-    different questions and can rank placements differently, so the caller
-    states the shape rather than accepting a baked-in answer.
-
-    Defaults to pure single-token generation, which is where placements differ
-    most.
-    """
+    """Sorts cheapest first; both terms are whole-request ms, so prefill and decode add up."""
     scored = [
         (
             c,

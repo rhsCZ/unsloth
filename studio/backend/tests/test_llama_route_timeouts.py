@@ -29,14 +29,8 @@ def test_non_streaming_generation_timeout_has_read_deadline():
 
 
 def test_an_infinite_env_value_does_not_remove_the_deadline(monkeypatch):
-    """`inf` is positive, so a `value > 0` parser lets it through.
-
-    Both of this branch's knobs feed deadlines, and the first-token one also
-    builds `httpx.Timeout` for the non-streaming path, where the positional
-    form covers connect, read, write and pool. An operator writing `inf`, or
-    `1e309` which parses to it, would otherwise get a request that can never
-    time out anywhere. The default is restored instead.
-    """
+    """Non-finite env values such as inf or 1e309 fall back to the default, so the deadline still
+    applies."""
     for raw in ("inf", "Infinity", "1e309", "-inf"):
         monkeypatch.setenv(inf_mod._OPENAI_COMPAT_FIRST_TOKEN_TIMEOUT_ENV, raw)
         monkeypatch.setenv(inf_mod._OPENAI_COMPAT_STREAM_KEEPALIVE_ENV, raw)
@@ -80,14 +74,7 @@ def test_stream_first_item_deadline_after_headers():
 
 
 def test_stream_read_is_never_cancelled_to_implement_a_deadline():
-    """Replaces a pair that asserted `__anext__` ran in the request task.
-
-    That targeted `asyncio.wait_for`, which times out by CANCELLING the read --
-    and httpcore closes the body on any streaming exception, so a cancelled read
-    is a dead stream that surfaces as a truncated 200. Cancellation was the
-    hazard, task identity only its proxy; emitting while a read is outstanding
-    needs a task, so pin the hazard itself.
-    """
+    """A stream read must never be cancelled to enforce a deadline, since cancelling truncates the body."""
 
     async def _run():
         cancels = []
@@ -210,15 +197,7 @@ def test_stream_wait_does_not_shorten_upstream_read_for_disconnect_poll():
 
 
 def test_latched_read_ceiling_covers_the_stall_guard():
-    """A lowered first-token env must not cap the whole body under it.
-
-    httpcore reads `extensions["timeout"]["read"]` once, before the body loop
-    (`_async/http11.py::_receive_response_body`), so the value armed before the
-    FIRST read is the ceiling for every later one and the post-token re-arm
-    cannot raise it. With UNSLOTH_OPENAI_COMPAT_FIRST_TOKEN_TIMEOUT below the
-    stall timeout, a healthy mid-stream gap would then be cut at the smaller
-    first-token value instead of the configured stall guard.
-    """
+    """httpcore latches the read timeout before the body loop, so a low first-token value caps all reads."""
 
     async def _run():
         response = SimpleNamespace(request = SimpleNamespace(extensions = {"timeout": {}}))
@@ -249,15 +228,7 @@ def test_latched_read_ceiling_covers_the_stall_guard():
 
 
 def test_closing_the_pump_under_cancellation_re_raises_it(monkeypatch):
-    """The pump must not absorb a cancellation aimed at the request task.
-
-    `_aclose_stream_resources` closes the pump, the iterator, the response and
-    the client, records a CancelledError from any of them, and re-raises it only
-    once everything is shut. If the pump's own teardown swallows that
-    cancellation instead, `aclose()` returns normally, the recording never
-    happens, and the caller carries on down its completion path -- the Anthropic
-    surface would emit `emitter.finish()` for a stream the client cancelled.
-    """
+    """A cancel during pump teardown must be re-raised, or the caller runs its completion path anyway."""
 
     async def _run():
         class _Blocks:
@@ -293,16 +264,8 @@ def test_closing_the_pump_under_cancellation_re_raises_it(monkeypatch):
 
 
 def test_a_callable_bound_latches_no_socket_ceiling():
-    """A callable bound can RISE later, so no first-read value is safe.
-
-    The passthrough's `_terminal_read_timeout_s` returns the stall timeout until
-    a finish chunk lands and the terminal grace (2s) after it. With the stall
-    timeout set below that grace, any ceiling latched from the arm-time value
-    would cut the promised grace short and drop a late usage chunk, and httpcore
-    ignores the re-arm that was supposed to raise it. The range of an opaque
-    callable is not knowable here, so the socket is left unbounded and the
-    wall-clock deadline -- authoritative either way -- does the enforcing.
-    """
+    """A callable bound can rise later, so no socket ceiling is latched; the wall-clock deadline
+    enforces."""
 
     async def _run():
         response = SimpleNamespace(request = SimpleNamespace(extensions = {"timeout": {}}))
@@ -334,13 +297,7 @@ def test_a_callable_bound_latches_no_socket_ceiling():
 
 
 def test_deadline_does_not_discard_a_read_that_already_landed():
-    """A token that arrives while the pump is suspended on a keepalive yield.
-
-    Downstream backpressure can hold the generator past the deadline after the
-    read has already completed. Timing out then would throw away a valid item
-    and report a stall that did not happen, so the deadline is only allowed to
-    fire on an empty `asyncio.wait`.
-    """
+    """The deadline may fire only on an empty asyncio.wait, so a landed read is not discarded."""
 
     async def _run():
         gate = asyncio.Event()

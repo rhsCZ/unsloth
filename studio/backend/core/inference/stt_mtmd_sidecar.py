@@ -166,11 +166,7 @@ def ensure_engine_available() -> str:
 
 
 def _reap(process: Optional[subprocess.Popen]) -> None:
-    """Stop a child and wait for it, so its port and VRAM are actually free.
-
-    terminate() alone returns before the process has gone, and a child that
-    ignores SIGTERM would hold both until Unsloth exits.
-    """
+    """Waits for exit, since terminate alone returns before the child's port and VRAM are actually freed."""
     if process is None:
         return
     try:
@@ -372,12 +368,8 @@ class _MtmdDownloadState:
         revision: Optional[str] = None,
         total: Optional[int] = None,
     ) -> Optional[int]:
-        """Count only the two selected files in their three cache forms.
-
-        status() captures these under the lock and passes them in: reading them
-        here would let a run that starts mid-probe pair its bytes with the total
-        of the run that just ended.
-        """
+        """Counts the two selected files; values come from status() under the lock so runs cannot
+        mix totals."""
         try:
             model_id = model_id or self._model_id
             hub_cache = hub_cache if hub_cache is not None else self._hub_cache
@@ -645,21 +637,14 @@ class MtmdSttSidecar:
             self._binary_path_revision = None
 
     def _drain_active_requests(self, deadline: float) -> None:
-        """Wait, bounded, for in-flight transcriptions to finish.
-
-        Never called while holding ``_lock``: `transcribe` claims ``_active_requests``
-        under that lock, so waiting there would block the very request being waited on.
-        """
+        """Must not hold _lock: transcribe claims _active_requests under it, so the wait would block
+        itself."""
         while self._active_requests and time.monotonic() < deadline:
             time.sleep(0.1)
 
     def _holds_expected_model(self, expected: Optional[str]) -> bool:
-        """Whether the resident model is the one the caller claimed. Call under ``_lock``.
-
-        A caller that owns a specific model must not release whatever happens to be
-        resident: another surface can switch the engine between the ownership check and
-        the request reaching the sidecar.
-        """
+        """Compared under the lock: another surface can switch the resident model before the release
+        arrives."""
         if expected is None:
             return True
         current = self._model_id
@@ -677,12 +662,7 @@ class MtmdSttSidecar:
         wait: bool = True,
         expected_model: Optional[str] = None,
     ) -> None:
-        """Release the resident model. ``wait=False`` skips a sidecar mid-request.
-
-        `transcribe` runs outside ``_lock`` and counts itself in ``_active_requests``, so
-        that, not the lock, is what says busy here. ``expected_model`` scopes the release
-        to one model, compared under the lock.
-        """
+        """Busy is judged by _active_requests, since transcribe runs outside _lock; the drain is bounded."""
         if not wait and (self.is_loading() or self._active_requests):
             return
         # Bounded drain: do not kill llama-server under a live transcription, nor wait forever.
@@ -718,13 +698,7 @@ class MtmdSttSidecar:
             self._drain_active_requests(drain_deadline)
 
     def cancel_pending_load(self) -> bool:
-        """Preempt a starting llama-server so training is not raced for VRAM.
-
-        _process is only assigned once the server answers /health, so unload()
-        cannot reach a child that is still allocating. Startup runs outside
-        _lock, so this acts without it: the event makes _wait_for_server give
-        up, and load() then reaps the child.
-        """
+        """Startup runs outside _lock and _process is set only once /health answers, so use an event."""
         if not self._loading:
             return False
         event = self._load_cancel_event
@@ -755,11 +729,8 @@ class MtmdSttSidecar:
         return True
 
     def wait_for_load_to_settle(self) -> None:
-        """Block until a cancelled startup has been reaped and its VRAM freed.
-
-        load() holds _start_lock across startup and its cleanup, so taking it
-        is the wait.
-        """
+        """Taking _start_lock is the wait: load holds it across startup and the cleanup of a
+        cancelled one."""
         with self._start_lock:
             pass
 
@@ -771,14 +742,8 @@ class MtmdSttSidecar:
 
     @contextmanager
     def update_maintenance(self) -> Iterator[bool]:
-        """Block new loads while the llama.cpp tree this binary lives in is
-        replaced. The chat backend coordinates its own server; this sidecar runs
-        the same executable, so on Windows a live one blocks the swap.
-
-        The guard is published before waiting for the locks, so a load already
-        past its own check still cannot start a process against a half-swapped
-        tree. Yields whether a warm server had to be unloaded.
-        """
+        """On Windows a live llama-server blocks the swap; the guard is published before waiting on
+        the locks."""
         self._update_in_progress = True
         try:
             with self._start_lock, self._lock:
@@ -1021,11 +986,7 @@ class MtmdSttSidecar:
         cancel_event: Optional[threading.Event] = None,
         on_progress = None,
     ) -> dict:
-        """Transcribe encoded audio bytes, as the other sidecars do.
-
-        ``fast`` has no effect: decoding is greedy and the model picks the
-        language itself.
-        """
+        """fast has no effect here: decoding is greedy and the model picks the language itself."""
         ensure_engine_available()
         model_id = resolve_mtmd_model_id(model)
         if cancel_event is not None and cancel_event.is_set():

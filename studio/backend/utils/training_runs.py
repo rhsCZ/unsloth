@@ -111,11 +111,7 @@ def model_segment_from_default_output_dir_name(output_dir_name: str) -> Optional
 
 
 def _model_segment_from_run_dir_name(output_dir_name: str) -> Optional[str]:
-    """``model_segment_from_default_output_dir_name`` widened to date-time stamps.
-
-    The strict inverse gates on ``isdigit()`` because it only reads folders we wrote; this
-    one also reads folders we did not. Same shape otherwise, project suffix and escape included.
-    """
+    """Looser than the strict inverse because it also reads run folders we did not write."""
     head, separator, last_segment = str(output_dir_name or "").rpartition("_")
     if not separator or not _RUN_DIR_TIMESTAMP.match(last_segment):
         return None
@@ -126,17 +122,7 @@ def _model_segment_from_run_dir_name(output_dir_name: str) -> Optional[str]:
 
 
 def base_model_from_run_dir_name(dir_name: str) -> Optional[str]:
-    """``unsloth_<model>_<timestamp>`` -> ``unsloth/<model>``, else None.
-
-    The last resort when no config names a base model. It sits beside
-    ``build_default_output_dir_name`` because it is that function read backwards; keeping the
-    pair together is what stops the parse drifting from the names we write.
-
-    None matters as much as a name here. Without a timestamp the folder is not one we wrote,
-    and every caller already asks the user instead. Guessing reaches the Hub: ``unsloth/`` is
-    rejected outright, and a truncated ``unsloth/llama_3`` for ``unsloth_llama_3_8b`` is worse,
-    being a valid id that does not exist.
-    """
+    """Returns None rather than guess: a truncated id like unsloth/llama_3 is valid but wrong."""
     model_segment = _model_segment_from_run_dir_name(dir_name)
     if model_segment is None or not model_segment.startswith(_UNSLOTH_ORG_PREFIX):
         return None
@@ -154,11 +140,7 @@ def extract_project_name(config: Any) -> Optional[str]:
 
 
 def drop_non_finite(value: Any) -> Any:
-    """Replace inf and NaN with None, recursively.
-
-    json writes them as the non-standard ``Infinity`` / ``NaN`` literals, but Starlette renders
-    with ``allow_nan = False``, so a stored config carrying one 500s the view that returns it.
-    """
+    """Starlette renders with allow_nan = False, so stored NaN or Infinity would 500 the view."""
     if isinstance(value, bool):
         return value
     if isinstance(value, float) and not math.isfinite(value):

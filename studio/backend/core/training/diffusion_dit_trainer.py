@@ -120,11 +120,7 @@ _KREA2_TARGETS = (
 def _select_lora_targets(
     cfg_targets: tuple[str, ...], spec_targets: tuple[str, ...]
 ) -> tuple[str, ...]:
-    """Pick the LoRA target modules for a DiT run. ``normalized()`` always fills
-    ``lora_target_modules`` with the generic ``DEFAULT_LORA_TARGETS`` when a caller does not set
-    it, so that value means "unset" here: prefer the family's ``spec.lora_targets`` (which add
-    the DiT-specific projections). Any OTHER explicit tuple is a deliberate override and still
-    wins."""
+    """The generic DEFAULT_LORA_TARGETS means unset, so the family's targets apply; other tuples win."""
     if tuple(cfg_targets) == DEFAULT_LORA_TARGETS:
         return tuple(spec_targets)
     return tuple(cfg_targets)
@@ -155,11 +151,7 @@ class _FamilySpec:
 
 
 def _gather_sigmas(sigma_table, indices, device, dtype, n_dim):
-    """Gather per-sample sigmas for schedule ``indices`` and broadcast to ``n_dim``. Index-based (no
-    per-item search): ``indices`` are the positions ``_sample_timesteps`` drew from
-    ``scheduler.timesteps``, and ``sigma_table`` (the scheduler's own sigmas, or the shifted copy
-    from ``_training_sigma_table``) is aligned with it, so the identity table returns exactly
-    what the diffusers ``get_sigmas`` helper would."""
+    """Gathers by index, so sigma_table must stay aligned with the timesteps the indices were drawn from."""
     sigma = sigma_table[indices].to(device = device, dtype = dtype).flatten()
     while sigma.ndim < n_dim:
         sigma = sigma.unsqueeze(-1)
@@ -167,17 +159,7 @@ def _gather_sigmas(sigma_table, indices, device, dtype, n_dim):
 
 
 def _training_sigma_table(scheduler, flow_shift):
-    """The sigma table training draws index into, per ``cfg.flow_shift``. ``1.0`` (every non-Qwen
-    family's default) returns ``scheduler.sigmas`` unchanged: the historical behavior, correct
-    for the families whose schedule already matches training convention. ``"auto"`` (the
-    qwen-image default) reproduces the family's INFERENCE sigma distribution, which the scheduler
-    never bakes into ``sigmas`` when ``use_dynamic_shifting`` is true (the static ``shift`` at
-    init is skipped, so Qwen-Image otherwise trains on unshifted uniform sigmas): apply the
-    scheduler's own ``time_shift`` at mu = ``max_shift`` (Qwen pins base_shift = max_shift = log
-    3, so the inference mu is constant at every resolution) followed by its
-    ``stretch_shift_to_terminal`` -- using the scheduler's methods keeps the transform faithful
-    across diffusers versions. A numeric value applies the standard linear shift s*u/(1+(s-1)*u)
-    (musubi/kohya style discrete_flow_shift)."""
+    """auto reproduces inference sigmas, since use_dynamic_shifting leaves scheduler.sigmas unshifted."""
     sigmas = scheduler.sigmas
     if flow_shift == "auto":
         sc = scheduler.config
@@ -227,10 +209,7 @@ def _sample_timesteps(scheduler, batch_size, device):
 
 
 def _encoders_to_device(pipe, device) -> None:
-    """Move the pipeline's (non-quantized) text encoders to ``device`` before encoding. A QLoRA FLUX
-    load places the nf4 transformer on GPU but leaves the text encoders on CPU, so encode_prompt
-    would mix devices. Best-effort per encoder: a 4-bit encoder that is already placed raises on
-    .to() and is left as-is."""
+    """A QLoRA load leaves text encoders on CPU, so move them; a 4-bit encoder already placed is skipped."""
     for attr in ("text_encoder", "text_encoder_2", "text_encoder_3"):
         enc = getattr(pipe, attr, None)
         if enc is None:
@@ -286,12 +265,7 @@ def _load_pipe_without_transformer(pipe_cls, cfg, device):
 
 
 def _load_dit_transformer(transformer_cls, cfg, device, base_precision):
-    """Load the transformer alone in the resolved ``base_precision``. nf4: a prequant (bnb-4bit)
-    repo carries its quantization config and loads 4-bit as-is, while a dense base is quantized
-    to nf4 on the fly; the memory floor. bf16 / fp8 / mxfp8: the dense transformer (fp8/mxfp8
-    convert its frozen linears to float8 training compute AFTER the LoRA attaches; storage stays
-    bf16). int8: the dense transformer quantized in place to torchao weight-only int8 (the
-    PEFT-attachable scheme), roughly halving the bf16 weight footprint."""
+    """fp8 and mxfp8 convert the frozen linears after the LoRA attaches; storage stays bf16."""
     import torch
 
     if base_precision == "nf4":
@@ -317,23 +291,7 @@ def _load_dit_transformer(transformer_cls, cfg, device, base_precision):
 
 
 def _int8_quantize_base(transformer, family: Optional[str] = None) -> None:
-    """torchao weight-only int8 on the big frozen linears, applied after add_adapter so the base_layer
-    inside each LoRA wrapper quantizes while the adapters stay high precision. ``make_filter_fn``
-    (shared with the inference quant layer) keeps only Linears with >= 512 features -- which also
-    naturally skips the rank-sized LoRA matrices -- and drops the M=1 modulation projections int8
-    kernels reject.
-
-    ``family`` selects the per-family small-M exclusions on top of those. Passing it is what keeps
-    training and inference on the same list: without it LTX-2's one-token audio stream (and
-    Qwen-Image's unpadded text stream) is quantized here and the first forward raises, after the
-    whole base has been loaded.
-
-    The family's PAD list is applied for the same reason, and the same way the inference path
-    applies it: a small-M Linear is either excluded or padded, and a family that chose padding
-    (MiniMax-H3's context_embedder and token_refiner blocks) has those names in neither the generic
-    nor the family exclusions, so without this they are quantized bare and raise on the first
-    forward exactly like an unexcluded one.
-    """
+    """Passing family keeps training and inference on one exclusion list, else the first forward raises."""
     from core.inference.diffusion_transformer_quant import (
         _quiet_config,
         apply_small_m_padding,
@@ -355,10 +313,7 @@ def _int8_quantize_base(transformer, family: Optional[str] = None) -> None:
 
 
 def _fp8_module_filter(mod, fqn: str) -> bool:
-    """Which frozen linears get float8 training compute: skip anything LoRA-owned (the adapters must
-    stay high precision, since PEFT has no float8 base support), the output projection, and
-    shapes float8 kernels reject (dims not divisible by 16), matching the diffusers FLUX2
-    reference filter."""
+    """Skips LoRA modules, the output projection, and dims not divisible by 16 (float8 rejects them)."""
     import torch.nn as nn
 
     if not isinstance(mod, nn.Linear):
@@ -371,14 +326,7 @@ def _fp8_module_filter(mod, fqn: str) -> bool:
 
 
 def _fp8_training_config():
-    """The float8 training config: per-ROW (rowwise) scaling when this torchao build ships the
-    recipe, else the tensorwise default. The DiT families carry extreme activation outliers
-    (Z-Image MLP activations peak near 6.6e4, the same range that forced per-row scaling in the
-    inference quant layer): one tensor-wide dynamic scale pushes normal values (~1-30) below fp8
-    resolution, so the frozen base's forward -- the signal the LoRA regresses against --
-    degrades. Per-row scaling confines each outlier to its own token/channel. The tensorwise
-    fallback keeps pad_inner_dim so a non-16-aligned inner dim never aborts the scaled_mm (the
-    rowwise recipe manages its own padding rules and rejects the knob, hence the split)."""
+    """Rowwise scaling keeps activation outliers from crushing normal values, unlike a tensorwise scale."""
     from torchao.float8 import Float8LinearConfig
     try:
         return Float8LinearConfig.from_recipe_name("rowwise")
@@ -422,10 +370,7 @@ def _mx_module_filter(mod, fqn: str) -> bool:
 
 
 def _mxfp8_training_config():
-    """The torchao MX training config across the prototype API's revisions: torchao 0.16 ships
-    ``MXLinearConfig`` in ``prototype.mx_formats``; 0.17 removed it in favour of the
-    ``MXFP8TrainingOpConfig`` recipe API shared with MoE training. Both feed ``quantize_``.
-    Raises ImportError when neither API exists (mxfp8 then falls back to bf16)."""
+    """Tries torchao 0.16 MXLinearConfig, then the 0.17 MXFP8TrainingOpConfig; ImportError if neither."""
     try:
         from torchao.prototype.mx_formats import MXLinearConfig
         return MXLinearConfig.from_recipe_name("mxfp8_cublas")
@@ -438,13 +383,7 @@ def _mxfp8_training_config():
 
 
 def _apply_mxfp8_training(transformer, on_event) -> bool:
-    """Swap the frozen base linears to torchao MX float8 training compute (mxfp8, the
-    Blackwell-native block-scaled format; the swap is in place and the weights stay bf16 in
-    memory, so like fp8 this is a speed mode, not a memory mode). Applied AFTER add_adapter so
-    the filter can exclude the LoRA modules. Only competitive under torch.compile and only ahead
-    of compiled bf16 at large token counts (high resolution or batch), which is why it stays an
-    explicit opt-in rather than an "auto" pick. Never fatal: on any failure the run continues in
-    bf16 with a warning."""
+    """Only pays off under torch.compile at large token counts, and never fails: it falls back to bf16."""
     try:
         from torchao.quantization import quantize_
         quantize_(
@@ -467,18 +406,7 @@ def _pick_auto_precision(
     has_fp8,
     has_torchao = True,
 ) -> str:
-    """Pure policy for base_precision="auto": nf4 for a prequant base or no CUDA; else the fastest
-    dense mode whose weights + headroom (activations, optimizer, cache) fit the free VRAM at
-    decision time. bf16 + regional compile is the measured speed winner (2.3-2.6x over nf4 on
-    B200); fp8 stays an explicit opt-in because torchao float8's dynamic-scaling overhead made it
-    SLOWER than compiled bf16 at LoRA-training shapes on the same hardware. int8 must still
-    materialise the full bf16 transformer before ``quantize_`` shrinks it module-by-module, so
-    its band requires the dense-load transient (1.15x dense) to fit -- what int8 buys in that
-    band is steady-state headroom for activations and the latent cache, not load-time memory.
-    int8 also needs torchao at runtime (``_int8_quantize_base`` has no fallback, unlike fp8), so
-    auto only picks it when torchao is importable and drops to nf4 otherwise.
-    ``capability``/``has_fp8`` remain parameters so the policy can be revisited per GPU
-    generation without changing callers."""
+    """fp8 stays opt-in, since float8 dynamic scaling ran slower than compiled bf16 at LoRA shapes."""
     _ = capability, has_fp8
     if prequant or device != "cuda" or not free_gb or not dense_gb:
         return "nf4"
@@ -490,22 +418,7 @@ def _pick_auto_precision(
 
 
 def _dense_bf16_gb(spec, base_model: str) -> float:
-    """The dense-bf16 transformer size of the base this run actually trains from.
-
-    ``spec.dense_bf16_gb`` is one number per FAMILY, and flux.2-klein is a family with two
-    transformer sizes under it: the 4B default (8.1 GB) and the 9B / base-9B pair (18.2 GB). Sizing
-    a 9B run off the family number understates it by 2.3x, so base_precision="auto" (the mode /info
-    recommends, and therefore the Train tab's default) resolves to bf16 on a 16-24 GB GPU and the
-    dense load OOMs -- the run fails before the first step.
-
-    The inference auto-policy already keeps per-base overrides for exactly this, so read them here
-    instead of adding a second table that can drift. Reads the per-base OVERRIDES only, never the
-    family table underneath them: this spec's own number is the family default, and the two are
-    independently maintained, so falling through to the shared family entry would silently re-size
-    every base that has no override (klein's 4B default from 8.1 to 7.8, which moves the bf16 band
-    by half a GB). Never raises: a sizing lookup must not be able to fail a run that would otherwise
-    train.
-    """
+    """Per-base overrides, not the family size: flux.2-klein's 9B transformer is 2.3x its 4B default."""
     try:
         from core.inference.diffusion_auto_policy import base_repo_bf16_components_gb
         components = base_repo_bf16_components_gb(base_model)
@@ -517,11 +430,7 @@ def _dense_bf16_gb(spec, base_model: str) -> float:
 
 
 def _resolve_base_precision(cfg, spec, device) -> str:
-    """Resolve "auto" against the live GPU (free VRAM measured BEFORE anything loads); explicit
-    modes pass through (normalized() already validated them against the repo and compute dtype)
-    but are re-checked against the live device here: the dense modes are CUDA-only, and /info
-    never advertises them on a host without a GPU, so an explicit request from a stale or direct
-    client fails fast instead of loading a full dense transformer onto the CPU."""
+    """Explicit dense modes are re-checked against the live device, since they are CUDA-only."""
     mode = (cfg.base_precision or "nf4").strip().lower()
     if mode != "auto":
         if mode in ("bf16", "int8", "fp8", "mxfp8") and device != "cuda":
@@ -1106,13 +1015,7 @@ def _flux2_klein_save(pipe_cls, out_dir, transformer_lora_layers):
     )
 
 
-# LTX-2 (video). Milestone one trains from STILL IMAGES: a 1-frame clip is valid LTX-2 input (its VAE compresses time
-# by 8) and style LoRAs converge on 20-50 stills, so this spec reuses the image dataset layer. AUDIOVISUAL: forward
-# REQUIRES audio arguments and diffusers has no video-only escape hatch, so feed a one-token audio stream with
-# isolate_modalities=True and keep audio out of the loss and out of the LoRA targets -- the reason _LTX2_TARGETS names
-# its modules in full. Two-stage conditioning: the Gemma3-12B hidden states are ~370 MB per caption, so encode_prompts
-# runs both stages and caches only the small connector output. Video-stream attention only, fully qualified: a bare
-# "to_q" would also match audio_attn1/audio_attn2 and the cross-modality attentions.
+# Targets are fully qualified: a bare to_q would also match audio and cross-modality attention.
 _LTX2_TARGETS = (
     "attn1.to_q",
     "attn1.to_k",
@@ -1218,11 +1121,7 @@ def _ltx2_collate(
 
 
 def _ltx2_audio_token_count(config, num_pixel_frames: int, fps: float) -> int:
-    """Audio latent tokens accompanying ``num_pixel_frames`` at ``fps``. The pipeline derives this
-    as ``round(duration_s * sampling_rate / hop_length / temporal_compression)``; every term is
-    on the transformer config, so the trainer does not need the audio VAE resident (it never
-    encodes audio, see the spec comment). Floored at one token: the transformer indexes the audio
-    stream unconditionally, so an empty one would trip its RoPE."""
+    """Floored at one token because the transformer indexes the audio stream unconditionally."""
     per_second = (
         float(config.audio_sampling_rate)
         / float(config.audio_hop_length)
@@ -1244,13 +1143,7 @@ def _ltx2_unpack(pred, f, h, w, conf):
 
 
 def _ltx2_audio_state(sigmas, bsz, audio_len, channels, device, dtype):
-    """The audio-stream input for a step at ``sigmas``. A still-image dataset carries no audio
-    ground truth, so the placeholder stream rides the SAME flow-matching state a zero clean
-    latent would produce: ``(1 - sigma) * 0 + sigma * noise``. Zero is the mean of the normalised
-    audio latent distribution, so this keeps the stream at the right SCALE for every sigma
-    instead of feeding unit noise at a timestep the model expects nearly-clean latents at. With
-    ``isolate_modalities = True`` it cannot reach the video prediction at all; it exists only
-    because ``forward`` requires the argument."""
+    """Still images have no audio, so the placeholder follows the flow state of a zero clean latent."""
     import torch
 
     noise = torch.randn((bsz, audio_len, channels), device = device, dtype = dtype)
@@ -1462,10 +1355,7 @@ def _load_pixel_tensor(path, resolution, center_crop, random_flip, rng):
 
 
 def _load_pixel_tensor_planned(path, resolution, center_crop, u_left, u_top, flip):
-    """Deterministic variant of ``_load_pixel_tensor`` for the latent cache: the crop comes as unit
-    fractions (mapped uniformly over the same inclusive integer range ``randint`` draws from) and
-    the flip as a bool. ``center_crop`` reproduces the exact legacy floor-div center so a cached
-    center-crop run matches the uncached one bit-for-bit."""
+    """Deterministic crop and flip for the latent cache; center_crop matches the uncached path exactly."""
     from PIL import Image
 
     img, rw, rh = _open_resized(path, resolution)
@@ -1492,14 +1382,7 @@ def _build_latent_cache(
     pcache = None,
     plan = None,
 ):
-    """Precompute the per-image latent posterior cache: for each planned crop/flip variant, encode
-    once and store the affine (A, B) pair on CPU (pinned when possible) in fp32. The stats stay
-    fp32 so the per-step sample happens in fp32 and only the RESULT is cast to weight_dtype,
-    matching the in-loop path (encode fp32 -> sample/normalise fp32 -> .to(weight_dtype)); fp32
-    doubles the cache RAM over bf16 but the cache is tiny (a handful of latents per image).
-    ``pcache`` (a PersistentConditioningCache) serves hits from disk and receives every fresh
-    encode, so the next run of the same config starts warm. Returns None if the build was
-    interrupted by a stop request."""
+    """Stats stay fp32 to match the in-loop path; only the sampled result is cast to weight_dtype."""
 
     if plan is None:
         plan = _plan_cache_variants(
@@ -1574,10 +1457,7 @@ def _build_latent_cache(
 
 
 def _encode_prompts_cached(spec, pipe, to_encode, device, pcache):
-    """Encode captions, serving hits from the persistent cache and writing misses back. The returned
-    list is aligned with ``to_encode``; without a cache this is exactly ``spec.encode_prompts``.
-    The cached tuples are the family's own CPU embed tuples (dtype preserved by safetensors), so
-    a hit is identical to a fresh encode."""
+    """Cached entries are the family's own CPU embed tuples, so a hit is identical to a fresh encode."""
     if pcache is None:
         return spec.encode_prompts(pipe, to_encode, device)
     hits: dict = {}
@@ -1599,11 +1479,7 @@ def _encode_prompts_cached(spec, pipe, to_encode, device, pcache):
 
 
 def _load_warm_conditioning(pcache, image_paths, plan, to_encode, device):
-    """Load the FULL conditioning set (caption embeds + latent posterior stats) from the persistent
-    cache. Returns (caption_embeds, latent_cache) on a complete hit, else (None, None) so the
-    caller takes the cold path -- any missing/corrupt entry, and also an in-memory holding that
-    would blow the host budget (the cold path re-decides that with the VAE resident and can fall
-    back to per-step encoding). On success the VAE and text encoders are never loaded."""
+    """Any miss returns (None, None) so the cold path decides; a full hit never loads the VAE."""
     embeds = []
     for cap in to_encode:
         entry = pcache.get(pcache.text_key(cap))
@@ -1648,11 +1524,7 @@ def _load_warm_conditioning(pcache, image_paths, plan, to_encode, device):
 
 
 def _sample_cached_latents(cache, idxs, variant_rng, device, weight_dtype):
-    """Draw one latent per index from the cache: pick a variant, then sample the posterior (A + B *
-    randn) when the family is stochastic. Fresh noise per step, exactly like an in-loop
-    ``latent_dist.sample()``. The cached stats are fp32, so the sample is drawn in fp32 and only
-    the RESULT is cast to weight_dtype (matching the in-loop path's
-    ``encode_latents(...).to(weight_dtype)``)."""
+    """Draws fresh noise per step in fp32, as an in-loop latent_dist.sample() does; cast after."""
     import torch
 
     parts_a, parts_b = [], []
@@ -1694,10 +1566,8 @@ def _maybe_compile_transformer(
     on_event,
     base_precision = "nf4",
 ) -> bool:
-    """Regionally compile the transformer blocks (diffusers compile_repeated_blocks) after the LoRA
-    is attached. Never fatal: a wrap failure falls back to eager with a warning event, and
-    dynamo's suppress_errors keeps a frame that fails to COMPILE at the first step running eager
-    instead of raising mid-run."""
+    """Never fatal: a wrap failure falls back to eager, and suppress_errors runs a failed compile
+    eagerly."""
     if not _should_compile(cfg, base_is_bnb, device, base_precision):
         if base_precision in ("fp8", "mxfp8"):
             _emit(
@@ -1740,11 +1610,7 @@ def run_dit_lora_training(
     on_event: Optional[EventCb] = None,
     should_stop: Optional[StopCb] = None,
 ) -> str:
-    """Train a flow-matching DiT LoRA (FLUX.1 / FLUX.2 / Qwen-Image / Z-Image / Krea 2 / LTX-2) and
-    export it. Resumable: ``cfg.resume_from_checkpoint`` restores the adapter, optimizer moments,
-    LR position, EMA shadow, sampler cycle and RNG streams from a ``checkpoint-<N>`` bundle, and
-    the loop runs steps N+1..train_steps (the TARGET TOTAL). A stop-and-save and every
-    ``cfg.save_steps`` interval write such a bundle."""
+    """Resumes from cfg.resume_from_checkpoint; train_steps is the target total, not extra steps."""
     cfg = config.normalized()
     spec = _SPECS.get(cfg.resolved_family)
     if spec is None:
@@ -2256,12 +2122,7 @@ def _train_dit(
 
 
 def _make_optimizer(params, lr):
-    """8-bit AdamW (bitsandbytes) when available -- half the optimizer state, no accuracy regression
-    for LoRA -- else torch AdamW, fused on CUDA (with a fallback when this build/device lacks the
-    fused kernel). UNSLOTH_DIFFUSION_FP32_OPTIM forces plain (non-fused) AdamW, as it does for
-    SDXL: the accuracy guard wants the reference optimizer, and a host where the override means
-    one thing for one trainer and nothing for the other cannot answer "can this checkpoint be
-    resumed here" before the run starts."""
+    """UNSLOTH_DIFFUSION_FP32_OPTIM forces plain AdamW in both trainers, so a resume can be checked."""
     import torch
 
     if os.environ.get("UNSLOTH_DIFFUSION_FP32_OPTIM", "") in ("1", "true"):
@@ -2282,11 +2143,7 @@ def _make_optimizer(params, lr):
 
 
 def _free_text_encoders(pipe) -> None:
-    """Drop every conditioning module the pipeline holds once the embeddings are precomputed, so
-    they do not sit in VRAM during training. ``connectors`` is LTX-2's second conditioning stage
-    (~2.7 GB) and belongs here for the same reason as the text encoders; ``audio_vae`` /
-    ``vocoder`` are LTX-2 decode-side modules the trainer never touches. Absent attributes are
-    skipped, so this is a no-op for the image families."""
+    """Frees conditioning modules once embeddings are precomputed, so they do not sit in VRAM."""
     for attr in (
         "text_encoder",
         "text_encoder_2",

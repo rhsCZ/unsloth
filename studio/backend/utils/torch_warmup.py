@@ -207,11 +207,7 @@ def _warm_inference_backend() -> None:
 
 
 def _prime_nvlink_topology() -> Optional[threading.Thread]:
-    """Build the P2P gate's interconnect matrix off the load path. Returns the thread,
-    for tests to join.
-
-    Fire and forget, or its timeouts delay every stage behind it. Success-only: a miss cached
-    this early keeps P2P off for the life of the process (#10613)."""
+    """Runs off the load path and only caches success, since an early miss keeps P2P off for the process."""
 
     def _probe() -> None:
         try:
@@ -254,11 +250,7 @@ def _dynamo_gate_timeout() -> float:
 
 
 def gate_torch_stack_import(reason: str, log = None) -> bool:
-    """Finish ``import torch._dynamo`` before ``reason`` imports anything that reaches it. True iff imported.
-
-    ``unsloth_zoo``, ``torchao`` and ``diffusers`` enter the dynamo / inductor import cycle at
-    ``torch._inductor``; racing the warm inside ``import torch._dynamo`` takes the two package locks
-    in opposite order, and CPython's deadlock detector leaves a half-built module in sys.modules."""
+    """A racing torch._dynamo import can deadlock on package locks and leave a half-built module."""
     if _dynamo_done:
         return True
     if os.environ.get(DYNAMO_GATE_DISABLE_ENV_VAR) == "1":
@@ -271,15 +263,7 @@ def ensure_dynamo_imported(
     reason: Optional[str] = None,
     timeout: Optional[float] = None,
 ) -> bool:
-    """Finish ``import torch._dynamo`` on ONE thread. True iff dynamo is importable.
-
-    ``_dynamo`` is a LAZY submodule, so ``torch._dynamo.X`` hands back a still-initialising
-    module: ``.config`` binds early and ``.utils`` late, and a read in between raises
-    ``partially initialized module ... has no attribute 'utils'`` (#10350, #10963). Ordinary
-    loads open that window, not torch.compile: ``diffusers.hooks`` evaluates
-    ``@torch.compiler.disable()`` at class-body time. Wins only by getting there first.
-
-    ``timeout`` (seconds, None = forever) bounds a wait on another importer; False on expiry."""
+    """Finishes torch._dynamo on one thread; it is lazy, so an early read sees a half-initialized module."""
     global _dynamo_done
     if _dynamo_done:
         return True
@@ -326,11 +310,7 @@ def ensure_dynamo_imported(
 
 
 def close_dynamo_import_window(log) -> bool:
-    """``ensure_dynamo_imported()`` plus the breadcrumb, for a caller about to import diffusers.
-
-    `import diffusers` is itself a dynamo importer, so every media load path owes this call in
-    front of its first one. A warning, not a retry: a process that lost the race does not
-    recover. Wrap the IMPORT of this module too, since it reaches a private CPython name."""
+    """Call before importing diffusers, which is itself a dynamo importer and cannot recover a lost race."""
     imported = ensure_dynamo_imported(log = log, reason = "diffusers import")
     # Not nested in the dynamo gate: the background import it waits on reaches torch._dynamo.
     claim_media_import_window(log)
@@ -448,10 +428,7 @@ def _warm_after(previous: threading.Thread, epoch: Optional[int]) -> None:
 
 
 def start_background_warm() -> bool:
-    """Start the warm thread once. Returns True iff this call started it.
-
-    Runs on every host, torch or not: stage one is hardware detection, which feeds /api/health's chat_only. A FINISHED thread from an earlier lifespan does not count as one already running: reset_background_warm() declines mid-warm, so a shutdown leaves the object in place and treating that as "already started" skips the warm over hardware state the same shutdown cleared.
-    """
+    """A finished thread from an earlier lifespan does not count; shutdown cleared the state it warmed."""
     global _thread
     if os.environ.get(DISABLE_ENV_VAR) == "1":
         return False
@@ -481,12 +458,7 @@ def start_background_warm() -> bool:
 
 
 def reset_background_warm() -> bool:
-    """Let a later lifespan in this process start a fresh warm. True iff reset.
-
-    The same app can start twice, and shutdown clears the hardware state the first warm produced, so leaving the finished thread in place hands detection back to the first request, which is the stall this module removes.
-
-    Declines while the previous warm runs, so two warms never share the same imports; detection self-heals then, because /api/health kicks start_background_detection().
-    """
+    """Declines while the previous warm still runs, so two warms never share the same imports."""
     with _start_lock:
         thread = _thread
         if thread is not None and thread.is_alive():
@@ -519,12 +491,7 @@ _diffusers_prewarmed = False
 
 
 def _a_local_model_would_load_through_diffusers() -> bool:
-    """Whether any indexed media model would actually load through DIFFUSERS on this host.
-
-    Presence alone is the wrong question: a CPU or MPS host with a native binary, or
-    ``UNSLOTH_DIFFUSION_ENGINE=sd_cpp``, routes a supported GGUF to sd.cpp and imports no
-    diffusers. Family detection is pick-aware because a local GGUF can name it only in the
-    FILENAME."""
+    """A GGUF routed to sd.cpp imports no diffusers, so routing matters as well as presence."""
     from core.inference.diffusion_engine_router import (  # noqa: PLC0415
         ENGINE_DIFFUSERS,
         predict_engine,
@@ -557,10 +524,7 @@ def _a_local_model_would_load_through_diffusers() -> bool:
 
 
 def _is_native_video_pick(pick) -> bool:
-    """Whether *pick* is the one video combination that never imports diffusers.
-
-    ``VideoBackend.load_pipeline`` returns through ``_run_load_h3_native`` before its own
-    ``import diffusers``; every other video load reaches that import."""
+    """The one video load that returns before its diffusers import; all other video loads reach it."""
     from core.inference.video_families import detect_video_family  # noqa: PLC0415
     from core.inference.video_minimax_h3 import is_h3_native  # noqa: PLC0415
 
@@ -623,16 +587,8 @@ def _prewarm_quant_probe() -> None:
 
 
 def prewarm_diffusers_if_image_models_exist() -> bool:
-    """Import diffusers off the first image load. True iff this call did the import.
-
-    Gated on the install having a local image or video model, so a chat-only or a
-    training-only user never pays it. The gate itself is stdlib only.
-
-    Called from the POST-warm worker, after ``join_background_warm()``, so it cannot delay a
-    warm stage or the socket bind. Imports inside the media import window; skips once a load
-    has claimed it.
-
-    Never fatal, and opt out with ``UNSLOTH_STUDIO_DISABLE_DIFFUSERS_PREWARM=1``."""
+    """Runs after the warm joins so it cannot delay a stage; skipped once a load claims the import
+    window."""
     global _diffusers_prewarmed
     if _diffusers_prewarmed:
         return False

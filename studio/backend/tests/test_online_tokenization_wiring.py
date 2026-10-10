@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`UnslothTrainer._configure_online_tokenization`: what it changes, and when.
-
-The gate itself is covered by ``test_online_tokenization.py``; this is the
-wiring. The method must apply all four parts of the mechanism or leave
-``config_args`` and the dataset wrapper exactly as it found them: half-applied is
-the dangerous state, since ``skip_prepare_dataset`` without the lazy transform
-trains on raw strings. Every degradation path gets a case, driven through the
-real method, because "silently takes the old path" is a claim about side effects.
-"""
+"""Wiring of _configure_online_tokenization: all four parts apply or none, never half-applied."""
 
 import contextlib
 import json
@@ -30,12 +22,7 @@ _STUBBED: list = []
 
 
 def _stub_if_missing(name, attrs):
-    """Stand in for a dep the CPU-only test job does not install.
-
-    The real one wins whenever it imports, same rule and same ``__spec__ = None``
-    (which quiets the trainer's namespace-shadow guard) as
-    ``test_training_preflight.py``.
-    """
+    """Stub a dep the CPU-only job lacks; real module wins, and __spec__ = None quiets the shadow guard."""
     if name in sys.modules:
         return
     import importlib
@@ -80,12 +67,7 @@ ROWS = MIN_ROWS_FOR_ONLINE + 5
 
 
 def _single_process_launch(monkeypatch):
-    """Clear every launcher variable, so a run reads as Unsloth's own launch.
-
-    Same helper and same constant tuples as ``test_training_preflight.py``: the
-    two must not disagree about what counts as a launcher, or one file starts
-    passing on a set of variables the other never clears.
-    """
+    """Clear launcher env vars; must match test_training_preflight.py so both count the same launchers."""
     from core.training.dataset_bounds import WORLD_SIZE_ENV_FILES, WORLD_SIZE_ENV_VARS
     for name in WORLD_SIZE_ENV_VARS + WORLD_SIZE_ENV_FILES:
         monkeypatch.delenv(name, raising = False)
@@ -93,14 +75,7 @@ def _single_process_launch(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _no_ambient_launcher(monkeypatch):
-    """Every case in this file starts from a single-process launch.
-
-    The pass count is read out of the environment, so without this a case's
-    result depends on whatever the runner's shell happens to export, and on
-    whichever earlier test last set one of these. Both were live here: the file
-    already sets ``WORLD_SIZE`` in one test, and pytest's monkeypatch undo only
-    covers variables a test itself touched.
-    """
+    """Start each case single-process: the pass count reads env vars that earlier tests can leave set."""
     _single_process_launch(monkeypatch)
 
 
@@ -467,12 +442,7 @@ def test_a_per_node_torchrun_scales_the_rows_a_step_consumes(monkeypatch):
 
 
 def test_an_mlx_hostfile_scales_the_rows_a_step_consumes(monkeypatch, tmp_path):
-    """mlx.launch's ring backend advertises its ranks as a JSON file rather than a
-    number; its NCCL backend is CUDA-only, so this path is reachable.
-
-    Written in the shape the ring backend really uses: the outer list has one entry
-    per rank, and each entry is that rank's own list of addresses, because a pair of
-    peers may hold several connections."""
+    """mlx ring hostfile: one address list per rank, since a peer pair may hold several connections."""
     hostfile = tmp_path / "hosts.json"
     hostfile.write_text(
         json.dumps([[f"10.0.0.{i}:9000", f"10.0.0.{i}:9001"] for i in range(8)]),
@@ -491,13 +461,7 @@ def test_an_inline_hosts_payload_scales_the_rows_a_step_consumes(monkeypatch):
 # Only values that RAISE: "0"/"-4" already gave 1 under the old max(1, int(...)).
 @pytest.mark.parametrize("junk", ["auto", "", "eight"])
 def test_a_junk_world_size_no_longer_disables_online_tokenization(monkeypatch, junk):
-    """The direction this used to fail in was not the obvious one.
-
-    `int("auto")` raises, the enclosing `except` leaves the pass count unresolved,
-    and an unresolved step-capped run reads as infinite passes, so a launcher that
-    exported a non-numeric WORLD_SIZE silently turned the feature OFF on a run that
-    qualifies. Unusable values are a single process, which is what this host is.
-    """
+    """Non-numeric WORLD_SIZE means one process; unresolved, a step-capped run reads as infinite passes."""
     monkeypatch.setenv("WORLD_SIZE", junk)
     original = _dataset()
     decision, config_args, wrapper, trainer = _run(
@@ -551,11 +515,7 @@ def _captured_logger(monkeypatch):
 
 
 def test_a_multi_rank_launch_names_the_variable_that_claimed_the_ranks(monkeypatch):
-    """A size variable left behind by an earlier mpirun, or inherited from an
-    interactive srun, reads here as a multi-rank launch on a machine running one
-    process, and its whole visible effect is this run being told it makes several
-    passes. Name the variable so that verdict is not silent. The merged row bound
-    reads the same variables, so the environment is trusted either way."""
+    """Log must name the leftover size variable that claimed several ranks on a one-process host."""
     lines = _captured_logger(monkeypatch)
     _eight_ranks(monkeypatch, OMPI_COMM_WORLD_SIZE = "8")
     reported = [line for line in lines if "data-parallel processes" in line]

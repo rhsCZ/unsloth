@@ -43,17 +43,7 @@ _LOWEST_SIGNALABLE_PID = 2
 
 
 def is_signalable_pid(pid: object) -> bool:
-    """Whether `pid` names a process that may be recorded or signalled.
-
-    `bool` is excluded explicitly: it is an `int` subclass, so True would
-    otherwise read as pid 1.
-
-    Public because the floor has to hold at every signalling boundary in Unsloth,
-    not just this module's. It was written out by hand in four places at first,
-    and the site that got missed was missed precisely because "who enforces the
-    floor" was a question you had to answer by reading rather than by grepping
-    for one name.
-    """
+    """Excludes bool, since True would read as pid 1; public so every signalling site shares this floor."""
     return isinstance(pid, int) and not isinstance(pid, bool) and pid >= _LOWEST_SIGNALABLE_PID
 
 
@@ -123,11 +113,7 @@ def _is_windows() -> bool:
 
 
 def initialize_parent_lifetime() -> None:
-    """Install the parent-death reaper once, as early as possible at startup.
-
-    Windows builds and holds the Job Object; POSIX has nothing to install (the
-    guarantee is per-child via preexec). Idempotent and never raises.
-    """
+    """Idempotent and never raises; on Windows it holds the Job Object, while POSIX installs nothing."""
     global _initialized
     with _lock:
         if _initialized:
@@ -145,12 +131,7 @@ def initialize_parent_lifetime() -> None:
 
 
 def _pdeathsig_available() -> bool:
-    """Whether PR_SET_PDEATHSIG itself works, so the status is not a claim we
-    cannot keep.
-
-    seccomp can filter prctl on its first argument, so a successful read-only
-    GET proves nothing about SET. SET is therefore exercised for real, with the
-    value it already holds: a no-op that still goes through the same filter."""
+    """A read-only PR_GET proves nothing under seccomp, so the probe does a no-op PR_SET instead."""
     _PR_GET_PDEATHSIG, _PR_SET_PDEATHSIG = 2, 1
     try:
         import ctypes
@@ -292,14 +273,7 @@ def bind_current_process_to_parent_lifetime() -> None:
 
 
 def allow_child_processes() -> None:
-    """Allow the current multiprocessing worker to spawn children (#9094).
-
-    Children inherit the cleared flag, since `Process.__init__` copies `_config`.
-    A grandchild that does not pass `daemon =` itself is therefore non-daemonic,
-    and `_exit_function` joins those unconditionally and without a timeout, so it
-    would hold the worker's exit open forever. Everything a worker reaches today
-    passes `daemon = True`; keep it that way.
-    """
+    """Grandchildren inherit the cleared flag and hang worker exit unless they pass daemon = True."""
     try:
         from multiprocessing import process as multiprocessing_process
         config = getattr(multiprocessing_process.current_process(), "_config", None)
@@ -357,13 +331,7 @@ _forks_in_flight = 0
 
 
 def _suspend_native_caches() -> None:
-    """Before a fork: free the FFmpeg scaler PyAV 19+ caches for every thread that ever reformatted a frame.
-
-    A child that runs Python before exec (a preexec_fn spawn, or a bare os.fork) goes through PyOS_AfterFork_Child,
-    which frees the other threads' state. A scaler freed there waits on FFmpeg slice threads that do not exist in
-    the child, so the child never execs and the spawner, with every launch queued behind it, blocks forever. Freed
-    here instead, where those threads still run. The replacement drops writes until the fork is done: freeing the
-    old scalers releases the GIL, and a reformat on another thread must not cache a new one into this fork."""
+    """Frees PyAV's FFmpeg scaler caches before a fork; a child would hang waiting on threads it lacks."""
     global _forks_in_flight
     _forks_in_flight += 1
     try:
@@ -422,13 +390,7 @@ def _adopt_fork_reset() -> None:
 
 
 def spawn_on_lifetime_thread(spawn: Callable[[], object]) -> object:
-    """Run *spawn* (a Popen call) on a thread that lives as long as the process.
-
-    PR_SET_PDEATHSIG fires when the forking THREAD exits, not the process, so a
-    child spawned from a short-lived worker dies as soon as that worker returns.
-    Forking from one process-lifetime thread restores "die with the parent
-    process". Non-Linux arms no per-thread signal, so it spawns directly.
-    """
+    """PR_SET_PDEATHSIG fires when the forking thread exits, so spawn from a process-lifetime thread."""
     if not _is_linux():
         return spawn()
     global _spawner
@@ -489,12 +451,7 @@ class _Spawner:
 
 
 def child_popen_kwargs(preexec_fn: Optional[Callable[[], None]] = None) -> dict:
-    """Popen kwargs that bind a long-lived child to the parent's lifetime.
-
-    On Linux returns a composed ``preexec_fn`` (PDEATHSIG + any existing one);
-    empty elsewhere (Windows is covered by the inherited Job Object). Merge via
-    ``**child_popen_kwargs()`` alongside the caller's existing kwargs.
-    """
+    """The returned preexec_fn sets PDEATHSIG on Linux; Windows relies on the inherited Job Object."""
     if _is_linux():
         # getpid() in the spawner lets the child tell reparenting from a pid-1 parent.
         return {"preexec_fn": compose_preexec(preexec_fn, os.getpid())}
@@ -507,12 +464,7 @@ def _recorded_identity(value: object) -> "Optional[str]":
 
 
 def _same_identity(recorded: str, current: str) -> bool:
-    """Whether two identities describe the same process.
-
-    Records written before this carried ``starttime:comm`` on Linux, so compare
-    the start time alone there. Elsewhere the whole string is generated by the
-    same code and colons are part of the value (Windows FILETIME, macOS lstart).
-    """
+    """Old Linux records hold starttime:comm; compare only the start time there, else the whole string."""
     # A malformed record must not raise, or one bad file aborts the whole sweep.
     if not isinstance(recorded, str) or not isinstance(current, str):
         return False
@@ -587,12 +539,7 @@ def _pid_identity(pid: int) -> Optional[str]:
 
 
 def forget_pid(pid: Optional[int]) -> None:
-    """Stop tracking a child the owner has reaped, so terminate_all never
-    signals a recycled pid.
-
-    Kept when its process group still has members: the shim can exit before the
-    visual server it started, and this record is the only handle on that group.
-    """
+    """Kept while its process group has members: the shim can exit before the server it started."""
     if not pid:
         return
     with _record_lock:
@@ -606,12 +553,7 @@ def forget_pid(pid: Optional[int]) -> None:
 
 
 def _group_has_members(pgid: object) -> bool:
-    """Whether the group still holds a process that is actually running.
-
-    ``killpg(pgid, 0)`` alone is not enough: a leader that has exited but has
-    not been waited on is still a member, so a group whose every member is a
-    zombie would read as alive and keep its record forever.
-    """
+    """killpg(pgid, 0) also succeeds for zombie-only groups, which would then keep their record forever."""
     # killpg(1, 0) always succeeds, so without the floor a poisoned pgid retries forever.
     if not _signalable(pgid) or _is_windows() or not hasattr(os, "killpg"):
         return False
@@ -629,11 +571,7 @@ def _group_has_members(pgid: object) -> bool:
 
 
 def _windows_creation_time(identity: "Optional[str]") -> "Optional[int]":
-    """A Windows identity string read back as one 64-bit FILETIME, or None.
-
-    `_pid_identity` writes the creation time as ``high:low`` there, and the
-    descendant walk has to order two of them, not just compare them for equality.
-    """
+    """Parses the high:low identity to one 64-bit FILETIME, so creation times can be ordered."""
     if not isinstance(identity, str):
         return None
     parts = identity.split(":")
@@ -646,19 +584,7 @@ def _windows_creation_time(identity: "Optional[str]") -> "Optional[int]":
 
 
 def _windows_identity_of_handle(kernel32, handle) -> "Optional[str]":
-    """The creation-time identity of the process an OPEN HANDLE refers to, or None.
-
-    A handle pins the process it was opened on: the kernel keeps the object alive while the
-    handle is held, and the pid can be recycled without the handle ever following it. So a
-    check made through the handle answers about the same process every later call on that
-    handle acts upon, which a check made on the pid does not -- between a pid-based check
-    and the `OpenProcess` that follows it, the process can exit and its number be taken by
-    a stranger, and the handle then refers to the stranger.
-
-    Written in the same ``high:low`` spelling as `_pid_identity`, so the two are directly
-    comparable. None when the times cannot be read, which the caller must treat as "not
-    proven", never as a match.
-    """
+    """Read through an open handle, which pins the process; None means not proven, never a match."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -679,21 +605,7 @@ def _windows_identity_of_handle(kernel32, handle) -> "Optional[str]":
 
 
 def _windows_terminate_through_a_handle(pid: int, identity: "Optional[str]") -> "Optional[bool]":
-    """Kill *pid* through a handle that was proved to be the right process, or say why not.
-
-    ``True`` the process was signalled, ``False`` the handle is provably somebody else (or
-    cannot be identified while an identity was supplied), ``None`` no handle could be had at
-    all and the caller has to fall back.
-
-    A pid is a NAME, and Windows frees it the moment the process exits; ``taskkill /PID`` and
-    ``os.kill`` both resolve that name inside themselves, so anything they are told is
-    re-looked-up after the caller's check and can land on a replacement. A handle is the
-    process, not its name: once opened it refers to the same object until it is closed, so a
-    creation time read through it describes exactly what ``TerminateProcess`` on it will end.
-
-    Nothing is killed without proof. No identity to compare against means this stands down
-    and lets the caller decide, because the alternative is signalling a number.
-    """
+    """Kills via a proven handle, since taskkill /PID and os.kill re-resolve the reusable pid name."""
     if identity is None:
         return None
     try:
@@ -727,15 +639,7 @@ def _windows_terminate_through_a_handle(pid: int, identity: "Optional[str]") -> 
 
 
 def _windows_filetime_now() -> "Optional[int]":
-    """The wall clock as one 64-bit FILETIME, comparable with a process creation time.
-
-    `GetProcessTimes` reports creation as a UTC FILETIME and `GetSystemTimeAsFileTime`
-    reads the same clock, so a candidate whose creation time is LATER than a reading taken
-    before a snapshot cannot be a process that snapshot listed. That is the only way to
-    reject a number recycled between the snapshot and the identity read, where the identity
-    describes the replacement rather than the entry. None when it cannot be read, which
-    leaves the walk exactly as it was.
-    """
+    """Wall clock as a FILETIME; a process created after a pre-snapshot reading was not in the snapshot."""
     if not _is_windows():
         return None
     try:
@@ -753,13 +657,7 @@ def _windows_filetime_now() -> "Optional[int]":
 
 
 def _windows_child_pid_map() -> "Optional[dict[int, list[int]]]":
-    """Parent pid -> its children, from a Toolhelp snapshot. None when unreadable.
-
-    ctypes rather than psutil, and a snapshot rather than a `wmic` or PowerShell
-    child, for the same reason as the rest of this module: this runs on the unload
-    and shutdown paths, psutil is an optional extra here, and spawning a helper is
-    the thing being cleaned up after.
-    """
+    """Uses ctypes and a Toolhelp snapshot, not psutil or a helper, since teardown must not spawn one."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -876,20 +774,7 @@ def _child_pid_map() -> "Optional[dict[int, list[int]]]":
 def collect_descendants_known(
     pid: "Optional[int]",
 ) -> "tuple[list[tuple[int, Optional[str]]], bool]":
-    """`(descendants, known)`, where `known` is False when the walk could not be made.
-
-    An empty list has two very different meanings and collapsing them is a leak.
-    `_windows_child_pid_map` returns None when the Toolhelp snapshot cannot be taken or
-    the walk fails partway, and the root's own identity can be unreadable too; either way
-    the answer is "this process's children are not enumerable right now", not "it has
-    none". Read as "none", the unload terminates the leader, sees no survivors, and
-    deletes the record and the pidfile -- which is the exact leak this collector exists to
-    prevent, arrived at through a failed snapshot instead of through a reparent.
-
-    `collect_descendants` keeps returning the list alone, because the callers that only
-    want something to signal are right not to care. The unload does care: it is about to
-    drop the last handle on whatever it did not see.
-    """
+    """known is False when the walk failed; an unreadable walk must never be read as no children."""
     if not pid:
         return [], True
     # Windows never clears a stale creator pid, so check each candidate against its own
@@ -914,15 +799,7 @@ def collect_descendants_known(
 
 
 def collect_descendants(pid: "Optional[int]") -> "list[tuple[int, Optional[str]]]":
-    """A pid's descendants and their start-time identities.
-
-    Read this BEFORE signalling the parent: its children are reparented the
-    moment it exits, and nothing then ties them back to it. The identities let
-    the kill below skip a number that has since moved on to something else.
-
-    See `collect_descendants_known` for the caller that also needs to know whether the
-    walk could be made at all.
-    """
+    """Call before signalling the parent, since its children are reparented on exit and lose the link."""
     return collect_descendants_known(pid)[0]
 
 
@@ -934,26 +811,7 @@ def _windows_collect_descendants(pid: int) -> "list[tuple[int, Optional[str]]]":
 def _windows_collect_descendants_known(
     pid: int, identity: "Optional[str]" = None
 ) -> "tuple[list[tuple[int, Optional[str]]], bool]":
-    """`collect_descendants` for the Toolhelp table, which needs an ancestry proof.
-
-    Each candidate is ordered against ITS OWN immediate parent's creation time, carried
-    down the walk, not only against the root's. The root floor alone is not enough and the
-    difference is a real machine: the root starts at t=100, a stranger U starts at t=200
-    under some unrelated pid P, P exits, at t=300 P's number is reused for a genuine
-    Unsloth child, and U still records P as its creator because Windows never clears that
-    field. U is later than the root, so a root-only floor admits it, and the survivor sweep
-    then hands it to ``taskkill /PID <U> /T /F``, which takes down U and everything under
-    it. Ordering U against P's CURRENT creation time rejects it: a process cannot predate
-    the process that created it.
-
-    Without a readable floor this claims nothing at all, and a candidate whose own identity
-    cannot be read is skipped along with its subtree: a forced tree kill is not a place to
-    guess. Skipping it also makes the walk INCOMPLETE, and says so. A live pid the table
-    listed and this could not classify is a candidate, not an absence: reporting the walk as
-    complete without it let the caller terminate the leader, see no survivors and delete the
-    record and the pidfile while that child was still running. Not signalled either way --
-    unknown is not a licence to kill -- but never silently dropped.
-    """
+    """Orders each child against its own parent's creation time, since Windows keeps stale creator pids."""
     # Use the caller's identity, not a fresh read: a reused root pid would root the walk at a stranger.
     if identity is not None and not _provably_the_same(pid, identity):
         return [], False
@@ -1018,19 +876,7 @@ def _survivors_after_settling(
     still_a_survivor: "Callable[[int, Optional[str]], bool]",
     grace: float = _KILL_SETTLE_SECONDS,
 ) -> "list[tuple[int, Optional[str]]]":
-    """Which of *candidates* are still survivors once the kills have had *grace* to land.
-
-    Polled rather than read once, and bounded rather than waited out: a pid drops out once
-    `_KILL_SETTLE_CONFIRMATIONS` passes in a row agree it has gone, and a pid that is
-    genuinely stuck is still reported, which is the property the callers depend on. Order
-    is the callers' (deepest first) and is preserved.
-
-    The predicate is re-evaluated only for pids still in the list, so the expensive half of
-    it -- reading an identity to prove the number has not been recycled -- runs only for
-    the ones that look alive, which after a successful kill is none of them. A pid that
-    reads as gone and then as alive again starts its count over: agreements have to be
-    consecutive, because the point of the count is to survive a probe that lied once.
-    """
+    """A pid drops out after _KILL_SETTLE_CONFIRMATIONS consecutive agreements that it has gone."""
     if not candidates:
         return []
     agreed: "dict[int, int]" = {}
@@ -1060,18 +906,7 @@ def _survivors_after_settling(
 
 
 def confirm_pid_exited(pid: "Optional[int]", grace: float = _KILL_SETTLE_SECONDS) -> bool:
-    """Whether *pid* can be SHOWN to have exited, with the grace the read-backs use.
-
-    For an owner that has just signalled a pid (or the process group it leads) and has to
-    decide whether the record and the pidfile naming it may be dropped. Asking on the next
-    line answers "the kill has not finished yet" and keeps a record for a process that is
-    already gone.
-
-    False for anything this module will not signal, including a pid it cannot read. Not
-    True: this answer is what authorises deleting the only handles on a process, so
-    "cannot tell" has to come out on the side that keeps them, the same way every other
-    unprovable case in this module does.
-    """
+    """Waits out the settle grace; False when unknown, since True authorises dropping the last handles."""
     if not _signalable(pid):
         return False
     return not _survivors_after_settling(
@@ -1084,20 +919,7 @@ def _settle_after_the_kill(
     group_leader: bool,
     grace: float = _KILL_SETTLE_SECONDS,
 ) -> None:
-    """Wait, briefly, for a SIGKILL that has just been sent to actually land.
-
-    `_posix_terminate_one` ends on `killpg`/`kill` with SIGKILL and returns, and every one
-    of its callers reads liveness on the next line: `terminate_all` decides whether to
-    write the record straight back, `_reap_one_record` decides whether the file on disk may
-    be deleted, `terminate_pid` decides whether the pid may be forgotten. Measured here,
-    all three answered "still running" for a child that was gone half a second later, and
-    the record survived the process by a launch. Settling once HERE fixes every one of
-    them, and is the POSIX counterpart of the read-back grace on the Windows tree kill.
-
-    Only reached when the SIGTERM timeout was exhausted -- a child that exits politely
-    returns from the poll loop above and never gets here -- so this costs nothing on the
-    ordinary teardown.
-    """
+    """Waits briefly after SIGKILL, since an immediate liveness read still sees the child running."""
 
     def _still_there(candidate: int, _identity: "Optional[str]") -> bool:
         # A leader can be gone while its session is not.
@@ -1111,25 +933,7 @@ def _settle_after_the_kill(
 def terminate_descendants(
     collected: "list[tuple[int, Optional[str]]]", timeout: float = 5.0
 ) -> "list[tuple[int, Optional[str]]]":
-    """SIGTERM then SIGKILL what `collect_descendants` found, still alive.
-
-    The POSIX counterpart of the Windows ``taskkill /T``: a child that shares
-    this process's group cannot be reached with killpg, so its own children are
-    signalled by pid instead.
-
-    Returns the survivors as ``(pid, identity)``, with the identity this sweep COLLECTED
-    rather than whatever the number reads as afterwards. The pair is what the caller needs:
-    a pid it is about to record can have exited and been recycled since, and a bare number
-    would then name a stranger. Still running when it gives up is not the same as the
-    empty list. A kill can fail (the process is protected, the handle is denied, the
-    exit is simply slow), and reporting the attempt as the outcome is what lets the
-    caller delete the record and the pidfile out from under a worker that is still
-    holding GPU memory or a port, leaving nothing that names it.
-
-    Reporting only: adopting the survivors here would put a global record write on the
-    POSIX teardown path, where the group reaper already covers them and nothing asked for
-    it. The caller that is about to drop the last handle on them is the one that adopts.
-    """
+    """Returns survivors with the collected identity; a survivor must never read as an empty list."""
     if not collected:
         return []
     if _is_windows():
@@ -1177,19 +981,7 @@ def _windows_kill_below(
     depth: int,
     anchor_identity: "Optional[str]" = None,
 ) -> "Optional[bool]":
-    """Kill everything under *anchor*, capturing each subtree before removing its root.
-
-    True when something was signalled, False when there was nothing left to signal, and
-    None when the walk could not be done at all -- which is not the same as an empty tree
-    and must not be reported as one.
-
-    The capture is repeated at every level rather than taken once at the top, and that is
-    the whole point: between the snapshot and the kill there is a fifteen second taskkill
-    budget per process, and a child started in it is in no snapshot. Killing its parent
-    first severs the only link a later walk could follow to it, since Windows' parent-pid
-    field still names a process that no longer exists. So the children of a process are
-    read immediately before that process is signalled, never after.
-    """
+    """Reads each level's children just before signalling that level, so late starts are not missed."""
     if depth <= 0:
         # None, not False: the walk was not performed, so the record must survive.
         return None
@@ -1237,34 +1029,7 @@ _LATE_WALK_ROUNDS = 4
 def _windows_terminate_collected(
     collected: "list[tuple[int, Optional[str]]]",
 ) -> "list[tuple[int, Optional[str]]]":
-    """``taskkill /F`` each survivor individually, deepest first. Never ``/T``.
-
-    Windows has no process group, so once the leader has been terminated nothing
-    names its workers but this list. Identity is re-read per pid: the leader's
-    terminate ran in between, so a number here may already belong to someone else.
-
-    ``/T`` is deliberately NOT used, and that is the whole point of this function.
-    ``taskkill /T`` terminates the named process AND its child processes, and it finds
-    those children by walking the live parent-pid links -- the very links
-    ``_windows_collect_descendants`` refuses to trust. In the reused-pid case that
-    collector exists for, the stranger U is correctly kept OUT of `collected`, but U
-    still records the reused number P as its creator, so ``/T`` on P, which IS in the
-    list and IS identity-verified, rediscovers U through Windows' own walk and kills it.
-    The filter would be defeated by the kill it protects.
-
-    Reach is kept without it: each survivor is re-collected at kill time through the
-    SAME creation-time validation, so anything it started after the snapshot is killed
-    too, and anything merely linked to a recycled number is not. Losing the table means
-    killing fewer processes rather than more, which is the right way for a forced tree
-    kill to fail: a leaked worker is caught by the next sweep, and someone else's process
-    is not recoverable.
-
-    Returns the pids still running at the end. ``taskkill /F`` can fail outright (access
-    denied, a protected process) and can also report success on a process that has not
-    finished dying, so the answer is re-read from the pid rather than taken from the exit
-    status. A survivor reported here is what stops the caller from deleting the record and
-    the pidfile that are the only remaining handles on it.
-    """
+    """Uses taskkill /F per survivor, never /T, which follows stale parent-pid links to recycled pids."""
     attempted: "list[tuple[int, Optional[str]]]" = []
     unresolved: "list[tuple[int, Optional[str]]]" = []
     for pid, identity in reversed(collected):
@@ -1322,28 +1087,7 @@ def _windows_terminate_collected(
 
 
 def _windows_terminate_validated_tree(pid: int, identity: "Optional[str]" = None) -> bool:
-    """What ``taskkill /T /F`` was for, with the collector's filter kept intact.
-
-    Same contract as `_windows_terminate_tree`: True when nothing of this tree is left
-    running, False when something survived and the record naming it has to outlive the
-    call. The difference is how the tree is enumerated. ``/T`` asks Windows, which walks
-    the live parent-pid links; those links are stale by design (the creating pid is
-    recorded once and never cleared), so a stranger that merely inherited a recycled
-    number is reached and killed. `_windows_collect_descendants` is the filter that exists
-    to reject exactly that, and routing a forced kill through ``/T`` hands the rejected
-    process back to the kill anyway.
-
-    Descendants are enumerated BEFORE the root is signalled: once the root exits its own
-    identity stops being readable, and the collector needs it as the ancestry floor. The
-    root is then stopped FIRST, before the snapshot is worked through, so it cannot keep
-    extending the tree while each `taskkill` spends its budget.
-
-    A tree this cannot enumerate collapses to killing the root alone and answering False,
-    which is the same answer the ``/T`` fallback gave when taskkill was unavailable, and
-    it fails towards leaking a worker rather than towards killing a stranger. False here
-    is what keeps the record, so a later sweep still has a handle on whatever the failed
-    walk did not name.
-    """
+    """Tree kill like taskkill /T /F, but keeps the descendant filter; False if anything survives."""
     # Caller's identity, not a fresh read: a recycled leader pid would bless a stranger's tree.
     if identity is not None and not _provably_the_same(pid, identity):
         return False
@@ -1377,13 +1121,7 @@ def _still_the_same(pid: int, identity: "Optional[str]") -> bool:
 
 
 def _provably_different(pid: int, identity: "Optional[str]") -> bool:
-    """True only when the pid is provably a DIFFERENT process than it was.
-
-    The third answer `_provably_the_same` cannot give. That one folds "somebody else" and
-    "cannot tell" into the same False, which is right for deciding whether to signal and
-    wrong for deciding whether to report: a number that has moved on to a stranger is not
-    our leaked worker and must not be adopted, while one we merely cannot read might be.
-    """
+    """True only when the pid is provably a different process; an unreadable identity is not proof."""
     if identity is None:
         return False
     current = _pid_identity(pid)
@@ -1393,17 +1131,7 @@ def _provably_different(pid: int, identity: "Optional[str]") -> bool:
 
 
 def _provably_the_same(pid: int, identity: "Optional[str]") -> bool:
-    """True only when the pid is provably the SAME process it was at collection.
-
-    The fail-closed counterpart of `_still_the_same`. That one answers "is this
-    provably somebody else", which is the right question for a SIGTERM aimed at a
-    pid this process still owns a record for. It is the wrong question for the
-    Windows survivor sweep: there the answer arrives after the leader has already
-    been terminated, an unreadable identity is exactly what a pid that has been
-    recycled looks like, and the action taken is ``taskkill /T /F``, which reaches
-    everything the number now owns. So an identity that cannot be read on either
-    side leaves the process alone.
-    """
+    """Fail-closed: an identity that cannot be read on either side means the process is left alone."""
     if identity is None:
         return False
     current = _pid_identity(pid)
@@ -1477,12 +1205,7 @@ _owner_identity: Optional[str] = None
 
 
 def _own_identity() -> "Optional[str]":
-    """This process's identity, retried like a child's and then kept.
-
-    Recorded as None, any process that later reuses this pid reads as the owner
-    still running and the children this record names are never reaped. It
-    cannot change, so it is captured once rather than under the record lock.
-    """
+    """Captured once and kept: a None would make a reused pid read as this owner still running."""
     global _owner_identity
     if _owner_identity is None:
         _owner_identity = _identity_for_record(os.getpid())
@@ -1490,12 +1213,7 @@ def _own_identity() -> "Optional[str]":
 
 
 def _refreshed_identity(pid: int, identity: "Optional[str]") -> "Optional[str]":
-    """Fill in an identity the adoption could not read, while the child lives.
-
-    Recorded as None it is permanent, and neither terminate_all nor the startup
-    sweep will signal an entry it cannot verify, so that child would outlive
-    every shutdown. Written back, so this costs one probe per gap.
-    """
+    """A None identity is never signalled, so fill it in while the child lives and write it back."""
     if identity is not None or not _pid_alive(pid):
         return identity
     identity = _pid_identity(pid)
@@ -1532,11 +1250,7 @@ def _write_breadcrumb() -> None:
 
 
 def clear_breadcrumb() -> None:
-    """Drop our record after a clean shutdown.
-
-    Only when nothing is left: a child that outlived `terminate_all` still needs
-    the record, or the next startup has no way to find it.
-    """
+    """Keeps the record while any tracked child is still alive, or the next startup cannot find it."""
     with _record_lock:
         if _tracked_pids:
             _write_breadcrumb()
@@ -1594,12 +1308,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def pid_is_running(pid: "Optional[int]") -> bool:
-    """Whether a pid is a process that is still executing.
-
-    The public spelling of the liveness probe, for an owner that has to decide
-    whether a child it tried to kill is actually gone. An exited child nobody has
-    waited on is not running, so it does not count here.
-    """
+    """An exited child nobody has waited on is a zombie and does not count as running."""
     if not is_signalable_pid(pid):
         return False
     return _pid_alive(pid) and not _pid_is_zombie(pid)
@@ -1632,12 +1341,7 @@ def _pid_is_zombie(pid: int) -> bool:
 
 
 def _identity_for_record(pid: int, attempts: int = 3) -> Optional[str]:
-    """Identity to persist for *pid*, retried while it is still running.
-
-    A `ps` that timed out once would otherwise be recorded as "no identity",
-    and an entry with no identity is never signalled, so that child survives
-    every later launch.
-    """
+    """Retries, since an identity recorded as None means the entry is never signalled."""
     import time
 
     for attempt in range(attempts):
@@ -1657,26 +1361,7 @@ def adopt_pid(
     *,
     from_snapshot: bool = False,
 ) -> None:
-    """Track a child (e.g. a multiprocessing worker started after the parent job
-    was set up) and, on Windows, assign it to the job as belt-and-suspenders.
-    Tolerates a None or already-exited pid.
-
-    *identity* is the creation-time identity the CALLER already established for this pid.
-    Pass it whenever the pid came from an earlier snapshot: a survivor reported by a sweep
-    can exit between the sweep's last liveness check and this call, and the number is then
-    free for anything. Without the check, that replacement is recorded as this process's
-    child and, where a job object is active, assigned to a job that kills its members when
-    the app closes. Given one, this adopts only a pid that is PROVABLY still the same
-    process, and records the identity that was verified rather than re-reading it.
-
-    ``from_snapshot`` is how a caller says that its None means "this pid's identity could not
-    be READ", which is not the same claim as omitting the argument for a child this process
-    has just spawned. The POSIX collector returns ``(pid, None)`` for a survivor it could not
-    classify, and capturing an identity now would record whatever holds the number at this
-    moment -- exactly the recycled stranger the identity check exists to keep out. A caller
-    passing pids from an earlier snapshot sets it, and an unreadable one is then not adopted
-    at all.
-    """
+    """Pids from an earlier snapshot must pass their identity, so a recycled number is never adopted."""
     # pid 1 is init: recording it turns the sweep into killing everything the user owns.
     if not _signalable(pid):
         return
@@ -1726,14 +1411,7 @@ _shutdown_latch = threading.Event()
 
 
 def mark_process_shutting_down() -> None:
-    """Latch "this process is quitting" for every spawner in it.
-
-    Each subsystem already refuses to spawn during its OWN teardown, but that state
-    lives on the object being torn down: a second LlamaCppBackend built for a helper
-    load, or the inference orchestrator, never sees it and can Popen a child after
-    terminate_all has taken its snapshot. Set once here, read everywhere, so the answer
-    does not depend on which object a spawn happens to belong to.
-    """
+    """Process-wide latch: spawners on other objects also refuse after terminate_all takes its snapshot."""
     _shutdown_latch.set()
 
 
@@ -1743,25 +1421,12 @@ def is_process_shutting_down() -> bool:
 
 
 def begin_process_lifecycle() -> None:
-    """Clear the latch for an embedded host that calls run_server again.
-
-    Quitting is terminal for a CLI run, but in-process callers (studio/backend/colab.py)
-    reuse the interpreter, and a latch that never cleared would refuse every spawn of
-    the second session.
-    """
+    """Clears the shutdown latch so an in-process host can run the server again without refusing spawns."""
     _shutdown_latch.clear()
 
 
 def terminate_all(timeout: float = 5.0) -> "list[int]":
-    """Backstop sweep over adopted pids, after per-subsystem cleanup. SIGTERM,
-    then SIGKILL the survivors after `timeout`. Idempotent and teardown-safe.
-
-    Signals only a pid whose recorded start-time identity still matches. A pid
-    that cannot be verified is left alone and kept in the record, so the startup
-    sweep can retry it rather than this process signalling a stranger.
-
-    Returns the pids still alive afterwards, so the caller can keep them in the
-    crash record rather than dropping the only handle on them."""
+    """Only signals pids whose identity matches; unverifiable ones are kept and returned as survivors."""
     survivors: "list[int]" = []
     # Snapshot under the write lock: adopt_pid can still run concurrently.
     with _record_lock:
@@ -1824,17 +1489,7 @@ def terminate_pid(
     *,
     owner_verified: bool = False,
 ) -> None:
-    """Stop one tracked child now, tree and all, and drop its record.
-
-    For an owner that has to give up on a child before its own shutdown, and
-    cannot leave it for a sweep that will not run while this process lives.
-
-    ``owner_verified`` is for a caller that still holds a live handle on the child,
-    a Popen it has not yet dropped, and so does not need this function to re-derive
-    ownership from a start time it may no longer be able to read. It only waives the
-    "cannot prove this is ours" refusal below; a pid that provably belongs to a
-    different process now is still left alone.
-    """
+    """owner_verified waives only the cannot-prove refusal; a pid provably reused is still left alone."""
     # Floor here too: _windows_terminate_tree bypasses the POSIX helper's check.
     if not _signalable(pid):
         return
@@ -1867,13 +1522,7 @@ def terminate_pid(
 
 
 def reap_recorded_children(timeout: float = 5.0) -> "list[int]":
-    """Kill children recorded by a previous Unsloth that is no longer running.
-
-    Runs once at startup, before anything new spawns. Every record in the
-    directory is considered, so an Unsloth that crashed while a sibling was
-    running is still cleaned up. A child is only signalled when its recorded
-    start-time identity still matches, so a recycled pid is never touched.
-    """
+    """Considers every record in the directory, so a crash while a sibling ran is still cleaned up."""
     directory = _breadcrumb_dir()
     if directory is None or not directory.is_dir():
         return []
@@ -1983,11 +1632,7 @@ def _reap_one_record(path, timeout: float) -> "tuple[list[int], bool]":
 
 
 def _own_process_group(pid: int) -> Optional[int]:
-    """The pid's process group, but only when it leads one (start_new_session).
-
-    A child sharing Unsloth's group must never be recorded: killing that group
-    would take Unsloth and every sibling with it.
-    """
+    """Returns the group only if the pid leads one; a shared group would take Unsloth down with it."""
     if _is_windows() or not hasattr(os, "getpgid"):
         return None
     try:
@@ -2000,13 +1645,7 @@ def _own_process_group(pid: int) -> Optional[int]:
 
 
 def _reap_orphaned_group(pgid: object, pid: int, timeout: float) -> bool:
-    """Signal a recorded group whose leader is already gone. True when it was.
-
-    Safe without an identity check: the group id is the dead leader's pid, and
-    the kernel holds that number for as long as any task still references it as
-    a process group, so it cannot have been handed to an unrelated group while
-    members remain.
-    """
+    """No identity check needed: the dead leader's pid stays reserved while the group still has members."""
     if not _signalable(pgid) or pgid != pid or _is_windows() or not hasattr(os, "killpg"):
         return False
     try:
@@ -2049,20 +1688,7 @@ def _reap_orphaned_group(pgid: object, pid: int, timeout: float) -> bool:
 
 
 def _windows_terminate_pid(pid: int, identity: "Optional[str]" = None) -> bool:
-    """``taskkill /F`` for ONE pid. No ``/T``, so no tree expansion.
-
-    The counterpart of `_windows_terminate_tree` for a caller that has already
-    established which pids it is entitled to kill and must not have Windows add to that
-    set from the live parent-pid links. Caller has verified the identity.
-
-    `identity` is that verification, carried in so the FALLBACK below can repeat it. The
-    caller's check happened before the `taskkill`, and that call has a fifteen second
-    ceiling: the process can exit inside it -- which is the case the fallback exists for --
-    and Windows is then free to hand its number to something else. Signalling on the number
-    alone at that point kills a stranger. Without an identity the fallback is skipped
-    rather than guessed at: a leaked worker is caught by the next sweep, somebody else's
-    process is not recoverable.
-    """
+    """Kills one pid with taskkill /F, no /T; the fallback re-checks identity, as the pid can be reused."""
     import subprocess
 
     # Terminate through a handle first: taskkill /PID re-resolves the number and can hit a reused pid.
@@ -2097,14 +1723,7 @@ def _windows_terminate_pid(pid: int, identity: "Optional[str]" = None) -> bool:
 
 
 def _windows_terminate_tree(pid: int) -> bool:
-    """``taskkill /T /F``. True when the whole tree is gone.
-
-    False means only the leader was signalled and its workers may still be
-    running. This is the fallback for a root with no job object, so the record
-    naming it is the only handle left on them: the caller keeps it rather than
-    reading the dead leader as the tree being gone. Caller has already verified
-    the pid's identity.
-    """
+    """Runs taskkill /T /F; False means workers may still run, so the caller must keep the record."""
     import subprocess
 
     try:

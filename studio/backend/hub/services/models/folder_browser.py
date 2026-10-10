@@ -37,11 +37,7 @@ logger = get_logger(__name__)
 def _build_browse_allowlist(
     media_roots: Optional[list[Path]] = None, drive_roots: Optional[list[Path]] = None
 ) -> list[Path]:
-    """Root directories the browser may walk (also seeds the suggestion chips): HOME, resolved HF cache dirs, Unsloth outputs/exports/root, registered scan folders, and well-known local-LLM dirs. Each is added only if it resolves to a real directory so the sandbox has no dead boundary.
-
-    *media_roots* / *drive_roots* let the caller pass already-probed
-    removable-media and Windows drive roots so they aren't scanned again (a
-    disconnected mapped drive can make each probe slow); probed here when ``None``."""
+    """media_roots and drive_roots may be pre-probed; a disconnected mapped drive makes probing slow."""
     if account_access.managed_account():
         return [workspace_root().resolve()]
     from hub.storage.scan_folders import list_scan_folders
@@ -114,14 +110,7 @@ def _build_browse_allowlist(
 
 
 def _is_path_inside_allowlist(target: Path, allowed_roots: list[Path]) -> bool:
-    """True if *target* equals or descends from any allowed root; uses ``os.path.realpath`` so symlinks cannot escape the sandbox.
-
-    A Windows drive root (``D:\\``) authorizes its descendants, but a bare POSIX
-    root (``/``) must NOT: a single ``/`` allowlist entry (e.g. a legacy scan
-    folder) would otherwise authorize every absolute path, reaching ``/var``,
-    ``/root``, etc. the denylist does not cover. Mirrors the legacy browser so
-    both treat ``/`` identically.
-    """
+    """A bare POSIX / root must not authorize its descendants, or every absolute path would pass."""
     try:
         target_real = os.path.normcase(os.path.realpath(str(target)))
     except OSError:

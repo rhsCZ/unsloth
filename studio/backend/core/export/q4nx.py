@@ -228,11 +228,7 @@ def convert_existing_gguf(
     save_directory: Path,
     token = None,
 ) -> Path:
-    """Convert a GGUF already on disk; tokenizer files come from ``base_model``.
-
-    ``base_model`` is the original (non-GGUF) Hub repo or a local model folder. Returns the
-    folder to copy over a FastFlowLM catalog model of the same family and size.
-    """
+    """Config and tokenizer files come from ``base_model``, the original non-GGUF Hub repo or folder."""
     out_dir = Path(save_directory) / f"{gguf_path.stem}-q4nx"
     found = {
         name: _fetch_base_file(base_model, name, token)

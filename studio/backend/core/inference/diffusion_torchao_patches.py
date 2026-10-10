@@ -270,12 +270,7 @@ def _peft_torchao_tensor_subclasses():
 
 
 def _guard_peft_torchao_dispatcher(original):
-    """Wrap one `dispatch_torchao` so a removed tensor subclass costs only that class.
-
-    The wrapper calls through, so a torchao shipping both classes behaves exactly as upstream.
-    Only on a failure naming one of the two does it redo upstream's work against the classes that
-    remain, so an AffineQuantizedTensor weight still gets a TorchaoLoraLinear.
-    """
+    """Calls upstream; only a failure naming a removed class redoes dispatch with the classes left."""
     warned = [False]
     # Defining module's globals, incl. an is_torchao_available patched by the sibling fix.
     namespace = getattr(original, "__globals__", None)
@@ -289,12 +284,7 @@ def _guard_peft_torchao_dispatcher(original):
         return getattr(importlib.import_module(module_name), name, None)
 
     def _redo_dispatch(classes, args, kwargs):
-        """Upstream's body, with `classes` standing in for the two-class isinstance tuple.
-
-        Arguments are read by POSITION because peft 0.19 renamed the third parameter from
-        `lora_config` to `config`, and forwarded as `target, adapter_name, **kwargs`, which is
-        exactly how peft <= 0.18 builds TorchaoLoraLinear.
-        """
+        """Reads arguments by position: peft 0.19 renamed the third parameter from lora_config to config."""
         try:
             signature = inspect.signature(original)
             bound = signature.bind(*args, **kwargs)

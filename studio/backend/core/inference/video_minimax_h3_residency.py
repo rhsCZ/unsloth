@@ -337,10 +337,7 @@ def _is_original_forward(fn: Any, module: Any) -> bool:
 
 
 def compile_blocks_below_offload_hooks(transformer: Any, logger: Any = None) -> int:
-    """Compile each streamed block's own ``forward`` instead of ``_call_impl``, so the group-offload hooks stay eager.
-
-    Traced hooks put residency and prefetch state into the guards: 40 graphs on the first render at 24 GB and more on
-    every resident-set change. ``UNSLOTH_H3_COMPILE_BELOW_HOOKS=0`` keeps the old placement."""
+    """Compile each block's forward, not _call_impl, so hook state never enters compiled guards."""
     if str(os.environ.get(H3_COMPILE_BELOW_HOOKS_ENV, "")).strip().lower() in (
         "0",
         "off",
@@ -386,11 +383,7 @@ H3_TOP_GROUP_PIN_ENV = "UNSLOTH_H3_TOP_GROUP_PIN"
 
 
 def pin_streamed_top_level_group(transformer: Any, logger: Any = None) -> bool:
-    """Give a block-streamed denoiser's top-level group a pinned host copy and the blocks' copy stream.
-
-    diffusers builds it without a stream, so every forward uploads it from pageable memory and copies it back (0.45 s
-    of a 1.5 s step at 12 GB). #12389's top-level pin skips torchao weights, which this checkpoint has.
-    ``UNSLOTH_H3_TOP_GROUP_PIN=0`` keeps diffusers' group."""
+    """diffusers builds the top group without a stream, so each forward uploads it from pageable memory."""
     if str(os.environ.get(H3_TOP_GROUP_PIN_ENV, "")).strip().lower() in ("0", "off", "false", "no"):
         return False
     from .video_minimax_h3_te import h3_te_pin_allowed
@@ -584,11 +577,7 @@ def install_pinned_swap(
     logger: Any = None,
     label: str = "component",
 ) -> bool:
-    """Make a ComponentsManager-rotated module (H3's VAEs) move by re-pointing at a pinned in-place host copy.
-
-    Stock rotation uploads from pageable memory and copies back every park (3.0 s per VAE decode at 24 GB). A device
-    move uploads from the pinned copy, a CPU move only re-points; dtype changes or mismatched tensors take stock
-    ``nn.Module.to``. ``UNSLOTH_H3_VAE_PINNED_SWAP=0`` keeps stock moves."""
+    """Stock rotation uploads from pageable memory on every park; device moves use a pinned host copy."""
     if str(os.environ.get(H3_VAE_PINNED_SWAP_ENV, "")).strip().lower() in (
         "0",
         "off",

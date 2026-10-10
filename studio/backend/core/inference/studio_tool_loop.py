@@ -188,10 +188,7 @@ _HOSTED_ARGUMENT_PLUMBING_KEYS = frozenset({"google", "_server_tool"})
 
 
 def _carries_image_sentinel(result: str) -> bool:
-    """Whether a hosted result ends in the ``__IMAGES__`` envelope itself. Validated rather than
-    matched on sight, the way the local strippers validate theirs: a fetched page that merely
-    writes the marker is prose, and reading it as a picture would report an image the turn never
-    made."""
+    """Validated, not matched on sight: a fetched page that merely writes the marker is prose."""
     _, sep, payload = result.rpartition("\n__IMAGES__:")
     if not sep:
         return False
@@ -311,10 +308,7 @@ def _signed_provider_call_for_replay(call: dict[str, Any]) -> dict[str, Any] | N
 
 
 def _argument_fragment(value: Any) -> Any:
-    """A decoded-object ``arguments`` delta as the text it would have streamed as. llama-server has
-    shipped a decoded object where a string fragment belongs (ggml-org/llama.cpp#20198).
-    Everything else passes through untouched, so ``None`` still means "announced, no arguments
-    field". Mirrors ``streamedToolCallArguments`` in ``tool-call-arguments.ts``."""
+    """llama-server sends a decoded object for arguments; re-encode as the JSON text it would stream."""
     if isinstance(value, (dict, list)):
         try:
             return json.dumps(value, ensure_ascii = False, separators = (",", ":"))
@@ -324,10 +318,7 @@ def _argument_fragment(value: Any) -> Any:
 
 
 def _delta_text(content: Any) -> str:
-    """Text of a content delta, whether it is a plain string or content parts. Structured content
-    blocks reach the client fine either way, but only the text of them belongs in the assistant
-    message replayed upstream, and dropping it there loses the turn's prose on the follow-up
-    call."""
+    """Content parts reduce to their text: only that belongs in the replayed assistant message."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -405,10 +396,7 @@ class ToolLoopPolicy:
 
 
 def _split_top_level_json_objects(text: str) -> tuple[list[str], str]:
-    """The top-level JSON objects in ``text``, and any object still unfinished. A second top-level
-    ``{`` means one slot took a second parallel call. Text that is not a run of whole objects
-    comes back whole, so a stream this was never meant for is left alone. Must agree with
-    ``splitTopLevelJsonObjects`` in ``chat/tool-call-arguments.ts``."""
+    """Must agree with splitTopLevelJsonObjects in chat/tool-call-arguments.ts, or the split diverges."""
     unsplit: tuple[list[str], str] = ([], text)
     complete: list[str] = []
     depth = 0
@@ -642,13 +630,8 @@ class _Turn:
         }
 
     def note_hosted_tool_event(self, event: Any) -> None:
-        """Record a provider-side tool call carried on ``_toolEvent``. These reach the client as
-        their own frames but are not part of the assistant message this loop replays, so the
-        follow-up request would lose whatever the provider just produced; Unsloth's own events
-        carry a top-level ``type``, so ``_toolEvent`` is unambiguously the provider's. Both
-        halves matter: ``tool_end`` generally omits ``tool_name``, and for Gemini code execution
-        the code that ran is only in the ``tool_start`` arguments, so a result recorded alone is
-        unlabelled."""
+        """Keeps provider tool calls for replay: tool_end omits the name, and the code is only in
+        tool_start."""
         if not isinstance(event, dict):
             return
         kind = event.get("type")
@@ -933,10 +916,8 @@ class _Turn:
         self.open_key_by_index[index] = open_key
 
     def _call_is_finished(self, key: Any) -> bool:
-        """Whether a call forked off an unfinished object has since closed it. Only ``length`` and
-        ``content_filter`` mark a turn truncated, so a stream that stops after ``{"a":1}{`` looks
-        complete; running the tool a second time on that lone brace is worse than dropping a call
-        the model never finished writing."""
+        """A stray trailing brace looks complete, so running it is worse than dropping a call never
+        finished."""
         if key not in self.open_tail_keys:
             return True
         closed, unfinished = _split_top_level_json_objects(
@@ -953,13 +934,8 @@ class _Turn:
         taken: set[str] | None = None,
         cards: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Every call this turn produced, with ids unique across the whole run. ``taken`` carries
-        the ids already used by earlier turns: a provider that restarts its numbering each turn,
-        and the healer (which always mints call_0 first), would otherwise put two different
-        results under one id in the conversation replayed upstream. ``cards`` carries the card
-        ids already handed out, because the client keeps one list of cards for the whole
-        response, so a second round has to keep counting rather than start again at
-        ``tool_call_0`` and reopen the first round's cards."""
+        """Ids stay unique across turns: taken and cards carry earlier ids, or restarted numbering
+        collides."""
         seen: set[str] = taken if taken is not None else set()
         painted: set[str] = cards if cards is not None else set()
         out: list[dict[str, Any]] = []
@@ -1043,11 +1019,7 @@ def _rewrite_content(payload: dict[str, Any], choice: dict[str, Any], text: str)
 def _split_turn_end(
     payload: dict[str, Any], choice: dict[str, Any], delta: dict[str, Any]
 ) -> tuple[str | None, str]:
-    """Separate a turn-ending chunk into what can be sent now and the reason to hold. Only the
-    finish_reason has to wait for the healer to resolve; the content on that same chunk does not,
-    and holding it too would let residue flushed by ``finalize`` overtake it and reverse the text
-    on the wire. So the content goes out in place and a bare finish-only chunk is what gets
-    parked."""
+    """Only finish_reason waits for the healer; content is sent now so residue cannot reorder text."""
     now_choice = {key: value for key, value in choice.items() if key != "finish_reason"}
     now_choice["delta"] = delta
     now_payload = {key: value for key, value in payload.items() if key != "choices"}
@@ -1079,13 +1051,7 @@ def _unrun_provenance(tool_name: str, round_id: int) -> dict[str, Any]:
 def _unrun_call_card(
     *, tool_name: str, tool_call_id: str, arguments: Any, result: str, provenance: dict[str, Any]
 ) -> list[str]:
-    """The open/close pair for a call this loop announces but never runs. The close on its own is
-    not enough: a call the provider streamed as a tool_calls delta already has a card, and the
-    client reconciles both events onto it by id, but a call the healer promoted out of TEXT was
-    never streamed as a delta, so a lone tool_end names a card that does not exist and the
-    adapter drops it, leaving the user told nothing at all. Opening the card first makes both
-    cases end the same way, and keeps the invariant the loop is tested on, that every tool_end
-    closes a tool_start."""
+    """A lone tool_end would name a card that was never opened, so the loop opens one before closing it."""
     shown = arguments if isinstance(arguments, dict) else {}
     return [
         _sse(
@@ -1117,10 +1083,7 @@ def _is_strict_prefix_of_declared(name: str, declared_names: set[str]) -> bool:
 def _mcp_provenance_by_id(
     turn: "_Turn", declared_names: set[str], stamped: set[str]
 ) -> dict[str, Any]:
-    """MCP provenance per call id once its whole name has streamed, once per id.
-
-    Declared catalog decides completeness (``mcp__srv__cre`` is well formed too); strict-prefix names wait for tool_start.
-    """
+    """Stamps each call id once its name is a declared tool; a strict-prefix name waits for tool_start."""
     stamps: dict[str, Any] = {}
     for call in turn.by_index.values():
         call_id = call.get("id")
@@ -1145,11 +1108,7 @@ def _status_sse(text: str) -> str:
 
 
 def _merge_usage(totals: dict[str, Any], usage: Any) -> None:
-    """Sum one turn's usage into the running total. Per-turn usage is withheld while the loop runs
-    and one summed chunk is sent at the end, so a multi-turn answer reports the same shape a
-    single-turn one does instead of a burst of partial counts the client would have to add up.
-    Detail sub-objects are summed too: reporting less than the same provider's plain stream would
-    understate cost and cache hits."""
+    """Sums detail sub-objects too, so a multi-turn total does not understate cost or cache hits."""
     if not isinstance(usage, dict):
         return
     for field, value in usage.items():
@@ -1191,10 +1150,7 @@ def _is_usage_only(payload: dict[str, Any]) -> bool:
 
 
 def _replayed_call_ids(conversation: list[dict[str, Any]]) -> set[str]:
-    """Every tool-call id already in the history this run starts from. The healer restarts its
-    counter every request, so a freshly minted call_0 collides with a stripped call_0 replayed
-    from history inside one upstream body. Seeding the ledger makes calls() rename the new one as
-    it does any repeat within a run."""
+    """Healer ids restart each request, so replayed ids are seeded to make calls() rename a collision."""
     taken: set[str] = set()
     for message in conversation:
         if not isinstance(message, dict):
@@ -1237,10 +1193,7 @@ def _with_openai_compaction(
 
 
 def _append_user_turn(conversation: list[dict[str, Any]], content: str) -> None:
-    """Append a user turn, merging into a trailing one so roles keep alternating. A turn whose only
-    calls were no-ops appends no assistant message, so a bare append would leave two user turns
-    in a row. Unlike the in-process loops this conversation is rendered by the provider, and a
-    strict server rejects that."""
+    """Merges into a trailing user turn; a strict server rejects two user turns in a row."""
     if not content:
         return
     last = conversation[-1] if conversation else None
@@ -1263,10 +1216,7 @@ def _advance_tool_stream(generator: Any, outcome: dict[str, Any]) -> Any:
 
 
 async def _drain_step_task(task: Any, cancel_event: threading.Event) -> None:
-    """Join a pending ``next(gen)`` worker before its generator is closed. Cancelling the awaiting
-    task does not stop the worker thread, and calling close() while next() is still running
-    raises "generator already executing" and skips the generator's own cleanup. Setting the
-    cancel flag lets a cancel-observing tool return, then the task is shielded until it finishes."""
+    """Closing a generator mid-next() raises and skips its cleanup, so the worker thread is joined first."""
     if task is None:
         return
     if task.done():
@@ -1596,11 +1546,8 @@ async def stream_with_studio_tools(
             # The partial this run resumed is inside the compaction now, and merging over the item would discard it.
             resumes_partial = False
 
-        # Both of these mean the turn ended before the model finished saying what it wanted: "length" hit the token
-        # ceiling, "content_filter" had the output cut by the provider's own filter. Either way a call collected so
-        # far may be half-written, so it is described rather than run. "stop" is not in this set: llama.cpp and vLLM
-        # routinely finish a perfectly good tool call with it, and refusing those would disable tool calling on
-        # exactly the self-hosted servers this path exists for.
+        # stop is exempt: llama.cpp and vLLM finish valid tool calls with it, so refusing it
+        # disables them.
         truncated = turn.finish_reason in ("length", "content_filter")
         if truncated and healer is not None and turn.healed:
             # Truncated calls must not run; give back the exact span the healer removed so the text survives.
@@ -1630,10 +1577,7 @@ async def stream_with_studio_tools(
                     provenance = _unrun_provenance(name, round_id + 1),
                 ):
                     yield card_line
-        # tool_choice "none" is an instruction, and a provider that emits a call anyway has not been authorized to run
-        # one. Withdrawing the catalog on the way out is not enough on its own: Deep Research sets "none" exactly so
-        # the scraped web text in its prompts cannot reach python or terminal, so a naive or compromised endpoint
-        # echoing a call back must not be able to execute it here.
+        # tool_choice none forbids calls, so a call echoed back anyway by the provider must not run.
         calls = [] if unrun_reason is not None else turn.calls(used_call_ids, painted_card_ids)
         if not calls:
             # Clear the badge so the client closes a refused call's card; [DONE]-only streams have no other

@@ -85,20 +85,13 @@ StopCb = Callable[[], Any]
 
 
 def _all_trainable_family_names() -> tuple[str, ...]:
-    """Every family with a trainer: the image registry's ``trainable`` families plus the video
-    families listed in ``TRAINABLE_VIDEO_FAMILIES``. The two registries are separate by design (a
-    video checkpoint must never route to an image pipeline), so the trainable view has to union
-    them."""
+    """Kept separate so video checkpoints never route to the image pipeline; this view unions both."""
     video = tuple(n for n in supported_video_family_names() if n in TRAINABLE_VIDEO_FAMILIES)
     return tuple(trainable_family_names()) + video
 
 
 def _trainable_family_spec(name: str) -> Any:
-    """The registry entry for a trainable family name, from EITHER registry, or None. Every consumer
-    that starts from a resolved family NAME rather than a repo id needs this: the image registry
-    does not know a video family, so a plain ``detect_family`` returns None for one and the
-    caller silently skips it. That is how ``ltx-2`` stayed out of ``/diffusion/info`` and out of
-    the strict pipeline gate."""
+    """Searches both registries; detect_family alone misses video families, which callers would skip."""
     from core.inference.diffusion_families import detect_family
 
     key = str(name or "").strip().lower()
@@ -109,11 +102,7 @@ def _trainable_family_spec(name: str) -> Any:
 
 
 def _refuse_untrainable_video_family(name: str) -> None:
-    """Raise for a video family Unsloth has no trainer for. Video bases are invisible to the image
-    registry, so before this gate every video checkpoint fell through
-    ``resolve_trainable_family``'s unknown-name fallback and was handed to the SDXL trainer,
-    which failed inside from_pretrained. Refuse by name instead, listing the video families that
-    do train."""
+    """Refuses untrainable video families by name; otherwise they fall through to the SDXL trainer."""
     trainable = ", ".join(sorted(TRAINABLE_VIDEO_FAMILIES))
     raise ValueError(
         f"'{name}' is a video model Unsloth can't train yet. Video LoRA training currently "
@@ -122,21 +111,7 @@ def _refuse_untrainable_video_family(name: str) -> None:
 
 
 def _component_only_repos() -> dict[str, tuple[str, str, str]]:
-    """Every repo the family registries list only as a COMPONENT source, keyed by lowercased repo id ->
-    (family name, component, that family's base repo).
-
-    A pre-cast text-encoder repo (``te_prequant_repos``, in both registries) ships a single
-    component archive: no ``model_index.json``, no VAE, no scheduler, no pipeline, so
-    ``from_pretrained`` on one can only fail. Nothing in the NAME says so: ``unsloth/LTX-2-FP8``
-    carries the ``ltx-2`` token, so the detectors claim it and the ``unsloth/*`` trust gate passes
-    it. The registries' own tables are the only authority on what a repo holds, so read them rather
-    than special-casing repo ids.
-
-    A hosted pre-quantized DENOISER (a video family's ``prequant_repos``) is the same shape: the DiT
-    alone. The image registry's identically-named table means the opposite -- a full quantized
-    pipeline mirror -- so the two are read separately. A repo ALSO registered as a base somewhere is
-    a base and never appears here.
-    """
+    """Repos the registries list only as a component source, since their names suggest a full pipeline."""
     from core.inference.diffusion_families import detect_family
     from core.inference.video_families import detect_video_family
 
@@ -169,12 +144,7 @@ def _component_only_repos() -> dict[str, tuple[str, str, str]]:
 
 
 def _refuse_component_only_repo(base_model: str) -> None:
-    """Raise for a base model that is a family's component checkpoint rather than a model. Runs from
-    ``resolve_trainable_family``, so it fires in the ``/diffusion/start`` preflight BEFORE the
-    resident GPU workloads are freed. Without it the name match resolved a real family, the trust
-    gate passed the ``unsloth/*`` repo, the gated-access probe ignored the resulting
-    ``model_index.json`` 404 (a 404 is not an access problem), and the run evicted the user's
-    loaded model before failing inside ``from_pretrained`` in the child."""
+    """Refused in the preflight, before GPU residents are freed; a component repo cannot be a base."""
     hit = _component_only_repos().get(str(base_model or "").strip().lower())
     if hit is None:
         return
@@ -198,30 +168,7 @@ def _trainable_hint() -> str:
 
 
 def _assert_family_pipeline_available(fam: Any) -> None:
-    """Refuse a family whose pipeline class the installed diffusers does not carry.
-
-    ``pyproject`` deliberately leaves the diffusers floor conditional -- diffusers dropped Python
-    3.9 in 0.37 and this project still supports 3.9, so the pin reads ``diffusers>=0.39.0 ;
-    python_version >= '3.10'`` and an unconstrained ``diffusers`` below that. A supported install
-    can therefore legitimately predate a family's pipeline class: ``Krea2Pipeline`` arrived in
-    0.39.0 and ``Flux2KleinPipeline`` in 0.37.0, while the newest diffusers a 3.9 host can resolve
-    is 0.36.0, and an already-present older one satisfies the unconstrained pin outright.
-
-    The inference paths already assert this before a load; the training preflight did not, so
-    ``/diffusion/start`` reserved the slot and freed the resident GPU workloads, and only the
-    spawned child discovered the pipeline was missing. Losing a loaded model and THEN failing is the
-    worst ordering available, so assert here, while ``resolve_trainable_family`` still runs ahead of
-    every teardown.
-
-    Not strict: an unimportable diffusers is left to ``training_pipeline_import_error``, since
-    ``resolve_trainable_family`` runs from ``normalized()``, pure config validation called in plenty
-    of places that never train.
-
-    Family-agnostic on purpose, so the image and video registries share one gate. The class comes
-    from ``family_probe_class`` rather than ``fam.pipeline_class``: a modular family's
-    ``pipeline_class`` is the generic ``ModularPipeline``, which an older diffusers exports
-    regardless, so probing it accepted a MiniMax-H3 start the listing had already hidden.
-    """
+    """Asserts the pipeline class exists before GPU residents are freed, so a missing class fails early."""
     from core.inference.diffusion_families import (
         assert_pipeline_class_available,
         family_probe_class,
@@ -230,18 +177,7 @@ def _assert_family_pipeline_available(fam: Any) -> None:
 
 
 def training_pipeline_import_error(resolved_family: str) -> Optional[str]:
-    """The reason this host cannot import ``resolved_family``'s pipeline class, or None.
-
-    The strict half of the gate above, and it belongs to the ROUTE rather than to config validation.
-    ``assert_pipeline_class_available`` deliberately absorbs an unimportable diffusers for inference
-    -- the native sd.cpp engine serves GGUF picks on a CPU or Apple host that has none. Training has
-    no such fallback: its child is an ``mp.get_context("spawn")`` process in the SAME interpreter,
-    so a diffusers that cannot be imported here cannot be imported there either, and staying silent
-    bought only the ordering this preflight exists to prevent.
-
-    Returns the message instead of raising, matching ``training_precision_preflight_error``, so the
-    route maps it to its own 400.
-    """
+    """Strict, unlike inference: the training child shares this interpreter, so a failed import is final."""
     from core.inference.diffusion_families import (
         assert_pipeline_class_available,
         family_probe_class,
@@ -258,17 +194,7 @@ def training_pipeline_import_error(resolved_family: str) -> Optional[str]:
 
 
 def resolve_trainable_family(base_model: str, model_family: Optional[str] = None) -> str:
-    """Resolve the trainer family for a base model, or raise ValueError with a clear reason.
-    Positive resolution, before anything is downloaded: a ``.gguf`` name can never be a training
-    base; an explicit ``model_family`` must name a registry family, and that family must be
-    trainable; otherwise the family is detected from the base-model name, and a KNOWN but
-    non-trainable family is rejected; a name resolving to no registry family but matching a known
-    non-trainable architecture (SD3 / PixArt / ...) is rejected; a resolved family whose pipeline
-    class the installed diffusers lacks is rejected, so an environment too old for the pick fails
-    here rather than in the child, after the GPU residents are gone; and an unclassifiable custom
-    name/path falls through to the SDXL trainer (backwards compatible -- a wrong pick still fails
-    cleanly later in from_pretrained). No pipeline assert on that last path: there is no family
-    spec to read a class off, and SDXL's pipeline predates every diffusers in play."""
+    """An unclassifiable custom name falls through to the SDXL trainer, for backwards compatibility."""
     name = str(base_model or "").strip().lower()
     # A MODULAR_BASE_FAMILIES checkout has modular_model_index.json and no model_index.json.
     local = Path(base_model).expanduser() if base_model else None
@@ -345,12 +271,7 @@ def repo_is_prequantized(base_model: str) -> bool:
 
 
 def _module_is_torchao_stub(module: Any) -> bool:
-    """True iff ``module`` is the Unsloth Windows-ROCm torchao import stub rather than the real
-    package. The stub (core/_torchao_stub.py) satisfies find_spec and even lets ``from
-    torchao.quantization import quantize_`` succeed, but the imported symbols are no-op stub
-    types, so the quantization never happens. Every stub module carries the ``_unsloth_stub``
-    sentinel, so match on it (against the stub module's own sentinel object, not identity of a
-    re-created one)."""
+    """Detects the Windows-ROCm torchao stub via its _unsloth_stub sentinel; find_spec alone cannot tell."""
     if module is None:
         return False
     sentinel = getattr(module, "_unsloth_stub", None)
@@ -364,11 +285,7 @@ def _module_is_torchao_stub(module: Any) -> bool:
 
 
 def has_functional_torchao() -> bool:
-    """True iff the real torchao quantization API is importable (not the Windows-ROCm stub).
-    ``_int8_quantize_base`` needs ``Int8WeightOnlyConfig`` + ``quantize_`` and has no runtime
-    fallback, so gate both the auto int8 pick and the advertised int8 mode on a FUNCTIONAL
-    import: a plain ``find_spec("torchao")`` is satisfied by the stub, whose quantize_ leaves the
-    transformer dense while compile is disabled as if it were int8. Never raises."""
+    """Needs a functional import, not find_spec: the ROCm stub passes find_spec yet quantizes nothing."""
     try:
         import importlib
 
@@ -382,14 +299,7 @@ def has_functional_torchao() -> bool:
 
 
 def train_precision_modes() -> tuple[list[str], str]:
-    """(supported base_precision modes, recommended pick) for the current machine: nf4 always works;
-    bf16/auto need a bf16-capable CUDA GPU (Ampere+); int8/fp8/mxfp8 additionally need a
-    FUNCTIONAL torchao (their explicit paths import it with no fallback, and the Windows-ROCm
-    stub only looks installed). fp8 also needs sm89+; mxfp8 needs the Blackwell tensor cores
-    (sm100+) its cuBLAS kernels target. The dense modes all train in bf16 compute, which the DiT
-    trainer requires, so a non-bf16 CUDA GPU (T4/V100/RTX 20xx) is offered only nf4 -- otherwise
-    /info would advertise a start that evicts resident models and then fails the trainer's bf16
-    guard. Never raises."""
+    """Dense modes need bf16 compute, so a non-bf16 CUDA card (T4/V100) is offered only nf4."""
     modes = ["nf4"]
     recommended = "nf4"
     try:
@@ -558,12 +468,7 @@ _FLOW_TRAIN_FAMILIES = _DIT_TRAIN_FAMILIES | {"minimax-h3"}
 
 
 def effective_mixed_precision(cfg: Any) -> str:
-    """The precision the SDXL trainer will actually run in, resolved the same way it resolves it. A
-    pre-Ampere card has no native bf16, so a bf16 request silently becomes fp16 there. Recording
-    the REQUEST in a checkpoint's identity let a bundle written in fp16 resume in bf16 on a newer
-    card (and the reverse), continuing restored optimizer moments under different frozen-base
-    numerics while reporting a clean resume. Shared so the start route and the trainer cannot
-    disagree about what a checkpoint was trained as."""
+    """Precision the trainer actually runs in; pre-Ampere bf16 becomes fp16, so checkpoints record that."""
     import torch  # noqa: PLC0415 -- keep the import list light for the training subprocess
 
     requested = str(getattr(cfg, "mixed_precision", "") or "")
@@ -578,12 +483,7 @@ def effective_mixed_precision(cfg: Any) -> str:
 
 
 def native_bf16_supported() -> bool:
-    """True only when the live CUDA GPU provides NATIVE bf16 compute, not pre-Ampere emulation.
-    ``torch.cuda.is_bf16_supported()`` defaults to counting EMULATED bf16, which every pre-Ampere
-    CUDA card (T4 / V100 / RTX 20xx) reports as supported even though the DiT trainer needs real
-    Ampere-or-newer bf16. Gate NVIDIA on compute capability major >= 8 instead, the same #6658
-    fix the inference device resolver already uses; ROCm by gfx arch (``rocm_bf16_supported``).
-    Never raises. The flow trainers' admission is ``flow_bf16_trainable``."""
+    """Checks compute capability >= 8: torch's bf16 check counts emulated bf16 on pre-Ampere cards."""
     try:
         import torch
 
@@ -618,12 +518,7 @@ def flow_bf16_trainable() -> bool:
 
 
 def resolve_train_device() -> str:
-    """The device a flow-matching trainer runs on: CUDA first (so a box with both is unaffected),
-    then Intel XPU, else CPU.
-
-    Probes are guarded individually like ``dit_accelerator_missing_reason``: an uninitialised driver
-    whose ``is_available()`` raises must fall through, not kill the run. Shared so the two trainers
-    and the precision the run RECORDS cannot disagree."""
+    """CUDA first, then XPU, else CPU; a probe that raises must fall through rather than kill the run."""
     import torch  # noqa: PLC0415 -- keep the import list light for the training subprocess
 
     def _probe(module) -> bool:
@@ -641,15 +536,7 @@ def resolve_train_device() -> str:
 
 
 def xpu_native_bf16_probe() -> Optional[bool]:
-    """Native-bf16 on the live XPU, or None when the capability cannot be determined. Never raises.
-
-    ``is_bf16_supported()`` defaults to ``including_emulation=True`` and short-circuits before
-    reading ``has_bfloat16_conversions``, so the bare call answers True for EVERY available XPU:
-    the same emulation trap ``native_bf16_supported`` avoids on the CUDA side. Ask explicitly.
-
-    Tri-state because ``get_device_properties()`` raises when no device is really there: collapsing
-    that to False made the pre-eviction preflight refuse nf4 on any host whose XPU cannot be
-    interrogated, a probe failing CLOSED."""
+    """Ask with including_emulation=False, since the default says True for every XPU; None means unknown."""
     import torch  # noqa: PLC0415
 
     fn = getattr(getattr(torch, "xpu", None), "is_bf16_supported", None)
@@ -673,13 +560,7 @@ def native_bf16_supported_xpu() -> bool:
 
 
 def bf16_unsupported_reason(resolved_family: str) -> Optional[str]:
-    """Return a user-facing error string if ``resolved_family`` needs bf16 compute the live GPU
-    cannot provide, else None. The DiT trainer requires Ampere or newer and otherwise raises deep
-    in model load; the start route uses this to fail fast BEFORE evicting resident GPU workloads.
-    CPU-only hosts and SDXL (its own mixed_precision path) are exempt. Never raises. Covers every
-    FLOW-matching trainer, not just the DiT one: MiniMax-H3 has the same bf16 requirement (its
-    checkpoint keeps the patch projections and output heads in fp32) and the same eviction
-    ordering to protect."""
+    """Covers every flow-matching trainer, not just DiT, so the route fails before evicting residents."""
     if (resolved_family or "").strip().lower() not in _FLOW_TRAIN_FAMILIES:
         return None
     try:
@@ -701,13 +582,7 @@ def bf16_unsupported_reason(resolved_family: str) -> Optional[str]:
 
 
 def dit_accelerator_missing_reason(resolved_family: str) -> Optional[str]:
-    """Reason a DiT family cannot train on this host at all, else None. Never raises. nf4 is not a
-    CPU fallback: the 4-bit base load goes through diffusers' bitsandbytes quantizer, whose
-    validate_environment raises "No GPU found. A GPU is needed for quantization." unless CUDA,
-    XPU or MPS is present. Without this gate a GPU-less host accepts the default nf4 start,
-    evicts the resident Images pipeline, downloads the text encoders, and only then dies in the
-    child. SDXL keeps its own fp32-on-CPU path; MiniMax-H3 is covered too, since it loads its
-    denoiser through the same quantizer."""
+    """nf4 is no CPU fallback: bitsandbytes needs CUDA, XPU or MPS, and would fail after eviction."""
     if (resolved_family or "").strip().lower() not in _FLOW_TRAIN_FAMILIES:
         return None
     try:
@@ -736,19 +611,7 @@ def dit_accelerator_missing_reason(resolved_family: str) -> Optional[str]:
 
 
 def bitsandbytes_optimizer_supported() -> bool:
-    """Whether a bitsandbytes optimizer can complete an update on the SELECTED backend.
-
-    False only when training actually runs on Intel XPU: bitsandbytes registers
-    optimizer_update_8bit_blockwise (and optimizer_update_32bit) to Triton in every branch of
-    backends/xpu/ops.py, and Intel's Triton backend asserts on a SYCL toolchain we do not ship.
-    Construction still succeeds, so the trainers' try/except around the constructor never sees
-    it -- the run dies at the first optimizer.step(). Mirrors core/training/training.py.
-
-    Keyed on get_device(), NOT torch.xpu.is_available(): a hybrid host with an Intel iGPU beside
-    an NVIDIA card reports both and detection prefers CUDA. Answering the presence question there
-    would drop 8-bit on a CUDA run, and worse, change optimizer_key() so restore_resume_state
-    refuses every existing AdamW8bit checkpoint with a ResumeError.
-    """
+    """XPU is refused because bitsandbytes' Triton optimizer kernels assert; keyed on get_device()."""
     try:
         from utils.hardware import DeviceType, get_device
         return get_device() != DeviceType.XPU
@@ -757,14 +620,7 @@ def bitsandbytes_optimizer_supported() -> bool:
 
 
 def training_precision_preflight_error(resolved_family: str, base_precision: str) -> Optional[str]:
-    """Reason the requested DiT precision cannot run on this host, else None -- checked by the start
-    route BEFORE evicting resident GPU workloads (the trainer's own checks fire only in the
-    child, after eviction). Every gate mirrors one in _resolve_base_precision, so a doomed run is
-    rejected before teardown: the bf16-GPU requirement; no accelerator at all (which covers nf4
-    too); the dense precisions needing CUDA; the torchao precisions against a ROCm build, which
-    clears the stub test and hands the sm100 floor an AMD gfx version; explicit int8 needing a
-    FUNCTIONAL torchao; explicit fp8/mxfp8 against the Windows-ROCm stub; explicit mxfp8 needing
-    Blackwell. Add a gate there, add it here. Never raises."""
+    """Must mirror each gate in _resolve_base_precision, so doomed precisions fail before GPU eviction."""
     reason = bf16_unsupported_reason(resolved_family)
     if reason:
         return reason
@@ -819,13 +675,7 @@ def training_precision_preflight_error(resolved_family: str, base_precision: str
 
 
 def family_train_infos() -> list[dict[str, Any]]:
-    """Describe every trainable family for the Train UI: name, label, the default + allowed base
-    repos, the recommended starting hyperparameters, and a VRAM/access note. Built from the
-    family registry so it stays in sync with what the trainers support. Both registries: a video
-    family with a trainer is as trainable as an image one, and reading only the image registry is
-    what kept ``ltx-2`` out of the Train tab entirely. A family whose pipeline class the
-    installed diffusers lacks is dropped rather than advertised, since the start route refuses it
-    and no choice in the UI can fix that."""
+    """Lists both registries; drops a family whose pipeline class is missing, since start refuses it."""
     from core.inference.diffusion_families import family_pipeline_available, mirror_repo
     from core.inference.diffusion_transformer_quant import _family_train_denied
 
@@ -948,10 +798,8 @@ class DiffusionLoraConfig:
     resolved_family: str = "sdxl"
 
     def normalized(self) -> "DiffusionLoraConfig":
-        """Return a copy with derived/validated fields filled in. Raises ValueError on a request
-        that cannot train (bad numbers, or an untrainable base model). Also coerces values that
-        arrive as strings/blanks through the Unsloth config path (``learning_rate`` is preserved
-        as a string there; ``hf_token`` defaults to "")."""
+        """Coerces string and blank inputs from the Unsloth config path; learning_rate stays a
+        string there."""
         resolved_family = resolve_trainable_family(self.base_model, self.model_family)
         if self.train_steps < 1:
             raise ValueError("train_steps must be >= 1")
@@ -1168,10 +1016,7 @@ class DiffusionLoraConfig:
 
 
 def resolve_train_steps(cfg: "DiffusionLoraConfig", n_images: int) -> int:
-    """The effective optimizer-step count for a run. When ``cfg.num_epochs`` is set (> 0), one epoch
-    is one full pass over the dataset in optimizer steps -- ceil(N / (batch x grad_accum)) -- so
-    the run is ``num_epochs`` such passes, capped at 100000. With ``num_epochs == 0`` the
-    explicit ``cfg.train_steps`` is used unchanged."""
+    """With num_epochs > 0, steps are epochs times ceil(N / (batch x grad_accum)), capped at 100000."""
     if cfg.num_epochs > 0:
         per_step = max(1, cfg.train_batch_size * cfg.gradient_accumulation_steps)
         steps_per_epoch = max(1, math.ceil(n_images / per_step))
@@ -1220,12 +1065,8 @@ class PermutationBatchSampler:
         return {"n": self._n, "order": list(self._order), "pos": int(self._pos)}
 
     def load_state_dict(self, state: Optional[dict[str, Any]]) -> bool:
-        """Restore a cycle saved by ``state_dict``. True when it was restored. Refuses a state for a
-        different dataset size (the resume preflight already rejects a changed dataset; this
-        keeps a manually edited checkpoint from indexing out of range) and clamps a bad position.
-        The BOOLEAN matters: silently leaving a fresh sampler in place looks like a clean resume
-        while the RNG -- already restored to a point after this permutation was drawn --
-        generates a different order, so the run quietly reorders and skips images."""
+        """Returns False for a different dataset size; ignoring that would silently reorder and skip
+        images."""
         if not isinstance(state, dict) or int(state.get("n") or 0) != self._n:
             return False
         order = state.get("order")
@@ -1259,24 +1100,7 @@ def discover_image_caption_pairs(
     caption_column: str = "text",
     verify_images: bool = False,
 ) -> list[tuple[str, str]]:
-    """Resolve ``(image_path, caption)`` pairs from a dataset directory.
-
-    Caption sources, in priority order per image: a per-image sidecar ``<stem>.txt`` /
-    ``<stem>.caption``; then a ``metadata.jsonl`` / ``captions.jsonl`` row keyed by ``file_name``
-    (or ``image``) carrying the caption in ``caption_column`` (default ``text``); then
-    ``instance_prompt`` (dreambooth). A sidecar wins over the metadata row because it is the user's
-    explicit per-image edit (the labeling grid writes a .txt sidecar). Must agree with
-    ``routes.training._image_record``.
-
-    Images with no caption from any source are skipped. Pure filesystem + JSON, so it is
-    unit-testable without torch. Raises FileNotFoundError for a missing dir and ValueError when
-    nothing is captionable.
-
-    ``verify_images`` (opt-in) additionally runs a cheap PIL header probe on each captioned image
-    and raises ValueError on a corrupt/zero-byte/truncated file. The start route enables it so a bad
-    upload is rejected BEFORE the resident GPU models are freed; the trainers leave it off, since
-    they decode every image anyway.
-    """
+    """Captions: sidecar first, then metadata row, then instance_prompt; the route's reader must agree."""
     root = Path(data_dir).expanduser()
     if not root.is_dir():
         raise FileNotFoundError(f"data_dir is not a directory: {data_dir}")
@@ -1366,11 +1190,7 @@ _H3_CANVAS_MULTIPLE = 32
 
 
 def h3_train_unsupported_reason(cfg: Any) -> Optional[str]:
-    """Reason this config cannot run the MiniMax-H3 trainer, else None. Never raises. Called by the
-    START ROUTE before it frees the resident GPU models, and again by the trainer itself so a
-    direct call is refused the same way. Config-only by construction: every check reads the
-    request, never the host, so the route can answer without importing torch. Host capability
-    stays in the precision preflight next to it."""
+    """Config-only, so the start route can check it before freeing GPU residents, without torch."""
     if (getattr(cfg, "resolved_family", "") or "").strip().lower() != "minimax-h3":
         return None
     if cfg.mixed_precision != "bf16":
@@ -1430,12 +1250,7 @@ _H3_FIXED_RECIPE: dict[str, Any] = {
 
 
 def train_recipe_overrides(cfg: Any) -> dict[str, Any]:
-    """The fields whose REQUESTED value this family's loop replaces, mapped to what it runs. Shared
-    for the same reason ``h3_train_unsupported_reason`` is: the trainer applies these in the
-    CHILD, while the run record is written by the PARENT from the config handed to
-    ``service.start``. Normalising in the trainer alone therefore fixed what ran and left
-    Previous Runs describing cropping, flipping and min-SNR weighting that never happened. Empty
-    for every other family: their loops honour all three."""
+    """Recipe overrides for MiniMax-H3 only; the parent's run record must match what the child runs."""
     if (getattr(cfg, "resolved_family", "") or "").strip().lower() != "minimax-h3":
         return {}
     return dict(_H3_FIXED_RECIPE)
@@ -1453,13 +1268,7 @@ def discover_training_pairs(
     caption_column: str = "text",
     verify_images: bool = False,
 ) -> list[tuple[str, str]]:
-    """The ``(path, caption)`` pairs for ``resolved_family``, from whichever discovery its trainer
-    runs. The /diffusion/start preflight exists so a bad dataset 400s BEFORE the resident GPU
-    models are freed, which only holds while it runs the SAME discovery as the trainer. It ran
-    the image one unconditionally, so a MiniMax-H3 dataset -- captioned clips, the only thing its
-    trainer accepts -- was rejected at the route with "No captioned images found".
-    ``verify_images`` is image-only: the clip discovery has no cheap header probe to match it, so
-    it is ignored for a clip family rather than quietly implying a check that did not happen."""
+    """Uses the family's own discovery (clips for MiniMax-H3), so the preflight matches the trainer."""
     if str(resolved_family or "").strip().lower() in CLIP_TRAINED_FAMILIES:
         from core.training.diffusion_h3_clips import discover_clip_caption_pairs
         return discover_clip_caption_pairs(
@@ -1481,11 +1290,7 @@ def _emit(on_event: Optional[EventCb], type_: str, **kw: Any) -> None:
 def _plan_cache_variants(
     num_images: int, cache_variants: int, center_crop: bool, random_flip: bool, seed: int
 ) -> list[list[tuple[float, float, bool]]]:
-    """Seed-deterministic crop/flip plan for the latent cache: per image, up to ``cache_variants``
-    draws of (u_left, u_top, flip) with the crop as unit fractions the loader maps onto its
-    integer crop range. Uses its own rng stream so the training loop's draws are untouched.
-    Center-crop / no-flip collapse duplicate variants, so callers encode each distinct variant
-    exactly once. Pure (no torch) for CPU unit tests."""
+    """Own rng stream keeps training draws unchanged; duplicate variants are encoded once."""
     crop_rng = random.Random(seed)
     plan: list[list[tuple[float, float, bool]]] = []
     for _ in range(max(0, num_images)):
@@ -1523,11 +1328,7 @@ def _latent_cache_over_budget(
     total_variants: int,
     budget_bytes: Optional[int] = None,
 ) -> bool:
-    """True when a cache of ``total_variants`` entries, each two fp32 tensors totalling
-    ``per_variant_bytes``, is estimated to exceed ``budget_bytes``. ``per_variant_bytes`` is
-    measured from a real encoded latent, so the estimate tracks the actual per-family tensor
-    shape (SDXL 4-channel vs a packed 16-channel DiT latent) rather than a guess. The budget is
-    read from the module constant at call time when not given, so tests can override it."""
+    """Per-variant bytes are measured from a real latent, so the estimate tracks each family's shape."""
     if budget_bytes is None:
         budget_bytes = _LATENT_CACHE_BUDGET_BYTES
     return per_variant_bytes * max(0, total_variants) > budget_bytes
@@ -1538,12 +1339,7 @@ def _apply_perf_flags(
     device: str,
     cudnn_benchmark: bool = False,
 ) -> dict:
-    """Set the run-scoped torch backend knobs: TF32 matmuls + high fp32 matmul precision when
-    ``cfg.enable_tf32`` is on, strict fp32 (all TF32 flags cleared) when it is off, plus cudnn
-    autotuning when the caller opts in. Autotune is for the conv-heavy SDXL U-Net only: measured
-    on B200, it DOUBLES peak VRAM (fp32 VAE conv workspaces) while the DiT loop gains nothing.
-    Returns a snapshot for ``_restore_perf_flags``. Best-effort: missing attributes on a
-    CPU/other-vendor build are skipped."""
+    """cudnn autotune is for the SDXL U-Net only: it doubles peak VRAM and gains nothing for DiT."""
     from core.inference.diffusion_speed import snapshot_backend_flags
 
     snap: dict[str, Any] = {"flags": snapshot_backend_flags(), "matmul_precision": None}
@@ -1632,13 +1428,7 @@ def _refuse_ltx23_training_base(base_model: str) -> None:
 
 
 def _assert_trusted_base_model(base_model: str, *, allow_modular: bool = False) -> None:
-    """Gate the training base model the same way the inference backend gates non-GGUF loads: a local
-    path or a trusted repo (``unsloth/*`` or an allowlisted official base). This runs BEFORE
-    ``from_pretrained`` so an untrusted remote repo (which could ship pickle weights) is never
-    fetched or deserialised. ``allow_modular`` is for a trainer whose loader is
-    ``ModularPipeline.from_pretrained``: a local MiniMax-H3 pipeline carries
-    ``modular_model_index.json`` and no ``model_index.json``, so the conventional shape check
-    rejected the one local layout that family HAS."""
+    """Checked before from_pretrained so untrusted repos (possible pickle weights) are never fetched."""
     from core.inference.diffusion import _assert_local_base_is_pipeline, _is_trusted_diffusion_repo
 
     trusted = (
@@ -1655,22 +1445,12 @@ def _assert_trusted_base_model(base_model: str, *, allow_modular: bool = False) 
 
 # One writer and one reader for BOTH trainers, so an SDXL and a DiT run resume from the same bundle shape.
 def trainable_state_dict(model: Any) -> dict[str, Any]:
-    """The trainable (LoRA) parameters of ``model``, keyed by parameter name. Deliberately NOT the
-    peft/diffusers export format: this is the checkpoint's private copy of exactly the tensors
-    the optimizer holds moments for, so restoring it and the optimizer state together reproduces
-    the run bit-for-bit. Parameter names are stable across a re-attach and across regional
-    torch.compile (which compiles submodules in place without renaming), the same assumption
-    ``LoRAEMA`` makes."""
+    """Exactly the tensors the optimizer holds moments for, not the peft export, so resume is bit-exact."""
     return {name: p.detach() for name, p in model.named_parameters() if p.requires_grad}
 
 
 def load_trainable_state_dict(model: Any, state: Optional[dict[str, Any]]) -> int:
-    """Copy a ``trainable_state_dict`` back into ``model`` in place, returning how many parameters
-    were restored. Copies rather than reassigns, so the optimizer's parameter references (and
-    their loaded moments) stay valid. Every saved tensor must land: a partial match means the
-    parameter NAMES moved, and because the optimizer state is keyed by parameter INDEX it would
-    still load cleanly, leaving restored Adam moments and a restored LR position driving freshly
-    initialised LoRA weights while the run reports a normal resume. Raise instead."""
+    """A partial match raises: optimizer state is keyed by index, so moved names would load silently."""
     if not state:
         return 0
     import torch
@@ -1737,13 +1517,7 @@ def write_resume_checkpoint(
     discard_existing: bool = False,
     preexisting: Optional[Any] = None,
 ) -> tuple[Optional[str], Optional[str]]:
-    """Write one resume bundle for the run, returning ``(checkpoint_path, error)``. Never raises: a
-    checkpoint failure must not lose a training run that is otherwise fine, so the error is
-    returned (and emitted as a warning) for the caller to report as ``resume_blocked_reason``.
-    Used for BOTH the periodic ``save_steps`` saves and the stop-and-save, so the two produce
-    identical state. ``discard_existing`` is set on the FIRST write of a run that did not resume,
-    so bundles left in the output dir by an earlier run of the same adapter name cannot outrank
-    it."""
+    """Never raises: a failed write returns its error instead of losing an otherwise healthy run."""
     from core.training.diffusion_checkpoint import capture_rng_state, save_checkpoint
     try:
         path = save_checkpoint(
@@ -1774,21 +1548,7 @@ def write_resume_checkpoint(
 
 
 def _reapply_lr_schedule(optimizer: Any, lr_scheduler: Any) -> None:
-    """Recompute the learning rate for the NEXT step from the LIVE schedule.
-
-    ``optimizer.load_state_dict`` restores the rate the checkpoint was written with and
-    ``LRScheduler.load_state_dict`` restores only the position, never re-evaluating the lambda, so
-    the first step after a resume runs at the OLD schedule's value. That is invisible while
-    ``train_steps`` is unchanged but wrong the moment the target moves -- continuing a finished
-    cosine run by raising the step count would take its first step at lr 0.0, leaving every
-    parameter untouched.
-
-    Only for the closed-form ``LambdaLR`` diffusers' ``get_scheduler`` returns, and evaluated from
-    its own public ``lr_lambdas`` / ``base_lrs`` / ``last_epoch`` rather than ``get_lr()`` (which
-    warns when called outside a step). A chainable scheduler derives its next rate from the current
-    one, so re-applying it there would double-step. Best-effort: a schedule we cannot re-evaluate
-    keeps the restored value.
-    """
+    """Scheduler resume restores only the position, so the first step would run at the old lr."""
     try:
         import torch
 
@@ -1817,12 +1577,7 @@ def restore_resume_state(
     sampler: Any = None,
     rng_streams: Optional[dict[str, Any]] = None,
 ) -> Any:
-    """Load ``cfg.resume_from_checkpoint`` into a freshly built run. Returns the
-    ``LoadedCheckpoint`` (whose ``.step`` is the last COMPLETED optimizer step, so the loop
-    restarts at ``.step``), or None when no resume was requested. Re-runs the full preflight in
-    the child: the start route already validated the request before evicting the GPU, but the
-    trainer must not trust a config it did not check itself. Raises ResumeError (a ValueError) on
-    a mismatch, which the process adapter surfaces as the run's error message."""
+    """Re-runs the full preflight in the child rather than trusting the start route's check."""
     if not cfg.resume_from_checkpoint:
         return None
     from core.training.diffusion_checkpoint import (
@@ -1925,20 +1680,7 @@ def _publish_to_lora_catalog(
     cfg: DiffusionLoraConfig,
     steps: Optional[int] = None,
 ) -> Optional[str]:
-    """Best-effort copy of the trained adapter into the Unsloth diffusion LoRA directory so the Images
-    LoRA picker (which scans only files directly under ``loras/diffusion``) finds it without the
-    user moving files. Also writes a ``<alias>.json`` metadata sidecar so the picker can family-gate
-    the adapter. Returns the published path, or None on any failure.
-
-    ``steps`` is the step count the run actually REACHED, which is what the sidecar must record: a
-    run stopped at step 11 of 500 published an adapter claiming 500 steps. None keeps the old
-    behaviour for callers that do not know the reached step.
-
-    A VIDEO family publishes nothing: ``loras/diffusion`` is read by the Images LoRA picker alone
-    and ``core/inference/video.py`` has no LoRA surface, so mirroring a video adapter there would
-    copy a large file into a catalog nothing can load. The run still reports ``lora_path`` (and
-    ``ema_path``), which is the adapter a caller loads directly.
-    """
+    """Video families are skipped: loras/diffusion is read only by the Images LoRA picker."""
     if detect_video_family("", override = cfg.resolved_family) is not None:
         return None
     try:
@@ -1976,10 +1718,7 @@ def _write_lora_sidecar(
     cfg: DiffusionLoraConfig,
     steps: Optional[int] = None,
 ) -> None:
-    """Write the adapter metadata sidecar read back by diffusion_lora._scan_local. Best effort: a
-    failure here must not fail publishing, so callers wrap it. ``steps`` records the step the run
-    REACHED. It used to record ``cfg.train_steps``, the CONFIGURED length, so an adapter saved by
-    stopping at step 11 of 500 advertised 500."""
+    """Records the step reached, not the configured train_steps, so a stopped run is not overstated."""
     meta = {
         "family": cfg.resolved_family,
         "families": [cfg.resolved_family],

@@ -140,11 +140,7 @@ def last_substantive_instruction(
     min_chars: int = INSTRUCTION_MIN_CHARS,
     skip_latest: bool = True,
 ) -> str | None:
-    """The most recent real instruction, for use as a recall query.
-
-    ``skip_latest`` skips the newest user message, which is the one that was too thin to
-    search with in the first place.
-    """
+    """skip_latest exists because the newest user message is too thin to search with."""
     users = [m for m in messages if m.get("role") == "user"]
     if skip_latest and users:
         users = users[:-1]
@@ -157,18 +153,7 @@ def last_substantive_instruction(
 
 
 def is_thin_query(text: str, *, min_chars: int = INSTRUCTION_MIN_CHARS) -> bool:
-    """Whether searching an archive for this text is worth a retrieval slot.
-
-    Thin means the message NAMES NOTHING TO SEARCH FOR: every word of it is a function
-    word, an anaphor or a continuation. It deliberately does not mean "short". Counting
-    words instead swept in every self-contained two-word request -- "review billing",
-    "restart nginx", "ZQXVARA123?" -- and the anchor a thin query earns is spent ahead of
-    the user's own words in `conversation_archive.recall`. At the top_k of 1 that both the
-    over-budget backoff (4 -> 2 -> 1) and a small window (`_recall_top_k` is
-    `budget // CHUNK_TOKENS`) reach, the anchor takes the only slot: measured on a
-    nine-turn archive, "review billing" at top_k=1 recalled the standing instruction and
-    NOT the billing turn, which the same recall returns without an anchor.
-    """
+    """Thin means naming nothing searchable, not short: review billing is short but a real query."""
     stripped = (text or "").strip()
     if not stripped:
         return True
@@ -184,23 +169,7 @@ def is_thin_query(text: str, *, min_chars: int = INSTRUCTION_MIN_CHARS) -> bool:
 
 
 def _protected_cost(turns: list[list[dict]], index: int) -> int:
-    """What pinning the head of ``turns[index]`` actually costs the window.
-
-    `truncate_oldest_messages` protects by GROUP, not by message, and `group_turns` puts
-    an assistant reply that carries no tool calls in the SAME group as the user message it
-    answers. So pinning a one-line instruction also holds that reply, and charging only the
-    instruction let a pin exceed the ceiling by an arbitrary amount: measured at 28 tokens
-    charged against 20037 actually held. The budget has to count what is really kept, or it
-    is not a budget.
-
-    It must not count more than that either. A trailing tool exchange is NOT held: an
-    assistant message with tool calls opens its own group, and `truncate_oldest_messages`
-    skips a protected group BEFORE the `starts_user_turn` expansion that would otherwise
-    absorb the groups behind it, so that tool group stays its own eviction unit and is
-    evicted independently of the pin. Charging it would let one large tool result cost a
-    small instruction its pin over tokens the pin never keeps -- which is the case the pin
-    exists for, since an agent run is exactly where the filler follow-up appears.
-    """
+    """Charges the group the pin really holds, reply included, but not a trailing tool exchange."""
     # Dense estimate: 4 chars/token undercharges CJK and emoji ~2x; over-charging only refuses the pin.
     return estimate_messages_tokens_dense(turns[index])
 
@@ -213,20 +182,7 @@ def pinned_instruction_ids(
     max_tokens: int = PIN_MAX_TOKENS,
     prompt_target: int | None = None,
 ) -> set[int]:
-    """`id()`s of the messages in the most recent instruction groups worth protecting.
-
-    Bounded twice over. At most ``groups`` of them, and never more than ``max_tokens``
-    summed across everything the pin actually holds: only the USER message is named, but
-    the window protects by group, so the reply in that group is held with it and is charged
-    with it -- and a trailing tool exchange, which is its own group and stays independently
-    evictable, is not (see `_protected_cost`). Anything larger
-    than the ceiling is not pinned AT ALL rather than partially: the single enormous
-    instruction is precisely the thing that could starve the window, so it is the thing
-    excluded.
-
-    ``groups`` of 0 returns an empty set, which makes every downstream byte identical to
-    today.
-    """
+    """Oversized instructions (over max_tokens) are skipped whole, so they cannot starve the window."""
     if groups <= 0 or not messages:
         return set()
     ceiling = max_tokens

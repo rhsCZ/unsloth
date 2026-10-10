@@ -233,12 +233,7 @@ class AudioCodecManager:
         logger.info("Loaded DAC audio codec")
 
     def decode_snac(self, generated_ids: torch.Tensor, device: str) -> Tuple[bytes, int]:
-        """Decode SNAC tokens (Orpheus) into WAV bytes.
-
-        Finds the START_OF_SPEECH (128257) marker, extracts codes after it,
-        strips EOS (128258), redistributes 7-per-frame codes into 3 SNAC layers.
-        Returns (wav_bytes, 24000).
-        """
+        """Orpheus emits 7 codes per frame, redistributed into 3 SNAC layers; output is 24000 Hz WAV."""
         token_indices = (generated_ids == 128257).nonzero(as_tuple = True)
         if len(token_indices[1]) > 0:
             cropped = generated_ids[:, token_indices[1][-1] + 1 :]

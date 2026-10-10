@@ -180,14 +180,7 @@ def test_liveness_probe_heartbeats(logs, monkeypatch):
 
 
 def test_watchdog_window_outlasts_the_probe_interval():
-    """The window has to be wider than the poll, or the heartbeat is a no-op.
-
-    ``_QUIET_POLL_DEDUP_MS`` stamps only on emit, so a 10s window against a probe that
-    arrives every ~19s never sees two inside one window and every probe logs anyway --
-    which is what putting this path in ``_QUIET_POLL_PATHS`` would have done. The desktop
-    watchdog runs ``HEALTH_WATCHDOG_INTERVAL`` (15s) between rounds plus up to
-    ``HEALTH_PROBE_TIMEOUT`` (10s) inside one, so pin the floor at a full round.
-    """
+    """The dedup window must outlast a full watchdog round, or the heartbeat probe is never suppressed."""
     commands_rs = (
         Path(__file__).resolve().parents[2] / "src-tauri" / "src" / "commands.rs"
     ).read_text(encoding = "utf-8")

@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""FastAPI round-trip tests for the OpenAI-compatible POST /v1/audio/speech.
-
-The TTS core (_generate_tts_wav) is faked, so these cover route wiring, validation,
-gallery persistence and the raw-WAV response without torch, weights or a GPU."""
+"""Round-trip tests for POST /v1/audio/speech with _generate_tts_wav faked, so no torch or GPU."""
 
 from __future__ import annotations
 
@@ -257,10 +254,7 @@ def test_the_shared_core_guards_before_generating():
 
 
 def test_the_budget_is_rechecked_after_an_idle_model_is_restored():
-    """With nothing loaded there is no context to measure, so the guard passes everything.
-    Idle auto-unload leaves exactly that state, and the restore below it brings the context
-    back, so the first request after an eviction reached generation over-context and came
-    back as a one-token clip."""
+    """Budget is rechecked after an idle eviction: with nothing loaded the guard passes every request."""
     import inspect
 
     source = inspect.getsource(routes_module._generate_tts_wav)
@@ -1007,11 +1001,7 @@ def test_client_abort_records_a_cancelled_row(monkeypatch):
 def test_a_failure_before_the_relabel_does_not_leak_the_requested_path(
     monkeypatch, requested, expected
 ):
-    """body.model is informational and is echoed straight into the row, so the relabel on
-    the success path is the only thing that ever cleaned it. A failure before generation
-    (no audio model loaded) left the raw client string on a terminal row that the monitor
-    overlay polls and serves. Windows and UNC forms are covered because redacting a host
-    path is the whole point."""
+    """A failed request must not leave the raw body.model host path in the monitor row, UNC included."""
 
     cli, calls, saved = _make_client(monkeypatch, generate = _boom)
     api_monitor.clear()

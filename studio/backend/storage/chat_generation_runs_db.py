@@ -137,12 +137,7 @@ def _live_entries_locked() -> list[_PoolEntry]:
 
 
 def _unregister_locked(entry: _PoolEntry | None) -> None:
-    """Drop ``entry`` from the registry, and any reference whose thread has gone with it.
-
-    Pruning here and on insert keeps the list bounded. Not a weakref callback: those fire during
-    collection at an arbitrary point, including while this thread holds ``_pool_lock``, which is
-    not reentrant. Caller holds it.
-    """
+    """Not a weakref callback: GC could fire it while this thread holds the non-reentrant _pool_lock."""
     surviving: list[weakref.ref[_PoolEntry]] = []
     for ref in _pool_registry:
         alive = ref()
@@ -164,12 +159,7 @@ def _discard_pooled() -> None:
 
 
 def _discard_all_pooled() -> None:
-    """Close every pooled connection on every thread, idle ones immediately.
-
-    The thread retiring an account is never the worker that parked the handle: the SSE loop waits
-    on a 32 thread pool of its own. One in use is left alone and closed by its borrower on return,
-    since yanking it would fail that caller's query.
-    """
+    """Idle ones close at once; a connection in use is closed by its borrower on return."""
     global _pool_generation
     with _pool_lock:
         _pool_generation += 1
@@ -211,12 +201,7 @@ def _database_path(conn: sqlite3.Connection) -> Path:
 
 
 def _connect() -> sqlite3.Connection:
-    """get_connection plus the one-off progress-lease migration for this database.
-
-    Returns this thread's cached connection when there is one for the database the acting account
-    resolves to right now. Falls back to a fresh connection whenever reuse would be unsafe, so the
-    cache can only ever make things faster, never change what a caller sees.
-    """
+    """Reuses the thread's connection only for the current account database; never changes results."""
     # Not the resolved path: tests pin that a warm connect resolves the account root zero times.
     # Paired with _schema_ready identity, which conftest rebinds per test.
     key = current_account_id() or ""
@@ -264,13 +249,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def _prepare_connection() -> tuple[sqlite3.Connection, bool]:
-    """The original, uncached body, plus whether the lease migration is done for this database.
-
-    The flag keeps a blocked migration retryable: when the ALTER loses to another writer this
-    returns without marking the path ready so the NEXT call retries, and caching such a connection
-    would skip that call forever, leaving the lease columns missing and reconcile_runs reaping
-    nothing.
-    """
+    """Returns False while the lease ALTER is blocked, so the next call retries instead of skipping it."""
     conn = get_connection(check_same_thread = False)
     db_path = _database_path(conn)
     if db_path in _schema_ready:
@@ -409,11 +388,7 @@ def _append_events_locked(
 
 
 def _missing_lease_columns(exc: sqlite3.OperationalError) -> bool:
-    """Whether `exc` is this database still waiting on the progress-lease migration. _connect lets a call through
-    when contention blocks the ALTER, so every statement naming progress_at or progress_tokens can meet a table
-    that predates them. Degrading to the pre-migration behaviour keeps that window harmless: without it a
-    blocked migration would abort a generation with `no such column` the moment the writer let go.
-    """
+    """Lets pre-migration behaviour run while the lease ALTER is blocked, not abort with no such column."""
     message = str(exc).lower()
     return "no such column" in message and (
         "progress_at" in message or "progress_tokens" in message
@@ -421,15 +396,7 @@ def _missing_lease_columns(exc: sqlite3.OperationalError) -> bool:
 
 
 def _touch_progress_locked(conn: sqlite3.Connection, run_id: str, tokens: int) -> None:
-    """Stamp the progress lease for one flush of streamed output. Monotonic in both fields, the same
-    rule studio_db._safe_generation_assistant_update applies to the assistant row this run owns: the
-    token counter only ever accumulates, and progress_at takes MAX(stored, now) so a wall-clock step
-    backwards (NTP, suspend) cannot age a live run into the sweep below. One chunk carries at most
-    one token delta, so the count of chunk events is the token count. updated_at moves with it, as
-    it already does on every event append. That is what the follower's snapshot poll compares, so a
-    client watching a run through a long model preparation or an admission wait, neither of which
-    emits events, sees the server is alive and rearms its own no-progress deadline instead of
-    reporting an interruption over healthy work."""
+    """updated_at also moves, so a long model load or admission wait still looks alive to followers."""
     now = now_ms()
     try:
         conn.execute(
@@ -710,10 +677,7 @@ def get_worker_run(
 
 
 def touch_progress(run_id: str) -> None:
-    """Renew one run's progress lease without recording any streamed output. For work the lease cannot
-    see: automatic model loading, idle reload and auto-download all happen between mark_running and
-    the first token, and the engine's own first-token budget does not start until after them, so
-    ageing a run from mark_running could reap a legitimate load followed by a legitimate prefill."""
+    """Covers loads and downloads before the first token, which would otherwise age out and be reaped."""
     conn = _connect()
     try:
         _touch_progress_locked(conn, run_id, 0)
@@ -986,12 +950,7 @@ def wait_for_events(
 def reconcile_runs(
     *, error: str = "Unsloth restarted during generation", stale_after_ms: int | None = None
 ) -> list[str]:
-    """Settle active runs, returning the ids settled. ``stale_after_ms`` is what makes this safe to run
-    while Studio is serving: with it, only runs whose progress lease has not moved for that long are
-    settled, so a slow but advancing generation is never touched. Without it (process boot) every
-    active run is orphaned by definition and all of them are settled. Partial output survives either
-    way: only the run row and the assistant message's status metadata are rewritten, never the
-    streamed content or the event log."""
+    """Without stale_after_ms all active runs settle; with it, only runs whose lease went stale."""
     conn = _connect()
     settled: list[str] = []
     try:

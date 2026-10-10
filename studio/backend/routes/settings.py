@@ -331,10 +331,7 @@ def _nested_model(annotation: Any) -> Optional[type[BaseModel]]:
 
 
 def _readable(model: type[BaseModel], value: Any) -> Any:
-    """Drop what this build's schema does not define, keeping every field it does. `extra = "forbid"` is right
-    for a submitted payload but wrong for reading storage back: a blob holding one field from a newer build
-    would otherwise fail validation, and a stored recipe the user can no longer read is worse than one
-    missing a field this build cannot render anyway."""
+    """extra=forbid suits submitted payloads, not storage: a newer build's field must not fail the read."""
     if isinstance(value, list):
         return [_readable(model, item) for item in value]
     if not isinstance(value, dict):
@@ -413,10 +410,7 @@ def _with_value_at_location(
 
 
 def _preserve_recovered_defaults(schema: type[BaseModel], stored: dict, submitted: dict) -> dict:
-    """Do not mistake a recovery default for an edit to an unreadable stored field. A downgraded GET omits
-    known fields whose values this schema cannot validate, then Pydantic supplies their defaults in the
-    response; the client cannot tell those defaults from stored values and echoes them in its next state
-    write. Preserve the raw leaf only while the submitted value is still the synthesized value."""
+    """A recovery default echoed back unchanged is not an edit: keep the raw stored leaf."""
     recovered, locations = _validated_without_invalid_fields(schema, _readable(schema, stored))
     recovered_values = recovered.model_dump()
     merged = submitted
@@ -1100,12 +1094,7 @@ _NO_LAUNCH = object()
 
 
 def _active_launch_placement():
-    """``(state, policy_active, mlock_applicable, direct_io, dio_applicable, dio_managed,
-    pending_settings)`` for the running child.
-
-    ``state`` is ``_NO_LAUNCH`` when nothing is running or coming up, so the
-    caller can tell "no process" apart from "a process with no load-mode".
-    """
+    """_NO_LAUNCH means nothing is running or starting, distinct from a process with no load-mode."""
     try:
         from routes.inference import get_llama_cpp_backend
 
@@ -1129,29 +1118,13 @@ def _active_launch_placement():
 
 
 def _launch_effect_of(settings):
-    """The part of ``(keep_resident, no_ram_reserve)`` a launch can express.
-
-    Mirrors ``should_mlock``: the page-lock is emitted only when residency is on and
-    no-reserve is off, so with no-reserve on the residency toggle reaches no flag.
-    """
+    """Mirrors should_mlock: with no-reserve on, the residency toggle reaches no flag."""
     keep_resident, no_ram_reserve = settings
     return (keep_resident and not no_ram_reserve, no_ram_reserve)
 
 
 def _model_memory_reload_required() -> bool:
-    """True when the loaded process's memory placement contradicts the settings.
-
-    Compares the state the child ACTUALLY launched with -- env defaults plus
-    last-wins argv, so a user-supplied --mlock / --no-mmap counts -- against
-    what the current settings would produce. The idle-unload veto applies
-    immediately (the loop re-reads each poll), so only placement can be stale.
-
-    Keyed on is_active, not is_loaded: a save that lands while a load is still
-    passing its health check would otherwise report no reload while the child is
-    already committed to the pre-save flags. _memory_launch_pending covers the
-    same window before Popen, where the placement is decided but _process is
-    still None.
-    """
+    """Keyed on is_active, not is_loaded, so a save landing mid-health-check still triggers a reload."""
     state, policy_active, mlock_applicable, direct_io, dio_applicable, dio_managed, pending = (
         _active_launch_placement()
     )
@@ -1174,11 +1147,7 @@ def _model_memory_reload_required() -> bool:
 
 
 def _model_memory_mlock_active(want_mlock: bool) -> bool:
-    """Whether page-locking is actually in force, not merely asked for. This drives the locked-memory cap
-    warning, so taking it from the toggles alone would tell a discrete-GPU user to raise a limit nothing
-    consults. With nothing running this is the intent; once a child exists it is what that child got, since
-    a full offload to a discrete GPU skips the lock and a diffusion runner has no load-mode at all. A
-    user's own --mlock counts, since the resolver reads the launched argv."""
+    """Reports what the running child got, not what was asked: a full offload skips the lock."""
     if not want_mlock:
         return False
     state, _policy_active, _applicable, _direct_io, _dio_applicable, _dio_managed, _pending = (
@@ -2239,12 +2208,7 @@ def _bare_model_id(model_id: str) -> Optional[str]:
 
 
 def _fallback_supplies_extra_args(model_id: str, target_id: str) -> bool:
-    """Whether a load for this model would still pick flags off another entry. The carry-over copies a legacy
-    bare ``repo`` row's flags onto the first ``repo:QUANT`` save and leaves the bare row in place, and a
-    load reads the qualified key first and the bare one after it, so clearing the box for the quant is only
-    a clear while the quant keeps a row of its own. Answered rather than repaired: stripping the flags off
-    the bare row was the first fix and it is too broad, since that row is the fallback for every quant that
-    has no row."""
+    """A quant's cleared flags only stick if it has its own row; the bare repo row is the fallback."""
     from utils.openai_auto_switch_settings import get_model_override
 
     for candidate in (
@@ -2261,12 +2225,7 @@ def _fallback_supplies_extra_args(model_id: str, target_id: str) -> bool:
 
 
 def _fallback_supplies_reasoning_flag(model_id: str, target_id: str) -> bool:
-    """Whether a load for this model would still pick a reasoning flag off another entry.
-
-    The -1/"" pair is stored rather than dropped so a qualified row survives as a tombstone that
-    shadows such a flag. A later save leaving the controls at their defaults omits the pair, and
-    without this the row can empty out, be deleted, and hand the reset value straight back.
-    """
+    """Keeps the -1 tombstone so the qualified row still shadows any fallback reasoning flag."""
     from core.inference.llama_server_args import (
         parse_reasoning_budget_message_override,
         parse_reasoning_budget_override,
@@ -2314,10 +2273,7 @@ def _other_quants_remain(bare_id: str, removed_ids: list[str]) -> bool:
 
 
 def _legacy_standalone_gguf_key(model_id: str) -> Optional[str]:
-    """The stored ``<path>:LABEL`` entry for a bare standalone .gguf path, if any. A loose file has no quant to
-    choose between, so it is keyed by the bare path, but the label derived from its filename is never empty
-    and that is how the picker keyed the same file before, so an upgraded install carries entries under it.
-    The auto-switch loader reads that spelling after the bare path misses."""
+    """Older builds keyed loose .gguf files as <path>:LABEL, read only after the bare path misses."""
     import os
 
     if not model_id.lower().endswith(".gguf"):
@@ -2334,12 +2290,7 @@ def _legacy_standalone_gguf_key(model_id: str) -> Optional[str]:
 
 
 def _fill_target_id(target_id: str) -> str:
-    """Where a one-time backfill write for ``target_id`` has to land. A fill only adds, so unlike a save it
-    cannot retire the other spelling of a cached repo. Creating the snapshot-path key while the server
-    already holds the repo id would leave two entries for one quant, and the loader reads the load path
-    before the advertised id, so an upgraded browser's pre-upgrade copy would shadow the newer server
-    config. Only in that direction: a repo-id key never outranks an existing path entry, and two snapshot
-    paths name two caches."""
+    """A fill only adds, so it must not create a snapshot-path key beside a server repo-id entry."""
     from core.inference.model_ids import hf_cache_repo_id
     from utils.openai_auto_switch_settings import split_quant_suffix
 
@@ -2707,10 +2658,7 @@ def _llama_runtime_available() -> bool:
 
 
 def _llama_backend_active(model: str | None = None, token: HfTokenArg = None) -> bool:
-    """Whether llama serves the active model, or would serve ``model`` if supplied. Delegates to the embeddings
-    module so a runtime fallback from sentence-transformers to llama-server is honored: in that state the
-    process loads only inert GGUF, so the ST pickle gate below must not hard-block a repo whose GGUF
-    companion is clean. Before any backend is built this reflects the resolver."""
+    """Follows the embeddings resolver, so a sentence-transformers fallback to llama-server counts."""
     from core.rag import embeddings
     try:
         if model is not None:
@@ -3030,10 +2978,7 @@ def _is_st_weight_name(basename: str) -> bool:
 
 
 def _st_weight_source(model: str, hf_token: Optional[str]) -> Optional[tuple[str, list[str]]]:
-    """``(repo, weight files)`` for the repo an ST load of ``model`` would open. A slashless name such as
-    ``all-MiniLM-L6-v2`` resolves under the ``sentence-transformers/`` namespace, which is what the loader's
-    own ``st_repo_id_candidates`` encodes; probing only the literal id refused the alias outright and a
-    forced save then pinned it cache-only."""
+    """Probes every st_repo_id_candidates entry; the literal id alone refused slashless aliases."""
     from utils.utils import st_repo_id_candidates
 
     for candidate in st_repo_id_candidates(model) or [model]:
@@ -3073,10 +3018,7 @@ def _cached_snapshot_has_st_weights(model: str) -> bool:
 
 
 def _cached_st_source(model: str):
-    """``(repo id, snapshot dir)`` the cached ST weights for ``model`` came from. Same predicate as
-    ``_cached_snapshot_has_st_weights``, keeping the repo it matched under rather than reducing it to a yes:
-    for a slashless alias that repo is the ``sentence-transformers/`` one, and the PUT verifies and scans
-    it."""
+    """Returns the repo that matched, not a yes/no, since the PUT verifies and scans that repo."""
     try:
         from utils.utils import cached_st_source
         return cached_st_source(model)
@@ -3220,22 +3162,13 @@ def _resolve_embedding_model_plan(
     """
 
     def _authorized(repo: Optional[str]) -> bool:
-        """The repo a cache lookup actually matched, asked about in its own right.
-
-        Through the shared gate, so the forced-anonymous sentinel keeps a cached PUBLIC
-        embedder instead of being told to download one it already has: the raw check
-        refuses that caller whatever the repo is, which the template, dataset and GGUF
-        paths all stopped doing. is_cached is True because the lookup that produced this
-        repo already found it on disk.
-        """
+        """Goes through the shared gate, so the forced-anonymous sentinel keeps a cached public repo."""
         if not repo:
             return False
         return not cached_read_refused(token, repo_id = repo, is_cached = lambda: True)
 
-    # No pre-gate on ``resolved``: every cache lookup below is authorized against the repo it
-    # actually matched, so gating the lookup as well probed the Hub on every resolve, including
-    # the local and sentence-transformers paths that never consult it, and could spend half the
-    # resolver's deadline before a miss. It was also the wrong question, per the note above.
+    # Cache lookups are authorized per matched repo; a pre-gate would probe the Hub on every
+    # resolve.
 
     # Resolve for the model being selected.
     on_llama = _llama_backend_active(resolved, token)

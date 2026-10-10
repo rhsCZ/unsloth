@@ -36,10 +36,7 @@ def _norm_token(token: str) -> str:
 
 
 def _anchor_tokens(page_text: str, match: LocatorMatch) -> list[str]:
-    """Normalized anchor tokens from the chunk's leading span. Drops first and last
-    token (boundaries often slice mid-word) when long enough. Pipes are split out so
-    Markdown table cells (``|Q1|$1.2M|``) become individual words that match the PDF
-    word stream."""
+    """Drops the first and last word of the span (often cut mid-word); pipes split table cells apart."""
     segment = page_text[match.start : match.end]
     raw = segment.replace("|", " ").split()
     if len(raw) >= MIN_ANCHOR_WORDS + 2:

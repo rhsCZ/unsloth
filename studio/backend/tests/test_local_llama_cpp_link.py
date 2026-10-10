@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Behavioral tests for the --with-llama-cpp-dir 'unmanaged local link' contract.
-
-When the canonical llama.cpp dir is a symlink (POSIX) / junction (Windows) to a
-user's own checkout, Unsloth must treat it as externally managed:
-  - the in-app updater must not offer or apply a prebuilt over the link
-  - orphan cleanup must not kill a llama-server the user launched from that tree
-
-A link into the image's own code tree ($UNSLOTH_STUDIO_APP) is not one of these: the
-Docker image makes it over its own install, and treating it as a checkout disabled the
-update the image ships the runtime for.
-
-These exercise real link behavior rather than grepping the scripts.
-"""
+"""A llama.cpp link to a user's checkout is unmanaged; a link into UNSLOTH_STUDIO_APP is not."""
 
 import os
 import subprocess
@@ -86,11 +74,7 @@ def test_active_install_is_local_link(tmp_path: Path) -> None:
 
 
 def test_a_link_into_the_studio_app_tree_is_not_a_local_link(tmp_path: Path, monkeypatch) -> None:
-    """The Docker image keeps Studio's code in $UNSLOTH_STUDIO_APP and links each entry
-    of it into the Studio home, the directory users mount a volume on. whisper.cpp is
-    discovered through the home (there is no UNSLOTH_WHISPER_CPP_PATH pin to shortcut
-    it), so the image's own link would otherwise read as a user checkout and disable the
-    in-app update. A link into the image's code is Unsloth's own install, not external."""
+    """Image links into UNSLOTH_STUDIO_APP are Unsloth's own install, so the in-app update must stay on."""
     app = tmp_path / "app"
     home = tmp_path / "home"
     home.mkdir()

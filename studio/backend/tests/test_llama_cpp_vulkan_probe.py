@@ -1,23 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Vulkan free-VRAM reader regression tests on a synthetic probe output.
-
-Covers the post-probe handling in
-``LlamaCppBackend._get_gpu_free_memory_vulkan``:
-
-  * integrated GPUs (probe reports is_igpu=1) leave a flat per-device host
-    margin matching llama.cpp's --fit-target, so context auto-sizing can't
-    over-commit shared RAM, and report total 0 (shared RAM is not a budget),
-  * discrete GPUs (is_igpu=0) keep their free untouched and pass their real
-    total through so the fit can reserve absolute headroom,
-  * an inherited ``GGML_VK_VISIBLE_DEVICES`` is passed through to ggml unchanged
-    (ggml applies it), not stripped or filtered in Python -- the probe reports
-    ggml's compact ordinal, which load_model pins with ``--device Vulkan<i>``.
-
-The ggml Vulkan library is never loaded: subprocess.run is mocked to emit
-the tab-separated lines the real ``_vulkan_probe.py`` would print.
-"""
+"""Vulkan free-VRAM reader tests on a fake probe; GGML_VK_VISIBLE_DEVICES is left for ggml to apply."""
 
 from __future__ import annotations
 

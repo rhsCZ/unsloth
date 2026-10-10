@@ -77,11 +77,7 @@ def boto3_available() -> bool:
 
 
 def _build_s3_client(s3_config: dict):
-    """Create a boto3 S3 client from the config dict.
-
-    Uses explicit access keys when provided, otherwise falls back to the
-    default credential chain (IAM role / instance profile / env / shared creds).
-    """
+    """Explicit keys win; otherwise the default credential chain (IAM role, env, shared files)."""
     require_explicit_credentials({"s3_dataset": s3_config})
     import boto3
 
@@ -316,14 +312,7 @@ def prepare_s3_dataset_download(
     dest_dir: Optional[str] = None,
     cancel_callback: Optional[Callable[[], bool]] = None,
 ) -> S3DatasetDownload:
-    """Download supported dataset files from S3 to a local directory.
-
-    Returns the local files plus the owned temporary directory, when one was
-    created. Call ``cleanup()`` after the dataset loader has materialized data.
-
-    Raises ``RuntimeError`` if boto3 is missing, and ``ValueError`` if the
-    bucket/prefix contains no supported dataset files.
-    """
+    """Caller owns any temp dir returned; call cleanup() after the loader has materialized the data."""
     if not boto3_available():
         raise RuntimeError("S3 dataset loading requires boto3. Install it with: pip install boto3")
 

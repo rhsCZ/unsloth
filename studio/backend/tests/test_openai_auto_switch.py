@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Opt-in OpenAI /v1 model auto-switch: resolver, hook, and settings coercion.
-
-No GPU or llama-server: the backend and the load route are mocked, mirroring
-tests/test_gguf_completion_usage.py.
-"""
+"""Opt-in /v1 model auto-switch tests; the backend and load route are mocked, no llama-server."""
 
 import asyncio
 import json
@@ -49,42 +45,7 @@ import state.tool_policy as _tp
 
 @pytest.fixture(autouse = True)
 def _auto_switch_waiters_are_not_carried_between_tests(request, monkeypatch):
-    """Restore ``_auto_switch_waiters`` around every test, and fail the test that dirties it.
-
-    It is a module-level dict in routes.inference, so a test that registers a waiting request
-    and does not unregister it leaves that entry behind for every later test in the same xdist
-    worker. It matters beyond tidiness because ``_switch_waiter_count()`` sums every key rather
-    than reading one, so a single stranded entry inflates the count for the whole worker and
-    ``_wait_for_model_switch_idle`` sees waiters that do not exist.
-
-    Two jobs, deliberately. Restoring keeps the next test starting from a known state. Raising
-    names the test that left the residue instead of the unrelated one that trips over it later,
-    which is the whole difficulty with this class of bug: the failure surfaces nowhere near its
-    cause.
-
-    The two halves have different proofs, and one of them has none. Removing the marker from a
-    staging test makes that test fail, so the detection half is covered. Removing the restore
-    changes nothing any test here can observe: the growth check is per-test, so a carried-over
-    entry only harms files that run LATER in the same worker, and which files share a worker is
-    decided by xdist at run time. A cleanliness assertion in a second file would pass vacuously
-    whenever the two land in different processes, which is worse than no test at all, so the
-    restore is kept as a defensive measure and is deliberately left unproven.
-
-    ``monkeypatch`` is requested, and not because this fixture patches anything. It is what
-    fixes the teardown ORDER. ``_wire()`` rebinds the registry with
-    ``monkeypatch.setattr(inference_route, "_auto_switch_waiters", {})``, so the entry a test
-    stages goes into a temporary dict, and whichever of the two fixtures tears down second sees
-    the original one restored and nothing amiss. Depending on ``monkeypatch`` here makes this
-    fixture set up after it and therefore tear down before it, so the read below lands on the
-    dict the test actually wrote to. That ordering held incidentally without the dependency,
-    which is exactly the reason to state it: a guard that works by accident stops working
-    silently.
-
-    Three tests stage a waiting request on purpose, with ``_note_switch_waiter(key, 1)`` and no
-    matching -1, because that is the honest way to set the condition up. They carry
-    ``@pytest.mark.stages_switch_waiter`` to say so, which is checked here rather than inferred
-    from a name, so a new leak cannot arrive silently by resembling them.
-    """
+    """Fail any unmarked test that leaves a waiter staged, since _switch_waiter_count sums every key."""
     before = dict(inference_route._auto_switch_waiters)
     try:
         yield
@@ -166,12 +127,7 @@ _REAL_HOST_HAS_NON_GGUF_BACKEND = resolver._host_has_a_non_gguf_backend
 
 @pytest.fixture(autouse = True)
 def _host_serves_non_gguf(monkeypatch):
-    """Pin the host-capability gates for the classifier tests.
-
-    They are about the config rules, not about whether this machine happens to have
-    torch or MLX installed, and an unpinned MLX verdict made the whole file pass or fail
-    by platform. Each gate is covered by its own test below.
-    """
+    """Pin host gates so classifier tests do not depend on whether torch or MLX is installed."""
     monkeypatch.setattr(resolver, "_host_has_a_non_gguf_backend", lambda: True)
     # the device itself, not the helper, so a test setting DEVICE for itself still wins.
     monkeypatch.setattr(hw, "DEVICE", hw.DeviceType.CUDA, raising = False)
@@ -179,11 +135,7 @@ def _host_serves_non_gguf(monkeypatch):
 
 @pytest.fixture(autouse = True)
 def _clean_resolver_index():
-    """Drop the scan cache around every test.
-
-    The /v1 admission hook warms the index in the background, so a test exercising it
-    can publish its fixture's scan and, inside the TTL, hand it to the next test.
-    """
+    """Clear the scan cache per test; the /v1 hook's background warm-up would leak it across the TTL."""
     resolver.invalidate_index()
     yield
     resolver.invalidate_index()
@@ -1511,13 +1463,7 @@ def test_override_route_rejects_managed_flag_and_removes(monkeypatch):
 
 
 def test_override_route_stores_llama_server_tuning(override_store):
-    """Load mode, draft KV dtype, checkpoints and cache RAM survive the route.
-
-    The picker has a control for each and mirrors all four, and
-    ``model_override_load_kwargs`` already applies them off a stored row, so a
-    payload that drops them leaves the setting reaching a picker load and nothing
-    else -- and the panel, which hydrates from this row, reads it back as unset.
-    """
+    """The override route must store load mode, draft KV dtype, checkpoints and cache RAM."""
     _put(
         "unsloth/B-GGUF",
         load_mode = "mmap+mlock",
@@ -1539,11 +1485,7 @@ def test_override_route_stores_llama_server_tuning(override_store):
 
 
 def test_override_route_keeps_a_row_holding_only_tuning(override_store):
-    """One of the four on its own is a saved field, not an empty payload.
-
-    ``is_removal`` counts what the payload carries, so a field it did not declare
-    would read as "nothing set" and delete the model's row instead of writing it.
-    """
+    """A lone tuning field is a save, not a removal, since is_removal counts the fields sent."""
     _put("unsloth/B-GGUF", cache_ram = 0)
     assert settings.get_model_override("unsloth/B-GGUF") == {"cache_ram": 0}
 
@@ -4704,11 +4646,7 @@ _PASSTHROUGH_PLAIN = [{"role": "user", "content": "hi"}]
 def test_chat_count_tokens_prices_the_route_the_completion_takes(
     monkeypatch, cli_policy, messages, fields, priced_tools
 ):
-    """The count must describe the request the completion actually sends (#7453).
-
-    Applying the process tool policy without first asking which route the request takes prices a
-    built-in catalog plus the action nudge, while the completion forwards verbatim and sends neither.
-    """
+    """The count must match the route the completion takes; applying tool policy first overprices it."""
     _switched, counted = _count_tokens_backend(monkeypatch, count = 99, supports_tools = True)
 
     async def _select(
@@ -4736,11 +4674,7 @@ def test_chat_count_tokens_prices_the_route_the_completion_takes(
 
 
 def test_chat_count_tokens_keeps_adjacent_user_turns_on_the_passthrough(monkeypatch):
-    """Coalescing is an ordinary-GGUF-path step, so it has to follow the routing.
-
-    ``_openai_messages_for_passthrough`` drops the empty assistant sentinel but keeps the two user
-    turns around it (a stopped response's shape), so merging prices a prompt that route never sends.
-    """
+    """Passthrough keeps adjacent user turns uncoalesced, so the count must not merge them."""
     _switched, counted = _count_tokens_backend(monkeypatch, count = 99, supports_tools = True)
     sentinel_thread = [
         {"role": "user", "content": "first"},
@@ -4761,10 +4695,7 @@ def test_chat_count_tokens_keeps_adjacent_user_turns_on_the_passthrough(monkeypa
 
 
 def test_chat_count_tokens_folds_a_stopped_studio_tool_thread(monkeypatch):
-    """The counter skips its own coalesce on the passthrough, so only the fold helper keeps a
-    Stop-sentinel thread alternating; without it the bar prices a prompt the completion 400s on.
-    Unlike ``..._keeps_adjacent_user_turns_on_the_passthrough`` above, this thread IS folded.
-    """
+    """A stopped studio tool thread must be folded to alternate roles, or the counted prompt 400s."""
     _switched, counted = _count_tokens_backend(monkeypatch, count = 99)
     thread = [
         {"role": "user", "content": "what did we say about seeds?"},
@@ -4940,12 +4871,7 @@ def _enabled_mcp_server(
     cached = None,
     cooloff = False,
 ):
-    """One enabled MCP server, with its discovery cache in a known state.
-
-    Both cache dicts are module globals shared across the whole test session, so they are
-    replaced rather than mutated: a leftover entry would make an "undiscovered" case look
-    discovered and quietly pass.
-    """
+    """Replace the MCP discovery caches rather than mutate them, or a leftover entry fakes discovery."""
     from core.inference import mcp_client
     from core.inference import tools as tools_mod
     from storage import mcp_servers_db
@@ -5199,11 +5125,7 @@ def test_chat_count_tokens_still_counts_without_audio(monkeypatch):
 
 
 def test_chat_count_tokens_refuses_an_empty_prompt(monkeypatch):
-    """#8882: an empty conversation renders the generation marker alone.
-
-    unsloth/Phi-4-mini-instruct-GGUF Q4_K_M renders "<|assistant|>" for an empty message list, one
-    token, and the header reported it as usage on a chat nobody had started.
-    """
+    """An empty chat renders just the generation marker, so it is refused rather than reported as usage."""
     switched, counted = _count_tokens_backend(monkeypatch, count = 1)
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(inference_route.chat_count_tokens(_count_request([]), "tester"))
@@ -5222,12 +5144,7 @@ def test_chat_count_tokens_counts_an_empty_chat_carrying_a_system_prompt(monkeyp
 
 
 def test_chat_count_tokens_counts_an_empty_chat_the_cli_policy_fills(monkeypatch):
-    """`--enable-tools` outranks the request's own `enable_tools: false`.
-
-    The client cannot see that policy, so the emptiness verdict belongs here: the schemas and the
-    action nudge it injects are real occupancy, and refusing them would blank a bar that has a
-    number to show.
-    """
+    """--enable-tools outranks enable_tools: false, so the server, not the client, judges emptiness."""
     _switched, counted = _count_tokens_backend(monkeypatch, count = 850, supports_tools = True)
 
     async def _select(
@@ -5509,17 +5426,7 @@ def test_strict_count_refuses_a_text_only_template_fallback(monkeypatch, failure
 
 
 def test_an_empty_chat_sends_the_empty_list_unchanged(monkeypatch):
-    """A fresh New Chat has no messages and, by default, no system prompt. The count must
-    forward that empty list as-is rather than inventing a turn to make the template happy.
-
-    Templates that index ``messages[0]`` look like they must reject an empty list, and under
-    python jinja2 they do. llama-server renders through minja, where that yields undefined
-    instead of raising, so the real engine returns the bare preamble. Checked against the
-    shipped templates for Llama-3.2-1B-Instruct, Qwen3-8B, Phi-4, gemma-3-270m-it and
-    mistral-7b-instruct-v0.3 driven through llama-server with --jinja: all five render.
-    Injecting a placeholder system turn would add a system block to the count for Qwen3
-    (+30 chars) and Phi-4 (+38), overcounting the empty chat the bar exists to show. Templates
-    that raise on no messages (Qwen3.5+) are re-priced only after refusing; see below."""
+    """Send the empty message list as-is; a placeholder system turn would overcount the empty chat."""
     seen = {}
 
     class _FakeResponse:
@@ -5688,10 +5595,7 @@ def test_a_busy_server_is_not_taken_for_a_refusal(refusing_client):
 
 
 def test_a_count_never_spawns_mcp_servers():
-    """get_enabled_mcp_tools starts stdio MCP server processes, writes cache and cooloff state,
-    and blocks for a whole probe timeout against a server that is down. A background recount
-    must not do host work the user's completion never asked for, so the count path pins
-    mcp_allowed False rather than deriving it from payload.mcp_enabled."""
+    """The count path pins mcp_allowed False, since get_enabled_mcp_tools would spawn stdio MCP servers."""
     import ast
     import pathlib
 
@@ -6253,14 +6157,7 @@ def _drive_idle_loop(
     until = None,
     timeout = 10.0,
 ):
-    """Pass `until` when the test asserts something the loop must DO: a loaded
-    runner can otherwise be cancelled mid-sequence (save recorded, unload not),
-    which is a flake, not a failure. Name the LAST state the test asserts: the
-    loop signals most of these from inside a to_thread body and still has
-    bookkeeping to run after it, so an earlier landmark cancels that away.
-    The fixed window always runs afterwards, both as settle time for that
-    bookkeeping and because most of these tests also assert the loop then
-    stops, which needs a stretch of loop time to be worth anything."""
+    """Pass until naming the last state asserted; an earlier one cancels the loop's bookkeeping."""
     import time as _time
 
     async def _drive():
@@ -7030,13 +6927,7 @@ def test_a_fill_keeps_the_sent_context_when_it_does_not_store_the_flag(monkeypat
     ["100352", "not-a-number", 100352.0, True, [100352], {"v": 100352}],
 )
 def test_a_legacy_override_row_cannot_break_the_loader(stored_max_seq_length):
-    """Rows are coerced on write but returned verbatim on read (get_model_overrides),
-    so an entry written by an older build, by hand or through the API can hold any
-    JSON type. Comparing the context against one must degrade, never raise: a raise
-    here fails every auto-switch load of that model with a 500 the user cannot clear.
-    A value that is not a plain positive int cannot be confirmed as matching, so the
-    shadowing flag is stripped exactly as it was before the opt-in existed.
-    """
+    """Legacy override rows can hold any JSON type; the loader must degrade, never raise, on them."""
     from utils.openai_auto_switch_settings import model_override_load_kwargs
 
     out = model_override_load_kwargs(
@@ -7052,10 +6943,7 @@ def test_a_legacy_override_row_cannot_break_the_loader(stored_max_seq_length):
 
 @pytest.mark.parametrize("stored_max_seq_length", ["", False, None, 0])
 def test_a_falsy_legacy_context_leaves_the_flag_as_the_only_control(stored_max_seq_length):
-    """These resolve to "no context field sent", so there is nothing to shadow and
-    the pass-through flag stays the user's only way to set the knob -- the same
-    answer this path gave before the opt-in existed.
-    """
+    """Falsy legacy context values send no context field, so the pass-through flag is the only control."""
     from utils.openai_auto_switch_settings import model_override_load_kwargs
 
     out = model_override_load_kwargs(
@@ -7248,13 +7136,7 @@ _LEGACY_SNAPSHOT = "/home/u/.cache/hub-alt/models--unsloth--B-GGUF/snapshots/2f1
 
 
 def test_a_repo_save_retires_the_legacy_snapshot_path_entry(monkeypatch):
-    """The two spellings of one cached repo cannot both be stored, or the older wins.
-
-    The one-time backfill mirrors the pre-upgrade path-qualified key to the server, the
-    Settings page then keys the same row by its repo id, and the loader reads the load
-    path first: without retiring the leftover, every API load applies the settings the
-    user just replaced.
-    """
+    """A repo save must retire the legacy snapshot-path key, or the loader reads the stale row first."""
     _mock_override_store(monkeypatch)
     settings.set_model_override(f"{_LEGACY_SNAPSHOT}:Q4_K_M", max_seq_length = 4096)
 
@@ -7488,12 +7370,7 @@ def test_vulkan_probe_without_a_binary_does_not_block_the_load(monkeypatch):
 
 
 def _pin_resolves_on_a_host_with_device_0(monkeypatch):
-    """Make device 0 exist, so the index-kind check is the only thing under test.
-
-    Without this the whole helper falls to its `except: return False` on a CPU-only
-    runner, which is how the mismatch cases below would pass for the wrong reason and
-    how the matching case failed on CI while passing on a GPU box.
-    """
+    """Make device 0 exist, or CPU runners fall to False and mismatch tests pass for the wrong reason."""
     import utils.hardware as hardware_pkg
     from utils.hardware import DeviceType
     from utils.hardware import hardware as hardware_mod
@@ -8174,11 +8051,7 @@ def test_two_local_paths_differing_only_in_case_are_not_the_same_model(monkeypat
 
 
 def test_abs_path_ids_are_recognised_in_either_platform_spelling():
-    """Path() follows the running OS, so a Windows host read "/home/me/x.gguf" as
-    relative and a POSIX host read "C:\\models\\x.gguf" the same way, and either
-    then reached /v1/models as a published host path. Ids outlive the machine
-    that wrote them (settings sync, WSL, a copied config), and the model-override
-    identity already folds both spellings."""
+    """Path ids must be detected in every OS spelling; Path() follows the host, but ids outlive it."""
     for spelling in ("/home/me/models/x.gguf", "C:\\models\\x.gguf", "//host/share/x.gguf"):
         assert resolver._is_abs_path_id(spelling) is True, spelling
         assert (
@@ -8198,10 +8071,7 @@ def test_abs_path_ids_are_recognised_in_either_platform_spelling():
 
 
 def test_fill_absent_fields_put_never_replaces_a_newer_server_value(override_store):
-    """The one-time localStorage backfill reads the override map once and then
-    writes each model in turn, so a save by another tab during that pass was
-    overwritten by this browser's older copy. fill_absent_fields writes only what
-    the entry lacks, so every value already on the server wins."""
+    """A backfill must only fill absent fields, so a stale browser copy cannot overwrite the server."""
     newer = settings_route.ModelOverridePayload(model_id = "unsloth/B-GGUF", max_seq_length = 8192)
     settings_route.update_openai_auto_switch_override(newer, "tester")
 
@@ -8220,10 +8090,7 @@ def test_fill_absent_fields_put_never_replaces_a_newer_server_value(override_sto
 
 
 def test_fill_absent_fields_carries_the_browser_only_settings_into_a_legacy_entry(monkeypatch):
-    """Codex P1: the override map shipped before the browser mirror did, storing only
-    llama_extra_args and max_seq_length. An upgraded install holds such an entry while
-    localStorage holds the context, KV cache, speculative and GPU settings, and an
-    entry-level skip would strand exactly what the migration exists to carry."""
+    """A legacy entry lacking browser-only settings must still be filled, not skipped whole."""
     store = _mock_override_store(monkeypatch)
 
     legacy = settings_route.ModelOverridePayload(
@@ -8332,10 +8199,7 @@ def test_map_entry_fill_reads_and_writes_in_one_transaction(tmp_path, monkeypatc
 
 
 def test_a_first_writer_entry_collapses_a_conflicting_claim_inside_the_write(tmp_path, monkeypatch):
-    """The credential-provenance rule, decided where the race is. A caller that reads the map,
-    sees nothing, and then writes loses to a second caller doing the same with a different
-    identity: both see "absent" and the last one stores its own claim over the first. So the
-    comparison belongs inside this transaction."""
+    """Compare credential provenance inside the write transaction, or two first writers race."""
     monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path))
     monkeypatch.setattr(db, "_schema_ready", set())
 
@@ -8386,13 +8250,7 @@ def test_a_first_writer_entry_collapses_a_conflicting_claim_inside_the_write(tmp
 def test_a_fill_never_relabels_a_stored_gpu_pin_with_this_browser_s_index_space(
     tmp_path, monkeypatch
 ):
-    """A pin and the index space it is written in are one value.
-
-    The server holds physical ids with no qualifier, which is what every writer
-    before the field meant; this browser's backfill offers Vulkan ordinals. Field
-    by field the ids would stay and the qualifier would land, and the row would
-    then name devices in a space it was never written in.
-    """
+    """A GPU pin and its index space are one value; a fill must not add this browser's qualifier."""
     monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path))
     monkeypatch.setattr(db, "_schema_ready", set())
 
@@ -8417,10 +8275,7 @@ def test_a_fill_never_relabels_a_stored_gpu_pin_with_this_browser_s_index_space(
 
 
 def test_gpu_ids_dedupe_is_not_a_scan_of_the_list_being_built():
-    """gpu_ids arrives from an authenticated client and normalize_model_override
-    de-duplicates it. Testing membership against the growing list walks up to
-    MAX_GPU_ID entries per element; a set keeps the pass linear. Order, bounds and
-    the bool rejection all have to survive the change."""
+    """Dedupe gpu_ids with a set, not a scan of the growing list, so the pass stays linear."""
     from utils.openai_auto_switch_settings import MAX_GPU_ID, normalize_model_override
 
     assert normalize_model_override({"gpu_ids": [3, 1, 3, 0, 1, 2]})["gpu_ids"] == [3, 1, 0, 2]
@@ -8467,10 +8322,7 @@ def _switch_with_overrides(monkeypatch, resolves_to, stored, requested):
 
 
 def test_a_loose_gguf_prefers_its_path_keyed_settings_over_the_alias(monkeypatch):
-    """Codex: the settings UI keys a standalone .gguf by its bare path, while
-    override_id is the filename stem /v1/models advertises and an overrides PUT can
-    be written against. Reading the alias first let it shadow the saved settings for
-    good, so an API load kept applying the old flags."""
+    """A loose .gguf's path-keyed settings must win over the filename alias, which can shadow them."""
     path = "/srv/models/Qwen3-8B-Q4_K_M.gguf"
     alias = "Qwen3-8B-Q4_K_M"
     req = _switch_with_overrides(
@@ -8551,11 +8403,7 @@ def test_a_cached_repo_still_resolves_by_its_repo_id(monkeypatch):
 
 
 def test_a_fill_does_not_replay_a_stored_flag_through_validation(monkeypatch):
-    """The migration now writes for entries it used to skip, and an omitted
-    llama_extra_args is normally carried over from the stored entry. Replaying a
-    flag that has been denylisted since it was saved would 400 the one-time
-    migration, which then retries on every start. A fill keeps the stored flags
-    without sending them back."""
+    """A fill keeps stored llama_extra_args and never replays them, since a denylisted flag would 400."""
     from core.inference import llama_server_args
 
     store = _mock_override_store(monkeypatch)
@@ -8586,11 +8434,7 @@ def test_a_fill_does_not_replay_a_stored_flag_through_validation(monkeypatch):
 
 
 def test_override_payload_rejects_booleans_for_numeric_fields():
-    """bool subclasses int and pydantic parses non-strictly, so `true` would
-    arrive as 1: `max_seq_length: true` becomes a one-token context and
-    `gpu_ids: [true]` pins GPU 1. _bounded_int rejects bools for exactly that
-    reason, but never sees one, because coercion happens at the route boundary
-    first. Reject them there so that guard is reachable through this path."""
+    """Pydantic coerces true to 1, so the route rejects booleans before _bounded_int can see them."""
     import pytest
     from pydantic import ValidationError
     from routes.settings import ModelOverridePayload
@@ -8627,12 +8471,7 @@ def test_override_payload_rejects_booleans_for_numeric_fields():
 
 
 def test_two_spellings_of_one_cached_quant_do_not_delete_each_others_save(monkeypatch):
-    """A save writes its target key, then reads the map back to retire the other spelling
-    of the same cached repo, in a second transaction. This route is a plain `def`, so
-    FastAPI runs it in a threadpool: two clients saving one quant, one by repo id and one
-    by the snapshot path an upgraded install still holds, can both write before either
-    cleanup runs and then retire each other's row. Both calls return 200 and nothing is
-    stored. Whichever runs second must retire the first instead."""
+    """Two threadpool saves of one quant under different spellings must not retire each other's row."""
     _mock_override_store(monkeypatch)
     repo = "unsloth/Qwen3-8B-GGUF:Q4_K_M"
     snapshot = "/mnt/old-cache/models--unsloth--Qwen3-8B-GGUF/snapshots/abc123:Q4_K_M"
@@ -8867,11 +8706,7 @@ def test_api_only_turned_on_mid_save_still_spares_the_model(monkeypatch, tmp_pat
 
 
 def _age_resolver_clock(monkeypatch, seconds):
-    """Advance the resolver's monotonic clock by *seconds*.
-
-    Ageing a snapshot by rewriting its stamp assumes the host has been up longer
-    than the age; a fresh CI runner has not, and the subtraction flips the sign.
-    """
+    """Age by patching the clock: subtracting from a stamp goes negative on a fresh CI runner."""
     base = time.monotonic()
     monkeypatch.setattr(resolver, "time", types.SimpleNamespace(monotonic = lambda: base + seconds))
 
@@ -9722,10 +9557,7 @@ def test_a_gguf_only_endpoint_refuses_a_non_gguf_target_before_loading(monkeypat
 
 
 def test_two_scan_roots_sharing_a_basename_do_not_answer_for_each_other(monkeypatch):
-    """A scanned directory with no repo alias is advertised under its basename, so
-    /root1/model and /root2/model both advertise "model". Accepting that shared alias as
-    proof of residency answered an explicit request for the second path with the first
-    path's weights, defeating the exact filesystem keys _build_index deliberately holds."""
+    """Shared basenames across scan roots must not count as residency; exact filesystem keys decide."""
     llama = _FakeBackend("org/A-GGUF")
     llama.is_loaded = False
 
@@ -9966,10 +9798,7 @@ def test_a_text_seq2seq_checkpoint_is_not_switchable(tmp_path):
 
 
 def test_a_whisper_checkpoint_is_switchable(tmp_path):
-    """Whisper wears ForConditionalGeneration and carries no multimodal sub-config, being
-    the audio model rather than wearing one, so requiring that key filtered it out with T5.
-    The orchestrator loads it through WhisperForConditionalGeneration and chat routes the
-    request to generate_whisper_response, so it is a target this server actually serves."""
+    """Whisper has no multimodal sub-config, so a sub-config requirement must not filter it out."""
     path = _local_checkpoint(tmp_path, "whisper-large-v3")
     info = SimpleNamespace(id = str(path), path = str(path))
     (path / "config.json").write_text(
@@ -10022,10 +9851,7 @@ def test_an_mlx_host_does_not_advertise_an_asr_checkpoint(tmp_path, monkeypatch)
 
 
 def test_a_conditional_checkpoint_with_no_vision_sub_config_is_switchable(tmp_path, monkeypatch):
-    """A conversion that drops the vision tower keeps the parent's multimodal architecture name
-    but loses the sub-config, so demanding one withheld a checkpoint both workers load. Shape
-    taken from ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit, whose weights hold only language_model.*
-    and whose config carries image_token_id and text_config but no vision_config at all."""
+    """A checkpoint whose conversion dropped the vision tower has no vision_config; still switchable."""
     path = _local_checkpoint(tmp_path, "Ornith-MLX-4bit")
     info = SimpleNamespace(id = str(path), path = str(path))
     (path / "config.json").write_text(
@@ -10089,10 +9915,7 @@ def test_a_revision_key_does_not_pass_as_a_modality_marker(tmp_path):
 def test_a_config_declaring_model_file_is_not_switchable(
     tmp_path, monkeypatch, architecture, mlx_host
 ):
-    """model_file is the other key that runs code out of the checkpoint, and unlike auto_map it
-    does not pass through trust_remote_code at all: mlx_lm/utils.py and mlx_vlm/utils.py both
-    exec_module the named file before dispatching on model_type. An unattended switch grants no
-    approval, so it is refused on the same boundary as auto_map."""
+    """model_file executes checkpoint code without trust_remote_code, so it is refused like auto_map."""
     monkeypatch.setattr(resolver, "_host_serves_mlx", lambda: mlx_host)
     path = _local_checkpoint(tmp_path, "CustomModelFile")
     info = SimpleNamespace(id = str(path), path = str(path))
@@ -10111,14 +9934,7 @@ def test_a_config_declaring_model_file_is_not_switchable(
 
 
 def test_a_conditional_family_the_model_picker_refuses_is_not_switchable(tmp_path):
-    """The resolver used to re-derive the category from architecture strings and drifted from the
-    classifier behind the picker's can_chat, which is how an installed checkpoint could be offered
-    in the UI and be unknown to the API. The conditional branch defers to that classifier now, so
-    the families it refuses are refused here without being restated.
-
-    Only that branch. The resolver is deliberately not a subset overall: the causal fast path does
-    not consult the classifier, and the audio branch serves whisper on a Transformers host though
-    the classifier calls it unchattable."""
+    """Conditional checkpoints defer to the picker's classifier; refused families stay unswitchable."""
     from hub.services.models.common import _local_transformers_can_chat
 
     path = _local_checkpoint(tmp_path, "Shared")
@@ -10145,10 +9961,7 @@ def test_a_conditional_family_the_model_picker_refuses_is_not_switchable(tmp_pat
 
 
 def test_an_empty_auto_map_is_not_remote_code(tmp_path):
-    """The consent gate reads auto_map for truthiness (_config_has_auto_map in
-    utils/security/consent.py), so an empty or null mapping names no implementation and
-    executes nothing. Rejecting on the key's presence alone hid a loadable checkpoint
-    while adding no approval boundary."""
+    """Empty or null auto_map is not remote code: the consent gate checks truthiness, not key presence."""
     path = _local_checkpoint(tmp_path, "EmptyAutoMap")
     info = SimpleNamespace(id = str(path), path = str(path))
     base = '{"architectures": ["Qwen3ForCausalLM"], "model_type": "qwen3", "auto_map": %s}'
@@ -10221,10 +10034,7 @@ def test_the_advertised_alias_is_cleared_before_a_replacement_load(tmp_path):
 
 
 def test_a_failed_replacement_keeps_the_surviving_model_advertised():
-    """A repair raises SidecarSwapInProgress before the old worker is torn down, so the
-    orchestrator keeps active_model_name and that model goes on serving. The alias was
-    already cleared for the load that never happened, so without restoring it the still
-    resident model loses the id /v1/models and response ids report it under."""
+    """A failed swap must restore the active alias, or the surviving model loses its advertised id."""
 
     class _Orchestrator:
         def __init__(self, active):
@@ -10870,11 +10680,7 @@ def test_audio_beside_a_clip_is_rejected_before_a_non_gguf_switch(monkeypatch):
 
 
 def test_the_gguf_audio_preflight_takes_the_base64_llama_cpp_takes():
-    """The preflight must refuse exactly what _prepare_audio_for_llama refuses.
-
-    That helper decodes with the lenient default, which drops whitespace, so a
-    validate = True preflight 400'd MIME-wrapped and newline-padded uploads the same
-    server served before the preflight existed."""
+    """Audio preflight must refuse exactly what _prepare_audio_for_llama refuses, incl. wrapped base64."""
     import wave
 
     wav = io.BytesIO()

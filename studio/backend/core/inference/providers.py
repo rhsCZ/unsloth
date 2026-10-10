@@ -453,13 +453,7 @@ def get_base_url(provider_type: str) -> str | None:
 
 
 def provider_runs_local_tools(provider_type: str | None) -> bool:
-    """Whether Unsloth may run its own tool loop against this provider type.
-
-    Unsloth's tools (web_search, python, terminal, MCP, knowledge-base search) execute on the
-    Unsloth host, so any provider whose wire format can carry a tool schema out and a tool result
-    back can use them: the whole OpenAI-compatible family plus Gemini and Anthropic, whose
-    native shapes are translated to and from OpenAI chunks in ``external_provider.py``.
-    """
+    """Unsloth's tools run on the host, so any provider that carries tool schemas and results qualifies."""
     # isinstance: a list/dict from the body would raise TypeError (500 instead of 400).
     if not isinstance(provider_type, str):
         return False
@@ -468,15 +462,7 @@ def provider_runs_local_tools(provider_type: str | None) -> bool:
 
 
 def provider_model_runs_local_tools(provider_type: str | None, model: str | None) -> bool:
-    """``provider_runs_local_tools`` narrowed to one model.
-
-    Gemini's image models are the exception the provider-wide flag cannot
-    express: ``_stream_gemini`` sets ``text_tools_allowed = False`` for them and
-    emits no ``functionDeclarations``, so the catalog never reaches the model.
-    Advertising the capability there lights up the MCP and Docs pills and then
-    completes the turn as if the user had selected nothing, which is worse than
-    not offering them.
-    """
+    """Gemini image models are excluded: _stream_gemini emits no functionDeclarations for them."""
     if not provider_runs_local_tools(provider_type):
         return False
     if provider_type == "gemini" and isinstance(model, str):
@@ -488,17 +474,7 @@ def provider_model_runs_local_tools(provider_type: str | None, model: str | None
 
 
 def provider_hosted_tools(provider_type: str | None) -> frozenset[str]:
-    """Built-in tool names this provider executes on its own side.
-
-    These are not Unsloth's tools: they are body flags (`tools: [{type:
-    "web_search"}]`, `plugins: [{id: "web"}]`, `codeExecution`) that the provider
-    runs and bills, and the only thing this server does with them is forward the
-    name. `provider_runs_local_tools` is orthogonal -- most providers do both,
-    and a request picks a side by which names it lists.
-
-    Empty for the self-hosted presets (llama.cpp, vLLM, Ollama, custom) and for
-    openai_codex, whose `web_search` is Unsloth's own tool run by the Codex loop.
-    """
+    """Provider-run tools (not Unsloth's); empty for self-hosted presets and openai_codex."""
     if not isinstance(provider_type, str):
         return frozenset()
     info = PROVIDER_REGISTRY.get(provider_type)
@@ -520,15 +496,7 @@ LOCAL_STANDINS_FOR_HOSTED_TOOLS: dict[str, frozenset[str]] = {
 
 
 def hosted_only_tools(provider_type: str | None, enabled_tools: Any) -> list[str]:
-    """The requested hosted tools Unsloth is not running in their place.
-
-    image_generation and web_fetch have no local implementation, and their UI
-    pills are independent of Search / Code / RAG, so a request that mixes one of
-    them with an Unsloth tool has to carry it through to the provider or the tool
-    silently disappears while its toggle stays on. code_execution has no local
-    implementation either, and rides along unless the same request also asked
-    for the local tools that would duplicate it.
-    """
+    """Hosted tools without a local version are forwarded, or the toggle stays on while nothing runs."""
     if not isinstance(enabled_tools, list):
         return []
     hosted = provider_hosted_tools(provider_type)
@@ -667,16 +635,7 @@ def _public_registry_hostname(host: str) -> bool:
 
 
 def _metadata_address(address: str) -> bool:
-    """``_metadata_host`` for a RESOLVED address: the exact services, no net.
-
-    The 169.254.0.0/16 clause exists to catch a caller who types a link-local
-    address at the metadata service directly, and it stays for that. It cannot
-    be applied to a resolved address: 169.254/16 is the general IPv4 link-local
-    range (RFC 3927), so a self-assigned host, an mDNS .local name on a network
-    without DHCP, or a captive portal answering every query would all read as
-    the metadata service. Those are refused today by nobody, and this change is
-    not the place to start.
-    """
+    """Resolved addresses match only exact metadata IPs; 169.254/16 is general IPv4 link-local."""
     try:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
@@ -692,14 +651,7 @@ _HOST_SAFE_CHARS = "!$&'()*+,;=" + '"`{}%|\\'
 
 
 def _transport_host(hostname: str) -> str:
-    """The ASCII host httpx will dial, so the checked name is the dialled name.
-
-    ``socket.getaddrinfo`` encodes a Unicode host with the stdlib ``idna`` codec
-    (IDNA 2003), httpx with the ``idna`` package (IDNA 2008), and the two differ
-    on the deviation characters: straße.de resolves as strasse.de through the
-    resolver and as xn--strae-oqa.de through httpx, which are different hosts
-    owned by different people. Mirrors httpx's `_urlparse.encode_host`.
-    """
+    """Encodes the host the way httpx does (IDNA 2008), so the checked name is the one actually dialled."""
     try:
         # An address is dialled as written; quoting one would corrupt IPv6.
         ipaddress.ip_address(hostname)
@@ -725,12 +677,7 @@ def _cached_addresses(hostname: str) -> tuple[str, ...] | None:
 
 
 def _resolve_host(hostname: str, port: int | None, scheme: str) -> tuple[str, ...] | None:
-    """Addresses for ``hostname``, or ``None`` when the resolver did not answer.
-
-    One lookup and one cache entry serve both callers, which read "no answer" in
-    opposite directions: the metadata check has nothing to refuse, the opt-in
-    private-address check refuses.
-    """
+    """One lookup serves both callers, which read None oppositely: metadata passes, private refuses."""
     import socket
 
     hostname = _transport_host(hostname)
@@ -803,11 +750,7 @@ def _managed_account_caller() -> bool:
 
 
 def _managed_private_urls_allowed() -> bool:
-    """True when the owner has opened private provider addresses to managed accounts.
-
-    Imported here, not at module scope: tests/test_provider_base_url_validation.py loads this
-    module standalone.
-    """
+    """Imported locally so tests/test_provider_base_url_validation.py can load this module standalone."""
     from utils.managed_provider_url_settings import get_managed_private_provider_urls_allowed
     return get_managed_private_provider_urls_allowed()
 
@@ -837,11 +780,7 @@ def _reject_non_public(hostname: str, port: int | None, scheme: str, reason: str
 
 
 def public_provider_address(url: str) -> str:
-    """Resolve ``url``'s host now and return one public address to dial, or raise ``ValueError``.
-
-    Re-resolving per connection stops a name rebinding to loopback or the LAN after the
-    cached check.
-    """
+    """Resolved per connection so a name cannot rebind to loopback or the LAN after the cached check."""
     import socket
 
     parts = urlsplit(url)
@@ -870,11 +809,7 @@ METADATA_REFUSED_REASON = "Cloud metadata endpoints cannot be used as a provider
 
 
 def provider_address_excluding_metadata(url: str) -> str:
-    """Resolve ``url``'s host now and return one address to dial, refusing only metadata services.
-
-    For a caller the owner has allowed private addresses. Re-resolving rather than trusting the
-    save-time check is the point: a name is free to answer 169.254.169.254 afterwards.
-    """
+    """Re-resolves instead of trusting the save-time check: a name may later answer the metadata IP."""
     import socket
 
     parts = urlsplit(url)
@@ -905,23 +840,7 @@ def provider_address_excluding_metadata(url: str) -> str:
 
 
 def validate_provider_base_url(base_url: str) -> str:
-    """Return a normalized provider base URL, or raise ``ValueError``.
-
-    The backend issues outbound requests to this URL with the caller's decrypted
-    API key attached, so it is caller-controlled server-side egress. Only shapes
-    that can never be a real provider endpoint are refused: a non-http(s) scheme,
-    control characters, a missing host, and cloud metadata services. Plain http,
-    loopback, LAN hosts, odd ports, query strings and basic-auth userinfo all
-    stay valid -- Ollama, llama.cpp, vLLM and custom gateways rely on them. A
-    caller-supplied hostname is resolved far enough to apply the metadata block
-    to DNS aliases of it; rejecting other private addresses stays opt-in for the
-    owner, and is on for a managed account until the owner turns it off for the
-    installation (``utils.managed_provider_url_settings``), which is how a team
-    sharing one LAN model server gets to use it from more than one account.
-
-    Normalization is strip + trailing-slash removal only (what the client did
-    before), so validating an already-validated URL returns it unchanged.
-    """
+    """Private addresses are refused only if the owner opts in, or by default for managed accounts."""
     if not isinstance(base_url, str) or not base_url.strip():
         raise ValueError("Provider base URL is required.")
 
@@ -968,22 +887,7 @@ def validate_provider_base_url(base_url: str) -> str:
 def list_available_providers(
     include_hidden: bool = False, include_oauth: bool = False
 ) -> list[dict[str, Any]]:
-    """Return registered providers (for the /registry endpoint).
-
-    Hidden entries exist only for backend lookups and are surfaced by the UI via
-    ``CUSTOM_PROVIDER_PRESETS`` instead of the dropdown, so they stay filtered out by default. That
-    default is load-bearing for upgrades: a browser holding a cached bundle from before this
-    capability existed has no idea to filter on ``hidden``, and would render the self-hosted presets
-    as duplicate dropdown entries.
-
-    ``include_hidden`` is how a client that does know says so. The self-hosted presets are exactly
-    the ones that run Unsloth's tools, so their capability has to reach a frontend that asks for it,
-    and asking is opt-in.
-
-    OAuth rows are opt-in too: a pre-OAuth bundle (v0.1.701-beta, bare request) renders them as an
-    API-key form the backend then rejects (#8722). Every bundle sending ``include_hidden`` already
-    renders OAuth, so either flag opts in.
-    """
+    """Hidden and OAuth rows need include_hidden; older cached bundles would show duplicate presets."""
     result = []
     for provider_type, info in PROVIDER_REGISTRY.items():
         if (info.get("hidden") and not include_hidden) or info.get("managed"):

@@ -346,13 +346,7 @@ def native_unflatten(
     *,
     path: str = "",
 ) -> Optional[dict]:
-    """``tensors`` + ``raw`` header -> state dict, or None when torchao's reader has to do it.
-
-    ``tensors`` is not modified when this returns None. Raises ValueError for a checkpoint that is
-    recognised but incomplete (a listed tensor or a weight part missing, a tensor the header does not
-    list, a live field this torchao lacks): torchao's reader would fail the same file, later and less
-    clearly. A weight of a layout this module does not model returns None instead.
-    """
+    """Raises ValueError on an incomplete checkpoint, since torchao would fail later and less clearly."""
     api = _torchao_api()
     if api is None:
         return None

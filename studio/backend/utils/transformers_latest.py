@@ -115,13 +115,7 @@ _FETCH_MISSING = "__unsloth_fetch_missing__"
 
 
 def _read_within(resp, deadline: float) -> str | None:
-    """Body of *resp*, or None if the transfer is still running at *deadline*.
-
-    ``resp.read()`` in one call has no bound at all: the socket timeout only fires on a
-    read that stalls longer than itself, so a drip-fed response never trips it. ``read1``
-    returns what has arrived instead of blocking for a full chunk, which is what lets the
-    budget be checked as the body comes in.
-    """
+    """read1 returns what has arrived, so the deadline is checked during a drip-fed body."""
     read1 = getattr(resp, "read1", None)
     if read1 is None:
         return resp.read().decode("utf-8", "replace")
@@ -136,11 +130,7 @@ def _read_within(resp, deadline: float) -> str | None:
 
 
 def _fetch_text(url: str) -> str | None:
-    """GET *url* within a bounded wall-clock budget, one retry; None on any failure.
-
-    Returns ``_FETCH_MISSING`` (without retrying) on HTTP 404 so callers can tell
-    "absent at this ref" apart from "network flaked".
-    """
+    """Returns _FETCH_MISSING on a 404 without retrying, so absent is told apart from a transient error."""
     import urllib.error
     import urllib.request
 
@@ -181,16 +171,7 @@ def _fetch_latest_pypi_version() -> str | None:
 
 
 def _fetch_remote_model_types(ref: str) -> frozenset[str] | None:
-    """CONFIG_MAPPING_NAMES keys at *ref* (a release tag like ``v5.12.0`` or ``main``).
-
-    Fetches configuration_auto.py plus auto_mappings.py (the 5.10+ split) from
-    raw.githubusercontent.com and parses them with the shared AST extractor. A file
-    that 404s (auto_mappings.py on pre-5.10 tags) is skipped, but a transient fetch
-    or parse failure of EITHER file fails the whole lookup: most model types live in
-    auto_mappings.py on current releases, so a partial map cached for the TTL would
-    make /validate skip the upgrade prompt for architectures the release does ship.
-    An empty result is likewise a failure so it is never cached as "supports nothing".
-    """
+    """A transient failure in either file fails the lookup, so a partial map is never cached."""
     keys: set[str] = set()
     fetched_any = False
     for name in _AUTO_FILES:
@@ -259,12 +240,7 @@ def _snapshot_is_fresh(snapshot: dict | None) -> bool:
 
 
 def _refresh_snapshot() -> dict | None:
-    """Fetch a fresh snapshot from PyPI + raw.githubusercontent.com; None on failure.
-
-    The PyPI version and its tagged mapping are required; the ``main`` mapping is
-    best-effort (recorded as an empty list plus ``main_checked=False`` when unavailable,
-    so a dev-only architecture is reported as "unknown" rather than "unsupported").
-    """
+    """PyPI version and tagged mapping are required; a missing main mapping sets main_checked to False."""
     version = _fetch_latest_pypi_version()
     if version is None:
         return None
@@ -285,15 +261,7 @@ def _refresh_snapshot() -> dict | None:
 
 
 def _get_snapshot() -> dict | None:
-    """Current support snapshot: memory -> disk -> network, with TTL and failure backoff.
-
-    The network refresh runs outside the lock so a slow fetch cannot stall other
-    threads in the ASGI pool; _is_fetching deduplicates concurrent refreshes, and a
-    loser waits (bounded) for the winner's answer rather than stacking a second fetch.
-    Waiting is what makes this safe to gate on: the Configure preview and the Start
-    button both ask, and a loser that answered "no answer" told the start there was no
-    upgrade, so the run launched on a model no installed transformers can load.
-    """
+    """A concurrent caller waits on the in-flight fetch, since an empty answer would let a start proceed."""
     global _memory_snapshot, _last_failure_at, _is_fetching, _fetch_done
     with _lock:
         if _snapshot_is_fresh(_memory_snapshot):
@@ -365,12 +333,7 @@ def _is_bitsandbytes_config(cfg: dict | None) -> bool:
 
 
 def _mlx_swaps_bnb_repo_for_its_base(model_name: str) -> bool:
-    """Whether the MLX loader replaces this bnb Hub id with its base repo.
-
-    Mirrors unsloth_zoo's ``_remap_unsloth_bnb_hub_id_for_mlx``: only an
-    ``unsloth/`` Hub id is remapped, never a local directory. What it remaps, MLX
-    quantizes itself, so transformers never sees that architecture.
-    """
+    """True for an unsloth/ bnb Hub id, which MLX swaps for its base repo; local paths are not swapped."""
     if not isinstance(model_name, str) or not model_name.startswith("unsloth/"):
         return False
     if os.path.exists(model_name):
@@ -381,20 +344,7 @@ def _mlx_swaps_bnb_repo_for_its_base(model_name: str) -> bool:
 def _architecture_cannot_come_from_transformers(
     model_name: str = "", cfg: dict | None = None
 ) -> bool:
-    """Whether this host builds model architectures somewhere other than transformers.
-
-    The inference backend is chosen by hardware, and the MLX branch has no
-    transformers path to fall back to, so on MLX mlx-lm and mlx-vlm decide what
-    loads. Upgrading transformers cannot make an architecture loadable there, so
-    offering the install costs minutes and changes nothing.
-
-    One bitsandbytes repo is the exception. mlx-lm cannot read bnb weights, so the
-    MLX loader dequantizes them through ``AutoModelForCausalLM.from_pretrained``
-    -- transformers building the architecture after all -- and only an
-    ``unsloth/*-bnb-4bit`` Hub id is swapped for its base repo before that. A
-    third-party or local bnb repo therefore still fails inside transformers with
-    the unrecognized-architecture error this offer exists to fix, so it keeps it.
-    """
+    """On MLX, mlx-lm builds the model, so upgrading transformers cannot help, except unsloth bnb ids."""
     try:
         from utils.hardware import DeviceType, get_device
         if get_device() != DeviceType.MLX:
@@ -407,13 +357,7 @@ def _architecture_cannot_come_from_transformers(
 
 
 def latest_transformers_supports(model_type: str) -> dict | None:
-    """Whether the newest transformers (PyPI release and/or GitHub main) ships *model_type*.
-
-    Returns ``{"pypi_version": str, "supported_in_pypi": bool, "supported_in_main": bool}``
-    or None when the answer is unavailable (offline, kill switch, network failure) — the
-    caller must then fall through to current behavior. Cached (memory + JSON snapshot on
-    disk, ttl ~1 day) so repeated tier resolutions never re-fetch.
-    """
+    """Returns None when offline, disabled or failing, so the caller keeps current behavior."""
     if not isinstance(model_type, str) or not model_type:
         return None
     if _disabled() or _env_offline():
@@ -438,20 +382,7 @@ def _hardcoded_model_types() -> frozenset[str]:
 
 
 def check_upgrade_for_model(model_name: str, hf_token: str | None = None) -> dict | None:
-    """Upgrade signal for *model_name*, or None when current routing already handles it.
-
-    The tier hook for the pre-load ``/validate`` path: fires ONLY when the model's
-    ``model_type`` is absent from every installed overlay (and from the hardcoded tier
-    tables), i.e. exactly when today's load would fail with an unrecognized-architecture
-    error. Returns ``{"model_type", "pypi_version", "supported_in_pypi",
-    "supported_in_main"}`` when the newest transformers knows the type, else None.
-
-    Also None on a host that does not build architectures through transformers at
-    all -- see ``_architecture_cannot_come_from_transformers``.
-
-    Never raises; every network touch is bounded and cached. Offline or with the
-    ``UNSLOTH_STUDIO_NO_LATEST_TRANSFORMERS`` kill switch it returns None immediately.
-    """
+    """Fires only when model_type is in no installed overlay or tier table, i.e. the load would fail."""
     try:
         if _disabled() or _env_offline():
             return None
@@ -609,15 +540,7 @@ def _resolve_exact_version(name: str, specifier) -> str | None:
 
 
 def compat_plan(version: str) -> tuple[tuple[str, ...], list[str]]:
-    """(extra exact pins to shadow-install, blocking requirement strings) for *version*.
-
-    Compares the release's core requires_dist against the running base env (the env the
-    workers overlay the sidecar onto). A requirement the base env satisfies needs nothing;
-    an unsatisfied shadowable dep becomes an exact pin inside the sidecar; any other
-    unsatisfied requirement is a blocker. An unavailable requires_dist BLOCKS the
-    install: proceeding unverified could pin a sidecar whose imports then crash the
-    workers, and the caller just reached PyPI for the version check so a retry is cheap.
-    """
+    """Unknown requires_dist blocks the install: an unverified sidecar could crash the workers."""
     reqs = _fetch_main_requires() if ".dev" in version else _fetch_requires_dist(version)
     if reqs is None:
         return (), ["dependency metadata for this release (could not be fetched from PyPI; retry)"]
@@ -695,17 +618,7 @@ def install_latest_transformers(
     before_swap = None,
     reserved: bool = False,
 ) -> dict:
-    """Consented install of the latest transformers sidecar; returns a structured result.
-
-    Guards: the requested *version* must match the current PyPI latest from the (cached)
-    snapshot, so a client cannot pin an arbitrary package version through this endpoint.
-    On success ``.venv_t5_latest`` is provisioned and pinned; routing then resolves the
-    new tier automatically on this and every future start. *before_swap* is forwarded
-    to the stage-and-swap: it runs only after the staged install succeeded, right
-    before the live sidecar is replaced. *reserved* means the caller already holds the
-    sidecar swap reservation (the install route takes it before waiting on the
-    inference lifecycle gate, so worker starts see it for the whole window).
-    """
+    """Accepts only the current PyPI latest version, so a client cannot pin an arbitrary package."""
     from utils.transformers_version import end_sidecar_swap, try_begin_sidecar_swap
 
     if not reserved and not try_begin_sidecar_swap():

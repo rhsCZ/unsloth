@@ -270,13 +270,7 @@ def can_load_chat_during_training(
     single_device_gpu: Optional[str] = None,
     post_handoff_free_gpu_vram_gb: Optional[Dict[int, float]] = None,
 ) -> Tuple[bool, Dict[str, Any]]:
-    """Decide if a NEW chat model can load without OOMing active training (inverse of
-    can_keep_chat_during_training: training is already resident, so size the chat model against the free VRAM
-    that remains). Sizes/places it the same way the loader will: HF auto reuses auto_select_gpu_ids; HF explicit
-    requires an even-share per-GPU floor for device_map="balanced"; GGUF sizes from required_override_gb over
-    the visible pool. ``single_device_gpu`` is the exact physical device token selected by a single-device
-    runner. `load_in_4bit` must be effective (LoRA can flip 4-bit -> 16-bit). CPU/MLX allows the load;
-    default-deny on any CUDA/XPU case it can't size, so a load never OOMs training."""
+    """Default-denies any CUDA or XPU case it cannot size, so chat loads never OOM training."""
     try:
         from utils.hardware import (
             DeviceType,
@@ -509,10 +503,7 @@ def free_kept_models_for_training(reason: str) -> List[str]:
 
 
 def _stt_sidecar_holds_no_vram(sidecar) -> bool:
-    """True only when the resident dictation model is provably in CPU RAM. Conservative on purpose: anything
-    unreadable answers False and the sidecar is freed as before. Skipping one that does hold VRAM would starve
-    the run this is making room for, which is far worse than a needless reload.
-    """
+    """True only when provably on CPU; wrongly skipping a VRAM-holding sidecar would starve the run."""
     try:
         device = getattr(sidecar, "device", None)
         if isinstance(device, str) and device.strip().lower() == "cpu":

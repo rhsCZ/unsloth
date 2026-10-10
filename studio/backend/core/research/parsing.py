@@ -145,12 +145,7 @@ def _normalize_synthesis_audit(
 
 
 def _streamed_titles(streamed: str) -> list[str]:
-    """Plan step titles already complete in a partially streamed planner response.
-
-    Only closed JSON strings match, so a title still being written is never published half
-    formed. Escapes are decoded per match; the surrounding object is still incomplete, so the
-    response as a whole cannot be parsed yet.
-    """
+    """Only closed JSON title strings count, so a title still streaming is never published half formed."""
     titles: list[str] = []
     for match in _STREAMED_TITLE.finditer(streamed):
         try:

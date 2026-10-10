@@ -42,25 +42,13 @@ _MERMAID_FENCE = re.compile(r"mermaid\b", re.IGNORECASE)
 
 
 def _citation_title(source: dict, fallback: str) -> str:
-    """Title as it may appear in a markdown link label.
-
-    The prompt tells the model to copy titles verbatim from the source catalog, and search
-    titles routinely carry a bracket ("[PDF] Annual Report") which makes the citation
-    unmatchable, so the catalog and the citation writer strip them the same way.
-    """
+    """Strips brackets from titles, since a [PDF] prefix would make the citation unmatchable."""
     title = str(source.get("title") or fallback).replace("[", "").replace("]", "").strip()
     return title or fallback
 
 
 def _trim_url_tail(raw: str) -> str:
-    """Strip trailing prose punctuation that ``_RAW_URL`` swallowed.
-
-    Mirrors GFM extended autolink path validation: walk right to left, dropping
-    ``.,;:!?`` and any ``)`` that has no matching ``(`` inside the URL, stopping at the
-    first character that is neither. Both rules must run in one interleaved pass, else
-    ``https://x/y.)`` keeps a stray dot. Without this, ``(https://x/y)`` never matches
-    the catalog and the citation is dropped from the report.
-    """
+    """Trims trailing prose punctuation and unmatched ')' like GFM autolinks, in one interleaved pass."""
     end = len(raw)
     opening, closing = raw.count("("), raw.count(")")
     while end:
@@ -76,11 +64,7 @@ def _trim_url_tail(raw: str) -> str:
 
 
 def _placeholder(kind: str, index: int) -> str:
-    """Sentinel for text a validator must move but not rewrite.
-
-    NUL delimited: ``_mask_code`` normalizes away any the model wrote, so one cannot reach a
-    report and be mistaken for a token.
-    """
+    """NUL-delimited: _mask_code strips any NULs the model wrote, so a copy cannot pass as a token."""
     return f"\x00{kind}-{index}\x00"
 
 
@@ -106,10 +90,7 @@ _CODE_MARKDOWN.inline.ruler.at("backticks", _record_code_span)
 
 
 def _footnote_content_lines(lines: list[str]) -> set[int]:
-    """Line numbers the renderer reads as footnote content, whatever this parser calls them.
-
-    Loose on purpose: over-collecting only costs a masked block, which errs towards validating.
-    """
+    """Footnote content lines per the renderer; loose on purpose, as over-collecting only masks a block."""
     covered = set()
     inside = False
     for number, line in enumerate(lines):
@@ -143,11 +124,7 @@ def _mask_code(text: str, placeholders: dict[str, str]) -> str:
         spans.extend((start + first, start + last) for first, last in env["code_spans"])
 
     def record_row(start: int, end: int) -> None:
-        """Cell by cell, as the renderer splits a row before parsing inline.
-
-        Every cell token carries the whole row's map, so cutting at unescaped pipes is what
-        keeps a span inside one cell.
-        """
+        """Cuts at unescaped pipes, as the renderer splits rows, so a code span stays inside one cell."""
         cell = start
         escaped = False
         for index in range(start, end):
@@ -193,11 +170,7 @@ def _mask_code(text: str, placeholders: dict[str, str]) -> str:
 
 
 def _restore_placeholders(text: str, placeholders: dict[str, str]) -> str:
-    """Substitute every token in one pass.
-
-    A replace() per token rescans the report once per span, costing O(len(report) x spans); one
-    sub() is linear, and never rescans restored code for a later token.
-    """
+    """Restores every token in one re.sub pass; a replace per token rescans the report once per span."""
     if not placeholders:
         return text
 

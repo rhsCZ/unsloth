@@ -1,20 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Log volume must not regress, and every polled path must be classified.
-
-Unsloth's log-reduction work is several PRs deep and every round of it started with someone
-noticing a log was huge. Nothing stopped the next chatty endpoint. These are the two guards
-that do: an envelope on how much an idle app writes, and a closure check that makes it
-impossible to add a poll without saying which suppression rule owns it.
-
-The counts here are derived from a formula over the poll period and the de-duplication
-window, not recorded from a run, so changing a poll interval moves the expectation with it
-and only a genuine rule violation fails.
-
-See ``test_log_signal_floor.py`` for the other half: these tests cap how much is written,
-that one guarantees the important things still are.
-"""
+"""Expected log counts come from a formula over poll period and dedup window, not from a recorded run."""
 
 from __future__ import annotations
 
@@ -44,11 +31,8 @@ class TestClassificationClosure:
     """Guard B. The registry and the middleware's own sets must describe the same world."""
 
     def test_every_classified_path_is_in_a_scenario(self):
-        """A path cannot be quieted without saying how often it is polled.
-
-        Otherwise a path joins ``_QUIET_POLL_PATHS`` for a reason nobody records, and the
-        budget never sees it because no scenario asks for it.
-        """
+        """Every classified poll path must appear in a budget scenario, or the budget never sees its
+        volume."""
         classified = set()
         for attr in (
             "_QUIET_POLL_PATHS",
@@ -71,12 +55,8 @@ class TestClassificationClosure:
         )
 
     def test_every_polled_path_has_exactly_one_class(self):
-        """And a poll cannot be added without choosing a rule for it.
-
-        ``classify`` returns ``normal`` for anything unlisted, which is a real class with a
-        300 ms window, so the check is that the choice was deliberate: a path polled faster
-        than a few seconds and left in ``normal`` logs on essentially every request.
-        """
+        """Unlisted paths default to the normal class, so every fast-polled path must be classed
+        deliberately."""
         offenders = {
             path
             for path, (period, _provenance) in session.ALL_POLLS.items()
@@ -158,11 +138,8 @@ class TestVolumeEnvelope:
         ],
     )
     def test_each_path_matches_its_class_formula(self, label, polls, duration, monkeypatch):
-        """The window is honoured exactly, not merely under a ceiling.
-
-        A ceiling alone would pass if suppression stopped working and something else got
-        quieter. Checking the derived count catches the rule itself breaking.
-        """
+        """Asserts exact counts, not a ceiling, so a broken suppression rule cannot pass by getting
+        quieter."""
         result = replay.replay(hmod, monkeypatch, polls, duration)
         counts = Counter(result.capture.paths())
 
@@ -185,11 +162,8 @@ class TestVolumeEnvelope:
         )
 
     def test_the_liveness_burst_collapses_to_one_bucket(self, monkeypatch):
-        """The five liveness paths answer one question and must cost one line, not five.
-
-        Asserted on the bucket total rather than on which path won it: the SPA fires them
-        together and whichever arrives first legitimately takes the line.
-        """
+        """The five liveness paths must cost one line together; assert the bucket total, not which
+        path won."""
         liveness = {
             path: value
             for path, value in session.IDLE_POLLS.items()

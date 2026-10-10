@@ -192,10 +192,7 @@ WINDOWS_COMMAND_RESERVE = 8192
 
 
 def windows_command_length(args: list) -> int:
-    """Characters ``subprocess`` would put on a Windows command line for ``args``. list2cmdline is
-    the exact serializer Popen uses there, and it is not a sum of lengths: a value needing quotes
-    has its backslashes doubled, so an escape-heavy grammar can nearly double. Measuring it is
-    the only honest check."""
+    """Windows command-line length as list2cmdline builds it; escapes make a plain sum wrong."""
     import subprocess
     return len(subprocess.list2cmdline([str(a) for a in args]))
 
@@ -206,10 +203,7 @@ def max_extra_args_bytes() -> int:
 
 
 def _flag_name(token: str) -> Optional[str]:
-    """Flag name for ``token``, or None if it isn't a flag. Peels `--key=value` to `--key`,
-    normalises long-option underscores like llama.cpp, treats `-1`/`-0.5` as values (shorts
-    always start with a letter), and normalises attached `-np8` / `-np-1` / `-np8x` to `-np`.
-    Mirrors the CLI's `_expand_attached_np_short`."""
+    """Flag name for a token, or None; folds --key=value, underscores and attached -np8 to a base name."""
     token = token.strip()
     if not token.startswith("-") or token in {"-", "--"}:
         return None
@@ -228,11 +222,7 @@ def _flag_name(token: str) -> Optional[str]:
 
 
 def _value_is_attached(token: str, flag: str) -> bool:
-    """Whether this token carries its own value, rather than expecting the next one. Not "the name
-    changed": _flag_name also folds llama.cpp's underscore spelling (--ctx_size is --ctx-size to
-    it, and the binary takes both), so comparing the normalised name against the raw token read
-    "--ctx_size 4096" as attached and then refused the 4096 as a bare value. Only "=" and an
-    attached short like -np8 are values in the same token."""
+    """True only for '=' or an attached short value; a name change alone (--ctx_size) does not count."""
     raw = token.strip()
     if "=" in raw:
         return True
@@ -353,19 +343,7 @@ def validate_extra_args(args: Optional[Iterable[str]]) -> list[str]:
 
 
 def drop_managed_flags(args: Optional[Iterable[str]]) -> tuple[list[str], list[str]]:
-    """Split stored args into what still loads and the flag names removed.
-
-    For the paths that CARRY OVER an existing value rather than receive a new one. The denylist
-    grows (``--agent`` and the MCP flags were added once a text box made them one paste away), so an
-    override saved by an older build can hold a name that is refused today. Refusing there punishes
-    a user for a decision made later: the load, or the save of an unrelated setting, fails naming a
-    flag they may not remember writing. Dropping is the same judgement applied quietly.
-
-    A flag takes its value with it, or ``--log-file /var/log/x`` would leave a bare ``/var/log/x``
-    behind, which llama.cpp reads as a positional model path. The bounds and the control-character
-    rule are enforced by re-validating what is left, so the result is always something
-    ``validate_extra_args`` accepts.
-    """
+    """Drops managed flags from carried-over args together with their values, so none is orphaned."""
     tokens = [str(raw) for raw in (args or [])]
 
     def _takes_next(
@@ -631,10 +609,7 @@ def parse_ctx_override(args: Optional[Iterable[str]]) -> Optional[int]:
 
 
 def parse_ctx_checkpoints_override(args: Optional[Iterable[str]]) -> Optional[int]:
-    """Return the last user-supplied ``--ctx-checkpoints`` value, or None. The control emits its
-    flag before the extras, so a copy typed for this load last-wins at launch. Sizing has to
-    price that value, not the field, or a ``--ctx-checkpoints 256`` in the extras allocates 256
-    per-slot snapshots against a fit that budgeted the field's count."""
+    """Last user --ctx-checkpoints value, or None; extras win over the field, so sizing prices that."""
     value = _last_flag_value(args, _CTX_CHECKPOINTS_FLAGS)
     if value is None:
         return None
@@ -658,11 +633,7 @@ def ctx_checkpoints_within_host_budget(
     *,
     upstream_default: Optional[int] = None,
 ) -> int:
-    """Fit checkpoints per slot within the host budget and this build's own default.
-
-    Unknown sizes keep the default. The minimum useful count may exceed the target budget
-    but never the default: this caps what the child would keep, it never raises it.
-    """
+    """Caps the per-slot checkpoint count to the host budget; it never raises the build's default."""
     default = (
         LLAMA_CTX_CHECKPOINTS_DEFAULT if upstream_default is None else max(0, int(upstream_default))
     )
@@ -690,11 +661,7 @@ def effective_ctx_checkpoints(
     upstream_default: Optional[int] = None,
     inherited: Optional[int] = None,
 ) -> int:
-    """Resolve the child count: extras, field, an inherited env value, then the budget.
-
-    ``inherited`` is llama.cpp's own LLAMA_ARG_CTX_CHECKPOINTS, which it applies before
-    argv, so argv beats it and it beats the build default.
-    """
+    """Child count: extras, then field, then env LLAMA_ARG_CTX_CHECKPOINTS, then the budget."""
     if not supports_flag:
         return 0
     override = resolve_ctx_checkpoints(args, requested)
@@ -718,19 +685,7 @@ def resolve_requested_ctx(args: Optional[Iterable[str]], fallback_n_ctx: int) ->
 
 
 def matches_explicit_ctx_override(args: Optional[Iterable[str]], n_ctx: Any) -> bool:
-    """Whether a pass-through ``-c``/``--ctx-size`` matches the context the caller is already sending
-    as a first-class field.
-
-    Context is the one first-class field whose load-time value is a VRAM-fit TARGET, so a matching
-    flag is not a stale shadow but the user's standing decision to run past the estimated threshold.
-    Both strippers ask here rather than mirroring the test, so auto-switch and /load inheritance
-    cannot drift.
-
-    False for anything unconfirmable, which is the pre-existing strip: no flag, a malformed one, or
-    a non-positive/non-int ``n_ctx``. That last case is real -- override rows are coerced on write
-    but returned verbatim on read, so a row from an older build can hold any JSON type and must not
-    raise here.
-    """
+    """True when a pass-through -c/--ctx-size equals n_ctx, which is a choice to run past the VRAM fit."""
     if isinstance(n_ctx, bool) or not isinstance(n_ctx, int) or n_ctx <= 0:
         return False
     try:
@@ -782,10 +737,7 @@ def _last_flag_value(
 
 
 def parse_cache_override(args: Optional[Iterable[str]]) -> Optional[str]:
-    """Return the last-wins cache type if extras pass cache flags. Mirrors parse_ctx_override but
-    for cache type. Recognises both -ctk (key) and -ctv (value); when both appear, returns the
-    last-wins value, treating key and value cache flags as the same setting because Unsloth's KV
-    estimate has a single cache_type_kv knob."""
+    """Last-wins cache type from -ctk or -ctv; both are one setting, as the KV estimate has one knob."""
     return _last_flag_value(args, _CACHE_FLAGS)
 
 
@@ -864,10 +816,7 @@ def resolve_reasoning_budget_message_with_env(
 
 
 def parse_gpu_layers_override(args: Optional[Iterable[str]]) -> Optional[int]:
-    """Return the last user-supplied GPU layer count from extras. Manual GPU memory mode strips
-    llama.cpp offload flags because the first-class load fields own them, so callers use this
-    parser first to preserve an explicit ``-ngl`` / ``--gpu-layers`` / ``--n-gpu-layers`` value
-    when translating the extras into those fields."""
+    """Last user-supplied -ngl value from extras, read before Manual mode strips the flags."""
     raw_value = _last_flag_value(args, _GPU_LAYER_FLAGS)
     if raw_value is None:
         return None
@@ -887,11 +836,7 @@ def _as_emitted(value: float) -> float:
 
 
 def _as_float32(value: float) -> float:
-    """``value`` as llama.cpp would hold it: overflow becomes inf rather than raising.
-
-    ``struct.pack`` raises OverflowError where the C cast it stands in for saturates, so the
-    caller would have to guard every call site instead of just testing isfinite once.
-    """
+    """Rounds to float32 as llama.cpp holds it; overflow becomes inf, not an OverflowError."""
     try:
         return struct.unpack("=f", struct.pack("=f", value))[0]
     except OverflowError:
@@ -908,29 +853,7 @@ _FLOAT32_MIN_NORMAL = struct.unpack("=f", struct.pack("=f", 1.1754943508222875e-
 def parse_tensor_split_override(
     args: Optional[Iterable[str]], *, reserialized: bool = False
 ) -> Optional[list[float]]:
-    """Return the last user-supplied ``-ts`` / ``--tensor-split`` ratios from extras.
-
-    Manual GPU memory with ``gpu_layers >= 0`` strips ``--tensor-split`` because the first-class
-    ``tensor_split`` field owns it. Callers must promote the last-wins extras value into that
-    field first, or an asymmetric MoE split such as ``-ts 2.2,1`` is discarded and llama-server
-    falls back to a near-even layer count (#11330).
-
-    Delimiters match llama.cpp's ``[,/]+`` (``-ts 3/1`` is the same as ``-ts 3,1``). Degenerate
-    values raise so ``validate_extra_args`` can refuse them as a 400 rather than stripping them
-    silently.
-
-    Bounds are llama.cpp's, not Python's: ``std::stof`` (common/arg.cpp) throws
-    ``std::out_of_range`` above FLT_MAX and on any subnormal, and the shares are prefix-summed
-    into a float array (llama-model.cpp), so a value this parser would take as a finite double
-    can still abort the server at startup. Every share is rounded to float32 BEFORE it joins the
-    total, because that is the order llama.cpp adds them in.
-
-    ``reserialized`` is which text the child will parse. Manual mode promotes the ratio into the
-    first-class field and the launcher writes it back out with ``f"{x:g}"``, six significant
-    digits, so there the emitted string is judged. Everywhere else ``-ts`` is pass-through and
-    llama-server reads the user's own text, so judging a rounded version would refuse input that
-    runs: ``-ts 1.1754943508222874e-38,1`` is fine as typed and subnormal once re-serialized.
-    """
+    """Last -ts ratios, checked against llama.cpp's float32 limits; bad shares raise, giving a 400."""
     raw_value = _last_flag_value(args, _TENSOR_SPLIT_FLAGS)
     if raw_value is None:
         return None
@@ -971,13 +894,7 @@ def parse_tensor_split_override(
 
 
 def check_batch_floor(args: Optional[Iterable[str]], n_parallel: int) -> None:
-    """Raise when a pass-through --batch-size would abort llama-server. The launcher raises the
-    value it emits itself to ``max(slots, 2)``, with the measurements recorded beside that code:
-    ``-b 1`` aborts at any slot count, and a batch below ``--parallel`` aborts too. Extras are
-    appended AFTER that flag and win the last-wins parse, so a small value here is not a smaller
-    batch, it is a server that dies during startup, and by then the previous model has been
-    unloaded. Only the shapes that are certainly wrong: an unreadable value is left to
-    llama-server, which names it better than a guess here would."""
+    """Raises when a pass-through --batch-size is below 2 or below --parallel; llama-server aborts then."""
     raw_value = _last_flag_value(args, _BATCH_FLAGS)
     if raw_value is None:
         return
@@ -994,10 +911,7 @@ def check_batch_floor(args: Optional[Iterable[str]], n_parallel: int) -> None:
 
 
 def fit_is_enabled_in(args: Optional[Iterable[str]]) -> bool:
-    """Whether the last ``--fit`` in extras turns the fitter ON. Only ``--fit on`` hands placement
-    back to llama.cpp; ``--fit off`` disables it and so cannot move weights to the CPU. Upstream
-    requires a value and rejects anything that is neither truthy nor falsey, so an absent or
-    unreadable value is not an enable."""
+    """Only a truthy last --fit in extras enables the fitter; absent or unreadable values do not."""
     raw_value = _last_flag_value(args, _FIT_FLAGS)
     return raw_value is not None and raw_value.strip().lower() in _ENV_TRUE_VALUES
 
@@ -1005,10 +919,7 @@ def fit_is_enabled_in(args: Optional[Iterable[str]]) -> bool:
 def fit_is_effectively_on(
     args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """Whether the fitter actually runs, over the WHOLE argv and the env twin. ``fit_is_enabled_in``
-    answers for the extras alone; this answers for the child. llama.cpp defaults the fitter ON
-    and applies the env before argv, so only an explicit "off" turns it off, and an unreadable
-    value keeps it on."""
+    """Whether the child runs the fitter; llama.cpp defaults it on and only an explicit off stops it."""
     raw_value = _last_flag_value(args, _FIT_FLAGS)
     if raw_value is None and env:
         raw_value = env.get("LLAMA_ARG_FIT")
@@ -1020,11 +931,7 @@ def fit_is_effectively_on(
 def fit_ctx_in(
     args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[int]:
-    """Return the last --fit-ctx, falling back to the supplied environment.
-
-    Unset or invalid values return None. Preserve negatives: llama.cpp stores them
-    unsigned, disabling context reduction.
-    """
+    """Negative values are kept: llama.cpp stores them unsigned, where they disable context reduction."""
     raw_value = _last_flag_value(args, _FIT_CTX_FLAGS)
     if raw_value is None and env:
         raw_value = env.get("LLAMA_ARG_FIT_CTX")
@@ -1039,20 +946,7 @@ def fit_ctx_in(
 def fit_target_margin_in(
     args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[float]:
-    """The per-device margin an effective ``--fit-target`` asks the fitter to keep.
-
-    ``-fitt/--fit-target`` takes a list of MiB values, one per device, and a single value is
-    broadcast across all of them (common/arg.cpp; default 1024, ``fit_params_target`` in
-    common/common.h). The fitter refuses to allocate into that margin and spills the rest to host
-    RAM instead (``targets.push_back(dmds_full[id].free - margins[id])``, common/fit.cpp), so a
-    load-mode fit that credits VRAM has to price it.
-
-    Returns the LARGEST value in the list, because the fit charges one margin to every device it
-    credits and understating would claim a fit that is not there. ``None`` when nothing readable is
-    set, which leaves the caller on llama.cpp's own default rather than on a guess. Last-wins over
-    argv, and the env twin only when argv sets nothing, the same precedence
-    ``fit_is_effectively_on`` uses.
-    """
+    """Largest --fit-target margin: the fit charges one margin to every credited device; None if unset."""
     raw_value = _last_flag_value(args, _FIT_TARGET_FLAGS)
     if raw_value is None and env:
         raw_value = env.get("LLAMA_ARG_FIT_TARGET")
@@ -1076,20 +970,7 @@ def split_policy_starves_devices(
     n_credited: int,
     env: Optional[Mapping[str, str]] = None,
 ) -> bool:
-    """True when the effective split leaves fewer devices holding weights than ``n_credited``.
-
-    ``--split-mode`` and ``--tensor-split`` are pass-through under auto-select
-    (``_SPLIT_SHADOWING_FLAGS`` is stripped only when the Tensor Parallelism toggle owns the split),
-    so both reach the child appended after Unsloth's own placement flags, and either can quietly
-    shrink the pool a pooled VRAM credit was priced for. ``--split-mode none`` is
-    ``LLAMA_SPLIT_MODE_NONE`` (common/arg.cpp), which puts the whole model on ``--main-gpu`` alone,
-    while ``row``/``layer``/``tensor`` all keep every device. ``--tensor-split`` is a per-device
-    proportion list, and upstream zero-fills every device past the end of the list, so a short list
-    starves the tail just as an explicit ``0`` starves its own device.
-
-    Value-aware on purpose: a restatement that keeps all devices is not an override, and voiding on
-    it would abstain from a fit that is really there.
-    """
+    """True when --split-mode none or a short --tensor-split leaves fewer devices than were credited."""
     if n_credited <= 1:
         return False
     mode = _last_flag_value(args, _SPLIT_MODE_FLAGS)
@@ -1144,10 +1025,7 @@ def parse_split_mode_override(args: Optional[Iterable[str]]) -> Optional[str]:
 
 
 def resolve_tensor_parallel(args: Optional[Iterable[str]], fallback_tensor_parallel: bool) -> bool:
-    """Return the tensor-parallel state load_model should treat as requested. A user-supplied
-    ``--split-mode`` in extras last-wins-overrides the toggle, so reconcile it back into the
-    boolean: any explicit split mode means tensor-parallel is on iff that mode is ``tensor``.
-    Falls back to the toggle value when extras don't set it."""
+    """An explicit --split-mode in extras overrides the toggle; tensor-parallel is on only for tensor."""
     override = parse_split_mode_override(args)
     if override is None:
         return fallback_tensor_parallel
@@ -1155,10 +1033,7 @@ def resolve_tensor_parallel(args: Optional[Iterable[str]], fallback_tensor_paral
 
 
 def _env_split_mode_is_tensor(env: Optional[Mapping[str, str]] = None) -> bool:
-    """True when the inherited LLAMA_ARG_SPLIT_MODE env selects tensor. Unsloth emits --split-mode
-    only on its tensor branch, so a tensor env on the layer path would run the child
-    tensor-parallel unbudgeted; this flips the budget to tensor. Only tensor is heavier, so other
-    modes are ignored."""
+    """An inherited LLAMA_ARG_SPLIT_MODE=tensor is budgeted as tensor, or the child runs it unbudgeted."""
     raw = (os.environ if env is None else env).get("LLAMA_ARG_SPLIT_MODE")
     return bool(raw) and raw.strip().lower() == "tensor"
 
@@ -1168,10 +1043,7 @@ def _effective_tensor_parallel(
     tensor_parallel: bool,
     env: Optional[Mapping[str, str]] = None,
 ) -> bool:
-    """Tensor-parallel decision including the inherited LLAMA_ARG_SPLIT_MODE env.
-    resolve_tensor_parallel (extras + toggle), flipped on when extras set no split mode but the
-    child inherits a tensor split env. Shared by load_model (which budgets and launches it) and
-    the tensor-fallback wrapper (so an env-only tensor crash still retries layer split)."""
+    """Also honours the inherited LLAMA_ARG_SPLIT_MODE env, and the tensor fallback reuses this decision."""
     resolved = resolve_tensor_parallel(extra_args, tensor_parallel)
     if (
         not resolved
@@ -1188,11 +1060,7 @@ def _tensor_parallel_matches_loaded(
     loaded_tensor_parallel: bool,
     env: Optional[Mapping[str, str]] = None,
 ) -> bool:
-    """Whether a duplicate load request matches a loaded server's tensor state. Env-only tensor mode
-    is a launch hint load_model may downgrade to layer split (capacity/buffer), scrubbing the
-    child env. So only let an inherited tensor env raise a match against a server that *actually*
-    launched tensor; on a downgraded (layer) server the env is ignored, and an identical request
-    would downgrade the same way, avoiding an endless reload of a healthy server."""
+    """An inherited tensor env matches only a server that really launched tensor, so no reload loop."""
     requested = resolve_tensor_parallel(extra_args, requested_tensor_parallel)
     if (
         loaded_tensor_parallel
@@ -1300,24 +1168,7 @@ def strip_shadowing_flags(
     strip_cache_ram: bool = False,
     strip_spec_draft_cache: bool = False,
 ) -> list[str]:
-    """Strip flags that shadow first-class Unsloth settings.
-
-    Used when inheriting a previous load's ``llama_extra_args`` so an inherited `-c 4096` can't
-    override the current `max_seq_length` (same for cache / spec / template / split-mode). Each
-    ``strip_*`` toggle controls one group; the route only strips groups whose first-class field the
-    caller actually supplied.
-
-    ``strip_split_mode`` removes both ``--split-mode`` and the coupled ``--tensor-split`` (the
-    Tensor Parallelism toggle owns the whole split). ``strip_tensor_split`` removes
-    ``--tensor-split`` *alone*, so manual mode can replace an inherited per-GPU ratio while leaving
-    the user's ``--split-mode`` row/none/layer choice intact. ``strip_device`` is enabled when
-    ``gpu_ids`` owns placement.
-
-    ``strip_mlock`` / ``strip_no_mmap`` are enabled by the Model Memory settings so a
-    RAM-reservation flag cannot survive a load the user asked to keep RAM-free. ``strip_no_mmap``
-    covers every spelling of mode `none`, so the negative DirectIO forms go with it. All boolean:
-    only the token is dropped.
-    """
+    """Drops inherited flags shadowing first-class settings, so an old -c cannot override max_seq_length."""
     shadowing: set[str] = set()
     if strip_context:
         shadowing |= _CONTEXT_FLAGS
@@ -1378,10 +1229,7 @@ def strip_shadowing_flags(
 
 
 def strip_split_mode_only(args: Optional[Iterable[str]]) -> Optional[list[str]]:
-    """Remove the split-mode group (``--split-mode`` / ``-sm`` and the coupled ``--tensor-split`` /
-    ``-ts``) from ``args``, keeping every other shadow flag. Preserves a None/empty input so the
-    inherit-vs-explicit-empty distinction survives. Used where tensor mode is being forced off
-    (downgrade / fallback)."""
+    """Removes --split-mode and the coupled --tensor-split; None or empty input is returned unchanged."""
     if not args:
         return args
     return strip_shadowing_flags(
@@ -1395,10 +1243,7 @@ def strip_split_mode_only(args: Optional[Iterable[str]]) -> Optional[list[str]]:
 
 
 def strip_context_only(args: Optional[Iterable[str]]) -> Optional[list[str]]:
-    """Remove the context group (``-c`` / ``--ctx-size``) from ``args``, keeping every other shadow
-    flag. Preserves a None/empty input so the inherit-vs-explicit-empty distinction survives.
-    Used by the Metal zero-context floor, where a trailing ``-c 0`` would last-wins override the
-    floor and pin the native length again."""
+    """Removes -c/--ctx-size only; a trailing -c 0 would otherwise override the Metal zero-context floor."""
     if not args:
         return args
     return strip_shadowing_flags(
@@ -1415,17 +1260,7 @@ MANAGED_DIO_FLAGS: tuple[str, ...] = ("--load-mode", "dio")
 
 
 def no_reserve_requires_dio(*, supports_load_mode: bool, gpu_offload_confirmed: bool) -> bool:
-    """Whether "Don't reserve system RAM" owes this launch ``--load-mode dio``.
-
-    Windows keeps the whole GGUF mapping resident after a full offload, because
-    ``unmap_fragment`` is a no-op there (#9033), so the setting only means
-    anything on that platform once the offload is confirmed and the build
-    understands the flag.
-
-    Placement only. Whether a loader choice further down the chain then overrides
-    the pair is not asked here: ``resolve_launch_load_mode`` answers that by
-    resolving the argv the policy really produces.
-    """
+    """Windows keeps a full offload's mapping resident, so DirectIO is owed only on confirmed offload."""
     return sys.platform == "win32" and supports_load_mode and gpu_offload_confirmed
 
 
@@ -1439,22 +1274,8 @@ def resolve_launch_load_mode(
     env: Optional[Mapping[str, str]],
     settings: tuple[bool, bool],
 ) -> tuple[bool, bool]:
-    """``(policy_emitted_dio, effective_dio)`` under this ``(keep_resident, no_ram_reserve)``.
-
-    Runs the REAL policy chain and resolves the argv it produces, rather than
-    assembling a hypothetical by hand. The launch calls it for each settings pair
-    it needs an answer about, so those answers cannot disagree about one launch.
-
-    Asking by hand is what went wrong before: the env view and the surviving
-    extras are scrubbed and stripped BY the settings, so a hypothetical built
-    from the live ones silently answered for the wrong toggle.
-
-    The two halves are DIFFERENT questions and conflating them is the other way
-    to get this wrong. ``effective_dio`` is what the child runs, which a user's
-    own ``dio`` satisfies on its own. ``policy_emitted_dio`` is whether THIS
-    policy put the pair there, which is what "did the policy change this launch"
-    and "would a relaunch add something" actually turn on.
-    """
+    """Resolves the real policy argv, not a hand-built guess; policy_emitted_dio and effective_dio
+    differ."""
     managed, extras = apply_model_memory_policy(
         extra_args,
         supports_load_mode = supports_load_mode,
@@ -1485,41 +1306,7 @@ def apply_model_memory_policy(
     env: Optional[Mapping[str, str]] = None,
     settings: Optional[tuple[bool, bool]] = None,
 ) -> tuple[list[str], list[str]]:
-    """Resolve the Model Memory settings into llama-server flags, returning ``(managed_flags,
-    extras)``: what Unsloth emits itself, and the user's extras with any vetoed flag removed.
-
-    "Keep model in GPU memory" page-locks the weights (``--load-mode mmap+mlock``, or the deprecated
-    ``--mlock``) but ONLY when ``weights_in_host_memory``. mlock pins a whole mapping in host RAM,
-    so for a model fully offloaded to a discrete GPU it would hold a second full copy of the weights
-    in system RAM without doing anything for VRAM residency; there, residency is carried by the
-    idle-unload veto alone. Every other load-mode-bearing flag is stripped from the emitted extras,
-    because a trailing one resets the whole mode and would drop the mlock.
-
-    "Don't reserve system RAM" drops ``--mlock`` / ``--no-mmap``, leaving the
-    default mmap path except on Windows with confirmed full GPU offload, where
-    supported builds use DirectIO to avoid retaining the resident file mapping.
-    With both off nothing is stripped, so a hand-typed flag still applies.
-
-    ``gpu_offload_confirmed`` is that confirmation, and the caller has to
-    establish it POSITIVELY. ``not weights_in_host_memory`` is not the same
-    thing: that predicate exists to skip a page-lock, so it errs towards True
-    for a device it did not probe and towards False for an offload the build
-    cannot perform, and neither direction is safe for choosing a loader.
-
-    ``env`` is the child's environment AFTER ``scrub_memory_env``. An inherited
-    loader choice that survives the scrub is a non-reserving one the settings
-    disclaim, and argv beats the environment in llama.cpp, so the managed
-    DirectIO stands aside for it the way the fit's own mode does.
-
-    ``settings`` is a ``(keep_resident, no_ram_reserve)`` the caller already read
-    as one coherent snapshot. A launch that has to consult the toggles itself,
-    to decide whether a placement answer is worth probing for, must hand that
-    same pair down: re-reading here would let a save landing in between gate the
-    probe on one value and the flags on another.
-
-    The per-model Mmap/Mlock control is resolved separately, by
-    ``apply_load_mode_policy``, which runs after this and defers to it.
-    """
+    """Mlock only when weights sit in host RAM; GPU offload must be positively confirmed, never inferred."""
     if settings is None:
         try:
             from utils.model_memory_settings import get_model_memory_settings
@@ -1579,20 +1366,7 @@ def apply_load_mode_policy(
     requested_load_mode: Optional[str] = None,
     settings: Optional[tuple[bool, bool]] = None,
 ) -> tuple[list[str], list[str]]:
-    """Resolve the per-model Mmap/Mlock control into llama-server flags, returning ``(managed_flags,
-    extras)`` like ``apply_model_memory_policy``, and meant to run straight after it on the extras
-    that call returned.
-
-    The Model Memory settings win, which is what the Run settings panel tells the user, so changing
-    the order without changing ``loadModeOverrideNotice`` makes that note wrong. "Keep model in GPU
-    memory" owns the mode outright while it applies; "Don't reserve system RAM" vetoes the values
-    holding a full host copy (``none``, ``mlock``, ``mmap+mlock``) and leaves ``mmap`` and ``dio``
-    alone.
-
-    ``auto`` emits nothing: it IS llama.cpp's default, so pinning it would freeze what a later build
-    may redefine. An unknown value is dropped rather than passed through, since llama-server exits
-    on one.
-    """
+    """Model Memory settings win, so this must run after apply_model_memory_policy; auto emits nothing."""
     tokens = list(extra_args or [])
     mode = _normalize_load_mode_value(requested_load_mode)
     if not mode:
@@ -1639,10 +1413,7 @@ def _normalize_load_mode_value(value: Optional[str]) -> str:
 
 
 def _strip_reserving_load_modes(tokens: list[str]) -> list[str]:
-    """Drop only ``--load-mode`` values that lock or reserve host RAM. No-reserve vetoes the
-    reservation, not the loader: ``mmap`` and ``dio`` hold no full host copy, so a DirectIO
-    preset survives instead of silently falling back to mmap. Unknown values are left alone
-    rather than rewritten."""
+    """Drops only the --load-mode values that reserve host RAM; mmap and dio hold no full copy and stay."""
     out: list[str] = []
     i, n = 0, len(tokens)
     while i < n:
@@ -1667,12 +1438,7 @@ def _strip_reserving_load_modes(tokens: list[str]) -> list[str]:
 
 
 def model_memory_owns_placement(settings: Optional[tuple[bool, bool]] = None) -> bool:
-    """True when either toggle is on, so the child env must be scrubbed.
-
-    ``settings`` answers for a GIVEN ``(keep_resident, no_ram_reserve)`` instead of
-    the live one, which is what lets the launch ask what it WOULD scrub under a
-    setting that is not currently on.
-    """
+    """True when either toggle is on, so the child env is scrubbed; a given pair replaces the live one."""
     if settings is not None:
         return settings[0] or settings[1]
     try:
@@ -1683,10 +1449,7 @@ def model_memory_owns_placement(settings: Optional[tuple[bool, bool]] = None) ->
 
 
 def _env_var_locks_or_reserves(name: str, value: str) -> bool:
-    """Whether this inherited var, as set, locks or reserves host RAM. Mirrors the argv rule: the
-    settings own the RESERVATION, not the loader, so a DirectIO or mmap choice made through the
-    environment survives the same way ``--load-mode dio`` does. An unrecognised value is left
-    alone."""
+    """Mirrors the argv rule: settings own the reservation, not the loader, so inherited dio survives."""
     normalized = value.strip().lower()
     if name == "LLAMA_ARG_MLOCK":
         return normalized in _ENV_TRUE_VALUES
@@ -1771,17 +1534,7 @@ def scrub_denied_env(env: dict) -> list[str]:
 
 
 def extra_args_select_load_mode(extra_args: Optional[Iterable[str]]) -> bool:
-    """Whether the pass-through block already picks a loader mode itself.
-
-    The argv twin of ``memory_env_selects_load_mode``, and it answers for both spellings: the
-    ``--load-mode`` enum, and the flags it replaced (``--no-mmap`` / ``--mmap`` / the direct-IO
-    pair), which are what this launch emits on a build predating the enum
-    (``_LEGACY_LOAD_MODE_FLAGS``) and so are what a user's own flag would collide with there.
-
-    Presence, not value: a fit-derived mode stands aside for any pick the user made rather than
-    trying to rank the two. Their tokens are appended after the managed block and llama.cpp is
-    last-wins, so theirs governs either way.
-    """
+    """Any user --load-mode or legacy flag counts by presence, so a fit-derived mode stands aside."""
     for raw in extra_args or ():
         if _flag_name(str(raw)) in _LOAD_MODE_FLAGS | _LOAD_MODE_ALIAS_FLAGS:
             return True
@@ -1789,21 +1542,7 @@ def extra_args_select_load_mode(extra_args: Optional[Iterable[str]]) -> bool:
 
 
 def memory_env_selects_load_mode(env: Optional[Mapping[str, str]]) -> bool:
-    """Whether the inherited environment already picks a loader mode.
-
-    llama.cpp applies the ``LLAMA_ARG_*`` twins BEFORE argv (common/arg.cpp runs its environment
-    loop and only then "handle command line arguments"), and both assign the same
-    ``params.load_mode``, so a managed ``--load-mode`` emitted here beats an inherited choice
-    without the user typing anything. A mode DERIVED from a fit has to stand aside for that choice,
-    the same way it stands aside for the per-model pick; a hand-typed flag is argv and still wins by
-    last-arg.
-
-    Per variable, matching what upstream really does with each value: a no-value option
-    (``--mlock``) runs its handler only for a truthy one (``opt.handler_void && is_truthy(value)``),
-    a negative alias (``LLAMA_ARG_NO_MMAP`` / ``LLAMA_ARG_NO_DIO``) counts by PRESENCE whatever it
-    says (``get_value_from_env`` forces "0" when it exists), and the rest assign a mode for any
-    value they parse.
-    """
+    """Inherited LLAMA_ARG_* env picks a mode: negative aliases count by presence, MLOCK only if truthy."""
     if not env:
         return False
     for name in MEMORY_ENV_VARS:
@@ -1822,13 +1561,7 @@ def memory_env_selects_load_mode(env: Optional[Mapping[str, str]]) -> bool:
 
 
 def scrub_memory_env(env: dict, settings: Optional[tuple[bool, bool]] = None) -> list[str]:
-    """Drop inherited memory placement the settings override.
-
-    Returns the names removed, for logging. A no-op with both toggles off, so an
-    existing LLAMA_ARG_MLOCK deployment keeps working untouched. Only the values
-    that actually lock or reserve go: an inherited ``LLAMA_ARG_DIO=1`` is a
-    loader choice, not a reservation, and no-reserve has no quarrel with it.
-    """
+    """Removes only inherited vars that lock or reserve RAM; LLAMA_ARG_DIO=1 is a loader, so it stays."""
     if not model_memory_owns_placement(settings):
         return []
     removed = [
@@ -1865,17 +1598,7 @@ def _pageable_env_value(
     value: str,
     drop_shadowed_mlock: bool = False,
 ) -> tuple[bool, Optional[str]]:
-    """``(rewrite, new_value)`` for an inherited var that disables mmap.
-
-    ``rewrite`` False leaves the var alone. ``new_value`` None means remove it; a string replaces
-    it, which is how a locked mode keeps its lock. ``LLAMA_ARG_MLOCK`` is otherwise left alone: on
-    its own it sets the lock bit over the default mapping and holds no unmapped copy.
-
-    ``drop_shadowed_mlock`` says the launch is NOT locked before the rewrite, because a later
-    selector reset the mlock bit -- llama.cpp resolves these last-wins, so ``LLAMA_ARG_MLOCK=1``
-    beside ``LLAMA_ARG_NO_MMAP`` leaves the child unlocked. There is then no lock to carry, so the
-    var goes and a ``mlock`` mode is dropped rather than promoted to ``mmap+mlock``.
-    """
+    """A shadowed LLAMA_ARG_MLOCK is dropped, not promoted, or it would page-lock the oversized mapping."""
     normalized = value.strip().lower()
     if name == "LLAMA_ARG_MLOCK":
         # Only when already shadowed: resurrecting it would page-lock the oversized mapping
@@ -1893,32 +1616,7 @@ def _pageable_env_value(
 def force_pageable_load(
     argv: Optional[Iterable[str]], env: Optional[dict] = None
 ) -> tuple[list[str], list[str]]:
-    """Rewrite a launch that would hold a full unmapped host copy into a pageable one.
-
-    Returns ``(argv, overridden)``, naming the argv tokens and env vars that were dropped or
-    rewritten, for the log line and the warning. Empty means the launch was already pageable and
-    ``argv`` comes back unchanged.
-
-    Modes ``none`` and ``mlock`` read the weights into a buffer llama.cpp allocates (``use_mmap`` is
-    set for ``mmap``/``mmap+mlock``/``auto`` and nothing else), so a model larger than free RAM
-    cannot load at all rather than paging in slowly. Both sides of llama.cpp's env-then-argv
-    resolution are rewritten, since the environment supplies the default the argv only overrides
-    when it names the same option.
-
-    A lock that is EFFECTIVE is preserved rather than dropped: ``mlock`` becomes ``mmap+mlock`` and
-    ``--no-mmap --mlock`` keeps its lock through the strip, so "keep this in RAM" still holds, over
-    a mapping the kernel can fall back on. ``none`` has no lock to keep and needs no replacement
-    flag at all, mmap being the default, so a build predating ``--load-mode`` is handed nothing it
-    cannot parse.
-
-    A SHADOWED lock is not resurrected. These options resolve last-wins, so ``--mlock --no-mmap``
-    (and the ``LLAMA_ARG_`` twins, where the negative alias is read after the affirmative one) runs
-    unlocked and unmapped: the reserving selector already cleared the lock bit, which is what
-    ``resolve_effective_memory_state`` reports. Dropping only the selector and leaving the earlier
-    ``--mlock`` standing would hand the child ``mmap+mlock`` and page-lock the whole oversized
-    mapping into the RAM this override exists to keep pageable, worse than the load it fixes. So the
-    pre-rewrite state decides, not the tokens that happen to be present.
-    """
+    """Rewrites none/mlock to pageable: effective locks become mmap+mlock, shadowed locks stay dropped."""
     tokens = [str(a) for a in (argv or [])]
     _mlock_now, _reserves_now = resolve_effective_memory_state(tokens, env)
     drop_shadowed_mlock = _reserves_now and not _mlock_now
@@ -1990,12 +1688,7 @@ _LOAD_MODE_RESERVING_VALUES = frozenset({"none", "mlock"})
 def resolve_effective_memory_state(
     argv: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> tuple[bool, bool]:
-    """``(mlock, reserves_ram)`` the child will actually run with.
-
-    Mirrors llama.cpp: env supplies defaults, argv overrides last-wins. Used to
-    compare a running process against the current settings, so the reload hint
-    reflects the launched state rather than only what Unsloth emitted.
-    """
+    """What the child runs with: env supplies defaults, argv overrides last-wins, as llama.cpp does."""
     mlock, reserves_ram, _direct_io = resolve_effective_load_state(argv, env)
     return mlock, reserves_ram
 
@@ -2003,14 +1696,7 @@ def resolve_effective_memory_state(
 def resolve_effective_direct_io(
     argv: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """Whether the child will actually run DirectIO.
-
-    ``mmap`` and ``dio`` both hold no full host copy, so they are the same
-    ``(mlock, reserves_ram)`` and the reload comparator cannot tell them apart.
-    Where the Windows no-reserve policy owes a launch dio, that difference is
-    the whole decision, so it is resolved from the same parse rather than a
-    second one that could drift from it.
-    """
+    """Whether the child streams via DirectIO: mmap and dio have the same (mlock, reserves_ram) pair."""
     return resolve_effective_load_state(argv, env)[2]
 
 
@@ -2104,33 +1790,7 @@ def memory_state_satisfies_settings(
     dio_applicable: bool = False,
     dio_managed: bool = False,
 ) -> bool:
-    """True when a launched ``(mlock, reserves_ram)`` matches the settings.
-
-    Shared by the duplicate-load comparator (so toggling a setting forces a real relaunch instead of
-    returning already-loaded) and the settings route (so the reload hint agrees with it).
-
-    ``state`` is None for a process this policy does not govern, such as the diffusion runner, which
-    has no load-mode of its own; nothing about it can contradict the settings, so it always matches.
-
-    ``policy_active`` says the launch differed from an unmanaged one, because a flag was emitted, a
-    requested one suppressed, or an inherited env var scrubbed. With both toggles off the policy no
-    longer applies, so any of those has to be undone on the next launch, while a launch it never
-    touched is left alone.
-
-    ``mlock_applicable`` is False when the launch is fully offloaded to a
-    discrete GPU, where page-locking host RAM buys nothing and is deliberately
-    not emitted. Residency there is the idle-unload veto, which needs no
-    relaunch, so demanding mlock would ask for a reload that can never satisfy
-    the check.
-
-    ``direct_io`` is whether the launch actually streams, and ``dio_applicable``
-    whether ``no_reserve_requires_dio`` held for its platform, build and
-    placement. Default mmap and DirectIO are the same ``(mlock, reserves_ram)``,
-    so without these a Windows full-offload process launched on the default
-    mapping reports as satisfying a no-reserve that would now emit dio, and both
-    the reload hint and the duplicate-load fast path leave it running. None means
-    a caller that does not track it, which never forces a reload.
-    """
+    """Whether a launch satisfies the settings; on Windows full offload, mmap must reload to get dio."""
     if state is None:
         return True
     try:

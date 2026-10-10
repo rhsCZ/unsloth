@@ -473,11 +473,7 @@ def test_a_downgraded_read_does_not_erase_newer_stored_fields(monkeypatch):
 
 
 def test_a_store_holding_load_options_is_read_without_them_and_keeps_them(monkeypatch):
-    """Presets are a generation recipe; load options belong to the resident build.
-
-    A store written before that split still holds them, so the read must ignore them and the
-    write must not throw them away.
-    """
+    """Older stores still hold load options: the read must ignore them and the write must keep them."""
     stored = {
         "image_generation_presets": {
             "activePreset": "Landscape",

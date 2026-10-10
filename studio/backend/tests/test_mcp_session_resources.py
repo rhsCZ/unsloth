@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Resource accounting for shared MCP sessions.
-
-Every cached session owns an event loop on its own daemon thread, and the cache
-now holds HTTP sessions too, so the count is driven by how many chats are open
-rather than how many stdio servers are configured. These assert the threads and
-descriptors come back, and that the cache stays inside its cap.
-
-Counts settle rather than being sampled once: a session thread is stopped by the
-loop, so it exits shortly after close() returns.
-"""
+"""Session threads and descriptors must be released; counts are polled until they settle."""
 
 from __future__ import annotations
 
@@ -39,10 +30,7 @@ def _settled(
     expected: int = 1,
     timeout: float = 10.0,
 ) -> int:
-    """Wait out an asynchronous close.
-
-    A discarded session is closed by the cleanup worker rather than on the
-    request thread, so its close lands just after the call returns."""
+    """Discarded sessions close on the cleanup worker, so a check must wait for the close to land."""
     deadline = time.monotonic() + timeout
     while client.exited < expected and time.monotonic() < deadline:
         time.sleep(0.005)

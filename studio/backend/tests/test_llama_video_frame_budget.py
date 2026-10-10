@@ -407,14 +407,7 @@ def test_the_gguf_route_shrinks_the_clip_after_the_size_check_and_before_injecti
 
 
 def test_the_conversions_result_is_what_gets_injected():
-    """The ordering test above matches source text, so it cannot see whether the
-    conversion's RESULT is used. Dropping just the assignment silently disables
-    the whole feature -- the clip is still converted, then thrown away and the
-    original injected -- while every substring it searches for stays put.
-
-    Read the structure instead: the awaited call must be bound to a name, and
-    that same name must be the one handed to _inject_video_part.
-    """
+    """The converted clip, not the original, must be the value passed to _inject_video_part."""
     import ast
 
     source = (Path(__file__).resolve().parent.parent / "routes" / "inference.py").read_text(
@@ -458,10 +451,7 @@ def test_the_conversions_result_is_what_gets_injected():
 
 
 def test_the_route_hands_the_helper_bare_base64_with_any_data_header_gone():
-    """`shrink_video_for_llama` documents a bare-base64 contract, and the route
-    is what has to honour it. A data: URL reaching ffmpeg would decode to
-    garbage and be forwarded unchanged, losing the speedup silently.
-    """
+    """The route must hand shrink_video_for_llama bare base64, with any data: header removed first."""
     import routes.inference as inference_route
 
     payload = base64.b64encode(b"not-really-a-clip").decode("ascii")

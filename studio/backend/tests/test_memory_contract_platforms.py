@@ -1,27 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The shared contract across the platform x GPU-vendor product.
-
-The consolidation is pure arithmetic and renaming, with no platform-specific
-branch anywhere in it, which is precisely the claim worth testing rather than
-asserting: a contract that quietly depends on the host is the kind of thing that
-is only discovered by the one user who has that host.
-
-The matrix is the four platform keys the repo already parametrises over
-(``test_diffusion_predownload_guard_platforms.py``) crossed with the placements
-a GGUF load can end up in: everything on one card, split across two, partly on
-the host, entirely on the host, and nothing probed at all.
-
-Two properties hold in every cell:
-
-* the WIRE SHAPE of both legacy routes is identical everywhere, so no client
-  needs a per-platform branch
-* ``weights_bytes`` keeps its own meaning on each route in every cell, which is
-  the compatibility boundary the whole consolidation rests on
-
-No GPU, no network, no model load. Pure functions.
-"""
+"""Both legacy routes keep their wire shape and weights_bytes meaning on every platform and placement."""
 
 import sys
 from pathlib import Path

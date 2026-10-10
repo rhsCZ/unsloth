@@ -96,11 +96,7 @@ class ExportOrchestrator:
             )
 
     def clear_logs(self) -> None:
-        """Drop buffered log lines from a previous op so the UI shows only this run.
-
-        The seq counter is NOT reset (clients keep a stable cursor); the current seq
-        is snapshotted into ``_run_start_seq`` to anchor the SSE default cursor.
-        """
+        """Drops buffered lines but keeps the seq counter running, so clients' stable cursors stay valid."""
         with self._log_lock:
             self._log_buffer.clear()
             self._run_start_seq = self._log_seq
@@ -134,12 +130,8 @@ class ExportOrchestrator:
         return self._cancel_requested
 
     def _record_op_finished(self, success: bool, message: str, output_path: Optional[str]) -> None:
-        """Snapshot the just-finished op so status pollers can recover its outcome.
-
-        Called from each op's ``finally`` (with ``_active_op_kind`` still set) BEFORE
-        ``_export_active`` is cleared, so a status read that observes the op as
-        inactive is guaranteed to also see this matching result.
-        """
+        """Called before ``_export_active`` clears, so any read that sees the op inactive sees its
+        result."""
         with self._op_lock:
             self._op_seq += 1
             status = "cancelled" if self._cancel_requested else ("success" if success else "error")
@@ -283,13 +275,7 @@ class ExportOrchestrator:
         logger.info("Export subprocess started (pid=%s)", _spawned_proc.pid)
 
     def _shutdown_subprocess(self, timeout: float = 10.0) -> bool:
-        """Gracefully shut down the export subprocess.
-
-        Returns True only once the worker is confirmed dead. If it survives
-        terminate/kill (e.g. wedged in an uninterruptible CUDA syscall that outlives
-        SIGKILL) the live handle is KEPT, not nulled, so is_worker_alive() and the
-        pre-swap liveness guard can still observe the survivor instead of a cleared
-        handle and refuse the destructive sidecar swap."""
+        """Keeps the handle if the worker survives kill, so the pre-swap guard still sees the survivor."""
         if self._proc is None or not self._proc.is_alive():
             self._proc = None
             return True
@@ -364,14 +350,7 @@ class ExportOrchestrator:
         timeout: float = _EXPORT_INACTIVITY_TIMEOUT,
         max_wait: Optional[float] = None,
     ) -> dict:
-        """Block until a response of the expected type arrives.
-
-        *timeout* is an **inactivity** timeout: it resets on each log and status message, so a
-        large export survives as long as the worker keeps reporting. Matches the inference side.
-
-        *max_wait* additionally caps the total wait, for ops that must fail fast: a short
-        inactivity budget alone is not one, since any line printed renews it.
-        """
+        """*timeout* is inactivity, renewed by each log or status line; *max_wait* caps total wait."""
         started = time.monotonic()
         hard_deadline = None if max_wait is None else started + max_wait
 

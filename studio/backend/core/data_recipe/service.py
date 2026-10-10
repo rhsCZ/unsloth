@@ -218,12 +218,7 @@ def _apply_data_designer_prompt_blank_patch() -> None:
 
 
 def _require_public_provider_endpoint(endpoint: str) -> None:
-    """The recipe engine dials providers itself, so a managed account's endpoint cannot use the pinned
-    transport: require HTTPS, which binds the peer to its certificate rather than to a DNS answer that
-    may rebind to loopback or the LAN after this public-address check.
-
-    With the switch on, the HTTPS and public-address rules stand down so a saved connection is one
-    a recipe can run on. The metadata rule does not: this path has no validator behind it."""
+    """Managed endpoints need HTTPS: the certificate binds the peer, not a DNS answer that can rebind."""
     if not managed_account():
         return
     from urllib.parse import urlsplit
@@ -262,12 +257,7 @@ def _require_public_provider_endpoint(endpoint: str) -> None:
 
 
 def install_public_egress_guard() -> None:
-    """Managed recipe workers: the engine dials providers itself, so every name resolves through this
-    guard and a host that rebinds to loopback or the LAN after the endpoint check is refused at connect
-    time rather than dialled. Process-wide, so it is installed only in the job subprocess.
-
-    With the switch on the guard narrows to the metadata services rather than standing down: a
-    worker whose engine dials for itself has nothing else between it and that address."""
+    """Process-wide, so installed only in the job subprocess; rebinding hosts are refused at connect."""
     if not managed_account():
         return
     from utils.managed_provider_url_settings import get_managed_private_provider_urls_allowed

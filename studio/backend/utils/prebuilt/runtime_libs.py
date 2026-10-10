@@ -157,11 +157,7 @@ _VENDORED_CUDA_ROOTS: tuple[tuple[Path, str], ...] = (
 def vendored_cuda_runtime_dirs(
     marker: object, *, roots: Optional[Iterable[tuple[Path, str]]] = None
 ) -> list[str]:
-    """Vendored dirs holding libcudart + libcublas for the marker's ``runtime_line`` major.
-
-    Empty when the loader already finds that pair. Callers append the result LAST
-    so it never displaces the runtime the build picked.
-    """
+    """Callers append these last so the vendored runtime never displaces the one the build picked."""
     if not sys.platform.startswith("linux"):
         return []
     runtime_line = marker.get("runtime_line") if isinstance(marker, dict) else None

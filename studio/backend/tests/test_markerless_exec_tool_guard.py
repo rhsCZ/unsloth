@@ -1,21 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Guard tests for the markerless execution-class tool-call fix.
-
-Two HIGH-severity prompt-injection -> RCE findings: the markerless (bare, unwrapped) parsers
-promoted ``call:NAME{...}`` and ``NAME[ARGS]{json}`` found ANYWHERE in assistant text, gated
-only by "is NAME enabled", so content the model quotes (web/RAG/pasted) shaped like one ran
-through ``execute_tool`` -> ``_bash_exec``/``_python_exec``.
-
-The fix: an execution-class tool (``python``/``terminal``/``edit_file``) or any open-vocabulary
-``mcp__*`` tool is NEVER promoted or stripped from a MARKERLESS span, whatever
-``enabled_tool_names`` says. It must carry an unambiguous wrapper (``<|tool_call>``,
-``[TOOL_CALLS]``, ``<function=>``) or arrive as a structured tool_call. Benign tools keep the
-bare form; the trusted wrapped/marker forms keep executing code and MCP tools.
-
-See ``core/tool_healing.py::EXECUTION_CLASS_TOOL_NAMES`` and ``_markerless_promotable``.
-"""
+"""Bare text never promotes exec-class or mcp__ tools; they need a wrapper or a structured tool_call."""
 
 import json
 
@@ -803,10 +789,7 @@ def test_a_promotable_bare_gemma_call_is_a_streaming_boundary():
 
 
 def test_the_transformers_cleanup_keeps_a_stop_token_that_closes_an_envelope():
-    """``_clean_generated_text`` trims the active stop token from every snapshot, so once the
-    decoder preserves native controls a marker that is BOTH the EOS and the required closer (TML
-    Inkling's ``<|end_message|>``) went before the parser read it and strict parsing rejected a
-    complete call. An ordinary EOS is not a native control and is still trimmed."""
+    """A stop token that also closes the envelope must survive cleanup or strict parsing rejects it."""
     import ast
     import pathlib
 
@@ -903,10 +886,7 @@ def test_the_mlx_vlm_decoder_keeps_the_reasoning_protocol_delimiters():
 
 
 def test_a_gemma_peer_behind_a_blocked_json_object_is_held():
-    """The end-of-turn parser searches the whole turn, so a chain can change format.
-    ``blocked_bare_json_chain_may_continue`` stopped at the first non-object suffix, yet
-    ``{"name":"terminal",..} call:web_search{..}`` still promotes ``web_search``, so the peer
-    streamed and was promoted only at end of turn."""
+    """A blocked JSON object does not end the chain; a Gemma call behind it is still held."""
     from core.inference.tool_call_parser import blocked_bare_json_chain_may_continue as may_continue
 
     blocked = json.dumps({"name": "terminal", "parameters": {"command": "id"}})
@@ -1030,12 +1010,8 @@ def test_the_gemma_tail_hold_does_not_walk_the_tool_catalog_per_chunk():
 
 
 def test_the_bare_gemma_scan_skips_the_regex_when_there_is_no_call_word(monkeypatch):
-    """The streaming detectors call this per chunk on the whole cumulative text.
-
-    ``_GEMMA_BARE_TC_RE`` cannot match without a literal ``call``, so an answer that never says
-    the word must not pay for a regex sweep per chunk. Counting sweeps rather than timing stays
-    honest on a loaded CI box: an 8k answer at 6-char chunks ran ~1300 and now runs none.
-    """
+    """Skip the bare Gemma regex sweep unless the text contains the word call; it runs per streamed
+    chunk."""
     from core.inference import tool_call_parser as tcp
 
     sweeps = []
@@ -1069,12 +1045,7 @@ def test_the_bare_gemma_scan_skips_the_regex_when_there_is_no_call_word(monkeypa
 
 
 def test_a_blocked_prefix_anchors_the_promotable_peer_in_every_markerless_format():
-    """The parser scans past a blocked call and promotes the peer behind it.
-
-    The strip has to agree, or the executed call's raw serialization stays in the content beside
-    the structured ``tool_calls`` entry and the next iteration replays both. Only the Gemma form
-    anchored, so the rehearsal and bare-JSON prefixes leaked.
-    """
+    """Stripping and parsing must agree on blocked prefixes, or the executed call's raw text is replayed."""
     gate = {"terminal", "web_search"}
     for prefix in (
         'terminal[ARGS]{"x":1}',

@@ -1,12 +1,4 @@
-"""Tests for MCP config-file import (issue #5936).
-
-Covers the round-trip-safe command join/split inverse (join_stdio_command ↔
-parse_stdio_command, on both posix and win32 using the issue's Windows
-fixtures), the pure config parser (parse_mcp_config), and the POST /import
-route (stdio gate on/off, url dedup, one bad entry not sinking the batch).
-
-Run from studio/backend:  python -m pytest tests/test_mcp_config_import.py -q
-"""
+"""join_stdio_command and parse_stdio_command must round-trip on posix and win32 fixtures."""
 
 import sys
 

@@ -666,11 +666,7 @@ def _id_chunks(folder_ids: list[str]) -> list[list[str]]:
 
 
 def linked_folder_ids(scope: str) -> list[str]:
-    """The folders a scope owns right now, for bounding a later retirement to them.
-
-    Metadata connection, like retirement itself: the delete path has to finish even when the
-    vector extension cannot load.
-    """
+    """Reads only the metadata DB, so deletes finish even when the vector extension cannot load."""
     with closing(rag_db.get_metadata_connection()) as conn:
         if not _metadata_table_exists(conn, "linked_folders"):
             return []
@@ -718,12 +714,7 @@ def retire_scope(
     folder_ids: list[str] | None = None,
     rows: bool = True,
 ) -> None:
-    """Stop all future work, even when the vector extension cannot load.
-
-    `rows = False` writes only the tombstone: enough on its own to stop new links and uploads,
-    and the only half a caller can take back, since the folder and job updates overwrite state
-    nobody recorded. A caller whose ownership check can still go stale takes it first.
-    """
+    """rows=False writes only the tombstone: stops new links and uploads, and is all a caller can undo."""
     conn = _retirement_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -737,11 +728,7 @@ def retire_scope(
 
 
 def retire_and_delete_kb(kb_id: str) -> bool:
-    """Atomically retire a KB scope and delete its owner row.
-
-    Document rows remain as the durable cleanup queue until
-    ``delete_retired_scope`` removes their stored files and database state.
-    """
+    """Retires the scope and deletes its owner row atomically; document rows stay as the cleanup queue."""
     scope = store.kb_scope(kb_id)
     conn = rag_db.get_connection()
     try:
@@ -761,12 +748,7 @@ def retire_and_delete_kb(kb_id: str) -> bool:
 
 
 def delete_retired_scope(scope: str) -> bool:
-    """Purge an ownerless scope and retain its tombstone permanently.
-
-    The tombstone closes late cross-database upload/link races while the scope is ownerless; only a
-    same-id project recreate clears it (``unretire_scope``). File removal happens before database rows
-    are discarded, so any failure remains retryable from durable metadata.
-    """
+    """Purges an ownerless scope but keeps its tombstone; files go before DB rows, so retries are safe."""
     conn = rag_db.get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -945,12 +927,7 @@ def request_sync(folder_id: str, *, rebuild: bool = False) -> str:
 
 
 def _fold_into_active_job(conn, active, kind: str) -> None:
-    """Absorb a new request into the job already queued or running for this folder.
-
-    A pending job has not scanned yet, so it can simply become the requested kind. A
-    running job already fixed its file list, so the request becomes a successor: the
-    caller's changes are only guaranteed to land in the run that follows this one.
-    """
+    """Pending jobs take the kind; a running job's files are fixed, so the request becomes a successor."""
     if active["status"] == "pending":
         if kind == "rebuild":
             conn.execute(
@@ -1018,11 +995,7 @@ def get_job(job_id: str) -> dict | None:
 
 
 def job_events(job_id: str):
-    """Poll persisted state so streams also work after a backend restart.
-
-    Yields None as a keepalive when a pass produces no change for a while, which is what
-    lets a client tell a slow job from a proxy holding the whole response back.
-    """
+    """Polls persisted state so streams survive restarts; yields None as a keepalive during quiet passes."""
     previous = None
     last_sent = time.monotonic()
     while True:
@@ -2153,12 +2126,7 @@ def _recover_startup_state() -> None:
 
 
 def _reap_orphaned_documents(conn, now: str) -> None:
-    """Drop folder-owned documents left unreferenced by a crash before mapping.
-
-    Also runs periodically: a process that survives the crash reclaims the
-    expired job and reindexes the file, so its own startup pass is long past.
-    Anything still leased by a live ingestion or folder sync is left alone.
-    """
+    """Drops folder-owned orphans from a crash; anything still leased by a live ingestion is kept."""
     orphans = conn.execute(
         "SELECT d.id, d.stored_path FROM documents d "
         "WHERE d.linked_folder_id IS NOT NULL AND NOT EXISTS "

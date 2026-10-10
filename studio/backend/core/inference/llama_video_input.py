@@ -162,11 +162,7 @@ def _filter_chain(
     oversized: bool,
     sampled_fps: Optional[float] = None,
 ) -> str:
-    """Tail pad, then rate cap, then scale, each only when needed. Order matters:
-    the cap shares the blind spot the pad covers (`fps=4` on a 0.1s clip also emits
-    nothing, leaving tpad no frame to clone), the cap only goes downwards since
-    `fps` DUPLICATES when asked for more than the source has, and scale is skipped
-    inside the budget where it would UPSCALE."""
+    """Pad, then rate cap (downwards only, as fps duplicates frames), then scale; order matters."""
     ceiling = _rate_ceiling(sampled_fps)
     chain = []
     if duration is not None and 0 < duration < MIN_SAMPLED_SECONDS:
@@ -184,11 +180,7 @@ def shrink_video_for_llama(
     max_pixels: int = MAX_FRAME_PIXELS,
     sampled_fps: Optional[float] = None,
 ) -> str:
-    """Make a clip cheap and safe for llama-server to sample, as bare base64.
-
-    ``sampled_fps`` raises the rate ceiling. Keeps only video and the timing of every
-    real frame. Missing tools, failures and an over-``max_bytes`` result pass through.
-    """
+    """Keeps only video and each real frame's timing; missing tools or oversize output pass through."""
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:

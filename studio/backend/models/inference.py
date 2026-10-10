@@ -3963,12 +3963,7 @@ _CLAUDE_STYLE_REMINDER_SUFFIX = (
 
 
 def _is_repeated_claude_style_reminder(text: str, retained_system: list[str]) -> bool:
-    """Keep Claude's per-tool style reminder from growing an unchanged system prefix.
-
-    Only the exact standalone reminder is redundant, and only when both its style
-    heading and an identical reminder are already retained. Never deduplicate
-    arbitrary instructions or text from user/tool messages.
-    """
+    """Drop an exact standalone style reminder already retained; never dedupe other user or tool text."""
     if not text.endswith(_CLAUDE_STYLE_REMINDER_SUFFIX):
         return False
     style = text[: -len(_CLAUDE_STYLE_REMINDER_SUFFIX)]

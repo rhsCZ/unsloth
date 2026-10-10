@@ -5948,14 +5948,7 @@ def test_compacting_an_earlier_call_lets_the_next_one_run(monkeypatch):
 
 
 def test_refusing_a_call_also_stops_it_costing_the_window(monkeypatch):
-    """Observed live: an accurate refusal, then the 400 it was issued to prevent.
-
-    The refusal is a `tool` message, and a chat template renders an assistant turn's
-    `tool_calls` only once one of those answers them. So declining to run the tool is the
-    very thing that makes its arguments start costing the prompt, and the generation that
-    follows is rejected anyway -- with nothing written, but also nothing the user can do.
-    The refused arguments are the one case with no replay value at all.
-    """
+    """Refusing a tool call still makes its arguments cost the prompt, so refusal does not save room."""
     immovable = "please read all of this: " + "u" * 40000
     oversized = "<!DOCTYPE html>" + "x" * 8000
     streams = [
@@ -5993,14 +5986,8 @@ def test_refusing_a_call_also_stops_it_costing_the_window(monkeypatch):
 
 
 def test_reply_room_is_reclaimed_before_generating(monkeypatch):
-    """A prompt that FITS can still leave nothing to answer in.
-
-    Observed on a 4096 window: every tool call servable, none refused, the file written,
-    and the turn ended on `finish_reason: length` with the model still thinking -- the
-    prompt had eaten the room its answer needed. The pre-execution gate never fired
-    because nothing was ever unservable, so compaction, the exact lever for this, was
-    never asked to run.
-    """
+    """A prompt that fits can still leave no room for the reply, so compaction must run before
+    generating."""
     bulky = "<!DOCTYPE html>" + "z" * 30000
     prior_call = {
         "id": "call_done",
@@ -6047,14 +6034,7 @@ def test_reply_room_is_reclaimed_before_generating(monkeypatch):
 
 
 def test_an_oversized_call_is_run_and_compacted_rather_than_refused(monkeypatch):
-    """Refusing costs the same tokens as running, and leaves nothing written.
-
-    The refusal is itself the `tool` message that makes the arguments render, so declining
-    does not avoid their cost. The model then retries with a fresh oversized call and each
-    round reclaims less -- 50%, then 34%, then 15% of one measured thread, ending in a
-    one-character reply. Running the call needs no context at all; only the next prompt
-    does, and by then the arguments describe a file on disk.
-    """
+    """Refusing an oversized call costs the same prompt tokens as running it, so it is run and compacted."""
     oversized = "<!DOCTYPE html>" + "x" * 24000
     streams = [
         _structured_tool_call(
@@ -6142,15 +6122,7 @@ def _two_edits_in_one_turn():
 
 
 def test_a_second_call_in_a_compacted_turn_is_still_visible_to_the_model(monkeypatch):
-    """Compaction rebuilds the messages, which silently detaches the local handle.
-
-    The run-then-compact rescue rewrites `conversation` in place. The loop was still
-    holding the assistant message it built BEFORE that, so the next call in the same
-    batch appended its `tool_call` to a dict no longer in the list while its RESULT was
-    appended to the list. The model then received a `tool` message answering a call it
-    could not see, which some templates reject outright and the rest render as an
-    unexplained result.
-    """
+    """Compaction rebuilds the messages, so a call after it must not append to a stale message dict."""
 
     payloads: list[dict] = []
     backend = _make_backend(
@@ -6191,15 +6163,7 @@ def test_a_second_call_in_a_compacted_turn_is_still_visible_to_the_model(monkeyp
 
 
 def test_the_synthesized_final_pass_is_recosted_before_it_is_sent(monkeypatch):
-    """The last request of a tool run is the biggest, and it skips the top of the loop.
-
-    ``on_conversation_grew`` is KV admission's only view of a growing tool loop and fires
-    at the TOP of a round. The iteration cap breaks out mid-round instead, after the
-    assistant turn and its tool result are appended, and goes straight to the synthesized
-    final answer. Without a re-cost there the largest prompt of the run is the one the
-    pool never hears about, and llama.cpp answers the overcommit by killing every
-    decoding slot at once.
-    """
+    """The synthesized final pass must be re-costed; the iteration cap skips on_conversation_grew."""
     first_stream = _structured_tool_call("web_search", {"query": "kernel"}, "call_search")
     final_stream = [_sse({"content": "6.10."}), _done()]
     backend, payloads = _backend_and_payloads(monkeypatch, [first_stream, final_stream])
@@ -6360,10 +6324,7 @@ def test_a_cancel_emits_the_blocked_object_the_gguf_guard_was_holding(monkeypatc
 
 
 def test_only_the_tool_loop_flushes_held_text_on_cancel():
-    """``_cancelled_hold_text`` reads buffers bound inside the tool loop. The synthesized
-    final pass never rebinds or writes them and emits incrementally, holding nothing, so a
-    flush there could only ever replay the previous iteration's text as the final answer.
-    Asserted on the source because reaching that pass needs a live template render."""
+    """Only the tool loop flushes held text on cancel; the synthesized final pass holds nothing to flush."""
     import inspect
 
     from core.inference.llama_cpp import LlamaCppBackend

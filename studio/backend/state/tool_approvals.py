@@ -25,13 +25,7 @@ _PARK_TIMEOUT_DEFAULT_S = 300.0
 
 
 def _park_timeout_from_env() -> float:
-    """Read the park ceiling once, at import, tolerating a value nobody can parse.
-
-    Read here rather than per wait so one run cannot change ceiling mid-flight. A typo must not be
-    fatal: this module is imported on the chat path, so raising would take the backend down at
-    startup over an environment variable, and a stuck approval is the lesser failure. A negative or
-    non-finite value would disable the ceiling silently, so both fall back too.
-    """
+    """Read once at import so a run cannot change it mid-flight; a bad value falls back, never raises."""
     raw = os.environ.get("UNSLOTH_STUDIO_TOOL_APPROVAL_TIMEOUT_S")
     if raw is None or not raw.strip():
         return _PARK_TIMEOUT_DEFAULT_S
@@ -72,11 +66,7 @@ DECISION_EXPIRED = "expired"
 
 
 def decision_reason(slot) -> Optional[str]:
-    """Why ``wait_tool_decision`` returned for ``slot``, or None if it did not say.
-
-    None on purpose for a slot a stubbed waiter never touched: the caller then falls back to
-    TOOL_REJECTED_MESSAGE, which is exactly what it did before reasons existed.
-    """
+    """None means no reason was recorded, so the caller falls back to TOOL_REJECTED_MESSAGE."""
     if not isinstance(slot, dict):
         return None
     return slot.get("reason")
@@ -111,10 +101,7 @@ def wait_tool_decision(
     cancel_event = None,
     timeout = _DECISION_TIMEOUT,
 ):
-    """Block on a slot from ``begin_tool_decision`` until the user decides. Returns ``"allow"`` or ``"deny"``, falling back to ``"deny"`` if the wait times out or generation is cancelled first. Records WHY in ``slot["reason"]`` (see ``decision_reason``), because a bare ``"deny"`` cannot tell a user who refused from an approval nobody answered, and the loops report one of those to the user as their own decision. Always removes its own slot on exit.
-
-    The park ceiling measures time with NOBODY WATCHING, not time since the call parked. A durable run outlives its tab by design, so its cancel_event says nothing about whether a human is there; ``run_subscribers`` is what knows. While a follower is attached the deadline keeps re-arming and the wait is bounded by ``_DECISION_TIMEOUT`` exactly as a browser-owned run always was, so a user still reading what the tool wants to do does not lose the decision out from under them. Reaching that bound takes renewing the RUN's lease as well (``cancel_event.renew_lease``), since parking makes no progress and the sweeper would otherwise settle the run at its lease timeout, around 20 minutes, and cancel the wait. Once the followers go the ceiling runs (default 300s, ``UNSLOTH_STUDIO_TOOL_APPROVAL_TIMEOUT_S``) and an unattended agent adapts and continues. An explicit Stop still denies immediately.
-    """
+    """Records why in slot['reason']: a bare deny cannot tell a refusal from an unanswered approval."""
     park = bool(getattr(cancel_event, "durable", False))
     run_id = getattr(cancel_event, "durable_run_id", "") or ""
     # Run ids are account-local, so ask attendance under the same account.
@@ -165,16 +152,7 @@ def wait_tool_decision(
 
 
 def tool_decision_is_pending(approval_id, session_id = None) -> bool:
-    """True while `approval_id` is still waiting on a human.
-
-    A reopened tab cannot otherwise tell a parked call from one the user already answered: both are
-    saved as a card with no result and an approval id, because the result only lands with tool_end.
-    Re-arming the answered one puts Approve/Deny over a call that is already executing, and every
-    press 404s. So the state is asked for rather than inferred.
-
-    Scoped like resolve_tool_decision, and a set event counts as decided rather than pending, so the
-    window between the decision and the waiter popping its own slot does not read as still-parked.
-    """
+    """Asked of the state, not inferred: a reopened tab cannot tell parked calls from answered ones."""
     if not approval_id:
         return False
     with _lock:

@@ -78,10 +78,7 @@ from core.training.diffusion_checkpoint import (
 
 
 def compute_sdxl_add_time_ids(resolution: int) -> tuple[int, int, int, int, int, int]:
-    """SDXL micro-conditioning ``add_time_ids`` for a square ``resolution`` train crop:
-    (original_h, original_w, crop_top, crop_left, target_h, target_w). Pure; the trainer
-    turns it into a tensor. No crop offset is applied (top-left = 0). The training loop
-    derives per-image time-ids from the actual crop instead; this is the square default."""
+    """Square default with no crop offset; the training loop derives per-image ids from the actual crop."""
     return (resolution, resolution, 0, 0, resolution, resolution)
 
 
@@ -181,15 +178,7 @@ def _encode_sdxl_prompts(
 def _build_sdxl_latent_cache(
     vae, vae_scale, image_paths, cfg, device, weight_dtype, on_event, check_stop
 ):
-    """Precompute the per-image latent posterior cache: for each planned crop/flip variant,
-    encode once and store ``(A, B, time_ids)`` on CPU in fp32. ``A`` and ``B`` are the affine
-    posterior parameters (mean/std with the VAE scale folded in) so a per-step sample is
-    ``A + B * randn`` -- distribution-identical to an in-loop ``latent_dist.sample()`` -- and
-    ``time_ids`` is the SDXL micro-conditioning for the crop. The stats stay fp32 so the
-    per-step sample happens in fp32 and only the RESULT is cast to weight_dtype, matching the
-    in-loop path (encode fp32 -> sample fp32 -> scale -> .to(weight_dtype)); fp32 doubles the
-    cache RAM over bf16 but the cache is tiny (a handful of latents per image). Returns None if
-    the build was interrupted by a stop request. ``vae_scale`` is read before the VAE is freed."""
+    """Caches the affine (A, B) pair with the VAE scale folded in, so a per-step sample is A + B * randn."""
     import torch
 
     plan = _plan_cache_variants(
@@ -247,12 +236,7 @@ def _build_sdxl_latent_cache(
 
 
 def _sample_sdxl_cached_latents(cache, idxs, variant_rng, device, weight_dtype):
-    """Draw one latent + its time_ids per index from the cache: pick a variant, then sample
-    the posterior (A + B * randn) with fresh noise per step, exactly like an in-loop
-    ``latent_dist.sample() * vae_scale``. The cached stats are fp32, so the sample is drawn in
-    fp32 and only the RESULT is cast to weight_dtype (matching the in-loop path). Returns
-    ``(latents, batch_time_ids)`` already on ``device`` in the training dtype (scale is folded
-    into the cache)."""
+    """Draws fresh noise each step, like an in-loop sample, since the VAE scale is folded into the cache."""
     import torch
 
     parts_a, parts_b, tid_rows = [], [], []
@@ -277,18 +261,7 @@ def run_diffusion_lora_training(
     on_event: Optional[EventCb] = None,
     should_stop: Optional[StopCb] = None,
 ) -> str:
-    """Train an SDXL U-Net LoRA and export it. Returns the output directory.
-
-    Emits ``model_load_started`` / ``model_load_completed`` / ``progress`` (step, loss) /
-    ``complete`` (output_dir, lora_path) events via ``on_event``; ``error`` is emitted by
-    the process adapter. Honours ``should_stop`` (checked before model load and between
-    optimizer steps); a stop saves a partial adapter unless it carries ``save=False``.
-
-    Resumable: ``cfg.resume_from_checkpoint`` restores the adapter, the optimizer moments,
-    the LR-schedule position, the sampler cycle and every RNG stream from a
-    ``checkpoint-<N>`` bundle, and the loop then runs steps N+1..train_steps
-    (``train_steps`` is the TARGET TOTAL, not an additional budget). A stop-and-save and
-    every ``cfg.save_steps`` interval write such a bundle."""
+    """A stop saves a partial adapter unless it carries save=False; train_steps is the target total."""
     import torch
     import torch.nn.functional as F
     from diffusers import DDPMScheduler, StableDiffusionXLPipeline
@@ -700,10 +673,7 @@ def run_diffusion_lora_training(
 
 
 def _make_lora_optimizer(params: list, lr: float) -> Any:
-    """8-bit AdamW (bitsandbytes) by default -- half the optimizer state, no meaningful
-    quality cost for LoRA -- falling back to torch AdamW (fused on CUDA) when unavailable.
-    UNSLOTH_DIFFUSION_FP32_OPTIM forces plain (non-fused) AdamW: the accuracy guard wants the
-    reference optimizer, so it must not take the fused path."""
+    """UNSLOTH_DIFFUSION_FP32_OPTIM forces plain non-fused AdamW, as the accuracy guard requires."""
     import torch
 
     if os.environ.get("UNSLOTH_DIFFUSION_FP32_OPTIM", "") in ("1", "true"):
@@ -724,10 +694,7 @@ def _make_lora_optimizer(params: list, lr: float) -> Any:
 
 
 def run_diffusion_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> None:
-    """mp.Queue subprocess adapter: run a training job, translating the ``on_event``
-    callback to ``event_queue`` and a ``stop_queue`` poll to ``should_stop``. Dispatches to
-    the trainer registered for the resolved family. Any unexpected exception is reported as
-    an ``error`` event rather than crashing silently."""
+    """Unexpected exceptions become an error event on the queue, not a silent subprocess crash."""
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
     def on_event(ev: dict) -> None:

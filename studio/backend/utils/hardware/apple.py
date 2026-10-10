@@ -396,10 +396,7 @@ def read_gpu_temperature_c() -> Optional[float]:
 
 
 def read_gpu_power_w() -> Optional[float]:
-    """Average GPU power in watts since the previous call, or None.
-
-    The first call establishes the baseline sample and returns None.
-    """
+    """Average GPU watts since the previous call; the first call only sets the baseline and returns None."""
     global _energy, _energy_failed
     if _energy_failed:
         return None

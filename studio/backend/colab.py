@@ -147,10 +147,7 @@ def _colab_wants_cloudflare(cloudflare: "bool | None") -> bool:
 
 
 def _finalize_colab_admin_password() -> "tuple[str, str] | None":
-    """Clear the bootstrap-password gate on Colab so Cloudflare tunnels can start. Returns ``(username,
-    password)`` for display in the notebook. On first run the random admin password is finalized; on
-    later runs (e.g. after interrupt) the stored credentials are re-displayed so the Cloudflare link
-    stays usable. Anyone who can read this cell already controls the runtime."""
+    """Later runs re-display the stored credentials, keeping the Cloudflare link usable."""
     if not _is_colab_runtime():
         return None
     try:
@@ -227,10 +224,7 @@ def _ready_card_html(
     has_cloudflare_link: bool = False,
     cloudflare_requested: bool = False,
 ) -> str:
-    """Branded ready card for the in-notebook Unsloth view. Colab ``*.prod.colab.dev`` proxy URLs are
-    session-scoped and 404 when opened as a top-level tab or on another device, so never
-    ``window.open`` them. On real Colab the Cloudflare link is the supported entry point because
-    in-cell proxy embeds often stay blank."""
+    """Never window.open ``*.prod.colab.dev`` URLs: they are session-scoped and 404 as a top-level tab."""
     short_url = _short_colab_url(url, port)
     if _is_colab_runtime() or _is_colab_proxy_url(url, port):
         if has_cloudflare_link:
@@ -570,12 +564,7 @@ def _show_and_embed(
 
 
 def start(port: int = 8888, *, cloudflare: "bool | None" = None):
-    """Start Unsloth Studio in Colab and display the URL. Args: port: Port to bind/serve on.
-    cloudflare: Shareable Cloudflare HTTPS link. ``None`` (default) auto-enables on real Colab
-    because the in-cell proxy embed is often blank; pass ``False`` to skip the tunnel or ``True`` to
-    force it on other runtimes. Usage: start() # Cloudflare link on Colab (auto); proxy iframe
-    elsewhere start(cloudflare=False) # Colab proxy iframe only (often blank on current Colab)
-    start(cloudflare=True) # force Cloudflare link on any runtime"""
+    """cloudflare=None auto-enables the tunnel on Colab, where the in-cell proxy is often blank."""
     import time
 
     logger.info("🦥 Starting Unsloth Studio...")

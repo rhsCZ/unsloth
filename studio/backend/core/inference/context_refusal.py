@@ -155,13 +155,7 @@ _ROLE_ADVICE["developer"] = _ROLE_ADVICE["system"]
 
 
 def oversize_advice(context_tokens: int) -> str:
-    """The remedy half of an oversize refusal: what the user can actually do.
-
-    Split out from :func:`describe_oversize` so a surface that must keep its own head
-    wording -- the Anthropic passthrough sends Anthropic's "Prompt is too long: N
-    tokens > M maximum", which is what its clients key on -- can still pair it with
-    this diagnosis instead of prescribing compaction for a prompt no compaction fits.
-    """
+    """Split from describe_oversize so the Anthropic passthrough can keep its own head wording."""
     blamed = _blame_latest_turn(context_tokens)
     advice = _ROLE_ADVICE.get(blamed[0]) if blamed else None
     if advice is None:
@@ -185,13 +179,7 @@ def oversize_advice(context_tokens: int) -> str:
 
 
 def describe_oversize(request_tokens: int, context_tokens: int) -> str:
-    """The user-facing message for a prompt that exceeds the loaded context window.
-
-    The advice splits on the only two things that change what the user can do: whose
-    turn is the bulk of the prompt, and whether that turn is merely most of the prompt
-    or actually too big to send at all. An unrecognised role falls back to the generic
-    wording rather than blaming a turn it cannot describe.
-    """
+    """Advice turns on whose turn is the bulk and whether it can be sent; unknown roles get generic text."""
     return (
         f"Message too long: {request_tokens} tokens exceeds the "
         f"{context_tokens}-token context window. "
@@ -216,17 +204,7 @@ def describe_unservable_tool_call(
     *,
     compacted_calls: int = 0,
 ) -> str:
-    """The message for a tool call refused BEFORE it ran, because its turn cannot be served.
-
-    `describe_oversize` reconstructs blame from a recorded diagnosis, because by the time it
-    speaks the request has already been rejected and the cause has to be inferred. This one
-    is said by the loop that is holding the call, so it names the tool outright instead of
-    guessing at a role, and it is the only refusal on this path that can promise nothing was
-    written -- which is the fact the user most needs and the 400 could never offer.
-
-    ``compacted_calls`` is reported when history was already spent trying to make room, so
-    "increase the Context Length" does not read as advice nobody tried.
-    """
+    """Refused before the tool runs, so it can promise nothing was written, which a 400 never could."""
     # The bar is window minus a reply floor, so explain the gap or the numbers look contradictory.
     head = (
         f"Not enough context left to run {tool_name}: the next request would be about "

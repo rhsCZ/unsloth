@@ -154,18 +154,7 @@ _METAL_TE_ON_GPU_ENV = "UNSLOTH_DIFFUSION_SD_CPP_METAL_TE_GPU"
 
 
 def metal_text_encoder_flags() -> list[str]:
-    """Keep the TEXT ENCODER on CPU when sd.cpp runs on Apple Metal, else nothing.
-
-    ggml's Metal backend gates RMS_NORM on contiguous rows and calls ``GGML_ABORT`` when that does
-    not hold, with no per-op CPU fallback, so an LLM text encoder (Qwen3 for FLUX.2 / Z-Image, T5
-    for FLUX.1) takes the whole sd-server process down mid-generation:
-        ggml_metal_op_encode_impl: error: unsupported op 'RMS_NORM' -> ggml_abort
-        LLMEmbedder::encode_prompt -> LLMRunner::compute -> GGMLRunner::compute
-
-    Observed on macos-14 arm64 with FLUX.2-klein-4B Q2_K: the model loads on ``mps`` and the first
-    generation dies with exit code -6. The encoder runs once per prompt while the DiT runs every
-    step, so pinning only the encoder keeps Metal for the part that matters. Set
-    ``UNSLOTH_DIFFUSION_SD_CPP_METAL_TE_GPU=1`` to opt back in once ggml grows the kernel."""
+    """Keeps the text encoder on CPU because ggml's Metal backend aborts on an unsupported RMS_NORM."""
     import os
     import sys
 
@@ -189,16 +178,7 @@ GRAPH_CUT_AUTO_FLAGS: tuple[str, ...] = GRAPH_CUT_VRAM_FLAGS + GRAPH_CUT_STREAM_
 def device_backend_flags(
     device_name: Optional[str], offload: Optional[list[str]] = None
 ) -> list[str]:
-    """Pin the diffusion, text-encoder and VAE graphs to one ggml device (e.g. ``CUDA1``).
-
-    Without this sd.cpp uses its own default device, ordinal 0 whatever the user chose, so on a
-    mixed box the checkpoint lands on the first card rather than the one that can hold it. Empty
-    for an automatic pick, which keeps sd.cpp's choice.
-
-    ``--clip-on-cpu`` / ``--vae-on-cpu`` are the deprecated spellings of ``te=cpu`` / ``vae=cpu``,
-    so pinning a device over them would win last and undo the low_vram policy. Only the modules
-    that policy left on the GPU are pinned.
-    """
+    """Pins only modules the offload policy left on GPU; a later device flag would undo --clip-on-cpu."""
     if not device_name:
         return []
     flags = offload or []
@@ -208,20 +188,7 @@ def device_backend_flags(
 
 
 def without_device_backend_flags(flags: Sequence[str]) -> list[str]:
-    """``flags`` with every ``--backend <spec>`` pair removed.
-
-    Two callers, both wrong if they read the pin.
-
-    The status and the saved recipe derive "was anything offloaded?" from these flags being
-    empty, so a pin on a `fast` load (whose policy is deliberately no flags) would report an
-    offload that never happened, purely because a card was selected.
-
-    And sd.cpp CONCATENATES repeated ``--backend`` values rather than replacing
-    (``examples/common/common.cpp``, ``concat = ','``), with an explicit per-module entry beating
-    the bare default (``ggml_extend_backend.cpp``). Appending ``--backend cpu`` to a spec that
-    says ``diffusion=CUDA0`` therefore leaves the denoiser on CUDA, making the CPU-backend restart
-    -- the recovery from a ggml op the device cannot run -- a silent no-op.
-    """
+    """sd.cpp concatenates repeated --backend values, so a CPU restart must strip the device pin first."""
     out: list[str] = []
     skip = False
     for flag in flags:
@@ -240,12 +207,8 @@ _GGML_UNSUPPORTED_OP_MARKERS = ("unsupported op", "ggml_abort")
 
 
 def is_ggml_unsupported_op_abort(message: str) -> bool:
-    """True if ``message`` is a captured sd.cpp log tail carrying a ggml unsupported-op abort.
-
-    Used to decide whether a dead sd-server is worth restarting on the CPU backend: an abort with
-    this signature is deterministic for the graph in question, so a plain retry on the same backend
-    would fail identically, while a CPU restart runs it. Any other death (OOM kill, a real bug,
-    a corrupt checkpoint) must NOT be silently retried."""
+    """Only this abort signature is retried on CPU; OOM kills, real bugs, and corrupt checkpoints
+    are not."""
     text = (message or "").lower()
     return all(marker in text for marker in _GGML_UNSUPPORTED_OP_MARKERS)
 
@@ -257,16 +220,7 @@ def offload_flags(
     diffusion_fa: bool = False,
     vae_on_cpu: bool = True,
 ) -> list[str]:
-    """Translate a diffusers memory policy into sd-cli offload flags.
-
-    ``none``: resident, no flags. ``group``: stream the model (``--offload-to-cpu``) + flash
-    attention. ``model`` / ``sequential``: offload everything, also CLIP/VAE to CPU + VAE tiling.
-    ``vae_tiling`` / ``diffusion_fa`` force those flags on regardless of policy.
-
-    ``vae_on_cpu = False`` drops only ``--vae-on-cpu`` from the offload policies. A family whose
-    VAE cannot run on the CPU path still wants everything else the policy asks for, and that flag
-    is the smallest of the three savings: the denoiser is what dominates.
-    """
+    """vae_on_cpu=False drops only --vae-on-cpu, for families whose VAE cannot run on the CPU path."""
     flags: list[str] = []
     fa = diffusion_fa
     tile = vae_tiling
@@ -302,11 +256,7 @@ def build_sd_cpp_command(
     verbose: bool = False,
     extra_args: Optional[list[str]] = None,
 ) -> list[str]:
-    """Build the full ``sd-cli`` argv for one text-to-image generation.
-
-    Required model/IO flags first, then set sampling params, then offload flags, then caller
-    ``extra_args`` last (sd.cpp's parser is last-wins, so a power user can override anything).
-    """
+    """``extra_args`` go last because sd.cpp's parser is last-wins, so a user can override any flag."""
     if not files.diffusion_model:
         raise ValueError("diffusion_model path is required")
     if not (params.prompt or "").strip():
@@ -524,15 +474,7 @@ def build_sd_cpp_server_command(
     verbose: bool = False,
     extra_args: Optional[list[str]] = None,
 ) -> list[str]:
-    """Build the ``sd-server`` argv: model + hardware/server flags only.
-
-    sd-server loads the model once at spawn from the SAME flags as sd-cli, plus ``--listen-ip`` /
-    ``--listen-port``. Per-generation params go in each ``/sdcpp/v1/img_gen`` request, so one
-    resident process serves many generations without reloading. ``offload`` / ``native_speed`` map
-    to the same sd.cpp flags. ``scratch_dir`` is pointed at by the LoRA / upscaler / embeddings dir
-    flags (sd-server iterates those and fails on a missing dir, so give it a real empty one).
-    ``extra_args`` last (last-wins).
-    """
+    """Those dir flags all point at ``scratch_dir``, which must exist: sd-server fails on a missing dir."""
     if not files.diffusion_model:
         raise ValueError("diffusion_model path is required")
 
@@ -596,12 +538,7 @@ def build_img_gen_request(
     qwen_image_layers: Optional[int] = None,
     custom_sigmas: Optional[list[float]] = None,
 ) -> dict:
-    """Build the ``POST /sdcpp/v1/img_gen`` JSON body for one text-to-image request.
-
-    The API takes the whole batch in one request, reusing the resident model. Sampling lives under
-    ``sample_params``; guidance is split like the one-shot engine (a FLUX distilled value ->
-    ``guidance.distilled_guidance``, a real CFG scale -> ``guidance.txt_cfg``). Only set keys are emitted.
-    """
+    """Guidance is split: FLUX distilled values go to distilled_guidance, real CFG scales to txt_cfg."""
     if not str(prompt).strip():
         raise ValueError("prompt is required")
 
@@ -671,10 +608,7 @@ def build_vid_gen_request(
     ref_images_b64: Optional[list[str]] = None,
     output_compression: int = 90,
 ) -> dict:
-    """``POST /sdcpp/v1/vid_gen`` body equivalent to ``build_sd_cpp_video_command`` (same pixels for the same seed).
-
-    AVI: needs no WebM build, as the CUDA prebuilt's sd-cli writes. ``--rng cpu`` is a server context flag, passed at
-    spawn."""
+    """Writes AVI, which needs no WebM build; ``--rng cpu`` is a server flag, so it is passed at spawn."""
     if not (params.prompt or "").strip():
         raise ValueError("prompt is required")
     if params.width <= 0 or params.height <= 0 or params.num_frames <= 0:

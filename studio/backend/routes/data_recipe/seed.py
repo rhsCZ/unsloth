@@ -129,11 +129,7 @@ def _list_hf_data_files(*, dataset_name: str, token: HfTokenArg) -> list[str]:
 
 
 def _list_hf_dataset_configs(*, dataset_name: str, token: HfTokenArg) -> list[dict[str, Any]]:
-    """The `configs:` block of the dataset card, which maps a config to its own file globs.
-
-    A config name is not required to be a folder name: fineweb-edu's `sample-10BT`
-    lives under `sample/10BT/`, so a folder-name guess reads a different config.
-    """
+    """Read configs from the card's configs block; config names need not match folder names."""
     try:
         from huggingface_hub import HfApi
         from huggingface_hub.utils import HfHubHTTPError
@@ -162,12 +158,7 @@ def _patterns_for_split(
     *,
     exact: bool = True,
 ) -> list[str]:
-    """Every shape a card may use for `data_files`, as hub/services/datasets does.
-
-    A bare string or list of strings is the shorthand for the train split. The
-    name is read exactly first: a card may declare Train beside train, and
-    `load_dataset` is handed the name the caller asked for, not a folded one.
-    """
+    """A bare string or list means the train split; an exact name match is tried before folding."""
     if isinstance(data_files, str):
         return [data_files] if _same_split(DEFAULT_SPLIT, split, exact) else []
     if isinstance(data_files, dict):
@@ -212,11 +203,7 @@ def _declared_split_patterns(
 
 
 def _normalized_glob(pattern: str) -> str:
-    """The pattern as the listing spells it, the way `normpath` would.
-
-    `list_repo_files` returns data/train.parquet, so ./data and staging/../data
-    have to lose their dots here or match nothing.
-    """
+    """Drop empty and dot segments the way list_repo_files spells paths, or the glob matches nothing."""
     parts: list[str] = []
     for part in pattern.strip().split("/"):
         if part in ("", "."):
@@ -240,12 +227,7 @@ def _config_scope(configs: list[dict[str, Any]], subset: str | None) -> str:
 
 
 def _pick_config(configs: list[dict[str, Any]], subset: str | None) -> dict[str, Any] | None:
-    """The config a bare request lands on, the way the Hub resolves it.
-
-    Without a subset the answer is not always the one literally called `default`:
-    a card may flag another config as the default, and a card with a single
-    config uses it whatever its name (imdb ships only `plain_text`).
-    """
+    """With no subset, pick the config flagged default, else the only config, whatever its name."""
     if subset:
         names = [(c, str(c.get("config_name") or DEFAULT_CONFIG)) for c in configs]
         return next(
@@ -264,11 +246,7 @@ def _pick_config(configs: list[dict[str, Any]], subset: str | None) -> dict[str,
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """A card glob as a regex: `*` stops at a folder boundary, `**` crosses it.
-
-    Matching on the literal prefix instead would let `data/train-*.parquet` claim
-    `data/train-notes.json`, which the recipe path then never reads.
-    """
+    """* stops at a folder boundary, ** crosses it; prefix matching would claim train-notes.json."""
     parts: list[str] = []
     i = 0
     while i < len(pattern):
@@ -316,21 +294,14 @@ def _class_end(pattern: str, start: int) -> int:
 
 
 def _ignored_by_the_loader(path: str, pattern: str) -> bool:
-    """Whether the loader drops this match by name, as dataset_info.json.
-
-    Those basenames leave a glob's matches unless the pattern is that file
-    itself (`data_files.FILES_TO_IGNORE`).
-    """
+    """Loader drops names in data_files.FILES_TO_IGNORE from globs unless the pattern is that file
+    itself."""
     name = PurePosixPath(path).name
     return name in _IGNORED_DATA_FILENAMES and PurePosixPath(pattern).name != name
 
 
 def _hidden_to_the_loader(path: str, pattern: str) -> bool:
-    """Whether a match sits in a part the loader skips unless it was asked for.
-
-    A hidden or dunder component the pattern does not carry itself drops the
-    match, so `**/*` never reaches .backup/ or __pycache__/ (`data_files`).
-    """
+    """Loader skips hidden and dunder parts unless the pattern names them; **/* never reaches .backup/."""
     for prefix, parts in ((".", "parts"), ("__", "parent_parts")):
         in_path = _marked_parts(path, prefix, parts)
         in_pattern = _marked_parts(pattern, prefix, parts)
@@ -351,11 +322,7 @@ def _files_under_patterns(
     *,
     as_the_loader_would: bool = False,
 ) -> list[str]:
-    """The files a glob takes, under the loader's rules for a card's own glob.
-
-    A pattern this module writes goes to a reader that skips nothing, so it is
-    judged on what it plainly matches.
-    """
+    """Judge matches by what the pattern plainly matches, since the module's own reader skips nothing."""
     matchers = [(pattern, _glob_to_regex(pattern)) for pattern in patterns]
     return [
         f
@@ -382,23 +349,12 @@ def _common_parent(paths: list[str]) -> str:
 
 
 def _label_in_name(name: str, label: str) -> bool:
-    """The label standing on its own in a file name, separators and all.
-
-    Tokenizing the name instead would lose a label that carries a separator, so
-    validation_matched or sample-10BT could never match anything. The separators
-    are the loader's own (`local_options._SEP`), digits included, so train1 is
-    the train split while training is not.
-    """
+    """Labels can carry separators (sample-10BT), so match the label in place rather than by tokens."""
     return re.search(rf"(?:^|{_SEP}){re.escape(label)}(?:$|{_SEP})", name) is not None
 
 
 def _split_folder(lowered_path: str, labels: tuple[str, ...]) -> bool:
-    """A folder standing for this split, qualified or not: train, train_a, en-train.
-
-    The loader reads a separator-qualified folder as the split too
-    (`local_options._DIR_NAME_KEYWORD_PATTERNS`), so an exact component match
-    would leave train_a ranking as nothing.
-    """
+    """Qualified folders like train_a or en-train count as the split, as the loader reads them."""
     return any(
         _label_in_name(part, label) for part in lowered_path.split("/")[:-1] for label in labels
     )
@@ -422,12 +378,8 @@ def _carries_another_split(path: str, split_lower: str) -> bool:
 
 
 def _split_rank(path: str, split_lower: str) -> int:
-    """0 the split is a folder, 1 the file name carries it, 2 neither.
-
-    The name is read as whole labels rather than by where the split sits in it,
-    so questions_train_000.jsonl counts as train, and `datasets` own aliases
-    count too, so dev.jsonl is validation.
-    """
+    """Rank 0 if a folder carries the split, 1 if the file name does, else 2; labels match as whole
+    words."""
     lowered = path.lower()
     labels = _split_labels(split_lower)
     if _split_folder(lowered, labels):
@@ -439,14 +391,7 @@ def _split_rank(path: str, split_lower: str) -> int:
 
 
 def _in_subset(data_files: list[str], subset: str | None, split_lower: str) -> list[str]:
-    """The files carrying this config label, as a folder or in the file name.
-
-    A repo may encode its configs in the names instead of the layout, as
-    main-train.parquet beside socratic-train.parquet. A folder carrying the
-    label is the config whatever its files are called; a name only carrying it
-    while belonging to no part of the split is a coincidence, not the config,
-    so it is dropped rather than allowed to decide the answer.
-    """
+    """A folder carrying the config label is the config; a name-only match outside the split is dropped."""
     if not subset:
         return data_files
     subset_lower = subset.lower()
@@ -480,16 +425,7 @@ def _select_best_file(
 def _pattern_fits_the_split(
     data_files: list[str], wanted: set[str], root: str, pattern: str
 ) -> bool:
-    """The pattern must take every wanted file under the root, and no other file there.
-
-    A folder may name one split several ways at once (train-part.parquet beside
-    questions_train.parquet), so a glob built from whichever file was picked can
-    drop the rest; a loose glob can just as easily swallow a neighbouring split.
-    Read relative to the root the pattern is anchored at, so a split spread over
-    sibling folders is only accepted by a pattern that reaches all of them.
-    Judged against the WHOLE listing, since a candidate checked only against the
-    subset slice can still match another subset's files.
-    """
+    """A glob must take every wanted file under the root and no other, judged on the whole listing."""
     matcher = _glob_to_regex(pattern)
     prefix = f"{root}/" if root and root != "." else ""
     for path in data_files:
@@ -501,11 +437,7 @@ def _pattern_fits_the_split(
 
 
 def _candidate_patterns(stem: str, suffix: str, split_lower: str) -> list[str]:
-    """Globs for this split's files in one folder, narrowest first.
-
-    Built from whichever of the split's names this file actually uses, since a
-    validation shard may well be called dev.
-    """
+    """Globs for the split in one folder, narrowest first, built from the stems this file actually uses."""
     stem_lower = stem.lower()
     candidates: list[str] = []
     for label in _split_labels(split_lower):
@@ -539,12 +471,7 @@ def _ext_rank(suffix: str) -> int:
 
 
 def _dominant_suffix(paths: list[str]) -> str:
-    """The format the loader would build this split from: most files, parquet on ties.
-
-    One broad card glob can cover several formats, and picking whichever name
-    sorts first would point the recipe at a format the split does not use
-    (`local_options._one_module`).
-    """
+    """The format the loader builds a split from: most files, with parquet winning ties."""
     counts: dict[str, int] = {}
     # Slice the window as the loader does, then drop metadata within it.
     window = sorted(paths)[:_MAX_MODULE_INFERENCE_FILES]
@@ -581,12 +508,8 @@ def _of_suffix(paths: list[str], suffix: str) -> list[str]:
 
 
 def _extension_glob(paths: list[str], suffix: str, repo_files: list[str]) -> str:
-    """What the pattern should end in to keep every file this builder reads.
-
-    A split over both .json and .jsonl needs the shared start of the two, which
-    leaves the glob open at the end; where the repo holds a a.json.gz that glob
-    would read it too, so there the winning extension is used alone.
-    """
+    """Shared .json/.jsonl glob only when a split uses both; otherwise a repo's .json.gz would be
+    swept in."""
     group = set(_builder_exts(suffix))
     used = {Path(path).suffix.lower() for path in paths} & group
     if len(used) < 2:
@@ -611,10 +534,7 @@ def _common_name_prefix(paths: list[str]) -> str:
 
 
 def _name_initials(paths: list[str]) -> str:
-    """The first characters of these file names, as a glob class body.
-
-    Only letters and digits, so nothing in the class can be read as syntax.
-    """
+    """Only letters and digits go into the glob class, so nothing there can read as glob syntax."""
     initials = sorted({Path(path).name[:1] for path in paths if Path(path).name[:1].isalnum()})
     if not initials or len(initials) != len({Path(path).name[:1] for path in paths}):
         return ""
@@ -626,12 +546,7 @@ def _staged_split_files(
     labels: tuple[str, ...],
     scope: str = "",
 ) -> set[str]:
-    """This split's shards, when the repo is laid out the way the loader looks first.
-
-    Split inference is staged and the sharded names come first: once
-    data/train-00000-of-00001.parquet is there, a train-named file elsewhere is
-    not in the split (`local_options._grouped_splits`).
-    """
+    """Sharded names come first: a train-named file outside the sharded layout is not in the split."""
     prefix = f"{scope}/" if scope else ""
     inside = [path[len(prefix) :] for path in data_files if path.startswith(prefix)]
     grouped = _sharded_splits([PurePosixPath(path) for path in inside])
@@ -666,12 +581,7 @@ def _widened_declared_pattern(
     *,
     fallback_glob: bool = False,
 ) -> str:
-    """One glob covering several declared ones, keeping the split out of it if it can.
-
-    The folder holding them all may hold the other splits too, which is what the
-    split-named form avoids; it is only used when it takes the declared files
-    and nothing else.
-    """
+    """One widened glob over declared files, used only when it takes exactly those files and no others."""
     parent = _common_parent(declared_files)
     base = f"{parent}/**" if parent else "**"
     prefix = f"{parent}/" if parent else ""
@@ -1219,12 +1129,7 @@ def _require_unstructured_ext(filename: str) -> str:
 
 
 def _read_native_drop(lease: str, budget: int) -> tuple[str, bytes]:
-    """Read a desktop drop; returns (filename, content). The webview never names a path directly: Rust
-    signs what the OS handed it, and this re-verifies and re-stats that grant before reading a byte.
-    Same contract as the RAG route's ``_save_native_path_upload``. ``budget`` is what is still
-    allowed for this block. The path is a local file of any size, so it is refused on its stat
-    rather than after a multi-gigabyte read, and the read itself stops one byte past the budget in
-    case the file grew between the two."""
+    """Read a desktop drop only via its signed lease, re-verified and size-checked before reading."""
     from utils.native_path_leases import NativePathLeaseError, verify_native_path_lease
 
     try:

@@ -207,13 +207,7 @@ def _note_activity() -> None:
 def other_inference_request_count(
     current_request_counted: bool = True, *, include_pending: bool = True
 ) -> int:
-    """Tracked inference requests other than the current route call.
-
-    The middleware counts requests before route code runs, so the caller is excluded by
-    default. Idle-unload counts pending waiters too (a swap holding the gate would unload
-    out from under them); the swap guard passes include_pending=False since a pending
-    request is blocked in the middleware and can't be the one a swap would interrupt.
-    """
+    """Counts tracked inference requests except the current one; idle unload also counts pending ones."""
     with _lock:
         active = _inflight
         if current_request_counted and active > 0:
@@ -231,20 +225,13 @@ def other_preview_inflight_count(current_request_counted: bool = True) -> int:
 
 
 def other_admitted_inference_count() -> int:
-    """Non-preview requests admitted to local inference (passed auth, reached the
-    _maybe_auto_switch_model / generate_stream choke point). The preview busy guard counts
-    these instead of raw _inflight, so a pre-auth/unauthenticated tracked request can't
-    block a preview. The current request is always a preview (never admitted), so no
-    self-exclusion is needed."""
+    """Admitted non-preview requests only, so a pre-auth request cannot block a preview swap."""
     with _lock:
         return _admitted_inference
 
 
 def other_non_preview_pending_count() -> int:
-    """Non-preview requests queued on the lifecycle gate (_pending, not yet in flight).
-    The preview swap guard must count these: a queued Unsloth request would otherwise start
-    against the model a preview swapped in while it waited. The current request is a preview
-    already in flight, so not in _pending."""
+    """Counts queued non-preview requests, which would otherwise start on a model a preview swapped in."""
     with _lock:
         return max(0, _pending - _preview_pending)
 
@@ -264,10 +251,7 @@ def _preview_swap_gen() -> int:
 
 
 def note_preview_swap_begin() -> None:
-    """Mark a preview swap in progress. Call before taking the lifecycle gate to load, pair
-    with note_preview_swap_end() after the gate releases, so a non-preview request arriving
-    at any point during the swap (including after the counter bumps but before the gate
-    releases) is rejected."""
+    """Marks a preview swap in progress; pair with note_preview_swap_end() once the gate releases."""
     global _preview_swap_inflight
     with _lock:
         _preview_swap_inflight += 1
@@ -285,12 +269,7 @@ def _preview_swap_active() -> bool:
 
 
 def preview_swapped_since_entry(scope) -> bool:
-    """True if a preview swap ran, or is running, since this request entered the middleware.
-    Extends the gate-wait reject flag to catch a non-preview request that passed the gate
-    BEFORE a swap (so it never set _PREVIEW_SWAP_REJECT_SCOPE_KEY) but is still pre-admission
-    when a preview swaps the model out from under it. entry_gen is None only when the
-    middleware never snapshotted it (non-dict/non-inference scope), so fall back to the
-    swap-in-progress flag alone."""
+    """True if a preview swap ran or runs since this request entered; previews never reject themselves."""
     if not isinstance(scope, dict):
         return False
     # A preview may swap the model in itself, so it must never reject itself.
@@ -306,11 +285,7 @@ def preview_swapped_since_entry(scope) -> bool:
 
 
 def _claim_non_preview_slot() -> None:
-    """A non-preview request that ran against the local model (2xx) adopts it for Unsloth,
-    so clear preview ownership -- a later preview for another checkpoint then 503s instead
-    of swapping the model out from under an active Unsloth conversation. Claiming on success
-    (not before) means a per-route-rejected request never strands a preview-owned model.
-    Lazily imported: routes.inference imports this module."""
+    """A 2xx non-preview request adopts the local model, so preview ownership is cleared on success."""
     try:
         from routes.inference import _set_preview_resident
         _set_preview_resident(None)
@@ -374,10 +349,7 @@ _ADMITTED_SCOPE_KEY = "_unsloth_keepwarm_admitted"
 
 
 def note_admitted_inference(scope) -> None:
-    """Mark a non-preview request as admitted local inference (passed auth, reached the
-    _maybe_auto_switch_model / generate_stream choke point), so the preview busy guard
-    counts it. Idempotent per scope; a no-op for preview (/p/) paths (own ownership) and
-    non-dict scopes."""
+    """Marks a non-preview request as admitted inference, counted by the preview busy guard; idempotent."""
     global _admitted_inference
     if not isinstance(scope, dict) or scope.get(_ADMITTED_SCOPE_KEY):
         return
@@ -395,14 +367,7 @@ def _note_admitted_end() -> None:
 
 
 def untrack_admitted_inference(scope) -> None:
-    """Drop an already-admitted request from the preview busy guard once the route knows it
-    will not run against the resident GGUF after all.
-
-    ``untrack_current_request`` covers only the in-flight counters; the admitted tally is
-    what ``load_model_for_preview`` reads, so a route that admitted at the auto-switch hook
-    and then served the request some other way keeps blocking preview swaps for its whole
-    duration. Pops the marker so the middleware's finally, which balances only a scope that
-    still carries it, cannot decrement a second time. Idempotent."""
+    """Drops it from the busy guard; the marker is popped so the finally cannot decrement twice."""
     if not isinstance(scope, dict) or not scope.pop(_ADMITTED_SCOPE_KEY, False):
         return
     _note_admitted_end()
@@ -477,10 +442,7 @@ def note_model_loaded(backend = None) -> None:
 
 
 def note_model_unloaded() -> None:
-    """Record a deliberate (user/API) unload: drop any idle reload stash so the next request
-    can't resurrect the just-unloaded model. Unlike the idle loop (which stashes the freed
-    model for an alias reload), an explicit unload means "stay unloaded", so it must not
-    stamp activity."""
+    """Drops any idle reload stash so a deliberate unload is not undone by the next request."""
     _set_last_unloaded(None)
 
 
@@ -572,18 +534,7 @@ def _as_bytes(value) -> bytes:
 
 
 def _carries_bearer_credentials(scope, path: str = "") -> bool:
-    """Whether this request carries the credentials its route demands.
-
-    Every tracked media route depends on ``get_current_subject`` (HTTPBearer), so a request without
-    one is refused before any handler runs. Counting it anyway would still pin the pipeline: the
-    count is taken here, ahead of FastAPI parsing the body, and a client that opens the POST and
-    then withholds its body produces no response status either, so the 401/403 exclusion below never
-    gets to run -- one such connection, replaced as it times out, would keep a multi-GB pipeline
-    resident for good. Real clients always send the header. Keyless API access is the one case where
-    a route demands no bearer at all; its outer admission middleware records that decision before
-    keep-warm runs, so reuse the snapshot instead of repeating settings, listener and DNS work on
-    this loop.
-    """
+    """Counts only bearer-authenticated requests, so a stalled upload cannot pin a multi-GB pipeline."""
     from utils.keyless_api_access import KEYLESS_ADMISSION_STATE_KEY
 
     state = scope.get("state")

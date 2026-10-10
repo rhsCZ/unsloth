@@ -56,15 +56,7 @@ def normalize_domain(value: Any) -> str:
 
 @lru_cache(maxsize = 256)
 def _normalized_domain_tuple(raw_domains: tuple) -> tuple:
-    """``normalize_domain`` over an all-``str`` list, deduplicated, order preserved.
-
-    ``normalize_domain`` is a pure function of its argument (lowercase, IDNA encode,
-    validate), so the result for a given tuple of exact ``str`` domains is invariant and
-    safe to memoise. One restricted web search checks the same policy against every
-    candidate URL, which re-normalised both lists (up to 100 domains each) every time.
-    An invalid domain still raises from inside here, and ``lru_cache`` does not memoise
-    exceptions, so the same ``ValueError`` is raised on every call as before.
-    """
+    """normalize_domain is pure, so memoising it is safe; invalid domains still raise on each call."""
     domains: list = []
     seen: set = set()
     for raw_domain in raw_domains:

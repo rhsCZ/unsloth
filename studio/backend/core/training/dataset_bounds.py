@@ -65,22 +65,7 @@ def _seed_int(value: Any, default: int) -> int:
 
 
 def world_size_from_rank_files(environ: Any = None) -> int:
-    """Ranks an mlx.launch listed in a hostfile, or 1 when there is no readable one.
-
-    Either representation the rest of the repo accepts: the payload inline in the
-    variable, or a path to a file holding it. `unsloth_cli/_inference.py`'s
-    `_json_rank_count_from_env` reads the same two variables the same way, down to the
-    {"hosts": [...]} object form, so the two must not disagree about how many ranks a
-    launch has.
-
-    Only a list of ranks counts, and its length is the count. Anything else -- no such
-    file, a truncated or malformed payload, some other object, an empty ring hostfile
-    (which is what mlx.launch writes for a single host) -- reads as 1, the count of
-    Unsloth's own launch. Never raises: a row bound must not be what fails a run.
-
-    A path must name a regular file. mlx.launch writes a temp file, and opening
-    whatever else a variable happens to name could block a run forever on a fifo.
-    """
+    """Only regular files are opened: opening a fifo named by a variable could block a run forever."""
     source = os.environ if environ is None else environ
     sizes = [1]
     for name in WORLD_SIZE_ENV_FILES:
@@ -106,31 +91,14 @@ def world_size_from_rank_files(environ: Any = None) -> int:
 
 
 def world_size_from_env(environ: Any = None) -> int:
-    """Data-parallel processes the launcher advertises, or 1 when none does.
-
-    The largest wins: a torchrun launch sets WORLD_SIZE and LOCAL_WORLD_SIZE, and on
-    one node they agree, while a multi-node one must be sized by the global count.
-    Anything unusable (unset, empty, a stray "auto", 0, negative) reads as 1, which
-    is the count Unsloth's own single-process launch has.
-
-    Some launchers advertise the count as a file rather than a number; see
-    WORLD_SIZE_ENV_FILES.
-    """
+    """Takes the largest advertised count: a multi-node torchrun must be sized by the global WORLD_SIZE."""
     source = os.environ if environ is None else environ
     numbers = max(_positive_int(source.get(name), 1) for name in WORLD_SIZE_ENV_VARS)
     return max(numbers, world_size_from_rank_files(source))
 
 
 def world_size_env_report(environ: Any = None) -> str:
-    """The launcher variables that are set, for a log line. Never raises.
-
-    Which variable claimed the rank count is the only thing a user can act on when
-    a run on one machine is told it makes several passes. mpirun, srun and some
-    container images leave a size variable behind, and a stale one reads as a
-    multi-rank launch here exactly as it does in the row bound.
-
-    Values are truncated: MLX_HOSTFILE legitimately carries a whole JSON payload.
-    """
+    """Lists launcher variables that are set; a stale one makes a single-machine run look multi-rank."""
     source = os.environ if environ is None else environ
     parts = []
     for name in WORLD_SIZE_ENV_VARS + WORLD_SIZE_ENV_FILES:
@@ -150,18 +118,7 @@ def max_steps_dataset_rows(
     *,
     world_size: Any = None,
 ) -> Optional[int]:
-    """Rows a max_steps run can reach, or None when it is unbounded.
-
-    A step draws batch_size * gradient_accumulation_steps rows on every data-parallel
-    replica, so world_size times that in total: DDP hands each rank its own shard of
-    the step, and DataParallel splits the batch over the visible devices. Leaving the
-    factor out spends the whole slack on rank count alone, and from four replicas up
-    a run re-reads rows it has already trained on.
-
-    world_size is what the caller established (the CUDA worker also counts visible
-    CUDA devices, which env cannot report); anything unusable falls back to the
-    launcher env, and that falls back to 1, which is Unsloth's own launch.
-    """
+    """Each step draws batch_size * gradient_accumulation_steps rows per replica, so scale by world_size."""
     steps = _positive_int(max_steps, 0)
     if steps <= 0:
         return None
@@ -171,20 +128,7 @@ def max_steps_dataset_rows(
 
 
 def effective_packing(config: dict, branch_never_packs: bool = False) -> bool:
-    """Whether the trainer will actually pack, not merely what was requested.
-
-    Packing opts the bound out, since one packed sample spans an unknown number of
-    source rows. The requested value is the answer unless the caller establishes
-    that this run's branch never packs: the vision and audio-VLM branches, and
-    every audio codec, train on a Trainer with no packing argument.
-
-    Do NOT pass the client-supplied dataset flags: `is_dataset_image` /
-    `is_dataset_audio` are true on a column-NAME match, so a text model with an
-    "audio" column carries the flag yet trains on the text path, which packs. Pass
-    the branch the model probe detected. The branches differ on raw-text and CPT:
-    vision is gated on `not raw_text_mode`, while audio preprocessing is chosen
-    before the raw-text bypass and so holds either way.
-    """
+    """Pass the branch the model probe detected, not the client dataset flags, which match column names."""
     if not config.get("packing", False):
         return False
     return not branch_never_packs
@@ -196,15 +140,7 @@ def max_train_rows_for_config(
     *,
     world_size: Any = None,
 ) -> Optional[int]:
-    """The bound for a worker config, or None when the run is not bounded.
-
-    Streaming and an explicit train-split range opt out further down, in the
-    loaders, where those values live.
-
-    world_size is not read from the config: it belongs to the launch, not to what
-    the user configured, and a stale one carried across a spawn would size the
-    subset for the wrong machine.
-    """
+    """world_size is not read from the config; a stale one from a spawn would size the wrong machine."""
     if effective_packing(config, branch_never_packs = branch_never_packs):
         return None
     return max_steps_dataset_rows(
@@ -216,13 +152,7 @@ def max_train_rows_for_config(
 
 
 def run_dir_for_checkpoint(checkpoint_path: Any) -> Optional[str]:
-    """The run directory a checkpoint lives in, or None when there is none.
-
-    Only ``<output_dir>/checkpoint-<global_step>`` counts. Matching the bare
-    prefix would take the parent of a RUN directory that happens to start with it,
-    writing the marker one level above where a resume looks. A caller that names
-    the run directory itself gets it back unchanged.
-    """
+    """Only checkpoint-<global_step> counts; a bare checkpoint prefix would also match run directories."""
     if not checkpoint_path:
         return None
     path = str(checkpoint_path).rstrip("/\\")
@@ -239,21 +169,7 @@ def record_row_bound(
     max_train_rows: Optional[int],
     seed: Any = 3407,
 ) -> bool:
-    """Record the bound a run started with, beside its checkpoints.
-
-    The subset is training state: fixed at the first start and read back on every
-    resume, because both loaders fast-forward to a batch *index* and the ordering
-    is a function of the bound. Re-deriving on resume cannot work, since the config
-    is editable between runs and a pre-feature checkpoint is indistinguishable.
-
-    Best effort, and it reports whether it succeeded so the caller can say so: a
-    run must never fail over a marker, and the dataset is already bounded by now,
-    so an unwritable marker only costs a later resume reading the run as unbounded.
-
-    Written to a temp file and os.replace'd (atomic on POSIX and Windows) because a
-    resume rewrites an already valid marker: truncating in place then failing (a
-    full disk) would leave an empty file, read as "no marker".
-    """
+    """Written via temp file and os.replace, so a full disk mid-rewrite cannot leave an empty marker."""
     run_dir = run_dir_for_checkpoint(output_dir)
     if not run_dir:
         return False
@@ -289,19 +205,7 @@ def row_bound_for_resume(
     max_train_rows: Optional[int],
     seed: Any = 3407,
 ) -> tuple[Optional[int], int]:
-    """The (rows, seed) a resume must use, or the freshly computed pair.
-
-    Not resuming: the caller's own values, which record_row_bound then pins.
-
-    Resuming a marked run: that run's values, so the rows and their order match
-    what it trained on, whatever the config now says.
-
-    Resuming with no readable marker: no bound. Such a checkpoint trained on the
-    whole corpus in its natural order, and both trainers resume by batch index
-    rather than by remembering rows (HF Trainer replays the current dataloader,
-    `ignore_data_skip` defaults to False; MLXTrainer jumps a cursor into a schedule
-    rebuilt from the current dataset), so a subset would continue on unrelated rows.
-    """
+    """A resume with no readable marker gets no bound, as both trainers resume by batch index."""
     fallback_seed = _seed_int(seed, 3407)
     if not checkpoint_path:
         return max_train_rows, fallback_seed
@@ -324,15 +228,7 @@ def bound_dataset_rows(
     *,
     on_bound = None,
 ):
-    """Cut a map-style dataset to max_train_rows rows, or return it untouched.
-
-    Shuffled, not the head: a corpus ordered by source or difficulty would
-    otherwise make a short run train on one homogeneous slab. shuffle() only builds
-    an indices mapping.
-
-    Callers apply this before the formatting, template and tokenization passes,
-    which map over every row: that is the cost this avoids.
-    """
+    """Shuffled, not the head, since an ordered corpus would train one slab; apply before formatting."""
     if not max_train_rows or max_train_rows <= 0:
         return dataset
     # A DatasetDict answers len() with its split count, so guard on ops, not type.

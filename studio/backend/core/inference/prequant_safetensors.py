@@ -76,20 +76,7 @@ def is_safetensors_checkpoint(name: Optional[str]) -> bool:
 
 
 def _torchao_helpers() -> Optional[tuple]:
-    """``(flatten, unflatten)`` from torchao, or None when this install cannot do it.
-
-    Imported lazily and by feature rather than by version string: the module moving out of
-    ``prototype`` is a rename we should follow silently, and a version parse is not evidence the
-    symbols exist. Never raises -- an install without them has no safetensors support, which is a
-    fallback, not an error.
-
-    The stub comes FIRST because importing by feature is not enough against it. On Windows ROCm
-    ``install_torchao_windows_rocm_stub`` installs a meta-path finder that answers every
-    ``torchao.*`` import with fabricated callables, so the import below succeeds and hands back two
-    names that return None. Planning would then read safetensors as supported, drop the dense
-    shards, and the load would unflatten nothing. The pickle probe already asks ``is_stubbed`` for
-    the same reason (``diffusion_prequant._register_prequant_safe_globals``).
-    """
+    """The is_stubbed check must come first: a Windows ROCm stub fakes every torchao import."""
     try:
         from core._torchao_stub import is_stubbed
         if is_stubbed("torchao"):
@@ -194,13 +181,7 @@ def load_plain_prequant_safetensors(
 
 
 def _first(value: Any) -> Any:
-    """Both torchao helpers return a 2-tuple whose first element is the dict we want.
-
-    Unpacking blindly is the bug this exists to prevent: ``flatten_tensor_state_dict`` returns
-    ``(tensors, metadata)`` and ``unflatten_tensor_state_dict`` returns ``(state_dict, _)``, and a
-    tuple handed on to ``load_state_dict`` fails with a type error that says nothing about torchao.
-    A release that returns the bare dict instead is handled by the same line.
-    """
+    """Never unpack blindly: unwraps torchao's (dict, extra) tuple, and passes a bare dict through."""
     return value[0] if isinstance(value, tuple) else value
 
 
@@ -214,18 +195,7 @@ def _root_level_keys(state_dict: Any) -> list:
 
 
 def unsupported_state_dict_keys(state_dict: Any) -> list:
-    """Root-level keys this container cannot round-trip: the QUANTIZED ones.
-
-    ``unflatten_tensor_state_dict`` does ``tensor_name.rsplit(".", 1)`` to split a key into module
-    fqn and weight name, so a root-level entry (``x_pad_token`` rather than ``embed.weight``) cannot
-    go through torchao at all. Plain tensors do not need to: they are written beside the flat set
-    under ``UNSLOTH_ROOT_PREFIX`` and restored on read, which is what z-image needs, since
-    ``ZImageTransformer2DModel`` holds ``x_pad_token`` and ``cap_pad_token`` at the root and every
-    safetensors build of it was refused after the download and the GPU quantization had finished.
-
-    A root-level TENSOR SUBCLASS is still refused: reconstructing one is exactly the job of the
-    flatten pair that cannot address it, so there is nothing to carry it in.
-    """
+    """Root-level quantized keys, which cannot round-trip; plain root tensors use UNSLOTH_ROOT_PREFIX."""
     roots = _root_level_keys(state_dict)
     if not roots:
         return []
@@ -237,13 +207,7 @@ def unsupported_state_dict_keys(state_dict: Any) -> list:
 
 
 def save_prequant_safetensors(path: str, *, fmt: str, state_dict: Any, metadata: Any) -> None:
-    """Write ``state_dict`` (quantized, tensor subclasses and plain tensors alike) to ``path``.
-
-    ``fmt`` and ``metadata`` land in the header beside torchao's own description of every tensor.
-    Raises when the install cannot serialize this way: the caller is an offline builder that was
-    ASKED for safetensors, and silently writing a pickle under a ``.safetensors`` name would be the
-    worst of both.
-    """
+    """Raises instead of writing a pickle under a .safetensors name when torchao cannot serialize."""
     helpers = _torchao_helpers()
     if helpers is None:
         raise RuntimeError(
@@ -295,12 +259,7 @@ def save_prequant_safetensors(path: str, *, fmt: str, state_dict: Any, metadata:
 
 
 def read_prequant_header(path: str) -> Optional[dict]:
-    """``{"format": ..., "metadata": {...}}`` read from the header alone, or None.
-
-    No tensor is touched, so this is the cheap way to answer "what scheme is this artifact, and is
-    it even ours" on a multi-GB file. None means "not an Unsloth safetensors pre-quant checkpoint",
-    which every caller treats as unknown rather than as an error.
-    """
+    """Reads only the header, so it is cheap on multi-GB files; None means not an Unsloth checkpoint."""
     try:
         from safetensors import safe_open
         with safe_open(path, framework = "pt") as handle:
@@ -390,23 +349,7 @@ def _header_without_unconstructible_fields(
     path: str,
     attempts: int = 8,
 ) -> dict:
-    """``raw``, minus fields THIS torchao cannot construct, when dropping them changes nothing.
-
-    torchao's tensor subclasses are reconstructed from their serialized dataclass kwargs, so a
-    checkpoint written by a newer release carries fields an older constructor rejects outright:
-    0.18 added ``reduce_range`` to ``QuantizeTensorToInt8Kwargs``, and a 0.17 install answers the
-    published Qwen-Image-2.1 int8 artifact with ``Failed to create instance of
-    QuantizeTensorToInt8Kwargs: ... unexpected keyword argument 'reduce_range'``. The loader then
-    reports no usable checkpoint and the dense bf16 denoiser is downloaded and quantized at runtime,
-    which is the whole saving gone, for a field the file records as ``false``.
-
-    Driven by the error rather than by a version table: the failure names the field, so only the
-    field that actually blocks this install is touched, and a release that adds a different one is
-    handled with no code change. A dropped field carrying a NON-default value is refused instead,
-    since silently loading weights under settings the file did not ask for is worse than falling
-    back. A dry run against ``unflatten`` is the only way to learn the name, and it is cheap: the
-    constructor raises on the first tensor.
-    """
+    """Drops a field the constructor rejects only if its value is the default; otherwise refuses."""
     header = dict(raw)
     dropped: list = []
     for _ in range(attempts):
@@ -481,16 +424,7 @@ _MAX_HEADER_BYTES = 100_000_000
 
 
 def _mapped_tensors(path: str) -> tuple:
-    """``(header metadata, {name: tensor})`` with every tensor a view of a private mapping of ``path``.
-
-    ``safe_open(...).get_tensor`` copies each tensor into anonymous memory, so a 34 GB checkpoint costs
-    34 GB of host RAM before the first byte reaches the GPU; the pickle path maps the file instead
-    (``prequant_mmap_enabled``). This maps it with the same primitive ``torch.load(mmap = True)`` uses
-    (``UntypedStorage.from_file``, private), so the two containers cost the same on every OS: pages are
-    read when ``.to(device)`` touches them, and a write never reaches the file. The header is checked
-    the way safetensors checks it (known dtypes, non-negative integer shapes, byte ranges that tile the
-    data section exactly, a bounded header); anything else raises and the caller re-reads unmapped.
-    """
+    """Maps the file instead of copying it to host RAM; a bad header raises so the caller re-reads."""
     import struct
 
     import torch
@@ -556,17 +490,7 @@ def load_prequant_safetensors(
     device: str = "cpu",
     mmap: bool = False,
 ) -> dict:
-    """Read ``path`` into the SAME dict shape the pickle path returns.
-
-    Returning ``{"format", "state_dict", "metadata"}`` rather than a new type is deliberate: every
-    validation and load step downstream (scheme / base / min_features / fast_accum checks, the fp8
-    activation-floor probe that reads the reconstructed tensors, the rotation biconditional, the
-    kernel-preference pin) then runs unchanged on both containers, so the two formats cannot drift
-    into having different acceptance rules.
-
-    ``mmap`` maps the file instead of copying it (CPU tensors only), as the pickle path does for an
-    accelerator destination.
-    """
+    """Same dict as the pickle path so downstream validation is shared and the formats cannot drift."""
     helpers = _torchao_helpers()
     if helpers is None:
         raise RuntimeError(
@@ -619,22 +543,7 @@ def load_prequant_safetensors(
 
 
 def scheme_is_flattenable(quant_config: Any, *, features: int = 512) -> Optional[bool]:
-    """Whether THIS torchao can flatten what ``quant_config`` quantizes a weight to.
-
-    ``safetensors_prequant_supported`` answers a different question: the helpers import, the package
-    is there. That is necessary and not sufficient, and int8 is the case where the gap bites. Through
-    torchao 0.17 ``Int8DynamicActivationInt8WeightConfig`` still produces a
-    ``LinearActivationQuantizedTensor`` over an ``AffineQuantizedTensor``, which ``flatten`` refuses;
-    0.18 produces ``Int8Tensor``, which it accepts. Without this the builder passes its preflight,
-    downloads the model, spends the hours of GPU quantization, and only then discovers it cannot
-    write the file it was asked for.
-
-    Probed on one tiny CPU Linear rather than read off a version string, for the same reason
-    ``_torchao_helpers`` imports by feature: the constraint is what the installed release actually
-    produces. ``None`` means the probe itself could not run (no torch, a config this torchao will not
-    apply to a bare Linear), which callers must treat as "proceed": refusing a build because the
-    probe was unavailable would be worse than the late failure it exists to prevent.
-    """
+    """Probes a tiny Linear, since importable helpers are not enough: torchao 0.17 cannot flatten int8."""
     helpers = _torchao_helpers()
     if helpers is None:
         return False

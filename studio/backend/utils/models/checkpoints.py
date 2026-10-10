@@ -147,11 +147,7 @@ def _read_checkpoint_loss(checkpoint_path: Path) -> Optional[float]:
 def parse_adapter_features(
     adapter_path: str, probe_weights: bool = True
 ) -> Optional[Dict[str, Optional[bool]]]:
-    """Adapter feature flags (PEFT or MLX config) for the export UI; None without a config.
-
-    ``full_state`` is tri-state: no config marker proves absence (PEFT saves embedding state only
-    as weight keys), so a negative needs the weight-header probe and stays None without it.
-    """
+    """``full_state`` is tri-state: no config marker proves absence; a weight-header probe is needed."""
     cfg_path = os.path.join(adapter_path, "adapter_config.json")
     try:
         with open(cfg_path, "r", encoding = "utf-8") as f:
@@ -414,12 +410,7 @@ def has_preview_model(output_dir: Optional[str]) -> bool:
 
 
 def preview_ref(output_dir: Optional[str]) -> Optional[str]:
-    """``/p`` ref (``run`` or ``run/checkpoint``) relative to outputs_root, or None.
-
-    Posix-joined so a nested output dir keeps a working link instead of collapsing
-    to its basename. None when not previewable, outside outputs_root, or deeper than
-    the two path segments the ``/p`` route matches (so the UI omits a dead link).
-    """
+    """Returns None when outside outputs_root or deeper than the two segments the ``/p`` route matches."""
     if not has_preview_model(output_dir):
         return None
     try:

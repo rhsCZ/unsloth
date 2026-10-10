@@ -275,12 +275,7 @@ def cached_subscription_models(provider_id: str) -> list[dict[str, Any]] | None:
 
 
 def offered_subscription_model_ids(provider_id: str) -> set[str]:
-    """Slugs the plan offers, and so the only ones a fetch alone may authorize.
-
-    Hidden entries are cached for their metadata and stay usable when they are already
-    on a connection, but a slug the picker never offered must not become invocable just
-    because a catalog fetch happened.
-    """
+    """Only slugs the picker offered; a catalog fetch must not make a hidden model invocable."""
     return {
         model_id
         for model_id, model in _offered_models.get(provider_id, {}).items()
@@ -305,11 +300,7 @@ def _begin_catalog_request(provider_id: str) -> int:
 
 
 def subscription_catalog_matches_account(provider_id: str, account_id: str | None) -> bool:
-    """Whether the catalog held for this connection belongs to the account named.
-
-    The OAuth bundle is shared through the installation DB but the catalog is per
-    process, so another worker can rebind a connection this one still has a catalog for.
-    """
+    """Catalog is per process but the OAuth bundle is shared, so another worker can rebind the account."""
     known = _catalog_accounts.get(provider_id)
     return known is None or account_id is None or known == account_id
 
@@ -323,12 +314,7 @@ def subscription_catalog_stale(provider_id: str) -> bool:
 
 
 def saved_models_proven_for(provider_id: str, account_id: str | None) -> bool:
-    """Whether the row's saved models are on record as validated against this account.
-
-    Consulted when this process holds no catalog: the in-memory mark is gone after a
-    restart and never existed on a cold worker, so the record kept with the credentials
-    is the only thing that still knows a rebind happened.
-    """
+    """With no local catalog, the record kept with the credentials is the only sign of a rebind."""
     if account_id is None:
         return True
     bundle = codex_auth.load_oauth_bundle(provider_id)
@@ -336,12 +322,7 @@ def saved_models_proven_for(provider_id: str, account_id: str | None) -> bool:
 
 
 def subscription_catalog_known(provider_id: str) -> bool:
-    """Whether this process has read a catalog for the connection at all.
-
-    Without one the saved row is the only evidence there is; with one, a slug the plan
-    does not carry has genuinely gone, which is how a reauthorization to another account
-    retires the previous account's selections.
-    """
+    """With a catalog, a slug the plan lacks has truly gone, which retires the old account's selections."""
     return provider_id in _offered_models
 
 
@@ -364,11 +345,7 @@ async def list_subscription_models(
     account_id: str,
     force: bool = False,
 ) -> list[dict[str, Any]]:
-    """Model slugs this ChatGPT plan can reach; anything else is a 400 upstream.
-
-    ``force`` skips the cache for an explicit user reload: a plan change or a slug
-    rolled out since the last fetch is exactly what that click is asking about.
-    """
+    """Slugs the ChatGPT plan can reach (others 400 upstream); ``force`` bypasses the cache on reload."""
     if _catalog_accounts.get(provider_id) not in (None, account_id):
         forget_subscription_models(provider_id)
     if not force:
@@ -473,13 +450,7 @@ async def list_subscription_models(
 
 
 async def ensure_subscription_models(provider_id: str) -> set[str]:
-    """The plan's slugs, fetching them once when this process has none yet.
-
-    The catalog lives in memory, so a restart leaves a saved dynamic slug with
-    nothing to authorize it. Callers use this before refusing such a model; an
-    unreachable or disconnected upstream returns empty so the caller falls back
-    to the seed rather than locking the account out.
-    """
+    """Fetches slugs when this process holds none; an unreachable upstream returns empty, not an error."""
     listed = offered_subscription_model_ids(provider_id)
     if listed:
         return listed

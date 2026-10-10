@@ -198,12 +198,7 @@ def template_system_turn(
     tools: bool = False,
     controls: tuple = (),
 ) -> tuple[bool, str | None]:
-    """How a system turn the chat did not send renders in this template on ``today``.
-
-    Whether one renders at all, and the default system prompt it has to carry so the prompt reads as
-    the template's own render: "" when there is none, None when no system turn reproduces it (the
-    template rewrites what it is given). A template the probe cannot render takes one carrying nothing.
-    """
+    """None when no system turn reproduces the render, because the template rewrites what it is given."""
     if not chat_template:
         return True, ""
     catalog = PROBE_TOOLS if tools else None

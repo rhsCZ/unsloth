@@ -115,13 +115,7 @@ _LLAMA_CPP_SCRIPTS_WARNING_EMITTED = False
 
 @contextlib.contextmanager
 def _llama_cpp_scripts_pin():
-    """Pin convert_hf_to_gguf.py to setup.sh's llama.cpp ref for one conversion.
-
-    Scoped and marked internal because UNSLOTH_LLAMA_CPP_SCRIPTS_DIR is read as the
-    user's own choice: it outranks UNSLOTH_LLAMA_CPP_CONVERTER_TAG, and it exempts the
-    converter from the UNSLOTH_CONVERTER_SCAN_STRICT refusal. A pin the user set is left
-    exactly as it is; that one carries their exemption.
-    """
+    """User-set UNSLOTH_LLAMA_CPP_SCRIPTS_DIR outranks this pin and skips the converter's strict scan."""
     global _LLAMA_CPP_SCRIPTS_WARNING_EMITTED
     if _IS_MLX:
         # The MLX save path pins itself under a non-reentrant lock; nesting here deadlocks.
@@ -184,13 +178,7 @@ def _llama_cpp_scripts_pin():
 
 
 def _multi_gpu_device_map_kwargs() -> dict:
-    """``device_map`` kwargs for sharding a checkpoint across every visible GPU.
-
-    unsloth's ``from_pretrained`` defaults to ``device_map="sequential"``, which stacks
-    the whole model on GPU0 and OOMs multi-GPU hosts whose other GPUs sit empty (#7053).
-    Returns a sharding map only on a real multi-GPU CUDA/ROCm host (mirroring the
-    inference loader's ``get_device_map``), else empty so single-GPU, CPU and MLX loads
-    keep the loader default."""
+    """Shards only on multi-GPU hosts, since unsloth's sequential device_map stacks the model on GPU0."""
     if _IS_MLX:
         return {}
     try:
@@ -212,11 +200,7 @@ def _multi_gpu_device_map_kwargs() -> dict:
 
 
 def _is_oom_error(exc: BaseException) -> bool:
-    """True for an accelerator OOM, however it is spelled.
-
-    accelerate and transformers re-raise it as a plain ``RuntimeError`` on several paths
-    and ROCm/XPU use their own classes, so match the message too.
-    """
+    """Also matches the message: accelerate and transformers re-raise OOM as a plain RuntimeError."""
     if torch is not None:
         oom_types = tuple(
             t
@@ -233,23 +217,12 @@ def _is_oom_error(exc: BaseException) -> bool:
 
 
 def _is_cpu_spill_rejection(exc: BaseException) -> bool:
-    """bitsandbytes refuses a map that spills to CPU/disk with a plain ``ValueError``.
-
-    Busy secondary GPUs can make ``balanced`` spill to CPU even where the old sequential
-    load fit on GPU0, and that message says nothing about memory, so the retry has to
-    match it explicitly. See transformers ``quantizers/quantizer_bnb_4bit.py``.
-    """
+    """bitsandbytes spills raise a plain ValueError that never mentions memory, so match its text."""
     return "dispatched on the cpu or the disk" in str(exc).lower()
 
 
 def _is_device_map_infeasible(exc: BaseException) -> bool:
-    """The planner refusing to place the model, matched by class name.
-
-    It raises rather than spilling a bitsandbytes model to CPU, budgeting from free
-    memory read before this process opens a context -- so a training or chat job
-    holding the other cards can make it refuse a model the single-device loader
-    still fits. By name, so the export does not require a version defining it.
-    """
+    """Matched by class name so the export needs no version that defines DeviceMapInfeasible."""
     return type(exc).__name__ == "DeviceMapInfeasible"
 
 
@@ -258,23 +231,13 @@ class _CpuSpillRetry(Exception):
 
 
 def _cpu_offloaded_modules(model) -> int:
-    """Count the modules a load parked on CPU or disk.
-
-    Only bitsandbytes refuses such a map; a full-precision load accepts it, leaves the
-    parameters on meta and dies much later in safetensors with "Cannot copy out of meta
-    tensor". Nothing raises at load time, so inspect the map directly. PEFT re-dispatches
-    when attaching an adapter, so in practice this catches merged checkpoints.
-    """
+    """Full-precision loads accept a CPU/disk map silently, then die on meta tensors; inspect the map."""
     device_map = getattr(model, "hf_device_map", None) or {}
     return sum(1 for target in device_map.values() if str(target) in ("cpu", "disk"))
 
 
 def _accepts_by_keyword(params, name):
-    """True if `name` is passable as a keyword, not merely named.
-
-    Every call site passes by keyword, so a positional-only parameter is not support: counting
-    it turns a clean refusal into a TypeError.
-    """
+    """Positional-only params do not count: call sites pass by keyword; counting them gives a TypeError."""
     import inspect
 
     parameter = params.get(name)
@@ -316,13 +279,7 @@ def _imatrix_export_supported(save_fn):
 
 
 def _reported_gguf_files(result):
-    """Absolute GGUF paths unsloth reported writing, or None if it reported nothing.
-
-    None means "fall back to the legacy heuristics", which covers every older shape:
-    pre-2025.10 unsloth returned nothing, is_main_process=False returns None, and
-    save_method="lora" returns a str. An empty result is None too, since a stale
-    manifest is indistinguishable from an old build.
-    """
+    """None means use legacy heuristics; an empty result is None too, as it may be a stale manifest."""
     if not isinstance(result, dict):
         return None
     files = result.get("gguf_files")
@@ -340,12 +297,7 @@ def _reported_gguf_files(result):
 
 
 def _materialized_imatrix_path(model_dir, imatrix_file):
-    """Where unsloth copies a `*.gguf_file` imatrix beside the model, else None.
-
-    `_materialize_imatrix` drops that copy in the model directory, so the owned-root scan
-    would otherwise relocate it as if it were a converted model. Callers compare the whole path
-    (see `_is_imatrix`): a basename match would suppress a real output of the same name.
-    """
+    """Imatrix copy the owned-root scan must skip; compare full paths, since basenames can hide outputs."""
     if imatrix_file is True:
         name = "imatrix_unsloth.gguf"
     elif isinstance(imatrix_file, (str, os.PathLike)):
@@ -359,11 +311,7 @@ def _materialized_imatrix_path(model_dir, imatrix_file):
 
 
 def _is_imatrix(path, imatrix_path):
-    """True when `path` is the materialized imatrix, asked of the filesystem rather than `==`.
-
-    The on-disk spelling is the filesystem's to choose (a folding mount changes case, APFS
-    stores NFD), so byte-exact `Path.__eq__` misses and the imatrix is relocated as a model.
-    """
+    """Uses os.path.samefile, not ==: case folding or APFS NFD spelling makes byte-exact comparison miss."""
     if imatrix_path is None:
         return False
     try:
@@ -438,10 +386,7 @@ def _has_nvidia_gpu():
 
 
 def _hf_offline(timeout = 3):
-    """True if export should avoid the Hub: honors the HF offline env vars, else does one
-    cheap TCP reachability probe so a network-down load uses local files / the HF cache
-    instead of hanging on connection timeouts. Proxy-aware (probes the proxy egress when
-    one is configured); disable the probe with UNSLOTH_OFFLINE_PROBE=0."""
+    """Honors HF offline env vars, else a TCP probe avoids hangs; set UNSLOTH_OFFLINE_PROBE=0 to skip it."""
     _offline = {"1", "true", "yes", "on"}
     if (
         os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in _offline
@@ -483,11 +428,7 @@ def _is_wsl():
 
 
 def _apply_wsl_sudo_patch():
-    """On WSL, monkey-patch do_we_need_sudo() to return False.
-
-    WSL lacks passwordless sudo and do_we_need_sudo()'s `sudo apt-get update`
-    hangs on a stdin password; setup.sh pre-installs the build deps anyway.
-    """
+    """WSL: do_we_need_sudo()'s apt-get update hangs on a password prompt; setup.sh pre-installs deps."""
     if not _is_wsl():
         return
 
@@ -558,10 +499,7 @@ _STAGING_PREFIX = "unsloth-hub-upload-"
 
 
 def _staging_dir(export_parent):
-    """Stage a copy of an export where it fits: merge_and_overwrite_lora refuses a save its
-    destination cannot hold, and neither the temporary directory nor the export's own filesystem is
-    reliably the roomier, or even writable — only the export directory itself has to be.
-    """
+    """Temp dir and export filesystem are not reliably roomy or writable; only the export dir must be."""
     roomiest = []
     for parent in (Path(tempfile.gettempdir()), Path(export_parent)):
         try:
@@ -609,11 +547,7 @@ def _ensure_hub_repo_private(hf_api, repo_id):
 
 
 def _open_hub_repo(hf_api, repo_id, private):
-    """Create or reuse the repo we are about to upload into, private before anything lands.
-
-    Call this immediately before the upload, not earlier: it is what turns a failure after
-    this point into an empty repo.
-    """
+    """Call right before the upload: once the repo exists, a later failure leaves it empty."""
     repo_url = hf_api.create_repo(repo_id, private = private, exist_ok = True)
     repo_id = getattr(repo_url, "repo_id", repo_id)
     if private:
@@ -647,12 +581,7 @@ def _push_mlx_merged(
 
 
 def _publish_unsloth_model_card(hf_api, repo_id, model, hf_token):
-    """Write the card the delegated push can no longer write for itself.
-
-    Unsloth's `upload_to_huggingface` only writes it when its own `create_repo(exist_ok=False)`
-    finds the repo absent, so opening the repo first silently costs a fresh push its card.
-    Best-effort, and an existing card is kept, exactly as the merged and base paths do.
-    """
+    """Needed because opening the repo first makes upload_to_huggingface skip its card."""
     try:
         if hf_api.file_exists(repo_id, "README.md", repo_type = "model"):
             return
@@ -714,11 +643,7 @@ class ExportBackend:
     def scan_checkpoints(
         self, outputs_dir: Optional[str] = None
     ) -> List[Tuple[str, List[Tuple[str, str]]]]:
-        """
-        Scan outputs folder for training runs and their checkpoints.
-
-        Returns: [(model_name, [(display_name, checkpoint_path), ...]), ...]
-        """
+        """Returns [(model_name, [(display_name, checkpoint_path), ...]), ...] for the outputs folder."""
         if outputs_dir is None:
             outputs_dir = str(outputs_root())
         from utils.models.checkpoints import scan_checkpoints
@@ -735,18 +660,8 @@ class ExportBackend:
         _device_map_override: Optional[dict] = None,
         base_model: Optional[str] = None,
     ) -> Tuple[bool, str]:
-        """Load a checkpoint for export.
-
-        ``base_model`` is the caller's authorized adapter base; it wins over adapter_config.json.
-
-        ``hf_token`` authenticates the actual weight load for gated/private checkpoints, matching
-        the token the worker used for the security preflight (otherwise a gated repo passes scanning
-        then 401s at from_pretrained).
-
-        ``False`` (denied the ambient token) must travel all the way down: ``None`` reads as "go and
-        find a credential" (``if token is None: get_token()`` in ``save.py`` and ``hf_login``), and
-        ``get_token()`` reads the operator's stored login off disk.
-        """
+        """A False hf_token must reach the loader; None makes get_token() read the operator's stored
+        login."""
         token = normalize_token(hf_token)
         # Probe cache guards refuse anonymous reads, misreading a cached VLM offline.
         probe_token = token or None
@@ -1080,13 +995,8 @@ class ExportBackend:
         compressed_method: Optional[str] = None,
         install_missing_dependencies: bool = False,
     ) -> Tuple[bool, str, Optional[str]]:
-        """Export a merged model (a no-op merge for non-PEFT base models).
-
-        ``format_type`` is "16-bit (FP16)", "4-bit (FP4)", or a compressed-tensors label.
-        ``compressed_method`` is an optional compressed-tensors scheme alias (fp8, fp8_static, w8a8,
-        w4a16, mxfp4, mxfp8, nvfp4); it overrides ``format_type`` and is resolved against
-        unsloth.save COMPRESSED_EXPORT_SCHEMES.
-        """
+        """Export a merged model; a ``compressed_method`` scheme alias overrides ``format_type``
+        when set."""
         if self.decision is not None:
             return self._decision_only_gguf()
         if not _export_runtime_available():
@@ -1492,13 +1402,7 @@ class ExportBackend:
         private: bool = False,
         npu_q4nx: bool = False,
     ) -> Tuple[bool, str, Optional[str]]:
-        """Export the model in GGUF format.
-
-        ``quantization_method`` is a single GGUF quant method ("Q4_K_M") or a list of them; a list
-        produces one GGUF per quant from a single model load, since unsloth save_to_gguf loops
-        internally. ``imatrix_file`` is an importance matrix path or boolean. ``npu_q4nx`` also
-        converts one Q4_0 / Q4_1 / Q4_K_M GGUF to FastFlowLM's Q4NX for the AMD Ryzen AI NPU.
-        """
+        """A list of ``quantization_method`` values yields one GGUF per quant from a single model load."""
         if not _export_runtime_available():
             return False, _export_runtime_message(), None
         if self.decision is not None:
@@ -2024,13 +1928,7 @@ class ExportBackend:
         gguf_outtype: str = "q8_0",
         adapter_format: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[str]]:
-        """Export the LoRA adapter only, not merged.
-
-        ``gguf`` also converts the adapter to a GGUF LoRA file (llama.cpp convert_lora_to_gguf.py),
-        loadable with `llama-cli --lora ...`; ``gguf_outtype`` is its output float type, one of
-        q8_0/f16/bf16/f32. ``adapter_format`` is 'mlx' or 'peft' (MLX servers only offer both);
-        omitted resolves to the platform's native format.
-        """
+        """Adapter only, not merged; omitted ``adapter_format`` resolves to the platform's native format."""
         if self.decision is not None:
             return self._decision_only_gguf()
         if not _export_runtime_available():

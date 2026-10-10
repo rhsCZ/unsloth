@@ -629,11 +629,7 @@ class JobManager:
         self._emit(event)
 
     def _retire_workflow_key(self, job: Job) -> None:
-        """Revoke the workflow-scoped sk-unsloth-* key, if one was minted.
-
-        Best-effort: failures are swallowed. The key expires after 24h, so a
-        missed revoke is a latency, not correctness, concern.
-        """
+        """Best-effort: errors are swallowed, since the key expires on its own after 24h."""
         key_id = getattr(job, "internal_api_key_id", None)
         if not key_id:
             return

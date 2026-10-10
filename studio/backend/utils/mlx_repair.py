@@ -41,15 +41,7 @@ MLX_PACKAGES = tuple(f"{name}{spec}" for name, spec in _MLX_INSTALL_SPECS.items(
 
 
 def _zoo_declared_specifier(package: str) -> str:
-    """The version range the INSTALLED unsloth-zoo declares for `package`, or "".
-
-    The specs above track the zoo in the repository, but the self-heal runs against whatever zoo is on
-    the machine, and it never upgrades it. mlx-vlm 0.7.1 passes `cache` to `gated_delta_update`, which a
-    zoo predating that keyword does not accept, so admitting 0.7.1 next to an older zoo raises TypeError
-    at the first Qwen3.5 VLM training step, after mlx_stack_available() has already cleared the
-    chat-only gate. Reading the installed zoo's own requirement is what keeps the two in step without
-    naming a zoo version here: it widens on its own the moment a zoo that declares 0.7.1 is installed.
-    """
+    """The installed zoo's range, because mlx-vlm 0.7.1 passes cache, which older zoos reject."""
     try:
         from importlib.metadata import requires
     except ImportError:  # pragma: no cover - importlib.metadata is stdlib on every supported Python
@@ -75,12 +67,7 @@ def _zoo_declared_specifier(package: str) -> str:
 
 
 def _install_packages() -> tuple[str, ...]:
-    """MLX_PACKAGES, with mlx-vlm narrowed to what the installed unsloth-zoo declares.
-
-    Only mlx-vlm: it is the one whose call shape the zoo has to match, and mlx/mlx-lm are pinned
-    exactly at both ends, so intersecting those would just empty the range on any zoo a patch release
-    behind. Both specifiers are passed and uv intersects them.
-    """
+    """Only mlx-vlm narrows to the installed zoo's range; mlx and mlx-lm are pinned exactly at both ends."""
     packages = []
     for name, spec in _MLX_INSTALL_SPECS.items():
         declared = _zoo_declared_specifier(name) if name == "mlx-vlm" else ""

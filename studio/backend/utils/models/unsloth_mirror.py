@@ -64,13 +64,7 @@ def _string_literal(node) -> Optional[str]:
 
 @lru_cache(maxsize = 1)
 def _bad_mappings() -> Optional[dict]:
-    """``loader_utils.BAD_MAPPINGS``, the corrections the loader applies AFTER a table lookup
-    (a 4-bit dynamic quant that is too big, or a MoE that HF loads too slowly). Parsed out of
-    the source, because importing loader_utils imports torch.
-
-    ``None`` means the corrections could not be read, which is NOT the same as an empty table:
-    an uncorrected lookup can name a repo that does not exist, so the caller redirects nothing
-    rather than redirect somewhere the loader will never go."""
+    """None means the corrections could not be read, not an empty table; callers redirect nothing."""
     try:
         models_dir = _unsloth_models_dir()
         if models_dir is None:
@@ -98,13 +92,7 @@ def _bad_mappings() -> Optional[dict]:
 
 
 def mirror_lookup_available() -> bool:
-    """Whether a None from :func:`unsloth_public_mirror` means "no public copy" at all.
-
-    It can also mean "could not tell": the tables live in the installed unsloth package, and
-    find_spec can resolve to a directory that has no models/mapper.py under it. Callers that
-    REFUSE on a missing mirror have to tell those apart, or an unreadable table turns every
-    gated model into a refusal, including the ones Unsloth would have trained.
-    """
+    """Distinguishes a None from unsloth_public_mirror: no public copy, or tables that could not be read."""
     return _mapper_tables() is not None and _bad_mappings() is not None
 
 

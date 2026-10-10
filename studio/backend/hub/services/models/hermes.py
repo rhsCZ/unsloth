@@ -38,14 +38,7 @@ def staged_model_id(path: Path) -> str:
 
 
 def staged_gguf_files(hermes_dir: Path) -> List[Path]:
-    """Servable GGUFs staged in *hermes_dir*, a split counted once by its first part.
-
-    A flat glob, never a walk: ``assets/`` holds companions rather than models,
-    and Hermes excludes it by scanning only the top level. A split counts only
-    when EVERY part is on disk -- a download still in flight is not loadable, and
-    surfacing it would offer a model that fails at load. Continuation parts are
-    never rows of their own; llama.cpp opens the whole set from part one.
-    """
+    """Flat glob, not a walk, so assets/ is skipped; a split counts only when every part is on disk."""
     try:
         files = sorted(p for p in hermes_dir.glob("*.gguf") if p.is_file())
     except OSError as exc:

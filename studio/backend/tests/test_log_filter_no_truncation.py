@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""
-Regression tests for loggers.handlers.filter_sensitive_data.
-
-Pins two properties: (1) long strings with commas/slashes pass through unchanged
-(the base64-truncation heuristic from PR #5246 was too aggressive), and
-(2) native-path lease redaction still fires for inline and dict-key forms.
-"""
+"""Long strings with commas or slashes pass through unmodified, while lease redaction still fires."""
 
 from loggers.handlers import filter_sensitive_data
 

@@ -46,10 +46,7 @@ def mark_subscriber_seen(
     follower: str,
     account_id: str = "",
 ) -> None:
-    """Record that ``follower`` is attached to ``account_id``'s ``run_id`` right now.
-
-    Called once per iteration of the run's SSE loop, so at least every keep-alive period.
-    """
+    """Called every SSE loop iteration, so the stamp refreshes at least once per keep-alive period."""
     if not run_id or not follower:
         return
     with _LOCK:
@@ -61,11 +58,7 @@ def subscriber_departed(
     follower: str,
     account_id: str = "",
 ) -> None:
-    """Drop only ``follower``'s stamp when its loop exits, leaving any other follower's alone.
-
-    Best effort: an abruptly closed generator never runs its cleanup, which is why ``is_attended``
-    expires by age rather than trusting this. This only buys promptness on a clean close.
-    """
+    """Best effort only: an abruptly closed generator skips this, so is_attended also expires by age."""
     if not run_id or not follower:
         return
     key = _key(account_id, run_id)

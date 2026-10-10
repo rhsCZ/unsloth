@@ -119,12 +119,7 @@ def embedding_identity(
     gguf_repo: str | None = None,
     pooling: str | None = None,
 ) -> str:
-    """Tagged identity for ``documents.embedding_model``.
-
-    The configured model comes first so a row written before identities carried a tag
-    still compares equal on it. llama-server appends the GGUF repo it actually embeds
-    through, which is the part that can differ from the model's ST form, and any pooling
-    other than the CLS it once forced on every GGUF."""
+    """The model name comes first, so untagged rows written before the tag still compare equal on it."""
     model = _escape_identity_segment(model)
     if gguf_repo is None:
         return f"{backend}:{model}"
@@ -141,12 +136,7 @@ def embedding_identity_model(identity: str | None) -> str | None:
 
 
 def embedding_identity_matches(stored: str | None, current: str) -> bool:
-    """Whether ``stored``'s vectors can answer a query embedded under ``current``.
-
-    NULL is still assumed current. An untagged row predates the tag and we cannot know
-    which backend wrote it, so it matches on the model name alone, exactly as it did
-    before: dropping those would empty dense search over every corpus indexed so far.
-    They are reported instead (``store.count_untagged_documents``)."""
+    """Untagged rows match on the model name alone; dropping them would empty dense search."""
     if stored is None:
         return True
     if embedding_identity_model(stored) is not None:
@@ -213,22 +203,12 @@ def default_gguf_repo() -> str:
 
 
 def effective_gguf_repo() -> str:
-    """GGUF repo for the llama-server backend, tracking the effective model.
-
-    An explicit ``RAG_EMBED_GGUF_REPO`` env always wins, then the repo the picker
-    resolved and stored for this model (which need not follow any naming rule),
-    then the ``-GGUF`` companion convention.
-    """
+    """RAG_EMBED_GGUF_REPO wins, then the repo stored for this model, then the -GGUF convention."""
     return effective_gguf_repo_for_embedding_model(effective_embedding_model())
 
 
 def effective_gguf_repo_for_embedding_model(model: str) -> str:
-    """GGUF repo the loader/identity use for ``model``.
-
-    The resolved repo is part of the vector space identity, not merely a load
-    location: two different conversions of the same source model need separate
-    tags or their document/query vectors can be mixed.
-    """
+    """Resolved repo is part of vector identity: two conversions of one model must not mix vectors."""
     if "RAG_EMBED_GGUF_REPO" in os.environ:
         return EMBED_GGUF_REPO
     try:
@@ -249,15 +229,7 @@ EMBED_DEVICE = os.environ.get("RAG_EMBED_DEVICE", "auto")
 
 
 def embed_device_preference() -> str:
-    """``EMBED_DEVICE`` normalized to exactly ``gpu``, ``cpu`` or ``auto``.
-
-    One reader for both backends, because they used to disagree about the same
-    string: the llama path compared a bare ``.lower()``, so ``" gpu "`` fell through
-    to auto, and an Intel user writing the accelerator's own name (``xpu``) got CPU
-    from a setting that named their device. Anything that is not recognizably a
-    request for CPU or for an accelerator is ``auto``, so a typo degrades to each
-    backend's default rather than to silence.
-    """
+    """One reader for both backends; anything unrecognized is auto, so a typo falls back to the default."""
     value = (EMBED_DEVICE or "").strip().lower()
     if value in ("gpu", "cuda", "rocm", "hip", "xpu", "mps", "metal"):
         return "gpu"
@@ -267,13 +239,7 @@ def embed_device_preference() -> str:
 
 
 def embed_device_requires_gpu() -> bool:
-    """True when a failed GPU start must raise instead of retrying on CPU.
-
-    Only the literal documented value is that hard a request, which is what it has
-    always meant. The spellings we newly began honoring above -- padding, or the
-    accelerator's own name -- used to fall through to ``auto``, and ``auto`` falls
-    back, so reading them as fatal would take RAG away from hosts it worked on. They
-    still opt into the GPU; they just do not insist on it."""
+    """Only the literal value gpu insists on the GPU; newer spellings like xpu opt in without insisting."""
     return (EMBED_DEVICE or "").lower() == "gpu"
 
 

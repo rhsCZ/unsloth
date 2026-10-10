@@ -196,7 +196,7 @@ def _row_tools(tools):
     return normalized
 
 
-def _sharegpt_tool_turns(conversation, content = "", probe = False):
+def _sharegpt_tool_turns(conversation, content = "", probe = False,):
     """Map ShareGPT ``function_call`` / ``observation`` turns to OpenAI tool turns, and the
     markers ``probe`` put in place of each call's arguments and each result; the conversation
     itself when it has neither role."""
@@ -296,7 +296,7 @@ def _one_call_per_message(turns):
     return split if len(split) != len(turns) else turns
 
 
-def _render_conversation(tokenizer, conversation, tools = None, fallback_without_tools = True):
+def _render_conversation(tokenizer, conversation, tools = None, fallback_without_tools = True,):
     candidates = []
     # None content for DeepSeek-style templates; one call per message for Llama 3.x and gpt-oss.
     for content in ("", None):
@@ -319,7 +319,7 @@ def _render_conversation(tokenizer, conversation, tools = None, fallback_without
     return _render_messages(tokenizer, conversation, tools, fallback_without_tools)
 
 
-def _render_messages(tokenizer, conversation, tools = None, fallback_without_tools = True):
+def _render_messages(tokenizer, conversation, tools = None, fallback_without_tools = True,):
     from core.inference.chat_template_helpers import _normalize_tool_call_arguments
 
     attempts = []
@@ -366,7 +366,7 @@ def _template_render_stats(tokenizer, rows):
     return rendered, advertised, tool_rows
 
 
-def _sample_template_rows(dataset, chat_column, limit = _TEMPLATE_PROBE_ROWS):
+def _sample_template_rows(dataset, chat_column, limit = _TEMPLATE_PROBE_ROWS,):
     """sample finite datasets evenly, adding one missed sparse tool row; stream from the front."""
     n_rows = len(dataset) if hasattr(dataset, "__len__") else 0
     sampled = []
@@ -502,10 +502,7 @@ def apply_chat_template_to_dataset(
     num_proc = None,
     progress_callback = None,
 ):
-    """Apply the chat template to a dataset based on its format, returning a dict with the dataset, success status, warnings and errors.
-
-    ``dataset_info`` is the output of format_dataset() with metadata. ``custom_prompt_template`` is deprecated and non-None values are rejected, because Studio cannot persist a matching inference template. ``add_eos_token`` appends the tokenizer's eos_token to each ChatML text (Alpaca text always gets one), ``remove_bos_prefix`` strips a leading '<bos>' (Gemma and friends), ``custom_format_mapping`` maps custom columns to the standard format, and ``batch_size`` / ``num_proc`` control processing.
-    """
+    """Rejects a non-None custom_prompt_template: Studio cannot persist a matching inference template."""
     dataset = dataset_info["dataset"]
     final_format = dataset_info["final_format"]
     chat_column = dataset_info["chat_column"]

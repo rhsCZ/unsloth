@@ -546,22 +546,7 @@ _MAX_CONFIG_DEPTH = 12
 
 
 def iter_auto_maps(cfg, _depth: int = 0):
-    """Yield every ``auto_map`` dict in a config, at the top level and in any sub-config.
-
-    transformers reads ``auto_map`` off whichever config object builds the thing being
-    built, and for a composite model that is a SUB-config, not the top level. Reading
-    only ``cfg["auto_map"]`` therefore scans less than the load executes:
-    ``unsloth/models/_utils.py`` resolves ``text_config.auto_map["AutoModelForCausalLM"]``
-    through ``get_class_from_dynamic_module``, and ``unsloth/models/loader.py`` already
-    walks every level for the compiler because nesting goes beyond text/vision/audio
-    (Qwen-Omni ``thinker_config``, nested ``llm_config``). A repo whose only ``auto_map``
-    sits on a sub-config used to read as "ships no remote code", so the gate allowed it
-    with no scan, no findings and no fingerprint.
-
-    Depth-bounded rather than unbounded: a config is attacker-supplied JSON, and the
-    bound is what keeps a deeply nested one from costing anything. Twelve is far past
-    the deepest real composite (three).
-    """
+    """Walks sub-configs too: a composite model's auto_map sits there, so top-level-only scans miss code."""
     if _depth > _MAX_CONFIG_DEPTH or not isinstance(cfg, dict):
         return
     auto_map = cfg.get("auto_map")

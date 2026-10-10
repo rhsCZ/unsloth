@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for the idle auto-unload of the image and video backends.
-
-The real backends are replaced with fakes that publish the same status /
-loading_repo_ids / generate_progress surface, so these verify only the idle
-decision -- no torch, GPU, or model download.
-"""
+"""Idle auto-unload of image/video backends, tested with fakes: no torch, GPU or model download."""
 
 from __future__ import annotations
 
@@ -627,11 +622,7 @@ _BEARER = [(b"authorization", b"Bearer sk-unsloth-test")]
 
 
 def _stalled_media_request(path, headers):
-    """Open a tracked media POST that never sends a body, tick, and cancel it.
-
-    Stands in for a client that opens the connection and drips: the count is taken in the
-    middleware, ahead of the body parsing every one of these routes does before its auth
-    dependency runs, so nothing downstream ever produces a status for it."""
+    """The count is taken in middleware ahead of body parsing, so nothing downstream sees this request."""
 
     async def _run():
         started = asyncio.Event()
@@ -672,12 +663,7 @@ def test_an_authenticated_request_is_still_counted_before_its_body(media, monkey
 
 
 def test_the_openai_videos_route_never_claims_the_llama_slot():
-    """/v1/videos runs the video backend, exactly like /video/generate.
-
-    Adding "/videos" to the inference suffixes made it a tracked path; without the
-    matching non-LLM entry its completion called _claim_non_preview_slot(), clearing
-    preview ownership so the next preview of a different checkpoint 503s on the guard.
-    """
+    """/v1/videos must be a non-LLM route too, or its completion clears the llama preview slot ownership."""
     from core.inference import llama_keepwarm as kw
 
     for path in ("/v1/videos", "/api/inference/videos"):

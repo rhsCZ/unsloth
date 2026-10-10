@@ -1,11 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Tests for `content_to_text`, the #4383 fix for list-form message content.
-
-Loaded by file path so the test skips importing ``core.inference`` (whose
-``__init__`` pulls in the orchestrator + llama_cpp / torch).
-"""
+"""Tests content_to_text on list-form content; loads the module by path to skip core.inference."""
 
 import importlib.util
 from pathlib import Path

@@ -476,10 +476,7 @@ def _hf_repo_dir_has_content(repo_dir: Path) -> bool:
 
 
 def _hf_snapshots_hold_files(repo_dir: Path) -> bool:
-    """Whether the newest snapshot (the one ``_scan_hf_cache`` classifies) holds a real file.
-    Without symlinks huggingface_hub moves blobs into ``snapshots/<rev>/`` and leaves ``blobs/``
-    empty. Walked with ``scandir``, bounded by entries read (``rglob`` lists a whole directory
-    before yielding); unreadable entries are skipped."""
+    """Without symlinks, huggingface_hub leaves blobs/ empty, so real files live in snapshots/."""
     snapshot = hf_cache_scan.latest_snapshot_dir(repo_dir)
     if snapshot is None:
         return False

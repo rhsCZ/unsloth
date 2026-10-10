@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Platform-dependent behaviour of the shared MCP session machinery.
-
-What these can and cannot prove: Linux does not export asyncio.ProactorEventLoop
-at all, so a win32 test has to supply one. That makes these honest tests of which
-branch is *chosen*, and no test at all of IOCP, overlapped pipes or Windows handle
-cleanup. Those need a Windows runner, and this repo runs studio/backend/tests on
-ubuntu only. Do not read a pass here as Windows coverage.
-"""
+"""These check which win32 branch is chosen on Linux; a pass is not Windows coverage."""
 
 from __future__ import annotations
 

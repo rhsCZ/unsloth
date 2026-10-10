@@ -61,14 +61,8 @@ _REPO_ACCESS_PROBE_TIMEOUT_S = 10.0
 
 
 def apply_token_to_child_env(env: MutableMapping[str, str], hf_token: HfTokenArg) -> None:
-    """Grant a spawned probe exactly its caller's credential.
-
-    A child env is seeded from the parent's, so not *setting* a token is not denying one.
-    Only the sentinel scrubs; ``None`` keeps the inherited env on purpose. A token the Hub
-    refused in this request while anonymous reads worked goes to the child as anonymous too
-    (explicit tokens only: judging the ambient one imports huggingface_hub, which the pre-import
-    tier probe must not).
-    """
+    """Omitting a token does not deny one: the child inherits the parent env, so only the sentinel
+    scrubs."""
     if isinstance(hf_token, str) and hf_token and saved_token_rejected(hf_token):
         hf_token = False
     if isinstance(hf_token, str) and hf_token:
@@ -101,12 +95,7 @@ def is_anonymous(hf_token: HfTokenArg) -> bool:
 
 
 def qualify_cache_identity(hf_token: HfTokenArg, digest: str) -> str:
-    """Tag a token digest with the caller class that produced it.
-
-    Same token value, different authorization: a UI session is entitled to ambient, an
-    sk-unsloth API key is not. On the bare digest they collide, so a cache hands one the
-    other's verdict and a coalescer merges their scans into whichever arrived first.
-    """
+    """Keeps a UI session and an sk-unsloth key apart: the same token authorizes differently per caller."""
     return (
         f"{UI_CACHE_IDENTITY_PREFIX}{digest}"
         if isinstance(hf_token, AmbientAuthorizedToken)
@@ -228,14 +217,7 @@ def cache_reads_authorized(
     repo_type: str = "model",
     offline: bool = False,
 ) -> bool:
-    """Whether this caller may read the host Hub disk cache for *repo_id*.
-
-    Three outcomes, not two: a Hub that ANSWERED no denies, one that could not be ASKED resolves
-    against the disk (``_resolve_unaskable``), or a local question depends on reaching
-    huggingface.co. ``True`` is not "the token is valid": /auth-check answers 200 for any string
-    on a public repo and discriminates on the private and gated ones, which is where cached reads
-    are. ``repo_info`` cannot replace it, since gated public metadata returns for an invalid token.
-    """
+    """True does not mean the token is valid: /auth-check accepts any string on a public repo."""
     if is_anonymous(hf_token):
         return False
     # Deny by default: `not isinstance(str)` gave the ambient answer to True, 1, b"...".
@@ -266,11 +248,7 @@ def public_cache_read_authorized(
     repo_type: str = "model",
     offline: bool = False,
 ) -> bool:
-    """Whether serving *repo_id* from the cache to a caller with NO credential leaks anything.
-
-    The sentinel never authorizes itself, right for a private repo and wrong for a public one; an
-    unauthenticated /auth-check is that difference. Unaskable resolves against the disk.
-    """
+    """The anonymous sentinel never authorizes itself, which is wrong for public repos."""
     repo = (repo_id or "").strip()
     if not repo or _is_local_path(repo):
         return False
@@ -288,13 +266,7 @@ def cached_read_refused(
     repo_type: str = "model",
     offline: bool = False,
 ) -> bool:
-    """Refuse a read only where the operator's disk could answer it AND this caller may not.
-
-    ``is_cached`` is asked FIRST, so an uncached repo is never probed: refusing one protects
-    nothing and costs a legitimate caller its answer whenever the probe is merely unavailable.
-    It must fail closed, or the guard's own failure opens the path it guards. "May not read it"
-    is not "cannot authorize itself", which is where the sentinel sits.
-    """
+    """is_cached is asked first, so an uncached repo is never probed; a failed probe must fail closed."""
     if not is_cached():
         return False
     if cache_reads_authorized(hf_token, repo_id = repo_id, repo_type = repo_type, offline = offline):
@@ -397,15 +369,7 @@ def note_repo_fetched_with_a_request_token(
     repo_id: str,
     repo_type: Optional[str] = "model",
 ) -> "Optional[dict]":
-    """Record that *repo_id* was fetched under a credential, and WHICH one. Never raises.
-
-    Over-broad on purpose: an extra record withholds bytes the caller can still fetch, a missing
-    one leaks a private repo. ``by`` is ``None`` when the fetch cannot be attributed to exactly
-    one credential, which authorizes nobody.
-
-    Returns the entry it wrote, for a caller that may have to take it back; None when it wrote
-    nothing, or when the entry that stands is an earlier writer's.
-    """
+    """Over-records on purpose: an extra record withholds bytes, a missing one leaks a private repo."""
     if is_anonymous(token) or not repo_id:
         return None
     if token is not None and (not isinstance(token, str) or not token):
@@ -457,16 +421,8 @@ def forget_a_fetch_that_moved_nothing(
     repo_id: str,
     repo_type: Optional[str] = "model",
 ) -> None:
-    """Take back ``record`` when the call it was written for failed leaving NOTHING on disk.
-
-    Written before the call rather than after it on purpose: a fetch that dies half way has
-    still filled the cache, and an unrecorded repo reads later as "nobody needed a credential
-    for this". The cost is the other direction -- a 404, a rejected token or an outage leaves a
-    record for a fetch that never happened, the first-writer rule keeps it, and a repo a later
-    anonymous download fills is then withheld from the tokenless offline caller. So the record
-    is taken back only where the disk says the call really did move nothing, and only while it
-    is still the record this call wrote.
-    """
+    """Taken back only if the disk shows the failed call moved nothing and it is still this call's
+    record."""
     if not record or not repo_id:
         return
     try:
@@ -593,14 +549,7 @@ _UNREADABLE_CREDENTIAL_IDENTITY = "a-credential-this-host-could-not-read"
 def note_host_credential_identity(
     token: Optional[str], *, a_credential_was_held: bool = False
 ) -> None:
-    """Enter a credential this host HELD in the ledger, while Studio still has it to hash.
-
-    Called from the save and the delete paths, not only from the authorization gate that reads
-    the ledger: on an upgraded install the ledger starts empty, and an operator who replaced or
-    cleared the saved token before any unaskable probe ever ran left no trace of the old one at
-    all. A later outage then found "this host has never held a credential" and handed a
-    tokenless caller everything that credential had downloaded.
-    """
+    """Records the held credential from save and delete too, since an upgraded ledger starts empty."""
     if isinstance(token, str) and token:
         _note_host_credential_identities((token,))
     elif a_credential_was_held:
@@ -662,10 +611,7 @@ def _caller_populated_the_cache(
     repo_id: Optional[str] = None,
     repo_type: Optional[str] = None,
 ) -> bool:
-    """The whole safety of the unaskable fallback: disk presence is a fact about the OPERATOR, so
-    resolving an unanswerable probe against it for ANY caller hands a second principal the
-    operator's private downloads. A cache filled before the record existed reads as "never
-    recorded", which authorizes. Compared without short-circuiting, so timing reports nothing."""
+    """Disk presence belongs to the operator, not the caller, so it must never authorize one."""
     known, host_tokens = _host_hf_credentials()
     if not known:
         return False
@@ -716,10 +662,7 @@ def _cache_provenance_is_establishable(repo_id: Optional[str], repo_type: Option
 
 
 def _denial_can_be_overturned(repo_id: str, repo_type: str, token: Optional[str]) -> bool:
-    """Whether remembering this denial protects anything: only where ``_resolve_unaskable`` would
-    otherwise say yes. Slots are the point, since the key carries a CALLER-SUPPLIED repo id and
-    8192 denials for nonexistent repos force an eviction that refuses every unaskable probe
-    process-wide. Unanswerable means remember: not remembering is what loses safety."""
+    """Remember denials only where _resolve_unaskable would say yes; caller repo ids can flood the cache."""
     # BEFORE the rule below: a denial dropped during an unreadable store would be authorized
     # by the next outage.
     if not _cache_provenance_is_establishable(repo_id, repo_type):
@@ -859,12 +802,7 @@ def _inflight_lock(key: tuple[str, ...]) -> threading.Lock:
 
 
 def _probe_endpoint() -> str:
-    """The endpoint the rest of the backend means, not the raw env value.
-
-    ``HfApi().endpoint`` returns ``HF_ENDPOINT`` verbatim, so a scheme-less mirror builds a
-    URL both clients reject and every probe on that machine is denied. ``hf_endpoint_url``
-    is where the backend already normalises it; falls back since this module sits beneath.
-    """
+    """Uses hf_endpoint_url, since HfApi().endpoint returns a scheme-less HF_ENDPOINT verbatim."""
     try:
         from utils.hub_settings import MODELSCOPE, active_source, hugging_face_endpoint
     except Exception:
@@ -884,11 +822,7 @@ def _probe_endpoint() -> str:
 
 
 def _same_probe_target(answered: str, asked: str) -> bool:
-    """Whether two URLs address the same endpoint, up to the spellings a client may change.
-
-    Case in the host and a default port carry no meaning; the path, query and everything
-    else do, so a redirect to ``?next=login`` on the same path is still a different target.
-    """
+    """Host case and default port are ignored; path and query are not, so ?next=login is another target."""
     from urllib.parse import urlsplit
 
     def _parts(url: str):
@@ -1163,10 +1097,8 @@ def _is_missing_file(exc: BaseException) -> bool:
 
 
 def call_with_anonymous_retry(read, hf_token: HfTokenArg):
-    """Run ``read(token)``, once more anonymously if the Hub refuses the credential (a 401 on a
-    read that sent one). Anonymous answers are public data only. When anonymous fails too, the
-    ORIGINAL error is raised: it is the one callers classify.
-    """
+    """Retries anonymously only on a rejected credential; if that fails too, the original error is
+    raised."""
     if _credential_rejected_this_request(hf_token):
         try:
             result = read(False)

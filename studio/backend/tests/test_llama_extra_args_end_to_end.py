@@ -1,16 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What the child process actually receives when the editor sends extra args.
-
-The unit tests either side of this one pin the validator and the row's copy. This
-one pins the thing both exist to produce: the argv llama-server is launched with.
-It reuses the placement suite's harness, which runs the real ``load_model`` and
-captures the command at the Popen boundary instead of spawning anything.
-
-The bar the whole feature is measured against is the first test here: with nothing
-in the box, the command must be byte-identical to the one Unsloth emitted before.
-"""
+"""Pins the argv llama-server launches with: byte-identical to before when no extra args are set."""
 
 from __future__ import annotations
 
@@ -34,12 +25,7 @@ def _cmd(tmp_path, **load_kwargs):
 
 
 def _stable(cmd: list[str]) -> list[str]:
-    """The command with the values that differ per launch masked.
-
-    The port is picked from whatever is free, the GGUF lives under a per-test
-    tmp dir and the API key file is per launch, so a literal comparison could never hold. Everything else is the
-    part this feature must not move.
-    """
+    """Masks the per-launch port, GGUF path and API key file, leaving the rest of the argv to compare."""
     masked = list(cmd)
     for index, token in enumerate(masked):
         if index and masked[index - 1] == "--port":

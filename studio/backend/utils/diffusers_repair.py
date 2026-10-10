@@ -131,11 +131,7 @@ def _release_behind() -> bool:
 
 
 def _diffusers_is_an_index_install() -> bool:
-    """True when diffusers came from an index, the only state the repair acts on.
-
-    Read from metadata, so the common healthy boot spawns nothing: the pinned build is a direct
-    reference (git or zip) and records one in direct_url.json.
-    """
+    """Read from metadata so a healthy boot spawns nothing; direct builds record direct_url.json."""
     try:
         from importlib.metadata import distribution
         dist = distribution("diffusers")
@@ -222,10 +218,7 @@ def _installer_would_skip(main_active: bool = True) -> bool:
 
 
 def _run_installer(flag: str, timeout: float) -> "tuple[int | None, str]":
-    """Run one installer mode; None as the code when it was stopped at ``timeout``.
-
-    Raises OSError when the installer cannot start.
-    """
+    """Returns None as the code when stopped at timeout; raises OSError if the installer cannot start."""
     from utils.child_stdio import utf8_child_env
     from utils.process_lifetime import adopt_pid, child_popen_kwargs, forget_pid, terminate_pid
 
@@ -319,11 +312,8 @@ def _loaded_replaceable_modules() -> "list[str]":
 
 
 def repair_diffusers_before_imports(echo: Callable[[str], None] = lambda _line: None) -> bool:
-    """Repair an index install before app imports. Return True if the build was installed.
-
-    Raise PeerInstallInProgress if a peer holds the install lock at timeout, and
-    InstallInterrupted if our own install had to be stopped.
-    """
+    """Returns True if the build was installed; raises on peer lock timeout or an interrupted own
+    install."""
     main_active = _main_pin_active()
     if _opted_out(main_active) or not _MAIN_PIN.is_file() or not _INSTALLER.is_file():
         return False

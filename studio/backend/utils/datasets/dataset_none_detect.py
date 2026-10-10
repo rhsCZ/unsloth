@@ -29,19 +29,7 @@ _CHAT_KEY_SETS = (frozenset({"role", "content"}), frozenset({"from", "value"}))
 
 
 def _probe_conversation(dataset: Dataset, candidates = None):
-    """
-    Probe a dataset for its conversation column and turn structure.
-
-    candidates - column names to try, in priority order.
-                 Defaults to CONVERSATION_COLUMNS when None.
-
-    Returns a dict with:
-        column    - conversation column found
-        turn_keys - keys present in the first turn dict
-        roles     - all role values seen across the first few samples
-
-    Returns None if no conversation column is found.
-    """
+    """Returns the conversation column with its turn keys and roles seen, or None when no column matches."""
     if candidates is None:
         candidates = CONVERSATION_COLUMNS
     columns = set(dataset.column_names)
@@ -154,10 +142,6 @@ def _classify_empty(value) -> str:
 
 
 def find_none_alpaca(dataset: Dataset) -> dict:
-    """
-    Scan alpaca dataset for None/empty instruction or output fields.
-    Returns a stats dict with a detailed 'findings' list.
-    """
     stats = {
         "total_rows": len(dataset),
         "none_instruction": 0,
@@ -188,13 +172,7 @@ def find_none_alpaca(dataset: Dataset) -> dict:
 
 
 def find_none_chatml(dataset: Dataset, col: str = None) -> dict:
-    """
-    Scan chatml/sharegpt/gptoss dataset for turns with None/empty content.
-    Auto-detects the conversation column if col=None.
-
-    Returns a stats dict with a complete 'findings' list - one entry per bad
-    turn with row_index, turn_index, role, value_type, and raw_value.
-    """
+    """Auto-detects the conversation column when col is None; findings hold one entry per bad turn."""
     if col is None:
         _cinfo = _probe_conversation(dataset)
         if _cinfo is not None:
@@ -392,12 +370,7 @@ FORMAT_ALIASES = {"gpt-oss": "gptoss"}
 
 
 def detect_format(dataset: Dataset) -> str:
-    """
-    Auto-detect dataset format by probing columns and turn structure.
-
-    Returns a format name from FORMAT_REGISTRY, or 'unknown'.
-    Walks the registry in order; first match wins.
-    """
+    """Returns the name of the first FORMAT_REGISTRY entry that matches, or 'unknown'."""
     conv_info = _probe_conversation(dataset)
     for entry in FORMAT_REGISTRY:
         if entry["match"](dataset, conv_info):
@@ -414,12 +387,7 @@ def get_scanner(fmt: str):
 
 
 def scan_dataset(dataset: Dataset, fmt: str = "auto") -> dict:
-    """
-    One-liner: detect format (if 'auto') and scan for None/empty content.
-
-    Returns the stats dict with an added 'format' key.
-    Raises ValueError if the format is unknown or unsupported.
-    """
+    """Raises ValueError for a DatasetDict, or an unknown or unsupported format; 'auto' detects first."""
     # Reject a DatasetDict / IterableDatasetDict (not subclasses of each other).
     _dict_types = []
     try:
@@ -572,11 +540,7 @@ def show_row(
     fmt: str,
     col: str = None,
 ):
-    """Print the full contents of specific rows for inspection.
-
-    Used by test_codex_fixes.py to verify row rendering behaviour.
-    Not part of the production API.
-    """
+    """Not part of the production API; used by test_codex_fixes.py to check row rendering."""
     if col is None:
         for candidate in ("messages", "conversations", "texts"):
             if candidate in dataset.column_names:

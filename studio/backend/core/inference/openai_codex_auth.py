@@ -247,16 +247,7 @@ def save_oauth_bundle(provider_id: str, bundle: dict[str, Any]) -> None:
 
 
 async def remember_catalog_account(provider_id: str, account_id: str) -> None:
-    """Record, next to the credentials, which account the saved models were proven for.
-
-    The in-memory mark does not survive a restart or reach a cold worker, and a rebind
-    replaces the bundle wholesale, so keeping the proof here is what makes "these saved
-    models belong to some other account" outlive this process.
-
-    Written under the same guard the refresh path uses, and re-read inside it: an
-    unguarded read-modify-write here could put stale tokens back over a rotation that
-    landed in between, which would cost the connection its credentials.
-    """
+    """Stored with the credentials, so the proof survives restarts; written under the refresh guard."""
     if load_oauth_bundle(provider_id) is None:
         return
     async with provider_oauth_write_guard(provider_id):

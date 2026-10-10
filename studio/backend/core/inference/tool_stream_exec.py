@@ -37,12 +37,7 @@ _SECRET_TERMINATORS = frozenset(" \t\r\n\"'`,;)]}")
 
 
 def _hold_back_partial_secret(text: str) -> int:
-    """Index at which `text` may hold a credential token still open at its end.
-
-    Everything from the returned index is carried to the next chunk. Returns ``len(text)`` when the
-    tail is safe to emit whole. Conservative on purpose: holding back a few bytes that turn out to
-    be ordinary text only delays them until the next chunk or the final flush.
-    """
+    """Index where a credential token still open at the end of `text` begins; the tail is held back."""
     tail_start = max(0, len(text) - _SECRET_SCAN_TAIL)
     tail = text[tail_start:]
     best = len(text)
@@ -69,12 +64,7 @@ logger = get_logger(__name__)
 
 
 def accepts_kwarg(func: Callable[..., str], name: str) -> bool:
-    """Whether an injectable ``execute_tool`` supports the keyword ``name``.
-
-    ``execute_tool`` is replaceable (tests inject fakes / the pre-PR signature),
-    so forward a kwarg only when the callable declares it or takes ``**kwargs``
-    (passing it unconditionally would ``TypeError`` on an old signature).
-    """
+    """Injected execute_tool fakes may lack the kwarg, so it is passed only when declared or **kwargs."""
     try:
         params = inspect.signature(func).parameters
     except (TypeError, ValueError):
@@ -89,12 +79,7 @@ def accepts_output_callback(func: Callable[..., str]) -> bool:
 
 
 def search_images_kwargs(func: Callable[..., str], tool_name: str) -> dict[str, bool]:
-    """``{"search_images": True}`` when web_search should also return images, else ``{}``.
-
-    Read per call rather than per request so the Settings toggle applies to the
-    next search without a reload, and only for web_search so other tools never
-    pay the settings read.
-    """
+    """Read per call so the Settings toggle applies to the next search without a reload."""
     if tool_name != "web_search" or not accepts_kwarg(func, "search_images"):
         return {}
     from .search_images import search_images_enabled
@@ -120,15 +105,7 @@ _STREAM_CAPPED_NOTICE = "\n... (further live output not streamed)\n"
 
 
 def _drain_queue(q: "queue.Queue", sentinel: object, max_chars: int | None) -> tuple[str, bool]:
-    """Pull every currently-queued item, joining chunks in FIFO order.
-
-    With ``max_chars`` set, stop concatenating at the budget and discard the
-    remaining chunks in place, bounding peak allocation when a chatty tool queues
-    far more than the cap before the consumer wakes. The crossing chunk is sliced
-    to one char past the budget, enough for the caller's truncation to stay
-    byte-identical. Returns ``(joined_text, hit_sentinel)``; the surplus is still
-    scanned so completion is detected promptly.
-    """
+    """Joins queued chunks up to max_chars; the surplus is dropped but still scanned for the sentinel."""
     parts: list[str] = []
     total = 0
     dropping = False
@@ -162,20 +139,7 @@ def stream_tool_execution(
     heartbeat_interval_s: float = TOOL_HEARTBEAT_INTERVAL_S,
     poll_interval_s: float = _POLL_INTERVAL_S,
 ) -> Generator[dict, None, str]:
-    """Run ``invoke(output_callback)`` in a thread; yield live events; return the result.
-
-    ``invoke`` receives a thread-safe ``callable(str)`` it may call with
-    incremental output chunks (or ignore entirely). Exceptions raised by the
-    tool propagate to the caller unchanged after the worker thread finishes.
-
-    ``cancel_event`` is the request-level cancellation signal already handed to
-    the tool. If the consumer closes this generator early (an SSE disconnect
-    calls ``gen.close()``, raising ``GeneratorExit`` at a ``yield``), the wrapper
-    sets it so a cancel-observing tool stops, then joins the worker with a bounded
-    timeout. Set ONLY on that abnormal-exit path, never on a clean finish, because
-    the event is shared across a turn's tool calls and setting it early would
-    abort the next tool.
-    """
+    """cancel_event is set only on early close, not clean finish, because a turn's tool calls share it."""
     output_queue: queue.Queue[Any] = queue.Queue()
     done_sentinel = object()
     outcome: dict[str, Any] = {}
@@ -230,11 +194,8 @@ def stream_tool_execution(
         return text
 
     def _drain_and_drop() -> None:
-        """Discard the current and every queued chunk without concatenating.
-
-        Past the cap every chunk is dropped, so don't pay to build a combined
-        string only to drop it. Still detect completion so the loop can exit.
-        """
+        """Past the cap, drops chunks without joining them; completion is still detected so the loop
+        exits."""
         nonlocal finished
         while True:
             try:

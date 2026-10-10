@@ -27,12 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_dflash_architecture(path: str) -> bool:
-    """Whether a GGUF really is a DFlash sidecar, decided by its header.
-
-    ``dflash-`` is a filename convention an ordinary weight can satisfy, by accident or otherwise, and llama-server only discovers that at startup: it refuses the file as ``--model-draft`` and the load falls back to no speculation, after the bytes were already fetched. A DFlash sidecar declares ``general.architecture = dflash``, which no real weight does, so that is what settles it.
-
-    Kept here, beside the naming rules, because the local scan (detect_dflash_file) and the download / cache reuse in llama_cpp all have to apply it: a remote path that trusted the prefix alone would download gigabytes the launch then cannot use.
-    """
+    """Decided by the header's general.architecture = dflash; a dflash- filename can name a real weight."""
     return (read_gguf_architecture(str(path)) or "").lower() == "dflash"
 
 
@@ -41,14 +36,7 @@ def detect_dflash_file(
     search_root: Optional[str] = None,
     accept: Optional[Callable[[str], bool]] = None,
 ) -> Optional[str]:
-    """Find a DFlash sidecar for a local GGUF model.
-
-    Two things differ from detect_dspark_file, both forced by how DFlash is published. Root level only: ``dspark/`` is always a publisher's companion folder so that scan is safe, while ``dflash/`` is a family name a user picks for real weights (the reason llama_cpp._DRAFTER_DIR_KINDS leaves it out), so reaching into it would launch a weight copy as --model-draft. And no filename pairing: the published sidecar is ``dflash-kquant.gguf``, which names no model family at all, so _drafter_matches_weight would reject the one file this exists to find. The header is checked instead, since a DFlash sidecar declares ``general.architecture = dflash`` which no real weight does, and that also settles the adversarial case, a model merely CALLED DFlash (``Qwen3.6-35B-A3B-DFlash-Q4_K_M.gguf``) reporting its own architecture.
-
-    A sidecar that does name a family (``dflash-Qwen3.6-27B-BF16.gguf``, the scheme ggml-org uses) still wins over an unnamed one for the weight it matches, so a multi-model folder attaches the specific sidecar first.
-
-    ``accept`` filters candidates in preference order, so a caller with extra rules (a native lease) keeps scanning instead of treating the first rejection as no sidecar at all.
-    """
+    """Root level only; the header is checked, as the published dflash-kquant.gguf names no model family."""
 
     # Imported per call: model_config imports this module.
     from utils.models.model_config import _local_gguf_load_path

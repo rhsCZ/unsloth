@@ -137,12 +137,7 @@ def _escape_unprintable(text: str) -> str:
 
 
 def _echoable(exception: str) -> str:
-    """The traceback as lines that can never read as a log record, nor act on a terminal.
-    ``splitlines`` also splits on the other Unicode line breaks, so rejoining on line feeds
-    normalises every separator a message could smuggle in, including the CR the export worker's log
-    reader treats as a line break. Capped AFTER escaping: the field arrives bounded by
-    ``truncate_exception``, but escaping costs six characters each, so an all-C0 payload turns 16
-    KiB of bounded field into 98 KiB of echo."""
+    """Cap after escaping, since each escaped control character grows to six characters."""
     lines = [
         f"{_TRACEBACK_ECHO_PREFIX}{_escape_unprintable(part)}"
         for part in exception.rstrip().splitlines()
@@ -151,10 +146,7 @@ def _echoable(exception: str) -> str:
 
 
 def _cap_echoed_lines(lines: list[str], limit: int) -> str:
-    """Join the echoed lines within `limit` characters, keeping the head and the tail. Whole lines
-    where they fit, and the omission notice is prefixed too, so no emitted line can begin a JSON
-    value. A line too long for its budget is cut, not dropped: the cut can land inside an escape,
-    but the tail holds the exception type and message."""
+    """Cut an over-long line rather than drop it, so the tail with the exception type survives."""
     if limit <= 0:
         return "\n".join(lines)
     total = sum(len(line) + 1 for line in lines)
@@ -192,17 +184,7 @@ def _cap_echoed_lines(lines: list[str], limit: int) -> str:
 
 
 def with_readable_traceback(renderer):
-    """Wrap the JSON renderer so an exception is ALSO echoed as a real multi-line traceback on the
-    lines after the record. ~/.unsloth/studio/logs is a tee of stdout and stdout is JSON, so every
-    traceback reached its reader as one enormous line with escaped newlines: correct JSON,
-    unreadable prose, and that is how every crash anyone is asked to send in arrives. The JSON
-    record is emitted UNCHANGED, so record-by-record readers see what they always saw, and every
-    echoed line is prefixed so it cannot parse as a record. Non-JSON lines in that file are already
-    expected, since faulthandler dumps native stacks to the same handle. Returned as part of the
-    SAME string rather than written to another stream, so one ``print`` under ``PrintLogger``'s lock
-    keeps record and traceback adjacent and ordered: a processor runs BEFORE that print, and the
-    export worker reads stdout and stderr on separate pipes. JSON only. ConsoleRenderer
-    (development) already prints tracebacks as tracebacks."""
+    """Echo tracebacks as readable lines after the JSON record, prefixed so they never parse as records."""
 
     def _render(logger, method_name, event_dict):
         exception = event_dict.get("exception")
@@ -266,11 +248,7 @@ class _NullStream:
 
 
 def _silence_datasets_bar_output() -> None:
-    """Keep the datasets bar object, drop only what it writes. datasets exposes no env var, and its
-    disable_progress_bar() works by forcing tqdm(disable = True), which never registers the bar in
-    tqdm._instances. utils/datasets/chat_templates.py polls that set to publish "Applying chat
-    template" progress to the UI, so disabling the bar outright would freeze that status for a whole
-    long format job."""
+    """Drop only the datasets bar output; the bar stays in tqdm._instances for the chat template poller."""
     if "datasets" not in sys.modules:
         return
     try:
@@ -312,15 +290,7 @@ def _redirect_every_bar_output() -> None:
 
 
 def keep_progress_bars_countable() -> None:
-    """Keep the bar objects alive in a process that READS them, output dropped. core/training/worker.py
-    runs a poller over tqdm._instances to turn the Hub download bar and "Loading checkpoint shards"
-    into the UI's status line, which is the only progress a user sees between "Loading model..." and
-    the first step. A disabled bar is never registered in _instances, so the inherited
-    HF_HUB_DISABLE_PROGRESS_BARS default would leave that status frozen for a whole multi-GB
-    download. Only Unsloth's own default is undone; an operator who set the variable themselves
-    keeps getting no bars, and afterwards quiet_third_party_progress_bars() is a no-op in this
-    process. Call it BEFORE huggingface_hub is imported: hub reads the variable once into a module
-    constant, and enable_progress_bars() then refuses to override it."""
+    """Undo Unsloth's own HF_HUB_DISABLE_PROGRESS_BARS default before huggingface_hub is imported."""
     value = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
     if value is None or not _env_is_true(value):
         return
@@ -342,10 +312,7 @@ def quiet_bar_kwargs() -> dict:
 
 
 def allow_progress_bars() -> None:
-    """Undo an inherited Unsloth default so this process can draw progress bars. Called by the export
-    worker, whose stdout is forwarded to the export dialog and whose Hub upload bar is the only live
-    byte progress a long push_to_hub has. An operator-set HF_HUB_DISABLE_PROGRESS_BARS is left
-    alone."""
+    """Export worker needs its Hub upload bar, so undo Unsloth's HF_HUB_DISABLE_PROGRESS_BARS default."""
     global _BARS_RESTORED
     _BARS_RESTORED = True
     if os.environ.pop(_PROGRESS_BARS_DEFAULTED, None):
@@ -353,18 +320,7 @@ def allow_progress_bars() -> None:
 
 
 def quiet_third_party_progress_bars() -> None:
-    """Turn off the tqdm bars transformers / diffusers / huggingface_hub draw during an in-process
-    model load. A bar is written with carriage returns to a terminal, so in Unsloth's log it lands
-    as a burst of partial lines, and because tqdm writes to a different stream than the structlog
-    JSON writer with no line discipline between them, a bar can land mid-record and leave a line
-    that is no longer parseable JSON, losing the record for anything reading it record-by-record.
-    Nothing is lost by dropping them: download and load progress already reach the UI as real events
-    and via /api/inference/{images,video}/load-progress. The subprocess workers already do this by
-    exporting HF_HUB_DISABLE_PROGRESS_BARS; the server process, which loads the RAG embedder at boot
-    and every diffusers pipeline in-process, did not. Respects an explicit operator override, parsed
-    the way huggingface_hub parses it. Only modules that are ALREADY imported get the API call, so
-    this never forces a heavy import at logging-setup time, and never caches a Hub copy a subprocess
-    is about to replace with its transformers sidecar. `--verbose` skips it entirely."""
+    """Silence the transformers, diffusers and Hub tqdm bars that break JSON log lines; --verbose skips."""
     if _BARS_RESTORED:
         # The training worker reads bars from tqdm._instances, where a disabled bar never registers.
         return
@@ -435,10 +391,8 @@ class LogConfig:
         env: Optional[str] = None,
         quiet_progress_bars: bool = True,
     ) -> structlog.BoundLogger:
-        """Configure structured logging for the application. Args: service_name: Name of the service
-        for logging identification env: Environment (development/production), affects logging format
-        quiet_progress_bars: Turn third-party tqdm bars off. False for a process whose stdout is a
-        user-facing progress stream (the export worker)."""
+        """Configure structured logging; pass quiet_progress_bars=False for a process that streams
+        progress."""
         log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
         log_level = getattr(logging, log_level_name, logging.INFO)
 

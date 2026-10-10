@@ -42,15 +42,7 @@ _log_forward_gate = threading.Event()
 
 
 def _setup_log_capture(resp_queue: Any) -> None:
-    """Redirect fds 1 and 2 through pipes so every line printed by this worker
-    and any child it spawns is forwarded to the parent via resp_queue as
-    {"type": "log", ...} messages.
-
-    Must run BEFORE LogConfig.setup_logging and any ML imports, else library
-    handlers may capture the original stderr reference and bypass the pipe.
-    Lines are also echoed back to the original fds so the server console keeps
-    the full output even while ``_log_forward_gate`` is closed.
-    """
+    """Must run before LogConfig.setup_logging and ML imports, or handlers may bypass the pipe."""
 
     try:
         saved_out_fd = os.dup(1)
@@ -170,15 +162,7 @@ def _activate_transformers_version(model_name: str, hf_token: str | None = None)
 
 @contextlib.contextmanager
 def _offline_window_if_unreachable(step = "loading"):
-    """Force HF offline for a network-touching step (transformers version activation, the load
-    preflights that hit the Hub, or a local export) when the endpoint is unreachable, then
-    restore the prior env. Keeps a no-network export from hanging or failing on Hub calls, while
-    letting this persistent worker re-decide per operation once back online.
-
-    Post-ML-import (load preflights, exports), huggingface_hub has already read its in-process
-    offline constant and cached sessions, so env alone is too late: defer to the loader's
-    _force_hf_offline (env + in-process flags + session reset). Pre-import (activation),
-    huggingface_hub is not loaded yet, so setting the env vars suffices for its urllib probes."""
+    """Env vars are too late after ML import; defer to _force_hf_offline, which resets huggingface_hub."""
     saved: dict[str, str | None] = {}
     force_ctx = None
     try:
@@ -495,13 +479,7 @@ def _handle_cleanup(backend, resp_queue: Any) -> None:
 
 
 def run_export_process(*, cmd_queue: Any, resp_queue: Any, config: dict) -> None:
-    """Subprocess entrypoint. Persistent — runs command loop until shutdown.
-
-    Args:
-        cmd_queue: mp.Queue for receiving commands from parent.
-        resp_queue: mp.Queue for sending responses to parent.
-        config: Initial configuration dict with checkpoint_path.
-    """
+    """Subprocess entrypoint that blocks in the command loop until shutdown."""
     import queue as _queue
 
     # Install fd-level capture FIRST so child processes inherit the redirected fds.

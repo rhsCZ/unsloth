@@ -385,10 +385,7 @@ def convert_to_vlm_format(
     dataset_name = None,
     progress_callback = None,
 ):
-    """Convert simple {image, text} format to VLM messages format.
-
-    Returns a LIST of dicts with a 'messages' field, not a HuggingFace Dataset, to preserve PIL Images. For URL-based datasets, runs a 200-sample parallel probe first to estimate speed and failure rate via progress_callback, an optional callable(status_message=str).
-    """
+    """Returns a list, not a Dataset, so PIL Images are preserved; URL datasets are probed first."""
     from PIL import Image
     from .vlm_processing import generate_smart_vlm_instruction
 

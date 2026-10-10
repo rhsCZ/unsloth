@@ -440,11 +440,7 @@ for key, values in TEMPLATE_TO_MODEL_MAPPER.items():
 
 
 def is_gpt_oss_model_name(name: str) -> bool:
-    """Name-based check for gpt-oss / harmony models.
-
-    Used by the in-process backend and the parent orchestrator to detect
-    harmony models without an IPC round-trip.
-    """
+    """Name-only check, so the in-process backend and orchestrator detect harmony models without IPC."""
     name = (name or "").lower()
     if not name:
         return False

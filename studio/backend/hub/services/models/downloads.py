@@ -191,12 +191,7 @@ async def _audio_cpp_target(
     variant: Optional[str],
     hf_token: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
-    """``(repo, variant)`` a download of an audio.cpp umbrella folder row really works on.
-
-    Studio names such a model ``audio-cpp/audio.cpp-gguf/<Folder>`` with a quant, like any GGUF
-    repo; the job, its progress and its cancel run on the umbrella repo and the path-qualified key
-    the variant planner gives that file. Anything else passes through unchanged.
-    """
+    """audio.cpp umbrella folder rows run on the umbrella repo under a path-qualified variant key."""
     text = (repo_id or "").strip()
     if not text.lower().startswith("audio-cpp/audio.cpp-gguf/"):
         return text, variant
@@ -219,11 +214,7 @@ async def download_model_response(
     *,
     allow_ambient_token: bool = True,
 ):
-    """Start a background download for a HuggingFace model.
-
-    ``allow_ambient_token=False`` keeps the worker anonymous when the caller sent
-    no token, for repos named over the API rather than chosen here.
-    """
+    """With allow_ambient_token=False the worker stays anonymous for repos named over the API."""
     from core.training.account_jobs import account_is_retired
 
     if account_is_retired():
@@ -511,11 +502,7 @@ async def get_download_status_response(repo_id: str, gguf_variant: str = "") -> 
 
 
 async def get_active_downloads_response(repo_id: str = "") -> ActiveDownloadsResponse:
-    """Return every in-flight download for a repo in a single call.
-
-    Jobs of audio.cpp umbrella folder rows run on the umbrella repo; they are reported under the
-    row id and variant Studio started them with, and a row id filters to that row's jobs.
-    """
+    """Umbrella jobs report under their row id and variant; a row id filters to that row's jobs."""
     from core.inference.audio_cpp_models import folder_row_for_download, repo_of
 
     repo_id = repo_id.strip()
@@ -603,14 +590,7 @@ async def get_model_transport_status_response(
     gguf_variant: str = "",
     hf_token: Optional[str] = None,
 ) -> dict:
-    """Return last transport used for this repo + whether any partial blobs
-    exist + whether that partial supports byte-level resume.
-
-    ``resumable`` is True only when an HTTP partial exists. XET partials
-    are reported via ``has_partial`` but always have ``resumable=False``
-    because ``hf_xet`` rewrites the destination from scratch on every
-    call (network resume happens transparently via its chunk cache).
-    """
+    """Resumable only for HTTP partials; XET partials report has_partial, but hf_xet restarts them."""
     try:
         repo_id, gguf_variant = await _audio_cpp_target(repo_id, gguf_variant, hf_token)
     except HTTPException:
@@ -653,12 +633,7 @@ def _variant_manifest_decision(
     force_active: bool = False,
     active_root: Optional[Path] = None,
 ) -> "tuple[str, Optional[download_manifest.Manifest]]":
-    """The variant's manifest from whichever cache dir on disk holds it, and why.
-
-    The verdict is "found", "absent" (no cache on disk has one) or "refused" (one exists but applying it across the scanned caches would be wrong). Callers must tell those last two apart: a refusal decides that NO manifest may speak here, so re-reading one by another route walks back into the answer just rejected.
-
-    snapshot_progress reads manifests per scanned cache entry (entry.parent) while this resolver only ever asked the active cache, so the two could disagree about whether a manifest exists at all. When it lost, the expected file set came back empty and the hash filter dropped every blob in the shared blobs/ dir, a finished variant reporting 0 bytes. Active cache first so the common case is one lookup; every candidate found must agree before one is returned.
-    """
+    """Verdict is found, absent or refused; a refusal must not be re-read by another route."""
     # Not an early return: the active cache's manifest may be stale for a remembered cache.
     found: list[download_manifest.Manifest] = []
     active_manifest = download_manifest.read_manifest(
@@ -821,15 +796,7 @@ async def get_download_progress_response(
     hf_token: Optional[str] = None,
     mlx_load: bool = False,
 ) -> dict:
-    """Return download progress for any HuggingFace model repo.
-
-    Checks the local HF cache for completed blobs and in-progress
-    (.incomplete) downloads. Uses the caller-supplied expected total
-    when available; otherwise queries HF metadata and caches it.
-    Also returns ``cache_path``: the realpath of the snapshot directory
-    (or the cache repo root if no snapshot exists yet) so the UI can
-    show users where the weights actually live on disk.
-    """
+    """Progress from completed blobs and .incomplete files; uses the caller's expected total when given."""
     if account_access.managed_account():
         await asyncio.to_thread(account_access.require_download_progress_access, _registry, repo_id)
         hf_token = account_access.account_hf_token(hf_token)

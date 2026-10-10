@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""diffusers 0.40 LTX-2 pipelines must import on the pinned transformers 5.5.
-
-diffusers 0.40.0 and main import ``Gemma4UnifiedForConditionalGeneration`` at module level in every
-``diffusers.pipelines.ltx2.pipeline_ltx2*`` module, and that class only exists from transformers 5.10. On the Studio
-pin every LTX-2 / LTX-2.3 load failed with ``cannot import name 'Gemma4UnifiedForConditionalGeneration' from
-'transformers'``. These tests build a fake transformers and a fake lazy diffusers with the same shape (including
-transformers replacing its own ``sys.modules`` entry when ``processing_utils`` is first imported) so they run
-hermetically on CPU without either package installed.
-"""
+"""diffusers 0.40 LTX-2 imports need transformers 5.10 at module level; tests fake both packages."""
 
 from __future__ import annotations
 

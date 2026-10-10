@@ -28,10 +28,7 @@ def _settled(
     expected: int = 1,
     timeout: float = 10.0,
 ) -> int:
-    """Wait out an asynchronous close.
-
-    A discarded session is closed by the cleanup worker rather than on the
-    request thread, so its close lands just after the call returns."""
+    """Discarded sessions close on the cleanup worker, so a check must wait for the close to land."""
     deadline = time.monotonic() + timeout
     while client.exited < expected and time.monotonic() < deadline:
         time.sleep(0.005)
@@ -887,13 +884,7 @@ def test_close_mcp_sessions_drops_http_session(fake_clients):
 
 
 def test_dead_http_session_recovers(monkeypatch, fake_clients):
-    """An HTTP server that dropped the session while it sat idle is replaced
-    before the next tool call, not after it fails.
-
-    Deliberately not driven through FakeClient.dead: _is_session_dead is a
-    StdioTransport internal, and no real HTTP transport has ever exposed it (see
-    _transport_dead), so faking it here would test a mechanism that cannot fire
-    in production. The idle recheck is what actually catches this."""
+    """The idle recheck, not the dead-session flag, catches an HTTP session the server dropped."""
     monkeypatch.setattr(mcp_client, "_HTTP_IDLE_RECHECK", 0.0)
     assert call_tool_sync(HTTP_URL, None, "t", {}, scope = "chat") == "call-1"
     fake_clients[0].probe_error = True

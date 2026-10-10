@@ -1,17 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""What happens to an install that predates this denylist.
-
-Widening ``_DENYLIST_GROUPS`` is the one change here that can act on data already on
-disk: an override saved before a flag was denied still holds it. Every path that
-reads such an entry is pinned here, because the failure mode is a user who never
-typed the flag being unable to load or to save.
-
-The rule the suite encodes: an argument the CALLER just sent is refused loudly (400,
-naming the flag), and an argument merely CARRIED OVER from storage is dropped
-quietly. The first is a mistake being made now; the second is history.
-"""
+"""A flag the caller sends is refused with a 400; one carried over from storage is dropped quietly."""
 
 from __future__ import annotations
 
@@ -163,14 +153,7 @@ def _inherit_with_ctx_flag(monkeypatch, stored, fields_set, max_seq_length):
 
 
 def test_a_matching_inherited_ctx_flag_survives_an_apply(monkeypatch):
-    """The opt-in has to be durable, or the PR's own fix undoes itself.
-
-    An Apply that re-sends the SAME Context Length is not a fresh save that the
-    stored flag would outrank -- it is the same decision, and stripping it here
-    relaunched at the VRAM-fit estimate while the stored override still said
-    otherwise. Mirrors model_override_load_kwargs on the API auto-switch path;
-    both ask matches_explicit_ctx_override so the two cannot drift.
-    """
+    """A re-sent matching ctx flag must survive Apply, or relaunch ignores the stored override."""
     stored = ["--ctx-size", "100352", "--top-k", "40"]
 
     assert _inherit_with_ctx_flag(monkeypatch, stored, {"max_seq_length"}, 100352) == [

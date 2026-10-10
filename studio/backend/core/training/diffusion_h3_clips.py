@@ -81,11 +81,7 @@ def h3_audio_latent_count(num_frames: int) -> int:
 
 
 def h3_audio_sample_count(num_frames: int) -> int:
-    """Waveform samples per channel the audio VAE must be handed for ``num_frames`` frames.
-
-    The audio VAE hops 800 samples (32 kHz / 40 latents per second) and right-pads a short
-    tail, so handing it exactly ``latents * hop`` samples produces exactly the latent count the
-    packed layout reserves rows for -- no pad, no truncation."""
+    """Latents times hop samples: the audio VAE's latent count then matches the reserved rows exactly."""
     hop = H3_AUDIO_SAMPLING_RATE // H3_AUDIO_LATENTS_PER_SECOND
     return h3_audio_latent_count(num_frames) * hop
 
@@ -97,10 +93,7 @@ def h3_rows_per_latent_frame(latent_height: int, latent_width: int) -> int:
 def h3_packed_sequence_length(
     num_text_tokens: int, num_frames: int, height: int, width: int
 ) -> int:
-    """Rows of the packed ``[text | audio | video]`` sequence for one training sample.
-
-    The trainer builds no conditioning rows (it trains the ``t2va`` layout), so this is the
-    whole sequence and the figure the attention cost is quadratic in."""
+    """Whole packed sequence for the t2va layout, the figure attention cost is quadratic in."""
     latent_frames = h3_video_latent_frames(num_frames)
     rows_per_frame = h3_rows_per_latent_frame(
         height // H3_SPATIAL_COMPRESSION, width // H3_SPATIAL_COMPRESSION
@@ -115,14 +108,7 @@ def h3_train_canvas(
     short_edge: int = H3_CANVAS_SHORT_EDGE,
     max_pixels: Optional[int] = None,
 ) -> tuple[int, int]:
-    """MiniMax-H3's canvas rule, as ``(width, height)``.
-
-    Identical arithmetic to the pipeline's ``resolve_canvas_size`` (which returns
-    ``(height, width)``), re-expressed here so the trainer can size a dataset before any
-    diffusers import. ``short_edge`` is the run's ``resolution``; the area cap scales with it
-    so a smaller training canvas keeps the released aspect budget rather than the released
-    pixel count.
-    """
+    """Mirrors resolve_canvas_size without importing diffusers, so a dataset can be sized early."""
     if aspect_width <= 0 or aspect_height <= 0:
         raise ValueError(f"The aspect ratio must be positive, got {aspect_width}:{aspect_height}.")
     ratio = aspect_width / aspect_height
@@ -154,17 +140,7 @@ def discover_clip_caption_pairs(
     instance_prompt: Optional[str] = None,
     caption_column: str = "text",
 ) -> list[tuple[str, str]]:
-    """Resolve ``(clip_path, caption)`` pairs from a dataset directory.
-
-    The caption rules are exactly ``discover_image_caption_pairs``' -- a per-clip ``<stem>.txt``
-    / ``<stem>.caption`` sidecar wins, then a ``metadata.jsonl`` / ``captions.jsonl`` row keyed
-    by ``file_name`` (or ``video`` / ``image`` / ``file``) carrying ``caption_column``, then the
-    dreambooth ``instance_prompt`` -- so a user who has captioned an image dataset already knows
-    this layout. Only the file extensions differ.
-
-    An empty sidecar is the same deliberate tombstone it is for images: it suppresses the
-    metadata caption and leaves the clip uncaptioned, so the ``instance_prompt`` fallback applies.
-    """
+    """Caption rules match discover_image_caption_pairs; an empty sidecar suppresses metadata captions."""
     root = Path(data_dir).expanduser()
     if not root.is_dir():
         raise FileNotFoundError(f"data_dir is not a directory: {data_dir}")
@@ -236,25 +212,7 @@ def decode_clip(
     height: int,
     on_note: Optional[Callable[[str], None]] = None,
 ) -> tuple[Any, Any]:
-    """Decode one training clip to ``(frames, waveform)``.
-
-    ``frames`` is a uint8 numpy array of shape ``(num_frames, height, width, 3)`` resampled onto
-    MiniMax-H3's own 24 fps by whole-frame drop/duplicate -- the same selection the inference
-    reference-video decoder makes, so a clip reaches the model on the model's clock however it
-    was authored. Each frame is cover-cropped to the canvas aspect ratio and then resized, so
-    nothing is letterboxed and nothing is stretched.
-
-    The window is the FIRST ``num_frames`` of the source, and the latents are cached once for
-    the run, so a longer clip trains only its opening and its caption is paired with that. That
-    is the dataset contract -- pre-trim to the training duration -- but it used to be silent,
-    which is how a caption describing a whole scene ended up on its first second. ``on_note``
-    is called once per over-long clip with the numbers, so the run reports it.
-
-    ``waveform`` is a float32 array of shape ``(2, h3_audio_sample_count(num_frames))`` at
-    32 kHz. A mono source is duplicated to both channels; a clip with **no** audio track is
-    refused rather than silently trained as silence, because the audio rows are in the objective
-    and a silent target teaches the model to stop generating sound.
-    """
+    """Refuses a clip with no audio track, since silence would teach the model to stop making sound."""
     import av
     import numpy as np
     from PIL import Image
@@ -313,19 +271,7 @@ def decode_clip(
 
 
 def display_rotation_degrees(frame: Any, stream: Any) -> int:
-    """The clip's display rotation, one of 0/90/180/270, as a PLAYER would apply it.
-
-    PyAV hands back the CODED frame: unlike the ffmpeg CLI, ``to_image()`` and ``to_ndarray()``
-    do not honour the display matrix, and PyAV declines to do so by design. A phone clip shot
-    in portrait is stored landscape with a 90 degree matrix, so without this the trainer caches
-    sideways frames, on a canvas taken from the equally sideways coded size, and cover-crops
-    away the sides of the real picture.
-
-    The angle is FFmpeg's own: ``av_display_rotation_get`` on the 16.16 fixed-point 3x3, then
-    ``theta = -round(...) mod 360``, which is what ffmpeg's autorotate applies. Returns 0 for a
-    clip with no matrix, and for any PyAV too old to expose one -- previous behaviour, never an
-    exception, since a decode must not fail over orientation metadata.
-    """
+    """PyAV ignores the display matrix, so a portrait phone clip would be cached sideways."""
     import math
     import struct
 
@@ -384,19 +330,7 @@ def _cover_resize(image: Any, width: int, height: int, Image: Any) -> Any:
 
 
 def _decode_clip_audio(path: Any, target_samples: int, av: Any, np: Any) -> Any:
-    """The clip's soundtrack as float32 ``(2, target_samples)`` at 32 kHz.
-
-    Resampled by PyAV to the audio VAE's own rate and stereo layout, then trimmed or
-    zero-padded to exactly the sample count the packed layout reserves audio rows for. A short
-    tail is padded rather than refused: the video stream is the authority on the clip's length
-    and containers routinely end their audio a few milliseconds early.
-
-    That tolerance is bounded. Padding a materially short soundtrack out to the full window
-    trains the shared adapter on a target that is mostly silence, which is the exact failure the
-    "must have sound" check above exists to prevent -- and a stream carrying a fraction of a
-    second passed it, because the check only asks whether the container declares one.
-    ``_MAX_AUDIO_PAD_FRACTION`` is the container-tail allowance, not an augmentation budget.
-    """
+    """Pads a short audio tail only up to _MAX_AUDIO_PAD_FRACTION, so the target is not mostly silence."""
     resampler = av.AudioResampler(format = "flt", layout = "stereo", rate = H3_AUDIO_SAMPLING_RATE)
     chunks = []
     have = 0

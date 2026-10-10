@@ -190,12 +190,7 @@ def get_stored_embedding_model() -> str | None:
 
 
 def _get_stored_state() -> _StoredState:
-    """Read the override and its resolved artifact association as one snapshot.
-
-    The resolution is one JSON value so its model/repo/backend can never be
-    torn. The legacy individual fields are read in the same SQL statement for
-    compatibility with builds from before the atomic record existed.
-    """
+    """Reads the override and its resolution as one JSON value, so model, repo and backend cannot tear."""
     key = (current_account_id(), EMBEDDING_RESOLUTION_SETTING_KEY)
     now = time.monotonic()
     with _lock:

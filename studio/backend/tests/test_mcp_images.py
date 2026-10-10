@@ -540,13 +540,7 @@ def test_an_unnamed_tool_result_keeps_working():
 
 
 def test_stripping_is_unconditional_and_only_promotion_is_gated():
-    """Two different rules, and conflating them breaks one or the other.
-
-    The suffix runs to megabytes of base64, so it comes off every model-facing
-    text path whoever produced it -- that is a context-window property, and
-    test_tool_result_fits_window depends on it. Provenance answers a separate
-    question: whether those bytes are trusted enough to become IMAGE input.
-    """
+    """Stripping is unconditional; only trusted provenance decides whether an image promotes to input."""
     from core.inference.mcp_images import promote_history
     from core.inference.tool_loop_controller import (
         ToolCallCompletion,
@@ -863,10 +857,7 @@ def test_pixels_stay_history_first_when_the_attachment_is_newest():
 
 
 def test_the_vision_streamer_resolves_markers_for_a_replay_only_turn():
-    """The streamer marks its markers resolved either way, so gating them on the
-    singular attachment resolves a replay-only turn to none AND suppresses the
-    fallback detection -- native reasoning output then reaches the user as answer
-    text. Route classification keys off every image; generation has to as well."""
+    """Resolve markers for replay-only turns too, or native reasoning output leaks into the answer text."""
     import inspect
 
     from core.inference import inference as inference_module
@@ -1234,10 +1225,7 @@ def test_the_note_never_claims_the_survivors_are_the_first_ones():
 
 
 def test_a_parallel_batch_shares_one_decode_attempt_budget():
-    """room falls only on a SUCCESSFUL decode, so results that fail late in Pillow
-    never close the loop. Per result the allowance reset, and a 25-call turn of
-    malformed results bought 25 x 8 decodes of attacker-chosen rasters against a
-    conversation cap of eight pictures."""
+    """Decode attempts share one budget across a parallel batch, so malformed results cannot multiply it."""
     attempts: list = []
     original = mcp_images._png_data_url
     mcp_images._png_data_url = lambda data: (attempts.append(data), None)[1]
@@ -1326,10 +1314,7 @@ def test_a_transparent_screenshot_is_composited_rather_than_flattened_to_black()
 
 
 def test_replay_leaves_room_for_the_pictures_the_caller_attached():
-    """Providers apply their own per-request cap in document order, and promotion
-    PREPENDS the replay to the user turn. On Gemini (8 images, later ones dropped
-    silently) eight replayed screenshots evicted the picture the current question
-    was about."""
+    """Replay must leave image-cap room for the caller's own attachments; providers drop later images."""
     attachment = {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64," + _png()},
@@ -1379,10 +1364,7 @@ def test_replay_leaves_room_for_the_pictures_the_caller_attached():
 
 
 def test_the_replay_trim_runs_before_the_attachment_marker_exists():
-    """The trim drops by marker ORDINAL against a payload list holding replay only.
-    With the attachment's turn AHEAD of the replayed pictures, running it after the
-    mark deleted ordinal 0 -- the attachment's own marker -- while charging replay
-    payload 0, and every later pixel shifted onto the marker before it."""
+    """Trim replayed pictures before the attachment marker exists, since trimming is by marker ordinal."""
 
     def _scene():
         return [
@@ -1464,10 +1446,7 @@ def test_a_live_result_leaves_room_for_the_pictures_the_caller_attached():
 
 
 def test_the_local_loop_keeps_its_own_allowance_beside_an_attachment():
-    """The reservation is the EXTERNAL loop's, asked for rather than assumed: a
-    remote provider counts images per request, llama-server answers to a context
-    window. Reserving here would let six attachments squeeze the tool results the
-    model asked for down to two."""
+    """Each loop reserves its own image allowance; reserving here would starve the tool results."""
     attachments = [
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_png()}"}}
         for _ in range(6)
@@ -1497,10 +1476,7 @@ def test_the_local_loop_keeps_its_own_allowance_beside_an_attachment():
 
 
 def test_an_unnamed_tool_result_is_judged_by_the_call_that_made_it():
-    """role="tool" carries no name in plain OpenAI (the field is optional) or in
-    anything translated from Anthropic, and an absent name is read as legacy MCP
-    history that may be trusted -- so any client tool whose output merely ends in a
-    valid envelope was promoted as image input."""
+    """An unnamed tool result is judged by its originating call, not trusted as legacy MCP history."""
     for tool, promotes in (("read_file", False), ("mcp__shot__capture", True)):
         history = [
             {
@@ -1554,10 +1530,7 @@ def test_the_note_reports_what_the_tool_returned_not_what_admission_allowed():
 
 
 def test_the_caller_attachment_is_composited_on_the_way_to_the_worker():
-    """The server-tool path serialises the attachment to base64 for the worker. Plain
-    convert("RGB") kept whatever colour sat under the alpha, so a transparent
-    attachment whose background was never painted arrived black -- with its dark text
-    gone. The ordinary IPC path carries the PNG's alpha through untouched."""
+    """Attachments are composited before the worker, since plain RGB conversion turns transparency black."""
     import base64 as _b64
     import io as _io
 
@@ -1754,10 +1727,7 @@ def test_a_detached_image_turn_is_synthetic_too():
 
 
 def test_a_local_placeholder_turn_carries_one_picture():
-    """The route refuses a caller message with more than one image on every non-GGUF
-    target -- "This model takes one image per message" -- and no processor is known
-    to take several. Promotion was building exactly that shape, so a processor with
-    the limit failed mid-generation after the tool had already run."""
+    """Non-GGUF targets take one image per message; promotion must not build multi-image turns for them."""
     results = [[_image() for _ in range(4)], [_image() for _ in range(4)]]
 
     payloads = mcp_images.png_payloads_per_result(results)
@@ -1828,11 +1798,7 @@ def test_the_external_loop_detaches_the_note_for_a_multi_result_batch():
 
 
 def test_the_attachment_displaces_a_replay_marker_merged_into_its_turn():
-    """A replayed picture merges its marker into the following user turn; if that turn
-    then owns the attachment, the top-up added a second marker. Non-GGUF messages
-    take one image, so that shape failed at render, past the request validation. The
-    attachment wins, and the displaced payload drops rather than sliding onto the
-    next marker."""
+    """A replayed picture merged into the attachment's turn is dropped, so non-GGUF gets one marker."""
     replay = {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "and this?"}]}
     conversation = [{"role": "user", "content": "first"}, replay]
     prior = mcp_images.image_marker_parts(conversation)
@@ -2132,10 +2098,7 @@ def test_the_client_tool_rebuild_keeps_one_picture_per_turn(monkeypatch):
 
 
 def test_the_client_tool_rebuild_leaves_the_attachment_to_the_backend(monkeypatch):
-    """One replayed PNG and a new attachment on the question: no synthetic turn is
-    inserted beside the question (two user turns in a row), the replay keeps its
-    own marker, and the attachment's marker is the backend's to place by ordinal
-    from a snapshot that holds only the replay's."""
+    """Client-tool rebuild adds no synthetic turn; the backend places the attachment's marker by ordinal."""
     attachment = f"data:image/png;base64,{_png()}"
     question = {
         "role": "user",
@@ -2270,10 +2233,7 @@ def test_the_catalog_predicate_never_parses_the_envelope():
 
 
 def test_the_client_tool_rebuild_decodes_each_picture_once(monkeypatch):
-    """The route promotes the history for the server-tool path and again, from the
-    raw payload, for the client-tool rebuild. One request's decodes are shared, so a
-    retained raster is decoded once, not once per promotion. Two DIFFERENT pictures:
-    the cache is keyed by payload, and identical bytes would decode once anyway."""
+    """Each picture is decoded once per request, even though history is promoted on two paths."""
     decoded: list = []
     original = mcp_images._png_data_url
 
@@ -2542,10 +2502,7 @@ def test_a_merge_into_a_trailing_nudge_still_says_where_the_pictures_came_from()
 
 
 def test_a_replay_merged_into_the_question_still_says_where_the_pictures_came_from():
-    """Promotion merges a batch into the user turn that follows it (two user turns in a
-    row is what a strict template rejects). Merged bare, the pictures read as ones the
-    user attached; the note names the tool, detached wording when another tool's result
-    sat between. And the question stays the user's turn for the attachment's ordinal."""
+    """Replayed pictures merged into the question must name their source tool, not read as user-attached."""
     history = [
         {"role": "tool", "name": "mcp__s__shot", "content": _envelope("[1]", _image())},
         {"role": "tool", "name": "web_search", "content": "three results"},

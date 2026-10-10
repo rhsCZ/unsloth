@@ -89,12 +89,8 @@ class LlamaServerStatsLogger:
 
     @staticmethod
     def _prompt_rate(base, tokens, seconds):
-        """Prompt tokens per second over the engine's OWN measure of the time they took.
-
-        Prompt only: add_prompt(n, n, t_us) pairs those totals, while metrics_on_prediction()
-        passes n_gen and n_gen - 1. The baseline is held until both move, since /metrics
-        renders six significant digits and one can cross a boundary a scrape before the other.
-        """
+        """Baseline held until both move: /metrics rounds to six digits, so one can cross a boundary
+        first."""
         if base is None or tokens < base[0] or seconds < base[1]:
             return 0.0, (tokens, seconds)
         d_tokens, d_seconds = tokens - base[0], seconds - base[1]
@@ -103,21 +99,8 @@ class LlamaServerStatsLogger:
         return d_tokens / d_seconds, (tokens, seconds)
 
     def _stalled_for(self, now, running, decode_calls):
-        """Seconds the engine has held a slot without calling llama_decode().
-
-        Progress is n_decode_total, NOT the token counters. llama-server updates
-        tokens_predicted_total once per generation, from callback_on_reset when
-        the slot is released, and flushes prompt_tokens_total only on a decode
-        that produced output. Both therefore sit still for the whole of a healthy
-        long prefill and a healthy long decode, so treating them as a liveness
-        signal would flag every slow generation. n_decode_total increments on
-        every llama_decode() call, which is the thing that actually stops when
-        the engine is wedged.
-
-        Known blind spot: the counter's own help text excludes speculative and
-        multimodal decoding, so a long image or audio encode can look static.
-        That is one reason this only ever reports and never cancels anything.
-        """
+        """Progress is n_decode_total, not token counters, which stall during healthy prefill and
+        decode too."""
         if not running or decode_calls != self._last_decode:
             self._last_decode = decode_calls
             self._stall_since = now if running else None
@@ -129,16 +112,7 @@ class LlamaServerStatsLogger:
         return now - self._stall_since
 
     def _report_stall(self, running, waiting, stalled_for, decode_calls):
-        """Log only. Cancelling a generation on this evidence is not safe.
-
-        A held slot with no decode calls is the signature of a wedge, but the
-        scrape cannot prove the engine is not about to resume, and it cannot see
-        which of several in-flight generations owns the slot. Studio reaps a run
-        that stops making progress from its own token stream instead, where the
-        signal is per token and unambiguous. This exists so a wedge is visible in
-        the log at all: the incident that prompted it ran 22 minutes without a
-        single line above info.
-        """
+        """Log only: a scrape cannot prove the engine will not resume, so cancelling it is unsafe."""
         self._stall_reported = True
         self._log.warning(
             "engine_no_decode_progress",
@@ -218,12 +192,7 @@ _MAX_ENV_SECONDS = min(7.0 * 24.0 * 60.0 * 60.0, threading.TIMEOUT_MAX)
 
 
 def _env_float(name, default, logger):
-    """Seconds from the environment, rejecting anything that would silently do nothing.
-
-    float() accepts non-finite text, and both spellings disable the reporting they were
-    set to configure: max() drops nan so the stall line never arms, and an elapsed time
-    can never reach inf.
-    """
+    """Rejects non-finite values, which would silently disable the stall and elapsed reporting."""
     raw = os.environ.get(name)
     if raw is None:
         return default

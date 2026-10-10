@@ -217,12 +217,7 @@ class SttLanguageError(ValueError):
 
 
 def _close_connection_on_cancel(connection, cancel_event, done_event) -> None:
-    """Abandon one blocked sidecar HTTP request, leaving its server resident.
-
-    Shutting the socket unblocks the read without touching the process, so a cancelled
-    dictation does not cost the next one a server relaunch and model load. Shared by the
-    whisper.cpp and llama.cpp sidecars.
-    """
+    """Shuts the socket rather than the process, so a cancelled dictation keeps its server resident."""
     while not done_event.is_set():
         if not cancel_event.wait(0.05):
             continue
@@ -441,11 +436,7 @@ def _read_revision_record(repo: str) -> Optional[str]:
 
 
 def _fallback_revisions(repo: str, *, hub_cache: Optional[Path] = None) -> list[str]:
-    """Cached commits to try when no revision record survives, newest first.
-
-    Pinned downloads never write refs/main, so without this a lost record would
-    hide an already downloaded model and re-download it on every launch.
-    """
+    """Pinned downloads never write refs/main, so a lost revision record would hide a downloaded model."""
     repo_cache = _repo_cache_dir(repo, hub_cache = hub_cache)
     candidates: list[str] = []
     try:
@@ -631,13 +622,7 @@ def _is_missing_local_model_error(exc: BaseException) -> bool:
 
 
 def _snapshot_is_complete(snapshot: Path) -> bool:
-    """True when a cached snapshot holds every file loading needs.
-
-    An aborted download can leave only metadata behind, and an offline lookup
-    cannot know the repo's full file list, so verify config, preprocessor,
-    tokenizer, and weights directly. is_file() follows cache symlinks, so a
-    link from an interrupted blob download does not count.
-    """
+    """An aborted download leaves metadata only, so every file is checked; dangling links do not count."""
     index = snapshot / _STT_SAFETENSORS_INDEX
     if index.is_file():
         # Every shard must be safetensors: an index naming .bin shards would still pickle-load them.
@@ -732,10 +717,7 @@ class _SnapshotDownloadState:
         model_id: Optional[str] = None,
         download_id: Optional[str] = None,
     ) -> bool:
-        """Stop an in-flight download. False when none was running.
-
-        Partial blobs stay cached, so a restart resumes from them.
-        """
+        """Partial blobs stay cached, so a restarted download resumes from them."""
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 return False
@@ -761,12 +743,7 @@ class _SnapshotDownloadState:
         selected_files: Optional[tuple[_SelectedHubFile, ...]] = None,
         total: Optional[int] = None,
     ) -> Optional[int]:
-        """Count selected files across partial, blob, and snapshot locations.
-
-        status() captures these under the lock and passes them in: reading them
-        here would let a run that starts mid-probe pair its bytes with the total
-        of the run that just ended.
-        """
+        """Values come from status() under the lock, so a run starting mid-probe cannot mix totals."""
         try:
             repo = repo if repo is not None else self._repo
             revision = revision if revision is not None else self._revision
@@ -978,12 +955,7 @@ def _training_active() -> bool:
 
 
 def _clear_device_cache(device: Optional[str], collect: bool = True) -> None:
-    """Drop the unreferenced model, then hand its blocks back to the allocator.
-
-    ``collect = False`` for a caller that has just collected and dropped nothing since: a full
-    collection is not free (a long-lived backend reaches millions of tracked objects, where one
-    pass costs about a second), and the cancel path below runs this twice in a row while it
-    holds the model lock that ``wait_for_load_to_settle`` waits on."""
+    """collect=False skips a full gc pass, which costs about a second on a long-lived backend."""
     if collect:
         gc.collect()
     try:
@@ -1011,17 +983,7 @@ def _reported_device(device: Optional[str]) -> Optional[str]:
 
 
 def _pick_device(preference: Optional[str] = None):
-    """Return (device, torch_dtype) for the Whisper model.
-
-    CUDA uses float16. MPS and CPU use float32: Whisper's decoder is unstable in
-    float16 on MPS and degenerates into repeated tokens.
-
-    ``preference`` is the user's choice from ``core.inference.audio_device``.
-    ``cpu`` short-circuits detection entirely -- that is the whole point of the
-    option, so it must hold even on a machine with a working accelerator. ``gpu``
-    and ``auto`` both detect: preferring the GPU is what detection already does,
-    and the caller's CPU retry still covers a card that cannot take the model.
-    """
+    """MPS and CPU use float32: Whisper's fp16 decoder degenerates into repeated tokens on MPS."""
     from core.inference.audio_device import audio_device_forces_cpu
     try:
         import torch
@@ -1045,23 +1007,12 @@ def _pick_device(preference: Optional[str] = None):
 
 
 def _dtype_name(dtype) -> str:
-    """Name a dtype for the worker command: torch.float16 becomes float16.
-
-    Takes the plain strings tests use as readily as a real torch dtype, so the
-    command carries no torch object across the process boundary.
-    """
+    """Returns a plain string so the worker command carries no torch object across the process boundary."""
     return str(dtype).rsplit(".", 1)[-1]
 
 
 def _engine_is_alive(engine) -> bool:
-    """False only for a worker whose process is confirmed dead.
-
-    Anything without a liveness check counts as live, so a caller holding a
-    plain object (tests, or a future in-process engine) is unaffected. So does
-    a probe that cannot answer: absence of liveness evidence is not evidence
-    that the accelerator context was released, and reporting nothing resident
-    is what lets training be admitted against memory that is not free.
-    """
+    """Only a confirmed-dead worker reads as not alive; a probe that cannot answer counts as alive."""
     is_alive = getattr(engine, "is_alive", None)
     if is_alive is None:
         return True
@@ -1073,28 +1024,12 @@ def _engine_is_alive(engine) -> bool:
 
 
 def _engine_survived_kill(engine) -> bool:
-    """Whether a handle says its own child outlived terminate and kill.
-
-    close() reports that to its caller, but a cancelled or timed-out command
-    closes the worker from inside the handle and raises over the answer, so the
-    only record that reaches here is the one the handle keeps on itself.
-    """
+    """A cancelled command raises over close()'s answer, so the handle's own flag is the only record."""
     return bool(getattr(engine, "survived_kill", False))
 
 
 def _close_engine(engine) -> bool:
-    """End the worker behind an engine handle, if it has one.
-
-    Ending the worker is what returns its accelerator context; dropping the handle and emptying the
-    cache cannot. A plain object (tests, or a future in-process engine) has no close and needs none.
-
-    False when the engine says so itself, which WhisperWorker does for a child that outlived
-    terminate and kill and is therefore still holding the memory this call was made to release, and
-    False when close() raises out of a process operation: nothing was confirmed dead, so the handle
-    has to be kept rather than the memory advertised as free. A close that raised over a child
-    already gone still counts as released, so bookkeeping that failed after the death cannot wedge
-    every later load.
-    """
+    """False if the child survived, so its memory is not advertised as free; a dead child is released."""
     close = getattr(engine, "close", None)
     if close is None:
         return True
@@ -1117,16 +1052,7 @@ def _av_open(av, source):
 
 
 def _decode_audio_bounded(audio: bytes, cancel_event = None):
-    """Decode to 16 kHz mono PCM without buffering unbounded audio.
-
-    A small, highly-compressed upload can expand far past the encoded request
-    limit once decoded, so decode frame-by-frame and enforce the sample cap as
-    frames arrive, then hand the array straight to Whisper.
-
-    ``cancel_event`` is polled inside the frame loop: checking only after the decode
-    returned let an abandoned upload run to EOF or the sample cap, and several of them
-    could do that at once.
-    """
+    """Enforces the sample cap frame by frame, since a small compressed upload can expand far past it."""
     try:
         import av
         import numpy as np
@@ -1252,12 +1178,7 @@ class WhisperSttSidecar:
             return True
 
     def wait_for_load_to_settle(self) -> None:
-        """Block until any in-flight load() has exited and freed its memory.
-
-        load() holds self._lock throughout, including the from_pretrained()/
-        .to(device) allocation and cancel cleanup, so acquiring the lock here
-        waits for that memory to be freed.
-        """
+        """Taking _lock waits out load(), which holds it through allocation and cancel cleanup."""
         with self._lock:
             pass
 
@@ -1314,19 +1235,8 @@ class WhisperSttSidecar:
             self._release_engine_locked()
 
     def _release_engine_locked(self) -> bool:
-        """Release the resident engine. False if its child outlived the kill.
-
-        Such a child still holds its accelerator memory, so forgetting it here would report the
-        model unloaded and let training be admitted against memory that is not free. Keep it
-        resident instead and rearm the idle timer, so the release is tried again rather than
-        stranded.
-
-        The fields are cleared only once the worker is confirmed dead: close() can take the full
-        shutdown wait and loaded_model reads the fields without this lock, so clearing them first
-        would report nothing resident for that whole window. A worker kept this way is flagged a
-        survivor, held for its memory and not for its answers, so a later dictation loads one of its
-        own rather than waiting out the command timeout on it.
-        """
+        """Clears the fields only once the worker is confirmed dead; a survivor stays resident and
+        is retried."""
         self._cancel_idle_unload_locked()
         engine = self._engine
         device = self._device
@@ -1351,15 +1261,7 @@ class WhisperSttSidecar:
         model_id: str,
         device: Optional[str] = None,
     ) -> None:
-        """Hold an engine whose child outlived its close, so it stays accounted.
-
-        Its device is the one the child reports, which after a CPU retry is not the one this load
-        started on; a child that never finished its load reports none, so the device the attempt was
-        made on stands in. The idle timer is rearmed so the release is tried again. Held for its
-        memory, not its answers: it is flagged so a later dictation loads a worker of its own
-        instead of being handed one that is wedged, which would cost the caller the whole command
-        timeout.
-        """
+        """Held for its memory only: the next dictation loads a fresh worker rather than this wedged one."""
         self._engine = engine
         self._model_id = model_id
         self._survivor = True
@@ -1372,14 +1274,8 @@ class WhisperSttSidecar:
         self._schedule_idle_unload_locked()
 
     def _is_survivor_locked(self) -> bool:
-        """Whether the resident engine is held for its memory, not its answers.
-
-        Folds in the flag the handle raised on itself: a command that was cancelled or timed out
-        closes the worker from inside the handle, so close()'s False never reaches the sidecar and
-        this is the only way it learns the child outlived both signals. Handing such a worker to the
-        next dictation would spend the whole command timeout on it under the model lock; refusing
-        lets the idle timer retry the kill instead.
-        """
+        """Also reads the handle's own flag, since a cancelled command's close() result never
+        reaches this."""
         if self._survivor:
             return True
         if self._engine is not None and _engine_survived_kill(self._engine):
@@ -1394,21 +1290,7 @@ class WhisperSttSidecar:
             self._release_engine_locked()
 
     def _build_model(self, snapshot_path: str, device: str, dtype, cancel_event: threading.Event):
-        """Start a worker process holding this model and return its handle.
-
-        Out of process because an accelerator context is never given back while the process holding
-        it lives, so an in-process load made the backend permanently heavier even after unload.
-
-        A host that cannot create a child at all (a sandbox, or a frozen POSIX build) falls back to
-        loading here instead, on the CPU: this move may take work out of the backend, never take
-        dictation away from someone who had it. The fallback waits for the CPU attempt, so a spawn
-        failure on an accelerator still goes through the caller's own CPU retry.
-
-        A child that outlived start()'s own kill is left in ``_start_survivor`` for the caller.
-        start() ends its child on every failure, so a handle still reporting a live process is one
-        holding memory that nothing else knows about: dropping it here is what would let this failed
-        load read as nothing resident.
-        """
+        """Out of process: an accelerator context is only returned when the process holding it exits."""
         from core.inference.stt_transformers_worker import (
             InProcessWhisperEngine,
             SttWorkerSpawnError,
@@ -1440,19 +1322,7 @@ class WhisperSttSidecar:
         model_id: str,
         use_resident: bool = True,
     ) -> _CachedSttSnapshot:
-        """Validate the local snapshot before decode or model replacement. Returns the checkpoint's
-        multilingual flag when local metadata provides it; curated defaults are known multilingual.
-
-        ``use_resident = False`` skips the resident-model shortcut and resolves the path on disk.
-        The shortcut answers from the loaded model and returns no path, which is right when that
-        model is about to be reused and wrong when the caller is replacing it with one on another
-        device: the same model id is resident, but the load still needs somewhere to read the
-        weights from.
-
-        A survivor is held for its memory alone, so it does not answer for the model the way a
-        resident one does: the snapshot is looked up on disk, or the load it precedes would be
-        turned away as a checkpoint that is not downloaded.
-        """
+        """use_resident=False resolves the path on disk, since the resident shortcut returns no path."""
         model_id = resolve_model_id(model_id)
         with self._lock:
             reusable = use_resident and self._engine is not None and self._model_id == model_id
@@ -1494,17 +1364,8 @@ class WhisperSttSidecar:
         request_cancel_event: Optional[threading.Event] = None,
         device: Optional[str] = None,
     ):
-        """Load (or switch to) a model, reusing it if already resident.
-
-        ``device`` is the user's device preference (``auto``/``cpu``/``gpu``, see
-        ``core.inference.audio_device``). An explicit one that differs from the
-        resident model's reloads it, or the setting would be silently ignored.
-        ``None`` means no opinion: it takes the server default for a fresh load
-        and reuses whatever is resident, so a caller that never sends one cannot
-        move a model another surface placed.
-
-        Returns a ``(model, processor)`` pair.
-        """
+        """An explicit device differing from the resident one reloads the model; None keeps what is
+        resident."""
         from core.inference.audio_device import audio_device_default, normalize_audio_device
 
         if request_cancel_event is not None and request_cancel_event.is_set():
@@ -1652,13 +1513,8 @@ class WhisperSttSidecar:
         cancel_event: Optional[threading.Event] = None,
         on_progress = None,
     ) -> str:
-        """Run Whisper on already-decoded 16 kHz mono PCM and return text.
-
-        Splits into 30s windows (Whisper's receptive field) and sends one window
-        at a time to the worker; short clips take one pass. Windowing stays here
-        so a cancelled dictation stops between windows even while the worker is
-        busy, and so no single message carries more than 30 seconds of audio.
-        """
+        """Windowing stays in the parent, so a cancel stops between 30s windows even while the
+        worker is busy."""
         import numpy as np
 
         if cancel_event is not None and cancel_event.is_set():
@@ -1715,11 +1571,7 @@ class WhisperSttSidecar:
         on_progress = None,
         task: str = "transcribe",
     ) -> dict:
-        """Transcribe encoded audio bytes to text, or to English text with ``task="translate"``.
-
-        Accepts any container PyAV can decode: wav, mp3, opus/webm, ogg,
-        m4a/aac. Returns {text, language, duration, model}.
-        """
+        """Accepts any container PyAV can decode; task=translate returns English text."""
         ensure_stt_available()
         if cancel_event is not None and cancel_event.is_set():
             raise SttTranscriptionCancelledError("Transcription cancelled.")
@@ -1778,24 +1630,14 @@ class WhisperSttSidecar:
         }
 
     def cancel_transcription(self, cancel_event: threading.Event) -> bool:
-        """Ask this request's Transformers generation or load to stop.
-
-        Only this request's own event is set. The thread waiting on the worker
-        mirrors it into the child within a poll, so a cancel never reaches a
-        window belonging to a different request.
-        """
+        """Only this request's event is set, so a cancel never reaches another request's window."""
         already_cancelled = cancel_event.is_set()
         cancel_event.set()
         return self._cancel_owned_load(cancel_event) or not already_cancelled
 
     def _holds_expected_model(self, expected: Optional[str]) -> bool:
-        """Whether the resident model is the one the caller claimed. Call under ``_lock``.
-
-        A caller that owns a specific model must not release whatever happens to be
-        resident: another surface can switch the engine between the ownership check and
-        the request reaching the sidecar, and the queued unload then tears down a model
-        it never owned.
-        """
+        """Compared under the lock: another surface can switch the resident model before the release
+        arrives."""
         if expected is None:
             return True
         current = self._model_id
@@ -1813,12 +1655,8 @@ class WhisperSttSidecar:
         wait: bool = True,
         expected_model: Optional[str] = None,
     ) -> None:
-        """Release the resident model. ``wait=False`` skips a sidecar mid-request.
-
-        A transcription holds ``_lock`` throughout, so a caller releasing engines it does
-        not own must be able to leave a busy one alone. ``expected_model`` scopes the
-        release to one model, compared under the lock.
-        """
+        """Transcription holds the lock throughout, so wait=False lets a non-owner leave a busy
+        sidecar alone."""
         if not self._lock.acquire(blocking = wait):
             return
         try:

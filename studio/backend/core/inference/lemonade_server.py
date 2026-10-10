@@ -68,10 +68,7 @@ class LemonadeUnavailable(RuntimeError):
 
 
 def _kill_with_the_parent() -> None:
-    """Override the Linux parent-death signal with SIGKILL.
-
-    With a loaded model, SIGTERM held the NPU for about 9 s; SIGKILL released it within 1 s.
-    """
+    """Use SIGKILL, not SIGTERM: under SIGTERM a loaded NPU model kept the device held for seconds."""
     import ctypes
     import signal
 

@@ -32,16 +32,7 @@ class RawTextPreparationResult:
 
 
 def resolve_column_names(dataset) -> list[str]:
-    """Return the column names for *dataset*, guarding against None.
-
-    IterableDataset.column_names is None until HF datasets>=X materialises
-    it from the first batch; .map() also keeps it None.  Resolution order:
-      1. dataset.column_names if truthy (regular Dataset or HF>=4.4)
-      2. keys of dataset.features if available
-      3. bounded first-row probe, consumes one element, safe on IterableDataset
-         because HF re-iterates from the generator on the next pass
-      4. [] as a last resort so callers never see None
-    """
+    """IterableDataset.column_names can be None, so fall back to features, then a one-row probe, then []."""
     col_names = getattr(dataset, "column_names", None)
     if col_names:
         return list(col_names)

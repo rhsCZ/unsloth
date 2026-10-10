@@ -80,12 +80,7 @@ def _mime_is_bounded(image: Any) -> bool:
 
 
 def probably_decodable(image: Any) -> bool:
-    """Whether this entry could become a picture.
-
-    Header sniff only: admission runs per request and must not decode rasters to
-    price them. Answers True unless the payload is plainly not an image, so a
-    format Pillow can open is never charged nothing.
-    """
+    """Header sniff only, to avoid decoding rasters per request; True unless plainly not an image."""
     data = image.get("data") if isinstance(image, dict) else None
     if not isinstance(data, str) or not data:
         return False
@@ -105,10 +100,7 @@ def count_probably_decodable(images: Sequence[dict]) -> int:
 
 
 def text_before_envelope(result: str) -> str:
-    """The text with a trailing envelope cut off, WITHOUT parsing it -- for display
-    only. split_images json-loads the whole array to decide whether the suffix is a
-    real envelope; a monitor row built on the event loop cannot afford that on 12 MB,
-    and showing a little less of a malformed suffix costs nothing."""
+    """Display only: no json parse, which a 12 MB envelope cannot afford on the event loop."""
     index = result.rfind("\n" + SENTINEL)
     return result if index == -1 else result[:index]
 
@@ -118,10 +110,7 @@ def has_images(result: str) -> bool:
 
 
 def mentions_images(result: str) -> bool:
-    """Substring only, for deciding WHERE to run: has_images json-parses the whole
-    array, and doing that on the event loop to decide whether to leave the event
-    loop parsed a permitted 12 MB envelope right there. A false positive here costs
-    a thread hop; the worker validates for real."""
+    """Substring test only: a false positive costs a thread hop, not an event-loop parse of the array."""
     return ("\n" + SENTINEL) in result
 
 
@@ -131,20 +120,7 @@ def _decoded_urls(
     attempts: "list | None" = None,
     cache: "dict | None" = None,
 ) -> list[str]:
-    """Up to *limit* data URLs, counting only what decoded.
-
-    Slicing first would spend the quota on formats Pillow cannot read -- an SVG
-    _flatten_result accepted, say -- and drop the real PNGs behind them. So the
-    ATTEMPTS are bounded instead: the payload-byte budget caps the size of a result,
-    never the number of entries in it, and a server answering with thousands of tiny
-    unreadable ones would otherwise hold an inference worker open on Pillow for a
-    turn that can show four pictures at most. Same allowance the replay side spends,
-    for the same reason -- enough slack to look past a run of rejects.
-
-    *attempts* is a one-element budget shared across a parallel batch. Per result it
-    resets, and a 25-call turn of malformed results then buys 25 x 8 decodes of
-    attacker-chosen rasters against a cap of eight pictures.
-    """
+    """Successful decodes are capped, but attempts are capped too and shared across a parallel batch."""
     urls = []
     own = [limit + DECODE_FAILURE_ALLOWANCE] if attempts is None else attempts
     for image in images:
@@ -166,18 +142,7 @@ def _decoded_urls(
 
 
 def _decoded_urls_per_result(results: Sequence[Sequence[dict]]) -> list[str]:
-    """MAX_MODEL_IMAGES from EACH result, then the conversation cap over the whole.
-
-    A parallel batch arrives as several results concatenated. Applying the
-    per-result quota to the concatenation gives the first result the whole
-    allowance and delivers none of the second, though the conversation cap has
-    room for both.
-
-    Filled from the NEWEST result back when the batch cannot fit. Everything else
-    that bounds these pictures keeps the newest -- the conversation trim, and the
-    frontend's replay bound -- so filling from the front would show this turn
-    results 1 and 2 and the next turn results 2 and 3, off the same history.
-    """
+    """Quota per result, not per concatenated batch, so one call cannot take it all; newest filled first."""
     chosen: list[list[str]] = []
     room = MAX_TOTAL_MODEL_IMAGES
     # One attempt budget per batch, so failing decodes cannot multiply the allowance.
@@ -197,27 +162,7 @@ def eligible_replay_images(
     local: bool = False,
     budget: int = MAX_TOTAL_MODEL_IMAGES,
 ) -> dict:
-    """Which envelope entries can still be in the prompt once the cap has run.
-
-    The decoders are the expensive part -- a permitted raster is 40 megapixels and
-    a few hundred bytes of base64 can ask for one -- and until now every envelope in
-    a replayed history was decoded before the eight-image trim threw nearly all of
-    it away. A caller that posts its own history therefore chose how much Pillow
-    work one bounded request did. This picks the survivors first, from the message
-    list alone, so the count of decodes is a property of the cap rather than of the
-    history.
-
-    Keyed by position in *messages*; the value is how many leading entries of that
-    result may be decoded. Mirrors the frontend's boundMcpImageEnvelopes, spare
-    allowance included: this side cannot know which entries decode either, so a
-    result whose images all fail must not strand the valid ones behind it.
-
-    *local* budgets the way the marker paths spend: a tool batch -- consecutive
-    results -- lands as one turn carrying one picture, so the batch is charged once
-    and its further candidates are decode fallbacks, not a charge. Budgeting four per
-    result here spent the conversation's allowance on pictures the local path never
-    sends and dropped older batches that still had room.
-    """
+    """Chooses survivors before any decode, so Pillow work follows the cap, not the history."""
     eligible: dict = {}
     spare = DECODE_FAILURE_ALLOWANCE if budget > 0 else 0
     per_result = LOCAL_MAX_IMAGES_PER_TURN if local else MAX_MODEL_IMAGES
@@ -297,13 +242,7 @@ def png_payloads_per_result(
 
 
 def flattened_rgb(image, background = None):
-    """RGB with any transparency composited onto white (black for light ink), not dropped.
-
-    ``convert("RGB")`` keeps whatever colour sits UNDER the alpha, and a tool that
-    never painted a background leaves that black -- so a transparent screenshot's
-    dark text or line art converts to black on black and the model is handed a
-    blank rectangle. Only images that actually carry alpha take the composite.
-    """
+    """Composites alpha onto white (black for light ink), since convert('RGB') keeps the colour under it."""
     from PIL import Image, ImageChops, ImageStat
 
     # Match routes/inference.py _image_bytes_to_png_b64; I;16B/L reject point(), go through 'I'.
@@ -404,13 +343,7 @@ def _relabelled(
     original: int,
     owned: "set | None" = None,
 ) -> list:
-    """The turn's note rewritten for what actually survived a partial trim.
-
-    The label exists to tell the model which of the returned images it was really
-    shown, so a turn left holding two while still saying it carries four defeats it.
-    *owned* names the promoted parts; the caller's own attachments in the same turn
-    are not the tool's and are not counted into its note.
-    """
+    """Rewrites the note for the pictures left after a partial trim, not counting the caller's own."""
     remaining = sum(
         1
         for part in kept
@@ -438,13 +371,7 @@ def _relabelled(
 
 
 def _note_total(text, original: int) -> int:
-    """How many the tool returned, for a turn that no longer carries them all.
-
-    The note's own "of N" wins, so a second trim does not re-baseline to whatever is
-    left. A turn that arrived COMPLETE carries no such suffix, and falling back to
-    the post-trim count there told the model nothing had been dropped -- the one
-    thing the note exists to say. Fall back to what the turn held before this trim.
-    """
+    """Keeps the note's own 'of N', else falls back to the pre-trim count, not the post-trim one."""
     match = re.search(r"\((?:first )?\d+ of (\d+)\)\s*$", str(text or ""))
     if match:
         return int(match.group(1))
@@ -481,12 +408,7 @@ def _drop_oldest_image_parts(
     part_type: str,
     only: "list | None" = None,
 ) -> None:
-    """Drop the *excess* oldest image parts, and any turn they emptied.
-
-    With *only*, a list of the exact part objects promotion created, nothing else
-    is touched: a caller that attaches more than the cap keeps every one of its own
-    images, which admission has already charged for.
-    """
+    """With only, touches just the promoted parts, so a caller's own attachments survive the cap."""
     owned = {id(part) for part in only} if only is not None else None
     ordinals = set()
     for ordinal, part in enumerate(_image_parts(conversation, part_type)):
@@ -504,13 +426,7 @@ def _drop_image_parts_at(
     *,
     owned: "set | None" = None,
 ) -> None:
-    """Drop the image parts at the given positions in document order.
-
-    Positional rather than oldest-first: a protected pixel can sit anywhere in the
-    sink, because the attachment's marker belongs to the turn that supplied it and
-    that turn can precede a tool's pictures. Dropping by count would take the wrong
-    marker and hand every later pixel to the one before it.
-    """
+    """Drops by position, not oldest-first: a count would bind later pixels to the wrong markers."""
     if not ordinals:
         return
     seen = 0
@@ -557,23 +473,7 @@ def trim_image_turns(
     limit: int = MAX_TOTAL_MODEL_IMAGES,
     keep: "Sequence[int] | None" = None,
 ) -> tuple:
-    """Keep the newest *limit* pictures: a loop that keeps calling an image tool
-    otherwise re-sends every one it has seen. Markers and their own pixels go
-    together, or the processor counts image tokens it was given none for.
-
-    *keep* holds indexes into *payloads* that must survive -- the caller's own
-    attachment, which this cap has no business evicting: it is about what a tool
-    loop RE-SENDS, and dropping the picture the question was asked about answers a
-    different question. Bare markers carry no identity the way promoted
-    ``image_url`` parts do, so the position in the sink is what names them.
-
-    They still COUNT against *limit*. Exempting them would let a resumed chat's
-    replayed pictures carry a second full allowance and put twice the cap in the
-    prompt; the route reserves the attachment's slot by trimming replay to
-    ``limit - 1`` before interleaving it, which is where that reservation belongs.
-
-    Returns *keep* rebased onto the payload list this call leaves behind.
-    """
+    """Keeps the newest limit pictures; protected indexes survive, and all markers count against limit."""
     protected = sorted(index for index in (keep or ()) if 0 <= index < len(payloads))
     excess = len(payloads) - limit
     if excess <= 0:
@@ -594,16 +494,7 @@ def trim_image_url_turns(
     limit: int = MAX_TOTAL_MODEL_IMAGES,
     only: "list | None" = None,
 ) -> None:
-    """The same cap where the pixels ride in the prompt as data URLs.
-
-    GGUF and the external providers carry no separate payload list, so the parts
-    themselves are the budget: without this a screenshot loop resends every
-    picture it has ever taken on every later turn.
-
-    *only* scopes the cap to the parts promotion created. This cap is about what
-    REPLAY re-sends; a caller's own attachments are not counted against it and are
-    never deleted by it.
-    """
+    """Same cap for data-URL pixels; only promoted parts count, never the caller's own attachments."""
     if only is not None:
         # Prune first: the context fitter may have evicted turns.
         present = {id(part) for part in _all_image_url_parts(conversation)}
@@ -619,11 +510,8 @@ def trim_image_url_turns(
 
 
 def _merge_into_trailing_user_turn(conversation: list, parts: list[dict]) -> bool:
-    """Fold *parts* into a trailing ``role=user`` turn, if there is one.
-
-    A deferred no-op nudge lands as exactly such a turn, and appending after it
-    would put two user messages in a row -- which a strict VLM template rejects.
-    """
+    """Folds parts into a trailing user turn, since two user messages in a row break strict VLM
+    templates."""
     last = conversation[-1] if conversation else None
     if not isinstance(last, dict) or last.get("role") != "user":
         return False
@@ -644,13 +532,7 @@ def append_image_turn(
     returned: "int | None" = None,
     lead: str = IMAGE_TURN_TEXT,
 ) -> None:
-    """A user turn, not the ``role=tool`` result they came with: tool messages take
-    no image parts, and local templates render tool content as a string.
-
-    With *per_result*, *images* is a list of per-result lists and each keeps its own
-    MAX_MODEL_IMAGES quota; flattened first, a parallel batch would spend the whole
-    allowance on its first call.
-    """
+    """Adds a user turn, since tool messages take no image parts; per_result keeps each result's quota."""
     parts = content_parts_per_result(images) if per_result else content_parts(images)
     if not parts:
         return
@@ -687,13 +569,7 @@ def insert_placeholder_turn(
     total: "int | None" = None,
     lead: str = IMAGE_TURN_TEXT,
 ) -> None:
-    """A marker-only user turn placed *before* ``index``.
-
-    The pixels arrive history-first with the current attachment last, and a
-    positional VLM processor binds them to markers in document order. So the
-    replayed markers have to sit ahead of the turn that owns the attachment,
-    not after it.
-    """
+    """Marker-only turn placed before index, as a positional processor binds pixels to markers in order."""
     if count > 0:
         conversation.insert(index, placeholder_turn(count, total, lead))
 
@@ -704,13 +580,7 @@ def append_placeholder_turn(
     total: "int | None" = None,
     lead: str = IMAGE_TURN_TEXT,
 ) -> None:
-    """The marker-only form of the above, for backends taking pixels alongside.
-
-    The note rides along on the merge as well. Merged bare into a deferred no-op
-    nudge, the markers read as pictures attached to that nudge rather than as the
-    tool's output, and the next turn misattributes them; merged into a real question
-    they read as ones the user sent.
-    """
+    """The note rides on the merge, so markers are not misattributed to a nudge or the user's question."""
     markers = [{"type": "image"} for _ in range(count)]
     if not markers:
         return
@@ -742,14 +612,7 @@ def top_up_image_markers(
     *,
     ordinal: "int | None" = None,
 ) -> list[dict]:
-    """Give the conversation exactly *total* image markers, adding any shortfall
-    to the newest user turn.
-
-    ``messages_with_attached_image`` leaves a conversation that already carries
-    markers alone, which is right for a nudge retry but wrong for replayed MCP
-    pictures: those markers belong to earlier turns, not to the attachment. The
-    top-up goes last, matching where the attachment sits in the pixel list.
-    """
+    """Adds the shortfall to the newest user turn, since replayed markers belong to earlier turns."""
     out = list(messages)
     have = sum(
         1
@@ -797,13 +660,7 @@ def pixels_in_marker_order(
     new_payload,
     placed_at: "list | None" = None,
 ) -> list:
-    """The pixel list ordered the way its markers actually appear.
-
-    A positional VLM binds the Nth pixel to the Nth marker, so "history first,
-    attachment last" is only right when the attachment's turn is last. It is not
-    when the attachment came with an earlier question and a tool returned pictures
-    after it, so the order is read off the conversation rather than assumed.
-    """
+    """Orders pixels by where their markers sit, since a positional VLM binds pixels to markers in order."""
     # Pair payloads with markers by identity; popping from the front caused an off-by-one.
     by_marker = {id(part): payload for part, payload in zip(prior_markers, prior_payloads)}
     ordered = []
@@ -820,12 +677,7 @@ def pixels_in_marker_order(
 
 
 def is_synthetic_image_turn(message) -> bool:
-    """Whether promotion inserted this user turn, rather than the caller sending it.
-
-    An ordinal computed against the ORIGINAL history counts only real user turns,
-    so resolving it against the promoted list has to skip the turns promotion added
-    or the attachment's marker lands on a historical picture's turn.
-    """
+    """Ordinals count real user turns only, so skip promotion's inserted turns or markers hit history."""
     if not isinstance(message, dict) or message.get("role") != "user":
         return False
     content = message.get("content")
@@ -885,17 +737,7 @@ def mark_last_user_turn(
     *,
     ordinal: "int | None" = None,
 ) -> list[dict]:
-    """Mark the user turn carrying ``count`` images, where an attachment belongs.
-
-    *ordinal* names that turn counted among user turns. The newest user turn is
-    only the right guess when the attachment came with the newest question: the
-    extractor takes the newest user image from anywhere in the thread, so a
-    text-only latest turn would otherwise be told it supplied an older picture.
-
-    A replay marker already merged into that turn is displaced: a non-GGUF message
-    takes one image, and the attachment is the one the question is about. The
-    displaced payload drops in pixels_in_marker_order rather than sliding on.
-    """
+    """Marks the turn at ordinal, since an attachment can belong to an older question than the newest."""
     out = list(messages)
     markers = [{"type": "image"} for _ in range(count)]
     if ordinal is not None:
@@ -921,13 +763,7 @@ def promote_history(
     promoted_out: "list | None" = None,
     reserve_for_caller: bool = False,
 ) -> list[dict]:
-    """Rebuild image turns from replayed envelopes. The envelope leaves the tool
-    text either way: a text-only model must not be shown its base64.
-
-    *promoted_out* collects the exact image parts this call created, so a tool loop
-    resuming the conversation can seed its own cap with them instead of starting
-    from zero and letting the history's images through uncounted.
-    """
+    """Strips the envelope from tool text either way, so text-only models never see base64."""
     out, _payloads, promoted = _promote(
         messages, vision, local = False, reserve_for_caller = reserve_for_caller
     )
@@ -957,18 +793,7 @@ def _field(message, key):
 
 
 def resolve_tool_names(messages: Sequence) -> dict:
-    """Which tool each role="tool" message answers, keyed by its POSITION.
-
-    A tool message carries no ``name`` in plain OpenAI (the field is optional) or in
-    anything translated from Anthropic, and an absent name is read as legacy MCP
-    history that may be trusted. Correlating the call is what lets the mcp__ gate
-    run on those wire formats at all.
-
-    Each result is paired with the nearest UNMATCHED preceding call bearing its id,
-    not with a conversation-wide last-wins lookup: the backend itself restarts ids
-    like ``call_0`` every response, so one dict let a later non-MCP ``call_0``
-    rename an earlier MCP result -- or the reverse.
-    """
+    """Pairs each result with the nearest unmatched earlier call of its id; ids like call_0 repeat."""
     open_calls: dict = {}
     names: dict = {}
     for index, message in enumerate(messages or ()):

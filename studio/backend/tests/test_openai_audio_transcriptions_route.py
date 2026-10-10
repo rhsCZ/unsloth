@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""FastAPI round-trip tests for the OpenAI-compatible POST /v1/audio/transcriptions.
-
-The sidecar call (_transcribe_audio_result) is faked, so these cover multipart wiring,
-model-id mapping, response formats and error propagation without whisper or a GPU."""
+"""Round-trip tests for POST /v1/audio/transcriptions with _transcribe_audio_result faked; no GPU."""
 
 from __future__ import annotations
 
@@ -132,11 +129,7 @@ def test_sidecar_errors_keep_their_status(monkeypatch):
 
 
 def test_an_mtmd_only_model_forces_its_engine():
-    """Qwen3-ASR only runs on the mtmd sidecar.
-
-    The route passed no engine, so _resolve_stt_engine defaulted to Transformers and the
-    Whisper sidecar rejected the model.
-    """
+    """Qwen3-ASR runs only on the mtmd sidecar, so its engine is forced, not defaulted to Transformers."""
     from routes.inference import _stt_engine_for_model
 
     assert _stt_engine_for_model("qwen3-asr-0.6b") == "mtmd"
@@ -188,11 +181,7 @@ def test_verbose_json_carries_language_and_duration(monkeypatch):
 
 
 def test_verbose_json_without_a_language_is_refused_before_any_work(monkeypatch):
-    """OpenAI types language as a required string and the sidecar only echoes back the
-    language it was given, so an auto-detect request has nothing truthful to report.
-
-    Naming a language nobody detected would label a Japanese clip "en", so this refuses.
-    It refuses before the sidecar runs, so no GPU is burnt and no row is opened."""
+    """Refuse verbose_json without a language: naming one nobody detected would mislabel the clip."""
     cli, calls = _make_client(monkeypatch)
     api_monitor.clear()
     resp = _post(cli, data = {"response_format": "verbose_json"})

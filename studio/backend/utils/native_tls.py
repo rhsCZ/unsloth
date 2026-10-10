@@ -43,12 +43,7 @@ _activated = False
 
 
 def native_tls_enabled() -> bool:
-    """Resolve ``UNSLOTH_STUDIO_NATIVE_TLS`` against the platform default.
-
-    Linux is on only for the desktop's own backend: a .deb/AppImage launched
-    from an icon reads no shell profile, so the opt-in is unreachable there
-    (#9218), while a headless server has an operator who can export it.
-    """
+    """Linux defaults on only for the desktop backend: icon-launched apps never read the shell opt-in."""
     flag = os.environ.get(_NATIVE_TLS_ENV, "").strip().lower()
     if flag in _TRUTHY:
         return True
@@ -62,25 +57,12 @@ def native_tls_enabled() -> bool:
 
 
 def _desktop_owned_process() -> bool:
-    """True when this backend belongs to the Tauri desktop app.
-
-    Read, never popped: main._load_desktop_owner owns this marker and pops it,
-    but activation runs first (main.py:185, ahead of the loader), so reading it
-    here cannot steal it.
-    """
+    """Reads the Tauri owner marker without popping it, since main pops it later."""
     return os.environ.get(_DESKTOP_OWNER_KIND_ENV, "") == "tauri"
 
 
 def _uv_system_certs_wanted() -> bool:
-    """Whether uv should move onto the OS store along with this process.
-
-    True for an explicit opt-in and for the platforms install.sh already covers,
-    False when only the desktop-owner default turned native TLS on. truststore
-    ADDS the OS anchors to the ones a caller loaded, but uv's system certs
-    REPLACE its bundled webpki roots, so an unusable SSL_CERT_FILE that uv
-    happily ignores today becomes "No CA certificates were loaded from the
-    system" instead, and core/training/worker.py runs uv with no pip fallback.
-    """
+    """System certs replace uv's bundled roots, so uv gets them only on opt-in or covered platforms."""
     if os.environ.get(_NATIVE_TLS_ENV, "").strip().lower() in _TRUTHY:
         return True
     return sys.platform in _DEFAULT_ON_PLATFORMS

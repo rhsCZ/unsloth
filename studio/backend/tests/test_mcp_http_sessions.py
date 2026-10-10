@@ -1,13 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Shared HTTP MCP sessions: routing, identity, timeout budget, OAuth safety and
-concurrency.
-
-test_mcp_stdio_sessions.py owns the machinery these share; this file owns what is
-specific to HTTP now that it is cached too, and the regressions that came with it.
-Races use explicit barriers rather than sleeps so they cannot pass by luck.
-"""
+"""HTTP MCP session routing, identity, timeouts and races; races use explicit barriers, not sleeps."""
 
 from __future__ import annotations
 
@@ -54,10 +48,7 @@ def _settled(
     expected: int = 1,
     timeout: float = 10.0,
 ) -> int:
-    """Wait out an asynchronous close.
-
-    A discarded session is closed by the cleanup worker rather than on the
-    request thread, so its close lands just after the call returns."""
+    """Discarded sessions close on the cleanup worker, so a check must wait for the close to land."""
     deadline = time.monotonic() + timeout
     while client.exited < expected and time.monotonic() < deadline:
         time.sleep(0.005)
@@ -550,10 +541,7 @@ def test_an_expired_idle_http_session_is_replaced_before_dispatch(monkeypatch, c
 
 
 def test_a_concurrent_checkout_cannot_cancel_another_borrowers_recheck(monkeypatch, clients):
-    """Two HTTP borrowers now run at once, so the idle gap has to belong to the
-    borrower. Held on the session, the second checkout would overwrite the first
-    one's long gap with a near-zero one and talk it out of proving a session that
-    really had gone stale."""
+    """Idle gap is per borrower, not per session, so a concurrent checkout cannot hide a stale session."""
     monkeypatch.setattr(mcp_client, "_HTTP_IDLE_RECHECK", 0.0)
 
     def _client(
@@ -573,10 +561,7 @@ def test_a_concurrent_checkout_cannot_cancel_another_borrowers_recheck(monkeypat
 
 
 def test_a_second_borrower_still_proves_a_session_that_went_idle(monkeypatch, clients):
-    """last_used is refreshed at checkout, so a borrower arriving while the first
-    one's probe is still outstanding would see a near-zero gap and dispatch on a
-    session nobody has proved yet. If the server expired it, that user's call is
-    the thing that finds out, and it cannot be replayed."""
+    """A second borrower must still probe an idle session; checkout refreshes last_used, hiding the gap."""
     monkeypatch.setattr(mcp_client, "_HTTP_IDLE_RECHECK", 0.2)
     _call(HTTP_URL, scope = SCOPE)
     client = clients[0]
@@ -723,11 +708,7 @@ def test_evicting_another_scope_does_not_run_on_the_callers_deadline(monkeypatch
 
 
 def test_a_json_rpc_error_keeps_the_chats_session(monkeypatch, clients):
-    """A FastMCP server answers an unknown tool with a result carrying is_error,
-    but the spec also lets a server report it as a protocol error and non-FastMCP
-    servers do. Receiving that reply proves the connection works, so discarding
-    the session would throw away the chat's server-side state over a tool name
-    the model got wrong."""
+    """A JSON-RPC error proves the transport works, so an unknown tool name must not drop the session."""
 
     class ProtocolError(RecordingClient):
         async def call_tool(
@@ -753,10 +734,7 @@ def test_a_json_rpc_error_keeps_the_chats_session(monkeypatch, clients):
 
 
 def test_a_failed_session_is_not_closed_on_the_retry_budget(monkeypatch, clients):
-    """The session that fails the pre-dispatch probe is the one most likely to
-    hang on close, and the caller still has a reconnect and a retry to do on the
-    same deadline. Paying for its teardown first is what leaves the retry with
-    nothing."""
+    """A failed session's close must not spend the retry budget, or a hanging teardown leaves no retry."""
     monkeypatch.setattr(mcp_client, "_HTTP_IDLE_RECHECK", 0.0)
 
     class HangingExit(RecordingClient):
@@ -811,10 +789,7 @@ def test_a_synchronous_close_waits_for_work_already_started(monkeypatch, clients
 
 
 def test_a_surviving_call_does_not_pay_for_the_retirement(monkeypatch, clients):
-    """Parallel borrowers share one session, so one transport failure retires it
-    while another call is still succeeding. That makes the survivor the last
-    borrower, and its result is already waiting on this thread when the close
-    would run."""
+    """A surviving call must not wait on the close of a session retired by another borrower's failure."""
     closing = threading.Event()
 
     class SlowExit(RecordingClient):
@@ -876,10 +851,7 @@ def test_evictions_do_not_spawn_a_thread_each(monkeypatch, clients):
 
 
 def test_a_json_rpc_error_from_the_probe_keeps_the_session(monkeypatch, clients):
-    """The probe asks whether the server is still there. A rate limit or a
-    permission rule on tools/list answers that question with a yes, so treating
-    it as a dead transport would lose the chat's state over a reply that proves
-    the connection works."""
+    """A JSON-RPC error from the probe proves the server is alive, so the session is kept."""
     monkeypatch.setattr(mcp_client, "_HTTP_IDLE_RECHECK", 0.0)
 
     class ProbeRefused(RecordingClient):
@@ -1011,11 +983,7 @@ def test_a_failed_session_is_uncached_before_the_borrow_is_released(clients):
 
 
 def test_closing_sessions_works_during_interpreter_exit():
-    """close_mcp_sessions is the atexit handler. Python tears the
-    ThreadPoolExecutor machinery down before normal atexit callbacks, so a pooled
-    close raises there and the cleanup aborts with stdio subprocesses still up.
-
-    Run in a child process: the failure only exists at real interpreter exit."""
+    """close_mcp_sessions runs as atexit, when a pooled close raises and leaves stdio servers running."""
     import subprocess
     import textwrap
 

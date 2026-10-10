@@ -188,11 +188,7 @@ def acquire_for(
     replacing: bool = False,
     alongside: bool = False,
 ) -> Any:
-    """Make ``owner`` the sole GPU owner, evicting the other if it holds it.
-
-    ``register`` runs under the arbiter lock as ownership transfers, so a competing acquire cannot
-    evict this owner and let both loaders allocate VRAM at once.
-    """
+    """register runs under the lock as ownership moves, so a rival acquire cannot let both allocate VRAM."""
     global _owner, _owner_epoch, _owner_account, _prior_account
     if owner not in _EVICTORS:
         raise ValueError(f"unknown GPU owner: {owner!r}")
@@ -250,12 +246,7 @@ def release(owner: str) -> None:
 
 
 def release_if(owner: str, predicate: Callable[[], bool]) -> bool:
-    """Drop ``owner``'s claim only if it still holds it AND ``predicate()`` is true, atomically.
-
-    A slow unload's idle check and its ``release`` must not straddle a concurrent same-owner load
-    whose ``acquire_for(register=...)`` re-registers ownership under this lock; evaluating the
-    predicate under the lock keeps them atomic so ``release`` never clears the newer claim.
-    ``predicate`` must be quick and not re-enter the arbiter. Returns True iff ownership was dropped."""
+    """Evaluates the predicate under the lock, so a slow unload never clears a newer same-owner claim."""
     global _owner, _owner_epoch, _owner_account, _prior_account
     with _lock:
         if _owner != owner or not predicate():

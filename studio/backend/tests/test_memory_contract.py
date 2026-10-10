@@ -1,22 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""The canonical MemoryEstimate and the two legacy shapes projected from it.
-
-``test_memory_estimate_contract_freeze.py`` pins what the two ROUTES emit today.
-This file pins the shared layer they are being moved onto: that the canonical
-model separates the two meanings ``weights_bytes`` used to carry, and that each
-projection puts the right one back on the wire.
-
-The single most important assertion here is
-``test_the_two_projections_disagree_about_weights_bytes``. The whole point of
-routing both surfaces through one model is that their arithmetic cannot drift;
-the whole point of projecting back out is that their CONTRACTS still differ
-where they always did. Getting the first without the second is a silent
-regression for every existing caller of one route.
-
-Pure functions, no I/O.
-"""
+"""The shared estimate must still project two different weights_bytes meanings, one per legacy route."""
 
 import sys
 from pathlib import Path
@@ -98,15 +83,8 @@ class TestTheCanonicalModel:
         assert estimate.quant_file_bytes != _BREAKDOWN.weights_bytes
 
     def test_the_two_figures_are_reported_as_given(self):
-        """Neither figure is adjusted to make the other look consistent.
-
-        The quant file is by definition one of the resident files, so a quant
-        larger than the resident total is impossible in production. It is still
-        reported unchanged, because the two numbers come from different places
-        and "fixing" one against the other replaces a caller's real value with
-        an unrelated one rather than catching anything. An earlier draft clamped
-        here and truncated a 4.1 GB quant to a 373 byte synthetic header.
-        """
+        """Quant and resident figures come from different places, so neither is clamped to match the
+        other."""
         out = build_memory_estimate(_BREAKDOWN, quant_file_bytes = 9_999_999_999)
         assert out.quant_file_bytes == 9_999_999_999
         assert out.resident_files_bytes == _BREAKDOWN.weights_bytes
@@ -149,14 +127,8 @@ class TestTheRouteOverrides:
         assert (none_out.compute_bytes, none_out.total_bytes, none_out.n_ctx) == (0, 0, 0)
 
     def test_the_route_does_not_mutate_the_model_after_building_it(self):
-        """Pydantic does not validate assignment, so a post-build write is unchecked.
-
-        Measured rather than assumed: on pydantic 2.13,
-        ``m.gpu_bytes = "not an int"`` succeeds and puts that string on the wire,
-        and a declared ``int`` field accepts None the same way. The route used to
-        assign these four fields after construction; this pins that it does not
-        go back to doing so.
-        """
+        """Pydantic skips validation on assignment, so the route must build the model rather than
+        mutate it."""
         from pathlib import Path
 
         source = (Path(__file__).resolve().parent.parent / "routes" / "models.py").read_text(
@@ -200,12 +172,7 @@ class TestTheLegacyProjections:
         )
 
     def test_the_two_projections_disagree_about_weights_bytes(self, estimate):
-        """The compatibility boundary, asserted directly.
-
-        If this fails, the two routes have been made to agree on a key whose
-        meaning was never shared, and one set of callers is now silently reading
-        a different number through an unchanged JSON shape.
-        """
+        """The two routes must keep differing on weights_bytes, since their meanings were never shared."""
         panel = project_estimate_memory_response(estimate)
         bar = project_kv_cache_estimate(estimate)
         assert panel["weights_bytes"] != bar["weights_bytes"], (
@@ -223,13 +190,7 @@ class TestTheLegacyProjections:
         assert out["weights_bytes"] is None
 
     def test_a_zero_gpu_share_survives_as_zero(self):
-        """The one field where 0 must NOT become None.
-
-        An inherited LLAMA_ARG_DEVICE=none makes the launch entirely CPU
-        resident. Folding that into None sends the caller back to summing
-        segments and drawing VRAM pressure for a load that touches no card --
-        a bug this route already had once and fixed.
-        """
+        """A zero GPU share must stay 0, not become None, or CPU-only loads get priced as VRAM pressure."""
         cpu_only = SimpleNamespace(**{**_BREAKDOWN.__dict__, "gpu_bytes": 0})
         out = project_kv_cache_estimate(
             build_memory_estimate(cpu_only, quant_file_bytes = _QUANT_FILE_BYTES),

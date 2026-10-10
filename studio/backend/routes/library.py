@@ -449,10 +449,7 @@ _RANGE_RE = re.compile(r"\s*bytes\s*=\s*([0-9]*)-([0-9]*)\s*", re.IGNORECASE)
 
 
 def _byte_range(request: Request, size: int) -> Optional[tuple[int, int]]:
-    """The one ``bytes=`` range asked for, as (first, last) inclusive; None for the whole file.
-
-    What RFC 9110 lets a server ignore is ignored (another unit, several ranges, a malformed one,
-    an ``If-Range`` this route has no validator to match); a range past the end is unsatisfiable."""
+    """(first, last) inclusive, or None for the whole file; a range past the end is unsatisfiable."""
     match = _RANGE_RE.fullmatch(request.headers.get("range") or "")
     if not match or request.headers.get("if-range") or match.groups() == ("", ""):
         return None

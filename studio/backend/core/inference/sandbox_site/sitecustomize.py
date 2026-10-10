@@ -44,11 +44,7 @@ _REMAP_SIDECAR = ".unsloth_sandbox_remap.json"
 
 
 def _note(subject, original, mapped):
-    """Print the one-shot stderr notice so the model learns the real location.
-
-    ``subject`` is what "does not exist" (the prefix, or the whole invented
-    path); ``original`` is echoed in the ``(original -> mapped)`` tail.
-    """
+    """Prints once per process so the model learns the real location, not on every remap."""
     global _notified
     if _notified:
         return
@@ -61,12 +57,7 @@ def _note(subject, original, mapped):
 
 
 def _contained_join(cwd, rel):
-    """Join ``rel`` onto ``cwd`` so the result can never escape ``cwd``.
-
-    A habit path can carry ``..`` segments; joining verbatim would let the target
-    climb above the sandbox. ``..`` components are dropped and empty / ``.`` ones
-    ignored, keeping the result under ``cwd``.
-    """
+    """Drops ``..`` components so a path cannot climb out of the sandbox cwd."""
     parts = []
     for part in rel.split("/"):
         if part == "" or part == ".":
@@ -84,13 +75,7 @@ def _map_onto_cwd(
     text,
     notify = True,
 ):
-    """Map ``<prefix>/rest`` onto ``./rest`` in the CWD, noting it once.
-
-    The suffix is contained under the CWD (see ``_contained_join``) so a path
-    like ``/mnt/data/../other_session/file`` cannot escape the workdir.
-    ``notify`` is False when the caller may keep the original path (a read), so
-    the one-shot notice is not spent on a remap that never happens.
-    """
+    """``notify`` is False for reads that keep the original path, so the one-shot notice is not spent."""
     rel = text[len(prefix) :].lstrip("/")
     mapped = _contained_join(os.getcwd(), rel)
     if notify:
@@ -114,12 +99,7 @@ def _load_sidecar(cwd):
 
 
 def _record_sidecar(cwd, source, target):
-    """Persist ``source -> target`` so the next run re-serves it.
-
-    Written atomically (temp + ``os.replace``) and wrapped so a read-only/full
-    filesystem never breaks the interpreter. The path is inside the CWD, so the
-    patched ``open`` leaves it untouched (no remap, no recursion).
-    """
+    """Writes atomically and never raises; the path sits in the CWD so the patched open leaves it alone."""
     try:
         data = _load_sidecar(cwd)
         if data.get(source) == target:
@@ -134,27 +114,12 @@ def _record_sidecar(cwd, source, target):
 
 
 def _is_creating_mode(mode):
-    """True only when an ``open()`` mode string can CREATE a missing file.
-
-    Only ``w`` / ``a`` / ``x`` create. ``r+`` / ``rb+`` require the path to exist,
-    so they must not trip the write fallback (which would corrupt an unrelated
-    same-basename file); ``w+`` / ``a+`` / ``x+`` still match.
-    """
+    """r+ must not trip the write fallback, which would corrupt an unrelated same-basename file."""
     return isinstance(mode, str) and any(c in mode for c in ("w", "a", "x"))
 
 
 def _remap_open(file, mode):
-    """Remap for ``open()`` / ``io.open()``.
-
-    A prefix remap runs first: a write/create heals onto the CWD; a READ heals
-    only when the mapped target already exists (re-reading an earlier write),
-    else the original path is kept so a genuine missing input fails truthfully
-    instead of silently reading a same-basename workdir file. Only if no prefix
-    matched and the call creates does the fallback kick in: an absolute target
-    outside the CWD whose parent is missing is redirected to the basename in the
-    CWD, unless ``CWD/<basename>`` already exists (an unrelated file), in which
-    case the original path is kept so open raises.
-    """
+    """A read heals only if the target exists, so a missing input fails instead of reading a stray file."""
     creating = _is_creating_mode(mode)
     mapped = _remap(file, notify = False)
     if mapped is not file:
@@ -196,11 +161,7 @@ def _remap_open(file, mode):
 
 
 def _remap(path, notify = True):
-    """Map ``<prefix>/rest`` onto ``./rest`` in the CWD; other paths pass through.
-
-    ``notify`` is forwarded to ``_map_onto_cwd``; ``_remap_open`` passes False so
-    a read that keeps its original path emits no false notice.
-    """
+    """``_remap_open`` passes notify False, so a read that keeps its original path emits no false notice."""
     try:
         text = os.fspath(path)
     except TypeError:

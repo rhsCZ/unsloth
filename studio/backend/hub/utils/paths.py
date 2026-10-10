@@ -127,12 +127,7 @@ _MAX_GGUF_VARIANT_LENGTH = 512
 
 
 def is_valid_gguf_variant(variant: str) -> bool:
-    """Validate Hub GGUF variant keys.
-
-    Known quant labels are short tokens (``Q4_K_M``), but unknown GGUF layouts
-    use a snapshot-relative key derived from the filename and may contain
-    slashes or spaces.
-    """
+    """Unknown GGUF layouts use snapshot-relative keys, which may hold slashes or spaces."""
     if not variant or variant != variant.strip():
         return False
     if len(variant) > _MAX_GGUF_VARIANT_LENGTH:
@@ -214,13 +209,7 @@ def _assert_contained(resolved: Path, root: Path) -> None:
 
 
 def path_is_same_or_child(path: Path, root: Path) -> bool:
-    """True when *path* is *root* or lives beneath it.
-
-    Compares real (symlink-resolved, case-normalized) paths so the check holds
-    through symlinks and on case-insensitive filesystems, where a plain
-    ``Path.is_relative_to`` would miss a casing-only match. Returns False on any
-    resolution error rather than raising.
-    """
+    """Compares normcased realpaths so symlinks and case-only matches count; any error returns False."""
     try:
         path_real = os.path.normcase(os.path.realpath(str(path)))
         root_real = os.path.normcase(os.path.realpath(str(root)))
@@ -276,12 +265,7 @@ def resolve_cached_repo_id_case(
     use_memo: bool = True,
     repo_type: str = "model",
 ) -> str:
-    """Resolve repo_id to the exact casing already present in local HF cache.
-
-    Prefers the requested casing, but if a case-variant already exists in
-    local HF cache, reuses that exact cached spelling so we don't trigger
-    a duplicate download.
-    """
+    """Reuses the cached spelling when a case-variant exists, to avoid a duplicate download."""
     if not model_name or "/" not in model_name:
         return model_name
 

@@ -170,10 +170,7 @@ def _read_meta(path: Path, *, strict_io: bool = False) -> Optional[dict[str, Any
 
 
 def owned_image_path(image_id: str) -> Optional[Path]:
-    """Resolve an id to its PNG only when it is an Unsloth-owned image (a readable recipe chunk),
-    else None. The serve route uses this instead of image_path() so a guessed stem for a
-    hand-dropped foreign PNG -- which list_images/delete/clear already treat as not ours -- can't
-    be streamed out. Mirrors the delete/clear ownership guard."""
+    """Returns None unless the PNG is Unsloth-owned, so a guessed id cannot stream a hand-dropped file."""
     path = image_path(image_id)
     if path is None or _read_meta(path) is None:
         return None
@@ -209,20 +206,7 @@ def list_images(
     valid: Optional[Callable[[dict[str, Any]], bool]] = None,
     archived: bool = False,
 ) -> list[dict[str, Any]]:
-    """A window of images for infinite scroll: pinned first (most recently pinned leading), then
-    newest-first by file mtime (or the manual key once dragged).
-
-    mtime is a cheap stat ~= generation order, so a large gallery isn't opened in full just to
-    sort; only the window's recipes are read. limit=None returns everything from ``offset`` on.
-
-    ``archived`` selects WHICH shelf to page over, it does not widen one: False lists only active
-    images, True lists only archived ones. The archived section needs its own scrollable page, so
-    a chat-style "include archived" flag would not do.
-
-    ``valid`` (optional) filters records BEFORE pagination, so ``offset`` / ``limit`` and has_more
-    all count over the accepted-record domain. Pass the route's schema validator: a record with
-    every required key (so ``_read_meta`` accepts it) but a wrong value type would otherwise be
-    counted here yet dropped after slicing, stalling infinite scroll at offset 0."""
+    """Pinned first, newest by mtime; the valid filter runs before paging so has_more stays accurate."""
     try:
         paths = list(gallery_dir().glob("*.png"))
     except OSError:
@@ -330,17 +314,7 @@ def delete(image_id: str) -> bool:
 
 
 def clear(include_archived: bool = False) -> int:
-    """Delete Unsloth-owned gallery PNGs (readable recipe chunk); return how many were removed.
-
-    Archived images are SPARED by default: archiving is how a user sets something aside, so a
-    "clear the gallery" action that destroyed the archive would defeat it. Pass
-    include_archived=True to remove those too.
-
-    Raises FlagsUnavailable when the archive has to be spared but the flag store cannot be read.
-    Fail CLOSED: read() answers "nothing is archived" for an unreadable store, which here would
-    quietly delete the very archive this promises to keep.
-
-    Foreign PNGs are preserved: list_images already hides them, so clear must not destroy them."""
+    """Spares archived images unless include_archived; raises FlagsUnavailable if flags are unreadable."""
     removed = 0
     directory = gallery_dir()
     # Hold the flag lock across read-then-delete, or an archive landing mid-loop gets deleted.

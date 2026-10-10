@@ -338,11 +338,8 @@ _FILENAME_SPLITS = _keyword_patterns(_FILENAME_KEYWORD_PATTERNS)
 
 
 def _data_suffix(name: str) -> Optional[str]:
-    """The suffix that decides this file's builder, or None when it has none.
-
-    datasets reads the whole suffix chain, so records.parquet.backup is still parquet, and
-    a trailing compression suffix is stripped before the rest is considered.
-    """
+    """Whole suffix chain counts, so records.parquet.backup is parquet; compression suffixes are
+    stripped."""
     suffixes = PurePosixPath(name).suffixes
     if suffixes and suffixes[-1].lower() in _COMPRESSION_EXTENSIONS | _UNREADABLE_COMPRESSION:
         suffixes = suffixes[:-1]
@@ -353,11 +350,7 @@ def _data_suffix(name: str) -> Optional[str]:
 
 
 def _file_module(name: str) -> Optional[str]:
-    """The builder datasets would pick for this filename.
-
-    Its globs are case-sensitive, so TRAIN.JSONL is a file it never resolves. The folder
-    builders are the exception: those are registered in both cases.
-    """
+    """Globs are case-sensitive, so TRAIN.JSONL never resolves; folder builders accept both cases."""
     suffix = _data_suffix(name)
     if suffix is None:
         return None
@@ -443,11 +436,7 @@ def _grouped_splits(files: list[PurePosixPath]) -> Optional[dict[str, list[PureP
 
 
 def _one_module(grouped: dict[str, list[PurePosixPath]]) -> Optional[str]:
-    """The single builder every split agrees on, or None when datasets would refuse them.
-
-    It counts a split's files by extension and takes the winner, so a split with no clear
-    winner, or two splits wanting different builders, is a dataset it cannot build.
-    """
+    """Every split must agree on one builder; a split with no clear extension winner is unbuildable."""
     modules = set()
     for entries in grouped.values():
         counts: dict[tuple[str, str], int] = {}
@@ -481,10 +470,7 @@ def _blocked_by_compression(name: str, module: str) -> bool:
 
 
 def _offerable(entries: list[PurePosixPath], snapshot: Path, module: str) -> Optional[bool]:
-    """True when the split holds data Unsloth can train on, False when it holds none, None
-    when the config is unusable. datasets reads every file in the split, so one file that
-    escapes the cache, or one the builder chokes on, condemns the config rather than
-    the single file."""
+    """One bad file condemns the whole split config, since datasets reads every file in the split."""
     trainable = False
     empty = False
     for path in entries:

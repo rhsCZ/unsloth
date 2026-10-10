@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The FAMILY-SPECIFIC assemblers keep the no-download promise too.
-
-``test_diffusion_offline_load.py`` and ``test_video_offline_load.py`` pin the SHARED path: the
-staging phase, the byte estimate, the prefetch, the guarded ``pipe_kwargs`` every ordinary family
-is built from. Four assemblers do not go through that dict, and each of them was still reaching
-the Hub on a load nobody asked for:
-
-- the MiniMax-H3 hosted conditioner (~27 GB), fetched by ``load_h3_quantized_text_encoder``;
-- the image checkpoint, REOPENED by ``_resolve_gguf_path`` under the generation lock;
-- Krea 2, assembled per-component because the repo ships transformers-5.x configs;
-- LTX 2.3, assembled per-component because its vocoder class differs from the base pin.
-
-Krea and LTX are reachable with no race at all: both are handed a REPO ID rather than a staged
-snapshot (``_base_local_dir`` is None for 2.3 by design), so an assembler that resolves it without
-the flag downloads whatever the caller's cache root does not hold. Every test below therefore
-records what each component load was actually asked for, and the mirror tests keep the
-user-initiated path fetching exactly as it did before.
-"""
+"""Family-specific assemblers must not reach the Hub on a load the user did not request."""
 
 from __future__ import annotations
 
@@ -58,12 +41,7 @@ def _h3_te_module():
 
 
 def _drive_h3_conditioner(monkeypatch, *, local_files_only):
-    """Call the conditioner loader far enough to record its two Hub reads.
-
-    The loader is best-effort by contract and swallows everything into a None return, so the
-    RECORD is the result: the artifact fetch and the config read are the only two calls that can
-    leave the process, and a stub that raises after recording stops the 62 GB meta-init below.
-    """
+    """The loader swallows errors into None, so its recorded Hub calls are the result, not the return."""
     # Bare CI runners lack these, and the driver needs the real library, so skip.
     transformers = pytest.importorskip("transformers")
 
@@ -164,10 +142,7 @@ def _drive_resolve_gguf(monkeypatch, *, cached_here, local_files_only):
 
 @pytest.mark.parametrize("cached_here", [True, False])
 def test_reopening_the_image_checkpoint_is_a_cache_lookup_offline(monkeypatch, cached_here):
-    """Both resolutions, the live root and the other-root reuse. Neither is a no-op even on a hit:
-    ``hf_hub_download`` re-resolves the revision against the Hub, so a checkpoint republished since
-    the cache was filled is a multi-GB pull taken AFTER the resident pipeline was evicted, inside
-    the generation lock, with progress already reading 100%."""
+    """Offline reopen must be a cache lookup: even a hit makes hf_hub_download re-resolve the Hub."""
     for kwargs in _drive_resolve_gguf(monkeypatch, cached_here = cached_here, local_files_only = True):
         assert kwargs["local_files_only"] is True
 
@@ -513,12 +488,7 @@ def test_the_image_base_file_set_stages_the_transformer_config_but_not_its_shard
 
 
 def _sf_kwargs_keys(module_path: str) -> list[set[str]]:
-    """The literal keys of every ``sf_kwargs = {...}`` in *module_path*, one set per assignment.
-
-    Read from the source, like the call-site checks above: reaching this branch needs a real
-    multi-GB GGUF plus its base repo, which no unit test can stage. The call itself is
-    ``from_single_file(path, **sf_kwargs)``, so the keyword lives in the dict, not the call.
-    """
+    """Parsed from source since the branch needs a multi-GB GGUF no unit test can stage."""
     backend_root = pathlib.Path(diffusion_mod.__file__).resolve().parents[2]
     tree = ast.parse((backend_root / module_path).read_text(encoding = "utf-8"))
     found: list[set[str]] = []

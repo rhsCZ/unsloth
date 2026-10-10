@@ -160,11 +160,7 @@ def _validate_max_output_tokens_contract(
     field_was_set: bool,
     value: Optional[int] = None,
 ) -> None:
-    """Reject a non-null override on a ChatGPT subscription. Codex routing, model list and output cap
-    are all fixed, so an override stored there would never be read. Every other type takes one: the
-    frontend uses it to lower a model's documented cap, or to replace the 32,768-token fallback for
-    a model with no documented cap. An explicit null is allowed everywhere, Codex included: a blank
-    field serialises as null rather than as an omission, and clearing an absent override is a no-op."""
+    """Rejects a non-null override on ChatGPT subscriptions, where the output cap is fixed."""
     if field_was_set and value is not None and provider_type == "openai_codex":
         raise HTTPException(
             status_code = 400,
@@ -438,14 +434,7 @@ async def update_provider_config(
         return current.get(field) == written
 
     def _restore_metadata() -> None:
-        """Undo this request's own metadata write, while it is still the row. update_provider commits
-        and closes its own connection, so the row is already durable by the time any later step
-        fails; a compensating write is the only undo there is. This handler suspends between that
-        commit and the proof write, though (remember_catalog_account awaits a 30s file lock, and the
-        failure worth undoing is exactly the one where that lock was contended), so a second save
-        can land in between. Restoring the whole pre-request snapshot would silently erase it. Put
-        back only the columns this request set, and only those the row still holds this request's
-        value for: a column a later save has since claimed belongs to that save."""
+        """Restores only columns this request set and still holds, so a later save is not erased."""
         if not metadata_requested:
             return
         current = providers_db.get_provider(provider_id)

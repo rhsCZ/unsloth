@@ -34,12 +34,7 @@ _MAX_TRACKED_WINDOWS = 100_000
 
 
 def is_repetition_dominated(text: str) -> bool:
-    """Whether verbatim repeats account for the majority of ``text``.
-
-    Fails open: anything it cannot confidently judge is reported as fine to continue, so a
-    false negative costs one wasted continuation while a false positive would refuse to
-    finish an answer that was merely repetitive in an ordinary way.
-    """
+    """Fails open: text it cannot judge is reported as not repetitive, avoiding refusals of real answers."""
     if not isinstance(text, str):
         return False
     length = len(text)
@@ -75,10 +70,7 @@ def is_repetition_dominated(text: str) -> bool:
 
 
 def _line_repetition_dominated(text: str, length: int) -> bool:
-    """The common shape: one line repeated until it covers half the fragment.
-
-    Checked first because it is cheap and allocates nothing, unlike the window pass.
-    """
+    """Checked first because it is cheap and allocates nothing, unlike the window pass."""
     counts: dict[str, int] = {}
     for line in text.splitlines():
         normalised = line.strip()

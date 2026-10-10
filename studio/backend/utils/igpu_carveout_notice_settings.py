@@ -21,10 +21,7 @@ IGPU_CARVEOUT_NOTICE_KEY = "igpu_carveout_notice_dismissed_at_gb"
 
 
 def _coerce_gb(value: Any) -> Optional[float]:
-    """Anything unparseable reads as "never dismissed", matching a fresh install: a
-    corrupt row must not wedge the notice off permanently, so this fails toward
-    showing it rather than hiding it.
-    """
+    """Unparseable reads as never dismissed; a corrupt row must not hide the notice permanently."""
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -39,12 +36,7 @@ def _coerce_gb(value: Any) -> Optional[float]:
 
 
 def _is_plausible_gb(value: float) -> bool:
-    """Whether a number could be a GPU allocation someone actually has.
-
-    Infinity is the one that matters: Python's json accepts ``Infinity``, so a client
-    could otherwise dismiss at a value no machine will ever exceed and silence the
-    notice permanently, the opposite of the rule above.
-    """
+    """Rejects non-finite values: Python's json accepts Infinity, which would silence the notice forever."""
     return math.isfinite(value) and 0 < value < 1024 * 1024
 
 
@@ -59,12 +51,7 @@ def get_dismissed_at_gb() -> Optional[float]:
 
 
 def notice_already_dismissed(current_gb: Optional[float]) -> bool:
-    """Whether the notice should stay silent at an allocation of ``current_gb``.
-
-    Silent only while the allocation is unchanged or smaller. An unknown allocation
-    counts as dismissed once anything has been, since re-showing on a reading we
-    cannot compare is the nagging this exists to avoid.
-    """
+    """Silent only while the allocation is unchanged or smaller; an unknown size counts as dismissed."""
     dismissed_at = get_dismissed_at_gb()
     if dismissed_at is None:
         return False
@@ -75,11 +62,7 @@ def notice_already_dismissed(current_gb: Optional[float]) -> bool:
 
 
 def dismiss_notice(current_gb: Optional[float]) -> Optional[float]:
-    """Record dismissal at ``current_gb``. Returns what was stored, or None.
-
-    Only ever raises the stored value, so a stale client reporting an old, smaller
-    allocation cannot re-arm a notice the user already dismissed at a larger one.
-    """
+    """Only raises the stored value, so a stale, smaller report cannot re-arm a dismissed notice."""
     if current_gb is None:
         return get_dismissed_at_gb()
     try:

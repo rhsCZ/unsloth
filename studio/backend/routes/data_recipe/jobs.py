@@ -97,11 +97,7 @@ def _sign_download_link(**parts: Any) -> str:
 
 
 def _download_link_account(token: str, **parts: Any) -> AccountContext | None:
-    """The account this link was minted for, or None once it is invalid or deactivated.
-
-    Same shape as the signed RAG document link: expiry, account id, signature, with an empty
-    account id meaning the owner.
-    """
+    """Empty account id in the link means the owner; None once it is invalid or deactivated."""
     try:
         expires_at, account_id, signature = token.split(".", 2)
     except ValueError:
@@ -313,11 +309,8 @@ def _ensure_selected_local_model_loaded(
 def _inject_local_structured_response_format(
     recipe: dict[str, Any], local_provider_names: set[str]
 ) -> None:
-    """Inject an OpenAI ``response_format`` for each local llm-structured column. Clones the
-    model_config and repoints the column at the clone so llm-text / llm-judge columns sharing the
-    alias keep free-form sampling. Without this, data_designer only adds a prompt-level "return
-    JSON" hint, which small GGUFs often break. Forwarding ``response_format`` lets llama-server
-    apply grammar-constrained sampling, guaranteeing parseable output."""
+    """Give each structured column its own cloned model config so llama-server grammar-constrains
+    only it."""
     columns = recipe.get("columns")
     model_configs = recipe.get("model_configs")
     if not isinstance(columns, list) or not isinstance(model_configs, list):
@@ -486,15 +479,7 @@ def _normalize_run_name(value: Any) -> str | None:
 
 
 def _resolve_seed_endpoint(recipe: dict[str, Any]) -> None:
-    """Fill in the HF endpoint for a backend-executed seed fetch, in place.
-
-    Data Designer fetches the seed in this process, so the endpoint must be the
-    one THIS machine can reach. A client that sends none (the normal case) gets
-    HF_ENDPOINT resolved here, which matters for a remote browser: /api/health
-    reports the public default to it for a loopback mirror, and shipping that
-    back would bypass the mirror on the deployments that need it most. An
-    endpoint the user typed into the seed node is left alone.
-    """
+    """Resolve HF_ENDPOINT here when the client sends none, so a loopback mirror is not bypassed."""
     seed_config = recipe.get("seed_config")
     if not isinstance(seed_config, dict):
         return

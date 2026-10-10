@@ -67,33 +67,8 @@ def apply_completion_masking(
     detect_fn = None,
     dataset_template = None,
 ):
-    """Apply completion-only masking with an explicit dataset template or
-    auto-detection followed by the manual model-template fallback.
-
-    Args:
-        trainer: The platform trainer (SFTTrainer or MLXTrainer).
-        model_name: Model repo id used for table lookup and the gpt-oss
-            renamed-checkpoint fallback.
-        train_fn: The platform train_on_responses_only callable.
-        num_proc: Forwarded to train_fn when not None (CUDA path only).
-        notify: Optional callback notify(level, message) with level "info" or
-            "warning" for user-visible progress and warnings.
-        detect_fn: Marker detector (tokenizer/processor) -> (instruction_part,
-            response_part). Defaults to unsloth_zoo's get_chat_template_parts,
-            which raises loudly when the template cannot be parsed. Test seam.
-        dataset_template: Explicit template-table key for already-rendered
-            dataset text. Bypasses tokenizer marker detection when provided.
-
-    Returns:
-        (trainer, applied): the possibly wrapped trainer and whether masking
-        was applied. When applied is False the trainer is unchanged and
-        training runs on full sequences.
-
-    Only marker DETECTION failures trigger the table fallback. Exceptions
-    raised while applying the masking (dataset map, tokenization) propagate
-    to the caller in both the auto and manual paths, so a real failure stops
-    the run instead of silently changing the training objective.
-    """
+    """Only marker detection failures trigger the table fallback; errors while applying masking
+    propagate."""
     if notify is None:
         notify = lambda level, message: None
     kwargs = {}

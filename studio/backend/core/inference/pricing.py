@@ -146,10 +146,7 @@ def _lookup(provider: str, model: str) -> Optional[dict[str, float]]:
 
 
 def calculate_cost(provider: str, model: str, usage: dict[str, Any]) -> dict[str, float]:
-    """Return a per-turn USD cost breakdown (per-bucket + total).
-
-    Unknown model -> ``priced`` False and USD fields 0.0 (token counts still report).
-    """
+    """Unknown model gives ``priced`` False and zero USD, while token counts are still reported."""
     prices = _lookup(provider, model)
     if prices:
         prices = _launch_prices(provider, model, prices)

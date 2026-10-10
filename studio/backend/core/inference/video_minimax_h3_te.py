@@ -88,10 +88,7 @@ _QUANT_SUFFIX = ".comfy_quant"
 
 
 def h3_te_quant_scheme(mode: Optional[str]) -> Optional[str]:
-    """The hosted-conditioner scheme for a requested ``text_encoder_quant``, or None.
-
-    Pure and non-raising: the request has already been validated by ``normalize_te_quant`` at the
-    route, and a scheme with no hosted artifact simply keeps the released bfloat16 encoder."""
+    """Pure and non-raising; the request was validated at the route, unknown schemes give None."""
     if mode is None:
         return None
     normalized = str(mode).strip().lower().replace("-", "_")
@@ -104,19 +101,7 @@ def h3_te_quant_filename(scheme: Optional[str]) -> Optional[str]:
 
 
 def h3_te_quant_source(scheme: Optional[str]) -> str:
-    """The repo to fetch the hosted quantized conditioner for ``scheme`` from: our mirror, or the
-    repack it was mirrored from when this install already holds that exact artifact under the old
-    id.
-
-    The conditioner's half of ``h3_component_source``, and it matters more than the VAEs do: the
-    artifact is ~27 GB, and the load that wants it has already dropped the dense encoder shards
-    from its pull. So on an upgraded install a live re-download is not merely slow -- offline it
-    leaves the pipeline with no encoder at all, because the base snapshot it would fall back to
-    was never staged either.
-
-    PURE, and the same shared owner (``prefer_cached_legacy_source``, both cache roots) the VAEs
-    use, so planning, prefetching and loading cannot name different repos.
-    """
+    """Shares prefer_cached_legacy_source with the VAEs, so planning, prefetch and load name one repo."""
     filename = h3_te_quant_filename(scheme)
     if filename is None:
         return H3_TE_QUANT_REPO
@@ -137,13 +122,7 @@ def h3_te_resident_gb(scheme: Optional[str], *, bf16_gb: float) -> float:
 # H is a normalized regular Hadamard (H @ H == I); dequantizing without the rotation gives noise.
 @lru_cache(maxsize = None)
 def _int8_convrot_linear_class() -> Any:
-    """The ConvRot INT8 ``nn.Linear`` stand-in, built lazily so importing this module never imports
-    torch, and built exactly ONCE.
-
-    One load already shares a single class across every projection, so the cache is about the
-    SECOND load in a process: a fresh class there is a fresh ``___check_type_id`` guard, which
-    retraces every compiled block that survived the first one. Same reason the denoiser's
-    ``convrot_linear_class`` is cached."""
+    """Built lazily and once: a fresh class on a second load would retrace every compiled block."""
     import torch
     from torch import nn
 
@@ -265,29 +244,7 @@ def load_h3_quantized_text_encoder(
     local_files_only: bool = False,
     logger: Any = None,
 ) -> Optional[Any]:
-    """The hosted quantized Qwen3-VL conditioner for ``scheme``, on CPU, ready to seed into the
-    modular pipeline; None on any problem so the caller loads the released bfloat16 encoder.
-
-    ``base`` supplies the component CONFIG only (``<base>/text_encoder/config.json``); every weight
-    comes from the hosted artifact, so the 62 GB dense encoder is never fetched. ``local_base`` is
-    the already-staged snapshot of ``base`` when there is one, and it is preferred: the scoped
-    pre-download keeps every component config precisely so the meta-init loaders can read them
-    locally, and reading the config back out of the snapshot cannot go to the network at all.
-    ``cache_dir`` pins the config resolution to the live cache root for the hub-id case, exactly as
-    the artifact download above and every other loader call in this backend do -- unset, it
-    resolves through huggingface_hub's import-time constant instead and can re-download into a root
-    Unsloth no longer reads (or fail outright on an offline host that has already staged it).
-
-    ``local_files_only`` is a load nobody asked for, which may not fetch anything. The artifact is
-    ~27 GB, and the caller's staging phase (``_fetch_h3_te_quant``) has already accepted it -- so
-    without the flag this is where that promise is broken, after the resident pipeline was evicted.
-    It rides with the same other-root reuse the stager uses: the stager accepts a copy living only
-    under huggingface_hub's import-time root, so a lookup pinned to ``cache_dir`` alone would refuse
-    an artifact the load was cleared on and drop to the dense encoder the base pull already left
-    behind. A genuine miss still returns None through the handler below.
-
-    CPU on purpose: ``enable_auto_cpu_offload`` owns placement for every component, and a
-    pre-placed encoder would only be moved again."""
+    """Loads with local_files_only so a reload after eviction never re-downloads; None on any problem."""
     try:
         filename = h3_te_quant_filename(scheme)
         if filename is None:
@@ -508,11 +465,7 @@ def pin_module_in_place(
     _arena_factory: Any = None,
     repoint: bool = False,
 ) -> int:
-    """Move every CPU parameter / buffer of ``module`` into pinned host arenas, in place; returns pinned bytes.
-
-    Tensors are REPLACED in ``_parameters`` / ``_buffers``, not re-pointed via ``.data``: the hosted safetensors
-    tensors are views of one mmap, and ``.data =`` keeps the view's ``_base`` alive (27 GB of the mapping stayed
-    resident). Pinned, non-CPU and subclass tensors are left alone; tied tensors stay tied."""
+    """Replaces tensors in _parameters/_buffers rather than .data, which would keep the mmap alive."""
     import torch
 
     slots: dict[int, list] = {}  # id(tensor) -> [tensor, [(owner dict, name, is_param)]]
@@ -573,10 +526,7 @@ def stream_h3_text_encoder(
     pin: Optional[bool] = None,
     logger: Any = None,
 ) -> Optional[str]:
-    """Stream MiniMax-H3's conditioner leaf by leaf via group offloading, outside the ComponentsManager rotation.
-
-    Hooks go on ``text_encoder.model``, which the H3 encode step calls directly. ``pin=None`` decides from
-    ``h3_te_pin_allowed``. Returns ``"stream"`` (pinned) / ``"stream_lazy"``, or None with nothing changed."""
+    """Hooks go on text_encoder.model, which the H3 encode step calls directly, outside the rotation."""
     import torch
 
     onload = torch.device(device)

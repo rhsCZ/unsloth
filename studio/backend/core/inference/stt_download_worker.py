@@ -44,10 +44,7 @@ def spawn_download(
     *,
     hub_cache: Optional[Path] = None,
 ) -> subprocess.Popen:
-    """Run this module as a child process performing ``args``' download.
-
-    The token travels in the environment, never argv, so it stays out of ``ps``.
-    """
+    """The token is passed in the environment, never argv, so it does not show in ps."""
     cwd = backend_dir()
     from utils.hf_cache_settings import get_hf_cache_paths
 
@@ -80,12 +77,7 @@ def spawn_download(
 
 
 def terminate_download(process: subprocess.Popen) -> None:
-    """SIGTERM now, SIGKILL after a grace, so cancel() still returns at once.
-
-    The canceller holds the repository reservation until the reap returns, so a
-    worker that ignores SIGTERM would lock every Model Hub write on that repo
-    until Unsloth restarts.
-    """
+    """SIGTERM, then SIGKILL after a grace, so a worker that ignores SIGTERM cannot block repo writes."""
     try:
         process.terminate()
     except Exception:  # noqa: BLE001
@@ -103,12 +95,8 @@ def terminate_download(process: subprocess.Popen) -> None:
 
 
 def reap_download(process: subprocess.Popen) -> bytes:
-    """Wait for a worker and drop its PID. Returns its stderr.
-
-    Callers pair every spawn with this: an adopted PID that outlives the process
-    can be reused by something unrelated, which terminate_all would then signal
-    (macOS and Windows cannot pin a PID to an identity the way /proc does).
-    """
+    """Every spawn must be reaped: a PID kept after exit can be reused and then signalled by
+    terminate_all."""
     from utils.process_lifetime import forget_pid
 
     try:

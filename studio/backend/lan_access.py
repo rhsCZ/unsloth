@@ -63,11 +63,8 @@ _bound_addresses: tuple[str, ...] = ()
 
 
 def detect_lan_addresses(ip_version: int = 4) -> list[str]:
-    """The machine's own reachable addresses for one IP version, default route first. Loopback, link-local
-    (169.254/16) and multicast are dropped: none of them is an address another device on the network can open. A
-    public address is kept -- a cloud VM binding its own public IP is the same operation as a laptop binding its
-    Wi-Fi address, and the caller decides whether that is wanted.
-    """
+    """Loopback, link-local and multicast are dropped; public addresses are kept for the caller to
+    decide."""
     # WSL NAT addresses sit on a private Hyper-V network other devices cannot reach
     if _wsl_networking_mode() not in (None, "mirrored"):
         return []
@@ -192,11 +189,7 @@ def _interface_addresses(ip_version: int = 4) -> list[str]:
 
 
 def is_public_address(address: str) -> bool:
-    """True when ``address`` is routable from the internet, not just this network. A VPS or dedicated box usually
-    carries its public IPv4 straight on the NIC, so the addresses this module binds are not always the LAN
-    addresses the name implies. Callers surface that rather than refusing it: a public-IP campus or office
-    network is a legitimate place to serve, and only the operator knows which one they are on.
-    """
+    """A VPS may carry a public IPv4 on its NIC, so callers surface that rather than refuse it."""
     try:
         return ipaddress.ip_address(address).is_global
     except ValueError:
@@ -390,12 +383,7 @@ def _close_sockets(sockets) -> None:
 
 
 def stop_lan_listener() -> bool:
-    """Release the LAN sockets and take the listener down. Idempotent. Returns whether the port is confirmed
-    released; False means the sockets may still be accepting, so the caller must keep treating the host as
-    reachable. Waits for the sockets, not for ``serve()`` to return: uvicorn closes the sockets passed to it at
-    the top of its shutdown and only then drains in-flight responses, so waiting on the serve task would make a
-    Stop pressed from a LAN device wait out its own response.
-    """
+    """Waits for sockets, not serve(): a LAN Stop would otherwise wait out its own in-flight response."""
     global _server, _serve_loop, _sockets, _bound_addresses, _port, _error
 
     # a stop on the loop itself must not block on _lock held by a waiting start

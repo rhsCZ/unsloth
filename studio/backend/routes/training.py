@@ -178,11 +178,7 @@ _TRAINING_START_ERROR_RESPONSES = {
 
 
 def _hub_unreachable() -> bool:
-    """Bounded, memoised Hub reachability check. hf_env_offline() only reads env vars, so a merely dead
-    link burns the full 5s + 10s metadata budget per leg, once per resolved address: 30s at best and
-    minutes on a multi-homed resolver, before the cached fallbacks are consulted. The worker
-    subprocess already guards itself this way (core/training/worker.py); the route that spawns it
-    did not. Fails open."""
+    """Memoised probe, fails open; env-var offline checks miss a dead link that burns the timeout."""
     memo = hf_reachability_memo()
     if memo is not None:
         return memo
@@ -250,10 +246,7 @@ def _stop_training_if_active(
 
 
 def _is_finalizing(progress, msg_lower: str) -> bool:
-    """Worker alive past the last step, `complete` not yet drained. The save emits no step updates, so
-    the bar sat at 100% labelled "training", indistinguishable from a hang. Non-terminal by design:
-    the last step means the optimizer loop ended, not that the save succeeded, so completion still
-    comes solely from is_completed."""
+    """Not terminal: the last step ends the loop, not the save; only is_completed ends the run."""
     if any(k in msg_lower for k in ("saving", "merging")):
         return True
     total = getattr(progress, "total_steps", 0) or 0
@@ -618,11 +611,7 @@ def _remote_untrainable_model_format(
 
 
 def _hf_dataset_is_the_source(request: Any) -> bool:
-    """Whether the run will actually read ``hf_dataset``.
-
-    Mirrors the precedence in UnslothTrainer.load_and_format_dataset: local_datasets wins, then
-    s3_config, and only then dataset_source. A payload carrying a Hub id alongside either never
-    loads the Hub repo, so nothing about it can gate the start."""
+    """A Hub id beside local_datasets or s3_config is never loaded, so it cannot gate the start."""
     if getattr(request, "local_datasets", None):
         return False
     if getattr(request, "s3_config", None):
@@ -665,13 +654,7 @@ def _refuse_unauthorized_cached_local_paths(
     hf_token: HfTokenArg,
     label: str = "dataset",
 ) -> None:
-    """Refuse a local path that is really a snapshot inside the operator's Hub cache.
-
-    ``local_datasets`` takes any readable path, so pointing it at
-    ``.../datasets--org--private/snapshots/<rev>/data.parquet`` trained on the operator's private
-    dataset with no token at all. Same leak the model leg closes above, on the one input that
-    reaches the trainer without ever naming a repo.
-    """
+    """Local paths into the Hub cache are private repos in disguise; refused unless authorized."""
     from hub.utils.hf_cache_state import (
         cached_repo_ref_for_path,
         repo_cache_has_usable_snapshot,
@@ -1561,10 +1544,7 @@ async def cancel_training_start_request(
 
 
 def _background_video_generation_active() -> bool:
-    """Whether a video clip is generating on the video backend's worker thread. POST /video/generate
-    returns at once and generates in the background, so an in-flight clip is invisible to the
-    keep-warm in-flight request count the API-key training guards consult; ask the backend directly.
-    Best-effort: a probe failure must never block a training start."""
+    """POST /video/generate returns early, so the in-flight count misses it; ask the backend."""
     try:
         from core.inference.video import get_video_backend
         return bool(get_video_backend().generate_progress().get("active"))
@@ -2956,11 +2936,7 @@ class _DiffusionStartInFlight(RuntimeError):
 
 @contextlib.contextmanager
 def _diffusion_gpu_admission():
-    """Hold the diffusion service's GPU admission across the LLM spawn. Makes the cross-trainer
-    admission atomic: entering re-tests the diffusion state under the service's own lock and raises
-    if a diffusion run is reserved or active, and while it is held the diffusion ``reserve()``
-    refuses, so of two near-simultaneous starts exactly one proceeds. Fails OPEN on an import/health
-    failure: a chat-only install has no diffusion service and must still be able to train."""
+    """Holds diffusion GPU admission across the LLM spawn so only one of two racing starts proceeds."""
     try:
         from core.training.diffusion_training_service import (
             TrainingActiveError,
@@ -2989,10 +2965,7 @@ def _diffusion_gpu_admission():
 
 
 def _require_diffusion_dataset_mutable() -> None:
-    """Reject a dataset mutation while a diffusion run is active. The trainer re-opens dataset images
-    during the loop, so mutating underneath it makes the run nondeterministic or raises a
-    FileNotFoundError mid-step. Fails open (a service-import failure never blocks a mutation on an
-    unknowable state), matching the start interlock."""
+    """The trainer re-opens images mid-run, so a mutation underneath can raise FileNotFoundError."""
     if _diffusion_training_active():
         raise HTTPException(
             status_code = 409,
@@ -3004,11 +2977,7 @@ def _require_diffusion_dataset_mutable() -> None:
 
 
 def diffusion_dataset_interlock():
-    """Dependency holding the dataset interlock for a whole mutating request. The check above only
-    covers the instant it runs: every one of these endpoints then hands its filesystem work to a
-    thread, and a ``/diffusion/start`` reserving in that gap would move captions or images
-    underneath the preflight or the running trainer. As a yield dependency the registration spans
-    the endpoint, so ``reserve()`` refuses instead. Fails open on an import error."""
+    """A yield dependency, so the reservation spans the endpoint, not just the instant of the check."""
     try:
         from core.training.diffusion_training_service import (
             TrainingActiveError,
@@ -3026,10 +2995,7 @@ def diffusion_dataset_interlock():
 
 
 def _free_gpu_for_diffusion_training() -> None:
-    """Free GPU residents before the diffusion trainer spawns its own SDXL pipeline. The trainer
-    subprocess loads a full SDXL pipeline; an export worker, a resident Images pipeline or loaded
-    chat models would keep their VRAM and OOM the run. Mirrors the LLM start path's pre-spawn
-    cleanup. Best-effort: failing to free one resident never blocks the start."""
+    """Frees resident GPU models first; the trainer's SDXL pipeline would OOM beside them."""
     try:
         from core.export import get_export_backend
         exp_backend = get_export_backend()
@@ -3083,10 +3049,7 @@ def _free_gpu_for_diffusion_training() -> None:
 
 
 def _preflight_gated_base(base_model: str, hf_token: Optional[str]) -> None:
-    """HEAD a remote base repo's model_index.json with the caller's token; raise HTTP 400 on
-    401/403 (gated / unauthorized) with an actionable message. Best-effort: a local path,
-    a non-repo string, or a network hiccup passes through so the trainer can surface any real
-    load error itself. Runs before GPU teardown so a doomed start never evicts a loaded model."""
+    """Gated or unauthorized base repos fail with 400 before GPU teardown can evict a loaded model."""
     import urllib.error
     import urllib.request
 
@@ -3128,12 +3091,7 @@ def _preflight_gated_base(base_model: str, hf_token: Optional[str]) -> None:
 
 
 def _resolve_diffusion_data_dir(raw: str) -> Path:
-    """Resolve a diffusion-training ``data_dir``. The upload/labeling routes manage image datasets
-    directly under ``datasets_root()`` and the UI passes the bare folder name back as ``data_dir``,
-    but :func:`resolve_dataset_path` searches the LLM uploads and recipe roots FIRST, so an
-    unrelated upload or recipe folder of that name would shadow the just-uploaded image dataset.
-    Prefer the image dataset root for a bare single-component name that exists there; everything
-    else resolves exactly as before."""
+    """A bare folder name prefers the image dataset root when it exists there, so no upload shadows it."""
     from utils.paths import datasets_root
 
     value = str(raw or "").strip()
@@ -3159,15 +3117,7 @@ def _preflight_diffusion_resume(
     *,
     pin: bool = True,
 ) -> None:
-    """Validate ``config["resume_from_checkpoint"]`` against ``identity``, optionally PINNING it.
-
-    Pinning rewrites the config's resume path to the exact ``checkpoint-<N>`` directory accepted, so
-    the trainer resumes the bundle this preflight approved rather than re-picking "newest" from a
-    directory that could have changed. Called twice, once before the dataset is known and once with
-    its fingerprint, both times BEFORE the resident GPU models are freed. The FIRST pass does not
-    pin: its identity has no dataset fingerprint, so it can accept the newest bundle on the strength
-    of a check it did not make, leaving the dataset-aware pass nothing to do but reject it when
-    scanning the original directory would have found a matching older checkpoint. Raises ResumeError."""
+    """Pinning happens only in the fingerprinted pass; the first pass lacks the dataset fingerprint."""
     from core.training.diffusion_checkpoint import preflight_resume
 
     path, _step = preflight_resume(
@@ -3509,11 +3459,7 @@ def _reserved_diffusion_dataset_names() -> frozenset[str]:
 def _resolve_dataset_caption(
     folder: Path, image_path: Path, meta_captions: dict[str, str]
 ) -> Optional[str]:
-    """Resolve an item's caption using the same sidecar > metadata precedence the trainer applies in
-    ``discover_image_caption_pairs``. A per-item .txt/.caption sidecar wins and is stripped, so an
-    empty (tombstone) sidecar shadows metadata and yields "", which the trainer skips (``if
-    caption:``) and so must not count as captioned. Clips resolve through this same function: the
-    clip discovery applies the identical precedence over a different extension set."""
+    """An empty sidecar still shadows metadata and yields no caption, so it must not count as captioned."""
     caption: Optional[str] = None
     sidecar_present = False
     for ext in (".txt", ".caption"):
@@ -3594,10 +3540,7 @@ def _diffusion_dataset_summary(folder: Path) -> DiffusionDatasetSummary:
 
 
 def _mixed_media_refusal(data_dir: str, resolved_family: str) -> Optional[str]:
-    """Why ``resolved_family`` cannot train on this folder as it stands, or None. Both discoveries read
-    one medium and ignore the other, so a mixed folder trains on a subset the picker counted as
-    trainable and says nothing. The rule is the same in both directions, only the medium that is out
-    of place changes: refuse the folder rather than quietly train part of it."""
+    """Mixed images and clips train only one medium's subset, silently; the folder is refused."""
     from core.training.diffusion_train_common import CLIP_TRAINED_FAMILIES
 
     if str(resolved_family or "").strip().lower() in CLIP_TRAINED_FAMILIES:
@@ -3624,14 +3567,7 @@ def _image_dataset_refusal(data_dir: str) -> Optional[str]:
 
 
 def _clip_dataset_refusal(data_dir: str) -> Optional[str]:
-    """Why a folder holding clips cannot be trained on yet, or None when it can. No trainer reads clips
-    and ``discover_image_caption_pairs`` scans stills only, so without this a clip folder fails two
-    ways and neither says so: clip-only it raises "No captioned images found", wrong twice over on a
-    folder where every clip has one, and MIXED it trains on the image subset in silence while the
-    picker counted the clips as trainable. So the rule is the folder, not the outcome: any clip
-    present, refuse. The dataset layer still lists these folders, because uploading and captioning a
-    clip set is what lets one exist before the trainer does. Once discovery reads clips this check
-    goes with it."""
+    """Refuses any folder holding a clip, since no trainer reads clips yet; drop this once they do."""
     try:
         summary = _diffusion_dataset_summary(Path(data_dir).expanduser())
     except OSError:
@@ -3647,10 +3583,7 @@ def _clip_dataset_refusal(data_dir: str) -> Optional[str]:
 
 
 def _listed_dataset_clip_count(summary: DiffusionDatasetSummary) -> int:
-    """How many trainable CLIPS a listed dataset folder holds, as the dataset layer reports it. Read
-    off the summary with a 0 default rather than recounted here: counting clips is the dataset
-    layer's job, and while that layer is image-only the summary carries no clip count at all, so
-    every folder answers 0, which is precisely the state ``_ui_trainable_families`` has to detect."""
+    """Read from the summary: while the dataset layer is image-only, every folder reports 0 clips."""
     try:
         return int(getattr(summary, "clip_count", 0) or 0)
     except (TypeError, ValueError):
@@ -3658,10 +3591,7 @@ def _listed_dataset_clip_count(summary: DiffusionDatasetSummary) -> int:
 
 
 def _listed_dataset_trains_clips(summary: DiffusionDatasetSummary) -> bool:
-    """Whether a listed folder could actually start a clip run, not merely whether it holds clips. The
-    same two conditions ``_image_dataset_refusal`` applies at Start, read off the summary the
-    listing already built: clips present, and no stills mixed in. Kept beside the count helper so
-    the advertisement and the refusal cannot drift apart."""
+    """Same two conditions as _image_dataset_refusal (clips present, no stills), so they cannot drift."""
     if _listed_dataset_clip_count(summary) <= 0:
         return False
     try:
@@ -3671,16 +3601,7 @@ def _listed_dataset_trains_clips(summary: DiffusionDatasetSummary) -> bool:
 
 
 def _ui_trainable_families(datasets: list[DiffusionDatasetSummary]) -> list[dict]:
-    """The trainable families to ADVERTISE in the Train picker, given the datasets this same response
-    lists as selectable. ``family_train_infos()`` describes every family that has a trainer, right
-    for the API but wrong for the picker, which offers a family and a dataset together:
-    ``CLIP_TRAINED_FAMILIES`` train from captioned clips and nothing else, so while every selectable
-    dataset is stills, choosing one can only end in Start failing with "No captioned video clips
-    found". Gated on the LISTED datasets rather than a family name or feature flag, so it needs no
-    follow-up edit: the moment the dataset layer lists a folder of clips the family is advertised
-    alongside it, and the advertisement is withdrawn with the listing. "Has clips" is not enough,
-    since ``_image_dataset_refusal`` turns a MIXED folder away: the qualifying folder is one that
-    would survive that refusal, clips and no stills."""
+    """Offers CLIP families only when a listed folder holds clips and no stills, else Start fails."""
     from core.training.diffusion_train_common import CLIP_TRAINED_FAMILIES, family_train_infos
 
     infos = family_train_infos()
@@ -3767,11 +3688,7 @@ _DATASETS_CASE_INSENSITIVE: Optional[bool] = None
 
 
 def _dataset_folder_is_case_insensitive(folder: Path) -> bool:
-    """True when ``folder`` cannot hold two names differing only by case. Probed once per process
-    against the real filesystem rather than keyed off ``sys.platform``: NTFS and the default APFS
-    fold case, but macOS also ships case-SENSITIVE APFS volumes and a Linux host can keep its
-    Unsloth home on an exFAT/NTFS mount. A failed probe answers False, keeping the case-sensitive
-    behaviour."""
+    """Probes the filesystem rather than trusting sys.platform; a failed probe means case-sensitive."""
     global _DATASETS_CASE_INSENSITIVE
     if _DATASETS_CASE_INSENSITIVE is None:
         import tempfile
@@ -3785,11 +3702,7 @@ def _dataset_folder_is_case_insensitive(folder: Path) -> bool:
 
 
 def _clean_diffusion_dataset_name(name: str) -> str:
-    """Validate a dataset folder name: a single path component, no traversal, printable. Windows path
-    rules are applied on EVERY platform: a dataset created on one machine is opened on another, and
-    both failures are silent or confusing. A reserved device name dies in mkdir with an unhandled
-    OSError, and Win32 strips a trailing period, so an upload to the "new" dataset 'photos.' would
-    quietly write into the existing 'photos'."""
+    """Windows path rules apply on every OS: 'photos.' would silently write into 'photos'."""
     import re
 
     global _DATASET_NAME_RE
@@ -4101,10 +4014,7 @@ _MAX_TRAINING_IMAGE_SIDE = 4096
 
 
 def _validate_uploaded_training_image(path: Path, original_name: str) -> None:
-    """Reject an uploaded training image whose decoded dimensions exceed the per-side limit. Reads only
-    the header (never img.load()), so a small-payload / huge-dimension file is caught before it
-    spikes memory. Bytes PIL cannot identify are left as-is, so only oversized real images change
-    behaviour."""
+    """Reads only the header, never img.load(), so huge-dimension images are refused before decoding."""
     from PIL import Image, UnidentifiedImageError
 
     try:
@@ -4186,10 +4096,7 @@ def _load_metadata_captions(folder: Path) -> dict[str, str]:
 def _image_record(
     folder: Path, image_path: Path, meta_captions: dict[str, str]
 ) -> DiffusionDatasetImageRecord:
-    """Build one image record, resolving its caption with sidecar > metadata precedence
-    (the same order the trainer uses). A per-image .txt / .caption sidecar wins because
-    it is the user's explicit edit from the labeling grid, which must override a
-    metadata.jsonl / captions.jsonl row for the image."""
+    """A sidecar beats metadata or captions rows: it is the user's explicit edit from the labeling grid."""
     caption: Optional[str] = None
     source = "none"
     sidecar_present = False

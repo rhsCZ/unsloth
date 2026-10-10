@@ -158,11 +158,8 @@ def resolve_audio_cpp_stt_model(
     network: bool = False,
     hf_token: Optional[str] = None,
 ) -> AudioCppModel:
-    """The audio.cpp ASR model a repo id, umbrella folder id or legacy key names.
-
-    ``network=False`` (loads and transcriptions) resolves from the HF cache, so dictation works
-    offline once downloaded; downloads resolve against the Hub.
-    """
+    """With network=False it resolves from the HF cache so dictation works offline; downloads use
+    the Hub."""
     if model is None or not str(model).strip():
         model = DEFAULT_AUDIO_CPP_STT_MODEL
     base, ref_variant = split_variant_ref(str(model).strip())
@@ -607,12 +604,7 @@ class AudioCppSttSidecar:
         return server.backend == "cpu"
 
     def keep_loaded_variant(self, model: Optional[str]) -> Optional[str]:
-        """``model`` pinned to the variant already loaded for that same row when it names none.
-
-        A variantless id means "this row", not "this row's default": Settings and dictation send the
-        bare row id, and resolving it afresh would swap a loaded Moonshine small for the default
-        tiny. An explicit variant, or another row, is left alone.
-        """
+        """A bare row id keeps the variant already loaded for that row, not the row's default."""
         loaded = self._model
         if loaded is None or not self._server_alive() or model is None or not str(model).strip():
             return model

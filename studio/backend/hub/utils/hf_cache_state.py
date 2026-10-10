@@ -369,13 +369,7 @@ _CACHE_REPO_TYPES = ("model", "dataset", "space")
 
 
 def cached_repo_ref_for_path(path: Path | str) -> Optional[tuple[str, str]]:
-    """Map a path inside a Hub cache to the ``(repo_id, repo_type)`` that owns it.
-
-    ``None`` means "not the operator's cache", which every caller reads as "no check needed", so a
-    miss here is fail-OPEN. Hence every repo type rather than models alone, and candidates walked
-    OUTWARD rather than committing to the deepest match: repo file paths are arbitrary, so a
-    private snapshot may itself contain a directory named ``models--foo--bar``.
-    """
+    """None means not the operator's cache (fail-open); candidates walk outward, not deepest-first."""
     try:
         resolved = Path(path).expanduser().resolve(strict = True)
     except (OSError, RuntimeError, ValueError):
@@ -421,11 +415,7 @@ def cached_repo_id_for_path(path: Path | str, repo_type: str = "model") -> Optio
 
 
 def _is_repo_boilerplate(path: Path) -> bool:
-    """Whether *path* is repository furniture rather than anything a load consumes.
-
-    Deliberately a denylist of things no loader reads, not an allowlist of weight formats: a name
-    this does not recognise still counts as content, so a private snapshot in an unusual format is
-    refused rather than waved through."""
+    """A denylist of files no loader reads; unrecognised names count as content and are refused."""
     name = path.name
     if name in (".gitattributes", ".gitignore", ".gitmodules"):
         return True
@@ -439,13 +429,7 @@ def repo_cache_has_usable_snapshot(
     repo_id: str,
     metadata_filenames: tuple[str, ...] = (),
 ) -> bool:
-    """Whether the cache holds a snapshot of *repo_id* that a load could actually consume.
-
-    NOT "does a repo directory exist": an interrupted download leaves one with no snapshot under
-    it, and refusing on that costs a caller bytes that were never there, which the anonymous
-    ``/auth-check`` cannot clear on an ``HF_ENDPOINT`` mirror that does not serve it. An unlistable
-    directory counts as usable: the guard's own failure must not open the path it guards.
-    """
+    """Needs a loadable snapshot, not just a repo dir; an unlistable directory counts as usable."""
     scan_errors: list = []
     for repo_dir in iter_repo_cache_dirs(repo_type, repo_id, scan_errors = scan_errors):
         snapshots = repo_dir / "snapshots"

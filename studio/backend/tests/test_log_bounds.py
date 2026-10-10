@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Every log family must be bounded, and the two line caps must agree.
-
-The volume guards cap how many lines get written. This one caps what is left on disk
-afterwards, which is a separate failure: a family that writes one file per operation and
-never prunes grows for the life of the install, and nothing in the line budget notices.
-
-``utils.debug_log_sources.FAMILIES`` is the authoritative inventory of what Unsloth writes,
-so it is the list a new family cannot avoid appearing on.
-"""
+"""Each family in debug_log_sources.FAMILIES must prune old files, or its logs grow forever."""
 
 from __future__ import annotations
 
@@ -58,12 +50,7 @@ def _python_retention_sources() -> str:
 
 class TestFamiliesAreBounded:
     def test_every_python_written_family_prunes(self):
-        """A family that never prunes grows without limit.
-
-        Detected from the glob in FAMILIES appearing next to a retention call site, which
-        is deliberately loose: the point is to notice a family that nobody thought about,
-        not to pin how the pruning is spelled.
-        """
+        """A family whose glob never appears beside a retention call site is flagged as unbounded."""
         source = _python_retention_sources()
         unbounded = []
         for family, (_subdir, glob) in debug_log_sources.FAMILIES.items():

@@ -103,11 +103,7 @@ def _has_ancestor(
     *,
     max_depth: int = 8,
 ) -> bool:
-    """True if ``ancestor_pid`` is ``pid``'s parent (or grandparent, ...).
-
-    The listening socket can be held by a child of the process we spawned (a wrapper script, or a
-    shell on Windows), so an exact pid match alone would reject our own server. Depth-capped so a
-    pid-reuse cycle cannot loop."""
+    """Walks ancestors, since the listener may be a wrapper or shell child of our spawned process."""
     try:
         import psutil
         proc = psutil.Process(pid)
@@ -164,10 +160,8 @@ class SdCppServer:
 
     @property
     def lora_dir(self) -> Optional[str]:
-        """The server's ``--lora-model-dir`` scratch dir. Adapters staged here are picked
-        up per request (the sdcpp ``img_gen`` route refreshes its LoRA scan each call), so
-        server-mode LoRA works by materializing here and referencing the files via the
-        structured ``lora`` request field (the server ignores ``<lora:>`` prompt tags)."""
+        """Server rescans this dir per request; reference staged files via the lora field, not
+        prompt tags."""
         return self._scratch_dir
 
     def is_alive(self) -> bool:
@@ -191,13 +185,8 @@ class SdCppServer:
         startup_timeout: float = 600.0,
         extra_args: Optional[list[str]] = None,
     ) -> None:
-        """Spawn the server (which loads the model) and block until it is ready.
-
-        Raises ``RuntimeError`` (with the captured log tail) if the process exits during
-        startup or never answers within ``startup_timeout``. Holds the lifecycle lock so
-        a concurrent start/stop can't interleave. ``extra_args`` is appended last (last
-        wins), which is how the CPU-backend restart pins the graph off the GPU.
-        """
+        """extra_args go last so they win, which is how the CPU-backend restart pins the graph off
+        the GPU."""
         with self._lifecycle_lock:
             # A stop() that raced in before the lock already closed the client; do not leak a process.
             if self._stopped or self._abort.is_set():
@@ -314,10 +303,7 @@ class SdCppServer:
         timeout: float,
         interval: float = 0.5,
     ) -> bool:
-        """Poll ``/v1/models`` until 200; bail early if the process exits.
-
-        Upstream binds the port only AFTER the model is loaded, so a 200 here is a true
-        ready signal (no half-loaded race)."""
+        """A 200 is a true ready signal: upstream binds the port only after the model has loaded."""
         deadline = time.monotonic() + timeout
         url = f"{self.base_url}{_READY_PATH}"
         while time.monotonic() < deadline:
@@ -338,18 +324,8 @@ class SdCppServer:
         return False
 
     def _port_is_ours(self) -> bool:
-        """True unless the 200 at ``/v1/models`` demonstrably came from someone else's process.
-
-        ``_find_free_port`` binds an ephemeral port, reads it and closes the socket, and sd-server
-        binds it only AFTER loading the model -- minutes for a multi-gigabyte checkpoint. Another
-        local process can take the port inside that window, and ``/v1/models`` is a stock
-        OpenAI-compatible route that llama.cpp's own server (and a second Unsloth) answers 200 on,
-        so readiness would pass and every generation would be posted to an unrelated listener.
-
-        Verifying the listener really belongs to our child closes that. Best-effort by design:
-        psutil is optional, and reading another process' connections needs privileges on some
-        platforms, so anything short of a definite "that port belongs to a DIFFERENT pid" keeps
-        today's behaviour rather than failing a healthy start."""
+        """Best-effort: fails only when the port's listener is definitely a different pid; unknown
+        passes."""
         proc = self._process
         if proc is None or proc.pid is None:
             return True
@@ -409,12 +385,7 @@ class SdCppServer:
     def reclaimable_params_vram_gb(
         self, physical_gpu_id: Optional[int]
     ) -> Optional[dict[int, float]]:
-        """Stable resident parameter floor released when this server stops.
-
-        Device attribution is supplied by the backend that resolved the
-        CUDA/ROCm child pin. Missing attribution or a changing/dead process
-        fails closed.
-        """
+        """Fails closed (None) when device attribution is missing or the process has exited."""
         process = self._process
         if physical_gpu_id is None or process is None or process.poll() is not None:
             return None
@@ -486,13 +457,8 @@ class SdCppServer:
         submit_timeout: float = 60.0,
         total_timeout: float = NATIVE_GENERATION_TIMEOUT_S,
     ) -> list[bytes]:
-        """Submit one async ``img_gen`` job, poll it to completion, return image bytes.
-
-        ``on_step`` receives each server stdout line (for the step bar). ``cancel_event``,
-        when set, cancels the job via the native endpoint and raises ``SdCppCancelled``.
-        Raises ``RuntimeError`` on submit/poll failures (including the server dying), with
-        the log tail attached.
-        """
+        """A set cancel_event cancels the job natively and raises SdCppCancelled; on_step gets
+        stdout lines."""
         return self._run_job(
             "img_gen",
             _IMG_GEN_PATH,
@@ -542,13 +508,7 @@ class SdCppServer:
         submit_timeout: float = 60.0,
         total_timeout: float = NATIVE_GENERATION_TIMEOUT_S,
     ) -> Any:
-        """Submit one async ``kind`` job at ``path``, poll it to completion, return ``decode(job)``.
-
-        ``on_step`` receives each server stdout line (for the step bar). ``cancel_event``,
-        when set, cancels the job via the native endpoint and raises ``SdCppCancelled``.
-        Raises ``RuntimeError`` on submit/poll failures (including the server dying), with
-        the log tail attached.
-        """
+        """A cancel is reported as SdCppCancelled (route 409), not as a generic server-died 500."""
         # Report cancellation (route 409), not a generic "server died" 500.
         if self._stopped or not self.is_alive():
             if cancel_event is not None and cancel_event.is_set():

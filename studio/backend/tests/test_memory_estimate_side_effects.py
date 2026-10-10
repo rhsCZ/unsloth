@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Side-effect contracts for POST /api/inference/estimate-memory.
-
-``test_memory_estimate.py`` guards the arithmetic; this file guards the promises the
-route makes about what it does NOT do -- "no model is loaded, no device is touched,
-nothing is downloaded" -- behaviourally rather than by reading the source, because the
-panel fires this endpoint on every settings change and a regression here is a Hub round
-trip, a disk write, or a reaped llama-server behind a slider drag.
-
-Four properties, one section each:
-
-* the on-disk gate (``_estimate_target_is_on_this_disk``) is fail-OPEN on every error
-  path, so this pins which hosts fall through it into the network;
-* ``_probe_backend``'s ``except TypeError`` must not turn a fault raised INSIDE a
-  constructor into a silently process-reaping backend;
-* the blocking capability probe belongs off the event loop, where
-  ``_effective_default_slots`` already puts it;
-* both TTL caches are shared mutable module state reached from real threads.
-
-No GPU, no network, no model load: every GGUF here is a synthetic header on tmp_path.
-"""
+"""Estimate-memory must load no model, touch no device and download nothing; checked behaviourally."""
 
 import sys
 import threading
@@ -162,13 +143,8 @@ def _priced_locally(monkeypatch, gguf_path: str):
 
 
 def _pin_on_disk(monkeypatch):
-    """Answer the on-disk gate positively, however this revision asks it.
-
-    The gate is consulted through a bool wrapper and, for the narrower question of
-    whether a resolution may go online, through a tri-state. Both are pinned so these
-    tests measure the property they name rather than the gate, and so the same file
-    runs against a revision that has only the first.
-    """
+    """Pins the on-disk gate both as a bool and as a tri-state, so tests stay independent of the
+    revision."""
     monkeypatch.setattr(ri, "_estimate_target_is_on_this_disk", lambda _id: True)
     monkeypatch.setattr(
         ri,
@@ -179,12 +155,7 @@ def _pin_on_disk(monkeypatch):
 
 
 def _hub_offline_now() -> bool:
-    """Whether the in-process HF offline switch is currently thrown.
-
-    ``force_hf_offline`` flips ``huggingface_hub.constants.HF_HUB_OFFLINE`` rather than
-    only the env var, because the env var is read once at import. So the constant is
-    the honest observable for "would this call have gone to the network".
-    """
+    """Reads the HF_HUB_OFFLINE constant, not the env var, since the env var is only read at import."""
     import huggingface_hub.constants as _hf_constants
     return bool(_hf_constants.HF_HUB_OFFLINE)
 

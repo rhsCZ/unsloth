@@ -76,11 +76,7 @@ def runtime_context_length(model: Any, fallback: Optional[int] = None) -> Option
 def generation_budget_for_window(
     window: Optional[int], prompt_length: int, max_new_tokens: Optional[int]
 ) -> Optional[int]:
-    """Resolve a generation budget, where ``None`` means the caller set no limit.
-
-    An unset limit becomes the context the prompt leaves free. An explicit one is returned
-    untouched, so asking for more than fits still gets the backend's overflow error.
-    """
+    """Explicit limits pass through, so an oversized request gets the backend's overflow error."""
     if max_new_tokens is not None:
         return max_new_tokens
     if not window:

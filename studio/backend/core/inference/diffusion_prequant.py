@@ -861,10 +861,7 @@ def resolve_prequant_source(
                 filename = preferred,
                 declared_filenames = (preferred,),
             )
-        # Family-declared name first when there is one, then the derived chain, which puts the
-        # safetensors spelling ahead of the pickle. Order-preserving dedup so a family that declares
-        # exactly what the chain would derive does not make the downloader ask twice for it.
-        # Declared names are the default repo's files; a variant repo gets its own spelling of each.
+        # Dedup in order, so declared names matching the derived chain are not requested twice.
         variant_repo = _is_variant_prequant_repo(fam, repo_id)
         if variant_repo and preferred:
             declared = (prequant_repo_filename(repo_id, scheme, ".safetensors"),)
@@ -1499,25 +1496,7 @@ def load_prequantized_transformer(
     placement_device: Optional[str] = None,
     family: Optional[str] = None,
 ) -> Optional[Any]:
-    """Load the pre-quantized transformer described by ``source`` onto ``device``.
-
-    ``family`` (the Studio family name) is what a ComfyUI-format artifact needs to pick the layers Studio's
-    own ``scheme`` quantizes; Studio's own checkpoints record it themselves.
-
-    ``placement_device`` (default ``device``) is where the module is materialised; ``device`` selects kernels.
-
-    ``cache_dir`` is the live Hub cache root, as every other loader call pins it: unset, a fetch
-    lands under huggingface_hub's import-time constant, so a mid-session cache change re-downloads
-    into a root Unsloth no longer reads.
-
-    ``component`` must match the checkpoint's (MoE experts share every other field); ``prepare_model``
-    runs between ``from_config`` and ``load_state_dict``, the one window to reshape the skeleton. A
-    declared activation rotation is installed unconditionally: a miss renders wrong pixels silently.
-
-    Returns the placed transformer, or None on any problem (missing / mismatched / unreadable
-    checkpoint, unsupported meta-init, or a rotation this build cannot apply exactly) so the caller
-    falls back to dense-quantise. Best-effort: never raises for an unavailable artifact.
-    """
+    """Returns the placed transformer or None on any problem, so the caller falls back to dense quantise."""
     _LAST_FAILURE.text = None
     try:
         if source.kind == "path" and not _local_prequant_path_allowed(source.location):
@@ -1578,11 +1557,8 @@ def load_prequantized_transformer(
                 "comfy_format": True,
             }
         else:
-            # A safetensors artifact, or a torch.save pickle deserialized under the constructor ALLOWLIST above and never
-            # as a free-running one. First-party hosting is no reason to execute whatever bytes arrive: the artifact is
-            # mutable, fetched over the network, and reached by loads that never asked for one (auto resolves an unset
-            # precision to a hosted checkpoint), so a mutated file must fail to load rather than run. Both containers
-            # hand back the same dict, so every check below applies to them equally.
+            # Pickles load only under the ALLOWLIST, never free-running: a mutated file must fail,
+            # not run.
             ckpt = _read_prequant_for(path, placement_device or device, logger)
             if not _validate_checkpoint(
                 ckpt,
@@ -1627,21 +1603,14 @@ def load_prequantized_transformer(
                 # Non-persistent buffers (built in __init__, absent from the state dict) stay on meta. Rebuild on CPU so
                 # they hold real values, then re-assign the quantized weights; dense bf16 never reaches the GPU.
                 transformer = transformer_cls.from_config(config)
-                # The retry REPLACES the module, so the hook has to run again: skipping it here would load the same state
-                # dict into a differently shaped model, and this branch is the one families with non-persistent buffers
-                # always take -- the mismatch would be the norm, not the corner case, and strict=True would surface it as
-                # a bare key error.
+                # The retry builds a new module, so prepare_model must run again or the state dict
+                # mismatches.
                 if prepare_model is not None:
                     prepare_model(transformer, metadata)
                 transformer.load_state_dict(state_dict, strict = True, assign = True)
 
-            # The ONLINE half of an activation rotation, applied here rather than in a family's ``prepare_model`` hook so
-            # that no route can load a rotated checkpoint without it: the offline half is already baked into the weights
-            # that were just assigned, and a rotated weight met by an unrotated activation renders plausible garbage with
-            # nothing to catch. A no-op for every artifact that declares no rotation, and a RAISE (caught below into the
-            # dense fallback) for one this build cannot honour exactly. After load_state_dict because the meta retry above
-            # rebuilds the module; before apply_small_m_padding because padding reparents the Linears and the recorded
-            # fqns name the unwrapped tree.
+            # Online half of the rotation; applied here so no load route can skip it, after
+            # load_state_dict.
             from .diffusion_convrot import (
                 apply_activation_rotation,
                 declares_rotation,
@@ -1717,10 +1686,7 @@ def load_prequantized_transformer(
 
 
 def _entry_not_found_errors() -> tuple:
-    """``(EntryNotFoundError, LocalEntryNotFoundError)`` for both huggingface_hub majors. On 1.x the
-    base splits into a remote 404 and ``LocalEntryNotFoundError`` (no copy in this root, no
-    network); on BOTH majors local subclasses the base, so catch it first where they differ.
-    Private markers on an unexpected layout are raised by nothing, keeping today's behaviour."""
+    """LocalEntryNotFoundError subclasses EntryNotFoundError on both hub majors, so catch it first."""
     try:
         from huggingface_hub.errors import EntryNotFoundError
     except Exception:  # noqa: BLE001 - older/newer hub layouts
@@ -1747,15 +1713,7 @@ def _download_checkpoint_name(
     propagate_missing: bool,
     local_files_only: bool = False,
 ) -> str:
-    """Download ONE checkpoint filename, reusing a copy that sits under the other cache root. Pinned
-    to ``cache_dir``, hf_hub_download would not look there and would re-fetch multiple GB, so
-    re-run it THROUGH that root rather than return the raw path: the blob is reused after one
-    HEAD, a republished checkpoint is picked up rather than pinned stale, and offline still
-    resolves off the cached pointer. ``propagate_missing`` says another filename is still to be
-    tried, so a remote 404 for THIS one must reach the caller's fallback branch; swallowing it
-    would return the stale other-root copy of a name the repo no longer publishes. A local cache
-    miss is not that verdict, and with no name left to try neither is a 404: both keep the copy
-    already found."""
+    """A remote 404 must propagate while another name is still to try, or a stale other-root copy wins."""
     from huggingface_hub import hf_hub_download
 
     EntryNotFoundError, LocalEntryNotFoundError = _entry_not_found_errors()
@@ -1797,17 +1755,7 @@ def _resolve_checkpoint_path(
     scheme: Optional[str] = None,
     logger: Any = None,
 ) -> Optional[str]:
-    """The local file path for ``source``, downloading from the Hub if needed; None if absent.
-    ``local_files_only`` is the caller's promise that this load may not fetch anything, so a
-    cache miss answers None and the build falls back rather than pulling several GB nobody asked
-    for.
-
-    ``scheme`` drops the names this install could not deserialize anyway, which is the SAME filter
-    the download plan applies. It has to be the same one: with only the plan filtering, a repo
-    hosting both containers would have the plan stage the readable one while this fetched the
-    other, downloading a second artifact to fail on it and then falling back to dense weights the
-    plan had already left out. Unset keeps the whole chain, for the callers that have no scheme to
-    offer."""
+    """Applies the same scheme filter as the download plan, else a two-container repo fetches both."""
     if source.kind == "path":
         import os
 
@@ -1879,11 +1827,7 @@ def _resolve_checkpoint_path(
 
 
 def _config_cache_roots(checkpoint_path: str, cache_dir: Optional[str]) -> tuple:
-    """Cache roots to read the transformer config from, the checkpoint's OWN root first.
-    ``_resolve_checkpoint_path`` may answer from huggingface_hub's import-time root even when
-    Unsloth pins its live one, so pinning the config to the live root alone misses in exactly the
-    cache-moved/offline case the checkpoint lookup just accepted, and load_config's raise is
-    swallowed into a None return. The other root is still tried second."""
+    """Checkpoint's own cache root first: the checkpoint lookup can answer from the import-time root."""
     if cache_dir is None:
         return (None,)
     import os
@@ -1976,10 +1920,7 @@ def _fp8_kwargs_missing_floor(tensor: Any) -> Optional[Any]:
 
 
 def _fp8_activation_floor_restorable(state_dict: Any) -> bool:
-    """Whether every unfloored Float8Tensor differs from the runtime config in the floor alone.
-
-    torchao's fp8 weight quantiser never reads ``hp_value_lb``, so the weight bytes of an artifact built before
-    ``activation_value_lb`` equal what ``_make_quant_config`` builds today."""
+    """torchao's fp8 weight quantiser ignores hp_value_lb, so only the activation floor differs."""
     try:
         items = state_dict.items() if hasattr(state_dict, "items") else ()
         for _name, tensor in items:
@@ -2038,20 +1979,7 @@ def _repair_legacy_checkpoint(
 
 
 def _validate_activation_rotation(ckpt_format: Any, meta: Any, scheme: str, logger: Any) -> bool:
-    """Reject a checkpoint whose activation rotation this build cannot honour EXACTLY.
-
-    Three ways an artifact and a loader can disagree about the rotation, and all three end in the
-    same place -- weights in a rotated basis multiplied by unrotated activations, which is finite,
-    raises nothing, and renders quietly wrong -- so all three are refused here rather than
-    discovered later. First, the artifact declares a rotation and is tagged v1: only v2 makes an
-    Unsloth too old for this code refuse it, so a v1 tag on rotated weights is a hazard to every
-    OTHER build, and the builder that produced it is not one to trust about anything else in the
-    file. Second, the artifact is tagged v2 and declares none: nothing here would rotate, and the
-    tag says something was meant to. Third, the rotation is declared but its contract does not parse
-    (an unknown kind, a group that is not a power of 4, an absent or malformed fqn list).
-
-    Refusing costs a dense fallback: slower and bigger, never wrong.
-    """
+    """Refuses rotations this build cannot apply exactly, since a mismatch renders wrong pixels silently."""
     from .diffusion_convrot import declares_rotation, rotation_metadata_error
 
     rotated = declares_rotation(meta)
@@ -2157,12 +2085,7 @@ def _validate_policy(ckpt_format: Any, meta: Any, scheme: str, logger: Any) -> b
 
 
 def hosted_fast_accum_conflict(scheme: str, fast_accum: Optional[bool]) -> bool:
-    """Whether a FORCED fp8 accumulate rules out every HOSTED checkpoint for ``scheme``.
-
-    ``scripts/build_prequant_checkpoint.py`` bakes the auto choice (``_resolve_fast_accum(None)``)
-    into the fp8 artifacts, and ``_validate_checkpoint`` refuses a baked value differing from a
-    forced one. A planner that seeds without asking drops the released shards for a checkpoint the
-    load must reject. Only fp8 bakes the field, so every other scheme is False. No IO, no torch."""
+    """A forced fp8 fast_accum differing from the baked auto value rejects every hosted fp8 checkpoint."""
     from .diffusion_transformer_quant import TQ_FP8, _resolve_fast_accum
 
     if fast_accum is None or scheme != TQ_FP8:
@@ -2244,10 +2167,8 @@ def _validate_checkpoint(
                 ValueError(f"checkpoint min_features {ckpt_min!r} != runtime {min_features!r}"),
             )
             return False
-    # The int8 exclusion set is scheme-derived, so a token-list change would leave old checkpoints with a stale baked
-    # set that passes scheme+min_features then crashes at the first denoise. Reject a checkpoint that quantised a
-    # layer the runtime excludes; absent is accepted, and so is a superset (extra bf16 Linears load as stored; the
-    # hosted Wan2.2 fp8 files keep ``condition_embedder`` bf16).
+    # Reject quantised layers the runtime now excludes; a stale baked set would crash the first
+    # denoise.
     ckpt_excludes = meta.get("exclude_name_tokens")
     if ckpt_excludes is not None:
         from .diffusion_transformer_quant import exclude_tokens_for_scheme
@@ -2323,11 +2244,7 @@ def _validate_checkpoint(
 
 
 def _same_base_model(a: str, b: str) -> bool:
-    """Tolerant base-model id compare: exact, or same final path/repo segment (e.g.
-    ``/models/Z-Image-Turbo`` vs ``Tongyi-MAI/Z-Image-Turbo``). Both sides normalise through
-    ``canonical_base`` first, so a mirror id in a baked ``base_model_id`` check cannot refuse the
-    checkpoint and send the load down the multi-GB dense download. Today's mirrors keep the repo
-    name, so the tail compare would cover them, but this must not depend on that."""
+    """Both sides normalise via canonical_base, so a mirror id cannot force the multi-GB dense download."""
     from .diffusion_families import canonical_base
 
     a, b = canonical_base(a), canonical_base(b)
@@ -2372,31 +2289,8 @@ def pin_prequantized_module(
     logger: Any = None,
     label: str = "pre-quantized denoiser",
 ) -> bool:
-    """Keep a module resident on ``device``, out of a ComponentsManager's rotation.
-
-    ``ComponentsManager.enable_auto_cpu_offload`` parks every component on the CPU and moves each
-    one onto the accelerator inside its own ``pre_forward``, i.e. from within the block that is
-    already executing. A torchao-quantized module does not survive that move: the device change
-    reaches ``return_and_correct_aliasing``, which tries to alias a CPU storage to an accelerator
-    tensor and raises ``Attempted to set the storage of a tensor on device "cuda:0" to a storage on
-    different device "cpu"``, and MiniMax-H3's denoise loop dies on its first step. Moving the same
-    module at load time, outside any executing block, works -- so the fix is to place it once here
-    and take it out of the rotation rather than to move it per forward.
-
-    That is also what a pre-quantized denoiser is for: the hosted H3 checkpoint is ~20 GB against
-    66.3 GB dense, so keeping it resident is the saving being spent. The other components keep their
-    hooks, and the strategy sizes its decisions from live free memory, so the encoder and the VAEs
-    still offload around it.
-
-    For a torchao module that placement is REQUIRED, for the reason above. A caller may also pin a
-    plain dense module, where it is an optimisation instead: a module that moves per forward cannot
-    be regionally compiled either, since the onload hooks wrap the forward the graph would replace.
-    That caller owns the fit check (this function sizes nothing) and passes its own ``label``.
-
-    Returns True when the module was pinned. Best-effort on the hook surgery: if the manager does
-    not look the way this expects, the module is still placed on ``device`` and False is returned,
-    which is the behaviour before pinning existed.
-    """
+    """Keeps a torchao module resident, since auto-offload's mid-forward move breaks its storage
+    aliasing."""
     pinned = _unhook_from_manager(manager, module, logger = logger, what = "pin:hook")
     module.to(device)
     if logger is not None:
@@ -2511,12 +2405,7 @@ def stream_prequantized_module(
     logger: Any = None,
     label: str = "pre-quantized denoiser",
 ) -> Optional[str]:
-    """Stream a torchao module block by block via group offloading, outside the ComponentsManager rotation.
-
-    Returns ``"stream"`` (fully pinned, async copies), ``"stream_lazy"`` (pinned one group at a time), ``"sync"``
-    (unpinnable weights) or None (nothing changed).
-    Raises once the module is unhooked: the caller only streams what does not fit pinned, so a resident
-    fallback would OOM or be refused on every render."""
+    """Streams via group offloading; raises once unhooked, as a resident fallback would OOM each render."""
     if not torchao_group_offload_supported():
         return None
     import inspect

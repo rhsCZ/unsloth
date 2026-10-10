@@ -434,11 +434,7 @@ async def chat_generation_events(
                 yield f": keep-alive {int(snapshot['updatedAt'])}\n\n"
 
     async def stream_while_attended():
-        """``stream`` plus the bookend that says this follower has gone.
-
-        The stamp ages out on its own, so this only makes a cleanly closed tab stop counting as
-        attended now rather than ~45s from now.
-        """
+        """Emit a closing frame so a cleanly closed tab stops counting as attended immediately."""
         try:
             async for frame in stream():
                 yield frame

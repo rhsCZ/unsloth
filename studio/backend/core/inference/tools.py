@@ -232,13 +232,7 @@ _COPROC_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
 
 
 def _is_coproc_name(tokens: "list[str]", index: int) -> bool:
-    """Whether `tokens[index]` is the NAME of a `coproc NAME compound-command`, not a command word.
-
-    Callers gate this on having just consumed the `coproc` KEYWORD, which the neighbouring tokens cannot decide:
-    `echo coproc JOB if rm -f x` prints three words while `time coproc JOB if rm -f x` really deletes. They then
-    READ the name like any other command word rather than skipping it, since shlex has already dropped the quotes
-    and a forged `'{'` would otherwise hide whatever stands there; only command position carries past it.
-    """
+    """The name is still scanned as a command word, since shlex drops quotes and `'{'` could hide one."""
     return (
         index > 0
         and tokens[index - 1] == "coproc"
@@ -428,12 +422,7 @@ _REDIRECTION_RE = re.compile(r"^(?:\d+|&)?(?:<<<|<<-|<<|<>|>>|>\||<&|>&|<|>)")
 
 
 def _punctuation_lexer(text: str, punctuation: str) -> "shlex.shlex":
-    """A word lexer that hands back every one of ``punctuation`` as its own token.
-
-    shlex counts a newline as whitespace, so asking for it in punctuation_chars alone yields
-    nothing: it has to leave the whitespace set as well, or the separator bash sees at a line break
-    never appears in the token stream.
-    """
+    """Newline must leave shlex's whitespace set too, or the line-break separator never appears."""
     lexer = shlex.shlex(text, posix = True, punctuation_chars = punctuation)
     lexer.whitespace_split = True
     if "\n" in punctuation:
@@ -456,10 +445,7 @@ def _redirection_span(
     quoted: "frozenset[int]" = frozenset(),
     quoted_redirects: "frozenset[int]" = frozenset(),
 ) -> "tuple[int, ...]":
-    """The token indexes one shell redirection at ``index`` occupies, or ``()``. The shell REMOVES a
-    redirection before the command sees its arguments, so leaving the words in place made it the
-    command's first operand (verified: `sed </dev/null '1e rm -f victim' input` runs). A detached
-    target is claimed only when it is an ordinary word."""
+    """The shell drops a redirection before the command sees its args, so its words must go too."""
     if tokens[index] == "&" and index + 1 < len(tokens) and tokens[index + 1][:1] in "<>":
         # `&>out.txt` splits in two; only a redirection may follow the `&` here.
         tail = _redirection_span(tokens, index + 1, quoted, quoted_redirects)
@@ -542,10 +528,7 @@ def _sed_long_flag(name: str) -> str:
 
 
 def _sed_disables_exec(name: str) -> bool:
-    """Whether the long option ``name`` puts sed in a mode that REFUSES to shell out. --sandbox
-    disables e/r/w and --posix drops the GNU extensions `e` belongs to, so a script COMPILED
-    under either aborts the run and its payload is inert; which scripts that covers depends on
-    where the flag sits (see _sed_invocation). Only unambiguous abbreviations count."""
+    """--sandbox and --posix, or unambiguous prefixes of them, disable e/r/w; the script is then inert."""
     if len(name) >= 4 and "--sandbox".startswith(name):
         return True
     return len(name) >= 3 and "--posix".startswith(name)
@@ -565,10 +548,7 @@ _SED_STREAM_PROGRAM_SOURCES = frozenset({"-", "/dev/stdin", "/dev/fd/0"})
 
 
 def _sed_program_source_is_stream(value: str) -> bool:
-    """Whether an `-f` operand reads the script from a stream this scan cannot follow. A named file
-    stays out: it is documented residue rather than something to fail on. A process substitution
-    counts, since `sed -f <(printf 'e rm -f victim') input` really runs rm, and the lexer splits
-    that operand at the `(`."""
+    """An -f operand the scan cannot follow counts, like a process substitution; a named file does not."""
     if value in _SED_STREAM_PROGRAM_SOURCES or value.startswith("/dev/fd/"):
         return True
     return value[:1] in "<>"
@@ -592,26 +572,7 @@ def _sed_invocation(
     globs: "frozenset[int]" = frozenset(),
     expandable: "frozenset[int]" = frozenset(),
 ) -> "tuple[list[str], bool, bool]":
-    """The sed invocation whose command word sits at ``start``, as ``(program alternatives, unread,
-    live_program)``.
-
-    sed joins its -e values with newlines, so `sed -e '1a\' -e 'e rm -rf x'` appends a line instead
-    of executing it and the pieces are judged together. With no -e or -f the first positional is the
-    script.
-
-    --sandbox / --posix abort at COMPILE time, and sed compiles each -e as it is parsed while the
-    positional waits for the whole option list, so the flag suppresses exactly the scripts written
-    after it (verified on GNU sed 4.9). One written after the POSITIONAL suppresses only while
-    getopt permutes, and POSIXLY_CORRECT turns that off from outside the command text, so it is not
-    read as suppressing. `--` is honoured.
-
-    ``unread`` says the program is at best a PREFIX of the real one, so an empty result proves
-    nothing and callers fail closed on it.
-
-    ``stops`` and ``skips`` are token INDEXES, not text: where the invocation ends and which words
-    are a redirection the shell removes. Both distinctions need the original quoting, which the text
-    has lost. A skip yields to a pending -e/-f/-l value, since that word is sed's.
-    """
+    """sed joins -e values with newlines, so they are judged together; an unread script fails closed."""
     programs: "list[str]" = []
     first_positional = ""
     positional_disabled = False
@@ -720,15 +681,7 @@ def _sed_text(text: str) -> str:
 
 
 def _sed_exec_payloads(program: str) -> "list[str]":
-    """Shell payloads a sed program executes, in order.
-
-    `e COMMAND` runs COMMAND. A bare `e` and the `s///e` flag run the pattern space, which only
-    exists at run time, so they yield an EMPTY payload: executes, but nothing to screen. An empty
-    list means it only edits text.
-
-    The walk skips every region where an `e` is data (regexes, replacements, a/i/c text, r/w
-    filenames, b/t labels, comments).
-    """
+    """Payloads of sed `e COMMAND`; a bare `e` or `s///e` yields an empty payload, though it still runs."""
     payloads: "list[str]" = []
     n = len(program)
 
@@ -840,22 +793,7 @@ def _sed_exec_payloads(program: str) -> "list[str]":
 def _assignment_bindings(
     tokens: "list[str]", quoted: "frozenset[int]" = frozenset()
 ) -> "list[tuple[int, str, str | None]]":
-    """Every `NAME=value` word as ``(token index, name, value)``, in the order the shell performs the
-    assignments.
-
-    An ordered LIST, not a map, because bash uses the binding performed most recently BEFORE the
-    reference: first-wins let `p='1,3p'; p='1e rm -f victim'; sed "$p" input` read as `1,3p` while
-    rm really runs. The index rides along so _bindings_before can drop assignments that only happen
-    after the sed.
-
-    A non-literal value is recorded as ``None``, which CLEARS the name rather than leaving a stale
-    earlier one standing.
-
-    Only a word that really changes SHELL state counts: an assignment-shaped ARGUMENT, one in a
-    subshell and one used as a command's environment prefix all leave `$p` alone, and recording them
-    overwrote a payload with a value bash never assigned. A conditional one after `&&` may or may
-    not run, so it is UNRESOLVED instead.
-    """
+    """An ordered list, not a map: bash uses the latest binding before a reference, not the first."""
     bindings: "list[tuple[int, str, str | None]]" = []
     pending: "list[tuple[int, str, str | None]]" = []
     at_command = True
@@ -901,10 +839,7 @@ def _assignment_bindings(
 def _bindings_before(
     bindings: "list[tuple[int, str, str | None]]", cursor: int, limit: int, env: "dict[str, str]"
 ) -> int:
-    """Fold into ``env`` every binding at a token index below ``limit``, starting at ``cursor``, and
-    return the cursor to pass in next time. Later bindings overwrite earlier ones. Seds are
-    visited left to right, so the cursor only moves forward and the whole line costs ONE walk of
-    the binding list."""
+    """Folds bindings before `limit` into env, later ones winning; the cursor only moves forward."""
     while cursor < len(bindings) and bindings[cursor][0] < limit:
         _index, name, value = bindings[cursor]
         if value is None:
@@ -916,10 +851,7 @@ def _bindings_before(
 
 
 def _resolve_program_vars(program: str, env: "dict[str, str]") -> str:
-    """``program`` with each `$NAME` / `${NAME}` replaced by its assigned value. A sed script held
-    in a variable is only a program once the reference is resolved, and only in a pass that KEEPS
-    the quoted newline: the blanket newline pass turns the value into one long sed comment. An
-    unassigned name is left as written."""
+    """Keeps the quoted newline: a blanket newline pass would turn the value into one long sed comment."""
     return _PROGRAM_VAR_RE.sub(lambda m: env.get(m.group(1) or m.group(2), m.group(0)), program)
 
 
@@ -946,17 +878,7 @@ def _expansion_key(text: str) -> str:
 
 
 def _sed_program_unresolved(variants: "list[str]", live: "set[str]") -> bool:
-    """Whether NO spelling of the sed program is one this scan actually READ, because every one still
-    holds an expansion bash would rewrite.
-
-    The program is knowable only when each expansion reduces to text. The parameter transformations
-    (`${p%y}`, `${p/a/b}`, `${p:-z}`, ...) are not modelled one at a time; an unread program is
-    UNKNOWN and the auto gate asks, which makes every unmodelled form safe by default rather than a
-    way past.
-
-    Only expansions the shell RUNS count, and only where they land in the PROGRAM, so one the
-    program merely quotes, an escaped one and one in a FILE operand are all left running.
-    """
+    """Unmodelled expansions (e.g. `${p%y}`) leave the program unread, so the auto gate asks instead."""
     if not live:
         return False
     # shlex removes escaping, so key both spellings without backslashes (fails closed).
@@ -968,17 +890,7 @@ def _sed_program_unresolved(variants: "list[str]", live: "set[str]") -> bool:
 
 
 def _quoted_separator_indexes(text: str, tokens: "list[str]", punctuation: str) -> "frozenset[int]":
-    """Indexes of ``tokens`` that only LOOK like a shell separator because the quoting has been
-    stripped off them.
-
-    shlex hands back the identical token `;` for a real separator and for a quoted `';'` a command
-    receives as data, so `sed -n ';' -e '1e rm -f victim' input` looked like a sed that had already
-    ended (verified on GNU sed 4.9: it runs rm).
-
-    Told apart by masking every separator character the shell QUOTES and lexing a second time. Only
-    those characters change, and each inside the word it already belonged to, so the two token lists
-    line up; the alignment is asserted by the length check.
-    """
+    """Quoted `;` lexes as a bare `;`, so quoted separators are found by masking and re-lexing."""
     if not any(_looks_like_separator(token) for token in tokens):
         return frozenset()
     if _QUOTED_SEPARATOR_MARK in text:
@@ -1006,10 +918,7 @@ def _quoted_separator_indexes(text: str, tokens: "list[str]", punctuation: str) 
 def _masked_tokens(
     text: str, tokens: "list[str]", punctuation: str, chars: "frozenset[str]", mark: str
 ) -> "list[str] | None":
-    """``tokens`` re-lexed with every one of ``chars`` the QUOTING made literal replaced by
-    ``mark``, or ``None`` when the two lexes do not line up. Each replacement stays inside the
-    word it already belonged to, so the second lex yields the same words; the alignment is
-    asserted by the length check."""
+    """Re-lexes with the quoted characters masked, or returns None when the two lexes do not line up."""
     if not any(char in chars for char in text) or mark in text:
         return None
     states = _shell_quote_states(text)
@@ -1026,10 +935,7 @@ def _masked_tokens(
 def _quoted_redirection_indexes(
     text: str, tokens: "list[str]", punctuation: str
 ) -> "frozenset[int]":
-    """Indexes of ``tokens`` that only LOOK like a redirection because the quoting has been stripped
-    off them. A QUOTED redirection is a word the shell hands the command: `sed -f '>prog' -e '1e
-    rm -f victim' input` takes `>prog` as the script FILE and really runs the payload. Decided on
-    the operator the token OPENS with, so `2>'/dev/null'` stays a redirection."""
+    """Quoted `'>prog'` is a plain word, not a redirection; `2>'/dev/null'` stays one."""
     marked = _masked_tokens(text, tokens, punctuation, _REDIRECT_CHARS, _QUOTED_REDIRECT_MARK)
     if marked is None:
         return frozenset()
@@ -1043,11 +949,7 @@ def _quoted_redirection_indexes(
 def _unquoted_expansion_indexes(
     text: str, tokens: "list[str]", punctuation: str
 ) -> "frozenset[int]":
-    """Indexes of ``tokens`` holding an expansion the shell really PERFORMS. Live expansions are
-    collected over the whole command, so matching a sed program against them by text alone
-    attributed another command's expansion to a program that merely spells the same thing; this
-    supplies the missing occurrence. Double quoting is deliberately not literal: `sed "$p" f`
-    expands and must stay in."""
+    """Tokens with an expansion the shell really performs; double quotes do not make it literal."""
     if not any(char in _EXPANSION_CHARS for char in text) or _QUOTED_EXPANSION_MARK in text:
         return frozenset()
     states = _shell_quote_states(text)
@@ -1071,11 +973,7 @@ def _unquoted_expansion_indexes(
 
 
 def _unquoted_glob_indexes(text: str, tokens: "list[str]", punctuation: str) -> "frozenset[int]":
-    """Indexes of ``tokens`` holding a pathname-expansion metacharacter the shell will EXPAND,
-    rather than one the quoting made literal. bash expands after this scan, so in a directory
-    holding a file named `1e rm -f victim`, `sed *` hands sed that filename as its script and
-    really runs rm. The quoted spellings a sed program uses must stay readable. Told apart by
-    masking and re-lexing."""
+    """Globs bash expands (not quoted ones), since in `sed *` a filename may become sed's script."""
     if not any(char in _GLOB_CHARS for char in text) or _QUOTED_GLOB_MARK in text:
         return frozenset()
     states = _shell_quote_states(text)
@@ -1115,11 +1013,7 @@ def _xargs_replacement(tokens: "list[str]", start: int, end: int) -> str:
 
 
 def _xargs_hides_sed_program(tokens: "list[str]", xargs: int, sed: int, program: str) -> bool:
-    """Whether an xargs is the one deciding what program its sed runs. xargs appends the words it
-    reads on stdin, and with -I substitutes them into the words already there, so the program
-    need not be in the command TEXT at all (`printf '1e rm -f victim\0input\0' | xargs -0 sed`
-    runs rm), and the sed fails closed. The ordinary idioms are untouched, since their program is
-    right there and the placeholder stands where the FILE goes."""
+    """xargs can feed sed its program from stdin, so a program not written in the text fails closed."""
     if not program.strip():
         return True
     placeholder = _xargs_replacement(tokens, xargs, sed)
@@ -1127,10 +1021,7 @@ def _xargs_hides_sed_program(tokens: "list[str]", xargs: int, sed: int, program:
 
 
 def _sed_program_is_a_placeholder(program: str) -> bool:
-    """Whether the whole sed program is a token another tool REWRITES before sed starts. find
-    replaces `{}` with the pathname it found, so with a file named `1e rm -f victim` a `find ...
-    -exec xargs sed {} +` really runs rm while `{}` read as an already-known program. A `{}`
-    among the FILE operands is not the program and is untouched."""
+    """Another tool rewrites a `{}` program to a found pathname before sed runs, so it is not text."""
     return program.strip() == "{}"
 
 
@@ -1149,20 +1040,7 @@ def _exec_scan_layout(
     quoted: "frozenset[int]",
     quoted_redirects: "frozenset[int]" = frozenset(),
 ) -> "tuple[frozenset[int], frozenset[int], frozenset[int]]":
-    """``(exec-flag indexes, invocation-stop indexes, redirection indexes)`` for one token list, in a
-    single left-to-right pass.
-
-    An exec-flag index is a `find`/`fd` option whose following words are a COMMAND that tool runs.
-    Recognised only while a find/fd word the shell really RUNS is in scope: those letters belong to
-    too many other tools, so `grep -x rm file` must not have rm hard-blocked.
-
-    A stop index ends a sed invocation: a separator the shell PERFORMS, or the `;` / `{} +` closing
-    an open exec action. Outside an action those are ordinary operands.
-
-    A redirection index is a word the shell consumes and never hands to the command. Taken FIRST, so
-    the `&` in `sed 2>&1 '1e rm -f victim' input` reads as part of that redirection rather than as
-    the end of the invocation.
-    """
+    """Exec flags count only while a find/fd command is in scope; `grep -x rm` must not have rm blocked."""
     exec_flags: "set[int]" = set()
     stops: "set[int]" = set()
     redirects: "set[int]" = set()
@@ -1275,11 +1153,7 @@ _START_SWITCHES = frozenset(
 
 
 def _is_start_title(token: str) -> bool:
-    """True when START would read ``token`` as its window title, not the program. The cmd lexer
-    keeps the quote marks, so a title still arrives quoted; the posix lexer leaves two spellings
-    a bare program name cannot have, the empty ``start ""`` idiom and a title containing
-    whitespace. A single-word posix title is indistinguishable from a program name and is
-    deliberately not guessed."""
+    """A `start` title is empty, has whitespace or is quoted; a bare word is not guessed."""
     return (
         token == ""
         or any(char.isspace() for char in token)
@@ -1289,15 +1163,7 @@ def _is_start_title(token: str) -> bool:
 
 # Built once: the set never mutates and rebuilding per call was a measurable cost.
 def _blocked_word_re(assignment_prefixes: bool):
-    """The command-position backstop, with and without the assignment-prefix step.
-
-    The backstop has no quoting model, so anything it steps over it steps over inside quotes too.
-    Skipping assignment prefixes is only needed when the lex raised and the token walk never
-    happened; running it when the walk succeeded refused `echo '; A=1 rm -rf x'`, which bash runs
-    as one `echo` (checked: the file survives). A quoted value may hold the rest of the line
-    (`p='1e rm -f victim'`), which is a binding the sed screen resolves, so those are deliberately
-    not stepped over either way.
-    """
+    """Assignment prefixes are stepped over only when the lex raised; otherwise quoted text gets refused."""
     if not _BLOCKED_COMMANDS:
         return None
     return re.compile(
@@ -1317,38 +1183,7 @@ _BLOCKED_WORD_RE_WITH_ASSIGNMENTS = _blocked_word_re(True)
 
 
 def _join_escaped_newlines(text: str) -> str:
-    """Remove a backslash-newline where the shell removes it, and only there.
-
-    The shell strips the pair before it reads a command, so the line break is not a boundary and
-    the words either side belong to one command: `echo hi \\<newline>A=1 rm -rf x` is one `echo`.
-    Inside SINGLE quotes it strips nothing, and that difference is load-bearing:
-    `sed -n '1e touch a\\<newline>rm -f victim' f` continues the executed payload onto the next
-    line, so joining there would drop a command that really runs. An escaped backslash consumes
-    both characters, which leaves a following newline standing, as the shell does. The pair is
-    removed rather than replaced, since it can fall inside a word: checked against the same
-    bash, `to\\<newline>uch f` runs `touch`.
-
-    Only a backslash-LF continues. Checked against bash 5.2.21: a backslash before CRLF escapes
-    the CARRIAGE RETURN, so the newline still starts a command and `echo hi \\<CRLF>rm -rf x`
-    really runs `rm`. Joining all three characters made that read as one `echo`.
-
-    A comment strips nothing either. Inside an unquoted `#` comment the backslash is comment
-    TEXT, so the newline still ends the comment and starts a command: `echo ok # comment
-    \\<newline>rm -rf ./build` really runs `rm`, and joining made it one comment that the
-    later lex then discarded whole. `#` opens a comment only at the start of a word, so
-    `ab#cd` is an ordinary word and `"a # b"` is quoted text; both were checked against the
-    same bash.
-
-    A `$(...)` substitution is parsed in a FRESH quoting context even inside double quotes, so
-    the state is pushed at `$(` and popped at the matching `)`. Checked against bash 5.2.21:
-    `echo "$(echo hi # c \\<newline>rm -f victim<newline>)"` really runs `rm`, because the `#`
-    opens a comment in there and the backslash is comment text; carrying the outer `in_double`
-    in made the pair look like a continuation and the `rm` vanished. The same probe confirms the
-    other half: single quotes work in there (`"$(echo 'a \\<newline>rm -f victim')"` strips
-    nothing and `rm` does NOT run), and a `)` inside them does not end the substitution.
-    Backticks are left alone, since the same probe shows `#` does not open a comment inside
-    `"`...`"`.
-    """
+    """Removes backslash-LF only where the shell does: not in single quotes, comments, or before CRLF."""
     if "\\\n" not in text:
         # Nothing to join: return the input after one C-level scan.
         return text
@@ -1476,14 +1311,7 @@ def _join_escaped_newlines(text: str) -> str:
 
 
 def _find_blocked_commands(command: str, posix: "bool | None" = None) -> set[str]:
-    """Detect blocked commands at shell command position only.
-
-    A token is at command position if it is the first token, or follows a shell separator /
-    brace-group opener / new-command keyword, or a command-prefix wrapper like `env` / `time` /
-    `xargs`. Tokens in argument position pass through. Also scans `find ... -exec CMD` and recurses
-    into bash -c / cmd /c. ``posix`` names the dialect of the shell that will run the command; None
-    keeps the host default (_shell_is_posix).
-    """
+    """Matches blocked names only at command position, not as arguments; `posix` names the shell dialect."""
     blocked: set[str] = set()
 
     # Decode ANSI-C quoting first so `$'ssh'` is still detected at command position.
@@ -1531,18 +1359,8 @@ def _find_blocked_commands(command: str, posix: "bool | None" = None) -> set[str
         return base
 
     def _exec_child_index(start: int) -> "tuple[int, bool]":
-        """The command a `find -exec` actually runs, as ``(index, overflowed)``; the index is -1 when
-        the action holds no command word at all.
-
-        Command prefixes forward to their target, so `-exec env sed ...` runs sed. Wrapper flags,
-        assignment prefixes and duration operands are stepped over, and a wrapper option taking a
-        SEPARATE value consumes it too, else that value reads as the command. The hop is bounded so
-        `-exec env -exec env ...` cannot make this quadratic.
-
-        ``overflowed`` says the bound ran out with words still ahead. That is NOT the same as
-        finding nothing, and reporting both as "no child" let a long enough chain read as safe:
-        `-exec` + 33 `env` + `rm -f victim ;` really deletes.
-        """
+        """Hop-bound overflow is reported apart from no child, so a long wrapper chain cannot read
+        as safe."""
         i, steps, wrapper = start, 0, ""
         while i < len(tokens) and steps < _MAX_EXEC_PREFIX_SCAN:
             token = tokens[i]
@@ -2731,12 +2549,7 @@ _STUDIO_HOME_ENV_VARS = ("UNSLOTH_STUDIO_HOME", "STUDIO_HOME")
 
 
 def _same_directory(left: str, right: str) -> bool:
-    """Whether two spellings name the same directory.
-
-    normcase because Windows paths are case-insensitive, and realpath because `studio_root()`
-    resolves aliases: a `STUDIO_HOME` that is a symlink or junction to the configured root is the
-    root, and reading it as somewhere else drops every spelling of the variable from the guard.
-    """
+    """Compares case-insensitively with aliases resolved, so a STUDIO_HOME link to the root matches."""
 
     def tidy(path: str) -> str:
         return os.path.normcase(os.path.normpath(path))
@@ -2750,14 +2563,7 @@ def _same_directory(left: str, right: str) -> bool:
 
 
 def _studio_home_variable_spellings(resolved: "str | None" = None) -> "list[str]":
-    """`$VAR`, `${VAR}`, `%VAR%` and `$env:VAR` for each studio-home variable (sh, cmd, PowerShell).
-
-    A variable that is SET to some other directory is skipped. `STUDIO_HOME` is a generic name, and
-    another application can own it; with the spelling registered unconditionally, a command naming
-    that application's directory was refused in every permission mode even though it never came near
-    this install. A variable that is unset stays registered: the child cannot expand it either, so
-    the spelling reaches nothing, and dropping it would only widen the guard for no gain.
-    """
+    """Skips studio-home variables set to another directory, since STUDIO_HOME can be another app's."""
     out: "list[str]" = []
     for var in _STUDIO_HOME_ENV_VARS:
         value = os.environ.get(var)
@@ -2776,17 +2582,7 @@ _studio_auth_markers_cache: "tuple | None" = None
 
 
 def _studio_auth_dir_markers() -> tuple:
-    """``(plain spellings, variable spellings, "cd into the studio root" pattern)`` for this install.
-
-    Each spelling is a ``(marker, canonical marker)`` pair, both lowercased, so the per-call path
-    does no string building. The variable spellings (``$HOME/...``, ``$STUDIO_HOME/auth``, ``~/...``)
-    are kept apart because a text containing no ``$``, ``%`` or ``~`` cannot match one, and the
-    terminal classifier runs this once per candidate token of every command.
-
-    Resolved once per process: STUDIO_HOME is fixed at startup, and a custom UNSLOTH_STUDIO_HOME is
-    only covered by asking for the real root rather than assuming the default layout. A failure is
-    not cached, so a root that could not be resolved during startup import ordering does not leave
-    the guard half-blind for the process lifetime."""
+    """Cached per process, but a failed resolve is retried so import order cannot blind the guard."""
     global _studio_auth_markers_cache
     if _studio_auth_markers_cache is not None:
         return _studio_auth_markers_cache
@@ -2845,17 +2641,7 @@ _STUDIO_CREDENTIAL_BLOCKED = (
 
 
 def _canonical_path_text(text: str) -> str:
-    """Rewrite *text* into the one spelling the OS would resolve it to, lexically.
-
-    Separators are unified to "/", then `//` and `/./` collapse and `x/..` pairs cancel. The OS
-    opens `<home>/bin/../auth/auth.db` and `C:\\Studio\\.\\auth\\auth.db` as the protected database,
-    so without this the guard matched only the tidiest spelling of a path and every equivalent one
-    walked past it.
-
-    Lexical on purpose: no `realpath`, so no filesystem access and nothing to race. That makes it
-    wrong for a path whose parent is a symlink, which is the accepted limit here -- this is an extra
-    candidate spelling, never a replacement, so a match found in the raw text still counts.
-    """
+    """Lexical, not realpath: collapses `..` and `.` with no filesystem access, so there is no race."""
     unified = text.replace("\\", "/")
     out: "list[str]" = []
     for index, segment in enumerate(unified.split("/")):
@@ -2886,17 +2672,7 @@ _CWD_VARIABLE_RE = re.compile(r"\$\{PWD\}|\$PWD\b|%CD%|\$env:PWD\b", re.IGNORECA
 
 
 def _glob_can_name_the_marker(lowered: str, marker: str) -> bool:
-    """True when *lowered*, read as a shell glob, can expand to *marker* or something under it.
-
-    `sqlite3 ../../a?th/auth.db` never spells the auth directory, but bash expands `a?th` to `auth`
-    before sqlite3 opens anything, so comparing the literal text alone let the database through.
-    Matched segment by segment, because a shell wildcard does not cross a separator while
-    `fnmatch`'s does.
-
-    A segment whose literal characters are all metacharacters is skipped: `ls <studio root>/*` names
-    the auth directory only in the sense that listing a parent does, and refusing it would break
-    ordinary work for no secret read.
-    """
+    """Globs are matched per segment, so `../../a?th/auth.db` names the auth directory once expanded."""
     candidate = lowered.split("/")
     wanted = marker.split("/")
     if len(candidate) < len(wanted):
@@ -2924,11 +2700,7 @@ _STUDIO_HOME_ASSIGN_RE = re.compile(
 
 
 def _assignment_is_a_command_prefix(text: str, value_start: int) -> bool:
-    """True when a command follows the assignment's value on the same simple command.
-
-    `H=/tmp cat x` is a prefix assignment; `H=/tmp; cat x` is an assignment that stands alone. The
-    value ends at the first unquoted separator, so the quotes are tracked while scanning it.
-    """
+    """A `NAME=value` followed by a command on the same simple command is a prefix; a `;` ends it first."""
     index = value_start
     quote = ""
     while index < len(text):
@@ -2947,11 +2719,7 @@ def _assignment_is_a_command_prefix(text: str, value_start: int) -> bool:
 
 
 def _assignment_is_inert(text: str, index: int) -> bool:
-    """Whether an assignment at *index* binds nothing for the commands that follow it.
-
-    Inside quotes it is DATA that the command merely prints, and inside `( ... )` or
-    `$( ... )` it binds only the SUBSHELL, so the outer commands still expand the
-    inherited value."""
+    """In quotes it is data, and in a subshell it binds only there, so outer commands keep the value."""
     quote = ""
     escaped = False
     depth = 0
@@ -2999,14 +2767,7 @@ def _assignment_inert_states(text: str) -> "list[bool]":
 
 
 def _rebinds_the_studio_home_first(text: str) -> bool:
-    """True when *text* assigns a studio home variable BEFORE any use of it.
-
-    The shell assignment is what the child expands, whether or not the backend sets the same name,
-    so `UNSLOTH_STUDIO_HOME=/tmp/project; cat "$UNSLOTH_STUDIO_HOME/auth/config.json"` reads a
-    project file and not this install's directory. An assignment that comes AFTER a use rebinds
-    nothing for that use, and expanding it would hide a real read of the install's own auth
-    directory, so the ordering is what decides it.
-    """
+    """Only a studio-home assignment before a use rebinds it; a later one changes nothing for that use."""
     lowered = text.lower()
     assignments: "dict[str, int]" = {}
     for match in _STUDIO_HOME_ASSIGN_RE.finditer(text):
@@ -3045,12 +2806,7 @@ _studio_root_spellings_cache: "tuple | None" = None
 
 
 def _studio_root_spellings() -> "list[str]":
-    """Every lowered spelling of the Studio root: the literal path and its environment variables.
-
-    The variables come from `_studio_home_variable_spellings`, which drops one that is SET to some
-    other directory: `STUDIO_HOME` is a generic name another application can own, and registering it
-    unconditionally refused `find "$STUDIO_HOME" ...` against that application's tree.
-    """
+    """Lowered spellings of the studio root: the literal path plus variables that point at this install."""
     global _studio_root_spellings_cache
     markers = _studio_auth_dir_markers()[0]
     if _studio_root_spellings_cache is not None and _studio_root_spellings_cache[0] is markers:
@@ -3085,11 +2841,7 @@ def _text_names_the_studio_root(text: str) -> bool:
 
 
 def _quoted_words(text: str) -> "list[str]":
-    """Split on whitespace, honouring quotes but NOT backslash escapes.
-
-    `shlex.split(posix = True)` eats the separators of a Windows path, so
-    `find "C:\\Users\\me\\Unsloth Studio" ...` came back as one mangled word and matched no root.
-    """
+    """Splits on whitespace honouring quotes but not backslashes, so Windows paths keep their separators."""
     lexer = shlex.shlex(text, posix = True)
     lexer.whitespace_split = True
     lexer.escape = ""
@@ -3109,13 +2861,7 @@ def _folded_word(word: str) -> str:
 
 
 def _names_the_studio_root_itself(text: str) -> bool:
-    """True when one WORD of the command is the root itself, so the walk starts there.
-
-    Word by word, because the spelling appearing anywhere is not enough: the pattern in
-    `grep -rn 'cd <root>' src/` searches a project, and `<root>/projects/p/sandbox` is ordinary work
-    inside a project. Only a bare `<root>` (with any trailing separator) is the directory whose walk
-    reaches `auth/`.
-    """
+    """Only a bare studio root word (any trailing separator allowed) counts; a longer path does not."""
     # Folded the same way as the words, or a Windows root never matches.
     spellings = [_folded_word(spelling) for spelling in _studio_root_spellings()]
     if not spellings:
@@ -3138,12 +2884,7 @@ _STUDIO_WALK_SPLIT_RE = re.compile(r"[\s;&()<>]+")
 
 
 def _command_words(text: str) -> "list[str]":
-    """The word in COMMAND position of each pipeline segment, lowered and basenamed.
-
-    `echo tar "$STUDIO_HOME"` runs `echo`; `tar` is data it prints. Reading every non-option token
-    as an executable refused that. Assignments and the usual wrappers are stepped over so
-    `env -u X tar ...` still reports `tar`.
-    """
+    """Only the command-position word of each pipeline segment, so `echo tar` reports `echo`."""
     words: "list[str]" = []
     for segment in _COMMAND_SEPARATOR_RE.split(text.lower()):
         skip_next = False
@@ -3220,11 +2961,7 @@ def _marker_is_absolute(marker: str) -> bool:
 
 
 def _marker_is_a_path_segment(lowered: str, marker: str) -> bool:
-    """True when ``marker`` appears in ``lowered`` as a whole path, not merely as a prefix.
-
-    ``<home>/auth`` must match ``<home>/auth/auth.db`` and a bare ``<home>/auth``, but not
-    ``<home>/authors/notes.txt`` or ``<home>/auth-backup``.
-    """
+    """Matches only a whole path segment: `auth` must not match `authors` or `auth-backup`."""
     start = lowered.find(marker)
     while start != -1:
         end = start + len(marker)
@@ -3370,11 +3107,7 @@ _PROC_CWD_RE = re.compile(r"/proc/(?:self|thread-self|\d+|\$\$|\$\{?BASHPID\}?|\
 
 
 def _unquoted_parens(text: str):
-    """Yield `(index, char)` for each bracket that is shell syntax, skipping quoted ones.
-
-    `echo '('; cd ../..; echo ')'` writes two brackets no shell ever opens, and counted as syntax
-    they ended a subshell that was never entered, dropping the `cd` that came between them.
-    """
+    """Yields only unquoted brackets; a quoted one is text and does not open or close a subshell."""
     quote = ""
     escaped = False
     # A `$(` stays active inside double quotes, so suspend that quote for the subshell.
@@ -3405,11 +3138,7 @@ def _unquoted_parens(text: str):
 
 
 def _subshell_end(text: str, start: int) -> int:
-    """Where the subshell containing *start* closes, or the end of *text* when it is not in one.
-
-    `(cd ../..; ls models); cat auth/config.json` runs the `cat` in the unchanged directory: a
-    subshell's `cd` dies with the subshell, so its move must not reach past the closing bracket.
-    """
+    """A subshell's `cd` dies with the subshell, so its move ends at the closing bracket."""
     depth = 0
     for index, char in _unquoted_parens(text):
         if index >= start:
@@ -3456,13 +3185,7 @@ def _unquoted_braces(text: str):
 
 
 def _uncalled_function_spans(text: str) -> "list[tuple[int, int]]":
-    """Spans of function bodies *text* defines but never invokes.
-
-    `helper() { cd ../..; }; cat auth/config.json` never runs the `helper`, so the `cd` in its body
-    moves nothing and the `cat` reads the project's own auth file from the unchanged sandbox.
-    Refusing that is a false positive, and it is the same rule the python walk already applies to an
-    uncalled def.
-    """
+    """Function bodies defined but never invoked; a `cd` inside one moves nothing."""
     bodies: "list[tuple[str, int, int, int]]" = []
     for match in _SHELL_FUNCTION_RE.finditer(text):
         group = 1 if match.group(1) else 2
@@ -3494,24 +3217,14 @@ def _uncalled_function_spans(text: str) -> "list[tuple[int, int]]":
 
 
 def _token_spellings(token: str) -> "list[str]":
-    """The paths *token* can be, once the shell has had its say.
-
-    A backslash is a separator on Windows and an escape on POSIX, so `au\\th/auth.db` is both
-    `au/th/auth.db` and `auth/auth.db` and the guard has to try each.
-    """
+    """A backslash is a separator on Windows and an escape on POSIX, so each reading is tried."""
     if "\\" not in token:
         return [token]
     return list(dict.fromkeys([token.replace("\\", "/"), token.replace("\\", "")]))
 
 
 def _path_tokens_containing(text: str, wanted: str):
-    """Whole path tokens of *text* holding any character of *wanted* (or the substring `..`).
-
-    One linear pass, then a substring test per token. The equivalent patterns put the interesting
-    characters in the MIDDLE, so their leading `[^...]*` backtracks over every position of a long
-    token that does not contain one: a fifth of a second for a single 8 KB token, and a command
-    carries many.
-    """
+    """Scans tokens in one linear pass, since an equivalent regex backtracks on long tokens."""
     for match in _PATH_TOKEN_RE.finditer(text):
         token = match.group(0)
         if ".." in token if wanted == ".." else any(ch in token for ch in wanted):
@@ -3519,14 +3232,7 @@ def _path_tokens_containing(text: str, wanted: str):
 
 
 def _cwds_after_cd(workdir: str, text: str) -> "list[tuple[int, int, str]]":
-    """Every working directory *text* walks into via `cd`, as `(offset, limit, directory)` in order.
-
-    The offset is where that `cd` ends, because a relative path written BEFORE it opens from the
-    old directory: `cat auth/auth.db; cd ../..` reads inside the sandbox and is ordinary work.
-
-    `cd ../..` from the session sandbox lands on the Studio root, and the `auth/auth.db` that
-    follows is then the protected database under a name that matches nothing on its own.
-    """
+    """Relative paths before a `cd` open from the old directory; each cd applies from its end onward."""
     # Possible directories, not one: a failed `cd` leaves the shell where it was. Each state
     # is valid until end of text, or the closing bracket for a subshell move.
     states: "list[tuple[str, int]]" = [(workdir, len(text))]
@@ -3606,12 +3312,7 @@ def _references_studio_credential_here(
     _quoted_assignments: bool = False,
     _positional_assignments: bool = False,
 ) -> bool:
-    """`_references_studio_credential`, plus the relative paths *text* would open from *workdir*.
-
-    The tool cwd is `<studio home>/sandbox/<session>`, a sibling of the auth directory, so
-    `open('../../auth/auth.db')` reads the protected database while naming neither the directory
-    nor a credential basename. Resolving only the `..` tokens keeps this to the one shape that can
-    leave the sandbox at all."""
+    """Resolves only `..` paths from the tool cwd, the one relative shape that can leave the sandbox."""
     # A command binding the variable itself means its own directory by it.
     if "=" in text and _rebinds_the_studio_home_first(text):
         text = _expand_shell_assignments(text)
@@ -3733,16 +3434,7 @@ def _references_studio_credential_here(
 
 
 def _calls_in_uncalled_scopes(tree) -> "set[int]":
-    """Ids of calls sitting in a function or lambda body that nothing in *code* calls.
-
-    Deliberately narrow. A body whose name IS called anywhere in the snippet stays live, because the
-    move is then real and only the ordering is unknown, and the conservative reading is what a guard
-    wants. A branch is not a scope: `if cond: os.chdir(...)` may well run, so it keeps moving.
-
-    A CLASS body is not deferred at all: python executes it when the class statement runs, whether
-    or not anything instantiates the class, so `class C: os.chdir("../..")` moves the process. Only
-    the methods inside it are deferred, and those are function bodies reached in their own right.
-    """
+    """Calls in function bodies nothing invokes; class bodies run at definition and are not deferred."""
     called: "set[str]" = set()
     # A called or name-bound lambda is not inert.
     invoked: "set[int]" = set()
@@ -3847,12 +3539,7 @@ def _python_copies_the_studio_root(tree) -> bool:
 
 
 def _python_builds_a_credential_path(code: str, workdir: "str | None") -> bool:
-    """True when a path the CODE builds names the auth directory, however it is spelled.
-
-    `os.path.join("..", "..", "auth", "auth.db")` names the protected database in pieces, so the
-    text scan sees four ordinary strings and nothing that looks like a path. `_folded_path` is the
-    same fold the sensitive-path analyzer already applies to python; here its result is put through
-    the credential test, resolved against the cwd like any other relative path."""
+    """True when a path built from pieces, like os.path.join('..', '..', 'auth'), names the auth dir."""
     lowered = code.lower()
     # Cheapest gates first: root nameable, then a tree call, then the real root tests.
     if (
@@ -4019,12 +3706,7 @@ def _parent_chain(node) -> "tuple | None":
 
 
 def _is_cwd_call(node) -> bool:
-    """`Path.cwd()`, `os.getcwd()`, `Path.home()` and the bare spellings of each.
-
-    `home` counts because both subprocess environment builders set `HOME` to the session workdir, so
-    `Path.home()` returns the same directory `Path.cwd()` does and a parent walk off it lands in the
-    studio root just the same.
-    """
+    """Counts `Path.home()` too: subprocess HOME is the session workdir, the same directory as cwd."""
     if not isinstance(node, ast.Call):
         return False
     func = node.func
@@ -4033,11 +3715,7 @@ def _is_cwd_call(node) -> bool:
 
 
 def _literal_name_bases(tree) -> "dict[str, str]":
-    """Names bound once to a literal path, so `root = Path('/tmp/p')` is not read as the cwd.
-
-    A name assigned more than once, or bound to something this fold cannot read, is left out: the
-    caller then falls back to the working directory, which is where an unqualified name usually is.
-    """
+    """Names assigned twice or bound to anything unreadable are dropped; the cwd is the fallback."""
     bases: "dict[str, str]" = {}
     rebound: "set[str]" = set()
     for node in ast.walk(tree):
@@ -4064,11 +3742,7 @@ def _parent_walk_targets(
     cwds: "list",
     name_bases: "dict | None" = None,
 ) -> "list[str]":
-    """Where a `.parent` / `.parents[n]` expression can land, resolved rather than guessed.
-
-    The fold writes one marker for the whole walk, so the level count and the base come from the
-    expression itself: `Path('/tmp').parent / 'auth'` is `/auth`, not something under the sandbox.
-    """
+    """Resolves a `.parent` walk from the expression's own literal base, not from the cwd."""
     tail = folded.rsplit("\x02", 1)[-1].lstrip("/\\")
     left = node
     while isinstance(left, ast.BinOp):
@@ -4107,12 +3781,7 @@ def _parent_walk_targets(
 
 
 def _scoped_chdir_bounds(tree) -> dict:
-    """`id(call) -> last line of the with body`, for a chdir used as a context manager.
-
-    `with contextlib.chdir(p):` restores the directory on exit, so the move applies to the body and
-    nothing after it. A call that is not a `with` item is absent here and stays permanent, which is
-    what a bare `os.chdir(p)` does.
-    """
+    """A `chdir` used as a with-item ends with its body; a bare `os.chdir` moves the directory for good."""
     bounds: dict = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.With, ast.AsyncWith)):
@@ -4148,11 +3817,7 @@ _CHILD_PROCESS_BARE_NAMES = frozenset(
 
 
 def _process_module_aliases(tree) -> "tuple[dict, set]":
-    """`(module aliases, bare process-function names)` for the import forms that rename either one.
-
-    `import subprocess as sp` renames the module and `from subprocess import run as launch` renames
-    the function, and both leave the call spelled under a name the fixed tables do not hold.
-    """
+    """Resolves import aliases of process modules and functions, which the fixed tables would miss."""
     aliases: dict = {}
     # Not pre-seeded with run/call/check_output: a snippet's own `def run` is not a launch.
     bare: "set[str]" = set()
@@ -4180,12 +3845,7 @@ def _launches_a_child_process(
     aliases: "dict | None" = None,
     bare: "set | None" = None,
 ) -> bool:
-    """True for a call that starts a process, by module attribute or by a bare imported name.
-
-    The receiver is resolved through the import aliases first. `import subprocess as sp` leaves the
-    call spelled `sp.run(...)`, and reading the receiver literally missed it, so a child handed a
-    `cwd` outside the sandbox went unchecked.
-    """
+    """Resolves the receiver through import aliases first, so a renamed `sp.run` is still a launch."""
     func = node.func
     if isinstance(func, ast.Attribute):
         receiver = func.value
@@ -4198,12 +3858,7 @@ def _launches_a_child_process(
 
 
 def _literal_directory_descriptors(tree, workdir: "str | None") -> dict:
-    """Name -> the directory an `os.open` of a literal path bound to it names.
-
-    Only the shape that can reach the auth directory is resolved: a literal path, opened as a
-    descriptor, held in a plain name. Anything else leaves the name absent and the `dir_fd` below
-    unresolved, which is what it already was.
-    """
+    """Maps a name bound to os.open of a literal path to that directory; other shapes stay unresolved."""
     descriptors: dict = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -4257,17 +3912,7 @@ def _call_runs_from_a_credential_directory(
     process_aliases: "dict | None" = None,
     process_functions: "set | None" = None,
 ) -> bool:
-    """True when a call hands a child process a directory that makes one of its paths a credential.
-
-    `subprocess.run([...], cwd = "../..")` leaves this process where it is, so the walk above never
-    moves, and each literal argument was tested against the sandbox instead of against the
-    directory the child actually runs from.
-
-    Restricted to the APIs that actually start a process. `cwd` is an ordinary keyword name, and
-    reading it as process semantics on any call refused ordinary code:
-    `describe("auth/config.json", cwd = "../..")` was blocked in every permission mode even though
-    the function may never touch that path.
-    """
+    """`cwd=` counts only on process-starting calls, since elsewhere it is an ordinary keyword name."""
     if not _launches_a_child_process(node, process_aliases, process_functions):
         return False
     given = next((kw.value for kw in node.keywords if kw.arg == "cwd"), None)
@@ -4321,12 +3966,7 @@ def _chdir_argument(node: "ast.Call"):
 
 
 def _chdir_names(tree, modules: "set[str] | None" = None) -> "set[str]":
-    """Every name that refers to `os.chdir` in this snippet, including aliases.
-
-    `from os import chdir as move` and `move = os.chdir` are both ordinary python, and a walk that
-    only knows the literal name resolves everything after `move('../..')` against the wrong place.
-    An alias of somebody else's `chdir`, `move = ftp.chdir`, is not one of them.
-    """
+    """Names referring to os.chdir, aliases included, but not some other object's chdir like `ftp.chdir`."""
     modules = modules or {"os", "contextlib"}
     # The bare name counts only once an import binds it; a local `def chdir` is ordinary.
     names: "set[str]" = set()
@@ -4356,11 +3996,7 @@ def _chdir_names(tree, modules: "set[str] | None" = None) -> "set[str]":
 
 
 def _chdir_modules(tree) -> "set[str]":
-    """The names that stand for a module whose `chdir` moves THIS process.
-
-    `ftp.chdir('../..')` changes a remote directory and leaves the local one alone, so reading a
-    project's own `auth/config.json` afterwards was refused for a move that never happened.
-    """
+    """Module names whose chdir moves this process; `ftp.chdir` only changes a remote directory."""
     # posix/nt are the modules os is built on.
     known = ("os", "contextlib", "posix", "nt")
     modules = set(known)
@@ -4381,13 +4017,7 @@ def _is_chdir_call(
     names: "set[str] | None" = None,
     modules: "set[str] | None" = None,
 ) -> bool:
-    """True for `os.chdir(...)`, a bare `chdir(...)`, and any alias bound from it.
-
-    `names` is the set of BARE names that refer to it, which is empty for a snippet that defines its
-    own `chdir` and never imports one. Empty is meaningful here, so it is distinguished from the
-    None the callers that do not compute it pass. The qualified `os.chdir(...)` form is unaffected:
-    the receiver is what identifies it there.
-    """
+    """An empty `names` means the snippet defines its own chdir; None means names were not computed."""
     bare = {"chdir"} if names is None else names
     func = node.func
     if isinstance(func, ast.Attribute):
@@ -4417,13 +4047,7 @@ def _reads_an_environment_variable(node) -> bool:
 
 
 def _python_env_binding_names(tree) -> "tuple[set, set]":
-    """`(names holding the studio home, names holding some OTHER environment variable)`.
-
-    A dynamic path piece is only the studio root when the expression that built it actually read
-    that variable. Attributing it to any snippet that mentions the variable ANYWHERE refused
-    `project = os.environ["PROJECT_HOME"]; open(project + "/auth/config.json")`, which names an
-    unrelated application's directory.
-    """
+    """Studio-home names are kept apart, so a foreign variable is never read as the install root."""
     studio: "set[str]" = set()
     foreign: "set[str]" = set()
     for node in ast.walk(tree):
@@ -4442,12 +4066,7 @@ def _python_env_binding_names(tree) -> "tuple[set, set]":
 
 
 def _expression_reads_the_studio_home(node, studio_names, foreign_names) -> bool:
-    """Whether THIS expression's dynamic piece is the studio home.
-
-    Positive attribution both ways: the expression reads the variable itself or uses a name bound to
-    it, or every environment-backed name in it belongs to a different variable. Anything this cannot
-    attribute keeps the old whole-snippet answer, which is the fail-closed one.
-    """
+    """Expression reads the variable or a name bound to it; anything unattributable fails closed."""
     names = {piece.id for piece in ast.walk(node) if isinstance(piece, ast.Name)}
     if any(_names_the_studio_home_env(piece) for piece in ast.walk(node)):
         return True
@@ -4457,12 +4076,7 @@ def _expression_reads_the_studio_home(node, studio_names, foreign_names) -> bool
 
 
 def _variable_points_at_this_install(name: str) -> bool:
-    """Whether a studio-home variable's VALUE is this install's root.
-
-    `STUDIO_HOME` is a generic name another application can own, and bypass keeps that foreign value
-    in the child, so `open(os.environ["STUDIO_HOME"] + "/auth/config.json")` reads the other
-    application. Unset stays True: the child cannot expand it either, so nothing is granted.
-    """
+    """A studio-home value naming another directory does not count; unset does, since it grants nothing."""
     value = (os.environ.get(name.upper()) or "").strip()
     if not value:
         return True
@@ -4476,11 +4090,7 @@ def _variable_points_at_this_install(name: str) -> bool:
 
 
 def _names_the_studio_home_env(node) -> bool:
-    """True when *node* reads an environment variable that holds the studio home.
-
-    `os.environ["UNSLOTH_STUDIO_HOME"]`, the `.get` spelling and `os.getenv` all return the same
-    directory. Case-insensitive, because `os.environ` upper-cases every key it is handed on Windows.
-    """
+    """Matches os.environ subscript, .get and getenv reads; key case is ignored, as on Windows."""
     if node is None:
         return False
     if isinstance(node, ast.Subscript):
@@ -4508,12 +4118,7 @@ def _names_the_studio_home_env(node) -> bool:
 
 
 def _code_reads_the_studio_home(code: str) -> bool:
-    """True when *code* mentions one of the environment variables that name the studio home.
-
-    Case-insensitive: on Windows `os.environ` upper-cases every key it is given (`os._createenviron`
-    sets `encodekey = str.upper` for `nt`), so `os.environ["unsloth_studio_home"]` returns the same
-    value the upper-case spelling does. The variable markers the text scan uses are already compared
-    lowercased, so this brings the python fold into line with them."""
+    """Case-insensitive, as Windows upper-cases every os.environ key, matching the lowered text scan."""
     lowered = code.lower()
     return any(
         var.lower() in lowered and _variable_points_at_this_install(var)
@@ -4550,12 +4155,7 @@ def _studio_home_spellings_lowered() -> "tuple[str, ...]":
 
 
 def _studio_home_for_guard() -> "str | None":
-    """This install's studio root, derived from the same resolution the markers use.
-
-    From the ORIGINAL spelling, not the folded one: a root with an uppercase character in it would
-    otherwise be reconstructed in lowercase, and on a case-sensitive host the marker check then
-    rejected its own synthesized path, letting a move to the real root through.
-    """
+    """Derived from the original spelling, not the folded one, so an uppercase root keeps its case."""
     auth_markers, _variable_markers, _cd_re = _studio_auth_dir_markers()
     if not auth_markers:
         return None
@@ -4563,12 +4163,7 @@ def _studio_home_for_guard() -> "str | None":
 
 
 def _needs_a_workdir(text: str) -> bool:
-    """Whether resolving *text* needs the cwd at all.
-
-    Traversal needs it, and so does anything that MOVES the directory: `pushd <studio home>;
-    sqlite3 auth/auth.db` carries no `..`, and without the workdir the walk that would have caught
-    it never ran.
-    """
+    """Needs the cwd for `..` traversal and for anything that moves the directory, such as `pushd`."""
     if ".." in text:
         return True
     lowered = text.lower()
@@ -4700,24 +4295,13 @@ _TREE_NODES_ATTR = "_unsloth_walk_nodes"
 
 @functools.lru_cache(maxsize = 2048)
 def _token_command_base(token: str) -> str:
-    """The command name a shell token would run: separators stripped, directory dropped, folded to
-    lower case.
-
-    Several scans recompute this for every token of every command, and the tokens repeat heavily
-    (`cat`, `-la`, `|`), so the result is memoised. Pure function of the token text.
-    """
+    """Lowercased basename of a token's command, memoised since the same tokens repeat heavily."""
     return os.path.basename(token.strip(";&|()`{}")).lower()
 
 
 @functools.lru_cache(maxsize = 64)
 def _parse_python(code: str):
-    """``(tree, None)`` or ``(None, SyntaxError)`` for a snippet, parsed at most once.
-
-    Classifying one python tool call parses the same source two or three times over: the safety
-    check parses it, the classifier parses it again, and the ``python -c`` path parses it a third
-    time before delegating. The tree is only ever read, so one parse serves all of them. The cache
-    is bounded and keyed on the source text, so it cannot go stale.
-    """
+    """Parses each snippet once; the tree is only read, so the source-keyed cache cannot go stale."""
     try:
         return ast.parse(code), None
     except SyntaxError as exc:
@@ -4725,14 +4309,7 @@ def _parse_python(code: str):
 
 
 def _tree_nodes(tree) -> list:
-    """``list(ast.walk(tree))``, computed once per parsed tree.
-
-    The python classifiers each sweep the whole tree a dozen times looking for a different node
-    shape, and every ``ast.walk`` rebuilds the same traversal from scratch. The node list is
-    identical for all of them, so it is built once and parked on the tree itself: the classifiers
-    only read the AST, and each call parses its own tree, so nothing can go stale. Falls back to a
-    plain walk if the attribute cannot be set.
-    """
+    """Caches the node list on the tree; classifiers only read it and every call parses its own tree."""
     nodes = getattr(tree, _TREE_NODES_ATTR, None)
     if nodes is None:
         nodes = list(ast.walk(tree))
@@ -4812,14 +4389,7 @@ _WIN_DRIVE_RELATIVE_JOIN_RE = re.compile(r"^[A-Za-z]:(?![\\/:])[^:\s]+$")
 
 
 def _posix_join(parts) -> str:
-    """Join folded path pieces the way ``os.path.join`` and ``Path(...)`` actually resolve them.
-
-    An absolute component DISCARDS everything before it: `os.path.join("/usr", "/media/x")` opens
-    `/media/x`, not `/usr/media/x`. Doing this at the join keeps the distinction from a doubled
-    separator inside one literal, which the OS simply collapses -- `/home/alice//usr/report.txt` is
-    `/home/alice/usr/report.txt` and has nothing to do with `/usr`. Inferring the join from `//`
-    after the fact could not tell those apart, and read `/usr` out of the literal.
-    """
+    """An absolute part discards what precedes it, as os.path.join does; `//` inside a literal does not."""
     out = ""
     for part in parts:
         if not out:
@@ -4876,10 +4446,7 @@ def _shell_assignment_expansions(
     quote_states = None,
     skip_prefix: bool = False,
 ) -> "tuple[str, str, bool]":
-    """(last binding everywhere, binding active at each use, saw a command-prefix assignment).
-
-    `x=/tmp cat "$x"` expands the argument with the OUTER x and only hands /tmp to the child, so with
-    *skip_prefix* such assignments bind nothing; the last-binding result keeps them for the child."""
+    """With skip_prefix, a command-prefix assignment binds nothing to expansions on its own command."""
     env = {}
     saw_prefix = False
     inert_states = None
@@ -5165,14 +4732,7 @@ def _folded_path(
     ctors = None,
     join_names = None,
 ) -> "str | None":
-    """Best-effort value of a path built from string literals, so a sensitive path assembled from
-    pieces (os.path.join('/etc', 'passwd'), Path('/etc') / 'passwd', f'/etc/{name}') is still
-    visible to the scan. A dynamic piece becomes NUL, a non-slash placeholder, so a dynamic segment
-    under a sensitive dir is still detectable.
-
-    ``literals`` maps names bound to string literals; ``ctors`` is the set of pathlib constructor
-    names; ``join_names`` are bare names bound to os.path.join.
-    """
+    """Folds literal pieces; a dynamic piece is a NUL placeholder, so a dynamic name stays detectable."""
     literals = literals or {}
     ctors = ctors or _PATH_CTORS
     join_names = join_names or frozenset()
@@ -5311,10 +4871,7 @@ def _folded_path(
 
 
 def _dynamic_name_hits_sensitive(folded) -> bool:
-    """True if a folded path with a dynamic piece (NUL) inside a path segment could spell a
-    credential target, e.g. open('/et' + chr(99) + '/passwd'). NUL matches any run of
-    non-separator chars so the dynamic split of a sensitive name resolves, while an all-dynamic
-    or segment-spanning path cannot form a single credential name and stays safe."""
+    """A NUL placeholder matches any run within one segment, so a split sensitive name still matches."""
     if not folded or "\x00" not in folded:
         return False
     pattern = "".join(r"[^/\\]*" if ch == "\x00" else re.escape(ch) for ch in folded)
@@ -6204,10 +5761,7 @@ _MCP_CREDENTIAL_KEY_RE = re.compile(
 
 
 def _mcp_arguments_reference_studio_credential(arguments) -> bool:
-    """True if an MCP call's arguments point at Studio's auth directory. An MCP server runs outside
-    the terminal sandbox, so a filesystem server would read the credential the local tools refuse.
-    Prose fields are skipped for the same reason they are below: an issue body that mentions the
-    filename is text to store, not a file to open."""
+    """An MCP server runs outside the sandbox, so its args are checked, but prose fields are skipped."""
 
     def walk(value, is_prose: bool = False) -> bool:
         if isinstance(value, str):
@@ -6465,10 +6019,7 @@ def never_needs_approval(name: str) -> bool:
 
 
 def is_always_safe_tool(name: str) -> bool:
-    """True for tools that never need an auto-mode prompt on any arguments, so a caller (e.g. the
-    streaming provisional card) can allow them before the full arguments are known. render_html
-    is intentionally excluded: a networked canvas needs approval, which cannot be judged before
-    its arguments stream."""
+    """Name-only check usable before arguments stream; render_html stays out since it needs approval."""
     return name in _ALWAYS_SAFE_TOOLS
 
 
@@ -6483,20 +6034,12 @@ def has_text_only_provisional_card(name: str) -> bool:
 
 
 def _web_search_fetches_url(name: str, arguments: dict) -> bool:
-    """web_search carrying a ``url`` fetches that exact page instead of searching, which is egress
-    to a host the CALL names, so it asks even though plain search stays always-safe. Name-only
-    ``is_always_safe_tool`` is deliberately unchanged: it runs before arguments exist, where a
-    query-only search must not prompt."""
+    """web_search with a url is egress to the named host, so it asks; name-only safety is unchanged."""
     return name == "web_search" and bool(str(arguments.get("url", "") or "").strip())
 
 
 def is_potentially_unsafe_tool_call(name: str, arguments: dict) -> bool:
-    """Whether a tool call must still pause for approval in auto mode.
-
-    Used by permission_mode="auto" ("Approve for me"): read-only calls
-    auto-run, anything that can mutate state, execute arbitrary code, or is
-    simply unrecognized asks first. Unknown tools fail closed.
-    """
+    """Auto mode prompts for anything that can mutate state or run code; unknown tools fail closed."""
     if _web_search_fetches_url(name, arguments):
         return True
     if name in _ALWAYS_SAFE_TOOLS:
@@ -6836,11 +6379,7 @@ def _short_flag_cluster(token: str) -> "list[str]":
 
 
 def _short_flag_arg(token: str, letters: str) -> "str | None":
-    """For a short-flag cluster (``-lc``, ``-Bc``, ``-c``), if one of ``letters`` appears as a flag
-    in it, return the text glued after that letter: ``""`` when the value is the next token, or
-    the attached payload for ``-c'cmd'``. ``None`` when no such flag is present, or for long
-    options / non-flags. Catches combined forms (``bash -lc 'git clean'``) an exact ``-c`` match
-    would miss."""
+    """Finds a flag letter inside a short-flag cluster, so combined forms like `bash -lc` are caught."""
     if not token.startswith("-") or token.startswith("--"):
         return None
     body = token[1:]
@@ -6851,15 +6390,7 @@ def _short_flag_arg(token: str, letters: str) -> "str | None":
 
 
 def _shell_quote_states(command: str) -> "list[str]":
-    """The quote context of every character: ``""`` outside quoting, ``"'"`` (or ``"$'"`` for ANSI-C,
-    which honours backslash escapes) inside single quoting, ``'"'`` inside double quoting, and
-    ``_ESCAPED_CHAR_STATE`` for a backslash and the character it quotes. A quote mark itself reports
-    the context it opens from, so a character is text bash expands exactly when its state is ``""``
-    or ``'"'``.
-
-    Tracked character by character rather than paired off with a regex, because a regex matches the
-    apostrophe in `echo "it's"` against the next quote, inverting the state for everything after it.
-    """
+    """Char-by-char scan: a regex pairs an apostrophe inside double quotes with a later quote."""
     states: "list[str]" = []
     quote = ""
     i, n = 0, len(command)
@@ -6894,18 +6425,7 @@ def _shell_quote_states(command: str) -> "list[str]":
 
 
 def _substitution_span(command: str, start: int) -> int:
-    """Index just past the `)` that closes the `$(` at ``start``.
-
-    The body of a substitution is a FRESH shell context, so quoting reopens inside even when the
-    whole thing sits in double quotes, and a paren the body QUOTES is text, not nesting. Counting it
-    raised the depth, the real `)` then never brought it back to zero, and the span ran on past the
-    end of the word, so a generated script went unnoticed.
-
-    _shell_quote_states is a left-to-right machine, so the states it reports for a prefix are the
-    ones it reports for the whole string; the window is grown until the span closes, which keeps the
-    cost a constant multiple of the substitution's own length rather than a walk to the end of the
-    line.
-    """
+    """Quoting restarts inside `$(...)`, so a quoted paren is text, not nesting."""
     n = len(command)
     width = _SUBSTITUTION_SPAN_STEP
     while True:
@@ -6963,14 +6483,7 @@ def _brace_param_span(command: str, start: int) -> int:
 
 
 def _collapse_shell_arithmetic(program: str) -> str:
-    """``program`` with each arithmetic expansion replaced by a digit (_ARITHMETIC_VALUE), a faithful
-    stand-in because arithmetic always evaluates to an integer.
-
-    Without it the expansion's own punctuation is read as sed source and hides the command behind
-    it: `sed "$((c+1))e rm -f victim"` runs rm for real, while the raw text takes the `c` for an
-    append-text command and swallows the payload as its operand. An expansion holding a COMMAND
-    substitution is left alone, so the substitution stays visible to _sed_program_unresolved.
-    """
+    """Swaps each arithmetic expansion for a digit, which is faithful since it evaluates to an integer."""
     out: "list[str]" = []
     i, n = 0, len(program)
     while i < n:
@@ -6986,17 +6499,8 @@ def _collapse_shell_arithmetic(program: str) -> str:
 
 
 def _shell_expansions(command: str, quoted: bool = True) -> "list[str]":
-    """Every expansion bash performs, as the exact text each one occupies: `$(...)`, backticks,
-    `${...}` in ANY form and a bare `$NAME` / `$?`.
-
-    With ``quoted`` (the default) the text is a whole command line, so a single-quoted or
-    backslash-escaped expansion is literal and reported as nothing. With ``quoted`` False the text
-    is a token shlex has already unquoted, where every character counts; comparing the two tells an
-    expansion the shell RUNS from one a sed program merely quotes.
-
-    ARITHMETIC is skipped: it evaluates to an integer, so it can spell no sed command. One holding a
-    command substitution is stepped INTO instead.
-    """
+    """Lists every expansion the shell performs; arithmetic is skipped, since it can spell no sed
+    command."""
     found: "list[str]" = []
     states = _shell_quote_states(command) if quoted else None
     i, n = 0, len(command)
@@ -7035,10 +6539,7 @@ def _shell_expansions(command: str, quoted: bool = True) -> "list[str]":
 
 
 def _separate_unquoted_newlines(text: str) -> str:
-    """``text`` with each UNQUOTED newline replaced by `;`, which shlex reads as a command boundary.
-    A newline inside quotes is DATA (a sed comment ends at one) so it survives, as does a
-    BACKSLASH-escaped newline, which bash deletes as a line continuation rather than a separator;
-    the blanket pass still supplies that boundary if one is wanted."""
+    """Unquoted newlines become `;`; quoted ones are data and backslash-escaped ones continue a line."""
     states = _shell_quote_states(text)
     out = []
     for i, ch in enumerate(text):
@@ -7174,13 +6675,7 @@ _MAX_SUBST_SITES = 64
 
 @functools.lru_cache(maxsize = 4)
 def _blocked_body_word_pattern_for(words: "frozenset[str]") -> "re.Pattern":
-    """A blocked name appearing anywhere in a command-substitution body.
-
-    Looser than the command-position scan on purpose: anything in the body may become the word
-    that runs. `.` (the synonym for `source`) cannot share that boundary, because any dot in a
-    filename then matches it - `$(cat .env)` was refused as "Blocked command(s) for safety: .".
-    Punctuation names get the strict boundary, the only place they can run anyway.
-    """
+    """`.` needs the strict boundary, since a loose one matched any dot, refusing `$(cat .env)`."""
     word_like = sorted(w for w in words if w[:1].isalnum() or w[:1] == "_")
     punctuation = sorted(w for w in words if w not in set(word_like))
     parts = []
@@ -7194,12 +6689,7 @@ def _blocked_body_word_pattern_for(words: "frozenset[str]") -> "re.Pattern":
 
 
 def _subst_is_word_fragment(command: str, opener: int) -> bool:
-    """Whether more of the command WORD follows the substitution opening at ``opener``.
-
-    Bash concatenates adjacent fragments, so `$(printf r)m` and `"$(printf r)"m` both run `rm`.
-    The body is benign in each, so a scan that only reads bodies reports nothing; what is
-    reportable is that the executed word cannot be known.
-    """
+    """Bash joins `$(printf r)m` into the word `rm`, so a benign body can still hide the command."""
     if command[opener] == "`":
         closer = command.find("`", opener + 1)
         end = len(command) if closer < 0 else closer + 1
@@ -7215,13 +6705,7 @@ def _case_arm_sites(
     quote_states: "list[str]",
     pattern: "re.Pattern | None" = None,
 ) -> "list[re.Match]":
-    """Matches of ``pattern`` anchored on a `case` arm's `)`, which is a command position.
-
-    Only inside `case ... in ... esac`, and only for a `)` that does not close a substitution -
-    otherwise the `)` of an ordinary `echo $(date) $(ls /tmp)` would read as an arm and refuse it.
-    ``pattern`` defaults to the substitution-site one; the variable-execution scan passes its own,
-    since a laundered `$c` runs in an arm just as readily as a substitution does.
-    """
+    """A case arm's `)` only inside case...esac, and never one closing a substitution like `$(date)`."""
     pattern = pattern if pattern is not None else _SUBST_CASE_ARM_RE
     if not _CASE_REGION_RE.search(command):
         return []
@@ -7243,12 +6727,7 @@ def _case_arm_sites(
 
 
 def _is_wrapper_flag_operand(command: str, start: int) -> bool:
-    """Whether the word at ``start`` is the VALUE of a wrapper option rather than a command.
-
-    `xargs -P $n` gives `-P` the `$n`, which is never the command the wrapper forwards to. Checked
-    here, not in the regex: a regex consuming the option and its value backtracks to the shorter
-    reading, and the atomic group that would pin it needs 3.11 while this file supports 3.9.
-    """
+    """Checked in code, not the regex, because the regex backtracks and atomic groups need Python 3.11."""
     preceding = command[:start].split()
     return bool(preceding) and preceding[-1] in _ALL_WRAPPER_VALUE_FLAGS
 
@@ -7472,10 +6951,7 @@ def _inline_python_is_high_risk(code: str) -> bool:
 
 
 def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
-    """High-risk terminal command for auto mode: credential/secret access, privilege escalation,
-    destructive/persistence changes, or network exec/exfil. Ordinary dev commands run without a
-    prompt. Fails closed (prompts) on an unparseable command. ``_depth`` bounds the recursion
-    into shell ``-c`` payloads."""
+    """Fails closed (prompts) on an unparseable command; `_depth` bounds recursion into `-c` payloads."""
     if len(command) > _MAX_TERMINAL_SCAN_CHARS:
         # Far longer than any ordinary command, and screening it is superlinear, so it asks instead.
         return True
@@ -8030,10 +7506,7 @@ def _terminal_is_high_risk(command: str, _depth: int = 0) -> bool:
 
 
 def _python_is_high_risk(code: str) -> bool:
-    """High-risk python for auto mode: code the sandbox static analysis would refuse anyway (shell
-    escape, network egress, a sensitive read), that reads/writes a credential path, or that runs
-    dynamically built code past those static checks. Ordinary in-workdir file writes and
-    computation run without a prompt."""
+    """Flags code the static checks refuse, credential-path access, or code built to run past them."""
     if not code or not code.strip():
         return False
     # A confirmation beats a silent refusal at execution time.
@@ -8319,14 +7792,7 @@ def _python_is_high_risk(code: str) -> bool:
 
 
 def is_high_risk_tool_call(name: str, arguments: dict) -> bool:
-    """Whether a tool call is sensitive enough to pause for approval in auto (Approve for me) mode.
-
-    Unlike is_potentially_unsafe_tool_call (which prompts on anything not read-only), this prompts
-    only on genuinely sensitive actions - credential access, privilege escalation,
-    destructive/persistence changes, and network exec/exfil - and lets ordinary development commands
-    run. The hard-block command set, rlimits and secret-env stripping remain in force underneath.
-    Unknown tools fail closed (prompt).
-    """
+    """Auto mode prompts only for sensitive actions; unknown tools fail closed (prompt)."""
     if _web_search_fetches_url(name, arguments):
         return True
     if name in _ALWAYS_SAFE_TOOLS:
@@ -8396,11 +7862,7 @@ def _augment_native_program_roots(roots: list[str]) -> list[str]:
 
 
 def _windows_program_roots() -> list[str]:
-    """Program Files install roots, resolved ONLY from the Windows known-folder API
-    (SHGetKnownFolderPath). Fails closed (returns ``[]``) if the API is unavailable: env vars
-    (%ProgramFiles%, even %SystemDrive%) are caller-overrideable and could relocate the trust
-    boundary. On any real Windows host shell32 is present, so this only returns empty where the
-    sandbox git-PATH feature is not needed anyway (#7317)."""
+    """Resolves Program Files only via SHGetKnownFolderPath, since env vars are caller-overrideable."""
     roots: list[str] = []
     try:
         import ctypes
@@ -8428,12 +7890,7 @@ def _windows_program_roots() -> list[str]:
 
 
 def _resolve_trusted_windows_git() -> tuple[str, str]:
-    """Find a git launcher in a TRUSTED Program Files dir. Returns ``(canonical_dir, ext)`` or ``("",
-    "")``.
-
-    ``shutil.which`` returns only the first PATH match, which may be an untrusted user shim; scan
-    the remaining PATH entries for a later trusted Git so bare ``git`` still resolves (#7317).
-    """
+    """The first PATH match may be an untrusted shim, so the other entries are scanned for trusted Git."""
     exts = [e for e in (os.environ.get("PATHEXT") or ".EXE;.CMD;.BAT;.COM").split(os.pathsep)]
     candidates: list[str] = []
     primary = shutil.which("git")
@@ -8455,14 +7912,7 @@ def _resolve_trusted_windows_git() -> tuple[str, str]:
 
 
 def _is_trusted_windows_program_dir(path: str) -> bool:
-    """True when ``path`` sits under a system-managed Program Files root.
-
-    Only the Program Files roots are trusted (admin-writable only), resolved via the known-folder
-    API so an overridden env var cannot relocate them, never ``%SystemRoot%`` (Git does not install
-    there and it holds world-writable subdirs like ``Windows\\Temp``). Per-user managers
-    (Scoop/Choco shims under the profile) are refused. Paths are canonicalized so 8.3 aliases and
-    junctions still resolve to their real root (#7317).
-    """
+    """Only Program Files roots are trusted, not %SystemRoot% (it holds world-writable subdirs)."""
     norm = _canon_win_path(path)
     for root in _windows_program_roots():
         root_norm = _canon_win_path(root)
@@ -8477,17 +7927,7 @@ _SANDBOX_TEMP_DIRNAME = os_sandbox.TOOL_TEMP_DIRNAME
 
 
 def _sandbox_temp_dir(workdir: str) -> str:
-    """The scratch directory for a sandboxed child, created when missing.
-
-    Inside the workdir, not the workdir itself: Git for Windows mounts /tmp at %TEMP% (the msys2
-    ``usertemp`` fstab entry), so pointing TEMP at the workdir made /tmp its shortest POSIX name and
-    ``pwd`` printed /tmp, leaving the user no way to find the real folder (#8892). One level down
-    still sits where the listings reach.
-
-    Falls back to the workdir when the name is unusable, since a TMPDIR that does not exist breaks
-    every tempfile call in the child. os.mkdir, never os.makedirs, so a workdir deleted mid-call is
-    not silently recreated.
-    """
+    """One level down, not the workdir: TEMP at the workdir made Git for Windows' `pwd` print /tmp."""
     temp_dir = os.path.join(workdir, _SANDBOX_TEMP_DIRNAME)
     try:
         os.mkdir(temp_dir, 0o700)
@@ -8500,13 +7940,7 @@ def _sandbox_temp_dir(workdir: str) -> str:
 
 
 def _is_sandbox_temp_dir(temp_dir: str, workdir: str) -> bool:
-    """Whether *temp_dir* is the workdir's own scratch directory.
-
-    Exact stored spelling, because the walks read the name off os.walk: on a case-insensitive volume
-    (default APFS, every NTFS) our lowercase probe lands on a directory stored as ``TMP``, and
-    realpath does not canonicalise case. And the real directory, not a link or junction to one,
-    since os.walk does not follow links and the artifacts would land where both walks skip.
-    """
+    """Exact stored spelling and a real directory, not a link, since os.walk does not follow links."""
     try:
         with os.scandir(workdir) as entries:
             if not any(entry.name == _SANDBOX_TEMP_DIRNAME for entry in entries):
@@ -8522,12 +7956,7 @@ def _is_sandbox_temp_dir(temp_dir: str, workdir: str) -> bool:
 
 
 def _reusable_sandbox_temp_dir(temp_dir: str, workdir: str) -> bool:
-    """Whether an existing entry may serve as the scratch directory.
-
-    Identity plus writability, since tempfile abandons an unwritable TMPDIR for the platform
-    default. Path accounting asks _is_sandbox_temp_dir instead: which directory a segment sits in
-    does not depend on writability.
-    """
+    """Needs identity and writability; tempfile abandons an unwritable TMPDIR for the platform default."""
     return _is_sandbox_temp_dir(temp_dir, workdir) and os.access(temp_dir, os.W_OK | os.X_OK)
 
 
@@ -8546,23 +7975,7 @@ _ISOLATED_CMD_GIT_ENV = {
 
 
 def _build_safe_env(workdir: str, shell: "str | None" = None) -> dict[str, str]:
-    """Build a minimal, credential-free environment for sandboxed subprocesses.
-
-    Whitelist-built from scratch (parent env NOT inherited): only
-    PATH/HOME/TMPDIR/LANG/TERM/PYTHONIOENCODING/PYTHONPATH (+VIRTUAL_ENV or Windows SystemRoot and a
-    minimal PATHEXT) reach the child; all credential vars (HF_TOKEN, AWS_*, etc.) are absent. HOME
-    (and on Windows HOMEDRIVE/HOMEPATH) points at the sandbox workdir so SDKs can't read the
-    operator's cached creds, and the temp vars at _sandbox_temp_dir just inside it. PYTHONPATH
-    carries only the sandbox sitecustomize shim directory.
-
-    PATH starts with the Unsloth interpreter / venv and OS system dirs so ``python``/``pip`` stay
-    pinned. On Windows only, Git-for-Windows install dirs from the host PATH are appended so bare
-    ``git`` resolves (#7317). User-writable host PATH entries are never inherited: they could shadow
-    auto-safe terminal commands.
-
-    ``shell="cmd_isolated"`` is the Windows MXC Terminal on cmd.exe: Git Bash's userland stays off
-    PATH and git gets the non-interactive settings in _ISOLATED_CMD_GIT_ENV.
-    """
+    """Env is built from a whitelist, not inherited; user-writable PATH entries could shadow commands."""
     exe_dir = os.path.dirname(sys.executable)
     path_entries = [exe_dir] if exe_dir else []
 
@@ -8749,22 +8162,14 @@ def _is_cred_location_env_name(name: str) -> bool:
 
 
 def _is_secret_env_value(value: str) -> bool:
-    """True if a value embeds credentials regardless of its name: URL userinfo
-    (``scheme://user:token@host`` in DATABASE_URL / PIP_INDEX_URL / HTTP_PROXY) and
-    connection-string credential fields (``...;Password=...`` / ``...;AccountKey=...``) whose
-    names dodge the name classifier."""
+    """Flags a value embedding credentials whatever its name: URL userinfo or connection-string secrets."""
     if not value:
         return False
     return _URL_USERINFO_RE.search(value) is not None or _SECRET_VALUE_RE.search(value) is not None
 
 
 def _build_bypass_env(workdir: str) -> dict[str, str]:
-    """Env for bypass exec: full host env minus credential vars, with HOME at the workdir and TMPDIR
-    just inside it so SDKs cannot read cached creds.
-
-    Stripping the child env is necessary but not sufficient (a same-UID child can read the parent's
-    env via procfs), so callers also harden the parent (see _harden_parent_against_proc_env_leak).
-    """
+    """Stripping credential vars is not enough: a same-UID child can read the parent's env via procfs."""
     env = {
         k: v
         for k, v in os.environ.items()
@@ -9065,17 +8470,7 @@ _parent_proc_hardened = False
 
 
 def _harden_parent_against_proc_env_leak() -> bool:
-    """Make the Unsloth process's /proc/<pid>/environ unreadable to its children.
-
-    Stripping the child env is not enough on Linux: a bypassed same-UID child can read
-    /proc/<getppid()>/environ to recover the parent's unfiltered secrets. Clearing PR_SET_DUMPABLE
-    reparents this process's /proc entries to root, closing that read.
-
-    Returns True when hardened or unnecessary (off Linux), False when needed but unappliable (e.g.
-    prctl denied by seccomp); callers must then fail closed. This is a mitigation, not a full
-    boundary: a bypassed tool can still walk /proc to an ancestor or read creds by path. Applied
-    lazily on first bypass.
-    """
+    """Clears PR_SET_DUMPABLE so children cannot read this process's environ; if it fails, fail closed."""
     global _parent_proc_hardened
     if _parent_proc_hardened:
         return True
@@ -9104,14 +8499,7 @@ _WIN_BASH_RELATIVE = (
 
 
 def _is_trusted_windows_bash(path: str) -> bool:
-    """True when ``path`` is a native Win32 bash under a system install root.
-
-    The shell runs every sandboxed command, so an untrusted one defeats the PATH / PATHEXT /
-    NoDefaultCurrentDirectoryInExePath hardening in _build_safe_env: a bash.exe in a user-writable
-    dir (Scoop, a per-user Git, a project checkout) would execute attacker-controlled code for a
-    command that already passed the blocklist. Same Program Files trust boundary as the sandbox git
-    PATH entry (#7317), and fails closed.
-    """
+    """Only a bash.exe under Program Files counts, since an untrusted bash defeats PATH hardening."""
     lowered = path.replace("/", "\\").lower()
     if any(marker in lowered for marker in _WSL_BASH_MARKERS):
         return False
@@ -9156,14 +8544,7 @@ def _windows_bash_git_cmd_dir() -> str:
 
 
 def _windows_bash_userland_dirs() -> list[str]:
-    """Trusted dirs holding the resolved bash and the POSIX tools beside it.
-
-    ``bash -c`` is non-login, so /etc/profile never runs and Git for Windows' ``usr\\bin`` stays off
-    PATH, leaving ls / cat / grep command not found. bash.exe ships under ``Git\\bin`` or
-    ``Git\\usr\\bin``, so both parents are probed. Candidates clear the same Program Files trust
-    boundary as the git entry (#7317) and are canonicalised against junctions. Fails closed: no
-    trusted bash, no entries, PATH unchanged.
-    """
+    """Trusted tool dirs beside the resolved bash, since non-login `bash -c` leaves them off PATH."""
     bash = _windows_bash()
     if not bash:
         return []
@@ -9205,14 +8586,7 @@ def _windows_system_cmd() -> str:
 
 
 def _terminal_profile(disable_sandbox: bool = False) -> str:
-    """Which shell the Terminal runs: "bash", "cmd_isolated" or "cmd_fallback".
-
-    Git Bash cannot start inside MXC (microsoft/mxc#1061), so when bash fails the MXC probe and
-    cmd.exe qualifies instead, Auto runs the Terminal isolated on cmd rather than unsandboxed on bash.
-    Any bash failure counts, not only the MSYS verdict: on a freshly prepared host bash fails without
-    that signature while cmd passes. Only a failed bash probes cmd. Full access and
-    UNSLOTH_MXC_TERMINAL_CMD=0 keep the host shell.
-    """
+    """Any bash failure falls back to isolated cmd, not unsandboxed bash, as MXC cannot start Git Bash."""
     if sys.platform != "win32":
         return "bash"
     bash = _windows_bash()
@@ -9320,12 +8694,7 @@ def _workdir_key(session_id: "str | None") -> tuple[str, str]:
 
 
 def _session_key(session_id: "str | None") -> tuple[str, str]:
-    """Lifecycle key for a session id.
-
-    Case-folded: two ids differing only in case are one directory on Windows and
-    on a default macOS volume, and keying them apart let a delete land while the
-    other chat was running a tool in there.
-    """
+    """Case-folded, since ids differing only in case share one directory on Windows and default macOS."""
     return current_account_id(), (session_id or _ANON_KEY).casefold()
 
 
@@ -9427,10 +8796,7 @@ def record_orphaned_project(
     pending_delete: bool = False,
     root_path: "str | None" = None,
 ) -> None:
-    """Remember where a deleted project's kept workspace lives. Written whether or not files were to
-    be deleted: the row that knew the path has gone either way, and a chat forked out of the
-    project still shows cards for it. ``pending_delete`` separates keep this, just make it
-    reachable from the user asked for it, finish when nothing is using it."""
+    """Written even when files are kept, since the row that knew the workspace path is already gone."""
     if not project_id or not workspace:
         return
     _write_orphan_record(
@@ -9547,14 +8913,7 @@ def forget_orphaned_project_if_gone(
 
 
 def _delete_recorded_workspace(project_id: str, workspace: str, root: "str | None") -> None:
-    """Remove a recorded workspace the way the immediate delete would.
-
-    Always through the storage helper, whose folder-name and denied-path checks decide what may go:
-    a record is a file on disk, and a stale or edited one naming an unrelated directory must not
-    become an rmtree of it. Without a recorded root the workspace's own parent is offered, which is
-    what the default layout puts the sandbox in; anything else it refuses, and the record stays
-    pending rather than being deleted on our own authority.
-    """
+    """Goes through the storage helper's checks, so a stale record cannot rmtree an unrelated directory."""
     from storage.studio_db import delete_project_workspace
 
     target = root or os.path.dirname(os.path.realpath(workspace))
@@ -9667,10 +9026,7 @@ def live_project_owns(
     workspace: str,
     root: "str | None" = None,
 ) -> bool:
-    """Whether a project with this id is the one those folders belong to. A reused id is not the
-    same workspace: the default root carries the project's name, and renaming a project leaves
-    its root where it was. A folder the live row does not own is still the deleted project's, and
-    still the one the user asked to remove."""
+    """A reused project id is not the same workspace, so an unanswerable lookup keeps the files."""
     try:
         from storage.studio_db import get_chat_project
         project = get_chat_project(project_id)
@@ -9770,10 +9126,7 @@ def _sandbox_name(session_id: str) -> str:
 
 
 def _preserve_foreign_marker(workdir: str, name: "str | None" = None) -> None:
-    """Move aside a marker-named entry that this migration did not write. This name was not reserved
-    before the change, so a chat that wrote its own .unsloth_sandbox has a real file there, and a
-    short note like notes reads as a perfectly good session name. Only the exact marker this move
-    is about to write is left alone; everything else is renamed, not removed."""
+    """Renames aside a marker-named entry this migration did not write, rather than deleting it."""
     marker = os.path.join(workdir, _SANDBOX_MARKER)
     if not os.path.lexists(marker):
         return
@@ -9822,14 +9175,7 @@ def _marker_owner(workdir: str) -> "str | None":
 
 
 def _session_dir(root: str, session_id: str) -> str:
-    """The directory for this exact id.
-
-    Two ids differing only in case are one name on Windows and on a default macOS volume. The marker
-    says which id made the directory, and anyone else gets one of their own rather than sharing
-    files that either chat's deletion would then remove. A directory already sitting in a root the
-    user pointed us at is nobody's sandbox: it is stepped around rather than run in, so no tool can
-    write a marker into it and make it look like ours.
-    """
+    """A link is never ours; a directory already in a user-chosen root is stepped around, not run in."""
     name = _sandbox_name(session_id)
     plain = os.path.join(root, name)
     # A link is never ours; claiming through one writes into somebody else's directory.
@@ -10039,10 +9385,7 @@ _STAGING_SUFFIX = ".arriving-"
 
 
 def _free_move_target(root: str, name: str) -> "str | None":
-    """A name in *root* nothing occupies, for a legacy move to land on. The resolver's own answer
-    first, so an untouched root keeps the plain name. Both derived names can be the user's in a
-    root they pointed us at, and returning nothing there stranded the files at the legacy root
-    for good: the marker the move writes is what finds this one again."""
+    """Searches past names the user may own, since returning nothing stranded legacy files for good."""
     candidate = _session_dir(root, name)
     if not os.path.exists(candidate):
         return candidate
@@ -10059,11 +9402,7 @@ def _free_move_target(root: str, name: str) -> "str | None":
 
 
 def _staged_move(source: str, target: str, name: str) -> None:
-    """Move one session in, so an interruption cannot look like a collision. Across filesystems
-    shutil.move copies as it goes, and a run killed part way leaves a partial destination with
-    the original still in place; the next launch would read that as a session the new root
-    already has and strand the files. Filled under a name nothing resolves to, then renamed,
-    which on one filesystem is atomic."""
+    """Copies to an unused staging name, then renames, so a killed copy is not mistaken for a session."""
     global _legacy_sandbox_migrated
     staging = f"{target}{_STAGING_SUFFIX}{uuid.uuid4().hex[:8]}"
     # Announced while neither end of the move is visible; migration-done checks must consult it.
@@ -10158,11 +9497,7 @@ def _marked_sandbox_after_moves(root: str, session_id: str) -> "str | None | boo
 
 
 def _legacy_session_dir(session_id: str) -> "str | None":
-    """This session's directory at the legacy root, while one is still there.
-
-    Both names, like the migration itself: a chat from before the upgrade whose
-    id starts with the derived prefix kept its folder under the literal id.
-    """
+    """Checks both the derived and the literal session name, since older chats kept the literal id."""
     if not is_owner_context():
         return None
     legacy_root = _legacy_sandbox_root()
@@ -10313,11 +9648,7 @@ def _sandbox_fallback(
     name: str,
     create: bool = False,
 ) -> str:
-    """``_default`` / ``_invalid`` under the root, contained like any session. They are ordinary
-    directories in a writable sandbox, so one replaced by a symlink would otherwise become the
-    root every unchecked request reads from. Dropping that link is only ours to do at our own
-    root; in a directory the user pointed us at, the entry is theirs and a fresh one is used
-    instead."""
+    """A symlinked fallback dir is removed only in our own root; a user's root gets a fresh one."""
     owner = _sandbox_name(name)
     path = os.path.join(root, name)
     if os.path.islink(path):
@@ -10609,16 +9940,7 @@ def _queue_detached_delete(target: str) -> None:
 
 
 def sweep_detached_sandboxes(root: "str | None" = None) -> None:
-    """Finish deletes a previous run was killed part way through.
-
-    The rename is what puts the tree out of reach, so a kill between it and the rmtree leaves a full
-    copy of the files nothing resolves to.
-
-    At our own root the name is enough: nothing but this code puts a ``.deleting-<hex>`` directory
-    there, and a tool that had removed the marker before the delete would otherwise leave the tree
-    unreachable for good. In a root the user pointed us at, the marker is still required, since a
-    folder of theirs can carry any name.
-    """
+    """A kill between rename and rmtree strands a copy; user roots must match the .deleting-<hex> marker."""
     base = os.path.realpath(root or sandbox_root())
     try:
         names = [name for name in os.listdir(base) if _DETACHED_RE.match(name)]
@@ -10666,13 +9988,7 @@ def _start_detached_sweep() -> "threading.Thread | None":
 
 
 def remove_session_sandbox(session_id: str, delete_files: bool = False) -> bool:
-    """Drop a deleted chat's sandbox. True when something was removed.
-
-    The chat was the only handle on that directory, so leaving it behind means one unreachable
-    folder per chat forever. Empty folders always go; files need ``delete_files``, since they are
-    the user's and are downloadable from the chat. Project workspaces are shared and have their own
-    delete flow.
-    """
+    """Empty folders always go; files need delete_files since they belong to the user."""
     if not session_id:
         return False
     # Only sessions that really resolve to a project workspace.
@@ -10743,10 +10059,7 @@ def _is_spill_artifact(sandbox: str, parent: str, name: str) -> bool:
 
 
 def _holds_no_user_files(target: str, owner: "str | None" = None) -> bool:
-    """Whether a sandbox holds nothing but (possibly empty) directories. Our own marker does not
-    count, and only while it is still ours: tool code runs in there and can write its own content
-    over that file, which is then the only copy of it. Bounded like every other walk here, and a
-    tree too big to check is not one to remove without being asked."""
+    """Our marker file is ignored only while it still holds our content; a tree too big to walk is kept."""
     budget = _MAX_SNAPSHOT_DIRS
     for parent, dirs, files in os.walk(target):
         if any(os.path.islink(os.path.join(parent, name)) for name in dirs):
@@ -10772,14 +10085,7 @@ def _holds_no_user_files(target: str, owner: "str | None" = None) -> bool:
 
 
 def _claimed_by_this_run(session_id: str, root: str) -> "str | None":
-    """The directory this process made for this chat, whatever the marker says.
-
-    Tool code runs in there and can empty that file or write another id into
-    it, and neither makes the directory somebody else's: this process wrote the
-    marker with O_EXCL and remembers doing it. Put back here, so the ordinary
-    routes find it too rather than leaving the files stranded until some later
-    call happens to repair it.
-    """
+    """The chat's directory this process created, even after tool code rewrote its marker file."""
     cached = _workdirs.get(_workdir_key(session_id))
     if not cached or cached not in _claimed_here:
         return None
@@ -10903,13 +10209,7 @@ _EDIT_FILE_DIFF_WINDOW_LINES = 120
 def _edit_file_resolve(
     raw_path: str, session_id: "str | None", disable_sandbox: bool
 ) -> "tuple[str | None, str]":
-    """Resolve the model's path the way python/terminal resolve theirs.
-
-    Same rules as the sitecustomize shim: a code-interpreter habit prefix
-    (/mnt/data, /workspace, ...) keeps its suffix under the workdir, everything
-    else is relative to it. Containment is checked on the realpath, so a symlink
-    planted inside cannot reach out.
-    """
+    """Containment is checked on the realpath, so a symlink planted inside the workdir cannot escape."""
     from state.tool_policy import require_tool_access
 
     require_tool_access(disable_sandbox = disable_sandbox)
@@ -10943,10 +10243,7 @@ def _edit_file_resolve(
 
 
 def _edit_file_decode(data: bytes, path: str) -> "tuple[str, str, str, str]":
-    """Decode file bytes into (text, newline, bom, error). ``text`` is normalized to \\n so an
-    old_string with plain newlines still matches a CRLF file; matching raw bytes would fail every
-    edit of a Windows-authored source. The original convention is returned so the write puts it
-    back instead of converting every line ending in the file."""
+    """Text is normalized to newlines so plain-newline snippets match CRLF files; the style is returned."""
     bom = ""
     if data.startswith(codecs.BOM_UTF8):
         bom = codecs.BOM_UTF8.decode("utf-8")
@@ -10972,15 +10269,7 @@ def _edit_file_write(
     expect: "bytes | None" = None,
     workdir: "str | None" = None,
 ) -> str:
-    """Write the new content, replacing the file atomically.
-
-    Sibling temp file then rename: an interrupted write must not leave a source file half-replaced.
-    The mode is carried over so an edit keeps the executable bit.
-
-    ``expect`` are the bytes the edit was computed from, compared again here so a file another chat
-    rewrote meanwhile is not reverted to this call's stale copy. ``workdir`` re-checks containment
-    just before the rename, so a parent swapped for a symlink after the path was resolved is caught.
-    """
+    """Atomic rename from a sibling temp file; will not revert a file another chat rewrote since expect."""
     payload = (bom + text.replace("\n", newline)).encode("utf-8")
     directory = os.path.dirname(path) or "."
     try:
@@ -11143,17 +10432,7 @@ def _edit_file_create(
     newline: str,
     workdir: "str | None" = None,
 ) -> str:
-    """Handle the empty-old_string case: create a file, never clobber one.
-
-    A zero-byte file is writable here on purpose: refusing every existing target would strand the
-    model, since an empty old_string would be refused and no other old_string can match an empty
-    file.
-
-    The absent case is created with O_EXCL rather than checked and then written: two chats sharing a
-    workspace can both pass a lexists() check and the later rename drops the earlier file. O_EXCL
-    also gives the new file the usual umask-derived mode, where a mkstemp temp file would leave it
-    0600.
-    """
+    """Creates with O_EXCL rather than a lexists check, so two chats cannot drop each other's file."""
     payload = (new.replace("\n", newline)).encode("utf-8")
     if not os.path.lexists(target):
         directory = os.path.dirname(target) or "."
@@ -11213,17 +10492,7 @@ _MAX_MATCH_SPANS = 10_000
 
 
 def _edit_file_parse_edits(raw) -> "tuple[list[tuple[str, str, bool]], str]":
-    """Validate the `edits` array into `(old, new, replace_all)` triples.
-
-    Every string is normalized the way the file is, so a snippet copied out of `cat` output with
-    plain newlines still matches a Windows-authored file.
-
-    The surrogate check is per entry and up front, before anything is written: a truncated emoji
-    escape survives `json.loads` as a lone surrogate that cannot be encoded, and the
-    UnicodeEncodeError the write raises is swallowed upstream into Unknown tool: edit_file, the one
-    answer that sends the model back to the whole-file rewrite. `old_string` needs no check, being
-    only ever compared.
-    """
+    """Lone surrogates are rejected before writing, since a late encode error becomes Unknown tool."""
     if not isinstance(raw, list) or not raw:
         return [], (
             "Error: 'edits' must be a non-empty array of {old_string, new_string} "
@@ -11264,18 +10533,7 @@ def _edit_file_parse_edits(raw) -> "tuple[list[tuple[str, str, bool]], str]":
 def _edit_file_apply_all(
     before: str, edits: "list[tuple[str, str, bool]]", name: str
 ) -> "tuple[str, int, str, str, int, str]":
-    """Apply every edit against the ORIGINAL text, or none of them.
-
-    Matched against `before` rather than against the running result, which is the rule llama.cpp's
-    own `edit_file` states and the only one a model can reason about: it copied each `old_string`
-    out of the file it read, so an entry that silently matched the output of an earlier entry would
-    land somewhere it never saw.
-
-    Spans are resolved for all entries first and checked for overlap, then applied right to left so
-    the earlier offsets stay valid. Every failure returns before a single byte is written: a partly
-    applied batch is the one outcome worse than a refused one, because the model cannot tell which
-    half landed.
-    """
+    """Matches every old_string against the original text and writes nothing unless all edits apply."""
     spans: list[tuple[int, int, str, int]] = []
     for index, (old, new, replace_all) in enumerate(edits, 1):
         if not old:
@@ -11545,12 +10803,7 @@ def web_search_tool_with_images() -> dict:
 
 
 def _build_sandbox_paths_note() -> str:
-    """Platform and working-directory note, on BOTH tool descriptions. Models habitually write to
-    /mnt/data, a ChatGPT code-interpreter path that does not exist here, so the POSIX text names
-    it. Naming only POSIX paths on Windows reads as you are on Linux and models then refuse to
-    invoke Windows programs that are in fact available, so that text says where the code runs
-    instead: without it a model assumes the pipe is its only output and declines to open a window
-    it believes nobody can see."""
+    """States where code runs, so models on Windows do not refuse to launch programs that are available."""
     # Otherwise a model assumes its output vanished into a scratch dir.
     created = (
         " Any file you create here is kept and shown to the user with a download "
@@ -11628,16 +10881,7 @@ _FULL_ACCESS_CLAUSE = {
 
 
 def _to_full_access(description: str, tool_name: str) -> str:
-    """Rewrite a sandboxed tool description for Full access.
-
-    Under bypass_permissions the loops pass disable_sandbox=True: _build_bypass_env /
-    _bypass_preexec skip the static analysis, the command blocklist and the rlimits, so the host
-    filesystem really is reachable. Handing a model the sandboxed text in that mode makes it answer
-    I am sandboxed and cannot see your files to a question one tool call would have answered.
-    Untouched clauses are the ones still true in both modes: the workdir is the per-session dir
-    either way (_build_bypass_env repoints HOME at it and TMPDIR / TEMP / TMP just inside it), and
-    so is the download-link note.
-    """
+    """Sandboxed wording under bypass_permissions makes models claim they cannot see the user's files."""
     clause = _FULL_ACCESS_CLAUSE[tool_name]
     for sandboxed, full_access in _FULL_ACCESS_SUBSTITUTIONS:
         description = description.replace(sandboxed, full_access.format(clause = clause))
@@ -11645,16 +10889,7 @@ def _to_full_access(description: str, tool_name: str) -> str:
 
 
 def _build_terminal_shell_note() -> str:
-    """Shell-specific note, on the TERMINAL description only.
-
-    Which shell runs is read from the resolver, not assumed: telling a model it has bash on a host
-    where _get_shell_cmd fell back to cmd reintroduces the multi-line half-execution this note
-    exists to prevent. It stays off the python description because none of it applies to the python
-    sandbox, and naming a shell there invites subprocess/os.system as a way past the terminal
-    blocklist. No program is named either: powershell/pwsh are on that blocklist and `cmd /c start`
-    is not, so recommending one hands back a hard block and recommending the other advertises the
-    gap.
-    """
+    """Shell is read from the resolver, not assumed; no program is named, as the blocklist is uneven."""
     if sys.platform != "win32":
         return ""
     if _windows_bash():
@@ -11771,11 +11006,7 @@ _FULL_ACCESS_TOOL_BY_NAME = {
 
 
 def apply_full_access_tool_descriptions(tools: list[dict]) -> list[dict]:
-    """Swap python/terminal/edit_file for their Full access schemas. Only the sandboxed built-ins
-    are touched; web_search, render_html, search_knowledge_base and MCP tools are passed through
-    untouched, and a list without any of them is returned as-is so callers can apply this
-    unconditionally. The input list is never mutated: ALL_TOOLS entries are module globals shared
-    across requests."""
+    """Never mutates the input: ALL_TOOLS entries are module globals shared across requests."""
     if not tools:
         return tools
     swapped = False
@@ -12213,10 +11444,7 @@ def _mcp_image_destination(url: str) -> str:
 
 
 def mcp_image_share(name, arguments, mcp_image) -> dict | None:
-    """Approval-card details plus the image bound to this server when the call would send it, else None.
-
-    A call that would send it has ``arguments`` rewritten in place to what goes out (settle_image_call).
-    """
+    """Returns None unless the call would send the bound image; then arguments is rewritten in place."""
     if mcp_image is None or not isinstance(arguments, dict):
         return None
     from .tool_loop_controller import UNPARSED_ARGUMENTS_KEY  # noqa: PLC0415
@@ -12382,11 +11610,7 @@ def _mcp_listing_compacted(name: str) -> bool:
 
 
 def _mcp_tool_names(server: dict, mcp_tools: list[dict]) -> dict[str, str]:
-    """Composed function name -> raw MCP name, for the tools this server ships to a model.
-
-    Names that already satisfy ``function.name`` are claimed first, so an alias minted for a dotted
-    or oversized one can never take a name another tool ships under.
-    """
+    """Names that already fit function.name are claimed first; an alias never takes another tool's name."""
     server_key = "blender" if server.get("builtin_id") == "blender" else server["id"]
     prefix = f"{MCP_TOOL_PREFIX}{server_key}__"
     raw_names = [
@@ -12480,18 +11704,7 @@ def _enabled_mcp_servers(servers: list[dict]) -> list[dict]:
 
 
 def cached_mcp_tools() -> tuple[list[dict], bool]:
-    """The MCP schemas already in cache, and whether that is the whole set.
-
-    get_enabled_mcp_tools() renders the same servers, but reaches the network to do it: it spawns
-    stdio servers, blocks for a probe timeout on one that is down, and writes cache and cool-off
-    state. A background token count must not do any of that, so this reads only what those probes
-    have already filled in.
-
-    ``complete`` is False when an enabled server has nothing cached and is not in its post-failure
-    cool-off, meaning a completion would probe it and render schemas this cannot price. A cool-off
-    server renders nothing on the completion path either, so skipping that one is exact rather than
-    short. Callers that must not undercount should decline on False.
-    """
+    """Reads only cached MCP schemas, never probing servers; complete is False when one is uncached."""
     servers = _enabled_mcp_servers(mcp_servers_db.list_servers())
     if not stdio_mcp_enabled():
         servers = [s for s in servers if not is_stdio(s["url"])]
@@ -12684,23 +11897,7 @@ def execute_tool(
     host_access_approved: bool = False,
     mcp_image = None,
 ) -> str:
-    """Execute a tool by name with the given arguments; returns a string.
-
-    ``timeout``: int seconds, ``None`` = no limit, unset = ``_EXEC_TIMEOUT``. ``session_id``:
-    optional ID for per-conversation sandbox isolation. ``thread_id``: optional conversation ID;
-    scopes stateful MCP stdio sessions per thread (session_id alone can be shared project-wide).
-    ``rag_scope``: hidden per-request RAG context the model never sees; consumed by
-    ``search_knowledge_base``. ``disable_sandbox``: Bypass Permissions; run python/terminal without
-    the safety checks, blocklist, or resource caps (secrets still stripped). Only affects local code
-    tools; web_search / MCP are unchanged. ``output_callback``: optional ``callable(str)`` invoked
-    with incremental stdout/stderr chunks while python/terminal executions run. Purely
-    observational: the returned result string is identical with or without it. ``website_policy``:
-    hidden server-validated domain limits for web_search. ``tool_execution_mode`` controls OS
-    isolation for python/terminal: ``"auto"`` isolates when available and otherwise preserves
-    existing behavior, while ``"required"`` refuses unisolated execution. Full access remains
-    controlled by ``disable_sandbox``; ``"full"`` here is refused. ``host_access_approved``: the user approved this
-    call at the confirmation prompt (see ``_prepare_tool_launch``).
-    """
+    """disable_sandbox runs python/terminal without checks, blocklist or caps; secrets stay stripped."""
     from state.tool_policy import require_tool_access
 
     require_tool_access(disable_sandbox = disable_sandbox)
@@ -13114,12 +12311,7 @@ _TOOL_MESSAGE_FRAMING_TOKENS = 8
 
 
 def _conversation_search_cost(text: str, counter = None) -> int:
-    """What admitting this result really costs, exactly when the caller has a tokenizer. The
-    estimate below is pessimistic for CJK and emoji but still optimistic for ASCII that tokenises
-    densely (source code, minified JSON, hashes, command output all run nearer two or three
-    characters per token than four), so a result could be admitted at well under its real cost
-    and then land in the current tool exchange, which the window is not allowed to evict. A
-    tokenizer-backed caller passes its own counter, and the GGUF path is one."""
+    """Exact cost via the caller's tokenizer; the rough estimate is optimistic for dense ASCII."""
     if counter is not None:
         try:
             return int(counter(text)) + _TOOL_MESSAGE_FRAMING_TOKENS
@@ -13129,13 +12321,7 @@ def _conversation_search_cost(text: str, counter = None) -> int:
 
 
 def _conversation_search_tokens(text: str) -> int:
-    """A deliberately pessimistic size for a search result, in tokens. The shared estimator charges
-    four characters per token, which is about right for English and badly wrong for text that
-    tokenises densely: CJK and emoji run closer to one token per character, so a result could be
-    accepted at a quarter of its real cost and then land in the current tool exchange, which the
-    window cannot evict. No exact counter is reachable from here, the provider loop having no
-    tokenizer at all, so non-ASCII characters are charged one token each and the rest at the
-    usual rate."""
+    """Pessimistic size: non-ASCII characters count one token each, since no tokenizer is reachable here."""
     dense = sum(1 for char in text if ord(char) > 127)
     return max(1, dense + (len(text) - dense) // 4)
 
@@ -13358,10 +12544,7 @@ def build_synthetic_search_exchange(
     text: str,
     sources: list[dict],
 ) -> dict:
-    """Render a retrieval the loop never asked for as a normal tool exchange. Returns ``{"events":
-    [...], "messages": [...]}``: the messages are what the model reads, the events what the UI
-    draws, so a forced retrieval shows up as an ordinary tool card with working citations instead
-    of appearing from nowhere."""
+    """Renders a forced retrieval as a normal tool exchange: messages for the model, events for the UI."""
     import json as _json
     import uuid as _uuid
 
@@ -13426,20 +12609,7 @@ def build_conversation_recall(
     top_k: int | None = None,
     branch_messages: list[dict] | None = None,
 ) -> dict | None:
-    """Retrieve the archived turns most relevant to the latest user message.
-
-    Deliberately NOT gated on ``rag_scope``: compaction happens whether or not document RAG is on,
-    and these turns are the conversation's own, not uploaded files.
-
-    Forcing this one retrieval is the whole feature. Given only a search tool, a 35B on MRCR v2
-    declined on 56% of rows, scoring 0.099 when it skipped against 0.461 when it searched; forcing
-    the lookup on the evicting turn took tool-only 0.258 to 0.604, and the model then called the
-    tool on 0% of rows, so it costs nothing on the common path.
-
-    ``style="tool"`` renders a tool exchange, for the tool loop which already carries a tools array.
-    ``style="inline"`` prefixes the latest user message instead, for the plain path: forging
-    tool_calls without a tools array breaks strict templates.
-    """
+    """Not gated on rag_scope. style="inline" avoids forged tool_calls, which break strict templates."""
     if not thread_id:
         return None
     try:
@@ -13515,10 +12685,7 @@ def build_conversation_recall(
 def rag_autoinject_reaches_retrieval(
     conversation: list[dict], rag_scope: dict | None
 ) -> tuple[bool, bool]:
-    """Everything checked before pre-retrieval searches: switched on, something to search for,
-    somewhere to search, and a store to search it in. Whether a hit then clears the score floor
-    is the one part not knowable without running the search. Shared with token counting, which
-    cannot run it and so must not decline a turn that stops short of the search here."""
+    """Checks everything before the search except the score floor, which only running it can settle."""
     if not rag_scope:
         return False, False
     enabled = rag_scope.get("autoinject")
@@ -13563,15 +12730,7 @@ def _thread_document_ids(thread_id) -> set | None:
 
 
 def build_rag_autoinject(conversation: list[dict], rag_scope: dict | None) -> dict | None:
-    """Pre-retrieve the latest user turn; if a hit clears the cosine floor return ``{"events": [...],
-    "messages": [...]}`` to splice into the loop, else ``None``. Toggle via ``rag_scope.autoinject``
-    (else env ``RAG_AUTOINJECT``); floor via ``rag_scope.autoinject_min_score`` (else env
-    ``RAG_AUTOINJECT_MIN_SCORE``).
-
-    Also the small-model fallback: models below ~4B often answer from memory instead of calling
-    ``search_knowledge_base``, so forcing retrieval here keeps attachments consulted regardless of
-    model size.
-    """
+    """Pre-retrieves the latest turn so models that skip search_knowledge_base still consult attachments."""
     enabled, whole_doc_requested = rag_autoinject_reaches_retrieval(conversation, rag_scope)
     if not enabled and not whole_doc_requested:
         return None
@@ -13611,11 +12770,8 @@ def build_rag_autoinject(conversation: list[dict], rag_scope: dict | None) -> di
         max_tokens,
         keep_first = 1,
     ):
-        """Drop passages from the tail until the rendered block fits, else None. Re-renders only
-        when something is dropped. None when not even the first ``keep_first`` passages fit: the
-        block joins the current turn, which the window may not evict, so it fails the request
-        rather than degrading it. ``keep_first`` is the floor of the tail: one for ranked
-        retrieval, but a whole document must never be eaten into."""
+        """Returns None if even the first keep_first passages do not fit, since the block cannot be
+        evicted."""
         floor = max(1, keep_first)
         kept, rendered = list(hit_sources), hit_text
         while len(kept) > floor and not _fits(rendered, max_tokens):
@@ -14090,12 +13246,7 @@ _PINNED_PROBE_BUDGET = 0.25
 
 
 def _pinned_create_connection(addresses):
-    """``socket.create_connection`` that walks *addresses* instead of resolving.
-
-    Pinning to one validated address dropped the walk every other client gets. Walking
-    here rather than around ``opener.open`` keeps the caller's timeout covering one
-    whole response.
-    """
+    """Walks the validated addresses like socket.create_connection; pinning just one would drop the walk."""
     import socket
 
     def create(
@@ -14221,16 +13372,7 @@ class _PinnedHTTPHandler(urllib.request.HTTPHandler):
 
 
 def _explicit_proxy_applies(scheme: str, host: str) -> bool:
-    """Whether urllib routes a *scheme* request for *host* through a proxy.
-
-    Only a proxied fetch may keep the hostname in the request URL: the proxy resolves it, so this
-    host never looks it up again. A direct one would, which is the DNS-rebinding window, so it stays
-    pinned to the validated IP.
-
-    *host* must be the ``host[:port]`` form ``Request.host`` carries, since that is what
-    ``ProxyHandler`` passes to ``proxy_bypass``; probing the bare hostname instead would disagree
-    with it on a port-qualified NO_PROXY entry.
-    """
+    """A direct fetch re-resolves the host (DNS rebinding), so only proxied fetches keep the hostname."""
     from urllib.request import getproxies, proxy_bypass
 
     # ProxyHandler lowercases keys and the Windows registry can return "HTTPS=...".
@@ -14243,12 +13385,7 @@ def _explicit_proxy_applies(scheme: str, host: str) -> bool:
 
 
 def _validate_and_resolve_host(hostname: str, port: int) -> tuple[bool, str, list[str]]:
-    """Resolve *hostname*, reject non-public IPs, return the pinned IP strings.
-
-    Returns ``(ok, reason_or_empty, resolved_ips)`` in resolver order. The caller pins
-    to these (with a ``Host`` header) rather than resolving again, which is the DNS
-    rebinding window, and walks them as ``socket.create_connection`` would.
-    """
+    """Rejects non-public IPs; callers pin the returned IPs instead of resolving again (DNS rebinding)."""
     import ipaddress
     import socket
 
@@ -14388,10 +13525,7 @@ def _fetch_budget_exceeded(deadline, cancel_event):
 
 
 def _fetch_hop_timeout(timeout, deadline):
-    """Per-operation socket timeout: the lesser of the caller's per-op timeout and the time left on
-    the deadline, so one slow hop cannot overrun the whole budget. Callers check
-    ``_fetch_budget_exceeded`` first, so remaining time is positive here; the tiny floor only
-    guards a race."""
+    """Lesser of the per-op timeout and time left on the deadline, so one hop cannot overrun the fetch."""
     if deadline is None:
         return timeout
     remaining = deadline - time.monotonic()
@@ -14401,11 +13535,7 @@ def _fetch_hop_timeout(timeout, deadline):
 
 
 def _resolve_with_budget(hostname, port, deadline, cancel_event):
-    """``_validate_and_resolve_host`` bounded by the overall fetch budget. ``getaddrinfo`` is
-    blocking with no deadline of its own, so a slow resolver (or a request cancelled before
-    dispatch) could run past the budget. Resolve on a daemon thread and poll the budget so the
-    fetch aborts on time; the abandoned lookup is discarded. With no deadline and no cancel_event
-    this is a plain synchronous call, so opt-out callers keep the old behavior and cost."""
+    """Resolves on a daemon thread and polls the budget, since getaddrinfo has no deadline of its own."""
     budget_error = _fetch_budget_exceeded(deadline, cancel_event)
     if budget_error is not None:
         return False, budget_error, []
@@ -14652,19 +13782,7 @@ _PORT_RE = re.compile(r"[0-9]{1,5}")
 
 
 def _normalize_url_scheme(url: str) -> str:
-    """Prepend ``https://`` to bare hosts (``google.com``, ``example.com:8443``).
-
-    ``urlparse`` reads the host of a ``host:port`` input as the scheme, so those are recognised by a
-    dotted host-like scheme with an empty netloc. Rewrites a dotted host with an optional in-range
-    port, and the ``//host`` form. Real schemes (``file:``, ``javascript:``, including ``file:80``),
-    root-relative paths (``/login``) and bad ports are returned untouched so the caller rejects
-    them. A dotted scheme is indistinguishable from ``host:port``, so ``com.acme.app:443/cb`` is
-    rewritten too; an empty port is kept as-is.
-
-    The host is matched against the raw authority, never against what ``urlparse`` returned, because
-    urlsplit strips tabs/newlines (3.10) and leading C0/space (3.12). Anything it would strip fails
-    the match, so the decision and the rewritten string cannot disagree across versions.
-    """
+    """Checks the raw authority because urlsplit strips some characters differently per Python version."""
     from urllib.parse import urlparse
 
     url = url.strip()
@@ -15037,10 +14155,7 @@ _HTML_LEADING_RE = re.compile(r"<(?:!doctype\s+html|/?(?:" + "|".join(_HTML_LEAD
 
 
 def _looks_like_html(body: str) -> bool:
-    """True only when the document ITSELF opens with HTML. Matches an HTML doctype or a leading
-    document/structure tag after optional whitespace, not a mere substring, so a Markdown README
-    with a fenced HTML example or tags further down stays Markdown. Also detects bare fragments
-    with no doctype, so a page with a missing/wrong Content-Type is still converted."""
+    """Only a leading doctype or structure tag counts, so Markdown with an HTML example stays Markdown."""
     probe = body.lstrip()[:256].lower()
     return bool(_HTML_LEADING_RE.match(probe))
 
@@ -15057,18 +14172,7 @@ def _looks_like_html_document(body: str) -> bool:
 
 
 def _loaded_context_tokens() -> int | None:
-    """The active model's context window, or None when it cannot be read.
-
-    Mirrors `research_runs._loaded_context_length` and `routes.inference._monitor_context_length`:
-    llama.cpp first, then the orchestrator the API layer reads. Both branches are needed. A
-    native/Transformers chat leaves `is_loaded` false, and stopping at that probe reported unknown,
-    which kept the full 16,000-character cap and reproduced on small native models exactly the
-    overflow this budget exists to prevent.
-
-    The ML backends live in a worker subprocess, so the in-process singleton is unpopulated here and
-    importing it pulls in the ML stack; peek at the orchestrator instead of constructing one. Every
-    failure is unknown so a fetch is never blocked by not knowing.
-    """
+    """Both llama.cpp and the orchestrator are read, since native chats leave is_loaded false."""
     try:
         from routes.inference import get_llama_cpp_backend  # noqa: PLC0415
         llama = get_llama_cpp_backend()
@@ -15107,13 +14211,7 @@ def _request_context_tokens() -> int | None:
 
 
 def _result_char_budget(cap: int) -> int:
-    """`cap`, lowered to what the serving window can actually hold. Shared by fetched pages and by
-    terminal/python results, because the failure is the same: a fixed character cap has no
-    relation to the loaded context, so on a small window one result fills most of it. That result
-    lands in the NEWEST turn, which the fit protects, so compaction cannot drop the very thing
-    that does not fit and the request goes irreducible. Measured live on a 5120-token window:
-    7043 and 6684 token requests refused, both on the code tools, whose 16,000-character cap is
-    about 4,000 tokens on its own."""
+    """Lowers the char cap to fit the loaded window; the protected newest turn cannot be compacted."""
     ctx = _request_context_tokens()
     if not ctx:
         return cap
@@ -15127,17 +14225,7 @@ def _tool_result_char_budget() -> int:
 
 
 def _page_char_budget() -> int:
-    """`_MAX_PAGE_CHARS`, lowered to what the serving window can actually hold.
-
-    16,000 characters is roughly 4,000 tokens: fine on a 128k model, nonsensical on a 4,864-token
-    one. Measured there, a single fetched page came back at 12,295 characters, the request went
-    irreducible at 8,995 tokens against a 3,648-token budget with `latest_turn_role: "tool"`, and
-    the user was advised to shorten a conversation consisting of one 11-token question. Nothing
-    downstream can recover from it either: the fit protects the newest turn.
-
-    Above roughly an 11k window this returns the old constant unchanged, so only the models that
-    cannot afford a whole page are affected.
-    """
+    """Shrinks the page cap to the window's share; above roughly an 11k window the constant stays."""
     ctx = _request_context_tokens()
     if not ctx:
         return _MAX_PAGE_CHARS
@@ -15145,10 +14233,7 @@ def _page_char_budget() -> int:
 
 
 def _request_result_room() -> int | None:
-    """Tokens this result may add before the NEXT prompt is over budget. None when the caller could
-    not say, and every cap then behaves exactly as it did before this existed: external
-    providers, the hosted path and any tool loop that does not price its own conversation all
-    take that leg."""
+    """None when the caller cannot price its prompt; external and hosted paths get the old caps."""
     room = _REQUEST_RESULT_BUDGET.get()
     if room is None:
         return None
@@ -15165,16 +14250,7 @@ def _window_context_tokens() -> int | None:
 
 
 def _dense_prefix_chars(text: str, token_budget: float) -> int:
-    """How many leading characters of `text` cost at most `token_budget` tokens.
-
-    Four characters per token is an English rate. Measured with Qwen3, Llama 3.2 and tiktoken on
-    real fetched pages, CJK prose runs 1.3-1.6 characters per token, and the percent-escaped links a
-    CJK page is full of run 1.3-1.5: both are the same non-ASCII bytes, one spelled in ASCII.
-    Charging them a token each, the rule `context_window.estimate_messages_tokens_dense` already
-    uses, keeps the share the caller asked to reserve a share instead of the whole budget.
-
-    One pass, so it costs nothing next to the fetch it sizes.
-    """
+    """Charges non-ASCII one token each: CJK runs 1.3-1.6 chars per token, so the share stays a share."""
     spent = 0.0
     index = 0
     length = len(text)
@@ -15258,16 +14334,7 @@ def _probe_cache(llama, ctx: int) -> dict:
 
 
 def _neutralized_for_prompt(chunk: str, llama) -> str:
-    """``chunk`` as the outgoing request will carry it, rather than as it is in hand.
-
-    The same sweep the request path applies, through the same helper and the backend's own markup
-    profile, so the two cannot disagree about what a marker becomes. `_PROBE_ROLE` is a user role,
-    which takes the full control rewrite a tool result takes rather than the boundary-only one an
-    assistant turn takes.
-
-    Best effort: a sweep that cannot run leaves the text as it was, which is the estimate this had
-    before and never worse.
-    """
+    """Applies the request path's control-markup sweep, so the count prices the text actually sent."""
     if not chunk:
         return chunk
     try:
@@ -15286,12 +14353,7 @@ def _neutralized_for_prompt(chunk: str, llama) -> str:
 
 
 def _loaded_token_counter(ctx: int):
-    """The tokenizer of the model serving this request, or None when there is not one. Same probe as
-    `_loaded_context_tokens`: whatever can answer for the window can also price a string exactly,
-    and `llama_cpp` already hands this same counter to the RAG admission check for exactly this
-    reason. Gated on the backend's own window matching the one the budget was sized against, so a
-    resident GGUF never prices a request that a different model (native, or an external endpoint)
-    is actually answering."""
+    """Uses the GGUF backend only when its window matches, so other models are never priced by it."""
     try:
         from routes.inference import get_llama_cpp_backend  # noqa: PLC0415
 
@@ -15312,18 +14374,8 @@ def _loaded_token_counter(ctx: int):
     template_down: list[bool] = []
 
     def _remember(chunk: str, value: int) -> None:
-        """Hold `value` for `chunk`, evicting least-recently-used entries to stay in bounds.
-
-        Refusing new entries once full was worse than not caching at all. Most tool results are
-        one-offs, so the first `_PROBE_COUNT_CACHE_ENTRIES` distinct prefixes froze the cache on
-        text that would never be asked about again, and because the baseline is only priced when a
-        count comes in OVER budget, a process that handled 64 results that FIT first locked it out
-        for good. Measured: after 64 English results, every later dense result paid 4 counter calls
-        (8 HTTP) again, exactly the merge base's cost, for the life of the process.
-
-        So evict, and pin the baseline: it is 0 characters, it is the same number for every result
-        this process truncates, and it is the one entry a bounded cache most needs.
-        """
+        """Evicts least-recently-used entries instead of refusing new ones; the 0-char baseline is
+        pinned."""
         if len(chunk) > _PROBE_COUNT_CACHE_CHARS:
             return
         with _PROBE_COUNT_LOCK:
@@ -15381,12 +14433,7 @@ def _loaded_token_counter(ctx: int):
         return baseline[0]
 
     def _count(chunk: str, token_budget: float = 0.0):
-        """Tokens for `chunk`, or None when the count did not measure it. `token_budget` is an
-        optimisation and nothing more. A count within budget and a count the guard rejects both
-        make the caller return its own estimate unchanged, so when `spent` fits, the baseline
-        that separates those two paths cannot change the answer and is not priced, which is why
-        an English result costs one round trip rather than two. The default of 0 means no budget,
-        so the guard always runs."""
+        """token_budget only skips the baseline count when the chunk already fits, saving a round trip."""
         spent = _rendered(chunk)
         if spent is None:
             return None
@@ -15418,18 +14465,7 @@ def _exact_prefix_chars(
     ctx: int,
     floor: int | None = None,
 ) -> int:
-    """`chars`, shrunk until the prefix really costs `token_budget`. Never grown.
-
-    The estimate below charges every ASCII character a flat 0.25 tokens, which is an English rate
-    and wrong in the same direction for the ASCII the code tools print most: measured with Qwen3-4B
-    and Llama-3.2 on a 5,120-token window, where the character cap admits 7,168 characters against a
-    1,792-token share, `base64 payload.bin` came back at 5,361 tokens, `hexdump -C` at 5,540 and
-    `sha256sum *` at 5,109 -- 105-108% of the WHOLE window, in the newest turn, which the fit
-    protects. A four-message thread was refused irreducible at 5,475 tokens against a 3,840-token
-    prompt budget. No character rule closes that: the same rule that charges a 76-character base64
-    line its real 57 tokens charges English prose 40% more than it costs. So when a tokenizer is
-    serving the request, ask it; when none is, keep the estimate exactly as it was.
-    """
+    """Asks the tokenizer when one serves the request; the English rate misprices dense ASCII."""
     # The caller's floor: the 2,000-char comfort floor can overflow a nearly full thread.
     if floor is None:
         floor = _MIN_PAGE_CHARS
@@ -15465,19 +14501,7 @@ def _exact_prefix_chars(
 
 
 def _can_measure_tokens(ctx: int, text: str) -> bool:
-    """Whether this request's tokens can really be counted, not merely whether a counter is exposed.
-
-    `_loaded_token_counter` returns a callable that answers None whenever the probe does not come
-    back with a number: `/apply-template` failing, or a chat template that drops the probe role, or
-    a backend that stopped serving between the check and the call. `_exact_prefix_chars` then hands
-    back the caller's estimate untouched, which charges plain ASCII the English four characters per
-    token; base64, minified JSON and hashes run nearer two, so a room that was never halved is spent
-    about twice over. A counter that cannot measure has to be treated exactly like a counter that is
-    not there.
-
-    Probed on this text's own opening rather than a constant, so a template that refuses some
-    content and not other content is judged on what is actually being sized.
-    """
+    """A counter that returns None for the text's opening cannot measure, so treat it as absent."""
     counter = _loaded_token_counter(ctx)
     if counter is None:
         return False
@@ -15488,10 +14512,7 @@ _MEASURABILITY_PROBE_CHARS = 64
 
 
 def _text_token_cost(text: str, ctx: int) -> float:
-    """What ``text`` really costs, measured when the serving model can measure it. The estimate is
-    the inverse of `_dense_prefix_chars`: ASCII at the English four characters per token,
-    everything else at one. Doubled when nothing can check it, for the same reason
-    `_UNMEASURED_ROOM_MARGIN` halves a room that cannot be measured."""
+    """Measured when the model can count it; unmeasurable text is priced at double the estimate."""
     counter = _loaded_token_counter(ctx) if ctx else None
     measured = None
     if counter is not None:
@@ -15513,12 +14534,7 @@ def _dense_char_limit(
     max_chars: int,
     reserve_tokens: float = 0.0,
 ) -> int:
-    """`max_chars`, lowered when `text` tokenises denser than four characters per token. Without
-    this the window-derived caps above reserve their share only for English. On the 4,864-token
-    window this PR was measured against, the 6,809-character page budget is 35% of the window in
-    English and 3,800-4,500 real tokens of a Chinese or Japanese page: 80-95% of the whole prompt
-    budget, in the newest turn, which the fit protects. That is the same irreducible refusal the
-    budget exists to prevent."""
+    """Lowers the cap for dense text, since English-sized caps can cost most of the prompt budget."""
     ctx = _window_context_tokens()
     room = _request_result_room()
     if room is None and (not ctx or len(text) <= _MIN_PAGE_CHARS):
@@ -15566,11 +14582,7 @@ def _fetch_page_text(
     cancel_event = None,
     website_policy: dict | None = None,
 ) -> str:
-    """Fetch a URL and return readable text content. HTML responses are converted to Markdown with a
-    main-content heuristic (``<article>``/``<main>`` scoping, hidden-element and boilerplate
-    stripping); non-HTML text responses are returned as-is. GitHub repo root pages are rewritten
-    to the README API so the model reads the README instead of the repo page's UI chrome. Blocks
-    private/loopback/link-local targets (SSRF protection) and caps the download size."""
+    """Blocks private and loopback targets (SSRF protection), so fetches cannot reach internal hosts."""
     if max_chars is None:
         max_chars = _page_char_budget()
     # One deadline for the whole fetch so the HTML fallback does not get a fresh timeout.
@@ -15639,16 +14651,7 @@ def _fetch_page_text(
 
 
 def _search_failure_message(exc: BaseException, timeout: int) -> str:
-    """Turn a ddgs exception into text the model and the UI can act on.
-
-    ddgs raises for an empty sweep as well as for refusals, so an unclassified ``Search failed:
-    {exc}`` reports nothing matched and every engine throttled us the same way. Matched by class
-    name because ddgs is imported lazily and tests stub the module.
-
-    The RatelimitException arm is forward-looking: ddgs 9.14.4 defines the class but raises it
-    nowhere, and no engine inspects the status code, so a throttled sweep parses to zero items and
-    arrives here as the empty-sweep DDGSException instead.
-    """
+    """ddgs raises for empty sweeps too, so a generic Search failed message would misreport them."""
     name = type(exc).__name__
     if name == "RatelimitException":
         return (
@@ -15664,13 +14667,7 @@ def _search_failure_message(exc: BaseException, timeout: int) -> str:
 
 
 def _resolve_engine_tiers(text_engines) -> list:
-    """``_SEARCH_ENGINE_TIERS`` reduced to the engines this ddgs actually has, in tier order.
-
-    Naming an engine the registry lacks is not an error: ddgs 9.8.0 raises ``KeyError`` on the first
-    unknown name and silently re-runs the request as ``auto``, the Yandex fan-out this exists to
-    prevent, and tier 1 trips it there because 9.8.0 ships no ``startpage``. An empty tier is dropped
-    for the same reason.
-    """
+    """Drops engines this ddgs lacks: an unknown name makes ddgs silently re-run as auto."""
     engines = text_engines or {}
     resolved = []
     for tier in _SEARCH_ENGINE_TIERS:
@@ -15844,10 +14841,7 @@ def _wrap_ddgs_client(cls, wrap, follow_redirects, signature, ddgs_exception) ->
 
 
 def _image_search_or_none(subjects: list, timeout, cancel_event, website_policy) -> "str | None":
-    """``_image_search`` that reports a failure as None instead of raising. Every caller sits inside
-    ``_web_search``'s own ``except``, which would turn a raise into Search failed: ... and throw
-    away the text results the search had already found. A picture is a garnish: it must not
-    become the answer."""
+    """Returns None on failure: an image error must not discard the text results already found."""
     try:
         return _image_search(
             subjects,
@@ -15863,11 +14857,7 @@ def _image_search_or_none(subjects: list, timeout, cancel_event, website_policy)
 def _empty_result_with_requested_images(
     empty_text: str, subjects: list, include_images: bool, timeout, cancel_event, website_policy
 ) -> str:
-    """``empty_text`` plus the pictures the model asked for by name, if any. An ``image_queries``
-    call is an explicit request, and it succeeds on its own when sent without a query, so
-    returning the bare No results found. because the TEXT sweep came back empty dropped images
-    that were there to be had. Only the named subjects are looked up here; the per-query image
-    pile has no answer to garnish."""
+    """Explicitly named image subjects still return pictures when the text search comes back empty."""
     if not subjects:
         return empty_text
     if not include_images:
@@ -16269,20 +15259,7 @@ _NETWORK_ROOT_NAMES = frozenset(
 
 
 def _network_candidates_possible(nodes) -> bool:
-    """Whether ANY call in this tree could resolve to a network function.
-
-    The alias maps, the literal-value map, the shadow bookkeeping and the second visitor pass all
-    exist to answer questions about a recognised egress call, and every route to one names a
-    network module: an import of it, an import from it, or the module written out at the call
-    site, which is a `Name` either way. A tree with none of those has no candidate to resolve, so
-    the screen can skip all of it and still reach the same verdict. Ordinary tool code -- pandas,
-    matplotlib, plain arithmetic -- takes that path.
-
-    Read off the node list the other classifiers already build and cache for this tree, so it
-    costs one pass over a list rather than a walk. Deliberately generous: a local variable that
-    happens to be called `socket` turns the full path back on, which costs time and never a
-    verdict.
-    """
+    """Skips the full egress screen when no network module is named; a false hit costs time only."""
     for node in nodes:
         if isinstance(node, ast.Name):
             if node.id in _NETWORK_ROOT_NAMES:
@@ -17187,10 +16164,7 @@ def _check_signal_escape_patterns(code: str):
         )
 
     def _reads_env_or_secret(node: ast.AST | None) -> bool:
-        """True if any node in the subtree resolves to an env/process read. Walks the whole subtree
-        (not just the root) to catch wrappers like `str(os.environ)`. Covers
-        os.environ[/.get]/os.getenv, bare getenv, and subprocess.{run,check_output,...} that
-        could lift parent env via printenv."""
+        """Walks the whole subtree so wrappers like str(os.environ) are caught, not just the root."""
         if node is None:
             return False
         for sub in ast.walk(node):
@@ -17255,12 +16229,7 @@ def _check_signal_escape_patterns(code: str):
         return False
 
     def _hf_upload_violation(node: ast.Call, method_name: str) -> str | None:
-        """Inspect an HF upload call; return a violation reason or None. Policy: HF uploads are
-        allowed only when (a) no sensitive kwarg is set, (b) no positional / keyword value reads
-        `os.environ` or related env readers, and (c) the path arg is a sandbox-local literal: a
-        relative string with no `..`, an `open(<literal>)`, or inline bytes. Dynamic / variable
-        paths are rejected since safety can't be proven statically and a wrong-allow means
-        credential exfiltration."""
+        """Dynamic paths are refused, since a wrong allow means credential exfiltration."""
         for kw in node.keywords or []:
             if kw.arg in _HF_SENSITIVE_KWARGS:
                 return (
@@ -17327,13 +16296,7 @@ def _check_signal_escape_patterns(code: str):
     _LITERAL_CANDIDATE_CAP = 8
 
     def _stored_names(targets) -> "list[str]":
-        """Only the names a target actually binds.
-
-        Walking every `ast.Name` under the target also returns the BASE of an attribute or
-        subscript, which is read, not rebound: `r.debug = True` left `r` looking rebound and
-        dropped the `r -> requests` alias that the runtime still has, so the call after it went
-        unrecognised.
-        """
+        """Only the names a target rebinds; an attribute or subscript base is read, not rebound."""
         names: list[str] = []
         stack = [t for t in targets if t is not None]
         while stack:
@@ -17433,28 +16396,15 @@ def _check_signal_escape_patterns(code: str):
     _REQUEST_SAFE_BINDINGS = frozenset({"urllib", "urllib.request", "urllib.request.Request"})
 
     def _scope_bodies(nodes, tree):
-        """`(scope id, statement list)` for the module and for every function, lambda and class body.
-
-        A shadow belongs to the scope whose body it sits directly in, so this is what says which
-        statements can shadow a name for which calls. The module is scope 0. A lambda has an
-        expression rather than a body, so it contributes no statements, only its parameters.
-        """
+        """Yields the module and every function or class body as (scope id, statements); lambdas add
+        none."""
         yield 0, getattr(tree, "body", [])
         for node in nodes:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 yield id(node), node.body
 
     def _names_bound_to_something_else(nodes) -> "set[str]":
-        """Every name bound ANYWHERE in the tree, in ANY scope, to something that is not part of
-        `urllib.request.Request`, plus `"*"` when a star import could have supplied it.
-
-        Unwrapping `urlopen(Request(url))` READS PAST a call, which is the one place where adding
-        a candidate makes the screen weaker rather than stronger, so it cannot use the accumulating
-        alias maps: a nested `def Request(_): return "https://evil.example/x"` really does decide
-        what the call inside that function reaches. Scope is ignored in the strict direction here,
-        so a binding anywhere is enough to refuse the unwrap and leave the argument reading as a
-        call, which the fail-closed rule then refuses.
-        """
+        """Scope is ignored on purpose: a name bound to anything but Request anywhere blocks the unwrap."""
         out: set[str] = set()
         for node in nodes:
             if isinstance(node, ast.Import):
@@ -17485,11 +16435,8 @@ def _check_signal_escape_patterns(code: str):
         return out
 
     def _collect_literal_names(nodes) -> "dict[str, frozenset[str] | None]":
-        """Name -> every string literal it is bound to anywhere in the tree, or None once any
-        binding is something this screen cannot read. Order and scope are ignored on purpose: the
-        call site is then checked against EVERY value the name can hold, which stays sound without
-        reasoning about which branch ran or which loop iteration this is. Reading only the newest
-        binding would allow `if f: url = evil` / `else: url = allowed` / `get(url)`."""
+        """Ignores order and scope on purpose, so a call is checked against every value its name
+        could hold."""
         values: "dict[str, set[str] | None]" = {}
 
         def bind(name: str, literal: "str | None") -> None:
@@ -17513,10 +16460,8 @@ def _check_signal_escape_patterns(code: str):
         return {k: (None if v is None else frozenset(v)) for k, v in values.items()}
 
     def _literal_str_prefixes(node, names) -> "list[tuple[str, bool]]":
-        """Every text a string expression is statically known to START with, one entry per value its
-        names can hold, each with whether that text is the whole value. The head is what decides the
-        destination: a URL's scheme and host sit in front of whatever a concatenation or an f-string
-        appends at runtime. `("", False)` means unreadable, so a caller can fail closed on it."""
+        """Known leading text per possible value; ('', False) marks unreadable, so the caller fails
+        closed."""
         if isinstance(node, ast.Constant):
             return [(node.value, True)] if isinstance(node.value, str) else [("", False)]
         if isinstance(node, ast.Name):
@@ -17972,14 +16917,7 @@ def _check_signal_escape_patterns(code: str):
                     self.shadow_lines.setdefault((name, scope), []).append(where)
 
         def generic_visit(self, node):
-            """`ast.NodeVisitor.generic_visit`, inlined, plus the rebinding hook.
-
-            Wrapping it instead would spend a third Python frame per level of nesting and so cut
-            the nesting this screen survives by a third: measured, a 494-term `+` chain analysed
-            and a 329-term one raised RecursionError, where the limit is 494 either side now. The
-            handlers that record an alias do their own rebinding FIRST, so they are skipped here:
-            they call this after registering, and a second sweep would pop what they just set.
-            """
+            """Inlined, not wrapped, so each nesting level uses two Python frames instead of three."""
             if self.unconditional_shadows and not isinstance(node, _REBOUND_BY_HANDLER):
                 self._rebind(node)
             for _field, value in ast.iter_fields(node):
@@ -18003,19 +16941,8 @@ def _check_signal_escape_patterns(code: str):
             at,
             after_star: bool = False,
         ) -> bool:
-            """Whether a module-level rebinding of `name` has certainly happened by `at`.
-
-            Positions are `(lineno, col_offset)`, so a semicolon-separated
-            `from requests import get as fetch; fetch = print; fetch(url)` orders correctly where
-            comparing lines alone made the rebinding invisible.
-
-            A call inside a function, lambda or class body is never shadowed: the body can be
-            invoked at any point, including before the rebinding. At module level the rebinding
-            counts only for what comes AFTER it, and only while no alias registration comes between
-            the two: the last `import`, `from ... import` or module-carrying assignment before the
-            call supersedes every shadow older than it. For a star-imported name the star import is
-            that registration, since it rebinds every exported name.
-            """
+            """Calls in functions are never shadowed; at module level only a rebinding before the
+            call counts."""
             registrations = self.star_lines if after_star else self.alias_lines.get(name, ())
             floor = max((where for where in registrations if where < at), default = (0, -1))
             return any(
@@ -18146,14 +17073,8 @@ def _check_signal_escape_patterns(code: str):
             self.generic_visit(node)
 
         def _modules_named_by(self, value, at) -> "set[str]":
-            """Every network module a value can name, following aliases, so `r = requests` keeps
-            `r.get(...)` screened instead of letting the assignment shed the module.
-
-            EVERY candidate is carried, not the first: `import requests as r` with a nested,
-            never-executed `import aiohttp as r` leaves `r` as `requests` at runtime, and
-            collapsing the set to one candidate resolved the later `s = r; s.get(...)` to the
-            unrecognised `aiohttp.get` and let a hostile host through.
-            """
+            """Carries every module a name could hold, not just the first, since a never-run import
+            can add one."""
             alts = _alternatives(value)
             if alts != [value]:
                 return set().union(*(self._modules_named_by(alt, at) for alt in alts))
@@ -18179,12 +17100,8 @@ def _check_signal_escape_patterns(code: str):
             }
 
         def _functions_named_by(self, value, at) -> "set[str]":
-            """Every network FUNCTION a value can name, the counterpart of `_modules_named_by`.
-
-            Without it an assignment shed the function the way it once shed the module:
-            `from requests import get as fetch` then `fetch = fetch`, or `g = fetch`, recorded the
-            target as shadowed and left the later call with no candidate at all.
-            """
+            """Tracks every network function a name can hold through assignments, so aliases stay
+            screened."""
             alts = _alternatives(value)
             if alts != [value]:
                 return set().union(*(self._functions_named_by(alt, at) for alt in alts))
@@ -18566,15 +17483,8 @@ def _check_signal_escape_patterns(code: str):
             return candidates
 
         def _unwrapped_url_arg(self, node: ast.AST) -> ast.AST:
-            """`urlopen(Request(url))` carries the destination one call further in, so read it
-            there, but only once the callee is PROVEN to be `urllib.request.Request`.
-
-            Trusting any callee spelled `Request` reads the wrong value: a local
-            `def Request(_): return "https://evil.example/x"` made the screen check the
-            allowlisted argument while the runtime call sent the request somewhere else. An
-            unproven callee is left wrapped, so it reads as a call rather than a literal and the
-            fail-closed rule refuses it.
-            """
+            """Reads the URL inside Request(...) only when the callee is proven to be
+            urllib.request.Request."""
             if isinstance(node, ast.Call) and node.args:
                 if "urllib.request.Request" not in self._fq_candidates(node.func):
                     return node
@@ -19006,15 +17916,7 @@ def _forget_tool_pid(proc) -> None:
 
 
 def _capture_process_group(proc):
-    """Return the setsid process-group id, or ``None`` when unavailable.
-
-    Captured right after ``Popen`` so a later ``poll()`` / ``wait()`` that reaps the leader cannot
-    make ``os.getpgid(proc.pid)`` fail first.
-
-    Windows has no process groups, so capture the wrapper pid instead, tagged for
-    ``_killpg_captured`` to reach with ``taskkill /T``; returning ``None`` there left a payload that
-    outlived its wrapper unsignalled.
-    """
+    """Captured right after Popen, before a poll or wait can reap the leader and break getpgid."""
     if os.name == "nt":
         job = _windows_job_capture(proc)
         if job is not None:
@@ -19101,15 +18003,7 @@ def _windows_pid_identity(pid: int) -> "str | None":
 
 
 def _windows_taskkill_tree(pid: int, identity: "str | None" = None) -> bool:
-    """``taskkill /T /F`` a pid and its descendants. True when it succeeded.
-
-    Every tool call runs under a shell wrapper, and Windows has no process groups, so a bare
-    ``proc.kill()`` reaps the wrapper and orphans the payload (usually the venv python), which then
-    blocks `unsloth studio update`.
-
-    ``identity`` is the creation time captured at spawn; a mismatch means the pid now belongs to
-    something else, so nothing is signalled.
-    """
+    """Kills the tree with taskkill /T /F; nothing is signalled if the pid's creation time changed."""
     if os.name != "nt":
         return False
     if identity is not None and _windows_pid_identity(pid) != identity:
@@ -19157,11 +18051,7 @@ def _kill_process_tree(proc) -> None:
 
 
 def _killpg_captured(pgid) -> None:
-    """SIGKILL a process group captured before its leader was waited on. Once ``proc`` exits,
-    ``os.getpgid(proc.pid)`` fails and ``_kill_process_tree`` short-circuits, so a stdout-holding
-    grandchild that outlived the parent could not otherwise be signaled. The pre-captured setsid
-    group id still targets the whole tree. On Windows the capture is a tagged pid and the
-    equivalent reach is ``taskkill /T /F``. No-op when nothing was captured."""
+    """Signals the group captured at spawn, since getpgid fails once the leader is reaped."""
     if pgid is None:
         return
     if isinstance(pgid, tuple):
@@ -19187,10 +18077,7 @@ def _cancel_watcher(
     poll_interval = 0.2,
     pgid = None,
 ):
-    """Daemon thread that kills a process when cancel_event is set. ``pgid`` is the group id
-    captured right after spawn; killing it directly reaps a stdout-holding grandchild even when
-    the watcher's own ``poll()`` already reaped the leader (which makes ``_kill_process_tree``
-    short-circuit)."""
+    """Kills via the spawn-time pgid, which still reaches a grandchild after the leader is reaped."""
     while proc.poll() is None:
         if cancel_event is not None and cancel_event.is_set():
             request_cancel = getattr(proc, "_unsloth_cancel", None)
@@ -19207,11 +18094,7 @@ def _cancel_watcher(
 
 
 def _appended_by_the_loop(text: str) -> float:
-    """What the tool loop will add to this result after the tool has handed it back.
-    `ToolCallCompletion.model_message` appends `TOOL_ERROR_NUDGE` to a result that opens with one
-    of `TOOL_ERROR_PREFIXES`, after this budget has already let the body take the whole room, and
-    a parallel batch of failed calls carries one nudge each. Priced in tokens like the retry
-    hint, and only for the results that will really carry it."""
+    """Prices the error nudge the loop appends after the body has taken the whole room."""
     try:
         from .tool_call_parser import TOOL_ERROR_NUDGE, TOOL_ERROR_PREFIXES  # noqa: PLC0415
     except Exception:  # noqa: BLE001 -- an unpriced nudge, not a failed tool call
@@ -19306,21 +18189,7 @@ def _truncate(
 
 
 def _fit_result_to_room(text, name = None):
-    """Cap a tool that does not cap its own output, when this request priced its room.
-
-    `python` and `terminal` truncate against this same budget before they return, so this is a no-op
-    for them. The other tools hand their string back whole: an MCP response is unbounded, a fetched
-    page or an edit receipt runs to a few thousand characters, and any of them can overflow a nearly
-    full local thread and then be protected as its newest exchange, which is the failure the budget
-    exists to prevent.
-
-    No spill file: these tools have no sandbox of their own, and `edit_file` must not have a workdir
-    created underneath a caller running with code execution off. So the cap comes with the plain
-    notice and no paging hint.
-
-    With no priced room (external providers, the hosted path, any loop that does not measure its own
-    conversation) the text is returned untouched.
-    """
+    """Caps output a tool did not cap itself; no spill file, as code execution may be off."""
     if _request_result_room() is None or not isinstance(text, str) or not text:
         return text
     # Only the model-visible part is measured; the frontend envelope must stay byte-identical
@@ -19333,10 +18202,7 @@ def _fit_result_to_room(text, name = None):
 
 
 def _split_frontend_suffix(text: str, name: "str | None") -> "tuple[str, str]":
-    """``text`` split into what the model sees and the trailing frontend-only envelope.
-    `strip_result_for_model` is the same function the replay path uses, so the split follows its
-    validation exactly: a result that merely mentions a sentinel keeps it in the body and is
-    capped with it, which is the conservative half."""
+    """Follows strip_result_for_model's validation, so a mere mention of a sentinel stays in the body."""
     from .tool_loop_controller import strip_result_for_model
 
     try:
@@ -19409,16 +18275,7 @@ def cap_tool_text(
 
 
 def _head_whole_lines(text: str, limit: int) -> "tuple[str, bool]":
-    """``text`` cut to at most ``limit`` characters, and whether it ended on a line break.
-
-    Whole lines where possible, so the hint can name a line that resumes exactly where this stopped;
-    a mid-line cut would repeat or lose one, and on a file printed verbatim that is a line of the
-    user's own code.
-
-    The flag is not decoration. One enormous line (minified JS, base64) has no boundary to cut on,
-    and a line number would then name the line AFTER the one the reader is halfway through, skipping
-    the rest of it. On single-line output that returns nothing at all.
-    """
+    """Cuts on a line break so the hint can name the resume line; False when no break exists to cut on."""
     head = text[:limit]
     cut = head.rfind("\n")
     if cut > 0 and cut >= limit // 2:
@@ -19446,12 +18303,7 @@ _SPILL_HASH_CHUNK_CHARS = 1 << 20
 
 
 def _digest_and_head(text: str, max_bytes: int) -> "tuple[str, int, bytes]":
-    """``(digest, encoded length, the first max_bytes of it)``, in one bounded pass. Encoding the
-    whole result to hash it and again to cut it puts two more copies of it through memory, and at
-    most `max_bytes` of the second is ever written. The output this runs on is by definition the
-    output that did not fit: `cat` of a file the model just wrote can be hundreds of megabytes,
-    and spending it twice more inside the backend risks the stall or the OOM instead of the
-    bounded answer this path exists to return."""
+    """Digests and keeps the head in one pass, so oversized output is never encoded whole in memory."""
     digest = hashlib.sha256()
     head = bytearray()
     total = 0
@@ -19481,12 +18333,7 @@ def _spill_lock(root: str) -> "threading.Lock":
 
 
 def _spill_records_dir() -> str:
-    """Where the spill manifests live: Unsloth's own storage, NOT the sandbox. The sandbox is a
-    directory tool code writes to, so nothing kept inside it can be evidence about the sandbox. A
-    marker file there was replaceable by a link, and once it is a plain file the model can
-    rewrite its contents and name the user's own files as Unsloth's, which turns the cleanup into
-    a delete and the prune into an unlink. Held beside the other records this file already keeps
-    outside the sandboxes."""
+    """Keeps spill records outside the sandbox, since tool code can rewrite any marker kept inside it."""
     try:
         from utils.paths.storage_roots import account_path  # noqa: PLC0415
         return str(account_path("tool-output-records"))
@@ -19503,10 +18350,7 @@ def _spill_record_path(root: str) -> str:
 
 
 def _spill_identity(root: str) -> "str | None":
-    """The directory's device and inode, which is what the record claims ownership OF. Tool code can
-    delete `.unsloth_tool_output` and make its own in the same place. That is a different
-    directory with the same path, and a record that only knew the path would hand the new one's
-    contents to the prune."""
+    """Device and inode, not the path, since tool code can recreate the directory at the same path."""
     try:
         stat = os.lstat(root)
     except OSError:
@@ -19517,10 +18361,7 @@ def _spill_identity(root: str) -> "str | None":
 
 
 def _own_spill_root(root: str) -> bool:
-    """Whether the spill directory is one this process made, creating it if it is absent. Ownership
-    is recorded outside the sandbox (`_spill_records_dir`) and is of a specific directory, not of
-    a path: a `.unsloth_tool_output` that came with the sandbox, or one tool code deleted and
-    recreated, has no matching record and is left alone entirely."""
+    """Ownership is of a specific directory, recorded outside the sandbox; any other is left alone."""
     if os.path.islink(root):
         return False
     try:
@@ -19557,27 +18398,7 @@ _DIR_FD_WRITES = (
 
 
 def _write_spill_file(target_dir: str, name: str, body: str) -> "str | None":
-    """Write one spill into ``target_dir``, without following a link at any point.
-
-    The directory is opened ONCE, O_NOFOLLOW, and every step after that is relative to that
-    descriptor. Checking the path and then writing to it by name is a race a shared project sandbox
-    can lose: another call can replace the directory with a symlink in between, and both the create
-    and the rename would follow it, putting this output outside the sandbox with the backend's own
-    permissions.
-
-    Still written to a fresh O_EXCL file and installed under the real name rather than opened over
-    whatever is there: the spill name comes from content the model produced, so it can predict it
-    and pre-create it, as a symlink or as a hard link sharing an inode with some file elsewhere.
-
-    Installed with `os.link`, which fails when the name is taken, rather than a rename, which on
-    POSIX replaces silently. The caller checks the destination first, but between that check and
-    this write another call sharing the workspace can put a file there, and a rename would then
-    destroy it.
-
-    Returns the stamp of what was installed, or None if nothing was. The stamp is taken here rather
-    than re-read from the path afterwards, because by then another call can have replaced the file
-    and the record would name its content as Unsloth's.
-    """
+    """Opens the dir with O_NOFOLLOW and installs via os.link, which never replaces an existing name."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if not _DIR_FD_WRITES:
         tmp = os.path.join(target_dir, f".tmp-{uuid.uuid4().hex[:12]}.txt")
@@ -19757,12 +18578,7 @@ def _forget_spill_record(path: str) -> None:
 
 
 def _spill_stamp(path: str) -> "str | None":
-    """What a spill looked like when it was written: device, inode, size, mtime, ctime. A recorded
-    PATH is not the file: tool code can write its own content over one, in place, keeping the
-    inode. mtime alone is not enough either, since `os.utime` can put it back and a
-    coarse-grained filesystem can leave it unchanged on its own; ctime moves on any write to the
-    file OR its metadata and cannot be set back from userspace, so restoring the mtime is itself
-    a change this sees."""
+    """Includes ctime, which userspace cannot set back, so a restored mtime still counts as a change."""
     try:
         stat = os.lstat(path)
     except OSError:
@@ -19784,17 +18600,7 @@ def _stamp_size(stamp: str) -> "int | None":
 
 
 def _file_digest(path: str, expected_size: "int | None" = None) -> "str | None":
-    """The digest of what is on disk now, or None when it is not a file this may read.
-
-    Opened O_NOFOLLOW and O_NONBLOCK and checked through the DESCRIPTOR, not the path. The stamp was
-    taken a moment ago and this runs in the sandbox's own directory: between the two, tool code can
-    put a symlink at the name, or a FIFO, or a device. A plain open would follow the first and block
-    forever on the others, and this is called synchronously by the prune and by chat deletion,
-    neither of which has a timeout.
-
-    ``expected_size`` refuses anything that is not the size the record remembers, so a file swapped
-    for an enormous one is not hashed before it is rejected.
-    """
+    """Opened with O_NOFOLLOW and O_NONBLOCK, so a symlink or FIFO swapped in at the path is rejected."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = None
     try:
@@ -19818,11 +18624,7 @@ def _file_digest(path: str, expected_size: "int | None" = None) -> "str | None":
 
 
 def _is_recorded_spill(root: str, path: str, owned: "dict[str, tuple[str, str]]") -> bool:
-    """Whether ``path`` is still the file this wrote, rather than one written over it. Both the
-    stamp and the CONTENT, because the stamp is only evidence about metadata: the content is what
-    says this file is still the output this process put there, and it is the last word before
-    anything is deleted. Read only after the cheap check passes, so the cost falls on the handful
-    of files that already look like ours."""
+    """Stamp is only metadata, so the content is the last check before anything is deleted."""
     relative = os.path.relpath(path, root).replace(os.sep, "/")
     recorded = owned.get(relative)
     if recorded is None or recorded[0] != _spill_stamp(path):
@@ -19831,10 +18633,7 @@ def _is_recorded_spill(root: str, path: str, owned: "dict[str, tuple[str, str]]"
 
 
 def _spill_record(root: str) -> "tuple[str | None, dict[str, tuple[str, str]]]":
-    """The recorded identity of ``root`` and the spills written into it. ``(None, {})`` when there
-    is no record, which is the answer for any directory this process did not create. An
-    unreadable or half-written record reads the same way, which retains too much rather than
-    deleting something that was never ours."""
+    """No record reads as (None, {}), and an unreadable record too, so nothing unowned is ever deleted."""
     try:
         with open(_spill_record_path(root), encoding = "utf-8") as handle:
             lines = handle.read().splitlines()
@@ -19886,10 +18685,7 @@ def _write_spill_manifest(
 
 
 def _record_spill(root: str, relative: str, stamp: str, digest: str) -> None:
-    """Append one written spill, with the stamp and digest of what was INSTALLED. Not re-read from
-    the path: between the install and this, another call sharing the sandbox can replace the
-    file, and stating the path then records that call's content as Unsloth's, which a later prune
-    or cleanup would delete. The writer knows what it put there, so it says so."""
+    """Stamp and digest come from what was installed, not a re-read, since another call may replace it."""
     try:
         with _spill_lock(root):
             with open(_spill_record_path(root), "a", encoding = "utf-8") as handle:
@@ -19899,20 +18695,7 @@ def _record_spill(root: str, relative: str, stamp: str, digest: str) -> None:
 
 
 def _spill_scope(session_id: "str | None", thread_id: "str | None") -> "str | None":
-    """Where this call's spills belong, or None for retain nothing.
-
-    Nothing is retained in a sandbox that more than one chat runs in. A project's chats share one
-    session by design (`project_session_id`) and a call with no session lands in the shared
-    `_default` one, and in both the sandbox is a directory every sibling chat's model has a terminal
-    in: a sub-directory is not access control, it is a name. Writing a result there puts output that
-    existed only in one chat's response on disk where the next chat can read it, and lets that chat
-    prune the files this one was told to page through.
-
-    So the trade is stated rather than hidden: in a project, a large result is truncated with a
-    notice and no continuation. Only a chat with a sandbox of its own gets paging. ``thread_id`` is
-    taken and unused for that reason: it identifies the chat, which is not the thing that has to be
-    separate.
-    """
+    """None for shared sandboxes (projects, default), where sibling chats could read the spill."""
     if not session_id or session_id.startswith(_PROJECT_SESSION_PREFIX):
         return None
     return ""
@@ -19943,10 +18726,7 @@ def _spill_full_output(
     workdir: str | None,
     scope: "str | None" = "",
 ) -> "tuple[str | None, bool]":
-    """Write the result into the sandbox; return its relative path and whether it is whole. ``(None,
-    True)`` whenever it cannot be done: no workdir, a read-only mount, a full disk, a path that
-    is not what it claims to be. The caller then falls back to the plain notice, because a hint
-    naming a file that is not there is worse than admitting the output is gone."""
+    """Returns (None, True) when no spill is possible; a hint naming a missing file is worse than none."""
     if not workdir or not os.path.isdir(workdir) or scope is None:
         return None, True
     try:
@@ -20016,24 +18796,7 @@ def _spill_files(root: str, directory: str, owned: "set[str]") -> "list[str]":
 
 
 def _unlink_verified_spill(root: str, path: str, owned: "dict[str, tuple[str, str]]") -> bool:
-    """Delete a spill, and only ever the file that was checked.
-
-    Moved to a private name first. A rename is atomic, so from that point the inode this verifies is
-    the inode this deletes: a sandbox writer that replaces the original name afterwards replaces
-    nothing that is on its way out. Verifying and then unlinking by name cannot promise that,
-    because the manifest lock orders Unsloth's own threads and the thing racing here is the sandbox.
-
-    Checked again under the private name, and put back if it no longer matches, since at that point
-    it is not the file this recorded and is not this to delete. The rename itself moves ctime, which
-    is ours to move, so the second check compares the device, inode, size and mtime, and the
-    content.
-
-    Nothing but a regular file with the recorded identity is moved at all: a directory or a FIFO
-    left at the name by the sandbox is rejected through its own descriptor before the rename, so the
-    restore below is never asked to put back a kind of thing `os.link` cannot. That leaves only the
-    vanishing window between the check and the rename, and the restore handles it by falling back to
-    a rename when the name is free again.
-    """
+    """Renames to a private name before unlinking, so the verified inode is the one deleted."""
     directory, name = os.path.split(path)
     recorded = owned.get(os.path.relpath(path, root).replace(os.sep, "/"))
     if recorded is None:
@@ -20058,11 +18821,7 @@ def _unlink_verified_spill(root: str, path: str, owned: "dict[str, tuple[str, st
 
 
 def _is_stamped_regular(path: str, stamp: str) -> bool:
-    """Whether ``path`` is right now the regular file ``stamp`` recorded. Through a descriptor
-    rather than the path, and for the same reasons `_file_digest` does it that way: O_NOFOLLOW
-    refuses a symlink dropped at the name and O_NONBLOCK refuses to hang on a FIFO or a device. A
-    directory opens, and is rejected by the mode check. ctime is deliberately not compared: the
-    caller compares it under the private name, where the rename it performs has already moved it."""
+    """Checks through a descriptor, not the path; ctime is skipped since the caller's rename moved it."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = None
     try:
@@ -20081,13 +18840,7 @@ def _is_stamped_regular(path: str, stamp: str) -> bool:
 
 
 def _restore_pruned_path(private: str, path: str) -> None:
-    """Put back something the prune moved but must not delete. `os.link` first, because it refuses
-    to overwrite: if the sandbox has taken the name again in the meantime, the file it put there
-    is not this to replace. A hard link cannot be made to a directory, so when it fails and the
-    name is in fact free, the rename that moved this here is reversed instead, which works
-    whatever was moved. Neither can promise the name is still free at the instant it runs, so the
-    last resort is to leave the data under the private name and say where it went, rather than
-    unlink it."""
+    """Relinks without overwriting; if the name is taken again, the data stays under its private name."""
     try:
         os.link(private, path)
         _quiet_unlink(private)
@@ -20104,15 +18857,7 @@ def _restore_pruned_path(private: str, path: str) -> None:
 
 
 def _prune_spills(target_dir: str, root: "str | None" = None) -> None:
-    """Bound this scope by count and the whole spill tree by bytes.
-
-    A long session prints many large results and each one is retained; without this the sandbox
-    grows without bound for output the model has almost certainly finished paging through.
-
-    The byte budget is enforced across ``root`` rather than per directory. A project's chats each
-    get their own scope under one shared sandbox, so a per-directory limit is really a per-chat
-    limit and a project with many tool-using chats multiplies it by however many there are.
-    """
+    """Caps spills by total bytes across root, not per chat, since a project's chats share one sandbox."""
     root = root or target_dir
     try:
         # Held across read and rewrite so a concurrent append is not dropped.
@@ -20210,11 +18955,7 @@ def _extract_missing_abs_path(output: str) -> str | None:
 
 
 def _is_outside_workdir(abs_path: str, workdir: str | None = None) -> bool:
-    """True when ``abs_path`` is not the working directory or under it. ``workdir`` is the
-    executor's actual working directory (defaults to the sandbox root). Project-backed sessions
-    run under a root OUTSIDE ``~/studio_sandbox`` (see ``_get_workdir``), so a legitimate miss
-    inside a project must be judged against the real workdir, not a static sandbox root, or it is
-    wrongly classed as an external habit path."""
+    """Judged against the real workdir, since project sessions run outside ~/studio_sandbox."""
     try:
         root = os.path.realpath(workdir or sandbox_root())
         rp = os.path.realpath(abs_path)
@@ -20224,10 +18965,7 @@ def _is_outside_workdir(abs_path: str, workdir: str | None = None) -> bool:
 
 
 def _missing_path_hint(output: str, workdir: str | None = None) -> str:
-    """Model-visible healing when an execution fails on an absolute path missing in the sandbox (a
-    code-interpreter habit path, or one invented from the CWD). Detected on the full
-    pre-truncation output; the hint echoes the failing path so the model retries with the right
-    relative name."""
+    """Detected on the full output before truncation; echoes the missing path so the model retries."""
     error_lines = _missing_error_lines(output)
     if not error_lines:
         return ""
@@ -20263,17 +19001,7 @@ def _drain_process_output(
     *,
     pgid = None,
 ) -> "tuple[str, bool, tuple[int, int]]":
-    """``proc.communicate(timeout=...)`` equivalent that also streams each stdout line (in
-    ``_DRAIN_TAIL_CHARS`` pieces when longer) to ``output_callback`` as it is produced.
-
-    Returns ``(output, timed_out, omitted)``. The joined output is what ``communicate`` would
-    return: the same TextIOWrapper decodes the stream, so encoding, error replacement, and newline
-    translation all match. Past the spill's head only a rolling tail is kept, and ``omitted`` is the
-    ``(chars, lines)`` dropped between them. On timeout the process tree is killed (mirroring the
-    non-streaming path).
-    With ``timeout=None`` the drain waits for EOF like ``communicate`` would, stopping early only
-    when ``cancel_event`` is set.
-    """
+    """Streams stdout to output_callback like communicate, keeping only a rolling tail past the head."""
     chunks: list[str] = []
     tail: "deque[str]" = deque()
     kept = joined = tail_chars = omitted_chars = omitted_lines = 0
@@ -20356,17 +19084,7 @@ _MAX_SNAPSHOT_DIRS = 2000
 
 
 def _user_path_parts(parts: "list[str]", root: "str | None" = None) -> "list[str]":
-    """The segments _MAX_SANDBOX_PATH_SEGMENTS applies to.
-
-    The scratch container is Unsloth's, not a name the model chose, and on Windows it is what /tmp
-    resolves to, so charging it a segment would drop one level of the /tmp artifacts served before
-    the workdir stopped being %TEMP%.
-
-    *root* is for callers that resolve the path afterwards. The walks read the stored spelling off
-    os.walk and never follow links; the download route resolves, and without the root a link named
-    unsloth-tmp (or a wrong-case entry on NTFS or APFS) would take the discount for a tree neither
-    walk lists.
-    """
+    """The scratch dir is Unsloth's, not a name the model chose, so it is not charged a path segment."""
     if not parts or parts[0] != _SANDBOX_TEMP_DIRNAME:
         return parts
     if root is not None and not _is_sandbox_temp_dir(
@@ -20395,10 +19113,7 @@ _MAX_HASHED_SNAPSHOT_BYTES = 4 * 1024 * 1024
 
 
 def _content_key(path: str, size: int) -> "str | None":
-    """A digest for a file small enough to read, else None. On FAT/exFAT and some network volumes
-    the timestamp granularity is a second or two, so an overwrite with different content of the
-    same length inside one tick is invisible to mtime and size, and the call reported no file at
-    all."""
+    """Hashes small files, since coarse timestamps hide a same-size rewrite made within one tick."""
     if size > _MAX_HASHED_SNAPSHOT_BYTES:
         return None
     try:
@@ -20415,17 +19130,7 @@ _fine_mtime_devices: "set[int]" = set()
 
 
 def _volume_timestamps_finely(workdir: str) -> bool:
-    """Whether this volume records sub-second times, so digests can be skipped.
-
-    That is the only thing the digest buys: at sub-second resolution a program cannot overwrite a
-    file inside the tick of its own previous write, and reading every artifact twice per call was
-    ~90% of a snapshot's cost.
-
-    Read off the directory rather than probed with a file of our own: several chats can share a
-    workdir, and a probe file appearing mid-walk is reported as a file the other call created. Three
-    stamps because one whole-second reading on a fine volume is chance; three is not. Anything
-    unreadable answers False, which hashes exactly as before.
-    """
+    """Reads stamps off the directory, not a probe file, which a sibling chat could see mid-walk."""
     try:
         stat = os.stat(workdir)
     except OSError:
@@ -20441,11 +19146,7 @@ def _volume_timestamps_finely(workdir: str) -> bool:
 
 
 def _defuse_sentinels(text: str) -> str:
-    """Break a marker line the executed program printed itself. Both readers take the last one, so a
-    call that created nothing and printed `__FILES__:[{"name": "report.csv", "size": 1}]` had
-    that read as the envelope: the line was hidden from the model and the UI offered a download
-    for a file nobody wrote. One space is enough, since both anchor on the line start, and it
-    leaves the text otherwise as the program wrote it."""
+    """Adds a space before printed __FILES__ and __IMAGES__ lines, so the program cannot fake them."""
     for marker in ("\n__FILES__:", "\n__IMAGES__:"):
         text = text.replace(marker, "\n " + marker[1:])
     return text
@@ -20456,11 +19157,7 @@ _MAX_SNAPSHOT_HASH_BYTES = 64 * 1024 * 1024
 
 
 def _snapshot_workdir_files(workdir: str | None) -> "dict[str, tuple]":
-    """relative path -> change key for every regular file, for the post-run diff. All files, not
-    just images: a .csv the model wrote used to be invisible. Size rides along with mtime because
-    FAT/exFAT and some network volumes have coarse timestamps, where an overwrite inside one tick
-    would look unchanged, and on those volumes alone a digest rides along too, since a
-    same-length rewrite inside one tick matches on all of it otherwise."""
+    """Maps every regular file to a change key; digests are added only on coarse-timestamp volumes."""
     snapshot: "dict[str, tuple]" = {}
     if not workdir or not os.path.isdir(workdir):
         return snapshot
@@ -20552,10 +19249,7 @@ def _call_finished(token: "dict | None") -> None:
 
 
 def _snapshot_differs(before: tuple, after: tuple) -> bool:
-    """Whether a file changed between two snapshots of its directory. The digest only when both
-    snapshots have one: hashing stops at a byte budget, so a file added or removed earlier in the
-    walk can push an untouched later file in or out of it, and comparing the tuples whole would
-    then report that file as one this call wrote."""
+    """Digest compared only when both snapshots have one, since the hash budget can shift later files."""
     if before[:2] != after[:2]:
         return True
     return before[2] is not None and after[2] is not None and before[2] != after[2]
@@ -20615,11 +19309,7 @@ def _timed_out_result(
     scope: "str | None",
     omitted: "tuple[int, int]" = (0, 0),
 ) -> str:
-    """Captured output, then the timeout status line.
-
-    Output leads: a finished card shows the live stream when the result is a prefix of it
-    (`preferFullToolOutput`), so a leading status would show the output twice.
-    """
+    """Output comes first, since a finished card shows the live stream when the result is a prefix of it."""
     ended = _truncate(f"Execution timed out after {timeout} seconds.")
     partial = _defuse_sentinels(output or "")
     if not partial.strip():
@@ -20651,11 +19341,7 @@ def _python_exec(
     tool_execution_mode: str = "auto",
     host_access_approved: bool = False,
 ) -> str:
-    """Execute Python code in a subprocess sandbox. disable_sandbox (Bypass Permissions): skip the
-    safety analysis and rlimit pre-exec, and use the host env minus secrets. output_callback:
-    optional callable(str) streamed stdout as it is produced; the returned result is
-    unchanged. tool_execution_mode selects automatic or required OS isolation; disable_sandbox
-    keeps full access as a separate explicit choice."""
+    """disable_sandbox skips safety analysis and rlimits, and uses the host env minus secrets."""
     if not code or not code.strip():
         return "No code provided."
 
@@ -20864,10 +19550,7 @@ def _bash_exec(
     tool_execution_mode: str = "auto",
     host_access_approved: bool = False,
 ) -> str:
-    """Execute a bash command in a subprocess sandbox. disable_sandbox (Bypass Permissions): skip
-    the command blocklist and rlimit pre-exec, and use the host env minus secrets.
-    output_callback: optional callable(str) streamed stdout as it is produced; the returned
-    result is unchanged. tool_execution_mode follows _python_exec."""
+    """disable_sandbox skips the command blocklist and rlimits; the host env minus secrets is used."""
     if not command or not command.strip():
         return "No command provided."
 

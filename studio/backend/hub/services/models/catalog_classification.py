@@ -126,12 +126,7 @@ def _hint_leaf(hint: str) -> str:
 def _name_hint_media_task(
     name_hints: tuple[Optional[str], ...], unmatched: Optional[str]
 ) -> Optional[str]:
-    """Media task from name and path hints alone, for a GGUF whose header settles nothing.
-
-    Both callers are files whose architecture cannot answer the question: a denoiser that
-    declares a placeholder arch, and a cloud file we must not open. They differ only in what
-    an unrecognised name means, hence *unmatched*.
-    """
+    """For a GGUF whose header settles nothing; callers differ only in what an unrecognised name means."""
     from core.inference.video_families import detect_video_family
     from core.inference.video_moe_pair import moe_pick_pairs
 
@@ -151,19 +146,7 @@ def _name_hint_media_task(
 
 
 def _unhydrated_gguf_task(name_hints: tuple[Optional[str], ...]) -> Optional[str]:
-    """Task for a GGUF still held as a cloud placeholder, read from its name alone.
-
-    The pickers filter On Device rows on an exact task, so an unclassified denoiser drops out
-    of Images and Video -- the pages whose pick is what would hydrate it -- and lists in Chat
-    instead, where a background auto-load recalls it into llama.cpp. The name is the only
-    evidence available, and it is the same evidence _arch_to_task already routes a
-    placeholder-arch denoiser on.
-
-    Speech stays out on purpose. A row tagged automatic-speech-recognition is dropped from
-    every filesystem list, and a text-to-speech GGUF row whose codec is unknown fails Audio's
-    routing check closed, so guessing either from a name hides the model outright. Unknown
-    keeps it in Chat, which is where a GGUF with nothing but a name belongs.
-    """
+    """Name-only task for a cloud placeholder; speech is never guessed, since a wrong tag hides the row."""
     if any(_is_h3_bundle_gguf_hint(hint) for hint in name_hints):
         return _VIDEO_GEN_TASK
     from core.inference.video_families import detect_video_family

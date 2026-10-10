@@ -122,19 +122,7 @@ TE_INT8_CONVROT_BUDGET_SCALE = 0.56
 def te_prequant_budget_scale(
     fam: Any, *, te_quant_mode: Optional[str], target: Any, base: str
 ) -> float:
-    """Scale to apply to a family's bf16 text-encoder size when budgeting memory for this pick:
-    ``TE_PREQUANT_BUDGET_SCALE`` when the load takes its encoder PRE-CAST from a hosted fp8
-    checkpoint, else 1.0.
-
-    Keyed on ``te_prequant_sources`` -- the same pure resolver the download plan and the load
-    itself use, so a budget can never disagree with them about what gets loaded -- and NOT on
-    ``text_encoder_quant`` alone. That distinction is the conservative one: the runtime cast
-    (``quantize_text_encoders``) runs *after* pipeline assembly has already materialised the
-    dense encoder, so its steady state is fp8 but its peak is bf16, and the peak is what a
-    budget has to cover. Only the pre-cast path is fp8-sized end to end.
-
-    Best-effort like the rest of this module: anything unresolvable returns 1.0, i.e. today's
-    bf16 budget."""
+    """Keyed on te_prequant_sources: a runtime cast peaks at bf16; only a pre-cast is fp8 throughout."""
     try:
         sources = te_prequant_sources_for_base(
             fam,
@@ -250,16 +238,7 @@ def te_prequant_repo_stem(repo_id: str, component: str, scheme: str) -> str:
 
 
 def te_prequant_repo_filenames(repo_id: str, component: str, scheme: str) -> tuple:
-    """Candidate filenames for ``(component, scheme)``, safetensors first.
-
-    Both extensions are live. The reader handles either, but the NAME has to be asked for, and a
-    single hardcoded extension is why a hosted safetensors encoder was unreachable: the resolver
-    requested ``.pt``, the Hub returned 404 and the loader fell back to the dense encoder without
-    saying anything, which costs a user the whole point of the artifact (17.5 GB instead of 9.4 GB
-    on Qwen-Image-2.1). Preference order rather than a registry entry, so a repo that swaps its
-    encoder to safetensors is picked up with no code change, and every repo still hosting a
-    ``.pt`` (Qwen-Image, LTX-2 and the rest) keeps resolving exactly as before.
-    """
+    """Both .safetensors and .pt are live and the name must be requested; safetensors is tried first."""
     # Lazy import: prequant_safetensors pulls torchao, which some hosts lack.
     from .prequant_safetensors import SAFETENSORS_SUFFIX
 
@@ -273,15 +252,7 @@ def te_prequant_repo_filename(repo_id: str, component: str, scheme: str) -> str:
 
 
 def te_candidate_filenames(source: Any) -> tuple:
-    """``source``'s names, best first, for anything SHAPED like a source.
-
-    One accessor so the download PLAN and the resolver cannot disagree about which artifact a
-    source means. They did: the resolver learned the chain while every consumer kept matching
-    ``filename`` alone, so the moment the preferred name became a safetensors spelling no repo
-    hosting a ``.pt`` was recognised by the plan, its dense encoder went back into the pull, and
-    the loader fetched the ``.pt`` on top of it. Planners also pass lightweight stand-ins, so this
-    reads defensively rather than touching the dataclass.
-    """
+    """Shared by the plan and resolver so they cannot disagree on which artifact a source means."""
     names = (
         getattr(source, "filename", None),
         *(getattr(source, "fallback_filenames", None) or ()),
@@ -290,13 +261,7 @@ def te_candidate_filenames(source: Any) -> tuple:
 
 
 def te_candidate_is_readable(name: Optional[str]) -> bool:
-    """Whether this install can open a pre-cast encoder artifact called ``name``.
-
-    NOT the transformer's ``restricted_prequant_load_supported``: this state dict is plain
-    tensors, read under a bare ``weights_only`` load with no constructor allowlist, so a ``.pt``
-    is always readable and asking the DiT's question would refuse one on every install whose
-    torchao lacks some DiT scheme's constructors. The safetensors container needs safetensors, not torchao.
-    """
+    """Not the DiT's torchao check: a plain-tensor .pt always reads; safetensors needs no torchao."""
     if not name:
         return False
     from .prequant_safetensors import is_safetensors_checkpoint, plain_safetensors_supported
@@ -305,11 +270,7 @@ def te_candidate_is_readable(name: Optional[str]) -> bool:
 
 
 def family_te_prequant_repo(fam: Any, scheme: str, component: str) -> Optional[str]:
-    """The hosted pre-cast encoder repo for ``(scheme, component)`` in this family, or None.
-
-    Reads the family's ``te_prequant_repos`` (scheme, component, repo_id) triples; the field
-    is optional on both DiffusionFamily and VideoFamily, so one resolver serves both loaders.
-    """
+    """The field is optional on DiffusionFamily and VideoFamily, so one resolver serves both loaders."""
     from .diffusion_nvfp4_flag import nvfp4_blocked
 
     if nvfp4_blocked(scheme):
@@ -331,10 +292,7 @@ def resolve_te_prequant_source(
     *,
     path_override: Optional[str] = None,
 ) -> Optional[TePrequantSource]:
-    """Resolve where the pre-cast checkpoint for ``(fam, component, scheme)`` comes from.
-
-    Priority: (1) explicit local ``path_override``; (2) the family's hosted repo entry;
-    (3) None -> no pre-cast artifact, caller downloads dense and casts. Pure: no IO."""
+    """Order: local path_override, then the family's hosted repo, else None (download dense and cast)."""
     if scheme not in TE_PREQUANT_SCHEMES:
         return None
     override = (path_override or "").strip()
@@ -380,17 +338,7 @@ def te_prequant_sources(
     target: Any,
     components: Iterable[str] = TE_PREQUANT_COMPONENTS,
 ) -> dict[str, TePrequantSource]:
-    """``{component: source}`` for every text encoder this pick would load PRE-CAST rather
-    than dense; ``{}`` when none apply.
-
-    ``components`` defaults to the generic pipeline injection set; callers that assemble an
-    additional component separately may request it explicitly.
-
-    Pure (no IO, no ``torch.load``) and gated exactly like ``te_prequant_pipe_kwargs``
-    below, which calls it. Download planning uses the same resolver so a plan can never
-    disagree with the load about which dense encoders are still needed -- staging the dense
-    encoder for a pre-cast load wastes tens of GB (LTX's Gemma3 is ~49 GB), and dropping one
-    the load actually wants costs a surprise mid-load pull."""
+    """Shares the download plan's resolver, so the plan and load agree on which dense encoders to fetch."""
     try:
         from . import diffusion_precision as precision
         from .diffusion_precision import (
@@ -434,14 +382,7 @@ def te_prequant_sources_for_base(
     components: Iterable[str] = TE_PREQUANT_COMPONENTS,
     standalone_component_bases: Optional[dict[str, str]] = None,
 ) -> dict[str, TePrequantSource]:
-    """Pre-cast sources whose registered encoder base matches the selected base.
-
-    A family match alone is insufficient for a custom pipeline. The hosted checkpoint was
-    built from the family's registered base, so selecting it for another base would download
-    the artifact before checkpoint metadata could reject it. Components loaded from their own
-    standalone repos may map both sides of this comparison through
-    ``standalone_component_bases``.
-    """
+    """Match the registered base too: a checkpoint for another base would be downloaded, then rejected."""
     sources = te_prequant_sources(
         fam,
         te_quant_mode = te_quant_mode,
@@ -487,20 +428,7 @@ def load_prequant_text_encoder(
     trim_lm_head: bool = False,
     failures: Optional[list] = None,
 ) -> Optional[Any]:
-    """Load the pre-cast text encoder described by ``source`` (on CPU, for pipeline
-    assembly to place), with the layerwise upcast hooks already installed.
-
-    Returns the encoder, or None on any problem (missing / mismatched / unreadable
-    checkpoint) so the caller falls back to the dense download + cast. Best-effort:
-    never raises for an unavailable artifact.
-
-    ``config_subfolder`` overrides where the encoder config lives in ``base`` (default:
-    the component name; "" means the repo root, for encoders assembled from a separate
-    standalone repo like HiDream's Llama TE4). ``config_overrides`` sets config fields
-    the pipeline's assembly normally passes to ``from_pretrained`` (forward-behaviour
-    flags only; the state dict is unaffected by them).
-    ``trim_lm_head`` builds the encoder without its untied ``lm_head`` and never reads that tensor
-    (``diffusion_text_encoder_trim``). ``failures`` collects the error text of a load that raised."""
+    """Returns None on any problem so the caller falls back to the dense download and cast; never raises."""
     try:
         if source.kind == "path" and not _local_prequant_path_allowed(source.location):
             _warn(
@@ -743,19 +671,7 @@ def _te_prequant_pipe_kwargs(
     skip_components: tuple = (),
     dense_source: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Component overrides for pipeline assembly: ``{<component>: <pre-cast encoder>}``
-    for every ``TE_PREQUANT_COMPONENTS`` attr the family hosts a pre-cast checkpoint for
-    (e.g. flux.1 hosts its T5-XXL as ``text_encoder_2``); ``{}`` when none resolve
-    (assembly loads dense as today).
-
-    Gated exactly like the runtime cast (mode normalized, device-supported, family not
-    denied), so injection can never engage where ``quantize_text_encoders`` would not.
-    The later ``quantize_text_encoders`` call re-applies the cast idempotently and keeps
-    status reporting truthful.
-
-    ``dense_source`` is the local directory or repo id assembly reads without fetching (None when it can
-    still fetch). A pre-cast encoder that fails to load with no dense weights there raises: the plan left
-    those shards out of the prefetch, so assembly would die on a missing shard instead."""
+    """Gated like the runtime cast, so injection never engages where quantize_text_encoders would not."""
     unavailable: list[str] = []
     failures: list = []
     cause = ""
@@ -1060,11 +976,7 @@ def _resolve_checkpoint_path(
 
 
 def _validate_checkpoint(ckpt: Any, scheme: str, component: str, base: str, logger: Any) -> bool:
-    """Reject a checkpoint that is the wrong format / scheme / component / base model.
-
-    ``te_class`` presence is checked by the caller (it resolves the class); torch /
-    transformers versions are recorded by the builder for forensics but not enforced (the
-    fp8 storage cast is version-stable plain-tensor data)."""
+    """Checks format, scheme, component and base only; torch and transformers versions are not enforced."""
     expected_format = TE_PREQUANT_FORMAT_INT8_CONVROT if scheme == "int8" else TE_PREQUANT_FORMAT
     if not isinstance(ckpt, dict) or ckpt.get("format") != expected_format:
         _warn(logger, scheme, ValueError("unrecognised pre-cast text-encoder checkpoint format"))
@@ -1113,13 +1025,7 @@ def te_prequant_hub_files(
     api: Any,
     logger: Any = None,
 ) -> dict[str, list[tuple[str, int]]]:
-    """``{component: [(rfilename, size)]}`` for every hosted pre-cast checkpoint that really
-    resolves on the Hub.
-
-    Only a component listed here may have its dense weights dropped from a plan or a prefetch:
-    an unpublished / gated / renamed artifact keeps its dense encoder, exactly as the load's own
-    fallback does. Checked per source so one missing repo cannot sink the whole plan. A local
-    path override is already on disk and is never staged."""
+    """Only components listed here may drop dense weights; a missing artifact keeps its dense encoder."""
     found: dict[str, list[tuple[str, int]]] = {}
     for component, source in sources.items():
         if getattr(source, "kind", None) != "repo" or not getattr(source, "filename", None):

@@ -107,9 +107,5 @@ def _is_on_path(agent: str) -> bool:
 
 
 def detect_installed_coding_agents() -> list[str]:
-    """Return the subset of CODING_AGENTS whose CLI binary is on PATH.
-
-    Order follows CODING_AGENTS, not discovery order, so callers can treat the
-    first entry as the preferred default among the installed agents.
-    """
+    """Ordered as CODING_AGENTS, so the first installed entry is the preferred default."""
     return [agent for agent in CODING_AGENTS if _is_on_path(agent)]

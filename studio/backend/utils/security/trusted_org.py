@@ -45,10 +45,7 @@ def is_trusted_org_repo(
     *,
     verify_remote: bool = True,
 ) -> bool:
-    """True only if *name* is a genuine HF repo under a trusted org. Fails closed
-    (local paths, malformed names, untrusted namespaces, Hub errors); never raises.
-    Offline trusts the namespace shape, since the Hub is unreachable by design.
-    """
+    """Fails closed on any error; offline it trusts the namespace shape, as the Hub is unreachable."""
     if not name or not isinstance(name, str):
         return False
     from utils.hub_settings import MODELSCOPE, active_source

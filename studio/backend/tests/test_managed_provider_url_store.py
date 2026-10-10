@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""The installation-wide switch for managed-account private provider URLs.
-
-The switch lives in the owner's app_settings, but every interesting read happens
-while a MANAGED account is bound: ``workspace_root`` sends a managed caller to
-``accounts/<id>/`` and ``account_path`` raises on anything outside it, so the
-read has to cross back into the owner's tree deliberately. If it did not, the
-feature would fail closed forever and the owner's switch would do nothing.
-"""
+"""The owner's switch must be read across the managed-account boundary, or it fails closed forever."""
 
 from pathlib import Path
 import sys
@@ -213,15 +206,7 @@ def test_the_held_answer_expires(monkeypatch, as_account):
 
 
 def test_a_read_in_flight_cannot_republish_what_a_write_replaced(as_account):
-    """The owner disabling the switch is not undone by a read that started before it.
-
-    The losing interleaving is: a managed request finds nothing held and goes to
-    the store, the owner's PUT commits False and drops the cache, and only then
-    does the older read hand back the True it saw. Without the generation check
-    that True is held for the whole TTL, so private egress keeps working after
-    the owner switched it off. The write is driven from inside the store read,
-    which is that interleaving exactly rather than a sleep hoping to hit it.
-    """
+    """A read that started before a write must not republish the value the write replaced."""
     as_account(OWNER)
     mpu.set_managed_private_provider_urls_allowed(True)
     mpu.forget_cached_setting()

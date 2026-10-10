@@ -60,11 +60,7 @@ logger = get_logger(__name__)
 
 
 async def _ensure_export_supported() -> None:
-    """Reject a mutating export request up front (HTTP 400) when the host can't export. Keeps the
-    backend authoritative even if a client bypasses the UI gate. Read-only endpoints
-    (scan/status/logs) are intentionally NOT gated so the Export page can still render the reason.
-    Also refuses (409) while a latest-transformers install is swapping .venv_t5_latest: an export
-    worker spawned mid-swap could activate a half-replaced sidecar."""
+    """Reject mutating exports server-side (400 if unsupported, 409 during a .venv_t5_latest install)."""
     from utils.transformers_latest import is_install_in_progress
 
     if is_install_in_progress():

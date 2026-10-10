@@ -1,15 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Tests for the per-(ip, username) login rate limiter.
-
-Covers:
-  - bucket key is (client-ip, username.lower())
-  - X-Forwarded-For honoured only when UNSLOTH_STUDIO_TRUST_FORWARDED is set
-  - 429 detail body does NOT leak the client IP
-  - One username failing doesn't lock out a different user from the same IP
-  - One IP failing doesn't lock out the same user from a different IP
-"""
+"""Login rate-limit buckets key on (client IP, lowercased username); a 429 body must not leak the IP."""
 
 import os
 import sys
@@ -224,12 +216,8 @@ class TestBucketKeyAndBlocking:
         assert auth_routes._login_blocked(victim) > 0
 
     def test_saturating_spray_cannot_reset_a_hot_ip_bucket(self, env_no_proxy, monkeypatch):
-        """An IP flooding the dict must not evict (and reset) its own hot bucket.
-
-        With FIFO eviction the oldest-inserted bucket -- the attacker's own, now
-        blocked -- was popped once enough fresh IPs arrived, letting the attacker
-        retry as first-seen. The overflow counter must keep it throttled.
-        """
+        """Eviction must not pop a blocked IP's bucket under a spray of fresh IPs, or the attacker
+        resets it."""
         from routes import auth as auth_routes
 
         monkeypatch.setattr(auth_routes, "_LOGIN_MAX_BUCKETS", 10)
@@ -366,11 +354,8 @@ class TestBucketKeyAndBlocking:
     def test_overflow_migration_is_bounded_not_one_entry_per_failure(
         self, env_no_proxy, monkeypatch
     ):
-        """A saturated IP can rack up many overflow failures; migrating them into a
-        fresh bucket must allocate at most the per-IP threshold worth of entries,
-        not one deque entry per recorded failure (which would let a single later
-        attempt allocate an arbitrarily large deque under the login lock).
-        """
+        """Overflow migration allocates at most the per-IP threshold of entries, not one per
+        recorded failure."""
         from routes import auth as auth_routes
 
         monkeypatch.setattr(auth_routes, "_LOGIN_MAX_BUCKETS", 10)

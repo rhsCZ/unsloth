@@ -333,12 +333,7 @@ def _token_in_needle(token: str, needle: str) -> bool:
 
 
 def detect_video_family(repo_id: str, override: Optional[str] = None) -> Optional[VideoFamily]:
-    """Resolve a ``VideoFamily`` from a repo id, or an explicit override.
-
-    Same contract as ``diffusion_families.detect_family``: an override matches a
-    name/alias exactly; otherwise the longest name/alias appearing as a whole
-    segment of the repo id wins.
-    """
+    """Family from an override (exact name or alias), else the longest whole-segment name in the repo id."""
     if override:
         key = override.strip().lower()
         for fam in _FAMILIES:
@@ -386,12 +381,7 @@ def resolve_video_base_repo(fam: VideoFamily, base_repo: Optional[str]) -> str:
 
 
 def _prequant_base_key(repo_id: Optional[str]) -> str:
-    """The lookup key ``prequant_variant_repos`` is written against: trimmed and lowercased.
-
-    Deliberately local rather than reusing ``diffusion_families.canonical_base``: this module
-    header keeps the two registries apart so neither picker can reach the other's tables, and the
-    image mirror map holds image repos only, so importing it would buy nothing but the coupling.
-    """
+    """Trimmed, lowercased lookup key; kept local so the video and image registries stay decoupled."""
     return (repo_id or "").strip().lower()
 
 
@@ -400,16 +390,7 @@ def video_family_prequant_repo(
     scheme: str,
     base_repo: Optional[str] = None,
 ) -> Optional[str]:
-    """The hosted pre-quantized DENOISER repo for ``scheme`` in this family, or None.
-
-    Mirrors ``diffusion_families.family_prequant_repo``: ``base_repo`` (when known) selects a
-    variant-specific checkpoint first, then the family default. Pure -- no IO, no torch -- so
-    validation and download planning can both ask before anything is downloaded.
-
-    Reads the tables through ``getattr`` and skips malformed rows instead of raising: this runs on
-    the refusal path of a load request, and a table typo must not turn a legitimate pick into a
-    500. A family object that predates these fields simply has no hosted checkpoint.
-    """
+    """Hosted pre-quantized denoiser repo for a scheme, base-specific first; malformed rows are skipped."""
     if nvfp4_blocked(scheme):
         return None
     base = _prequant_base_key(base_repo)
@@ -450,10 +431,7 @@ def video_family_prequant_resident_gb(fam: VideoFamily, scheme: str) -> Optional
 
 
 def video_family_prequant_task_specific(fam: VideoFamily, scheme: str, task: str) -> bool:
-    """True when the family names an artifact for exactly this ``(scheme, task)`` pair.
-
-    Reads the same ``prequant_filenames`` table ``resolve_prequant_source`` reads, through the
-    shared resolver, so the answer here and the file the load asks for cannot drift."""
+    """True when a task-specific artifact is named for this scheme, via the load's own resolver."""
     wanted = (task or "").strip().lower()
     if not wanted:
         return False
@@ -472,16 +450,7 @@ def video_family_prequant_available(
     task: Optional[str] = None,
     base_repo: Optional[str] = None,
 ) -> bool:
-    """True when a hosted pre-quantized denoiser really covers ``(scheme, task)``.
-
-    ``video_family_prequant_repo`` answers "is there a checkpoint for this scheme"; this answers
-    the question a load actually has, which also names the PARTITION. A task listed in
-    ``prequant_partition_tasks`` is served only by its own ``(scheme, task, filename)`` row, so a
-    scheme that has the repo but not that row is unavailable for it -- the alternative is loading
-    another partition's denoiser, which passes every check and generates the wrong thing.
-
-    Every other task, and every family that declares no partition tasks, gets exactly the old
-    answer. Pure, and never raises: this runs on the refusal and download-planning paths."""
+    """True when a hosted denoiser covers (scheme, task); partition tasks need their own row."""
     if video_family_prequant_repo(fam, scheme, base_repo) is None:
         return False
     wanted = (task or "").strip().lower()
@@ -494,12 +463,7 @@ def video_family_prequant_available(
 
 
 def video_family_prequant_schemes(fam: VideoFamily, task: Optional[str] = None) -> tuple[str, ...]:
-    """Every scheme this family has a hosted denoiser checkpoint for, in table order.
-
-    Used to name the workable schemes in a refusal message, so a rejected request tells the caller
-    what to pick instead of only what failed. With ``task``, the list is narrowed to the schemes
-    that cover THAT task, so a reference-video refusal cannot advertise a keyframe-only scheme.
-    Malformed rows are skipped, as above."""
+    """Schemes with a hosted denoiser; with task, narrowed so a refusal never suggests one that lacks it."""
     schemes: list[str] = []
     for entry in getattr(fam, "prequant_repos", ()) or ():
         if isinstance(entry, (tuple, list)) and len(entry) == 2 and entry[0] not in schemes:
@@ -513,12 +477,7 @@ def video_family_prequant_schemes(fam: VideoFamily, task: Optional[str] = None) 
 
 
 def snap_num_frames(fam: VideoFamily, num_frames: int) -> int:
-    """The nearest valid frame count at or below the request (k * step + offset).
-
-    Video latents are allocated as (num_frames - 1) / temporal_compression + 1, so
-    an off-lattice count wastes a partial latent frame at best and trips shape
-    checks at worst; snapping mirrors the image path's silent /16 size snap.
-    """
+    """Snap frames down to the k * step + offset lattice, since off-lattice counts break latent shapes."""
     step = max(1, fam.frame_step)
     offset = max(1, fam.frame_offset)
     requested = max(offset, fam.min_num_frames, num_frames)
@@ -559,20 +518,7 @@ def validate_video_request_shape(
     height: Optional[int] = None,
     num_frames: Optional[int] = None,
 ) -> None:
-    """Raise ``ValueError`` when a request asks for a shape ``fam`` does not support.
-
-    The generate route calls this at the API boundary so HTTP enforces exactly the rules the Desktop
-    interface offers: its resolution select lists only ``resolution_presets`` and its duration
-    select only lattice frame counts, while the API took anything inside the coarse request bounds
-    and then SNAPPED it. The snap is silent and floors, so a 256x256 request survived untouched and
-    denoised at a size no checkpoint was ever trained for.
-
-    This is a separate, explicit check rather than a change to ``snap_video_size`` /
-    ``snap_num_frames``, which internal callers still need. It stays silent for anything it cannot
-    judge (a family that declares no presets keeps the old SIZE snapping), and ``None`` means "use
-    the family default". The frame lattice is deliberately NOT part of that escape hatch: every
-    family declares a ``frame_step``, so an off-lattice count is always refused.
-    """
+    """Reject unsupported shapes at the API instead of snapping; the frame lattice is always enforced."""
     presets = tuple((int(w), int(h)) for w, h in fam.resolution_presets)
     # No declared presets: leave sizes to the snap; frame check below still runs.
     if presets and (width is not None or height is not None):
@@ -623,13 +569,7 @@ def validate_video_request_shape(
 def validate_video_keyframe_conditioning(
     fam: VideoFamily, h3_task: Optional[str], *, has_keyframes: bool
 ) -> None:
-    """Raise ``ValueError`` when a checkpoint cannot take the keyframes a request supplies.
-
-    Pure in the family and the MiniMax-H3 partition, which is what lets the generate route judge
-    the checkpoint it is about to SWITCH TO by the same rules the backend applies to the loaded
-    one. Without that, an auto-switch evicts a working pipeline and spends minutes loading a
-    target for a request that was already known to be unservable.
-    """
+    """Keyframe check, pure in family and H3 partition, so an auto-switch is refused before any eviction."""
     if not has_keyframes:
         return
     from .video_minimax_h3 import H3_TASK_REFERENCES
@@ -653,13 +593,7 @@ def validate_video_flow_controls(
     *,
     engine: Optional[str] = None,
 ) -> None:
-    """Raise ``ValueError`` when a request sets a shift the checkpoint cannot honour.
-
-    The backend's flow-shift rules, kept here so the generate route can judge the checkpoint it
-    is about to switch TO by the same ones. ``engine`` is optional because a target's engine is
-    normally not chosen until the load runs; where it IS determined by the pick, as MiniMax-H3
-    GGUFs are, passing it refuses an unservable request before anything is evicted.
-    """
+    """Reject flow shifts the checkpoint cannot honour; passing engine refuses before any eviction."""
     if flow_shift is not None and fam.default_flow_shift is None:
         raise ValueError(f"{fam.name} does not expose a video flow_shift control.")
     if audio_flow_shift is not None and fam.default_audio_flow_shift is None:
@@ -684,15 +618,7 @@ def validate_video_reference_conditioning(
     reference_image_size: Optional[str] = None,
     engine: Optional[str] = None,
 ) -> None:
-    """Raise ``ValueError`` when a checkpoint cannot be conditioned on the request's references.
-
-    The absence of references is a rule too: the Ref2VA partition has no text-only denoiser. See
-    ``validate_video_keyframe_conditioning`` for why these live here rather than inline.
-
-    ``engine`` is optional for the same reason it is on the flow controls: a target's engine is
-    normally unknown before the load, but where the pick decides it, passing it refuses an
-    unservable sizing policy before anything is evicted.
-    """
+    """Reject references the checkpoint cannot take; the ref2va partition has no text-only denoiser."""
     from .video_minimax_h3 import H3_REF_SIZE_MATCH, H3_REF_SIZE_MAX, H3_TASK_REFERENCES
 
     if not has_references:
@@ -739,11 +665,7 @@ _VIDEO_GENERATION_DEFAULTS: tuple[tuple[str, int, float], ...] = (
 def default_video_generation_params(
     *identifiers: Optional[str], fallback: tuple[int, float] = (40, 4.0)
 ) -> tuple[int, float]:
-    """Default ``(steps, guidance)`` for a loaded video model; the first identifier
-    naming a known variant wins, so a GGUF filename ('...distilled...Q4_K_M.gguf')
-    beats the family base repo. ``fallback`` is used when no identifier names a variant --
-    callers pass the resolved family's own default so a Wan model loaded from an opaque local
-    path under an explicit family_override still gets 50/5.0, not the hardcoded LTX 40/4.0."""
+    """Default (steps, guidance) by the first identifier naming a known variant; fallback when none does."""
     variant = video_generation_variant(*identifiers)
     for key, steps, guidance in _VIDEO_GENERATION_DEFAULTS:
         if key == variant:

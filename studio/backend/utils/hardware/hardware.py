@@ -962,19 +962,7 @@ def _torch_reports_a_hip_runtime() -> bool:
 
 
 def _torch_reports_another_vendors_runtime() -> bool:
-    """Whether the installed torch is a CUDA or XPU build, whatever its label says.
-
-    The mirror of _torch_reports_a_hip_runtime, and needed for the same reason in reverse.
-    A conda or locally built CUDA wheel carries no +cu tag, so the label names no vendor,
-    and the intent fallback then reads a stale recorded ROCm flavor as "this wheel targets
-    AMD" -- on a host whose real repair is reinstalling ROCm torch. torch.version.cuda is
-    written by the build itself and settles it.
-
-    An import failure is answered from disk, as _torch_reports_a_hip_runtime and
-    _torch_reports_an_xpu_runtime already answer it: torch/version.py records the runtime
-    whether or not the package imports. Returning False there made the clearing above inert
-    on the path it exists for, letting a stale ROCm flavor speak for a CUDA or XPU wheel.
-    """
+    """Reads torch.version.cuda/xpu, not the label; a stale ROCm flavor cannot speak for that wheel."""
     if TORCH_IMPORT_ERROR is not None:
         if _torch_reports_a_hip_runtime():
             return False
@@ -1639,14 +1627,7 @@ def _uncertainty_could_hide_the_frozen_mismatch(inventory: Dict[str, Any]) -> bo
 
 
 def current_chat_only_verdict() -> tuple[Optional[str], Optional[str]]:
-    """``(reason, detail)``, re-derived when the physical inventory can still change it.
-
-    detect_hardware() runs once at startup, but the inventory it consulted refreshes on a 60 second TTL. An eGPU attached after launch, or a driver that finished restarting after the first probe, flips the answer while the frozen verdict keeps saying ``no_gpu``: /api/system would list the card and publish a mismatch while the sidebar and the Export and Video pages went on insisting no accelerator exists. The reverse is the same bug, a card that goes away leaving a mismatch nobody can act on.
-
-    Only the three inventory-sensitive verdicts are re-derived, plus the one detection_failed that is not really unmeasured: a torch that will not import was classified from its wheel on disk at startup, so the inventory is the only thing still missing. mlx_unavailable, intel_mac and a detection_failed with no importable torch and no readable wheel describe things a 60 second probe cannot change, and re-deriving those would fight detect_hardware() rather than follow it.
-
-    Never raises: a probe that cannot answer keeps the frozen verdict, as does an inventory whose uncertainty is about the vendor the frozen mismatch came from.
-    """
+    """Re-derives the inventory-sensitive verdicts, so a late eGPU or driver is seen; never raises."""
     reason, detail = CHAT_ONLY_REASON, CHAT_ONLY_DETAIL
     frozen_but_measurable = reason == "detection_failed" and TORCH_IMPORT_ERROR is not None
     if reason not in ("no_gpu", "torch_cpu_build", "torch_cuda_unavailable"):
@@ -2347,11 +2328,7 @@ def get_package_versions() -> Dict[str, Optional[str]]:
 
 
 def _torch_get_device_module():
-    """Return the appropriate torch device module (cuda or xpu) and its name.
-
-    No torch at all answers ``(None, None)`` like an unsupported device: raising took the
-    exception out through /api/system on a host whose vendor CLI HAD found GPUs.
-    """
+    """No torch returns (None, None) rather than raising, which would take /api/system down with it."""
     device = get_device()
     try:
         import torch
@@ -2459,19 +2436,7 @@ def _rocm_props_total_is_carve_out(props: Any) -> bool:
 
 
 def _cuda_props_are_integrated(props: Any, backend: Optional[str] = "cuda") -> bool:
-    """Whether ``props`` describes an integrated CUDA part whose VRAM is system RAM.
-
-    Jetson and DGX Spark class parts set ``cudaDeviceProp::integrated`` (torch's
-    ``is_integrated``, ``integrated`` on older wheels).
-
-    ROCm and XPU are excluded BY NAME, not by trusting the field to be absent: HIP reuses
-    this namespace and left that field unassigned before 6.2, so reading it would call a
-    discrete card integrated on exactly the runtimes ``_HIP_INTEGRATED_FLAG_MIN``
-    distrusts (``_rocm_props_unified_status`` is the classifier for that hardware), and a
-    same-named field on a future Intel wheel must not start rewriting an iGPU's capacity.
-    ``torch.version.hip`` as well as ``IS_ROCM`` because that global is published by
-    detection, and this inventory is reachable from inside detection.
-    """
+    """ROCm and XPU are excluded by name: HIP left the integrated field unassigned before 6.2."""
     if IS_ROCM or backend != "cuda":
         return False
     try:
@@ -3958,14 +3923,7 @@ def _reconcile_rocm_unified_memory(utilization: Dict[str, Any], device_indices: 
 
 
 def _cuda_join_is_unsafe(device_indices: Optional[list[int]]) -> bool:
-    """Whether a torch row cannot be attached to an nvidia-smi row on this host.
-
-    CUDA enumerates FASTEST_FIRST by default while nvidia-smi reports PCI order, and
-    equal-sized cards defeat every other check, so with a NUMERIC mask the join is only
-    safe behind ``_cuda_order_matches_smi``. A UUID or MIG mask has no physical ids to
-    disagree about: nvidia.py resolves the mask itself and torch enumerates that same
-    mask in the same order, so ``visible_ordinal`` joins them whatever the order says.
-    """
+    """Numeric masks need _cuda_order_matches_smi, since FASTEST_FIRST order can differ from PCI order."""
     if not device_indices:
         return False
     return not _cuda_order_matches_smi()
@@ -3974,19 +3932,7 @@ def _cuda_join_is_unsafe(device_indices: Optional[list[int]]) -> bool:
 def _integrated_cuda_inventory(
     device_indices: Optional[list[int]],
 ) -> tuple[Dict[Any, Dict[str, Any]], str]:
-    """torch's context-free inventory, keyed the way the SMI rows are indexed.
-
-    Returns ``({key: row}, key_field)``, empty when the two sources cannot be joined.
-
-    Two index spaces, and picking the wrong one attaches another card's capacity to a
-    row. With a NUMERIC mask the SMI rows carry physical ids, so the join is on
-    ``index`` -- but only behind ``_cuda_order_matches_smi``, because CUDA enumerates
-    FASTEST_FIRST by default while nvidia-smi reports PCI order, and equal-sized cards
-    defeat every other check. Same gate the SMI VRAM query already applies. With a UUID
-    or MIG mask there are no physical ids: nvidia.py resolves the mask itself and
-    returns rows ordered by it, and torch enumerates that same mask in that same order,
-    so ``visible_ordinal`` joins them whatever CUDA_DEVICE_ORDER says.
-    """
+    """Joins on index only behind _cuda_order_matches_smi; UUID or MIG masks join on visible_ordinal."""
     if device_indices is None:
         ordinals = list(range(_torch_get_physical_gpu_count() or 0))
         if not ordinals:
@@ -4010,16 +3956,7 @@ _INTEGRATED_TOTAL_ADOPT_FLOOR_GB = 0.0625
 def _integrated_total_is_understated(
     cli_total_gb: Optional[float], torch_total_gb: Optional[float]
 ) -> bool:
-    """Whether an integrated part's CLI total is smaller than the pool torch can reach.
-
-    ``None`` from the CLI is the DGX Spark shape: nvidia-smi answers ``[N/A]`` for
-    memory.total, which NVIDIA documents, and anything is wider than nothing. A NUMBER
-    from the CLI is the Windows RTX Spark N1X shape, where the figure is real, readable
-    and scoped to the dedicated carve-out rather than to the CUDA budget.
-
-    Only ever True for a LARGER torch total, which is what makes every caller below a
-    widening and never a shrink.
-    """
+    """True only for a larger torch total, so every caller widens and never shrinks a CLI figure."""
     if torch_total_gb is None or torch_total_gb <= 0:
         return False
     if cli_total_gb is None:
@@ -4032,32 +3969,13 @@ def _integrated_total_is_understated(
 def _integrated_cuda_rows(
     device_indices: Optional[list[int]],
 ) -> tuple[Dict[Any, Dict[str, Any]], str]:
-    """``_integrated_cuda_inventory`` reduced to the rows torch calls integrated.
-
-    Deliberately NOT cached. The old check was "is a total missing", which a discrete
-    host answers no to without touching torch; widening a total nvidia-smi DID answer
-    cannot be decided without asking torch, and this runs on the 3-5 s /api/system poll,
-    so the cost was measured rather than assumed: 7 microseconds, because
-    get_device_properties is answered from the driver's device list and creates no
-    primary context (0 MiB on an RTX Spark N1X, against 116 MiB for mem_get_info). A
-    memo would buy nothing at that price and would have to be invalidated correctly.
-
-    Empty on a discrete host, and on any host the two sources cannot be joined, so every
-    caller keeps whatever the CLI reported.
-    """
+    """Not cached on purpose: get_device_properties costs microseconds and creates no primary context."""
     inventory, key_field = _integrated_cuda_inventory(device_indices)
     return {k: td for k, td in inventory.items() if td.get("_cuda_integrated")}, key_field
 
 
 def _cgroup_available_memory_gb() -> Optional[float]:
-    """What this process can still charge to an enforcing cgroup, or None.
-
-    Reuses the llama.cpp reader rather than a second copy: it walks the process's
-    cgroup AND its ancestors, since an ancestor slice can be the binding limit and
-    carries sibling usage a leaf never sees, and it handles v2 and legacy v1.
-    Imported lazily and only from the widening branch, so a discrete host, which
-    returns before ever reaching here, pays nothing for it.
-    """
+    """Reuses the llama.cpp cgroup reader; ancestor slices can be the binding limit, so they are walked."""
     try:
         from core.inference.llama_cpp import LlamaCppBackend
         mib = LlamaCppBackend._cgroup_available_memory_mib()
@@ -4082,26 +4000,7 @@ def _host_memory_used_gb() -> Optional[float]:
 def _reconcile_cuda_integrated_memory(
     utilization: Dict[str, Any], device_indices: Optional[list[int]]
 ) -> None:
-    """Publish the pool an integrated CUDA SoC can reach, not its dedicated carve-out.
-
-    Two shapes of one fault. On a DGX Spark nvidia-smi answers ``[N/A]`` for
-    memory.total and the monitor printed "Unknown / 0.00 GiB" beside a 121 GiB part
-    (#10691). On a Windows RTX Spark N1X it answers a number, 8128 MiB, which is the
-    carve-out and not the 46477 MiB budget the same device reports through
-    ``props.total_memory``: an under-report of about 5.7x, which judged a 270M model
-    not to fit. Filling only the blanks repaired the first and left the second standing,
-    because a wrong number is not a missing one.
-
-    NOT _torch_get_per_device_info, which the ROCm twin above can afford and this
-    cannot: this is the /api/system poll, and mem_get_info pins a primary context for
-    the life of the process (test_system_poll_no_cuda_context.py). Both figures here
-    are context-free.
-
-    Widens only, in both directions it could be read: a total the CLI reported LARGER
-    than torch's is left alone, and the free bytes published here are floored at the
-    free bytes the row already promised, so no device loses capacity it was trusted
-    with before this ran.
-    """
+    """Widens an integrated SoC to its reachable pool only; a CLI total already larger is left alone."""
     devices = utilization.get("devices", [])
     if not devices:
         return
@@ -4871,12 +4770,7 @@ def _selected_archive(homes: list, sizes: dict, tree: dict, vendor: set, table: 
 
 
 def _directory_weight_bytes(homes: list, sizes: dict, tree: dict, vendor: set) -> tuple:
-    """What one directory costs, and every file its spellings account for.
-
-    ``homes`` are the ``(folder, is_vendor)`` pairs answering to it, decided together because
-    splitting them lets a single archive lose in halves. ``tree`` carries every file, since an
-    index may name a shard below itself; the second return is what it accounted for.
-    """
+    """Homes are decided together; splitting them lets one archive lose in halves."""
     # Resolved apart so an adapter never stands in for its base model.
     transformers_model, transformers_held = _selected_archive(
         homes, sizes, tree, vendor, _TRANSFORMERS_ARCHIVES
@@ -5972,11 +5866,8 @@ def _nvidia_inference_devices() -> list[Dict[str, Any]]:
 
 
 def get_cross_vendor_inference_gpu_info() -> Optional[Dict[str, Any]]:
-    """The NVIDIA cards a CUDA llama.cpp runs on when torch is another backend, else None.
-
-    nvidia-smi only: a CUDA context here would pin VRAM. No ROCm counterpart: amd-smi cannot
-    prove the memory scope HIP sees (an APU reports only its carve-out).
-    """
+    """nvidia-smi only, since a CUDA context here would pin VRAM; amd-smi cannot prove HIP's memory
+    scope."""
     try:
         llama_backend = _installed_llama_backend()
     except Exception as e:
@@ -6005,27 +5896,7 @@ def get_cross_vendor_inference_gpu_info() -> Optional[Dict[str, Any]]:
 def _repair_smi_visible_devices(
     devices: list[Dict[str, Any]], parent_visible_ids: Optional[list[int]]
 ) -> bool:
-    """Fill in what nvidia-smi could not answer for, from torch's context-free inventory.
-
-    Returns whether every device now carries a capacity.
-
-    nvidia-smi answers ``[N/A]`` for memory.total on a DGX Spark, which NVIDIA documents.
-    Keeping that row is right, but a missing total is indistinguishable from no GPU
-    downstream: the frontend maps it to zero, the fit classifier returns ``ram``, and the
-    picker warns "No GPU detected" on a 121 GiB Blackwell (#10691). ``props.total_memory``
-    answers on the same host for no driver context.
-
-    The integrated flag rides along because the reason the capacity is unreadable is that
-    this part has no memory of its own, and a total published without it is counted twice.
-
-    A readable total is not a right one. nvidia-smi answers 8128 MiB on a Windows RTX
-    Spark N1X, the dedicated carve-out of a part whose CUDA budget is 46477 MiB, so the
-    old shortcut here -- return early whenever every row carried a number -- published a
-    45 GiB device as a 7.94 GiB one on the System tab while the About tab, which reads
-    torch, showed 45.39 GiB for the same machine. So a BLANK total is still filled on any
-    part, as it always was, and a READABLE one is additionally widened on a confirmed
-    integrated part, and on nothing else.
-    """
+    """Fills blank totals from torch; widens a readable one only on a confirmed integrated part."""
     if not devices:
         return False
     try:
@@ -6428,10 +6299,7 @@ def apply_gpu_ids(gpu_ids, backend: Optional[str] = None) -> None:
 
 
 def get_device_map(gpu_ids: Optional[list[int]] = None) -> str:
-    """The Hugging Face ``device_map`` string for model loading: "unsloth_balanced" on CUDA or "balanced" on XPU when gpu_ids lists >1 GPU, or when the visibility mask uses UUID/MIG/wildcard identifiers and >1 GPU is visible; "sequential" otherwise, including CPU/MLX.
-
-    CUDA asks for unsloth's head-aware planner rather than accelerate's "balanced", which caps every device but the last at about model_size / n_devices: the unquantized lm_head then does not fit on cuda:0, every module lands on the last card, and prepare_model refuses a 4bit model wholly on a non-zero card. "unsloth_balanced" rather than "unsloth" because the planner declines several shapes and the plain name falls back to "sequential", which fills cuda:0 to its whole free budget. XPU keeps plain "balanced": the planner has no non-CUDA memory budgets. Use prepare_gpu_selection() upstream to determine gpu_ids.
-    """
+    """CUDA uses unsloth_balanced, since plain unsloth falls back to sequential; XPU keeps balanced."""
     device = get_device()
     if device in (DeviceType.CUDA, DeviceType.XPU):
         multi_gpu = gpu_ids is not None and len(gpu_ids) > 1
@@ -6542,10 +6410,8 @@ def safe_thread_num_proc(desired: Optional[int] = None) -> int:
 def dataset_map_num_proc(
     desired: Optional[int] = None, *, serial_as_none: bool = True
 ) -> Optional[int]:
-    """A safe ``num_proc`` for Dataset.map()/filter(). None on spawn platforms (Windows, macOS) -- None, not 1, is the disable sentinel, since datasets >= 4.1 takes the pool branch for any num_proc >= 1. Also None on XPU once its runtime is initialized here, because os.fork() corrupts the Level-Zero context; pre-init XPU hosts can still parallelize CPU-side preprocessing. There is deliberately no CUDA equivalent: the child only runs the tokenizer, 300 forced-fork map() runs on an initialized CUDA context produced no failures, and detect_hardware() always initializes CUDA, so such a guard would serialize every CUDA run for nothing.
-
-    ``serial_as_none`` says how to spell "run in-process" for the layer reading the value back. Leave it True at a map() call site, where None is the only value that builds no pool. Pass False when the result is written into a config (SFTConfig.dataset_num_proc): a config None means "auto-size me" to every downstream reader, so only 1 survives that round trip.
-    """
+    """None, not 1, means no pool: spawn platforms, and an initialized XPU since fork corrupts
+    Level-Zero."""
     if sys.platform in ("win32", "darwin"):
         # UNSLOTH_DATASET_NUM_PROC is an unvetoed escape hatch; honour it.
         if _num_proc_override_is_set():

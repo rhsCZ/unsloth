@@ -99,14 +99,7 @@ def end_delete(repo_id: str) -> None:
 
 
 def begin_cache_purge() -> bool:
-    """Reserve EVERY dataset registry for a whole-cache purge, or none of them.
-
-    A managed-account install does not have one dataset registry, it has one per account
-    (:func:`_account_registry`). Reserving only the singleton left every other account's
-    download invisible to the purge, which would then remove files under its worker. Same
-    all-or-nothing shape as :func:`begin_delete`, and the count is recorded so a registry
-    created after this returns is born reserved rather than free to claim work.
-    """
+    """Reserves every account's registry, or none, so a purge cannot miss a managed account's download."""
     global _purging
     with _account_registry_lock:
         reserved = []
@@ -148,11 +141,7 @@ def _claim_dataset_download(registry, key: str, transport: str, **kwargs) -> tup
 def get_dataset_snapshot_metadata_cached(
     repo_id: str, hf_token: Optional[str] = None
 ) -> tuple[int, frozenset[str]]:
-    """Raw snapshot size + expected blob hashes for a dataset repo.
-
-    The dataset worker downloads every sibling, so the denominator is the full
-    sibling-size sum and the hashes cover every file. Consumed by the shared
-    ``snapshot_progress`` accounting."""
+    """Size and blob hashes cover every sibling, since the dataset worker downloads them all."""
     hf_token = account_hf_token(hf_token)
     token_fp = hf_cache_scan.token_fingerprint(hf_token)
     cache_key = (repo_id, token_fp)
@@ -207,11 +196,7 @@ async def get_dataset_download_progress_response(
     expected_bytes: int = 0,
     hf_token: Optional[str] = None,
 ) -> dict:
-    """Return download progress for a HuggingFace dataset repo.
-
-    Scans the ``datasets--owner--name`` cache dir and shares the blob accounting
-    with the model path via ``snapshot_progress``. Returns ``cache_path`` for the
-    UI."""
+    """Dataset progress from the datasets--owner--name cache dir, sharing snapshot_progress with models."""
     hf_token = account_hf_token(hf_token)
     registry = _account_registry()
     if managed_account():
@@ -252,11 +237,7 @@ async def download_dataset_response(
     *,
     allow_ambient_token: bool = True,
 ) -> dict:
-    """Start a background download for a HuggingFace dataset.
-
-    ``allow_ambient_token=False`` keeps the worker anonymous when the caller sent no token, for
-    repos named over the API rather than chosen here.
-    """
+    """With allow_ambient_token=False the worker stays anonymous for repos named over the API."""
     if account_is_retired():
         raise HTTPException(status_code = 403, detail = "Account is retired")
     hf_token = account_hf_token(hf_token)

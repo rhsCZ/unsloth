@@ -20,17 +20,7 @@ os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
 # spawned workers inherit it. `setdefault` preserves an explicit override, including "0".
 os.environ.setdefault("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "1")
 
-# The desktop app hands this process a GUI environment, and a GUI environment has
-# no ~/.bashrc in it. `shell_path::fix_path()` in src-tauri spawns the
-# login shell and then takes PATH out of it and nothing else, so an AMD host's
-# HSA_OVERRIDE_GFX_VERSION / ROCM_PATH / USE_CK are dropped on the desktop path
-# and kept on the `unsloth studio` one. #9926 is that difference: identical model
-# and machine, SIGSEGV from the app and a clean run from a terminal.
-#
-# Here because HSA reads HSA_OVERRIDE_GFX_VERSION and USE_CK when torch first
-# touches the GPU, which is far below this. A no-op unless the desktop app owns
-# this process AND the host has an AMD GPU AND the variable is absent, so a
-# terminal launch and every non-AMD host are unchanged.
+# Desktop GUI env drops AMD HSA_OVERRIDE_GFX_VERSION and USE_CK, which HSA reads at first GPU use.
 _backend_dir = str(_Path(__file__).parent)
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
@@ -472,11 +462,8 @@ def _start_helper_precache_if_enabled() -> None:
 
 
 def _run_llama_cpp_startup_probes(app: FastAPI) -> None:
-    """llama.cpp capability (MTP support) + freshness (release age) probes, run OFF the startup critical path.
-    Both are cached and freshness has a 24h disk TTL, but on a cold/expired cache the freshness check makes
-    a blocking GitHub request, and on macOS the first `llama-server --help` exec can stall on Gatekeeper
-    verification, and neither must gate `Application startup complete`. Writes app.state only; nothing reads
-    those values synchronously at startup."""
+    """Run llama.cpp probes off the startup path; GitHub freshness checks and macOS Gatekeeper stall
+    them."""
     try:
         from core.inference.llama_cpp import LlamaCppBackend
         from utils.llama_cpp_freshness import (
@@ -540,10 +527,7 @@ def _post_warm_current_generation() -> int:
 
 
 def _start_post_warm_thread() -> bool:
-    """Put up a post-warm worker for this lifespan. True iff one was started. Starts one even while a previous
-    worker is parked in the warm join: declining there left a restart with no worker at all, since the old
-    one was alive so this returned early, then read the shutdown and exited. Generations make the overlap
-    safe."""
+    """Start a worker even if an old one is parked in the warm join, else a restart is left with none."""
     global _post_warm_thread, _post_warm_generation
     with _post_warm_lock:
         _post_warm_generation += 1
@@ -601,10 +585,7 @@ def _start_linked_folder_auto_sync(generation: Optional[int]) -> None:
 
 
 def _post_warm_background_work(generation: Optional[int] = None) -> None:
-    """Platform repair and linked-folder lifecycle work after the coordinated warm. MLX repair used to probe the
-    runtime before the socket bound; joining first keeps that optional probe out of the login-screen
-    critical path. Linked-folder startup only loads embeddings when a queued sync has real ingestion
-    work."""
+    """Runs repair and linked-folder work after the warm join, keeping the MLX probe off the login path."""
     join_background_warm()
 
     # Shutdown can land during the join above; recheck before every action.
@@ -678,13 +659,7 @@ def clear_compiled_cache_unless_shared(app: FastAPI) -> None:
 
 
 def banner_autofill_available(app_state, environ) -> bool:
-    """Whether _inject_bootstrap will hand the login page the credential.
-
-    Read from the launch, not the environment: run_server sets UNSLOTH_API_ONLY and never
-    clears it, and an embedded host may call run_server() again in the same process with
-    different flags, so the variable outlives the launch that set it. The environment is
-    only the fallback for a direct uvicorn launch that never went through run_server.
-    """
+    """Read the launch's api_only flag, not UNSLOTH_API_ONLY, which outlives a re-launched run_server()."""
     if getattr(app_state, "suppress_bootstrap_injection", False):
         return False
     api_only = getattr(app_state, "api_only", None)
@@ -696,12 +671,7 @@ def banner_autofill_available(app_state, environ) -> bool:
 def bootstrap_banner_lines(
     username: str, bootstrap_path, password: Optional[str], *, autofill_available: bool
 ) -> "list[str]":
-    """The first-boot banner for a freshly created admin account.
-
-    Printing the password is the exception, not the rule: _inject_bootstrap fills the
-    login form in, so a launch that gets the injection must keep the credential out of
-    a log that ends up in a bug report.
-    """
+    """Omit the password from the banner when autofill fills the login form; logs reach bug reports."""
     lines = ["=" * 60, "DEFAULT ADMIN ACCOUNT CREATED", f"    username: {username}"]
     if autofill_available or not password:
         lines.append(f"    password saved to: {bootstrap_path}")
@@ -1055,19 +1025,7 @@ _IS_COLAB = os.path.isdir("/content") and (
 
 
 def _reportable_hf_endpoints(request) -> dict:
-    """The endpoints to hand the browser, which are not always the ones we use.
-
-    A loopback endpoint names a proxy on the MACHINE THE BACKEND RUNS ON, and a
-    private-network one an address on the backend's LAN. Handing either to a
-    browser elsewhere makes it fetch its OWN localhost or its OWN 10.0.0.5: the
-    calls either fail, or hit an unrelated service that, if it answers the CORS
-    preflight, is handed the user's Hub bearer token. endpoint_is_reachable_by
-    holds the rule; the backend keeps using its own value either way.
-
-    The client comes from client_ip(), not the socket peer: through the managed
-    Cloudflare tunnel the peer IS loopback, being the local cloudflared process
-    rather than the visitor, and an address it cannot determine reads as remote.
-    """
+    """Omit loopback and private endpoints from remote browsers, which would call their own localhost."""
     from utils.hub_settings import saved_only_endpoints
 
     # A saved endpoint stays behind the owner-only settings route.
@@ -1716,12 +1674,7 @@ _HEALTH_DETECT_BUDGET_S = 1.0
 
 
 async def _await_hardware_detection(budget: float) -> bool:
-    """Wait up to ``budget`` seconds for DEVICE to be set. True iff it is. Polls on the event loop
-    instead of awaiting ensure_hardware_detected() in a thread: asyncio.wait_for cannot cancel a
-    to_thread, so a timed-out call holds the executor slot for the rest of the import and a polled
-    endpoint would drain the pool. Returns False without kicking anything when the warm is switched
-    off. Health is probed automatically, so kicking detection here would import torch on every such
-    host and the switch would buy nothing."""
+    """Poll instead of awaiting a thread: a timed-out to_thread keeps its executor slot for the import."""
     if os.environ.get(DISABLE_ENV_VAR) == "1":
         return _hw_module.DETECTION_COMPLETE.is_set() and _hw_module.DEVICE is not None
     # Check event AND DEVICE: shutdown clears DEVICE before the event.
@@ -1738,13 +1691,7 @@ async def _await_hardware_detection(budget: float) -> bool:
 
 
 def _hardware_snapshot() -> Optional[tuple[bool, Optional[str], Optional[str]]]:
-    """``(chat_only, chat_only_reason, chat_only_detail)`` if detection is settled, else ``None``. A
-    seqlock read rather than ``_DETECT_LOCK``: that lock would park the endpoint for the whole torch
-    import. A forced re-detect clears the event on the way in and bumps the generation before
-    setting it again, so a read bracketed by both lands wholly before or after one pass, never
-    mid-pass where CHAT_ONLY is back to True and the reason to None. That middle must not be
-    published: config/env.ts caches the first reply carrying `device_type` as authoritative, and the
-    sidebar's recovery poll runs only while it reads `chat_only_reason == "mlx_unavailable"`."""
+    """Seqlock read so a half-finished re-detect is never returned; config/env.ts caches the first reply."""
     for _ in range(3):
         if not _hw_module.DETECTION_COMPLETE.is_set():
             return None
@@ -1801,13 +1748,7 @@ def _mlx_prestart_hold_ok(generation: int) -> bool:
 
 
 def _superseded_by_mlx_repair(snapshot: Optional[tuple[bool, Optional[str]]]) -> bool:
-    """True when the MLX self-heal is about to replace this settled verdict. Scoped to /api/health
-    rather than folded into ``_hardware_snapshot()``: the launcher's watchdog reads /api/liveness
-    and holds its startup grace open while hardware_detecting is set, so a 15-minute reinstall must
-    not stretch that grace. Bounded, never open-ended. A live worker holds the verdict for as long
-    as its install takes, capped by mlx_repair._WORKER_BUDGET_S. A repair that has not started yet
-    is only a promise, and this is where that promise expires: the hold lasts while the warm does
-    and a short handoff beyond it, under an absolute ceiling for the warm that never ends."""
+    """True when an MLX self-heal will replace the settled verdict; /api/liveness must not see it."""
     if snapshot is None:
         return False
     if not _hw_module.verdict_pending_mlx_repair(snapshot[0], snapshot[1]):
@@ -1824,17 +1765,7 @@ def _superseded_by_mlx_repair(snapshot: Optional[tuple[bool, Optional[str]]]) ->
 
 
 def _torch_warm_in_progress() -> bool:
-    """True while the coordinated warm thread is still working through its stages. A separate field
-    from ``hardware_detecting`` on purpose. Hardware detection is only ``_STAGES[0]``;
-    inference_backend, transformers and datasets run after it, and those C-extension imports can
-    hold the GIL for seconds at a time, so a launcher ending its startup grace on
-    ``hardware_detecting`` alone ends it with the expensive half of the warm still ahead. But that
-    marker also means "this hardware verdict is provisional, re-read it", and
-    config/hardware-verdict.ts keeps the UI provisional and polling while it is set, so keeping it
-    lit through datasets would hide Train for the whole warm. Two meanings, two fields. False
-    whenever no warm thread is running, which keeps the deferred case working: with
-    UNSLOTH_STUDIO_DISABLE_TORCH_WARM=1 the warm never starts, and one retired mid-stage by a
-    shutdown never finishes, so deriving this from "not finished" would report warming forever."""
+    """True while warm stages run, through the datasets import; hardware_detecting ends after stage 0."""
     status = warm_status()
     return bool(status["started"] and not status["finished"] and status["alive"])
 
@@ -1862,10 +1793,7 @@ def _media_generation_active() -> bool:
 
 
 def _inference_active() -> bool:
-    """True while at least one generation is in flight, published so the desktop health watchdog can tell a
-    backend that is busy serving from one that has died: a saturated host can stall the event loop past a
-    probe budget, and killing there ends a response the user is still waiting on. Failures report "not
-    busy"."""
+    """True while generations run, so the desktop watchdog does not kill a busy but stalled backend."""
     try:
         from state import active_generations
         if active_generations.count() > 0:
@@ -2232,14 +2160,7 @@ def _get_cached_system_gpu_info(
 
 
 def _probe_dense_quant_supported() -> bool:
-    """Whether an ``auto`` request could engage a dense quant on EVERY visible card.
-
-    The picker cannot see which card a load lands on, so a mixed host answers for the least capable.
-
-    IMPORTS the ML stack, so only ``_refresh_dense_quant_capability`` calls it, and only from the
-    post-warm worker or a request that already has both modules. Never memoised: the answer
-    sharpens, since an unprobed scheme counts as usable and a later load can record a kernel
-    failure in ``_SMOKE_CACHE``."""
+    """Imports the ML stack; callers are the post-warm worker or a request with both modules loaded."""
     try:
         from core.inference.diffusion_device import resolve_diffusion_device_target
         from core.inference.diffusion_transformer_quant import dense_quant_host_capable
@@ -2259,13 +2180,7 @@ def _probe_dense_quant_supported() -> bool:
 
 
 def _probe_dense_quant_schemes() -> list[str]:
-    """The auto ladder's schemes for this host, best first, on the same ladder and deny list the
-    loader's ``auto_scheme_candidates`` reads; a mixed host answers with the INTERSECTION. IMPORTS
-    the ML stack.
-
-    The CACHED variant, since a request holding torch reaches this from the polled ``/api/system``:
-    the load-time helper runs ``_scheme_supported``, which spawns the smoke probe or allocates in
-    this process. Like the capability bit, it sharpens as loads record verdicts in ``_SMOKE_CACHE``."""
+    """Cached auto-ladder schemes for polled /api/system: the uncached helper spawns smoke probes."""
     try:
         from core.inference.diffusion_device import resolve_diffusion_device_target
         from core.inference.diffusion_transformer_quant import auto_scheme_candidates_cached
@@ -2300,14 +2215,7 @@ def _refresh_dense_quant_capability() -> bool:
 
 
 def _dense_quant_supported() -> bool:
-    """The dense-quant bit for ``/api/system``, from already-loaded state only.
-
-    This route is polled throughout startup, and ``import torch`` and ``import torchao.quantization``
-    cost ~0.8s each and hold the GIL, the stall ``_await_hardware_detection`` already keeps off this
-    path. So never import here. The post-warm worker resolves it once the warm has the stack up, and
-    a request finding both modules loaded refreshes it, so a load's kernel verdict reaches the picker
-    on the next poll. False before that is honest: the picker renders no fast label, as it does for
-    an unknown VRAM budget."""
+    """Reads only already-loaded state: importing torch or torchao on this polled route stalls the GIL."""
     if "torch" in sys.modules and "torchao" in sys.modules:
         return _refresh_dense_quant_capability()
     return bool(_dense_quant_capability)
@@ -2562,15 +2470,7 @@ def get_disk_space(
         logger.debug(f"Could not resolve the active caches for the disk reading: {exc}")
 
     def _locate(probe):
-        """(first existing ancestor, its device), or None when this root is unreadable.
-
-        Two failures that look alike and must not be treated alike. A MISSING directory is
-        ordinary, since the cache legitimately does not exist yet on a fresh install, and the
-        volume it would live on is its nearest existing parent. A permission error, an I/O
-        error or a network mount that is not answering is not missing: climbing past it would
-        report the parent filesystem's free space for a disk nothing could read, which is the
-        confidently wrong answer this route exists to avoid. Those leave the root unreadable.
-        """
+        """Missing paths use the parent volume; an unreadable one (permission, I/O) is not climbed past."""
         try:
             chain = [probe, *probe.parents]
         except (OSError, ValueError, RuntimeError):
@@ -2738,10 +2638,7 @@ _DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
 
 
 def _canonical_origin(scheme: str, netloc: str) -> Optional[tuple[str, str, int]]:
-    """Canonicalise an Origin to ``(scheme, host, port)`` for equality. Browsers strip default ports (RFC 6454
-    sec 6.1) and scheme/host are case-insensitive (RFC 3986), so a bare string compare misclassifies
-    same-origin requests as cross-origin. Returns ``None`` on unparseable input so callers fall to the safer
-    cross-origin default."""
+    """Origin as (scheme, host, port): default ports and scheme/host case must not break equality."""
     scheme = (scheme or "").strip().lower()
     if not scheme or not netloc:
         return None

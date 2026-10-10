@@ -1,14 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Unit tests for OpenAI's server-side `shell` tool translation in
-`_stream_openai_responses`.
-
-Covers: request body shaping (container_auto, container_reference), the cloud
-guard (no shell tool on non-cloud base_urls), SSE translation of a
-shell_call/shell_call_output pair into tool_start/tool_end events, container_id
-surfacing as container_ready, and stale-container invalidation.
-"""
+"""Tests for the server-side shell tool in _stream_openai_responses, incl. the cloud-only guard."""
 
 import asyncio
 import json
@@ -372,10 +365,7 @@ def test_stale_container_emits_invalidated(monkeypatch):
 
 
 def test_expired_container_triggers_transparent_retry(monkeypatch):
-    """On a 'Container is expired' 400 for a container_reference request, the
-    streamer retries once with the container stripped; the user sees only
-    container_invalidated then the retry stream, never an error line.
-    """
+    """An expired-container 400 is retried once without the container, so the user never sees an error."""
     calls: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

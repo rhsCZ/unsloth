@@ -50,12 +50,7 @@ _BORROWED = (
 
 
 def _bind(namespace) -> None:
-    """Bind the borrowed names from `tools`, once, at the end of its import.
-
-    Two of the tables here EXTEND a table that lives in `tools`, and a module-level union would run
-    before that module finished. They are completed here instead, along with the union derived from
-    them, so the tables are whole before the first classification.
-    """
+    """Completes the tables extended from tools; a module-level union would run before that import ends."""
     globals().update({name: namespace[name] for name in _BORROWED if name in namespace})
     global _PY_PATH_WRITE_CALLS, _PY_PATH_ARCHIVE_CTORS, _PY_ALIASABLE_PATH_CALLS
     _PY_PATH_WRITE_CALLS = _PY_PATH_WRITE_CALLS | frozenset(
@@ -172,11 +167,7 @@ def _silent_root_list(producers) -> "tuple[str, ...]":
 
 
 def _excluding_ancestors_of_studio_home(roots) -> "tuple[str, ...]":
-    """Drop any root that is the studio home or contains it.
-
-    ``studio.db`` (chat history, provider and MCP configuration) and ``auth/`` live directly in that
-    directory, so a root reaching it hands a tool all of Studio's own state.
-    """
+    """Drops any root equal to or containing the Studio home, since studio.db and auth/ live there."""
     from utils.paths.storage_roots import studio_root
 
     try:
@@ -237,13 +228,7 @@ def _build_silent_roots() -> "tuple[tuple[str, ...], tuple[str, ...]]":
 
 
 def _hf_cache_dirs() -> "tuple[str, ...]":
-    """The HF cache locations, including one the owner configured in the UI.
-
-    Skipped entirely when the database does not exist yet, for the same reason the scan folders are:
-    the configured value is read through `get_app_setting`, which opens `studio.db`, and a
-    classification must not be what creates it. The environment and default locations still resolve,
-    so a first run keeps the caches it actually has.
-    """
+    """Skips the configured value when studio.db does not exist, since reading it would create that file."""
     from utils.hf_cache_settings import known_hf_cache_homes, known_hf_hub_caches
 
     if not _studio_db_exists():
@@ -260,12 +245,7 @@ _studio_db_path_cache: "tuple | None" = None
 
 
 def _studio_db_path_for(identity) -> "str | None":
-    """`studio.db`'s path, memoized on the account and environment the roots cache is keyed on.
-
-    `studio_db_path()` re-resolves the studio root on every call, which measured at ~28us here and
-    was most of the cost of VALIDATING an already cached root set. The memo key is the same one the
-    roots cache uses, so a changed home still re-resolves; only the repeated lookup is saved.
-    """
+    """Memoized on the same identity as the roots cache, so a changed Studio home still re-resolves."""
     global _studio_db_path_cache
     cached = _studio_db_path_cache
     if cached is not None and cached[0] == identity:
@@ -281,13 +261,7 @@ def _studio_db_path_for(identity) -> "str | None":
 
 
 def _studio_db_revision(identity = ()) -> int:
-    """The database's modification time, or 0 when there is none. Changes whenever a root that is
-    stored in it does.
-
-    The write-ahead log counts too: the server runs a WAL keeper, so a committed change to a scan
-    folder or a cache setting lands in `studio.db-wal` and leaves the main file's mtime alone. Read
-    on its own, a revoked folder stayed read-silent until the TTL expired.
-    """
+    """Counts studio.db-wal too: committed changes land there and leave the main file's mtime alone."""
     path = _studio_db_path_for(identity)
     if path is None:
         return 0
@@ -305,12 +279,7 @@ def _studio_db_revision(identity = ()) -> int:
 
 
 def _studio_db_exists() -> bool:
-    """Whether `studio.db` is already there.
-
-    Opening it CREATES it and initialises 27 tables, so any root that reads a stored setting has to
-    ask this first: on a first run the very first tool call would otherwise create the database as a
-    side effect of deciding whether to ask about a path.
-    """
+    """Checks existence only: opening studio.db would create it as a side effect of a path check."""
     from storage.studio_db import studio_db_path
     try:
         return studio_db_path().exists()
@@ -319,13 +288,7 @@ def _studio_db_exists() -> bool:
 
 
 def _scan_folder_roots() -> "tuple[str, ...]":
-    """Model folders the owner added in the UI. Read from the same table the model browser uses.
-
-    Only when the database already EXISTS. Opening it creates the file and initialises the schema,
-    and a classification is not a reason for that to happen: on a first run the very first tool call
-    would have created `studio.db` as a side effect of deciding whether to ask about a path. No
-    database means no folders were ever registered, which is the same answer an empty table gives.
-    """
+    """Reads only if studio.db exists, since opening it would create the file; no file means no folders."""
     from storage.studio_db import list_scan_folders
 
     if not _studio_db_exists():
@@ -420,13 +383,7 @@ def _resolved_fs_text(text: str) -> str:
 
 
 def _file_uri_path(text: str) -> "str | None":
-    """The filesystem path a local `file:` URI names, or None if *text* is not one.
-
-    `sqlite3.connect("file:/media/alice/private.db?mode=ro", uri = True)` opens the same database the
-    bare path does, but the scheme made it read as a relative name and the read went silent. The
-    query and fragment are the URI's own, not part of the path, and `%XX` is decoded because the OS
-    sees the decoded form.
-    """
+    """Strips the query and fragment and decodes %XX, since the OS sees the decoded path."""
     if not _FILE_URI_RE.match(text):
         return None
     path = _FILE_URI_RE.sub("", text, count = 1)
@@ -449,13 +406,7 @@ def _names_a_managed_account_subtree(candidate: str) -> bool:
 
 
 def _path_needs_approval(text, *, writing: bool = False) -> bool:
-    """True when reading (or, with ``writing``, creating/overwriting) this path leaves the sandbox
-    for the user's own filesystem.
-
-    Order matters: the credential checks run first, so the allowlist below can never turn
-    ``/etc/shadow`` or ``~/.ssh/id_rsa`` into a silent read just because ``/etc`` is read-silent.
-    A relative path stays silent -- it resolves inside the per-session workdir.
-    """
+    """Credential checks run before the silent allowlist, so /etc/shadow stays gated even under /etc."""
     if not isinstance(text, str) or not text.strip():
         return False
     text = text.strip()
@@ -731,13 +682,7 @@ _PATH_FORWARDING_COMMANDS = frozenset({"xargs", "parallel"})
 
 @functools.lru_cache(maxsize = 1)
 def _classified_terminal_commands() -> frozenset:
-    """Every command this scan can reason about, path-bearing or not.
-
-    Used by the subprocess fallback to tell "the child accesses no path" from "the child is a name
-    nothing here models". `_AUTO_SAFE_TERMINAL_COMMANDS` is the second half of that: `echo` and
-    `printf` take no path operand, and treating their arguments as paths asked for approval on a
-    child that the identical terminal command runs silently.
-    """
+    """Lets the subprocess fallback tell a pathless command from an unmodelled name."""
     return frozenset(
         _PATH_READ_COMMANDS
         | _PATH_WRITE_COMMANDS
@@ -1041,13 +986,7 @@ _SHELL_ASSIGN_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*=")
 
 
 def _terminal_path_operands(tokens, text = None) -> "list[tuple[str, bool]]":
-    """Absolute file operands a command list touches, as ``(path, writing)``.
-
-    Only commands in the tables above contribute operands, and only tokens that look absolute are
-    returned -- a relative operand lands in the session workdir, and a flag value that is not a path
-    (``head -n 5``) cannot look absolute. Redirection targets are included whichever command owns
-    them, since ``> /abs/file`` truncates that file regardless.
-    """
+    """Redirection targets count whatever the command, since > /abs/file truncates that file regardless."""
     # Every absolute spelling needs one of these characters; most commands exit here.
     if not any(_PATH_HINT_RE.search(t) for t in tokens):
         return []
@@ -1127,12 +1066,7 @@ def _terminal_path_operands(tokens, text = None) -> "list[tuple[str, bool]]":
 
 
 def _process_substitution_bodies(text: str) -> "list[str]":
-    """The body of each `<( ... )` / `>( ... )`, matched on BALANCED parentheses.
-
-    A body can hold a substitution of its own (`<(cat $(echo /media/x))`), and a pattern that
-    excluded parentheses rejected the whole body when it did. Depth-counted rather than recursive,
-    and each body is shorter than the text it came from, so the caller's recursion still terminates.
-    """
+    """Bodies of <( ) and >( ) substitutions, matched on balanced parentheses so nested ones are kept."""
     bodies: "list[str]" = []
     index = 0
     while index < len(text) - 1:
@@ -1157,12 +1091,7 @@ _ATTACHED_REDIR_RE = re.compile(r"(\d*(?:>>|>\||&>>|&>|>|<<<|<<|<))")
 
 
 def _raw_redirection_targets(text: str) -> "list[tuple[str, bool]]":
-    """`(target, writing)` for each redirection whose OPERATOR is unquoted in *text*.
-
-    Read from the raw command rather than the lexed tokens: any rule based on the token alone gets
-    either the quoted-data case or the attached-target case wrong. A here-document or here-string
-    takes a delimiter or literal data, never a file, so those operators are skipped.
-    """
+    """Reads the raw command: token rules get quoted and attached targets wrong; here-docs are skipped."""
     out: "list[tuple[str, bool]]" = []
     quote = ""
     index = 0
@@ -1220,12 +1149,7 @@ def _token_is_always_quoted(
     *,
     double: bool = True,
 ) -> bool:
-    """Whether EVERY occurrence of *token* in *text* is a quoted one.
-
-    Counted rather than searched: the same word can appear twice, once as data and once as syntax.
-    `echo 'x>/media/x'; echo x>/media/x` lexes to that token twice, and a membership test found the
-    quoted spelling and left the live redirection of the second command unsplit.
-    """
+    """Counts every occurrence: one token can be quoted data in one place and live syntax in another."""
     if not text or not token:
         return False
     occurrences = text.count(token)
@@ -1238,15 +1162,7 @@ def _token_is_always_quoted(
 
 
 def _split_backticks(tokens, text = None) -> "list[str]":
-    """Break a token carrying a backtick substitution into its own command.
-
-    `` echo `cat /media/x` `` runs that read as a command of its own, but the outer lexer keeps the
-    backticks inside ordinary tokens, so the path arrived as an argument of `echo` and was dropped
-    with it. `$( ... )` needs none of this: its brackets are punctuation to the lexer already.
-
-    The backtick becomes a separator, which is exactly what it is here -- everything between a pair
-    is a command line in its own right, and the segment machinery classifies it as one.
-    """
+    """Backtick substitutions are commands of their own; the lexer kept them in tokens, hiding paths."""
     if not any("`" in token for token in tokens):
         return list(tokens)
     out: "list[str]" = []
@@ -1264,16 +1180,7 @@ def _split_backticks(tokens, text = None) -> "list[str]":
 
 
 def _split_attached_redirections(tokens, text = None) -> "list[str]":
-    """Break a token that carries a redirection operator inside it into its parts.
-
-    ``echo CHANGED>/media/x`` lexes as one token because ``shlex`` is not given ``<``/``>`` as
-    punctuation, which hid the redirection target from the operand scan.
-
-    A QUOTED word is data, not syntax: `printf 'see >/media/private/report'` opens no file, and the
-    lexer has already dropped the quotes by the time the token arrives here. Two signs that it was
-    quoted are enough to leave it alone -- whitespace inside it, which no redirection operator has,
-    and the quoted spelling appearing in the command text the tokens came from.
-    """
+    """shlex does not split on < or >, so attached targets hide; quoted words are data and stay whole."""
     if not any(("<" in t or ">" in t) for t in tokens):
         return list(tokens)
     out: "list[str]" = []
@@ -1563,11 +1470,7 @@ def _inline_code_operands(source: str) -> "list[tuple[str, bool]]":
 
 
 def _shell_words(text: str) -> "list[str]":
-    """Split a `shell = True` command line the way the shell does.
-
-    A plain `str.split()` tore `cat '/media/x/My Documents/private.txt'` into two tokens, neither of
-    which looked absolute, so the read was never seen. Quotes are the thing being decided here.
-    """
+    """Shell-style split, so a quoted path with spaces stays one word; str.split() broke it."""
     if not text:
         return []
     try:
@@ -1578,11 +1481,7 @@ def _shell_words(text: str) -> "list[str]":
 
 
 def _seven_zip_operands(args, creating: bool) -> "list[tuple[str, bool]]":
-    """Operands of a 7-Zip invocation: `7z <command> <archive> [files...]`.
-
-    The archive is written whenever the command word adds to, updates, deletes from or renames in
-    it, and read otherwise (`x`, `l`, `t`). The remaining positionals are the files it packs.
-    """
+    """The archive is written by add, update, delete and rename commands, and read by x, l and t."""
     positionals = [arg for arg in args[1:] if not arg.startswith("-")]
     operands: "list[tuple[str, bool]]" = []
     for index, arg in enumerate(positionals):
@@ -1641,11 +1540,7 @@ _INLINE_CODE_COMMANDS = frozenset("python python2 python3 sh bash zsh dash ksh".
 
 
 def _nested_payload_writes(tokens, index: int) -> bool:
-    """Whether an interpreter's `-c` payload writes, so the directory it runs in is a write target.
-
-    `cd /models && python -c "open('weights.gguf', 'w')"` writes through a RELATIVE path, which the
-    payload scan cannot place and the command-name test never sees.
-    """
+    """A -c payload's relative writes land in the working directory, which is therefore a write target."""
     payload = next((tokens[i + 1] for i in range(index, len(tokens) - 1) if tokens[i] == "-c"), "")
     if not payload:
         return False
@@ -1681,12 +1576,7 @@ def _directory_change_write_targets(tokens) -> "list[tuple[str, bool]]":
 
 
 def _serializes_to_second_arg(func, module_aliases: "dict | None" = None) -> bool:
-    """True for ``torch.save(obj, path)``-style calls, where the path is the SECOND argument.
-
-    The receiver is resolved through the import aliases first: `import torch as t` makes it `t`,
-    which is in no table, and the call would otherwise fall through to the generic writer branch
-    that never looks at the second argument.
-    """
+    """Resolves the receiver through import aliases first, so an aliased t.save still matches torch.save."""
     if not isinstance(func, ast.Attribute):
         return False
     receiver = func.value
@@ -1699,12 +1589,7 @@ def _serializes_to_second_arg(func, module_aliases: "dict | None" = None) -> boo
 
 
 def _short_flag_with_value(arg: str, spec) -> "tuple[str | None, str | None]":
-    """Resolve a short-flag token against a command's flag table.
-
-    Handles the attached form (`sort -o/abs/out`) and the cluster (`tar -cf out.tar`, where only
-    the LAST letter takes the value). Returns ``(flag, value)``; ``value`` is None when the value
-    is the next token.
-    """
+    """Cluster like -cf: only the last letter takes the value; None means the value is the next token."""
     if arg.startswith("--") or len(arg) < 2:
         return None, None
     head = arg[:2]
@@ -1732,12 +1617,7 @@ _SUBSTITUTION_RE = re.compile(r"\$\((.*?)\)|`([^`]*)`|\$\{([^{}]*)\}", re.DOTALL
 
 
 def _substitution_operand_paths(token: str) -> "list[str]":
-    """Absolute paths written literally INSIDE a substitution in `token`.
-
-    Only literals are recovered, which is the common shape (`$(printf /abs)`, `$(echo /abs)`,
-    `` `cat /abs` ``). A substitution whose output is genuinely dynamic yields nothing here; that
-    remains the documented static-analysis gap rather than something this pretends to solve.
-    """
+    """Only literal absolute paths inside a substitution; dynamic output is a known static-analysis gap."""
     paths: "list[str]" = []
     for match in _SUBSTITUTION_RE.finditer(token):
         inner = next((group for group in match.groups() if group), "")
@@ -1752,10 +1632,7 @@ def _substitution_operand_paths(token: str) -> "list[str]":
 
 
 def _add_flag_operand(operands, kind, value: str, write_cmd: bool, creating: bool) -> None:
-    """Record a path supplied as a flag value, with the access that flag implies.
-
-    ``kind`` of "skip" means the value was data, not a path, and is simply consumed.
-    """
+    """Records a flag-supplied path with the access the flag implies; kind skip means the value is data."""
     if not kind or kind == "skip" or not value:
         return
     if not _looks_absolute(value):
@@ -1773,13 +1650,7 @@ def _add_flag_operand(operands, kind, value: str, write_cmd: bool, creating: boo
 
 
 def _terminal_reaches_outside_sandbox(tokens, text: "str | None" = None) -> bool:
-    """True when a command list reads or writes an absolute path outside the silent roots.
-
-    *text*, when given, is the command the tokens came from. A POSIX lexer treats a backslash as an
-    escape, so `cat C:\\Users\\alice\\notes.txt` arrives here as `C:Usersalicenotes.txt` and every
-    Windows absolute path was invisible to the gate. The raw text is re-lexed without that rule when
-    it carries a drive or a UNC share, and the operands from both passes are weighed.
-    """
+    """POSIX lexing eats backslashes in Windows paths, so the raw text is re-lexed without that rule."""
     if not any(_ABSOLUTE_HINT_RE.search(token) for token in tokens):
         # A POSIX lex may have eaten the separators, so recheck Windows spellings in the raw text.
         if not (text and _WINDOWS_SPELLING_RE.search(text)):
@@ -2039,19 +1910,7 @@ _PY_ALIASABLE_PATH_CALLS = (
 
 
 def _python_function_aliases(tree, module_aliases: "dict | None" = None) -> dict:
-    """Local name -> real function, for `from io import open as fopen` and `reader = open`.
-
-    Every MODELED path call is covered, not only the open-like ones: `from pandas import read_csv as
-    rc` leaves a plain `Name` under a name in no table, so the call is never dispatched and its path
-    argument is never looked at. Restricting this to `open` left every other reader and writer in
-    the tables reachable under an alias.
-
-    A plain assignment binds the same identity as an import does, so `reader = open` and
-    `rc = pandas.read_csv` are followed too. An attribute is only followed when its receiver is a
-    modelled module, so `sock.open` and `self.open` stay unmodelled rather than resolving to the
-    builtin. A name assigned more than once is dropped: which function it holds at the call is not
-    answerable here, and guessing either way would be wrong half the time.
-    """
+    """Maps local names to real functions for every modelled path call; a name assigned twice is dropped."""
     aliases: dict = {}
     assigned: dict = {}
     seen_twice: "set[str]" = set()
@@ -2103,14 +1962,7 @@ def _python_function_aliases(tree, module_aliases: "dict | None" = None) -> dict
 
 
 def _python_module_aliases(tree) -> dict:
-    """Local name -> real module, for `import io as stream` and `import os.path as p`.
-
-    Only the ROOT module is recorded, which is what the receiver tables are keyed on.
-
-    `from PIL import Image as I` counts too: `Image` is itself a modelled receiver, so `I.open(p)`
-    has to resolve back to it or the call reads as a Path-style method and the filename argument is
-    never looked at.
-    """
+    """Records the root module, which receiver tables key on; from-import aliases count too."""
     aliases: dict = {}
     assigned: "list[tuple[str, str]]" = []
     for node in _tree_nodes(tree):
@@ -2164,11 +2016,7 @@ _PY_ARCHIVE_MEMBER_CTORS = frozenset({"ZipFile", "TarFile"})
 
 
 def _python_archive_ctor_names(tree) -> "set[str]":
-    """Local names imported FROM an archive module that construct one.
-
-    `from tarfile import open as topen` binds a constructor under a name whose resolved spelling is
-    `open`, which is the builtin everywhere else, so the module it came from is what identifies it.
-    """
+    """Names imported from tarfile or zipfile that build archives; the module identifies them."""
     names: "set[str]" = set()
     for node in _tree_nodes(tree):
         if isinstance(node, ast.ImportFrom) and node.module in ("tarfile", "zipfile"):
@@ -2229,12 +2077,7 @@ def _python_archive_object_names(
 
 
 def _python_instance_reader_names(tree) -> dict:
-    """`local name -> reader methods`, for a reader reached through an instance.
-
-    `cfg = ConfigParser(); cfg.read(p)` opens p, and `read` on any other receiver is an ordinary
-    method, so the CONSTRUCTOR is what identifies it. Import aliases count. The chained
-    `ConfigParser().read(p)` binds no name and is resolved separately, at the call site.
-    """
+    """Names bound to a reader constructor; the constructor, not a bare read, marks the receiver."""
     ctors = dict(_PY_INSTANCE_READ_CTORS)
     for node in _tree_nodes(tree):
         if isinstance(node, ast.ImportFrom):
@@ -2261,12 +2104,7 @@ def _python_instance_reader_names(tree) -> dict:
 
 
 def _python_qualified_read_aliases(tree) -> "set[str]":
-    """Local names bound from a module whose reader is only modelled QUALIFIED.
-
-    `numpy.load` takes a filename while every other `load` in these tables takes an open file, so the
-    name is keyed on its module. `from numpy import load` and `from numpy import load as read_array`
-    drop that module, and the call arrives as a bare Name the reader table deliberately omits.
-    """
+    """Names from modules whose reader is modelled only qualified, since numpy.load takes a filename."""
     aliases: "set[str]" = set()
     for node in _tree_nodes(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -2286,12 +2124,7 @@ _PY_AMBIGUOUS_PATH_METHODS = frozenset({"replace", "remove"})
 
 
 def _receiver_is_a_path_object(receiver, ctors, path_objects) -> bool:
-    """True when the receiver of an ambiguous method is a `Path`-like value.
-
-    A direct `Path(p).replace(q)`, a name bound to one, or a chain off either. Anything else -- a
-    str, a list, a DataFrame -- is left alone, which is what the pre-existing analyzer did by
-    keeping these names qualified.
-    """
+    """Path-like receivers only: a direct Path(...), a name bound to one, or a chain off either."""
     while isinstance(receiver, ast.Attribute):
         receiver = receiver.value
     if isinstance(receiver, ast.Call):
@@ -2328,12 +2161,7 @@ def _python_path_object_names(tree, ctors) -> "set[str]":
 
 
 def _python_path_fold_aliases(tree) -> "tuple[set, set]":
-    """`(path constructor names, os.path.join names)`, including the local names imports bind them to.
-
-    `from pathlib import Path as P` leaves `P(...)` under a name the fold does not know, so the call
-    resolves to nothing and the path it builds is never checked. The main analyzer already collects
-    these for its own fold; the operand pass needs the same two sets.
-    """
+    """Path constructor and os.path.join names, including import aliases such as Path as P."""
     ctors = set(_PATH_CTORS)
     joins: "set[str]" = set()
     for node in _tree_nodes(tree):
@@ -2371,15 +2199,7 @@ def _python_path_bindings(
     ctors = None,
     joins = None,
 ) -> dict:
-    """Names bound to a foldable path (`p = '/media/x'`, `p := Path('/media') / 'x'`), so a read
-    through the variable folds to the same path a literal would.
-
-    A name bound more than once keeps EVERY path it was bound to, not the last one: rebinding
-    ``p`` after the read must not reclassify the read that already happened.
-
-    EVERY target of a chained assignment is bound, not just the first: `src = backup = '/media/x'`
-    has to make `open(src)` foldable, or the read runs unprompted.
-    """
+    """Keeps every path a name was bound to, not the last; binds all targets of chained assignments."""
     bindings: dict = {}
     extra: "dict[str, list[str]]" = {}
     for node in _tree_nodes(tree):
@@ -2443,12 +2263,7 @@ _MAX_REBOUND_NAMES = 3
 
 
 def _capped_alternates(values) -> "list[str]":
-    """Bound a list of candidate paths WITHOUT dropping the ones that can need approval.
-
-    A plain slice discards by position, so eight benign reassignments ahead of
-    `base = "/media/private"` hid the only value that mattered. Absolute candidates are kept first
-    and the cap is spent on the remainder, so the bound limits work rather than coverage.
-    """
+    """Caps candidates but keeps absolute ones first; a positional slice dropped the one that mattered."""
     values = list(values)
     if len(values) <= _MAX_REBOUND_ALTERNATES:
         return values
@@ -2467,13 +2282,7 @@ def _capped_alternates(values) -> "list[str]":
 
 
 def _sequence_elements(node, containers) -> "list":
-    """The elements of a literal sequence, or the node itself when it is not one.
-
-    A NAME holding one counts: `paths = ["/media/x"]; cfg.read(paths)` passes the same list the
-    inline form passes, and handing the bare name to the fold resolved nothing. The paths come from
-    the literal containers already collected for subscripts, so there is one place that knows what a
-    name holds.
-    """
+    """Elements of a literal sequence, including one a name is bound to, not only an inline one."""
     if node is None:
         return []
     if isinstance(node, (ast.List, ast.Tuple)):
@@ -2493,11 +2302,7 @@ def _sqlite_opens_read_only(node, given = None) -> bool:
 
 
 def _call_keywords(node) -> "list":
-    """A call's keywords, with a LITERAL `**{...}` splat expanded into the keywords it stands for.
-
-    `pd.read_csv(**{"filepath_or_buffer": "/media/x"})` passes the path under its own parameter
-    name; the splat arrives as a keyword whose `arg` is None, so the name was never matched.
-    """
+    """Expands a literal **{...} splat into its keywords, so the path is matched by its parameter name."""
     keywords = list(node.keywords)
     for keyword in node.keywords:
         if keyword.arg is not None or not isinstance(keyword.value, ast.Dict):
@@ -2509,11 +2314,7 @@ def _call_keywords(node) -> "list":
 
 
 def _python_fileinput_readers(tree) -> "set[str]":
-    """Local names bound by `from fileinput import input` / `FileInput`, with or without an alias.
-
-    Tracked by PROVENANCE rather than by name: a bare `input` is the builtin prompt on its own, and
-    only an import from this module makes it the reader that opens a file.
-    """
+    """Tracked by import provenance, not name: a bare input is the builtin prompt, not the file reader."""
     names: "set[str]" = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "fileinput":
@@ -2560,13 +2361,7 @@ def _literal_container_paths(node) -> "list[str]":
 
 
 def _subscript_literal_paths(node, containers) -> "list[str]":
-    """The paths a subscript can resolve to, when everything about it is a literal.
-
-    A constant index resolves to the ONE element it names, which is both exact and free of the cap
-    below. Otherwise every path the container holds is a candidate, ranked so the ones that need
-    approval survive the cap: a container of nine paths whose last is the outside one would
-    otherwise have lost it to eight read-silent ones ahead of it.
-    """
+    """A constant index gives one exact path; otherwise all container paths, approval-needing ones first."""
     target = node.value
     paths = (
         list(containers.get(target.id, ()))
@@ -2600,12 +2395,7 @@ def _exact_indexed_path(target, containers, index: int) -> "str | None":
 
 
 def _python_path_operands(tree) -> "list[tuple[str, bool]]":
-    """Absolute path operands a python snippet reads or writes, as ``(path, writing)``.
-
-    Reuses ``_folded_path`` so a path assembled from literals, an f-string, ``os.path.join`` or a
-    ``Path`` chain resolves the same way the credential scan resolves it. A path the folder cannot
-    resolve yields nothing here; the dynamic-alias checks elsewhere cover those.
-    """
+    """Reuses _folded_path, so f-strings, os.path.join and Path chains fold as in the credential scan."""
     ctors, joins = _python_path_fold_aliases(tree)
     qualified_readers = _python_qualified_read_aliases(tree)
     instance_readers = _python_instance_reader_names(tree)
@@ -2623,12 +2413,7 @@ def _python_path_operands(tree) -> "list[tuple[str, bool]]":
     operands: "list[tuple[str, bool]]" = []
 
     def add_subprocess_operands(call) -> None:
-        """Screen a child process's argv with the terminal operand scanner.
-
-        Handing the words to the shell scan keeps the read/write distinction: `["cp", "a", "/etc/b"]`
-        is a write to /etc, not a read of it. `shell = True` passes one command line, which splits
-        the same way.
-        """
+        """Child argv goes to the shell operand scanner, so `cp a /etc/b` is judged a write, not a read."""
         words: "list[str]" = []
         for argument in (*call.args, *(k.value for k in call.keywords)):
             for piece in ast.walk(argument):
@@ -2878,11 +2663,7 @@ def _python_reaches_outside_sandbox(tree, code = None) -> bool:
 
 
 def _open_call_writes(node, *, mode_index: int) -> bool:
-    """Write check for an open-like call whose mode sits at ``mode_index``.
-
-    ``open(file, mode)`` carries it at 1; ``Path(p).open(mode)`` at 0, because the receiver is the
-    path. Reading the wrong position silently turns a write into a read.
-    """
+    """mode_index is 1 for open(file, mode) and 0 for Path(p).open(mode); a wrong one hides writes."""
     if _has_kwarg_splat(node):
         return True
     if any(isinstance(a, ast.Starred) for a in node.args):

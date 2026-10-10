@@ -155,11 +155,7 @@ def active_thread_ids(
     exclude: Collection[threading.Event] = (),
     only: Optional[Collection[threading.Event]] = None,
 ) -> list[str]:
-    """Distinct conversation ids with a generation in flight, in start order.
-
-    A first turn that races persistence has no thread id yet: count() sees it,
-    this cannot name it.
-    """
+    """A first turn racing persistence has no thread id, so count() sees it but this list cannot."""
     seen: list[str] = []
     for e in snapshot(account_id, exclude, only):
         tid = e["thread_id"]

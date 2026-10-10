@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Hermetic tests for the in-app llama.cpp update orchestration.
-
-No network, no real install: the GitHub release lookup and the installer
-subprocess are both monkeypatched. Verifies detection (update_available) and
-the apply flow (job lifecycle, installer invocation, post-swap re-read).
-"""
+"""Hermetic llama.cpp update tests: the GitHub release lookup and installer subprocess are faked."""
 
 from __future__ import annotations
 
@@ -74,13 +69,7 @@ _REAL_POPEN = subprocess.Popen
 
 
 def _installer_command(cmd) -> bool:
-    """An INSTALL spawn, not one of the installer's read-only resolvers.
-
-    The same script answers --resolve-prebuilt / --resolve-backends, and the status
-    poll runs one to spot a drifted automatic backend. Faking those would hand the
-    caller's captured argv to a probe instead of to the install, which is the #8170
-    failure the docstring below describes, arriving from inside this module.
-    """
+    """True for installs only; the script's --resolve-prebuilt/--resolve-backends probes must not match."""
     parts = [str(part) for part in cmd]
     if not any("install_llama_prebuilt" in part for part in parts):
         return False
@@ -96,15 +85,8 @@ def _patch_installer_popen(
     captured_kwargs = None,
     spawned = None,
 ):
-    """Replace Popen for the installer only; everything else gets the real one.
-
-    subprocess is shared, so this patch catches every spawn in the process, and
-    _run_llama_phase adopts the installer pid right after starting it: on macOS
-    that identity lookup shells out to `ps`, which would otherwise reach on_start
-    and overwrite the installer argv a caller captured (#8170). Delegating rather
-    than faking keeps that lookup working, since a stand-in owes subprocess.run
-    the whole protocol and _pid_identity swallows whatever it does not get.
-    """
+    """Patches Popen for the installer only, delegating the rest so the pid identity lookup keeps
+    working."""
 
     def _popen(cmd, **kw):
         if spawned is not None:
@@ -511,12 +493,7 @@ def test_start_update_happy_path(monkeypatch, tmp_path):
 def test_a_second_spawn_during_the_update_does_not_overwrite_the_installer_argv(
     monkeypatch, tmp_path
 ):
-    """The installer is not the only thing the phase spawns.
-
-    _run_llama_phase adopts the installer pid, and on a host with no /proc that
-    identity lookup runs `ps`. Forced here because CI runs this file on Linux
-    only, so the macOS ordering is otherwise never exercised.
-    """
+    """Forces the ps fallback for the pid identity lookup, since CI runs this file on Linux only."""
     install_dir = tmp_path / "llama.cpp"
     binary = _write_install(install_dir, "b9493")
     monkeypatch.setattr(upd, "_find_binary", lambda: binary)
@@ -570,15 +547,7 @@ def test_a_second_spawn_during_the_update_does_not_overwrite_the_installer_argv(
 def test_update_leaves_the_recorded_choice_to_the_installer(
     monkeypatch, tmp_path, marker_fields, expected_choice
 ):
-    """An update names no backend: install_llama_prebuilt.py reads the choice back
-    out of the marker it wrote.
-
-    That is what makes the choice survive every other entry point too (setup.sh,
-    `unsloth studio update`, the desktop updater), none of which could forward an
-    env var they were never given. Both halves are asserted here -- the command
-    carries no override, and the installer resolves the marker to the choice -- so
-    the handoff cannot silently break on one side.
-    """
+    """An update passes no backend override; install_llama_prebuilt.py reads the choice from its marker."""
     monkeypatch.delenv("UNSLOTH_FORCE_VULKAN", raising = False)
     monkeypatch.delenv("UNSLOTH_LLAMA_CPP_BACKEND", raising = False)
     install_dir = tmp_path / "llama.cpp"
@@ -660,10 +629,7 @@ def test_start_update_reports_full_release_tag(monkeypatch, tmp_path):
 def test_an_update_that_kept_the_existing_install_does_not_claim_a_new_release(
     monkeypatch, tmp_path
 ):
-    """Exit 0 no longer implies the release changed: the installer answers a transient
-    failure by keeping the tree and exiting 0, so "Updated llama.cpp to <tag>" would name
-    the release the user already had. Reporting it as current is just as wrong, since the
-    phase only starts when a newer release was offered and the retry is still pending."""
+    """Exit 0 can keep the existing install after a transient failure, so success is judged by the tag."""
     install_dir = tmp_path / "llama.cpp"
     binary = _write_install(install_dir, "b9595", release_tag = "b9595-mix-aaaaaaa")
     monkeypatch.setattr(upd, "_find_binary", lambda: binary)

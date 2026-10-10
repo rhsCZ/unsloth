@@ -109,21 +109,7 @@ def _environment_paths() -> Optional[HuggingFaceCachePaths]:
 
 
 def _absence_is_real(path: Path) -> bool:
-    """Whether a FileNotFoundError for *path* proves the file is not there.
-
-    On POSIX it always does: a parent component that is a file raises NotADirectoryError, and a
-    parent that cannot be traversed raises PermissionError, both of which are their own types.
-    Windows collapses every one of those into ERROR_PATH_NOT_FOUND, which Python surfaces as
-    FileNotFoundError, so on Windows the exception means "not there, OR somewhere above it is not
-    a directory, OR I could not look" -- and the caller must only skip its read for the first.
-
-    Decided by the nearest ancestor that can actually be stat'ed: a directory means the tree is
-    real and the file genuinely is not in it; anything else means a component is a file or a
-    reparse point and the path could never have existed; an ancestor that cannot be inspected at
-    all is not proof either way, so it reads as "not proven". Running out of ancestors means
-    nothing along the path exists, which is the machine that has never opened Studio -- the case
-    the skip is FOR, so the absence is real there.
-    """
+    """On Windows FileNotFoundError can mean a parent is a file, so absence needs a real directory above."""
     current = os.path.dirname(os.fspath(path))
     while current:
         try:
@@ -169,11 +155,7 @@ def _stored_cache_home() -> Optional[Path]:
 
 
 def configured_cache_key() -> str:
-    """The configured cache location, for keying caches and in-flight work.
-
-    Deliberately unresolved: resolve() can block on the very volume a caller is
-    trying to move off. Only equality matters here, not the real path.
-    """
+    """Not resolved on purpose: resolve() can block on the volume being moved off; only equality matters."""
     explicit = (
         _EXPLICIT_CACHE_ENV.get("HF_HUB_CACHE")
         or _EXPLICIT_CACHE_ENV.get("HUGGINGFACE_HUB_CACHE")
@@ -253,12 +235,7 @@ def _xet_loader_barrier() -> Iterator[None]:
 
 @contextmanager
 def child_environment_for_spawn(environment: Mapping[str, str]) -> Iterator[None]:
-    """Apply captured env before spawn imports the child entrypoint.
-
-    Applying variables only inside the multiprocessing target can be too late
-    for libraries that snapshot environment variables at import. The lock keeps
-    this short parent-process override atomic through ``Process.start()``.
-    """
+    """Env must be set before spawn imports the child, since some libraries snapshot it at import."""
 
     from utils.utils import hf_environment_restored_for_spawn
 
@@ -410,16 +387,7 @@ def set_hf_cache_home(cache_home: Optional[str]) -> HuggingFaceCachePaths:
 
 
 def effective_cache_home() -> Path:
-    """The directory Hugging Face itself treats as HF_HOME.
-
-    Never ``HuggingFaceCachePaths.cache_home``, which is the DISPLAY home and is
-    not it in either direction: an explicit ``HF_HUB_CACHE=/mnt/project/hub``
-    makes it the hub's parent, and a Studio-selected models folder makes it that
-    folder, while ``initialize_hf_cache_environment`` deliberately leaves HF_HOME
-    at the platform default and redirects only the hub and xet caches. The token,
-    ``assets`` and ``datasets`` stay under the real home, so anything resolving
-    one of those has to ask here.
-    """
+    """The real HF_HOME, not the display cache_home; the token, assets and datasets stay under it."""
     live = (os.environ.get("HF_HOME") or "").strip()
     return _canonical(live) if live else _default_cache_home()
 

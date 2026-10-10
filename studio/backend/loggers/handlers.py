@@ -126,10 +126,7 @@ _CHAT_THREAD_PATH_RE = re.compile(r"^/api/chat/threads/(?!$)[^/]+(/forks)?$")
 
 
 def normalize_poll_path(path: str) -> str:
-    """Collapse a per-resource id so a templated path can join a suppression class. Used for classification and
-    the de-duplication bucket only; the emitted line still carries the real path. One bucket across ids is
-    deliberate, as with the liveness group: four tabs polling four threads are still one question.
-    """
+    """Collapse per-resource ids into one bucket; the emitted line still carries the real path."""
     m = _CHAT_THREAD_PATH_RE.match(path)
     if m is None:
         return path
@@ -144,10 +141,7 @@ _SELF_READ_PATHS = {
 
 
 def _is_quiet_success(method: str, path: str, status_code: int, pre_auth: bool) -> bool:
-    """GET-only. Suppress a 2xx poll line that carries no signal, plus a chat list poll's transient pre-auth 401
-    (only in the bootstrap window before the first successful token refresh). Mutations, real (post-refresh)
-    auth failures, and all other errors always log. --verbose disables the whole suppressor, except for the log
-    viewer's own reads."""
+    """Suppress only signal-free 2xx GET polls and bootstrap pre-auth 401s; mutations always log."""
     if method != "GET":
         return False
     if 200 <= status_code < 300 and path in _SELF_READ_PATHS:

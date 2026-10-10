@@ -110,16 +110,7 @@ def _record_scan_duration(duration: float) -> None:
 
 
 def _is_abs_path_id(value: str) -> bool:
-    """True when an id is an absolute filesystem path (the ./models and LM Studio scanners use the
-    on-disk path as the id) rather than a repo id like org/name.
-
-    Both spellings count on every host. Path() follows the running OS, so a Windows backend read
-    "/home/me/x.gguf" as relative and a POSIX one read "C:\\models\\x.gguf" the same way, and either
-    then reached /v1/models as a published id. Ids outlive the machine that wrote them: settings
-    sync, a WSL session and a copied config all carry the other platform's spelling, and the
-    model-override identity already folds both. Neither reading can misfire on a repo id, which has
-    no leading separator, drive or UNC prefix.
-    """
+    """Both POSIX and Windows forms count on any host; ids outlive the machine that wrote them."""
     from pathlib import PurePosixPath, PureWindowsPath
     try:
         return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
@@ -239,11 +230,7 @@ def local_gguf_companion_roots(load_path: str, *, repo_level: bool = False) -> t
 
 
 def local_path_gguf_companion_roots(load_path: str) -> tuple[str, ...]:
-    """Companion roots for a load naming a snapshot DIRECTORY, not a repo id (#10599).
-
-    Widened only when this directory is the one a repo-level selection would hand out
-    anyway, so any other revision counts as pinned; siblings of one ``models--`` dir only.
-    """
+    """Siblings count as companions only when this snapshot is the one a repo-level selection picks."""
     from pathlib import Path
     from hub.utils.gguf import select_gguf_cache_snapshot_for_repo_dir
     from hub.utils.hf_cache_state import same_existing_path
@@ -295,20 +282,7 @@ def local_gguf_companion_state(roots: tuple[str, ...]) -> tuple:
 
 
 def _legacy_variant_aliases(variants) -> tuple[tuple[str, str], ...]:
-    """``(legacy label, current label)`` for each id this module used to publish and no longer does.
-
-    /v1/models published the loader's label before the swap to the shared lister, and a client pins
-    what it was shown. ``DeepSeek-R1-BF16-Q4_K_M.gguf`` was ``BF16``, is ``Q4_K_M``: quant shaped,
-    so _resolve_from_index refuses it and the pin 404s. ``Meta-Llama-3-8B.gguf`` was ``8B``, is the
-    whole stem: not quant shaped, so it falls through to the Ollama-tag branch and quietly serves
-    the preferred quant instead. The quiet one is why quantless labels alias too.
-
-    Accept-only, so nothing new can pin a legacy spelling and a bare id never reaches here. Dropped
-    rather than guessed: a legacy label equal to a current one, and one naming two files. Grouped
-    rows give one file per quant, so ``alpha-Q4_K_M.gguf`` beside ``zeta-BF16-Q4_K_M.gguf`` keeps
-    the 404. Never raises: _local_gguf_entry answers None on an escape, which would drop the whole
-    repo.
-    """
+    """Maps legacy /v1/models labels to current ones; ambiguous ones are dropped rather than guessed."""
     try:
         from utils.models.model_config import _extract_quant_label, _qualified_variant_name
 
@@ -447,11 +421,7 @@ def _read_json(path):
 
 
 def _host_serves_mlx() -> bool:
-    """Whether this host's inference worker would pick MLXInferenceBackend.
-
-    Reads the detected verdict without triggering detection, so an unknown device
-    reads as "not MLX" and the entry is simply withheld until startup has decided.
-    """
+    """Reads the detected device without triggering detection; an unknown device reads as not MLX."""
     try:
         from utils.hardware import hardware as hw
         return hw.DEVICE == hw.DeviceType.MLX
@@ -460,15 +430,7 @@ def _host_serves_mlx() -> bool:
 
 
 def _host_has_a_non_gguf_backend() -> bool:
-    """Whether this host can serve non-GGUF weights at all.
-
-    The worker picks MLX on Apple Silicon and Transformers everywhere else, so a host
-    with neither leaves the load to fail after the swap has unloaded the resident GGUF.
-    An installed torch is not enough: the Transformers worker imports unsloth, whose
-    get_device_type raises outright on a host with no NVIDIA, AMD or Intel accelerator,
-    so a CPU-only or Vulkan-only box with a CPU wheel serves GGUF alone. Read the
-    detected device rather than importing torch, which costs seconds on this path.
-    """
+    """Installed torch is not enough: the Transformers worker needs an NVIDIA, AMD or Intel device."""
     if _host_serves_mlx():
         return True
     try:
@@ -484,13 +446,7 @@ def _host_has_a_non_gguf_backend() -> bool:
 
 
 def _has_safetensors_weights(load_dir) -> bool:
-    """Whether safetensors weights sit under the names the loader looks for.
-
-    Safetensors only: a .bin checkpoint is pickle-backed, and an API request must not
-    execute one without an explicit load action. The loader receives no variant, so
-    ``model.fp16.safetensors`` or a stray ``optimizer.safetensors`` is not weights it
-    can open.
-    """
+    """Safetensors only: a .bin checkpoint is pickle-backed, and an API request must not execute one."""
     import re
 
     if (load_dir / "model.safetensors").is_file():
@@ -567,12 +523,7 @@ def _model_type_is_audio(model_type) -> bool:
 
 
 def _weights_are_servable(load_dir) -> bool:
-    """Whether *load_dir* holds weights the chat loader can be pointed at.
-
-    On-disk shape only, nothing parsed from the config: safetensors weights, and none
-    of the markers that make a directory something other than a chat model (a diffusers
-    pipeline, a bare LoRA adapter, an embedder).
-    """
+    """On-disk shape only: safetensors weights, and no diffusers, bare LoRA or embedder markers."""
     from routes.models import _local_pipeline_index
 
     if _local_pipeline_index(load_dir) or not (load_dir / "config.json").is_file():
@@ -585,12 +536,7 @@ def _weights_are_servable(load_dir) -> bool:
 
 
 def _config_is_servable_here(load_dir, config: dict) -> bool:
-    """Whether *config* describes a chat model an API request may load on its own.
-
-    Not whether the load will succeed: /v1/models advertises what this server has and
-    could serve, and a load that then fails is an honest error to the caller. Only the
-    approval boundary and the category are decided here.
-    """
+    """Only the approval boundary and category are decided here; remote code is read as data only."""
     from utils.security.remote_code_scan import REMOTE_CODE_CONFIG_FILES
 
     # trust_remote_code needs an approval fingerprint a switch has not got; read as data only.
@@ -651,13 +597,7 @@ def _native_audio_pipeline_is_servable_here(load_dir) -> bool:
 
 
 def _local_weights_entry(loader_id: str, info) -> Optional[_LocalGgufEntry]:
-    """Build an entry for a local non-GGUF checkpoint (safetensors, MLX) the
-    inference orchestrator can serve, else None.
-
-    Requires a root ``config.json`` beside safetensors weights, so a bare LoRA adapter
-    or a tokenizer-only snapshot is never offered as a model. Diffusers pipelines,
-    embedders, custom-code repos and partial downloads are rejected too.
-    """
+    """Needs config.json beside safetensors; adapters, partial downloads and pipelines are rejected."""
     from pathlib import Path
 
     path = getattr(info, "path", None)
@@ -699,13 +639,7 @@ def _local_servable_entry(loader_id: str, info) -> Optional[_LocalGgufEntry]:
 
 
 def local_servable_model(info) -> Optional[tuple[bool, tuple[str, ...]]]:
-    """``(is_gguf, on-disk quant labels)`` when this server can serve *info* straight
-    from disk, else None. Non-GGUF weights carry no quant labels.
-
-    Read from the files, not ``info.model_format``: the HF-cache scanner leaves that
-    unset for GGUF snapshots, so filtering on it drops every cached GGUF. One scan
-    tells /v1/models what it can serve and which quant to name.
-    """
+    """Reads the files, not info.model_format: the HF-cache scanner leaves it unset for GGUF snapshots."""
     from pathlib import Path
 
     path = getattr(info, "path", None)
@@ -737,12 +671,7 @@ def _advertises_this_ollama_row(info) -> bool:
 
 
 def local_load_dir(path: Optional[str]) -> Optional[str]:
-    """The concrete directory *path* loads from, or None when it names no directory.
-
-    An HF cache repo resolves to its snapshot, which is what the orchestrator records as
-    the active model, so a caller comparing a scanned catalog path against resident state
-    is comparing the same string the loader used. Touches the filesystem.
-    """
+    """Resolves an HF cache repo to its snapshot, the same string the orchestrator records as active."""
     from pathlib import Path
 
     if not isinstance(path, str) or not path:
@@ -754,13 +683,7 @@ def local_load_dir(path: Optional[str]) -> Optional[str]:
 
 
 def _build_index() -> dict[str, _LocalGgufEntry]:
-    """Map normalized id/model_id/display_name -> local model entry.
-
-    Scans the same roots Unsloth's model picker lists (./models, the active plus
-    legacy/default HF caches, LM Studio and Hermes dirs, and user scan folders) so a named
-    local model is never missed and silently served as the loaded one. The Ollama scan only reads
-    manifests: the ``.gguf`` link its blobs need is materialized by the load.
-    """
+    """Scans the model picker's roots; Ollama manifests are read only, since load materializes the .gguf."""
     # Lazy import: routes.models imports core.inference.
     from pathlib import Path
     from routes.models import (
@@ -904,24 +827,7 @@ def _build_index() -> dict[str, _LocalGgufEntry]:
 
 
 def _sibling_revision_entries(raw_id: str, loader_id: str):
-    """Yield ``(revision_name, entry)`` for the repo's OTHER cached revisions.
-
-    An inactive-cache repo carries its snapshot path as the id, and /v1/models advertises only that
-    directory's basename once loaded, so anything durable pinned to it (a subagent config) holds one
-    revision hash. Hugging Face writes a new snapshot dir on every update and the scan emits a
-    single entry per repo pointed at the newest one, so that pin would otherwise stop resolving and
-    drop through to whatever model is loaded.
-
-    Each revision gets an entry for its OWN directory rather than an alias onto the scanned one:
-    aliasing would redirect a pin that names an older complete revision onto a newer half-downloaded
-    snapshot. Incomplete revisions are skipped for the same reason.
-
-    Sibling names are only revisions inside a real cache repo
-    (``<root>/models--org--name/snapshots/<rev>``); a scan folder that merely happens to be called
-    ``snapshots`` holds unrelated models. GGUF only: ``snapshot_variants_all_complete`` reports a
-    revision offering no quants as incomplete, so a non-GGUF repo pins to its scanned revision
-    alone.
-    """
+    """Each revision gets its own entry, not an alias, so an old pin never lands on a newer partial."""
     from pathlib import Path
     from types import SimpleNamespace
 
@@ -963,13 +869,8 @@ def _snapshot_is_trusted(
     *,
     duty_window: Optional[float] = None,
 ) -> bool:
-    """Whether a snapshot stamped *timestamp* may answer a model switch at *now*.
-
-    Positive is an ordinary scan, trusted for the TTL. Negative is when an
-    additions-only download invalidated it, trusted only while its rebuild could
-    still be running: one that keeps failing must not leave entries trusted forever,
-    or a model deleted on disk could still trigger a switch. Zero is revoked.
-    """
+    """Negative stamps are trusted only while a rebuild may still run, so a failing rebuild cannot
+    linger."""
     if timestamp > 0.0:
         return now - timestamp < _CACHE_TTL_S
     if timestamp < 0.0:
@@ -993,13 +894,7 @@ def index_generation() -> int:
 
 
 def invalidate_index(*, additions_only: bool = False) -> None:
-    """Mark the cached scan stale.
-
-    Entries stay available so an additions-only download invalidation can keep
-    serving known positive hits while its background rebuild adds the new model.
-    Other invalidations retain the allocation but revoke that trust, since a scan
-    root may have been removed. Ordinary TTL expiry is likewise not additions-only.
-    """
+    """Additions-only keeps known hits served during rebuild; any other invalidation revokes trust."""
     global _scan, _warm_pending, _generation
     with _lock:
         now = time.monotonic()
@@ -1049,29 +944,14 @@ def _index() -> dict[str, _LocalGgufEntry]:
 
 
 def index_is_built() -> bool:
-    """Whether a scan has ever completed, freshness aside.
-
-    Lock-free on purpose: ``_lock`` is held for the whole scan, so taking it would
-    park the request path on the scan it is trying to stay off. Safe because
-    ``_scan`` is only ever rebound, never mutated.
-    """
+    """Lock-free because _lock is held for the whole scan; _scan is only ever rebound, never mutated."""
     return _snapshot()[0] > 0.0
 
 
 def resolve_trusted_cached_local_gguf(
     requested: str, *, include_companion_scope: bool = False
 ) -> Optional[tuple]:
-    """Resolve a positive cache hit only when its snapshot is safe to trust.
-
-    A snapshot is trustworthy while fresh, or after an explicit additions-only
-    invalidation. A positive hit from ordinary TTL expiry or a scan-root change
-    must be rebuilt before it can trigger a model switch. The identity checks close
-    the race where invalidation publishes a different snapshot during resolution or
-    while the trust state is being evaluated.
-
-    With ``include_companion_scope=True``, append whether sibling snapshots belong
-    to this repo-level resolution and may be searched for compatible companions.
-    """
+    """Positive hits from TTL expiry or a scan-root change must be rebuilt before they can switch models."""
     snapshot = _snapshot()
     resolved = _resolve_from_index(
         requested,
@@ -1085,13 +965,7 @@ def resolve_trusted_cached_local_gguf(
 
 
 def warm_index_soon() -> None:
-    """(Re)build the index off the request path when it is missing or past its TTL.
-
-    The only refresh for callers using ``allow_scan=False``. Covers a stale index,
-    not just an absent one: a model downloaded through the Hub UI or dropped into a
-    scan folder has no invalidation hook and would otherwise stay invisible to them
-    for the life of the process. Never blocks, and never touches ``_lock``.
-    """
+    """Rebuilds a stale index too, since new downloads have no invalidation hook; never takes _lock."""
     global _warming, _warm_pending
     stamp = _snapshot()[0]
     if stamp > 0.0 and time.monotonic() - stamp < _duty_window():
@@ -1157,12 +1031,7 @@ def _scope_is_warming(scope: Optional[str]) -> bool:
 def resolve_local_gguf_for_switch(
     requested: str, *, include_companion_scope: bool = False
 ) -> Optional[tuple]:
-    """Resolve an auto-switch target without repeatedly scanning for known misses.
-
-    Reuse misses until invalidation or two duty windows of snapshot age. After one
-    window, requests trigger a background scan; the second allows time to finish.
-    New names and newly indexed hits use the normal resolver freshness checks.
-    """
+    """Reuses known misses until invalidation or two duty windows; one window triggers a background scan."""
     if not isinstance(requested, str) or not requested.strip():
         return None
     requested = requested.strip()
@@ -1201,21 +1070,7 @@ def resolve_local_gguf(
     allow_scan: bool = True,
     include_companion_scope: bool = False,
 ) -> Optional[tuple]:
-    """Return ``(load_path, gguf_variant, loader_id)`` for a local match, else None.
-
-    ``load_path`` is the local path or ``ollama-manifest:`` ref to hand /load (never a remote),
-    ``loader_id`` is the advertised id used as the launch-override key, and ``gguf_variant`` is None
-    for a non-GGUF checkpoint, which has no quant to pin. ``requested`` is ``repo`` or
-    ``repo:VARIANT``: an exact id match wins first (so ids containing a colon still resolve), else
-    the last ``:VARIANT`` is split off and resolves only when that quant is on disk, unless it names
-    no quant at all (an Ollama-style ":latest"), which means the repo.
-
-    ``allow_scan=False`` answers from the last built index and never rebuilds. It is a raw snapshot
-    read for callers that separately decide whether the snapshot is trustworthy; use
-    :func:`resolve_trusted_cached_local_gguf` for model switching. With
-    ``include_companion_scope=True``, append whether sibling snapshots belong to this repo-level
-    resolution and may be searched for compatible companions.
-    """
+    """Exact id wins first, then the last :VARIANT is split off; a suffix naming no quant means the repo."""
     if not isinstance(requested, str) or not requested.strip():
         return None
     requested = requested.strip()
@@ -1274,11 +1129,7 @@ def _resolve_from_index(
 
 
 def local_gguf_pinned_variant(requested: str) -> Optional[str]:
-    """The on-disk quant ``repo:VARIANT`` pins, by current label or legacy alias, else None.
-
-    Unlike :func:`resolve_local_gguf`, a suffix naming no quant (``:latest``) never falls back to the
-    repo's preferred one.
-    """
+    """Unlike resolve_local_gguf, a no-quant suffix like :latest never falls back to the preferred quant."""
     base, sep, wanted = requested.rpartition(":")
     if not sep:
         return None
@@ -1299,16 +1150,7 @@ def local_gguf_pinned_variant(requested: str) -> Optional[str]:
 
 
 def local_target_is_gguf(load_path: Optional[str], loader_id: Optional[str] = None) -> bool:
-    """Whether an auto-switch target is served by llama.cpp rather than the orchestrator.
-
-    Reads the weights the load will actually open, so a rebuilt index that no longer
-    carries the entry cannot flip the answer mid-switch. Falls back to the indexed
-    entry, then to True, which is what the callers need for a target that is not a
-    concrete path: llama.cpp is the only backend auto-switch used before non-GGUF
-    support, and the idle-unload reload stash only ever holds a freed GGUF.
-
-    Touches the filesystem, so call it off the event loop.
-    """
+    """Reads the weights the load opens, so a rebuild cannot flip it; call off the event loop."""
     from pathlib import Path
     from types import SimpleNamespace
 
@@ -1329,13 +1171,7 @@ MISS_VARIANT_NOT_FOUND = "variant_not_found"
 
 
 def describe_local_miss(requested: str) -> tuple[str, tuple[str, ...]]:
-    """Why :func:`resolve_local_gguf` missed, so an error can say "wrong quant"
-    instead of "no such model".
-
-    ``(MISS_VARIANT_NOT_FOUND, <local quants>)`` when the repo is downloaded but the
-    requested ``:VARIANT`` is not, else ``(MISS_MODEL_NOT_FOUND, ())``. Fail-safe: a
-    scan failure reports the generic miss rather than raising into the handler.
-    """
+    """Says wrong quant when the repo is downloaded; a scan failure falls back to the generic miss."""
     if not isinstance(requested, str) or not requested.strip():
         return MISS_MODEL_NOT_FOUND, ()
     base, sep, variant = requested.strip().rpartition(":")

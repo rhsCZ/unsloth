@@ -90,13 +90,7 @@ def _hf_token_for_loader(hf_token: Optional[str] | bool) -> Optional[str] | bool
 
 
 def _exact_model_name_for_load(config: ModelConfig, load_in_4bit: bool) -> Optional[str]:
-    """The repo id to hand the loader verbatim, or None to let Unsloth's mapper choose.
-
-    ``config.path`` when the mapped repo is not on disk and the user's own weights are.
-    The mapped repo's cached spelling when it IS on disk under another case: the mapper
-    emits one lowercased id and huggingface_hub keys the cache directory on the id
-    verbatim, so asking for any other spelling re-downloads it (huggingface_hub#3838).
-    """
+    """Uses the cached casing of the mapped repo: the HF cache keys on the exact id, else re-download."""
     if config.is_local or config.is_lora or not config.path:
         return None
     try:
@@ -339,12 +333,7 @@ _CLEANUP_SPAN_TOKENS = 8
 
 
 def _cleanup_join_pending(text: str) -> bool:
-    """Could a cleanup rule still be completed at the end of ``text``?
-
-    Only the last few characters can matter, and only after a space: a rule whose space is
-    further back than that is already settled either way. A trailing space counts, since the
-    next token can start any of the rules.
-    """
+    """Only the last few characters matter, from a space onward; a trailing space counts as pending."""
     window = text[-_CLEANUP_SPAN_CHARS:]
     for i, char in enumerate(window):
         if char != " ":
@@ -356,13 +345,7 @@ def _cleanup_join_pending(text: str) -> bool:
 
 
 def _decoder_cleans_up(streamer) -> bool:
-    """Does this streamer's decode apply clean_up_tokenization_spaces?
-
-    Read once, because the widened re-decode below is pure cost for the tokenizers that do
-    not (Qwen, Gemma, Mistral, gpt-oss ship it off, and transformers 5.17 ignores it for
-    every BPE tokenizer). The streamer's own kwargs win, then the tokenizer's default,
-    unwrapping NativeToolTokenDecoder to reach it.
-    """
+    """Skips the widened re-decode for tokenizers that default clean_up_tokenization_spaces off."""
     kwargs = getattr(streamer, "decode_kwargs", None) or {}
     if "clean_up_tokenization_spaces" in kwargs:
         return bool(kwargs["clean_up_tokenization_spaces"])
@@ -503,11 +486,7 @@ class _StopSequenceStreamer:
 
 
 def _prompt_already_has_bos(tokenizer, prompt):
-    """Did the rendered chat template emit BOS itself?
-
-    Most do, so the tokenizer must not add a second. Some do not (zephyr, tinyllama-chat), and
-    suppressing special tokens there drops BOS entirely.
-    """
+    """Most templates render BOS, so no second one is added; zephyr and tinyllama-chat do not."""
     tok = getattr(tokenizer, "tokenizer", tokenizer)
     bos_token_id = getattr(tok, "bos_token_id", None)
     if bos_token_id is None:
@@ -581,15 +560,7 @@ class InferenceBackend:
         return 0 if top_k < 0 else top_k
 
     def _resolve_chat_eos(self, model_name: str) -> None:
-        """Resolve this chat model's assistant-turn-end stop tokens once at load, cache them in
-        model_info, and repair generation_config.
-
-        Some checkpoints (Qwen3.5 / Qwen3.6 small chat models) end turns with ``<|im_end|>`` but
-        ship ``config.eos_token_id = <|endoftext|>`` and no ``generation_config.json``, so paths
-        that read ``generation_config`` (the vision path, tool loops) run past the turn and loop.
-        Markers are derived from the chat_template (chat_eos.resolve_chat_turn_end_eos_ids), so
-        base/coder models and harmony templates are left untouched.
-        """
+        """Qwen3.5/3.6 chats end turns on <|im_end|> yet declare <|endoftext|> as eos, so loops run past."""
         info = self.models.get(model_name) or {}
         model = info.get("model")
         container = info.get("tokenizer")
@@ -1089,11 +1060,7 @@ class InferenceBackend:
             return False
 
     def _apply_adapter_state(self, use_adapter: Optional[Union[bool, str]]) -> None:
-        """Apply adapter state before generation (must hold _generation_lock).
-
-        Toggles PEFT enable/disable_adapter_layers, so nothing is reloaded. use_adapter: None = no
-        change, False = base model, True = current adapter, str = named adapter.
-        """
+        """Must hold _generation_lock; toggles PEFT adapter layers in place, so nothing is reloaded."""
         if use_adapter is None:
             return
 
@@ -1136,12 +1103,8 @@ class InferenceBackend:
         cancel_event = None,
         **gen_kwargs,
     ) -> Generator[str, None, None]:
-        """Thread-safe generation with optional adapter toggling.
-
-        Adapter toggle and model.generate() are serialized by _generation_lock in the background
-        thread, avoiding the RLock-reentrant race when two async SSE handlers share one event-loop
-        thread. use_adapter: see _apply_adapter_state.
-        """
+        """Toggle and generate are serialized by _generation_lock so SSE handlers on one loop cannot
+        race."""
         yield from self._generate_chat_response_inner(
             cancel_event = cancel_event, _adapter_state = use_adapter, **gen_kwargs
         )
@@ -1173,16 +1136,8 @@ class InferenceBackend:
         reasoning_prefilled: bool = False,
         deduplicate_tool_calls: bool = True,
     ):
-        """Run an agentic tool loop on top of ``generate_chat_response``.
-
-        Yields the same event-dict protocol as the GGUF path so the route
-        layer can stream both backends through one helper. Each event is one of:
-
-        * ``{"type": "status", "text": ...}``
-        * ``{"type": "content", "text": cumulative_text}``
-        * ``{"type": "tool_start", "tool_name", "tool_call_id", "arguments"}``
-        * ``{"type": "tool_end", "tool_name", "tool_call_id", "result"}``
-        """
+        """Yields the same event-dict protocol as the GGUF path so one route helper streams both
+        backends."""
         from core.inference.safetensors_agentic import run_safetensors_tool_loop
         from core.inference.tools import execute_tool
 
@@ -1287,13 +1242,8 @@ class InferenceBackend:
         tool_protocol_active: Optional[bool] = None,
         stop: Optional[list] = None,
     ) -> Generator[str, None, None]:
-        """Generate response for text or vision models (lock held by background thread).
-
-        ``tools`` / ``enable_thinking`` / ``reasoning_effort`` / ``preserve_thinking`` are forwarded
-        into ``apply_chat_template`` so templates that understand them (Qwen3, Llama 3.1+, gpt-oss
-        harmony) advertise tool schemas and reasoning controls. ``presence_penalty`` matches the
-        GGUF sampling path (0 disables it). ``images`` is the MLX backend's list spelling.
-        """
+        """Forwards tools and reasoning flags into apply_chat_template for templates that understand
+        them."""
         yield from self._generate_chat_response_inner(
             messages = messages,
             system_prompt = system_prompt,
@@ -1341,15 +1291,8 @@ class InferenceBackend:
         tool_protocol_active: Optional[bool] = None,
         stop: Optional[list] = None,
     ) -> Generator[str, None, None]:
-        """Inner generation logic.
-
-        tool_protocol_active overrides the bool(tools) default for native tool token preservation:
-        the loop's unrestricted mode accepts any tool name with an EMPTY tools list, so bool(tools)
-        would strip the very tokens it is about to parse.
-
-        _adapter_state is passed to generate_stream/vision so the background thread can toggle
-        adapters under the generation lock.
-        """
+        """Keeps native tool tokens per tool_protocol_active: unrestricted mode sends an empty tools
+        list."""
         if not self.active_model_name:
             raise RuntimeError("No active model")
 
@@ -1924,11 +1867,7 @@ class InferenceBackend:
         cancel_event = None,
         extra_audio_arrays: Optional[list] = None,
     ) -> Generator[str, None, None]:
-        """Audio-input (ASR) generation: takes an audio numpy array, streams text.
-
-        Uses processor.apply_chat_template with audio embedded in messages (Gemma 3n pattern).
-        use_adapter: see _apply_adapter_state; None leaves the loaded state alone.
-        """
+        """Audio goes into the chat messages via processor.apply_chat_template (Gemma 3n pattern)."""
         import threading
         import numpy as np
 
@@ -2219,15 +2158,8 @@ class InferenceBackend:
         add_special_tokens: bool = True,
         stop: Optional[list] = None,
     ) -> Generator[str, None, None]:
-        """Generate a streaming text response (text models only).
-
-        Rendered chat prompts pass add_special_tokens=False; raw prompts keep the tokenizer
-        defaults, including BOS insertion for base models.
-
-        _adapter_state: if not None, the background thread toggles adapters before model.generate(),
-        under _generation_lock. ``presence_penalty`` matches the GGUF sampling path via a logits
-        processor (0 disables it).
-        """
+        """Rendered chat prompts pass add_special_tokens=False; raw prompts keep the tokenizer's BOS
+        default."""
         if not self.active_model_name:
             raise RuntimeError("No active model")
 
@@ -2990,12 +2922,8 @@ class InferenceBackend:
             logger.warning(f"Could not fully reset model state for {model_name}: {e}")
 
     def reset_generation_state(self, caller_cancel_event = None):
-        """Reset any cached generation state to prevent hanging after errors.
-
-        ``caller_cancel_event`` is accepted for signature parity with the orchestrator, which uses
-        it to drop a reset from a request that never started. Nothing here cancels a live
-        generation, so it is unused.
-        """
+        """caller_cancel_event is accepted for signature parity only; this never cancels a live
+        generation."""
         try:
             for model_name in self.models.keys():
                 self._reset_model_generation_state(model_name)
@@ -3039,12 +2967,7 @@ class InferenceBackend:
         return getattr(config, "eos_token_id", None)
 
     def _generated_token_count(self, model, outputs, prompt_len) -> Optional[int]:
-        """New tokens ``generate`` produced, or None when the shape says nothing.
-
-        ``generate`` returns prompt + completion for decoder-only models and decoder-start +
-        completion for encoder-decoder ones. Anything else yields None, so the caller never reports
-        a count it did not measure.
-        """
+        """Returns None for unrecognised outputs, so the caller never reports a count it did not measure."""
         sequences = getattr(outputs, "sequences", outputs)
         shape = getattr(sequences, "shape", None)
         if shape is None or len(shape) < 2:
@@ -3079,13 +3002,8 @@ class InferenceBackend:
         cancelled: bool = False,
         timer = None,
     ) -> None:
-        """Latch usage, timings and budget exhaustion for the worker's gen_done stats channel.
-
-        Left at None when the token count is unknown, so a path that cannot count reports what it
-        did before. ``truncated`` becomes finish_reason "length"; a cancelled run stopped by
-        request, not at the cap, so it never sets it. ``timer`` carries the prefill/decode split
-        behind the prompt and generation speeds.
-        """
+        """Cancelled runs never report finish_reason length: they stopped by request, not at the
+        token cap."""
         if completion_tokens is None:
             return
         completion_tokens = int(completion_tokens)

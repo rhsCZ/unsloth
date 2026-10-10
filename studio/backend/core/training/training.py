@@ -128,10 +128,7 @@ class TrainingStatusIdentitySnapshot:
 
 
 def _load_pyplot():
-    """Lazily import matplotlib.pyplot (headless Agg); return it, or None if
-    matplotlib is unavailable. Deferred so a blocked native wheel (e.g. Windows
-    Smart App Control) never breaks server startup, only loss plotting.
-    """
+    """Deferred so a blocked native wheel (Windows Smart App Control) cannot break server startup."""
     global _pyplot, _pyplot_failed
     if _pyplot is not None or _pyplot_failed:
         return _pyplot
@@ -388,14 +385,7 @@ _MODEL_SNAPSHOT_WEIGHTS = (
 
 
 def _with_load_subdirs(model_name: str, names: tuple[str, ...]) -> tuple[str, ...]:
-    """Extend snapshot filenames with the subdirectories a load actually reads.
-
-    Spark-TTS / BiCodec keep the trainable model under ``<snapshot>/LLM``, so such a
-    snapshot carries no root-level ``config.json`` and no root-level weights. The remote
-    preflight already expands those load roots via ``load_scan_target``; mirroring it
-    here keeps the cached path in agreement, otherwise a perfectly good cache resolves
-    to None and the start route rejects it as hf_model_not_cached_offline.
-    """
+    """Spark-TTS keeps its model under <snapshot>/LLM, so the cache check must look there too."""
     from hub.utils.hf_cache_state import with_load_subdirs
     return with_load_subdirs(model_name, names)
 
@@ -623,11 +613,7 @@ def _s3_dataset_name(s3_dataset: Any) -> Optional[str]:
 
 
 def _cleanup_cancelled_checkpoints(output_dir: Union[str, os.PathLike]) -> None:
-    """Remove only HF Trainer ``tmp-checkpoint-<step>/`` partials after a cancel.
-
-    Completed ``checkpoint-<int>/`` dirs survive. Symlinked output_dir / children
-    are skipped so containment can't be bypassed.
-    """
+    """Deletes only tmp-checkpoint-<step> partials and skips symlinks, so nothing outside output_dir."""
     if account_is_retired():
         return
     out = Path(output_dir)
@@ -1695,15 +1681,8 @@ class TrainingBackend:
         spawn_already_reserved: bool = False,
         **kwargs,
     ) -> bool:
-        """Spawn a subprocess to run the full training pipeline. All kwargs are serialized into a
-        config dict and sent to the worker; returns True if the subprocess started successfully.
-
-        ``before_spawn`` is an optional no-arg callable run after synchronous validation (start
-        guards, config build, explicit gpu_ids) passes but before VRAM-dependent auto GPU-selection
-        and the spawn -- used to free VRAM (e.g. unload chat) without tearing it down on a refused
-        start, while still letting auto-selection place training against the freed memory. Hook
-        failures never block the start.
-        """
+        """before_spawn runs after validation but before GPU auto-selection, so refused starts free
+        nothing."""
         with self._lock:
             if not self._start_request_allows_spawn_locked(start_request_id, job_id):
                 logger.info(
@@ -2131,11 +2110,7 @@ class TrainingBackend:
         grace_s: Optional[float] = None,
         terminal_seen: bool = False,
     ) -> None:
-        """Start a daemon that force-terminates a worker that will not exit. Armed by a stop
-        and by a run's own terminal event, since a wedged worker strands the UI either way.
-        No-op if no worker is alive or a live watchdog already watches this proc (a stale one
-        never blocks a new run). ``grace_s`` overrides the post-terminal grace;
-        ``terminal_seen`` starts it now, for an ending that never sets ``_complete_seen``."""
+        """A stale watchdog never blocks a new run; a live watchdog on the same proc makes this a no-op."""
         with self._lock:
             if expected_job_id is not None and self.current_job_id != expected_job_id:
                 return
@@ -2168,11 +2143,7 @@ class TrainingBackend:
         grace_s: Optional[float] = None,
         terminal_seen: bool = False,
     ) -> None:
-        """Escalate a worker that will not exit to force_terminate(): grace after "complete",
-        else the absolute backstop (module timeouts). No-ops on a clean exit or once a new run
-        replaces the worker. ``grace_s`` overrides ``_STOP_GRACE_S``; ``terminal_seen`` starts
-        the grace at entry, so an ending that never sets ``_complete_seen`` (an error) does
-        not sit out the whole backstop."""
+        """terminal_seen starts the grace at entry, for error endings that never set _complete_seen."""
         started = time.monotonic()
         complete_at: Optional[float] = started if terminal_seen else None
         reason = ""
@@ -2225,21 +2196,7 @@ class TrainingBackend:
         target_proc: "Optional[mp.Process]" = None,
         watched_job_id: Optional[str] = None,
     ) -> None:
-        """Finalize parent state after a force-terminate so the UI leaves "Stopping..." even if the
-        worker is wedged in driver teardown; preserves output_dir on a save so the checkpoint is
-        kept, and clears it on a cancel (Stop without saving must not offer resume/export). No-ops
-        if a new run already replaced the watched worker.
-
-        Supersession is checked on both the watched proc and job id: start_training sets
-        current_job_id before it installs the new _proc, so a stale watchdog entering that startup
-        window still sees the old (dead) handle and is caught by the job-id guard.
-
-        The run's terminal DB state is recorded (create-if-needed + finish by captured id) BEFORE
-        _proc is dropped: a wedged worker still reports alive, so the pump never reaches its own
-        finalize and would bail on its _proc-is-None guard once the handle is gone. While the handle
-        is held is_training_active() stays true, so no new run can start and current_job_id stays
-        the watched run for the write. _proc is dropped last, re-guarded on target_proc.
-        """
+        """Records the DB terminal state before _proc is dropped; the pump bails out once _proc is None."""
         with self._lock:
             if target_proc is not None and self._proc is not target_proc:
                 return
@@ -2326,13 +2283,7 @@ class TrainingBackend:
         resume_blocked: bool = False,
         config_json: Optional[str] = None,
     ) -> None:
-        """Record a force-stopped run finished by its captured id, from state snapshotted
-        under the lock. insert_metrics_batch upserts and finish_run is an idempotent UPDATE,
-        so a concurrent pump finalize of the same run is harmless and a different current run
-        is never touched. The watchdog is the sole finalizer once _proc is dropped, so a
-        transient DB error (e.g. a SQLite lock) is retried a few times; on final failure the
-        finalize is unclaimed (only if the run is still current) so the row is not left
-        claimed-but-unfinalized."""
+        """Retries transient DB errors, since the watchdog is the only finalizer once _proc is dropped."""
         for attempt in range(_DB_FINALIZE_RETRIES):
             try:
                 from storage.studio_db import finish_run, insert_metrics_batch
@@ -2396,15 +2347,7 @@ class TrainingBackend:
         return False
 
     def _await_run_record(self, proc: "Optional[mp.Process]", deadline: float) -> bool:
-        """Wait out the pump's terminal DB write, which lands after _complete_seen is set and can
-        outlast force_terminate's join when SQLite is contended. Exiting first leaves the row
-        running, which the next startup's orphan sweep rewrites to an error; the checkpoint and
-        its output_dir survive, the stopped status and the final metrics do not.
-
-        Only a worker that has exited is waited on, since the pump loops while one is alive. A run
-        whose worker lingers past its save still falls back to that join: telling a write that has
-        not started from one that started and failed needs a signal the finalize paths do not
-        publish, and adding one is a change to terminal-state handling, not to shutdown."""
+        """Waits out the terminal DB write; exiting early leaves the row running until the startup sweep."""
         while time.monotonic() < deadline:
             if proc is not None and proc.is_alive():
                 return True
@@ -2449,12 +2392,7 @@ class TrainingBackend:
                 )
 
     def _handle_stall_event(self, event: dict) -> None:
-        """A worker reported a no-progress download stall.
-
-        On the first model-load, terminate the worker so the pump loop respawns it
-        over HTTP. A later stall (already on HTTP, or outside model-load) surfaces
-        as an error instead.
-        """
+        """First model-load stall respawns the worker over HTTP; later stalls surface as errors."""
         msg = event.get("message", "Download stalled")
         with self._lock:
             recover = self._in_model_load and not self._xet_fallback_used
@@ -2488,11 +2426,7 @@ class TrainingBackend:
             )
 
     def _respawn_worker_disable_xet(self, expected_job_id: Optional[str] = None) -> bool:
-        """Respawn the worker once with HF_HUB_DISABLE_XET=1 after a model-load
-        stall. Runs on the exiting pump thread, reaps the terminated worker, and
-        starts a fresh worker + pump. DB/progress run-state is preserved so the
-        history row is not duplicated; the new worker re-formats and loads over HTTP.
-        """
+        """Retries once with HF_HUB_DISABLE_XET=1, keeping DB state so the history row is not duplicated."""
         from .lifecycle import training_lifecycle_guard
 
         with training_lifecycle_guard():
@@ -2670,14 +2604,7 @@ class TrainingBackend:
                 raise
 
     def _ensure_pump_alive(self) -> bool:
-        """Restart the event pump if it crashed, even after the worker exited.
-
-        Defence in depth behind _pump_loop's guards. _pump_running stays True only after an abnormal
-        exit (the loop clears it on intended exits), so a True flag plus a dead thread is an
-        unambiguous crash. Restarts even after worker exit so a fresh pump can drain the terminal
-        events and finalize; otherwise the run looks stuck running forever. Returns True if
-        restarted.
-        """
+        """Restarts a crashed pump even after worker exit, else terminal events are never drained."""
         with self._lock:
             if not self._pump_running:
                 return False
@@ -2704,12 +2631,8 @@ class TrainingBackend:
         return bool(self._complete_seen.is_set() or p.is_completed or p.error)
 
     def is_run_finished(self) -> bool:
-        """Whether the current run reached its own terminal state (saved and finalized).
-
-        is_training_active() is liveness-based, so it stays true until the worker exits, which
-        can lag minutes behind a slow teardown or never happen at all, leaving the UI at 100%.
-        Status and progress read this so a finished run reports terminal at once; the GPU
-        admission guards keep using is_training_active(), since a lingering worker holds VRAM."""
+        """Liveness lags until the worker exits, so status reads this; GPU guards keep
+        is_training_active."""
         if getattr(self, "_spawn_in_progress", False):
             return False
         with self._lock:
@@ -2842,11 +2765,7 @@ class TrainingBackend:
         return self._TrainerShim(self)
 
     def _safe_handle_event(self, event: dict) -> None:
-        """Apply one event, swallowing any handler error.
-
-        The pump is the only writer of the progress state every status surface
-        reads, so a malformed event must never propagate and kill it.
-        """
+        """A malformed event must not kill the pump, which is the only writer of progress state."""
         try:
             self._handle_event(event)
         except Exception:
@@ -3058,11 +2977,8 @@ class TrainingBackend:
                     )
 
     def _handle_event(self, event: dict) -> None:
-        """Apply a subprocess event to local state.
-
-        State updates happen inside self._lock; DB I/O happens after releasing
-        it so status-polling endpoints aren't blocked by slow SQLite writes.
-        """
+        """DB I/O happens after the lock is released so status polling is not blocked by slow SQLite
+        writes."""
         etype = event.get("type")
         db_action: Optional[str] = None
         db_action_kwargs: dict = {}
@@ -3412,10 +3328,7 @@ class TrainingBackend:
         )
 
     def _ensure_db_run_created(self) -> None:
-        """Create the DB row if it doesn't exist yet. An in-progress flag lets only one
-        caller create at a time, and ``_db_run_created`` is published only after
-        ``create_run`` commits, so a concurrent finalize never runs ``finish_run`` against a
-        not-yet-inserted row (a zero-row UPDATE that would leave the run stuck as running)."""
+        """Publishes _db_run_created only after create_run commits, so finish_run never misses the row."""
         if account_is_retired():
             return
         self._run_intent_lock.acquire()
@@ -3481,12 +3394,7 @@ class TrainingBackend:
         resume_blocked: bool = False,
         expected_job_id: Optional[str] = None,
     ) -> None:
-        """Flush remaining metrics and mark a run finished in the DB. Claims the finalize
-        under the lock so the watchdog and pump can't double-finalize, and no-ops when
-        ``expected_job_id`` no longer matches (a new run took over). The run id and final
-        progress are snapshotted under the lock and threaded through the flush/finish calls,
-        so a new run racing between this claim and the DB writes can't be flushed or marked
-        stopped under the old run's finalize."""
+        """Claims the finalize under the lock so the watchdog and pump cannot both finalize the same run."""
         if account_is_retired():
             return
         with self._provenance_lock:
@@ -3543,10 +3451,8 @@ class TrainingBackend:
                     )
 
     def _flush_metrics_to_db(self, run_id: Optional[str] = None) -> None:
-        """Flush buffered metrics to the DB and update live progress. The target run id,
-        metric batch, and progress snapshot are all taken under the lock, so a concurrent
-        flush can't double-remove metrics and a racing new run can't redirect the write to
-        a different job. A finalizer passes ``run_id`` to pin the target to its captured run."""
+        """Takes run id, batch and snapshot under the lock, so a racing new run cannot redirect the
+        write."""
         if account_is_retired():
             return
         with self._lock:
@@ -3606,10 +3512,6 @@ class TrainingBackend:
         progress: TrainingProgress,
         theme: str = "light",
     ) -> "Optional[plt.Figure]":
-        """Create training loss plot with theme-aware styling.
-
-        matplotlib is loaded lazily; returns None if it is unavailable.
-        """
         plt = _load_pyplot()
         if plt is None:
             return None

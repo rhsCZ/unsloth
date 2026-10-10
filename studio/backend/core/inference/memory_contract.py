@@ -97,28 +97,7 @@ def build_memory_estimate(
     total_bytes: Any = _UNSET,
     n_ctx: Any = _UNSET,
 ) -> MemoryEstimate:
-    """Normalize a planner breakdown into the canonical estimate.
-
-    *breakdown* is a ``_GgufMemoryBreakdown``, taken structurally rather than by
-    import so this module does not depend on a route module. Its own
-    ``weights_bytes`` field carries the RESIDENT-FILES meaning, which is why it
-    lands in ``resident_files_bytes`` and never in ``quant_file_bytes``.
-
-    *quant_file_bytes* has to be supplied by the caller because the planner does
-    not carry it: the planner is given a resolved config and reports what the
-    launch would hold, while the size of the one file the user picked is known
-    only to whatever resolved that file. Callers that genuinely do not know it
-    should pass 0 rather than the resident total, since a wrong number here is
-    exactly the confusion this module exists to end.
-
-    The four trailing overrides exist because ``/kv-cache-estimate`` derives those
-    figures from its own planner calls, with its own None handling, and they are
-    not the breakdown's. They are passed IN rather than assigned onto the returned
-    model afterwards: Pydantic does not validate assignment by default, so
-    mutating the model post-construction puts whatever it is handed straight onto
-    the wire. Measured, not assumed -- ``m.gpu_bytes = "not an int"`` succeeds on
-    pydantic 2.13, and so does setting a declared ``int`` field to ``None``.
-    """
+    """quant_file_bytes comes from the caller, as 0 when unknown rather than the resident total."""
     resident = int(getattr(breakdown, "weights_bytes", 0) or 0)
     quant = int(quant_file_bytes or 0)
     # Deliberately not clamped against resident: the figures come from different sources
@@ -173,11 +152,7 @@ def build_memory_estimate(
 
 
 def project_estimate_memory_response(estimate: MemoryEstimate) -> dict:
-    """The ``EstimateMemoryResponse`` shape, for ``POST /estimate-memory``.
-
-    ``weights_bytes`` here is the RESIDENT-FILES total, which is what this route
-    has always meant by it and what the Load Model panel itemizes against.
-    """
+    """Here weights_bytes is the resident-files total, which this route has always meant by it."""
     return {
         "available": estimate.available,
         "reason": estimate.reason,
@@ -216,26 +191,7 @@ def project_kv_cache_estimate(
     projector_bytes: Optional[int] = None,
     kv_checkpoint_bytes: Optional[int] = None,
 ) -> dict:
-    """The ``GET /kv-cache-estimate`` shape, for the Hub memory bar.
-
-    ``weights_bytes`` here is the QUANT FILE ALONE, which is what this route has
-    always meant by it: the bar draws its weights segment from this and prints it
-    beside the download size on the same row, so folding the projector or a
-    drafter in would make the two disagree on screen.
-
-    The keyword terms are this route's OWN itemization, computed by the route
-    rather than by the planner, so they are passed through instead of derived
-    here. ``kv_bytes`` is among them deliberately: this route prices the target
-    cache itself and its figure is not interchangeable with the planner's.
-    Reaching into the estimate for it would silently swap one for the other.
-
-    ``None`` is meaningful throughout and is preserved -- this route uses ``None``
-    for "no such term", never ``0``, and the frontend's ``estimateIsUnsized()``
-    distinguishes them.
-
-    The one field where ``None`` and ``0`` differ in the OTHER direction is
-    ``gpu_bytes``, which is passed straight through: see its field description.
-    """
+    """weights_bytes is the quant file alone, and None (not 0) means no such term for this route."""
     return {
         "weights_bytes": estimate.quant_file_bytes or None,
         "kv_bytes": kv_bytes or None,

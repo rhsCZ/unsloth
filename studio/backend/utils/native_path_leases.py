@@ -58,13 +58,7 @@ def native_gguf_companion_parent_allowed(
     allowed_subdirs: Collection[str] = (),
     mtp_search_root: str | Path | None = None,
 ) -> bool:
-    """Check whether a GGUF companion is in an allowed directory.
-
-    ``allowed_subdirs`` names the companion directories (``mtp``, ``dspark``)
-    this caller may reach into, beside the weight's own. A collection rather
-    than one flag per kind: each caller admits exactly the kind it is
-    resolving, so an MTP load never accepts a sidecar out of ``dspark/``.
-    """
+    """Accepts a companion beside the weight or in one of allowed_subdirs, so each kind stays separate."""
     companion_parent = Path(companion_path).resolve(strict = True).parent
     gguf_parent = Path(gguf_path).resolve(strict = True).parent
     if companion_parent == gguf_parent:

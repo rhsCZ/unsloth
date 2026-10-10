@@ -126,13 +126,7 @@ def retrieve_hybrid(
     mode: str = "hybrid",
     lexical_query: str | None = None,
 ) -> list[Hit]:
-    """``mode`` picks the backend: lexical-only, dense-only, or RRF of both
-    (default). Pool sizes and the RRF constant come from config.
-
-    ``lexical_query`` replaces the FTS5 expression on the LEXICAL leg only. The dense leg
-    always encodes the natural-language ``query``, because a conjunction of quoted tokens
-    is not a sentence and embedding it would throw away the paraphrase recall that is the
-    dense leg's whole reason for existing. No ranking maths changes here."""
+    """lexical_query changes only the FTS5 leg; the dense leg always encodes the natural-language query."""
     k = k if k is not None else config.TOP_K_HYBRID
     k = int(k)  # top_k may arrive as a float
     if mode == "lexical":

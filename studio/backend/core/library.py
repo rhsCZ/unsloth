@@ -127,10 +127,7 @@ def _item(
 
 
 def _fingerprint(info: os.stat_result) -> str:
-    """Which file a path-derived id (``sandbox:``, ``model:``) found: its inode (file id on Windows)
-    and birth time where the OS keeps one, so an edit in place keeps it and a path made again does
-    not. Not the device, which a remount changes. Linux keeps no birth time and ext4 reuses inodes,
-    so there a file recreated at once can pass for the old one."""
+    """Inode plus birth time keeps the id across in-place edits; Linux can reuse an inode for a new file."""
     birth = getattr(info, "st_birthtime", None)
     if birth is None and os.name == "nt":
         birth = info.st_ctime
@@ -707,10 +704,7 @@ def _export_metadata(path: str, root: Path) -> Optional[dict]:
 
 
 def _model_run_id(path: str, origin: str, runs: dict[str, str]) -> Optional[str]:
-    """The training run a model came out of: its own folder under outputs/, or for an export the
-    checkpoint its metadata records. An older Studio export, with metadata but no checkpoint, falls
-    back to its folder name (``{run}/{checkpoint}``, ``{run}-GGUF``); a folder with no metadata
-    has no known origin."""
+    """A folder with no metadata has no known origin; exports use the checkpoint their metadata records."""
     from utils.paths.storage_roots import exports_root, outputs_root
 
     try:
@@ -897,11 +891,7 @@ def _sandbox_path(ref: str) -> str:
 
 
 def _open_regular(path: str) -> BinaryIO:
-    """`path` opened once and checked by its descriptor; LookupError unless it is a regular file.
-
-    Another process can swap a checked name for a link before it is opened again. O_NOFOLLOW where
-    the OS has it, then the path must still resolve to itself and to this same file, which also
-    refuses a parent swapped for a link (the only way in on Windows)."""
+    """Opened by descriptor; the path must still resolve to this same file, so a link swap is refused."""
     # O_NONBLOCK: a FIFO swapped in for the file would otherwise hang here before the S_ISREG check.
     flags = (
         os.O_RDONLY
@@ -1332,10 +1322,7 @@ def safe_file_name(
     fallback: str = "file",
     item_id: Optional[str] = None,
 ) -> str:
-    """``name`` as a file name every OS can hold: its last path segment, nothing Windows refuses, no
-    leading dot (hidden), no trailing dot or space (Windows drops them), never a device name such as
-    ``CON``. With ``item_id``, a hash of it keeps each item's project copy apart, so adding one
-    twice is a no-op."""
+    """With item_id, a hash of it keeps each item's copy apart, so adding one twice is a no-op."""
     stem, ext = os.path.splitext(re.split(r"[\\/]", name or "")[-1])
     if not ext and stem.startswith("."):
         stem, ext = os.path.splitext(stem.lstrip("."))
@@ -1401,10 +1388,7 @@ def _open_owned(path: Path, item_id: str) -> BinaryIO:
 
 
 def open_item(item_id: str) -> ItemFile:
-    """An item's file, opened, with the names it downloads and copies into a project as.
-
-    Raises LookupError when the item is gone and ValueError for items with no file of their own
-    (chat attachments live inside messages, fine-tunes are folders)."""
+    """LookupError when gone; ValueError for items with no file of their own, such as chat attachments."""
     kind, _, ref = item_id.partition(":")
     if kind == "upload":
         record = library_db.get_upload(ref)
@@ -1455,10 +1439,7 @@ def project_item(item_id: str) -> ItemFile:
 
 
 def local_path(item_id: str) -> Path:
-    """The file, or model folder, behind an item, for Reveal in Finder.
-
-    Same errors as ``open_item``. A model path comes from the id, so it must sit inside the
-    outputs or exports root."""
+    """Model paths come from the id, so they must sit inside the outputs or exports root."""
     kind, _, ref = item_id.partition(":")
     if kind == "upload":
         path = upload_path(ref)
@@ -1507,11 +1488,7 @@ _THUMBNAILS = _Memo(size = 256)
 
 
 def _attachment_media(ref: str) -> tuple[str, bytes]:
-    """The image or clip stored in a chat attachment, with its type. LookupError when it holds none.
-
-    An image is stored as a data URL (``{"type": "image", "image": "data:image/png;base64,..."}``),
-    a clip as raw base64 (``{"type": "file", "data", "mimeType"}``), as the attachment route reads
-    them."""
+    """Images are stored as data URLs but clips as raw base64, so the two need different decoding."""
     import urllib.parse
 
     from fastapi import HTTPException
@@ -1602,10 +1579,7 @@ def _decoded(mime_type: str, source: BinaryIO) -> bytes:
 
 
 def thumbnail(item_id: str) -> bytes:
-    """A card's picture: an image cropped and scaled down, or a video's first frame, as WebP.
-    Remembered by the file's version, so an edit makes a new one.
-
-    LookupError when the item is gone or has no picture; RuntimeError when it cannot be decoded."""
+    """Remembered per file version, so an edit makes a new thumbnail instead of reusing the old one."""
     kind, _, ref = item_id.partition(":")
     if kind == "attachment":
         with _THUMBNAIL_DECODES:
@@ -1662,10 +1636,7 @@ def _location_path(key: str) -> Path:
 
 
 def locations() -> list[dict]:
-    """Where each kind of Library file lives, for Settings > Library. `movable` kinds can be moved
-    with ``move_location``; `custom` says the owner already has. `available` is false while a
-    chosen folder's drive is not there; `disk` is the free space where the folder is, and `device`
-    tells folders on one disk from folders on another (both null while unavailable)."""
+    """available is false while a chosen drive is absent; device tells folders on one disk apart."""
     entries = []
     for key in _LOCATIONS:
         path = _location_path(key)
@@ -1808,10 +1779,7 @@ def _is_empty(folder: Path) -> bool:
 
 
 def _prepare_target(target: Path, key: str, current: Path) -> Path:
-    """The folder the files go to: `target` itself when empty, else a named folder made inside it,
-    and inside a drive's mount point too, so the files stay together on it. Created if needed and
-    checked writable. The named folder can already be `current` (a Reset after a Reset into a
-    default that held files), which is returned as is."""
+    """Uses target itself when empty, else a named folder inside it, reusing it if it is already current."""
     try:
         target.mkdir(exist_ok = True)
         if not target.is_dir():
@@ -1835,10 +1803,7 @@ def _prepare_target(target: Path, key: str, current: Path) -> Path:
 
 
 def _refuse_overlap(target: Path, key: str, final: bool) -> None:
-    """Refuse a target inside another kind's folder, a chat sandbox (its listing would show the
-    files as tool output, and clearing the chat would delete them), the current folder or Unsloth's
-    own home (the key's default aside). The `final` folder, the one files go into, also must not
-    hold any of them: moving a folder into itself empties it."""
+    """Refuses targets inside another kind's folder or a chat sandbox, since clearing a chat deletes it."""
     current = _location_path(key)
     others = [_location_path(other) for other in _LOCATIONS if other != key]
     others.append(_SOURCE_ROOTS["sandbox"]())
@@ -1928,11 +1893,7 @@ def _renamed(entry: Path, dest: Path, log: _MoveLog) -> Optional[bool]:
 
 
 def _move_file(entry: Path, dest: Path, log: _MoveLog) -> None:
-    """Move one file (or link) to `dest`. Where something is already there, an identical file just
-    lets the original go, and a different one keeps both, the moved one renamed `name (2).ext`:
-    a move never overwrites or deletes a file it did not bring. Across drives the file is copied,
-    then the original removed; if the original cannot go (open in another program on Windows) the
-    copy goes instead, so each file is only ever in one place."""
+    """Never overwrites or deletes a file it did not bring; a clash keeps both, the moved one renamed."""
     if entry.name == _FLAGS_STORE and os.path.lexists(dest):
         _unlink(entry)
         return
@@ -2100,15 +2061,7 @@ def _settle(
 
 
 def move_location(key: str, path: Optional[str]) -> Optional[str]:
-    """Move one kind of file to another folder, files and all, and keep saving there. `path` None
-    moves it back to the default. Owner only; the caller checks.
-
-    The switch is recorded first, so a file saved during the move already lands in the new folder;
-    later passes then pick up saves that were writing to the old one. On a failure everything
-    moved so far goes back, with anything saved into the new folder meanwhile, and the old folder
-    stays in use. Returns the folder whose files were left where they are, for a Reset while its
-    drive is not there or a choice of the folder standing in for it, else None. Raises ValueError for a folder that cannot be used,
-    RuntimeError when the move itself fails."""
+    """The switch is recorded before any file moves, so saves during the move land in the new folder."""
     if key not in relocations.MOVABLE:
         raise ValueError(
             "These files stay where they are: training and chats remember them by path."
@@ -2194,10 +2147,7 @@ def _finish_move(key: str, target: Path) -> None:
 
 
 def _resume_move(key: str) -> None:
-    """Finish a move a crash cut short: what is still in the folder it left goes on into the chosen
-    one, merged as the move merges. While either folder's drive is not there the move waits for
-    it, the old folder standing in for a missing chosen one. A failure is logged and tried again
-    on the next start."""
+    """Finishes a move a crash interrupted: leftovers in the old folder merge into the chosen one."""
     with _move_lock:
         source = relocations.moving_from(key)
         if source is None:

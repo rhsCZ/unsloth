@@ -284,13 +284,7 @@ def resolve_speed_mode(
     is_gguf: bool,
     dense_default: str = SPEED_OFF,
 ) -> str:
-    """The effective speed mode when the caller leaves it UNSET (``None``).
-
-    GGUF defaults to ``default``: compiles only the hot dequant op chain (~70-80% of eager GGUF
-    time) for ~1.24-1.64x at a small compile, zero extra VRAM, perturbation below the quant noise
-    floor. Dense resolves to ``dense_default``: the image backend keeps ``off`` (bit-identical
-    first generations, deferred engagement), the video backend passes ``default`` (a clip denoise
-    amortises the compile within one generation). An explicit value (incl. ``"off"``) is honored."""
+    """Unset resolves to default for GGUF and dense_default otherwise; an explicit value is honored."""
     if value is None:
         return SPEED_DEFAULT if is_gguf else dense_default
     return normalize_speed_mode(value)
@@ -298,16 +292,7 @@ def resolve_speed_mode(
 
 @lru_cache(maxsize = 1)
 def torch_compile_runtime_available() -> bool:
-    """Whether THIS process can actually run an inductor compile.
-
-    Inductor needs Triton, and Windows is the one supported platform whose normal install has no
-    Triton wheel. The three Unsloth workers (inference / training / export) already gate on this
-    import and set ``TORCHDYNAMO_DISABLE=1`` when it fails, but the diffusion and video backends
-    run in the SERVER process, which those gates never reach, so ask it once here.
-
-    ``TORCHDYNAMO_DISABLE`` is honored on every platform: a compile under it is a silent no-op that
-    would otherwise be recorded as an engaged optimisation. Cached, since neither answer can change
-    inside a process and this runs on every load."""
+    """Triton has no Windows wheel; TORCHDYNAMO_DISABLE is honored on every platform."""
     if os.environ.get("TORCHDYNAMO_DISABLE", "").strip() not in ("", "0"):
         return False
     if sys.platform != "win32":
@@ -427,19 +412,7 @@ def apply_speed_optims(
     stream_int8_gemm: bool = False,
     logger: Any = None,
 ) -> dict[str, bool]:
-    """Apply the opt-in speed optims for ``speed_mode`` to a built pipeline, BEFORE placement /
-    offload. Returns which engaged; every step is best-effort (unsupported ones are skipped).
-
-    ``offload_active`` (offload policy != none) installs ``@torch.compiler.disable``d onload hooks,
-    so the compile must drop ``fullgraph`` (like an active step cache) or it crashes at step 1.
-    ``denoiser_offloaded`` (None = ``offload_active``) limits the CUDA-graph refusal to a moved denoiser.
-    ``stream_int8_gemm``: a moved denoiser still takes the fused int8 GEMM, installed against its onload device.
-
-    ``cuda_graph_default`` is what the CUDA-graph arm assumes for a family that declares nothing:
-    True on the image backend, False on video, where ``supports_cuda_graph`` opts in.
-
-    ``cache_active`` also covers a step cache that may still toggle on at generation time. The
-    CUDA-graph arm refuses only on ``cache_engaged``: the caller bypasses per chunk if it toggles."""
+    """Offload hooks are compiler-disabled, so compile must drop fullgraph or crash at step 1."""
     applied = {
         "channels_last": False,
         "vae_fp16_decode": False,
@@ -904,10 +877,7 @@ def compiled_shapes_are_static(pipe: Any, speed_mode: Optional[str]) -> bool:
 
 
 def _denoiser_dits(pipe: Any) -> list:
-    """Every DiT the denoise loop runs: the primary ``transformer`` plus a second expert some
-    families carry (Ideogram's ``unconditional_transformer``, an MoE ``transformer_2``). Speed /
-    attention optims must reach ALL of them (mirroring the offload path), else the second DiT runs
-    eager / native while status over-reports the optim as engaged."""
+    """Optims must reach every DiT; a second expert left eager would still be reported as engaged."""
     dits: list = []
     for attr in ("transformer", "transformer_2", "unconditional_transformer"):
         m = getattr(pipe, attr, None)
@@ -1177,10 +1147,7 @@ def _compile_repeated_blocks(
 
 
 def pin_reduction_configs(kwargs: dict[str, Any], logger: Any = None) -> bool:
-    """Keep one config per multi-config reduction instead of a per-process benchmark whose pick changes the sum order
-    (LTX-2 block RMSNorm: R0_BLOCK 4096 vs 2048 tie on B200, half the servers rendered another clip). Per-compile
-    ``options`` (``mode`` folded in), never the global knob: HunyuanVideo-1.5 is ~2% slower per step with it.
-    config.deterministic is unusable: dynamo resets it after the first frame. Returns True when engaged."""
+    """Pins one config per reduction, not a benchmark pick, since the pick changes sum order and output."""
     if not compile_config.reduction_config_filter_available():
         return False
     try:
@@ -1209,12 +1176,7 @@ def _install_inductor_backports(logger: Any) -> bool:
 
 
 def compile_dynamic(transformer: Any, dynamic: Optional[bool]) -> Optional[bool]:
-    """The ``dynamic`` a DiT is actually compiled with, so compile-cache fingerprints key on the same value.
-
-    dynamic=True makes even the constant segment starts symbolic, and on Qwen-Image-2.1 the attention output cat
-    (text + target, length s87 - s89) then fuses into torchao's per-row activation-quant reduction (CantSplit on torch
-    2.12 / 2.13 without ``diffusion_inductor_backports``). Even with the backport it is slower than automatic dynamic
-    (None), which does not recompile across prompt lengths or resolutions."""
+    """dynamic=True breaks torchao's per-row quant fusion on torch 2.12/2.13 unpatched; None is faster."""
     # Static kernels for video DiTs: dynamic shapes made LTX-2.3's QK-norm + RoPE ~3x slower.
     if transformer is not None and getattr(transformer, "_unsloth_compile_static", False):
         return False
@@ -1224,11 +1186,7 @@ def compile_dynamic(transformer: Any, dynamic: Optional[bool]) -> Optional[bool]
 
 
 def _carries_torchao_weights(module: Any) -> bool:
-    """Whether any parameter of ``module`` is a torchao tensor subclass (the int8 / fp8 dense fast path).
-
-    Checks ``.data`` too: some torchao builds keep ``Linear.weight`` a plain ``nn.Parameter`` wrapping the subclass,
-    the same two representations ``transformer_is_quantised`` covers. Only torchao's own types count, so a GGUF or
-    bitsandbytes parameter subclass keeps its existing compile policy."""
+    """Only torchao's own tensor types count; GGUF or bitsandbytes subclasses keep their compile policy."""
 
     def _torchao(t: Any) -> bool:
         return t is not None and type(t).__module__.startswith("torchao")
@@ -1377,11 +1335,7 @@ def settle_compile_fallback(
     pipe: Any,
     logger: Any = None,
 ) -> Optional[str]:
-    """After a render, fold a runtime compile fallback into ``state.speed_optims`` (image and video backends share it).
-
-    Adds ``compile_fallback_eager`` once, and drops ``compiled`` only when NO guarded DiT still runs compiled, so a
-    dual-DiT load whose second expert still compiles keeps the LoRA gate and the compile-cache shape registry. Returns
-    the recorded failure, or None when nothing fell back."""
+    """Adds compile_fallback_eager once; drops compiled only when no guarded DiT still runs compiled."""
     dit_error = compile_fallback_error(pipe)
     vae_error = _vae_compile_error(getattr(pipe, "vae", None))
     fallback = dit_error or vae_error
@@ -1549,11 +1503,7 @@ def _guard_compiled_decode(
     eager_when_tiled: bool = False,
     owner: Any = None,
 ) -> Any:
-    """``compiled`` behind an eager fallback: torch.compile is lazy, so lowering fails on the first call; OOMs still raise.
-
-    ``eager_when_tiled``: a tiled decode unrolls its tile loop into one graph (minutes of compile on low-VRAM loads),
-    and tiling is only settled by the memory plan after the compile, so it is read per call.
-    ``owner``: the slot the fallback restores."""
+    """torch.compile is lazy, so failures surface on the first call; a tiled decode runs eager."""
     owner = vae if owner is None else owner
     had_own = "decode" in getattr(owner, "__dict__", {})
     failed: list = []
@@ -1716,11 +1666,7 @@ def _enable_fp16_accumulation(
     dtype: Any = None,
     speed_mode: Optional[str] = None,
 ) -> bool:
-    """Turn on fp16-accumulated fp16 GEMMs for consumer GPUs (~2x the fp32-accumulate rate;
-    datacenter parts keep the safer default). Gated on: torch 2.10+ exposing the flag, a consumer
-    device, the family not in _FP16_ACCUM_DENY, UNSLOTH_DISABLE_FP16_ACCUM unset, and -- when
-    compute dtype IS fp16 (the only case results change) -- the ``max`` tier (bf16 loads are
-    bit-identical, so any tier). The caller's snapshot/restore returns the flag on unload."""
+    """Consumer GPUs only; fp16 compute changes results, so it is gated to the max tier."""
     import os
 
     if os.environ.get("UNSLOTH_DISABLE_FP16_ACCUM", "").strip().lower() in (

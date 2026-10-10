@@ -67,10 +67,7 @@ def _rocm_clang_cl_present() -> bool:
 
 
 def _cc_needs_msvc_headers(cc: str) -> bool:
-    """Triton's own predicates decide, so this cannot disagree with what it does. They are imported
-    apart from `get_cc` because `is_clang_cl` only arrived in triton-windows 3.5.1.post23: importing
-    all three together failed on every earlier release and threw away a usable `get_cc` with it.
-    The fallback is what both predicates do, a case-insensitive basename match."""
+    """Imported apart from get_cc: is_clang_cl only exists in triton-windows 3.5.1.post23 and later."""
     try:
         from triton.runtime.build import is_clang_cl, is_msvc  # noqa: PLC0415
         return bool(is_msvc(cc) or is_clang_cl(cc))
@@ -80,10 +77,7 @@ def _cc_needs_msvc_headers(cc: str) -> bool:
 
 
 def _triton_cc() -> str:
-    """triton-windows 3.8.0.post28, what a bare `pip install triton-windows` gives you today, has no
-    `get_cc` at all: it was renamed `_find_compiler(language)`, whose "c" branch is the old body.
-    Without this the newest release never reaches the compiler question and answers from the wheel
-    layout instead."""
+    """Newest triton-windows renamed get_cc to _find_compiler(language); else the wheel layout decides."""
     try:
         from triton.runtime.build import get_cc  # noqa: PLC0415
     except ImportError:
@@ -130,12 +124,7 @@ def _toolchain_summary() -> str:
 
 
 def _compiles_a_trivial_translation_unit(cc: str, inc_dirs) -> bool | None:
-    """Ask the compiler instead of predicting it. None means the probe could not be run.
-
-    Header discovery is an inference and it is wrong in the expensive direction: clang-cl
-    locates MSVC through its own search, so on a measured R9700 it compiled with INCLUDE,
-    VCINSTALLDIR and WindowsSdkDir all cleared, injecting an -internal-isystem we can see
-    no trace of. Predicting from directories alone would disable torch.compile there."""
+    """Predicting from directories wrongly disables torch.compile; clang-cl finds MSVC itself."""
     import subprocess  # noqa: PLC0415
     import tempfile  # noqa: PLC0415
 

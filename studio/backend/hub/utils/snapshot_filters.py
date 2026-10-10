@@ -89,11 +89,7 @@ def repo_ships_transformers_weights(filenames: Iterable[str]) -> bool:
 
 
 def repo_ships_root_safetensors(filenames: Iterable[str]) -> bool:
-    """Whether a load would find a COMPLETE root safetensors checkpoint.
-
-    Numbered shards are resolved through the index; with none, a load looks for a single
-    file and raises. So one shard is not evidence a checkpoint is there.
-    """
+    """One numbered shard proves nothing: a complete set must be named by the index."""
     names = list(filenames)
     if any(name == "model.safetensors" for name in names):
         return True
@@ -103,11 +99,8 @@ def repo_ships_root_safetensors(filenames: Iterable[str]) -> bool:
 
 
 def _variant_ships_as_safetensors(names: list[str], variant: str | None) -> bool:
-    """Whether `variant` is already covered by a COMPLETE safetensors checkpoint.
-
-    ``None`` is the canonical one, established by the root-safetensors gate. A named variant
-    needs its own safetensors, and its sharded form needs an index, as the canonical one does.
-    """
+    """A named variant needs its own safetensors, plus an index when sharded; None is the root
+    checkpoint."""
     if variant is None:
         return True
     if f"model.{variant}.safetensors" in names:
@@ -166,10 +159,7 @@ def snapshot_download_size(siblings: Iterable) -> int:
 
 
 def total_size_for_siblings(siblings: Iterable) -> int:
-    """Sum of declared sizes across siblings verbatim (no ignore filter).
-
-    Use for repo types that download every file (datasets); models go
-    through ``snapshot_download_size`` so the ignore patterns apply."""
+    """Sums sibling sizes verbatim, with no ignore filter; models use snapshot_download_size instead."""
     return sum(_size(sibling) for sibling in siblings)
 
 

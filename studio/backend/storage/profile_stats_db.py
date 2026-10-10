@@ -75,10 +75,7 @@ def _clean_str(value: Any) -> str:
 
 
 def _resolve_zone(tz_name: str, tz_offset_minutes: int):
-    """The caller's zone, preferring an IANA name over a single offset. A fixed offset is only correct
-    for the half of the year the caller happens to be in, so a winter message read during summer
-    lands an hour out and can cross midnight. An IANA name carries each date's own offset. The
-    offset stays as the fallback for callers that send no name, or hosts with no tzdata."""
+    """Prefers the IANA name: a fixed offset is wrong half the year and can shift dates past midnight."""
     if tz_name:
         try:
             return ZoneInfo(tz_name)
@@ -100,10 +97,7 @@ def _local_stamp(created_at_ms: int, zone) -> Optional[datetime]:
 
 
 def _streaks(days: set[date], today: date) -> dict[str, Any]:
-    """Current and longest run of consecutive active days. The current streak survives a day that has
-    not been used yet: a streak that ended yesterday is still "live" until today is over. Imported
-    history or a skewed client clock can date rows in the future; those are dropped up front so they
-    cannot pad the longest streak or be reported as the last active day either."""
+    """Drops rows dated after today up front, so a skewed client clock cannot pad the longest streak."""
     days = {day for day in days if day <= today}
     if not days:
         return {"current": 0, "longest": 0, "lastActiveDay": None}
@@ -241,13 +235,7 @@ def _merge_api_activity(chat: _MessageFold, api: _ApiUsageFold) -> None:
 
 
 def _fork_keepers(conn) -> dict[tuple[str, int, str], str]:
-    """For each original message, the one clone elected to stand in for it. A clone is normally ignored
-    because the original is counted instead. Once the original is gone, whether its thread was
-    deleted or just that row was pruned, the clones become the only record. Letting every sibling
-    count them would multiply the usage, so exactly one may. Electing per message rather than per
-    fork matters because fork_chat_thread copies one parent_id branch, not the whole thread: sibling
-    forks taken from a retry and a regeneration hold different rows, and a per-fork winner would
-    silently drop whatever only the loser carries."""
+    """Elects one clone per message, since a per-fork winner would drop rows only a losing fork has."""
     rows = conn.execute(
         """
         SELECT m.thread_id, m.created_at, m.role,
@@ -454,18 +442,7 @@ def _daily_series(fold: _MessageFold, today: date, days: int) -> list[dict[str, 
 
 
 def _superseded(prefix: str = "r.") -> str:
-    """SQL for "a later run resumed from this one, so its counters live there". ``prefix`` must qualify
-    the outer row: the EXISTS subquery selects from the same table, so a bare column name would bind
-    to the subquery instead. ``create_run``'s resume claim sets ``resume_blocked`` and leaves
-    ``output_dir`` alone. Cancelling clears ``output_dir`` while setting the same flag, so the flag
-    alone cannot tell the two apart. ``delete_run`` never clears the flag, so the continuation has
-    to still be there; otherwise deleting it would strand the source at zero while its row and
-    metrics stay visible in history. The continuation also has to have reached the source's step.
-    ``create_run`` claims the source the moment a resume starts, but ``final_step`` is only written
-    on the first metric flush, so a continuation that fails before then would take the source's
-    completed work down with it. ``resumed_from_run_id`` records the lineage outright. Runs written
-    before that column existed fall back to matching ``output_dir``, which is weaker: cancelling a
-    continuation nulls its ``output_dir`` and breaks the match."""
+    """resume_blocked alone cannot tell a resumed run from a cancelled one, so a continuation must exist."""
     return f"""
         {prefix}resume_blocked = 1
         AND EXISTS (

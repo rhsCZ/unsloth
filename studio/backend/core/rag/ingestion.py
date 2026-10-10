@@ -129,13 +129,7 @@ def _progress(conn, job_id: str, stage: str, progress: float) -> None:
 
 
 def _abort_if_document_deleted(conn, job_id: str, document_id: str) -> bool:
-    """Retire the job when a project delete or a discarded upload removed its document.
-
-    Opens the write transaction the caller then commits into, so a delete cannot land between
-    the check and the write. Chunks carry no foreign key to the document, so writing after one
-    would strand rows under a dead scope, and completing would report a deleted document as
-    indexed and retire the document it was replacing.
-    """
+    """Opens the write transaction first so a delete cannot slip between the check and the write."""
     conn.execute("BEGIN IMMEDIATE")
     if not account_is_retired() and store.get_document(conn, document_id) is not None:
         return False
@@ -173,11 +167,7 @@ def _embed_all(
     model_name: str | None,
     on_progress: Callable[[int, int], None] | None = None,
 ):
-    """Embed texts in batches. Returns ``(vectors, identity)`` of the embedder that
-    produced them. An ST encode failure swaps the process to llama-server, and a swap
-    between batches would leave one document holding vectors from two spaces, so the
-    document restarts under the backend that took over. That swap is one-way, so the
-    second pass is uniform."""
+    """Embeds in batches; a backend swap mid-document restarts the pass once, so one space per document."""
     for _ in range(2):
         vectors, identity, changed = _embed_pass(texts, model_name, on_progress)
         if not changed:
@@ -193,12 +183,7 @@ def _ocr_scanned_pages(
     job_id: str,
     ocr: bool | None = None,
 ) -> tuple[list, set[int]]:
-    """Replace text on near-empty (scanned/image-only) PDF pages with vision-model OCR
-    so image PDFs become searchable. Local Tesseract is the fallback. The per-upload
-    ``ocr`` flag overrides ``config.OCR_SCANNED``; no-op without scanned pages. OCR'd
-    pages have no text layer, so no preview highlight regions, but stay searchable.
-    Returns ``(pages, ocred)``: new ``Page`` objects for OCR'd pages (originals
-    otherwise) and the set of page numbers actually transcribed."""
+    """OCRs near-empty PDF pages with a vision model; the per-upload ocr flag overrides OCR_SCANNED."""
     if not (config.OCR_SCANNED if ocr is None else ocr):
         return pages, set()
     scanned = [
@@ -257,13 +242,7 @@ def _ocr_scanned_pages(
 def _replace_old_document(
     conn, replaces: tuple[str, str | None] | None, keep_path: str, document_id: str
 ) -> None:
-    """Drop the document this ingestion replaced (stale embedder / empty prior
-    ingest), called only after the replacement completed successfully.
-
-    Checked against the replacement inside the transaction that retires the old row: every
-    store helper commits, so a delete that removed the replacement between the completion and
-    this call would otherwise take the still-searchable document it was replacing with it.
-    """
+    """Drops the replaced document once its replacement completed, re-checked in the same transaction."""
     if replaces is None:
         return
     old_id, old_path = replaces
@@ -281,16 +260,7 @@ def _replace_old_document(
 def _retire_orphan_after_failure(
     conn, replaces: tuple[str, str | None] | None, keep_path: str, document_id: str
 ) -> None:
-    """Clear a never-indexed document whose replacement did not complete.
-
-    Orphans only: an ``empty_completed`` / stale-embedder original is still searchable. The
-    orphan has no live job, so startup repair (which scans jobs) never reaches it and the
-    scope would stay indexing forever, holding queued chat sends.
-
-    Checked against the replacement inside the transaction, as ``_replace_old_document`` is: a
-    delete that removed the replacement took its upload too, so dropping the orphan there would
-    discard the last copy. Failing that one instead still frees the scope.
-    """
+    """Clears a never-indexed orphan after its replacement fails, else the scope stays indexing forever."""
     if replaces is None:
         return
     old_id, old_path = replaces
@@ -480,19 +450,7 @@ def start_ingestion(
     content_hash: str | None = None,
     reuse_identical: bool = False,
 ) -> tuple[str, str]:
-    """Create the document + job rows and spawn the worker, returning
-    ``(document_id, job_id)``. A duplicate content hash in this scope returns the
-    existing id and its active job while indexing, or an already-completed job
-    when the document is ready (no re-ingest).
-
-    ``content_hash`` lets a caller that already hashed ``stored_path`` (linked-folder
-    reconciliation hashes it to detect content-identical renames) pass that digest
-    through instead of paying for a second full read of the file. Must be the lowercase
-    hex sha256 of ``stored_path``; a mismatched value would misfile the document under
-    the wrong hash, so it is trusted as given and never reverified here.
-
-    ``reuse_identical`` (dedupe=False only) copies a completed same-hash document's index
-    onto a new row instead of re-embedding, keeping per-path ownership for linked folders."""
+    """Duplicate hash reuses the existing document; a passed content_hash is trusted, never reverified."""
     account_path(stored_path)
     if account_is_retired():
         raise RuntimeError("Account is retired")
@@ -751,12 +709,7 @@ def _new_job(
 
 
 def _reap_finished_jobs() -> None:
-    """Drop per-job queues whose DB row already reached a terminal status.
-
-    Otherwise removed only by ``job_events`` after the ``None`` sentinel, so a
-    caller that polls ``/jobs/{id}`` instead of streaming would grow ``_jobs``
-    forever. Safe while streaming: ``job_events`` holds its queue reference.
-    """
+    """Drops queues whose DB row is terminal, so pollers that never stream do not grow _jobs."""
     with _jobs_lock:
         job_ids = [
             key if isinstance(key, str) else key[1]
@@ -790,18 +743,7 @@ def delete_terminal_job(job_id: str) -> bool:
 
 
 def job_events(job_id: str):
-    """Yield job events for SSE; ends when the worker signals completion.
-
-    Timed ``get`` so the generator can't block forever: it wakes to heartbeat,
-    to notice a disconnected client, and to stop on a terminal DB status (a hard
-    worker death that skipped the ``None`` sentinel). Drops the queue only on a
-    terminal exit, never on an early client disconnect.
-
-    It deliberately does *not* end on idle alone: a long silent stage (e.g.
-    embedding a large doc) is not a failure, and ending there would send
-    ``[DONE]`` with the row still pending, which the client treats as completion.
-    The stream ends only on a terminal status, the ``None`` sentinel, or disconnect.
-    """
+    """Ends only on a terminal status, the None sentinel, or disconnect; idle time alone never ends it."""
     with _jobs_lock:
         q = _jobs.get(account_key(job_id))
     if q is None:

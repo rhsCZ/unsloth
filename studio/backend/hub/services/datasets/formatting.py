@@ -366,16 +366,7 @@ def check_format_response(
     *,
     allow_unlabeled_tier1_fallback: bool = False,
 ) -> CheckFormatResponse:
-    """
-    Check if a dataset requires manual column mapping.
-
-    HF datasets: tier 1 loads a single requested split/subset file (avoids
-    resolving thousands of files); tier 2 falls back to full streaming. Local
-    files load directly. Plain `def` so FastAPI runs the blocking IO in a
-    thread-pool. The deprecated alias opts into the single-file fallback that
-    its previous implementation used, preserving source column order when the
-    only data filename has no split label.
-    """
+    """Plain def so FastAPI runs the blocking dataset IO in a thread pool, not on the event loop."""
     hf_token = account_hf_token(hf_token)
     account_path(request.dataset_name, reference = True)
     visible_cached_path(getattr(request, "local_path", None), "dataset")
@@ -591,13 +582,7 @@ def check_format_response(
 def ai_assist_mapping_response(
     request: AiAssistMappingRequest, hf_token: Optional[str] = None
 ) -> AiAssistMappingResponse:
-    """
-    Run the LLM-assisted dataset conversion advisor (user-triggered).
-
-    Multi-pass analysis with a 7B helper model: classify dataset type, generate
-    a conversion strategy, then validate it. Falls back to simple column
-    classification if the advisor fails.
-    """
+    """User-triggered 7B-model advisor; on failure it falls back to simple column classification."""
     hf_token = account_hf_token(hf_token)
     account_path(request.dataset_name, reference = True)
     visible_cached_path(getattr(request, "local_path", None), "dataset")

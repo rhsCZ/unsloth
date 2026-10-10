@@ -248,13 +248,7 @@ def test_embedder_failure_is_502(studio_embedder):
 
 
 def test_identity_redaction_leaves_the_backend_tag_alone(tmp_path, monkeypatch):
-    """A local model whose name occurs inside the backend tag.
-
-    `transformers` is a real directory people have lying around, and is_local_path accepts a
-    bare relative name that exists. A substring replace then rewrites the
-    `sentence-transformers` tag too, and the identity we advertise is one no backend claims
-    and _names_studio_embedder cannot match on the next request.
-    """
+    """Redacting a local model name must not rewrite the backend tag, e.g. sentence-transformers."""
     from core.rag import config as rag_config
 
     (tmp_path / "transformers").mkdir()
@@ -296,11 +290,7 @@ def test_identity_redaction_covers_the_gguf_repo_segment(monkeypatch):
 
 
 def test_identity_redaction_covers_a_local_repo_under_a_hub_model(monkeypatch):
-    """A hub model id whose GGUF companion is a local path.
-
-    RAG_EMBED_GGUF_REPO takes any path, so the model segment can need no redaction while the
-    repo segment beside it is an absolute path on the server.
-    """
+    """Redact a local path in RAG_EMBED_GGUF_REPO even when the model segment is a plain hub id."""
     from core.rag import config as rag_config
 
     monkeypatch.setattr(
@@ -373,12 +363,7 @@ def test_actionable_embedder_errors_keep_their_message(studio_embedder, exc, fra
 
 
 def test_pending_gguf_download_is_classified_like_the_st_one(tmp_path, monkeypatch):
-    """The GGUF backend hits the same condition and used to raise a bare RuntimeError.
-
-    Both backends refuse the same way when the picker's download has not finished, so both
-    have to reach the 409; untyped, this one fell into the catch-all and came back as a 502
-    saying only that an internal error occurred.
-    """
+    """A pending GGUF download must be typed like the sentence-transformers one, so both reach the 409."""
     from core.rag import embed_llama_server
 
     backend = embed_llama_server.LlamaServerBackend()
@@ -400,13 +385,7 @@ def test_pending_gguf_download_is_classified_like_the_st_one(tmp_path, monkeypat
 
 
 def test_actionable_errors_do_not_leak_a_local_path(studio_embedder, monkeypatch):
-    """Passing the message through must not undo the redaction the rest of the route does.
-
-    _get resolves a cached model to its absolute snapshot directory and hands that to
-    _guard_model_security, so the raised text can carry the server's HF cache layout, and a
-    configured model can be a local path in its own right. Both go out over /v1/embeddings,
-    where the identity and the limit errors already report the hashed label instead.
-    """
+    """Pass-through error text must not expose a local path, since the route hashes labels elsewhere."""
     studio_embedder.setattr(
         rag_config, "effective_embedding_model", lambda: "/srv/models/bge-small"
     )
@@ -842,13 +821,7 @@ def test_llama_max_tokens_comes_from_the_gguf_minus_its_special_tokens(tmp_path,
 
 
 def test_llama_max_tokens_is_dropped_when_the_binary_is_swapped(tmp_path, monkeypatch):
-    """Changing the custom llama.cpp path respawns onto the same GGUF.
-
-    _current() goes stale on the binary revision, so _ensure_ready kills and respawns, but
-    _resolve_model_path takes its same-repo fast path and never reaches _adopt_model_path.
-    The limit is not a pure model fact -- it clamps the GGUF context by the server's n_ctx
-    and n_ubatch, whose defaults differ between builds -- so it has to go with the binary.
-    """
+    """The token limit depends on the binary's n_ctx and n_ubatch, so a binary swap must drop it."""
     from core.rag import embed_llama_server
 
     backend = embed_llama_server.LlamaServerBackend()
@@ -911,11 +884,7 @@ def test_llama_max_tokens_is_capped_by_the_running_context(tmp_path, monkeypatch
 
 
 def test_llama_max_tokens_is_capped_by_the_ubatch_we_launched_with(tmp_path, monkeypatch):
-    """/props reports n_ctx and no batch field, so the launch value is the only one there is.
-
-    A prompt past one physical batch is refused by llama-server with a 500, which this route
-    turns into a 502; the limit exists to answer 400 before that.
-    """
+    """/props has no batch field, so the launch ubatch caps the limit; past it llama-server 500s."""
     from core.rag import embed_llama_server
 
     backend = embed_llama_server.LlamaServerBackend()

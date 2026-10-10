@@ -48,10 +48,7 @@ _BRANCH_FILTER_MAX_CANDIDATES = 256
 
 
 def _text_of(content, *, include_tool_calls: bool = False) -> str:
-    """Flatten OpenAI message content to plain text, dropping non-text parts. ``include_tool_calls``
-    also flattens assistant-ui's persisted ``tool-call`` parts, whose call lives in structured
-    ``toolName``/``args``/``result`` fields. The branch check needs them, or a transcript can
-    never contain the lines ``render_turn`` wrote and every archived tool turn looks rolled back."""
+    """Tool calls are flattened only when include_tool_calls is set, which the branch check needs."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -71,19 +68,7 @@ def _text_of(content, *, include_tool_calls: bool = False) -> str:
 
 
 def _probe_text(message: dict) -> str:
-    """One message flattened in the ORDER ``render_turn`` writes it.
-
-    The branch check matches in order, so both must agree on it. Bucketing the whole message as
-    call, text, result only holds while the text came BEFORE the call: a persisted row whose tool
-    call is followed by the model's final answer -- the ordinary agent turn -- renders as call,
-    result, answer, and the buckets put the answer in the middle, so `_scan_probes` advanced its
-    cursor past the answer to find the result and then could not find the answer again, classifying
-    an unchanged evicted tool exchange as off-branch so no query could return it.
-
-    So the buckets are flushed the way the replay serializer flushes its pending calls, when text
-    arrives after a call. Text before a call still rides ahead of it, which is the shape it is
-    written in.
-    """
+    """Matches render_turn's order: text after a tool call flushes the pending calls first."""
     chunks: list[str] = []
     calls: list[str] = []
     texts: list[str] = []
@@ -186,11 +171,7 @@ def render_turn(group: list[dict]) -> str:
 
 
 def _archivable(group: list[dict]) -> list[dict]:
-    """The part of an evicted turn worth archiving, or an empty list. Our own injections come out,
-    the rest stays. Rejecting the whole group threw away real answers: ``group_turns`` keeps a
-    tool call, its result and the following reply in ONE group, so an injection on that turn took
-    the model's answer down with it, leaving the question archived and the answer not -- on
-    compaction turns, which are the point here."""
+    """Drops only injected messages, keeping the real reply that shares a group with an injection."""
     if any(str(message.get("role") or "") in _SKIP_ROLES for message in group):
         return []
     kept = [message for message in group if not _is_injected(message)]
@@ -207,18 +188,7 @@ def _retrieval_names() -> frozenset:
 
 
 def _without_retrieval(group: list[dict]) -> list[dict]:
-    """The group with retrieval calls and their results removed.
-
-    `_is_injected` recognises the ids this feature and the RAG auto-inject generate, but a search
-    the MODEL asked for gets an ordinary `call_N` id from the parser, so both the call and its
-    retrieved passage were archived as new conversation. Measured: a second search then indexed the
-    first one's output inside its own, one nesting level per distinct search, each copy competing
-    for the four recall slots.
-
-    Removed by NAME, and only the retrieval parts: an assistant message can carry a retrieval call
-    alongside an ordinary one, and the reply that follows a search is real conversation that must
-    still be archived.
-    """
+    """Retrieval calls match by name: model searches carry plain call_N ids that _is_injected misses."""
     names = _retrieval_names()
     dropped_ids = set()
     out = []
@@ -247,20 +217,8 @@ def _without_retrieval(group: list[dict]) -> list[dict]:
 
 
 def _without_folded_retrieval(message: dict, dropped_ids: set):
-    """The message with any folded retrieval result cut out of its text, or None if that was all
-    it was. Matched on the shape the fold emits, since it rewrote the role the id match needs.
-
-    Keyed on ``tool_call_id`` against the calls just dropped, exactly as the role="tool" branch
-    is, and not on the tool name: the fold's output is only a JSON blob in user text, so a user
-    who pastes that shape while discussing the API would otherwise have their own words silently
-    dropped from the archive. An id-less block stays, which is what the role="tool" branch does
-    with an id-less result.
-
-    Cut, not dropped: the coalesce usually merges the passage with the question asked after it.
-    Both content shapes, because that merge yields a string for a plain question and a part list
-    for an image-bearing one. Split on "\\n\\n": ``json.dumps(indent = 2)`` emits no blank line,
-    so one folded block can never contain it.
-    """
+    """Matches the dropped tool_call_ids, not the tool name, so user text that looks like a fold
+    survives."""
     if str(message.get("role") or "") != "user":
         return message
     content = message.get("content")
@@ -311,26 +269,12 @@ def _text_without_folded_retrieval(text: str, dropped_ids: set):
 
 
 def enabled() -> bool:
-    """Whether the archive can actually run here. ``rag_available()`` and not ``RAG_AVAILABLE``: the
-    flag only records that ``import sqlite_vec`` worked, while the vec0 native library is a
-    separate file a venv can be missing (the common macOS case). Trusting it there is worse than
-    no feature at all: the fit still reserves room, then write and recall both fail, so the user
-    pays extra eviction for content that never arrives."""
+    """Uses rag_available(), not the RAG_AVAILABLE flag: the vec0 native library can be missing."""
     return bool(config.CONVERSATION_ARCHIVE) and bool(rag_db.rag_available())
 
 
 def can_archive(thread_id: Optional[str]) -> bool:
-    """Whether this thread's evicted turns can be archived at all.
-
-    A temporary (incognito) chat is never written to studio.db, yet the frontend still sends its
-    thread_id and the request carries no incognito flag, so saved messages are the only signal.
-    Archiving one would persist exactly what the user asked not to keep, into a scope with no thread
-    row that no deletion flow could reach. An API client that sends a thread_id without persisting
-    anything is excluded for the same reason.
-
-    Also gates the fit's recall reserve: a thread that cannot be archived cannot be recalled, so
-    reserving there would evict history for content that cannot arrive.
-    """
+    """Saved messages are the only signal: an incognito chat sends a thread_id but is never persisted."""
     if not thread_id or not enabled():
         return False
     try:
@@ -346,16 +290,7 @@ def archive_turns(
     live: Optional[list[dict]] = None,
     branch: Optional[list[dict]] = None,
 ) -> int:
-    """Index the evicted turns for ``thread_id``. Returns how many were newly written.
-
-    Idempotent by content hash: the same turns are evicted again on every later request in the
-    session, so re-archiving has to be free. After the first write each repeat costs one indexed
-    SELECT and writes nothing.
-
-    ``live`` is the fitted conversation, i.e. what the model can still see. It bounds how many
-    copies of a repeated turn the archive is allowed to hold right now; see ``_write_budget``.
-    Optional, and omitting it keeps the previous behaviour.
-    """
+    """Idempotent by content hash, so re-archiving evicted turns on later requests writes nothing."""
     if not thread_id or not evicted or not enabled():
         return 0
     if not can_archive(thread_id):
@@ -555,40 +490,13 @@ _INGEST_FAILED = False
 
 
 def degraded() -> bool:
-    """Whether the last archive attempt failed outright. The window reserves recall room before any
-    of this runs and ``archive_turns`` swallows its failures, so a machine whose embedder cannot
-    start would pay the reserve on every compaction for nothing. The caller checks this and stops
-    reserving."""
+    """Whether the last archive write failed; callers stop reserving recall room while it is set."""
     return _INGEST_FAILED
 
 
 def reachable() -> bool:
-    """Whether an archive write attempted RIGHT NOW could reach its store and embedder.
-
-    ``degraded`` is the verdict on the LAST write, the wrong tense for a caller deciding whether to
-    reset: this request's write runs afterwards and swallows its own failure, so the first request
-    after the store or embedder dies would commit a reset claiming the dropped turns are searchable
-    while nothing was indexed. A probe, not a promise: it cannot see a failure starting after it
-    returns, leaving the same one-turn window for a store that dies mid-request (the turns survive
-    anyway, since the client re-sends the branch and the write is idempotent).
-
-    The counter is CALLED, not merely constructed: `embedding_identity` is string formatting over
-    resolver metadata and `token_counter` hands back a lazy closure, so both reported a healthy
-    archive while the embedder could not initialize. And a real ENCODE, because the tokenizer is not
-    the forward pass: `_st_token_counter` reaches only `_get(model).tokenizer`, so a runtime encode
-    failure with no llama binary to fall back to left this answering yes while `archive_turns` was
-    about to raise and swallow it, after the reset had already dropped the history and told the
-    model it was searchable. The epoch is replayed from the boundary, so that loss is durable rather
-    than one turn.
-
-    NOT memoised across requests: a time-boxed cache handed back a stale yes for the whole window
-    after the store or embedder died, and one request inside it is enough. The caller memoises per
-    fit instead, which is the only span where the answer cannot change under it.
-
-    `"x"` rather than `""`: an empty input is documented to upset the llama embedding server. An
-    encode rather than `dim()`, which caches and on the sentence-transformers path runs no forward
-    at all -- that would reintroduce exactly the bug this closes.
-    """
+    """Probes the store and embedder with a real encode; never memoised, since a cached yes outlives
+    them."""
     if not enabled():
         return False
     conn = None
@@ -648,19 +556,7 @@ def _branch_seed(
     *,
     require_unique: bool = False,
 ) -> Optional[str]:
-    """Which stored endpoint the REQUEST proves by matching text. None when no row matches.
-
-    The newest stored row is not the branch the request is on: switching to a sibling, continuing
-    there and switching back leaves the abandoned branch holding the greatest created_at, and the
-    frontend says so outright in `refresh-context-usage.ts`. Measured on a thread with one such
-    switch, the walk read the abandoned branch and BOTH of the request branch's evicted turns
-    matched no position, taking MAX + 1 over an archive the other branch had already pushed up,
-    which the recall header presents as superseding.
-
-    Matched on text, not id: the wire carries no message ids. Scored rather than compared, since the
-    newest branch message is usually not persisted yet and the evicted turns are no longer in the
-    fitted conversation.
-    """
+    """Matches the request's text, not the newest stored row, which can belong to an abandoned branch."""
     if not branch:
         return None
 
@@ -747,26 +643,7 @@ def _active_chain(
     fallback: bool = True,
     require_unique: bool = False,
 ) -> list[dict]:
-    """The rows on ONE branch, oldest first, rather than the whole stored DAG.
-
-    `list_chat_messages` is an unfiltered SELECT ordered by time, but a thread is a tree:
-    `parent_id` is a real column and Retry leaves the replaced reply in place as a sibling. Read as
-    a flat list, an abandoned sibling lands between two live turns and the grouper glues it onto
-    whichever turn precedes it, so the regenerated turn matches no position at all and falls back to
-    MAX + 1. Measured on five turns with one Retry: the regenerated turn 2 came back numbered 5 out
-    of 4 live turns, colliding with live turn 3, under the header that says the higher number
-    supersedes. The cumulative archive is what makes MAX + 1 land past everything, so this does not
-    depend on the eviction order.
-
-    Walked newest leaf back to root, the same shape the frontend's `orderBySelectedBranch` uses to
-    decide what the model is actually shown. `parent_id` is missing on rows written before that
-    column, so the previous row stands in for it, which is exactly a flat list when nothing
-    branches. Unlike the frontend, this default path never roots a null after a recorded parent.
-    ``fallback=False`` lets callers decline when the request cannot seed a chain instead of silently
-    reading the newest stored sibling. ``require_unique`` likewise declines when indistinguishable
-    leaves tie for the best branch match and trims the winner after the last stored row the request
-    actually matched.
-    """
+    """Walks newest leaf back to root: a flat list would mix in siblings left by Retry."""
     if not messages:
         return []
     by_id: dict = {}
@@ -828,12 +705,7 @@ _REPLAY_AUDIO_DATA_URI = re.compile(r"data:audio/[a-z0-9.+-]+;base64,[A-Za-z0-9+
 
 
 def _server_builtin(part: dict) -> tuple[bool, bool]:
-    """Whether a persisted call is a provider-side builtin, and whether it has a native part. The
-    frontend drops a builtin from the replayed history entirely when there is no native part, and
-    replays one WITH a native part as a call carrying no `tool` result. Reconstructing either as
-    an ordinary local call inserted a phantom exchange, so the request-shaped turn no longer
-    matched the persisted run and the turn took a fallback ordinal. Both signals ride on the
-    persisted `args`, so this is decidable here."""
+    """Flags provider builtins and native parts; reading one as a local call adds a phantom exchange."""
     args = part.get("args")
     args = args if isinstance(args, dict) else {}
     if str(part.get("toolName") or "").lower() not in _SERVER_BUILTIN_NAMES:
@@ -902,22 +774,15 @@ def _sandbox_wrapper(result, tool_name: str) -> bool:
 
 
 def _strip_search_image_tokens(text: str) -> str:
-    """`stripSearchImageTokens`. A token resolves only against the message that produced it, so the
-    frontend drops them rather than replay an unresolvable id. Its code-block carve-out is NOT
-    mirrored: deciding it takes the frontend's whole markdown scanner, and nothing that reaches
-    this writes a token into code (the tool cannot open a region, and a reply that fences one
-    reconstructs exactly as it did before anything here stripped)."""
+    """Drops [[img: tokens, which resolve only against the message that produced them."""
     if "[[img:" not in text:
         return text
     return _SEARCH_IMAGE_TOKEN.sub("", text)
 
 
 def _sanitised_assistant_text(text: str) -> str:
-    """`sanitizeAssistantReplayText`: an assistant reply as the serializer replays it. The same two
-    substitutions the tool result gets, for the same reason: a reply that shows a picture carries
-    the token that placed it, and an audio turn carries its whole wav, so a stored reply
-    reconstructed verbatim described a message the request never sent and the turn matched no
-    transcript seat."""
+    """Strips image tokens and audio data URIs, as the serializer does, so replies match their
+    transcript."""
     return _REPLAY_AUDIO_DATA_URI.sub("[audio]", _strip_search_image_tokens(text))
 
 
@@ -940,11 +805,7 @@ def _sanitised_assistant_content(content):
 
 
 def _unwrapped(result, tool_name: str):
-    """A wrapper this app put around a result, reduced to the text the model actually saw. The
-    adapter replays that text alone, so serialising the wrapper reconstructed a tool message that
-    can never equal the archived one. Being a wrapper and losing the tokens are two questions, as
-    they are in the serializer: a result carrying both `images` and `webImages` is unwrapped by
-    the first and stripped by the second."""
+    """Reduces an app wrapper to the text the model saw, since the adapter replays only that text."""
     if not (
         _mcp_image_result(result)
         or _search_images_result(result)
@@ -956,11 +817,7 @@ def _unwrapped(result, tool_name: str):
 
 
 def _tool_result_content(result, tool_name: str = "") -> str:
-    """A persisted tool result in the string the replay serializer would have sent. An empty string
-    becomes the sentinel above, because the backend's ChatMessage validator rejects a `tool`
-    message with empty content; everything else is JSON with JavaScript's separators. Rendering
-    it any other way makes the reconstructed message differ from the one that was actually
-    archived, which is the whole point of this module comparing the two."""
+    """Empty results become a sentinel, since the backend rejects empty tool content."""
     if isinstance(result, str):
         return result if result else _EMPTY_TOOL_RESULT
     unwrapped = _unwrapped(result, tool_name)
@@ -971,16 +828,7 @@ def _tool_result_content(result, tool_name: str = "") -> str:
 
 
 def _replayable(part: dict) -> bool:
-    """Whether the serializer replays this tool call at all.
-
-    `chat-adapter.ts` drops the whole call when it has no result to send and cannot be replayed
-    without one: `if (!toolResult && !canReplayToolCallWithoutRoleTool(part)) continue`. That is
-    every cancelled or still-running LOCAL card. Keeping it here and merely omitting its `tool`
-    message invented an assistant `tool_calls` message the request never carried, which shifts the
-    groups either side of it and can send an otherwise live turn to a wrong ordinal or out of the
-    branch check entirely. A provider-side builtin is replayable without a result, but one with no
-    native part is dropped by `serializeAssistantToolCallPart` instead, so it is not a call here.
-    """
+    """Drops a call with no result unless it is a builtin with a native part, as the frontend does."""
     builtin, native = _server_builtin(part)
     if builtin:
         return native
@@ -999,11 +847,7 @@ def _local_round_id(part: dict):
 
 
 def _flushes_local_pair(part: dict) -> bool:
-    """`shouldFlushCompletedLocalToolPair`: a completed local call is its own round. A local tool
-    card that already has its result is flushed both BEFORE and AFTER it, so two adjacent
-    completed local calls replay as two sequential assistant/tool groups and not as one parallel
-    group. Batching them made `group_turns`, the occurrence ordinals and the live-branch check
-    all describe a transcript shape the request never sent."""
+    """A completed local call is flushed before and after, so adjacent ones replay as separate rounds."""
     provenance = part.get("provenance")
     if not isinstance(provenance, dict) or provenance.get("source") != "local":
         return False
@@ -1013,30 +857,7 @@ def _flushes_local_pair(part: dict) -> bool:
 
 
 def _as_wire(messages: list[dict], sanitise_assistant: bool = True) -> list[dict]:
-    """Persisted chat rows in the shape the inference layer sends them.
-
-    The store keeps a tool call as a ``tool-call`` CONTENT PART carrying its own result, while the
-    wire form is three messages: the assistant's `tool_calls`, a `tool` result, then the assistant's
-    reply. Nothing put them back, and everything here reads the persisted rows as if they were wire
-    messages, so an agent turn was invisible twice over. `group_turns` splits on `tool_calls`, which
-    a persisted row never has, so the whole exchange folded into the preceding user group and the
-    evicted tool group found no position of its own -- measured, seats came back empty and the
-    exchange took MAX + 1, the number its own opening question already had. And `_live_transcript`
-    probes these rows in the same shape, so the branch check compared a call/result/reply render
-    against a row reading call/reply/result: the archived agent turn failed the live-branch filter
-    and NO query could return it, on every tool-using turn.
-
-    The result is stripped from the call part and carried by the `tool` message instead, so
-    `_probe_text` renders each piece exactly once and in the order `render_turn` wrote it. Only the
-    id goes into `tool_calls`: the arguments stay on the content part, where `_probe_text` already
-    offers both JSON spellings, and `_is_injected` still sees the id it filters our own injections
-    by.
-
-    `sanitise_assistant` is the STORED side of that comparison. A caller projecting the request's
-    own messages against something written WITHOUT this projection must pass False:
-    `_branch_boundary_anchor` records an anchor straight off the request, so `_archive_as_wire` has
-    to hand the same bytes back or the rebase stops matching.
-    """
+    """Splits stored tool-call parts into wire form; pass sanitise_assistant=False for request messages."""
     wire: list[dict] = []
     for message in messages:
         content = message.get("content")
@@ -1138,39 +959,12 @@ def _as_wire(messages: list[dict], sanitise_assistant: bool = True) -> list[dict
 
 
 def _fallback_ordinal(conn, scope: str, positions: Optional[list[list[str]]]) -> int:
-    """Where a turn that matched no seat goes: past the archive AND past the transcript.
-
-    The two numbering spaces are different. Seats are TRANSCRIPT positions, while
-    `next_archive_ordinal` counts what has been ARCHIVED, and the newest user group is protected
-    from eviction, so during a long tool loop it is in the transcript and not in the archive. An
-    in-flight tool group evicted before its assistant row is persisted matches no seat and took the
-    archive's next number, which the user turn then claimed from the transcript: measured, both
-    documents landed on ordinal 0, and since `created_at` breaks the tie the tool answer rendered
-    ahead of the prompt that caused it, under the header saying a higher number was said later.
-
-    The transcript length is the right floor because an unmatched group is unmatched for being newer
-    than the saved rows. A gap in the numbering costs nothing: ordinals only have to order.
-    """
+    """A turn matching no seat takes the larger of the archive's next ordinal and the transcript length."""
     return max(store.next_archive_ordinal(conn, scope), len(positions or []))
 
 
 def _transcript_positions(thread_id: str, branch = None) -> Optional[list[str]]:
-    """The thread's saved messages as normalised probe text, in the order they were said.
-
-    The ordinal has to come from the CONVERSATION, not from the moment a turn happened to be
-    archived. Eviction is not strictly oldest-first: `truncate_oldest_messages` always protects the
-    newest user group, so an agent turn's tool groups are evicted while the user message that opened
-    them is held, and a pinned instruction is evicted only once it stops being pinned. Numbering by
-    archive time then records the genuinely oldest turn as the newest, and
-    `format_conversation_recall` states outright that the higher number "was said later and
-    supersedes the earlier one". Measured before this: a standing instruction archived second came
-    back as turn 3 of 3, presented to the model as superseding the two turns that actually followed
-    it.
-
-    Read from the persisted transcript rather than the request, because four of the five archive
-    call sites pass the tool loop's already-fitted messages, whose indices shift as earlier groups
-    drop out. `studio_db` holds the whole thread and is never truncated.
-    """
+    """Numbers come from the saved transcript, not archive time, since eviction is not oldest-first."""
     try:
         from core.inference.context_window import group_turns
         from storage import studio_db
@@ -1188,22 +982,7 @@ def _transcript_positions(thread_id: str, branch = None) -> Optional[list[str]]:
 
 
 def _occurrences(positions: Optional[list[list[str]]], group: list[dict]) -> list[int]:
-    """Where this turn sits in the transcript, every time it was said.
-
-    The WHOLE turn, not just its opening line. Matching on the first message alone made two
-    different turns that merely start the same -- a repeated "continue", the same question re-asked,
-    a regenerated reply -- claim each other's seats: measured, both were stamped with ordinal 0, and
-    because each then believed it had two occurrences to fill, the next compaction wrote both of
-    them AGAIN. Four documents for two turns, twice the recall slots spent on the same content, and
-    the older answer quoted under the higher turn number, which the header presents as the one that
-    supersedes.
-
-    Compared as a prefix, because the transcript legitimately lags the evicted group: a turn is
-    archived mid-request, before its own reply has been persisted. A turn that matches nothing
-    yields no seats and falls back to the previous allocator, so this can never do worse than not
-    looking. A list rather than one index because a conversation may legitimately contain the same
-    turn twice, and the later occurrence is usually the one that matters.
-    """
+    """Matches the whole turn, not its first line, so turns that merely start alike do not share seats."""
     if not positions or not group:
         return []
     texts = [_normalise_cased(_probe_text(message)) for message in group]
@@ -1255,16 +1034,7 @@ def _write_copy(
     vectors,
     seats: list[int],
 ) -> bool:
-    """One more copy of an already-embedded turn, at the next unfilled seat.
-
-    Only for topping up after a re-embed, which replaces a copy rather than adding one. Returns
-    False when there is no seat left to fill, so the caller stops rather than allocating a fresh
-    ordinal and putting a repeat at the end of its own conversation.
-
-    ``span`` is the turn's size in the TRANSCRIPT and not ``len(group)``: `_archivable` strips a
-    retrieval call and its result, so a group of three can span four live messages. Written short,
-    the branch check bounds its run by the smaller figure and filters this copy out of every recall.
-    """
+    """span is the turn's transcript size, not len(group), since archiving strips retrieval parts."""
     copies = store.documents_by_hash(conn, scope, digest)
     if not seats or len(copies) >= len(seats):
         return False
@@ -1311,26 +1081,7 @@ def _write_budget(
     live_positions: Optional[list[list[str]]],
     group: Optional[list[dict]] = None,
 ) -> int:
-    """How many copies of a repeated turn the archive may hold RIGHT NOW.
-
-    ``seats`` is every place the turn was said, which is what allocates ordinals, but it is the
-    wrong number to spend on writes. A thread can hold the same turn twice with only the older one
-    evicted; the archive then sees one stored copy against two seats, decides it is short, and
-    writes a second document for the occurrence still sitting in the prompt. Both are then
-    recallable, so identical text takes two of the four recall slots and one of them repeats what
-    the model can already read.
-
-    Counted against the LIVE conversation instead: a seat whose every message is still in the prompt
-    has not been evicted and buys no write. When that turn is evicted later the budget rises on its
-    own and the copy is written then, at its own ordinal.
-
-    COUNTED, not tested for membership: a set of live texts cannot tell "one of three identical
-    turns is still in the prompt" from "all three are", so every seat looked live and a turn said
-    three times with two of them evicted was archived once. Counting the live occurrences with
-    `_occurrences`, the same matcher that finds the seats, subtracts exactly as many as the prompt
-    really holds. Floors at 1 so a turn whose seats cannot be told apart from live text is still
-    stored; and with no ``live`` to compare against, this is exactly the old ``len(seats)``.
-    """
+    """Counts occurrences still in the live prompt, so a turn still shown is not archived again."""
     if not seats:
         return 1
     if not live_positions or not positions:
@@ -1347,14 +1098,7 @@ def _retire_surplus(
     *,
     rows = None,
 ) -> bool:
-    """Delete copies of this turn the conversation no longer holds. True if any went.
-
-    More copies than occurrences means a rewind removed one. The survivors are byte-identical, so
-    the branch filter validates every copy against the single remaining occurrence and `recall`
-    dedups on chunk id, which differs: measured, a recall slot went on quoting one turn twice, and
-    the surplus kept an ordinal a genuinely later turn had since taken. Does nothing without seats,
-    so a turn that failed to match its occurrences at all never loses a copy.
-    """
+    """Deletes surplus copies after a rewind; with no seats it does nothing, so no copy is lost."""
     if not seats:
         return False
     try:
@@ -1378,21 +1122,7 @@ def _restamp(
     commit: bool = False,
     skip_null: bool = False,
 ) -> None:
-    """Move existing copies of this turn onto the positions the transcript gives them.
-
-    An archive written by an earlier build numbered turns as they arrived, and one written before
-    the column existed has no number at all. Both keep an order that was never true, and
-    `format_conversation_recall` states that the higher number was said later and supersedes the
-    earlier one, so the block asserts it. Re-stamping at the next compaction lets those archives
-    converge with no migration pass and no reindex: this is an UPDATE on rows that already exist, so
-    nothing is duplicated.
-
-    Called from BOTH archived paths. The cheap pre-check that runs before chunking fires on exactly
-    the condition the write-lock branch does, so a restamp only in the latter was unreachable
-    outside a race: measured, a forced-legacy archive still read NULL,NULL after a full
-    re-compaction, and an archive-time order of 1,0 stayed 1,0 with the recall rendering the second
-    turn first.
-    """
+    """Converges archives numbered by arrival or not at all, via UPDATE, so nothing is duplicated."""
     if not seats:
         return
     try:
@@ -1420,19 +1150,7 @@ def _stale_document(
     *,
     occurrences: int = 1,
 ):
-    """The document id to replace, ``_ARCHIVED`` to skip, or None to write a new one.
-
-    Hash alone is not enough, twice over. Dense search only reads documents whose recorded embedder
-    matches the query's, so a turn archived under the previous model stays hashed-and-skipped while
-    being invisible to every paraphrased search; ingestion re-indexes in that case, and so does
-    this.
-
-    And a hash is not an identity when a user repeats themselves. ``occurrences`` is how many times
-    this exact turn appears in the transcript, so a copy is only "already archived" once every
-    occurrence has one. Without it the third turn of "set X to 1", "set X to 2", "set X to 1" was
-    dropped on the floor: never indexed, so no query could reach it, and the recall then handed the
-    model the superseded value under a header saying the higher turn number supersedes the lower.
-    """
+    """Hash alone is not enough: the embedder must match, and each repeated occurrence needs a copy."""
     copies = store.documents_by_hash(conn, scope, digest)
     if not copies:
         return None
@@ -1455,18 +1173,7 @@ def _archived_under(
 
 
 def _widen_span(conn, scope: str, digest: str, span: int) -> None:
-    """Grow a stored turn's window when the same text reappears over a LONGER span.
-
-    The digest is the rendered text, so two turns that read the same are one document, but their
-    transcript spans can differ: `_archivable` strips a retrieval call and its result, so a
-    three-message exchange and a four-message batch containing the same exchange render identically.
-    Archived in that order, the second is skipped and keeps the first turn's span of three, and
-    `_document_matches_one_run` then bounds its four-message live run by three and rejects it as
-    off-branch, so no query returns it.
-
-    Only ever UPWARDS. The window is a maximum, so a larger one still matches the shorter turn,
-    while narrowing it would break whichever turn was archived first.
-    """
+    """Only widens: a stored window is a maximum, so a longer span still matches the shorter turn."""
     try:
         conn.execute(
             "UPDATE documents SET archive_messages = ? "
@@ -1502,49 +1209,17 @@ def has_archive(thread_id: str) -> bool:
 
 
 def _normalise(text: str) -> str:
-    """Probe text for comparison: trimmed at both ends, otherwise exactly as written.
-
-    Case IS the edit. Lowercasing left a turn corrected only in capitalisation matching its archived
-    copy, so `_document_matches_one_run` kept the pre-edit document live and a recall could answer
-    with it. The two sides here are a stored render and the live text of the same messages, so there
-    is no spelling difference to be tolerant of, and nothing else retires the stale copy -- the edit
-    changes the digest, so it is written as a new document and the branch filter is the only thing
-    that could have dropped the old one.
-
-    `strip()` and not `rstrip()`, even though trimming each probe also discards leading indentation.
-    Keeping leading whitespace looks tighter and is worse: `render_turn` strips the whole message,
-    so a live turn beginning with a space or a newline then starts its run at a non-zero offset and
-    `_document_matches_one_run` retires it -- measured on `   hello there` and on a pasted block
-    opening on a newline, which is a silent loss of recall on exactly the pasted code that tends to
-    matter.
-
-    Indentation-only edits are therefore still tolerated, in both directions: probes are matched per
-    line and as substrings, so leading whitespace never decides. Closing that needs the probe
-    splitter to carry offsets, which is a bigger change than this bug warrants. Lexical search does
-    its own tokenising and never reads this.
-    """
+    """Trims both ends and keeps case: a capitalisation-only edit must retire the stale copy."""
     return (text or "").strip()
 
 
 def _normalise_cased(text: str) -> str:
-    """Whitespace-collapsed but CASE-PRESERVING, for transcript seat matching. `Set key Foo` and
-    `Set key FOO` are two different turns: they hash differently, so the archive keeps a document
-    for each. Folding case here made `_occurrences` hand BOTH seats to BOTH of them, and a turn
-    that believes it has two occurrences to fill gets written twice at the next compaction --
-    four documents for two turns, both stamped at both ordinals, and the recall unable to say
-    which spelling was said later. The two sides compared here are the same strings from the same
-    thread, so there is no casing to be tolerant of; only the free-text branch filter, which
-    compares a QUERY against saved text, still folds case."""
+    """Collapses whitespace but keeps case, since casing-only variants are different turns."""
     return " ".join((text or "").split())
 
 
 def _live_transcript(thread_id: str) -> Optional[list[str]]:
-    """The thread's saved messages, one normalised string each, or None if it has none. Keeps recall
-    on the branch the user is on: editing a message rewinds the thread, but the archive is
-    append-only and still holds the abandoned continuation's turns, so without this a recall can
-    pull back a turn that never happened on this branch. None means the thread has no saved
-    transcript (an API client passing a thread_id without persisting), and the caller then does
-    not filter: absence of evidence."""
+    """Keeps recall on the user's branch, since the append-only archive also holds abandoned turns."""
     try:
         from storage import studio_db
         messages = studio_db.list_chat_messages(thread_id)
@@ -1560,21 +1235,8 @@ def _live_transcript(thread_id: str) -> Optional[list[str]]:
 def branch_message_texts(
     messages: Optional[list[dict]], roles: Optional[tuple[str, ...]] = None
 ) -> Optional[list[str]]:
-    """The ACTIVE branch, one normalised string PER MESSAGE, from the request's own messages.
-
-    Per message rather than one blob, so the check stays inside the turn it is checking. Flattened,
-    a probe can be satisfied by any later message repeating the words: an archived "Should I deploy?
-    / No" whose answer was edited to "Yes" still matched because an unrelated later turn said "No".
-
-    Preferred over ``_live_transcript`` wherever available: the stored rows are the whole message
-    DAG, and retry/regenerate keep the replaced response as a sibling, so a thread-wide blob can
-    validate a turn that is not on this branch. The client sends exactly one branch per request, and
-    it is the same projection ``render_turn`` archived from, so the probe compares like with like.
-
-    ``roles`` narrows it to messages of those roles. The rolling window compares stored ASSISTANT
-    rows, and against every role a short abandoned reply ("Done") matches a live user message that
-    merely contains it ("not done yet").
-    """
+    """Taken from the request, not the stored DAG, which keeps abandoned siblings; one string per
+    message."""
     if roles:
         messages = [
             message for message in (messages or []) if str(message.get("role") or "") in roles
@@ -1593,10 +1255,7 @@ def message_text(content) -> str:
 
 
 def content_on_branch(content, transcript: Optional[list[str]]) -> bool:
-    """Whether one stored message's text appears on the branch ``transcript`` describes. Shared with
-    the rolling window, which has recall's problem: the stored rows are the whole DAG, so "the
-    newest assistant turn" can belong to a sibling branch. Empty text counts as on-branch, since
-    nothing to compare is not evidence of another branch."""
+    """Stored rows span all branches, so a newest reply may be a sibling; empty text counts as on-branch."""
     if not transcript:
         return True
     text = _normalise(_probe_text({"content": content}))
@@ -1619,11 +1278,7 @@ _GAP_IS_LABEL = re.compile(
 
 
 def _probes_for(text: str) -> list[str]:
-    """The lines of an archived chunk, normalised into things to look for on the branch. Substring
-    containment on a normalised prefix rather than a digest match: the archived text came from
-    the inference projection and the saved copy from the message store, so exact equality is too
-    brittle. The role labels ``render_turn`` writes exist only in the archived copy, so they are
-    stripped first, or every probe misses."""
+    """Strips the role labels render_turn writes, which exist only in the archived copy, before matching."""
     probes = []
     for line in (text or "").splitlines():
         without_role = _ROLE_PREFIX.sub("", line)
@@ -1642,10 +1297,7 @@ def _probes_for(text: str) -> list[str]:
 
 
 def _probe_entries(text: str) -> list[tuple[str, bool]]:
-    """``_probes_for`` with a flag per line: was it cut short, or is it a tool call. Both mean the
-    live message may legitimately hold more than the probe: a cut line is a prefix by
-    construction, and a tool call is matched against a haystack that renders its arguments twice,
-    spaced and compact, so only one of the two can ever be covered."""
+    """Flags lines cut short or tool calls, since the live message may hold more than the probe."""
     entries = []
     for line in (text or "").splitlines():
         without_role = _ROLE_PREFIX.sub("", line)
@@ -1683,20 +1335,7 @@ def _on_live_branch(text: str, transcript: Optional[list[str]]) -> bool:
 def _scan_probes(
     entries: list[tuple[str, bool]], messages: list[str], start: int, last: int
 ) -> Optional[tuple[int, int, int, bool, int]]:
-    """Where the probes finish: message index, end offset, opening offset, tail-is-partial, and the
-    message index the run OPENED on.
-
-    An index rather than a bool so one document's chunks scan as a single pass, each continuing
-    where the last stopped, which stops two chunks of a turn matching two places. The cursor within
-    that message is NOT carried over: chunks overlap by ``CHUNK_OVERLAP``, so the next one
-    legitimately repeats the previous tail.
-
-    The opening index is reported because that repeated tail can begin in an EARLIER message than
-    the one the previous chunk finished in -- a short line such as an assistant tool call just
-    before a long tool result is carried into the next chunk whole. Resuming at the finishing
-    message could then never match it, and an unedited document was retired as off-branch, which
-    makes that turn unsearchable.
-    """
+    """Reports the message a run opened on: an overlapping chunk's tail can begin in an earlier message."""
     index = start
     cursor = 0
     opened_at = None
@@ -1757,12 +1396,7 @@ def _probes_match_from(probes: list[str], messages: list[str], start: int, windo
 
 
 def _rendered_message_count(rows) -> int:
-    """How many messages the archived turn was rendered from. ``render_turn`` labels every message
-    it writes, so labelled lines count messages. That bounds the run this document may occupy,
-    far tighter than a line count: a two-message turn can be a hundred lines, and a
-    hundred-message window finds its tail anywhere. Overlapping chunks can double-count a label,
-    which only widens the window: the safe direction, since too narrow retires turns that are
-    still live."""
+    """Counts labelled lines, since render_turn labels every message; bounds the run a turn may occupy."""
     total = 0
     for row in rows:
         for line in (row["text"] or "").splitlines():
@@ -1773,11 +1407,7 @@ def _rendered_message_count(rows) -> int:
 
 
 def _document_on_live_branch(conn, document_id: str, transcript: list[str], cache: dict) -> bool:
-    """Whether EVERY chunk of an archived turn is still on the branch. Per chunk is not enough: a
-    turn over CHUNK_TOKENS spans several chunks, so editing the second half of a long answer
-    leaves the untouched earlier chunks eligible on their own. The archived unit is the turn, so
-    an edit to any part retires the whole copy. Cached per call: candidates from one turn share a
-    document, and this is the filter's only query."""
+    """Every chunk must still be on the branch: an edit to any part of a turn retires the whole copy."""
     if document_id in cache:
         return cache[document_id]
     try:
@@ -1801,11 +1431,7 @@ def _document_matches_one_run(
     transcript: Optional[list[str]],
     message_count: Optional[int] = None,
 ) -> bool:
-    """Every chunk of the turn, found within ONE run of adjacent messages. Chunk by chunk
-    independently is not enough: they are consecutive slices of one turn, so letting each pick
-    its own place reassembles a turn from parts that never sat together (head on the current
-    answer, tail on a later message repeating what the edit removed). The run is bounded by at
-    least the number of messages the turn was rendered from, so a live turn always fits."""
+    """Every chunk must match within one run of adjacent messages, not be assembled from scattered parts."""
     if not rows or not transcript:
         return False
     probe_lists = [_probe_entries(row["text"]) for row in rows]
@@ -1847,10 +1473,7 @@ def _document_matches_one_run(
 
 
 def _order_key(ordinal, created_at, document_rowid, chunk_index) -> tuple:
-    """The recall order, spelling-independent: the single-query path passes a row's
-    snake_case columns and the merge passes a source's camelCase keys, and a second copy of
-    the key agrees only until someone edits one of them.
-    """
+    """One key for both snake_case columns and camelCase keys, so the recall order cannot drift."""
     created = created_at or ""
     rowid = document_rowid or 0
     index = chunk_index or 0
@@ -1860,24 +1483,7 @@ def _order_key(ordinal, created_at, document_rowid, chunk_index) -> tuple:
 
 
 def _conversation_order(row) -> tuple:
-    """Sort key putting recalled turns in the order they were said.
-
-    NULL ordinals sort FIRST, and that is not a fallback so much as a fact: they were
-    written by a build that had no such column, so they genuinely predate every numbered
-    turn in the same scope. `created_at` breaks ties below that, because the ordinal is
-    deliberately not UNIQUE: the write lock is best-effort, so two concurrent archive
-    passes can compute the same MAX + 1 and must tie-break rather than raise.
-
-    Then the document's rowid, because `created_at` ties whenever the clock is coarser than
-    the write: Windows advances it about every 15.6 ms, so a compaction stamps a whole
-    conversation identically and the sort falls back to relevance order under a header
-    saying oldest first. Insertion order is what the archive recorded, and the rewrite path
-    preserves it (`create_document`'s `rowid`) so a re-embed cannot move a turn.
-
-    `chunk_index` comes LAST because it is a position WITHIN a document: above the rowid it
-    interleaves two tied documents (A0, B0, A1, B1, ...) rather than ordering them,
-    shredding the long message it exists to keep contiguous.
-    """
+    """NULL ordinals sort first; then created_at, then rowid, since coarse clocks tie created_at."""
     if row is None:
         return (2, 0, "", 0, 0)
     return _order_key(
@@ -1889,34 +1495,15 @@ def _conversation_order(row) -> tuple:
 
 
 def _above_floor(hits: list, min_dense_score: float) -> list:
-    """Candidates clearing the forced path's cosine floor. Off (0.0) returns them all. FORCED path
-    only: an automatic lookup returning whatever shares a stopword with the question is worse
-    than none, since that block is the model's first sight of the search tool. Lexical-only hits
-    are kept, because gating them on a similarity they never carried would delete the
-    exact-identifier hits this archive is best at."""
+    """Applies only to forced lookups; lexical-only hits are kept, since they have no score to gate."""
     if min_dense_score <= 0:
         return hits
     return [hit for hit in hits if hit.dense_score is None or hit.dense_score >= min_dense_score]
 
 
 def _ends_first_within_ties(conn, hits: list) -> list:
-    """Reorder each run of EQUAL lexical scores as newest, oldest, next-newest, ...
-
-    A tie is not an order. FTS5 floors the IDF of a term appearing in more than half the index at
-    1e-6, so in a per-thread archive every turn naming the subject of the conversation can score
-    identically -- measured at ONE distinct bm25 across eight revisions of the same variable. The
-    candidate list then arrives in rowid order, the caller truncates it at `top_k`, and the slots go
-    to the OLDEST turns purely because SQLite emitted them first: the current value never reached
-    the model, while `format_conversation_recall` told it a later turn supersedes an earlier one. A
-    stale answer presented as the authoritative one is worse than a miss.
-
-    Newest-first outright is the obvious fix and it is wrong: measured, it fails BOTH
-    `test_asking_what_it_was_originally_still_returns_the_first_assignment` -- the guard against a
-    fix that just returns the latest thing it can find -- and the tie test below it. Both ends is
-    what keeps "what is it now" and "what was it originally" answerable out of the same tied run.
-    Only WITHIN a run of equal scores, so nothing ever moves past a chunk the ranking pass actually
-    separated. Ordering is `_conversation_order`, so legacy NULL ordinals still count as oldest.
-    """
+    """Alternates newest and oldest within tied scores, since newest-first alone loses the original
+    value."""
     if not config.CONVERSATION_QUERY_FOCUS:
         # Reordering is selection, so it stays behind the rollback knob.
         return hits
@@ -1994,21 +1581,7 @@ def _both_ends(oldest: list, newest: list) -> list:
 
 
 def _focused_lexical(conn, scope: str, query: str, model, fetch: int) -> list:
-    """Archive lexical candidates: the identifiers FILTER, the content words RANK.
-
-    The identifier pass cannot also do the ranking. FTS5 floors the BM25 IDF of a term that appears
-    in more than half of the index at 1e-6 (`ext/fts5/fts5_aux.c`), and in a per-thread archive the
-    identifier the whole conversation is about is exactly such a term. Its hits therefore come back
-    in an order that carries no information, so cutting that pass off at ``fetch`` drops turns
-    effectively at random -- measured on a 20-turn archive naming one variable, the turn stating its
-    current value fell outside the 16 candidates and the recall answered with the four oldest turns
-    instead.
-
-    So the identifiers decide WHICH chunks are eligible and the content-word pass decides the order
-    among them. Chunks the ranking pass never saw keep their place behind the ones it did, and
-    chunks that match only the content words stay last, which is what keeps every slot on the
-    subject of the question.
-    """
+    """Identifiers filter candidates and content words rank them, as BM25 is flat on common identifiers."""
     expressions = (
         store.conversation_match_queries(query) if config.CONVERSATION_QUERY_FOCUS else [None]
     )
@@ -2074,13 +1647,7 @@ def _focused_lexical(conn, scope: str, query: str, model, fetch: int) -> list:
 
 
 def _candidates(conn, scope: str, query: str, model, fetch: int, thread_id: str) -> list:
-    """Up to ``fetch`` archive chunks for ``query``: lexical first, hybrid for the rest. The lexical
-    pass runs TWICE when the question contains an identifier: once requiring one of them, then
-    once over the content words. Requiring them is what stops an incidental word in the question
-    outranking the subject of the whole conversation; running the permissive pass as well is what
-    orders the survivors and what stops a filter that matches nothing from reading as an empty
-    archive. The merged list is what the caller's widening loop measures, so a filter returning
-    few rows cannot be mistaken for "nothing left to widen into"."""
+    """Lexical runs twice with an identifier: once requiring it, then over content words for order."""
     hits: list = []
     seen: set = set()
     for hit in _focused_lexical(conn, scope, query, model, fetch):
@@ -2118,20 +1685,7 @@ def recall(
     extra_queries: Optional[list[str]] = None,
     forced: bool = False,
 ) -> Optional[tuple[str, list[dict]]]:
-    """Most relevant archived turns for ``query``, rendered like any other RAG hit.
-
-    LEXICAL FIRST, then hybrid for the rest of the budget. Recalling your own conversation is mostly
-    exact match (a name, a number, a code pasted twenty turns ago), which lives or dies on rare
-    tokens. Measured on a 30-turn walkthrough with identical boilerplate per turn: the needle chunk
-    ranked 3rd lexically at any k, was never returned by dense retrieval at all, and RRF fusion
-    pushed it to 16th behind 30 useless dense hits. Dense still earns its place for paraphrased
-    recall, so it fills whatever the lexical pass leaves.
-
-    No relevance floor, unlike ``tool.search_for_autoinject``: its cosine gate keeps off-topic
-    documents out, but here the passages ARE this conversation and the alternative to a weak match
-    is no memory at all. It also keeps lexical-only hits, since ``filter_min_score`` only gates hits
-    carrying a dense score.
-    """
+    """Lexical first, since recall is mostly exact match; no relevance floor, as weak matches beat none."""
     query = (query or "").strip()
     if not thread_id or not query or not enabled():
         return None
@@ -2275,17 +1829,7 @@ def _delete_scope_without_vec(
     *,
     created_before: Optional[str] = None,
 ) -> list:
-    """Delete a scope's text-bearing rows over a connection with no sqlite-vec.
-
-    Deletion must not depend on the optional native extension. Rows are only WRITTEN while vec0
-    loads, but it can stop loading afterwards (a venv change, common on macOS), and a delete that
-    silently does nothing leaves a deleted chat's turns and uploads on disk, retrievable again once
-    vec0 returns.
-
-    The chunks_vec rows are unreachable from here and left behind. They carry vectors, not text, and
-    every read path resolves through ``chunks`` joined to ``documents``, both gone, so nothing can
-    retrieve an orphan.
-    """
+    """Must not depend on sqlite-vec: a silent no-op here would leave deleted turns retrievable."""
     conn = None
     removed = []
     try:
@@ -2315,15 +1859,7 @@ def _delete_scope_without_vec(
 
 
 def delete_for_thread(thread_id: str, *, created_before: Optional[str] = None) -> int:
-    """Drop a thread's archive. Called when the thread itself is deleted.
-
-    ``created_before`` bounds the delete to documents archived before an ISO-8601 UTC instant, which
-    is how a thread id that came BACK is handled. Skipping the scope wholesale spared the recreated
-    chat's memory but also kept the deleted conversation's, under a live id with nothing left to
-    sweep it: the endpoint reported success while the turns the user asked to delete stayed
-    recallable in the new chat. Cutting at the moment the delete was accepted takes exactly the old
-    conversation and leaves whatever the recreated thread has archived since.
-    """
+    """Bounded by created_before, so a reused thread id keeps the archive written since the delete."""
     if not thread_id:
         return 0
     scope = store.conversation_archive_scope(thread_id)
@@ -2344,12 +1880,7 @@ def delete_thread_documents(thread_id: str, *, created_before: Optional[str] = N
 
 
 def copy_thread_documents(source_thread_id: str, thread_id: str) -> tuple[dict[str, str], bool]:
-    """Copy a thread's finished uploads into another thread. Returns the source-to-copy document id
-    map and whether an upload still being ingested was left behind. Failed uploads are not copied
-    and not reported: the documents bar never shows them.
-
-    Files are copied before the transaction so rag.db's write lock is never held across file I/O.
-    """
+    """Copies files before the transaction, so rag.db's write lock is never held across file I/O."""
     from .ingestion import _copy_upload, _remove_upload
 
     scope = store.thread_scope(thread_id)

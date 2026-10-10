@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""``_wait_for_vram_settle`` helper contract.
-
-Pins the bounded poll over ``_get_gpu_free_memory`` bridging the kill -> spawn
-VRAM-reclaim window. Patches ``_get_gpu_free_memory``; no real llama-server or
-nvidia-smi involved.
-"""
+"""Bounded poll of _get_gpu_free_memory bridging the kill-to-spawn VRAM reclaim window."""
 
 from __future__ import annotations
 
@@ -80,12 +75,7 @@ import subprocess
 
 
 def _patch_probe(samples):
-    """Patch ``_get_gpu_free_memory`` to yield ``samples`` in order.
-
-    Each entry is a list[(idx, free_mib)], a callable, or an exception
-    (instance or class). Calls past the end repeat the last entry so tests
-    can assert "stopped polling" via the call count.
-    """
+    """Feeds _get_gpu_free_memory the given samples in order; calls past the end repeat the last entry."""
     state = {"i": 0, "calls": 0}
 
     def _side_effect():
@@ -119,15 +109,7 @@ _real_sleep = time.sleep
 
 
 class _Sleeps:
-    """The naps ``_wait_for_vram_settle`` asks for, in order.
-
-    Every claim in this file is about the helper's sleeping: did it skip the wait, did
-    it nap once per poll, did it clip the last nap to the deadline. Measuring that as
-    wall clock made each one a budget -- ``elapsed < 0.05`` around a short-circuit, which
-    a GC pause on a shared runner exceeds while the helper did exactly the right thing.
-    The durations it requests are the same facts without the runner in them, so ask for
-    those and keep one generous ceiling for the case where it never returns at all.
-    """
+    """Asserts on requested nap durations, since wall-clock timing flakes on a shared runner."""
 
     def __init__(self, clock = None):
         self.durations: list[float] = []
@@ -263,16 +245,7 @@ def test_max_wait_respected_when_never_settles():
 
 
 def test_max_wait_respected_when_probe_is_slow():
-    """Slow probe: clipped sleep keeps the wall-clock bound honest.
-
-    On a fake clock, because this one cannot be asked in real time. The claim is that
-    the nap AFTER the slow probe is cut to what is left of the budget, so the test needs
-    a nap to have been requested at all -- and if a real scheduler pause eats the 0.1s
-    that remained, a correct helper returns at the deadline check without napping and
-    the assertion fails on a run that did nothing wrong. Nothing here is about how fast
-    the box is, so the box is taken out: the probe charges its cost to the clock instead
-    of sleeping, and every sample is exact.
-    """
+    """Fake clock: the slow probe charges its cost to the clock, so the nap after it is clipped exactly."""
 
     def _slow_probe():
         clock.advance(0.30)
@@ -605,10 +578,7 @@ def test_record_then_reap_round_trip_identity_matches(tmp_path):
 
 
 def test_reap_recorded_pid_spares_live_server(tmp_path):
-    """A recorded server whose parent is still alive (the running Unsloth) is NEVER
-    reaped, and its pidfile is kept. This is the finding-3 guard: a helper backend
-    constructed in-process must not kill the active chat server. Uses the REAL
-    _pid_parent_is_alive (the child's parent is this live test process)."""
+    """A live parent's server is never reaped, so a helper backend cannot kill the active chat server."""
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     pidfile = tmp_path / "llama-server.pid"
     pidfile.write_text(str(proc.pid))

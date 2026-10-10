@@ -165,12 +165,7 @@ def _download(
     attempts: int = _DOWNLOAD_ATTEMPTS,
     timeout: float = _DOWNLOAD_TIMEOUT,
 ) -> bool:
-    """Download url to dest via urllib (temp file + atomic rename), retried. Best-effort -> bool.
-
-    Attempts share one budget rather than each getting `timeout`, so a failing download
-    costs about what the single attempt before it did, and the terminal cases below skip the
-    pauses: run.py starts the launch tunnel inline, where one of them delays the banner.
-    """
+    """Attempts share one budget, and terminal errors skip the pauses that would delay the launch banner."""
     import socket
     import ssl
     import tempfile
@@ -388,10 +383,7 @@ def _probe_edge(
 
 
 def _verify_through_edge(host: str, deadline: float) -> bool:
-    """Verify at the edge, which selects the tunnel by SNI rather than by address. Error 1033 and an intercepting
-    proxy's own page are both answers and are not told apart here, so only the marker ends the wait. Nothing
-    answering at all is this path being blocked, which the hostname may still get through.
-    """
+    """Edge match is by SNI; error 1033 and proxy pages both answer, so only the marker ends the wait."""
     addresses = _edge_addresses()
     if not addresses:
         return False
@@ -816,12 +808,7 @@ def start_studio_tunnel(
     admission: Optional[Tuple[int, int]] = None,
     origin_host: str = "localhost",
 ) -> Optional[str]:
-    """Start a quick tunnel and return its public URL once it is actually serving, or None
-    (best-effort). Waits for cloudflared to both mint the URL and register an edge connection, then
-    fetches /api/health over the public URL, so the caller never advertises a link that yields
-    Cloudflare error 1033 (HTTP 530) or an unresolvable host. If a URL is minted but no connection
-    registers within the window (e.g. quic is blocked on this network), retries once forcing the
-    http2 protocol. On any failure the tunnel is stopped and None is returned."""
+    """Returns the URL only after /api/health answers over it, so no dead link (1033) is advertised."""
     global _active_tunnel, _shutdown_requested, _tunnel_generation
     global _tunnel_state, _tunnel_owner, _tunnel_url, _tunnel_error, _tunnel_port
     if managed_by not in _TUNNEL_OWNERS:

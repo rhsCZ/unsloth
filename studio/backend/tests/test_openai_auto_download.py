@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Opt-in auto-download of a GGUF a /v1 request names but this server lacks.
-
-No network: huggingface_hub, the consent probe and the Hub download service are
-all mocked. The invariant: with the setting off nothing here runs at all, and
-with it on a name not shaped like a repo still falls through to the resident model.
-"""
+"""Opt-in /v1 GGUF auto-download: off runs nothing; a non-repo name still uses the resident model."""
 
 import asyncio
 import time
@@ -93,12 +88,7 @@ def _gated_error():
 
 
 def _hub_error(error_type, status_code: int, message: str):
-    """Build a Hub exception across huggingface_hub majors.
-
-    huggingface_hub 1.x made ``response`` a required keyword-only argument and the
-    project floor is 0.34, so construct positionally and fall back. The positional
-    form carries no response, which hf_error_status reads, so attach one either way.
-    """
+    """Hub 1.x makes response keyword-only, so build positionally and fall back; attach a response."""
     try:
         exc = error_type(message)
     except TypeError:
@@ -768,10 +758,7 @@ def _download_rows():
 
 
 def test_a_ui_session_download_is_not_marked_as_api_traffic(hub):
-    """The monitor overlay auto-opens on via_api_key, which exists to separate
-    "someone is serving other clients" from "someone is using Unsloth". Unsloth's
-    own chat hits these same /v1 endpoints with a session JWT, so hardcoding the
-    flag on the download row popped the panel open mid-chat."""
+    """Session-JWT downloads from Unsloth's own chat must not set via_api_key, or the overlay pops open."""
     api_monitor.clear()
     with pytest.raises(HTTPException):
         _hook("unsloth/x-GGUF", _Req(), enabled = True, current_subject = "unsloth")
@@ -800,11 +787,7 @@ def test_an_api_key_download_keeps_the_attribution_and_names_its_caller(hub):
 
 
 def test_an_api_key_caller_waiting_on_someone_elses_download_gets_a_row(hub):
-    """A download started by Unsloth's own chat is attributed to the session, so an
-    API-key client that asks for the same repo while it runs is refused before the
-    handler's own api_monitor.start. Without a row of its own that call is invisible:
-    the only row is the session's via_api_key=False download, so the overlay stays
-    shut and the monitor presents API traffic as Unsloth's own."""
+    """API-key callers refused by another's download still need a monitor row, or look like Unsloth's."""
     from auth.authentication import API_KEY_PREFIX
 
     api_monitor.clear()
@@ -1924,13 +1907,7 @@ def _unavailable_message(
     rows = None,
     listing = None,
 ):
-    """``_unavailable_model_message`` against a catalog holding *downloaded* and a
-    ``GET /v1/models`` listing holding *servable*.
-
-    ``rows`` and ``listing`` override either side with explicit objects, for the cases where the
-    shape matters rather than the ids: a scanner row that carries no ``model_id``, a partial
-    download, or a row listed under a non-chat ``task``.
-    """
+    """Unavailable-model message compares downloaded models with the servable GET /v1/models listing."""
     from types import SimpleNamespace
 
     async def _catalog():

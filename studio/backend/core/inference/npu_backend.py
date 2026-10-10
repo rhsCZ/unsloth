@@ -626,14 +626,8 @@ class LemonadeNpuBackend:
         return model
 
     def download(self, model_id: str) -> Iterator[dict[str, Any]]:
-        """Download a model, yielding progress events, then a final ``complete`` one.
-
-        Studio fetches the files itself when it can read FastFlowLM's file list, which lets an
-        interrupted download continue where it stopped; lemond's pull then only registers the
-        model. Otherwise lemond downloads it and its events are relayed.
-
-        Raises unless lemond sent its ``complete`` event: a stream cut short leaves a partial model.
-        """
+        """Raises unless lemond sends its complete event, since a cut-short stream leaves a partial
+        model."""
         model = self._model(model_id)
         server = self._ensure_running()
         files = (

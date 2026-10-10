@@ -261,13 +261,7 @@ def _variant_keys_to_delete(target_repo, variant: str) -> set[str]:
 
 
 def _audio_cpp_package_scope(target_repo, variant: str) -> tuple[frozenset[str], frozenset[str]]:
-    """``(own files, protected files)`` of an audio.cpp package mix being deleted.
-
-    A package mix (MiniMax Music 3, YuE2) is several GGUFs plus configs, some of them shared with
-    other mixes, so the quant key alone neither finds all of its files nor knows which a sibling
-    still needs. Own files are the mix's whole file list; protected files are every file of the
-    other mixes still fully on disk. Both empty for any other repo.
-    """
+    """Own files are the whole mix; protected files are those of other mixes still fully on disk."""
     try:
         from core.inference.audio_cpp_models import package_variant_files
     except Exception:  # noqa: BLE001 - no audio.cpp support, no package layout
@@ -722,17 +716,7 @@ def _diffusion_blocks_delete(repo_id: str) -> Optional[str]:
 
 
 def any_model_load_blocks_cache_clear() -> Optional[str]:
-    """The refusal detail if ANY inference backend is holding a cached model, else None.
-
-    The guards above ask whether one repo is in use. Emptying the whole Hugging Face cache is
-    every repo at once, so there is no repo to match on and anything loaded or loading is enough.
-    sd.cpp in particular re-reads its companion VAE and text-encoder files for every generation,
-    so a clear can break a model that was loaded long before it.
-
-    Fail-open on ACQUIRE, like the guards above: a backend that cannot be reached is not holding
-    anything this process can see. A backend that IS reachable and raises while being asked is a
-    different matter, and the caller fails closed on it rather than unlink weights blindly.
-    """
+    """Any loaded model blocks a clear; unreachable backends are ignored, a raising backend fails closed."""
     try:
         from core.inference import model_slots
         from routes.inference import get_llama_cpp_backend
@@ -887,15 +871,7 @@ async def delete_cached_model_response(
     cache_path: Optional[str] = None,
     only_if_orphan: bool = False,
 ):
-    """Delete a cached model repo (or a specific GGUF variant) from the HF cache.
-
-    When *variant* is provided, only the GGUF files matching that quant label
-    are removed (e.g. ``UD-Q4_K_XL``).  Otherwise the entire repo is deleted.
-    Refuses if the model is currently loaded for inference.
-
-    *only_if_orphan* is Free up space's precondition: 409 rather than delete when the repo has
-    become an installed checkpoint since the list the caller is acting on was built.
-    """
+    """only_if_orphan turns a repo that became an installed checkpoint since listing into a 409."""
     account_access.require_installation_owner()
     if not _is_valid_repo_id(repo_id):
         raise HTTPException(status_code = 400, detail = "Invalid repo_id format")

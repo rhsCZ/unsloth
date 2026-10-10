@@ -126,11 +126,7 @@ def _verbose_logging_requested() -> bool:
 
 
 def _hf_stdout_progress_disabled() -> bool:
-    """`disable_tqdm` for the HF training args, unless --verbose asked for everything. The trainer
-    subprocess has no terminal: its stdout is teed into the server log, so the tqdm bar becomes a
-    burst of carriage-return fragments that can also land inside a structlog JSON record and make
-    it unparseable. Every number the bar carries is already published twice, as the throttled
-    `training_progress` event added in #7087 and as the per-step SSE stream the UI charts."""
+    """The subprocess stdout is teed to the log, where tqdm fragments can break structlog JSON."""
     return not _verbose_logging_requested()
 
 
@@ -148,12 +144,7 @@ _RESERVED_LOG_KEYS = frozenset({"event", "level", "timestamp", "logger"})
 
 
 def _drop_hf_stdout_callbacks(trainer) -> None:
-    """Remove HF's stdout progress callbacks from an already-built trainer. `disable_tqdm=True` only
-    swaps ProgressCallback for PrinterCallback, which prints a raw dict per step instead
-    (`{'loss': '0.5684', 'grad_norm': ..., 'epoch': ...}`). Both write to the same stdout, so
-    both have to go; Unsloth's own progress callback, the SSE stream and `training_progress` are
-    unaffected. Best effort: a transformers build without these classes just keeps its current
-    behaviour."""
+    """disable_tqdm only swaps in PrinterCallback, which prints a raw dict per step; remove both."""
     if _verbose_logging_requested():
         return
     try:
@@ -172,12 +163,7 @@ _FORCED_16BIT_AUDIO_TYPES = frozenset({"csm", "whisper", "bicodec", "dac"})
 
 
 def _bitsandbytes_allows_4bit() -> bool:
-    """``loader.ALLOW_BITSANDBYTES``: False when bitsandbytes is absent or its native kernels
-    are unusable, which is the normal state on Studio's Mac, Intel and CPU installs and on
-    some AMD stacks. from_pretrained clears load_in_4bit on that path BEFORE it calls
-    get_model_name (unsloth/models/loader.py, the `if not ALLOW_BITSANDBYTES` block), so a
-    4-bit request resolves the SIXTEEN-bit mapping there. Read it rather than assume it, or
-    the metadata read names a repo the loader never fetches."""
+    """from_pretrained drops 4-bit when bitsandbytes is unusable, so the metadata read must check it."""
     try:
         from unsloth.device_type import ALLOW_BITSANDBYTES
         return bool(ALLOW_BITSANDBYTES)
@@ -233,22 +219,7 @@ _AUDIO_COLUMN_KEYWORDS = ("audio", "speech", "wav", "waveform", "sound")
 
 
 def _dataset_has_audio_column(dataset) -> Optional[bool]:
-    """Whether `dataset` really carries audio. None when it cannot be told.
-
-    `is_dataset_audio` comes from the format check's `is_audio`, set by a column-NAME keyword match
-    that never inspects the value, so a text dataset with a column called `audio` holding prose
-    reports audio. Refusing such a run would take away a text path that works today, so the dataset
-    itself gets the last word.
-
-    An ``Audio`` feature is audio without reading a row. Otherwise look at the values: an audio
-    column loaded from JSON/CSV is a ``Value("string")`` of paths until the preprocessor casts it
-    (``_preprocess_snac_dataset`` does exactly that), so trusting the schema would call a real audio
-    dataset textual.
-
-    None for a DatasetDict, a schema-less iterable dataset, or an unreadable row: an unreadable
-    model probe is still the likelier explanation, so the caller keeps refusing unless this says
-    False outright.
-    """
+    """Column names alone mislead (a text column called audio), so this checks the feature or the values."""
     try:
         from datasets.features.audio import Audio
     except Exception:  # noqa: BLE001 - datasets missing or too old to have the feature
@@ -386,11 +357,7 @@ class UnslothTrainer:
         model_revision: Optional[str] = None,
         load_in_4bit: bool = True,
     ) -> None:
-        """Lightweight detection and tokenizer load: no model weights, no VRAM. Sets is_vlm,
-        _audio_type, is_audio_vlm, model_name and loads a lightweight tokenizer for dataset
-        formatting. Call before load_and_format_dataset() so the dataset is processed before the
-        training model loads (avoids VRAM contention). load_model() later re-detects and loads
-        the full model + tokenizer, overwriting the lightweight one set here."""
+        """Loads no weights, so it can run before load_and_format_dataset() without VRAM contention."""
         self.model_name = model_name
         self.max_seq_length = max_seq_length
         self.trust_remote_code = trust_remote_code
@@ -864,10 +831,7 @@ class UnslothTrainer:
             )
 
     def _cleanup_audio_artifacts(self):
-        """Remove sys.path/sys.modules entries from previous audio preprocessing. After audio
-        training, codec source dirs and heavy modules (snac, whisper, sparktts, outetts) linger;
-        the next dataset.map(num_proc=N) forks children that inherit this stale state and
-        deadlock."""
+        """Leftover audio modules would make the next dataset.map(num_proc=N) fork children deadlock."""
         audio_paths = []
         if self._spark_tts_code_dir:
             audio_paths.append(str(self._spark_tts_code_dir))
@@ -1631,10 +1595,8 @@ class UnslothTrainer:
             return False
 
     def _apply_csm_forward_fix(self):
-        """Monkey-patch CsmForConditionalGeneration.forward for depth decoder kwargs. The original
-        forward leaks raw **kwargs (num_items_in_batch, causal_mask, etc.) from Trainer/PEFT into
-        the depth decoder, causing depth_decoder_loss=None and a 'Tensor + NoneType' crash. Patch
-        at both instance and class level and strip non-TransformersKwargs params."""
+        """The stock forward leaks Trainer kwargs into the depth decoder, causing a None loss and a
+        crash."""
         import torch
         import torch.nn as nn
         from transformers.models.csm.modeling_csm import (
@@ -1968,10 +1930,7 @@ class UnslothTrainer:
         dataset,
         custom_format_mapping = None,
     ):
-        """Preprocess dataset for Orpheus TTS training with SNAC codec. Mirrors
-        Orpheus_(3B)-TTS.ipynb: encode audio with SNAC (24kHz, 3 hierarchical layers), interleave
-        7 codes per frame, wrap with Orpheus special tokens, train on full sequence (no label
-        masking)."""
+        """Interleaves 7 SNAC codes per frame and trains on the full sequence, with no label masking."""
         import torch
         import torchaudio.transforms as T
 
@@ -2334,10 +2293,7 @@ class UnslothTrainer:
         dataset,
         custom_format_mapping = None,
     ):
-        """Preprocess dataset for OuteTTS training with DAC codec. Mirrors Oute_TTS_(1B).ipynb
-        DataCreationV3: Whisper for word timings, OuteTTS AudioProcessor for speaker
-        representations, PromptProcessor for training prompts. Outputs text strings for
-        SFTTrainer with dataset_text_field="text"."""
+        """Outputs text strings consumed by SFTTrainer via dataset_text_field='text'."""
         import io
         import tempfile
         import torch
@@ -2581,10 +2537,7 @@ class UnslothTrainer:
         custom_format_mapping = None,
         eval_dataset = None,
     ):
-        """Preprocess dataset for Whisper speech-to-text training. Mirrors Whisper.ipynb: extract
-        audio features with Whisper's feature extractor, tokenize text labels. Returns
-        (train_data, eval_data), each a list of dicts with 'input_features' and 'labels'. The 6%
-        carve-out is only the fallback for when ``eval_dataset`` is absent."""
+        """The 6% eval split is a fallback used only when eval_dataset is absent."""
         from datasets import Audio
 
         WHISPER_SAMPLE_RATE = 16000
@@ -2747,16 +2700,8 @@ class UnslothTrainer:
         max_train_rows: Optional[int] = None,
         max_train_rows_seed: int = 3407,
     ) -> Optional[tuple]:
-        """Load and prepare a dataset for training.
-
-        Strategy: format first, then split, which ensures both train and eval portions are formatted
-        and templated. ``max_train_rows`` bounds the rows kept before formatting, for a max_steps
-        run that cannot reach the whole dataset; see max_steps_dataset_rows.
-
-        Returns (dataset_info, eval_dataset) or None on error; eval_dataset may be None if no eval
-        split is available. hf_token must reach every load_dataset and get_dataset_split_names call
-        below, or a gated dataset is read under the ambient HF_TOKEN instead of the request.
-        """
+        """hf_token must reach every load_dataset call; otherwise gated datasets read the ambient
+        HF_TOKEN."""
         from core.training.s3_dataset import S3DownloadCancelled
 
         # datasets has no env var; silence its bars via the class before any load.
@@ -3220,10 +3165,8 @@ class UnslothTrainer:
                 logger.info("Stopped before applying chat template\n")
                 return None
 
-            # An inconclusive probe must not read as "not an audio model": falling through lands on the text path,
-            # which fails later with a column-mapping complaint. _dataset_has_audio_column is the tiebreaker because
-            # _is_dataset_audio is true on a column-NAME match alone; raw/CPT is exempt.
-            # ========== AUDIO MODELS: custom preprocessing ==========
+            # An inconclusive probe must not fall to the text path; the dataset check breaks the
+            # tie.
             if (
                 not self._audio_type
                 and not getattr(self, "_audio_type_known", True)
@@ -3641,11 +3584,7 @@ class UnslothTrainer:
         raw_text_mode: bool,
         is_deepseek_ocr: bool,
     ):
-        """Switch the plain-text path to lazy, worker-side tokenization. Mutates ``config_args`` and
-        the ``dataset`` wrapper in place when the run qualifies, and leaves both untouched
-        otherwise. ``self._online_eval_dataset`` returns the transformed eval split, and
-        ``self._online_prewarm_batches`` tells ``_preflight_first_batch`` how deep to prime.
-        Never raises: any failure degrades to the eager path."""
+        """Lazy worker-side tokenization for plain text; never raises, any failure degrades to eager."""
         from utils.datasets.online_tokenization import (
             OnlineTokenizationDecision,
             attach_online_tokenization,
@@ -3771,12 +3710,7 @@ class UnslothTrainer:
             return OnlineTokenizationDecision(enabled = False, reason = f"setup error: {exc}")
 
     def _release_online_dataloader(self) -> None:
-        """Shut down the online path's persistent DataLoader workers. Persistence is what carries
-        the prewarm barrier's workers into train(); nothing else drops them, so they would stay
-        resident through merging, quantization and GGUF export -- the most memory-hungry part of
-        a run -- each a fork of a process that had already initialised CUDA. Called from a
-        finally (so it covers preflight errors and a raising train()), and idempotent because
-        those paths reach it twice."""
+        """Persistent workers would otherwise stay resident through merge and GGUF export."""
         if not getattr(self, "_online_prewarm_batches", 0):
             return
         trainer = getattr(self, "trainer", None)
@@ -3794,19 +3728,8 @@ class UnslothTrainer:
             logger.info(f"Online tokenization: shut down {released} DataLoader workers\n")
 
     def _preflight_first_batch(self) -> Optional[str]:
-        """Validate the first real batch before train(). A base model whose chat template renders empty
-        yields empty float32 input_ids that crash the embedding on step 1; catch it here. Returns
-        None for a valid batch.
-
-        On the online path this doubles as the prewarm barrier: enough microbatches for the first
-        optimizer step and the DataLoader's in-flight depth are pulled through here, so step 1 never
-        waits on a cold worker.
-
-        The workers survive, not the batches: ``train()`` calls ``iter()`` again and torch answers
-        with ``_iterator._reset(...)``, restarting the sampler at row 0, so these batches are
-        tokenized twice. No rows are lost, and what it buys is forked workers past their first
-        import and tokenizer touch plus a warm page cache.
-        """
+        """Catches empty chat templates that would crash step 1; batches are re-tokenized on the
+        online path."""
         prewarm = int(getattr(self, "_online_prewarm_batches", 0) or 0)
         if prewarm:
             from utils.datasets.online_tokenization import memoize_train_dataloader
@@ -3871,11 +3794,7 @@ class UnslothTrainer:
         )
 
     def _train_worker(self, dataset: Dataset | dict, **training_args):
-        """Worker function for training (runs in a separate thread). ``dataset`` is either a raw
-        ``datasets.Dataset`` (audio preprocessing paths such as CSM / Whisper / SNAC / Audio-VLM)
-        or a ``dict`` wrapper returned by ``format_and_template_dataset`` (text and image VLM
-        paths). Streaming HF datasets arrive wrapped in the latter ``dict``, never as a bare
-        ``IterableDataset``."""
+        """Streaming datasets always arrive wrapped in the dict, never as a bare IterableDataset."""
         try:
             if sys.platform in ("win32", "darwin"):
                 from utils.cache_cleanup import register_compiled_cache_on_path
@@ -4585,13 +4504,7 @@ class UnslothTrainer:
             self.is_training = False
 
     def _patch_adapter_config(self, output_dir: str) -> None:
-        """Patch adapter_config.json with unsloth_training_method and unsloth_load_in_4bit. Values:
-        'qlora', 'lora', 'FT', 'CPT', 'DPO', 'GRPO', etc. For LoRA/QLoRA, the distinction comes
-        from load_in_4bit.
-
-        Both keys describe the base the run ACTUALLY trained on, so both read the same effective
-        flag: an install where bitsandbytes cannot run 4-bit trained on a 16-bit base and is a
-        'lora', not a 'qlora' whose recorded precision happens to disagree with its own name."""
+        """Both keys use the effective 4-bit flag, so a run that fell back to 16-bit is recorded as lora."""
         config_path = os.path.join(output_dir, "adapter_config.json")
         if not os.path.exists(config_path):
             logger.info("No adapter_config.json found — skipping training method patch")
@@ -4651,14 +4564,7 @@ class UnslothTrainer:
 
 
 def _ensure_deepseek_ocr_installed():
-    """Install the pinned DeepSeek OCR module if needed. Returns True if available.
-
-    Routed through the pinned-source machinery the other Hub-published sources use, so
-    the fetch is at a fixed revision and the import is checked to have come from it.
-    The old version decided "already available" with a bare
-    `from deepseek_ocr... import`, which any `deepseek_ocr` directory anywhere on
-    `sys.path` satisfied: that directory got imported and the real download was skipped.
-    """
+    """Installs from a pinned revision and verifies the import came from it, not any sys.path copy."""
     try:
         logger.info("Preparing the DeepSeek OCR module...")
 

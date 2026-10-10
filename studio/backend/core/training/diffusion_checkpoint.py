@@ -135,22 +135,12 @@ _UNRESOLVED_REVISION = "unresolved"
 
 
 def _revision_is_comparable(value: Any) -> bool:
-    """Only a real Hub commit (``rev-<sha>``) is a hard identity for the base model.
-    ``source_revision`` also returns a ``dir-<hash>`` built from the file SIZES AND MTIMES of a
-    LOCAL base directory. That is the right key for a conditioning cache, but far too brittle for
-    a resume gate: re-downloading, re-quantizing, or merely touching the local base changes it
-    while the weights are the same, and the user would get an unactionable "different base model
-    revision (dir-abc vs dir-def)" refusal. Compare Hub revisions, treat a local directory's
-    marker as advisory."""
+    """Only a Hub revision (rev-<sha>) is comparable; dir-<hash> from local sizes and mtimes is brittle."""
     return isinstance(value, str) and value.startswith("rev-")
 
 
 def _revision_repo(identity: "CheckpointIdentity") -> str:
-    """The repo ``identity.base_revision`` was read from, normalised for comparison. A bundle
-    written before mirrors existed has no ``base_revision_repo`` and always read the canonical
-    base, so it falls back to ``base_model``: that keeps an old bundle comparable with a new one
-    on a host that fetched the canonical repo, and only stops the comparison where it genuinely
-    cannot be made."""
+    """Bundles from before mirrors existed lack base_revision_repo, so this falls back to base_model."""
     return str(getattr(identity, "base_revision_repo", None) or identity.base_model or "").lower()
 
 
@@ -369,11 +359,7 @@ def _render(value: Any) -> str:
 
 
 def dataset_fingerprint(pairs: Any) -> str:
-    """A stable content marker for the (image, caption) pairs a run trains on. Built from each
-    image's FILE NAME, byte size and resolved caption, sorted, so it is invariant to the dataset
-    folder being moved or re-imported under a different root (which the run config already
-    records) while still catching an added, removed, re-captioned or replaced image. Never
-    raises: an unstatable file contributes ``?`` rather than failing a preflight."""
+    """Built from file name, byte size and caption, so moving the dataset folder does not change it."""
     parts: list[str] = []
     for entry in pairs or ():
         try:
@@ -390,17 +376,7 @@ _PROBE_BYTES = 65536
 
 
 def _content_probe(path: Any) -> str:
-    """``size-digest`` for one dataset file, or ``?`` when it cannot be read.
-
-    Size alone let an image be overwritten IN PLACE with different content of exactly the same
-    length -- same filename, same caption -- and the preflight accepted the dataset, so the restored
-    optimizer and scheduler carried on an old experiment against different images.
-
-    The head and tail rather than the whole file: hashing every image would make this scale with the
-    dataset, and two different images agreeing on their first and last 64 KiB as well as their exact
-    byte length is not a case that arises from editing a dataset. It is not a tamper-proof digest
-    and does not need to be.
-    """
+    """Hashes the head and tail, not the whole file: size alone missed same-length in-place overwrites."""
     try:
         size = os.path.getsize(path)
         digest = hashlib.sha256()
@@ -417,12 +393,7 @@ def _content_probe(path: Any) -> str:
 
 
 def _resolve_lora_targets(cfg: Any) -> tuple[str, ...]:
-    """The LoRA target modules the trainer will actually attach for ``cfg``. A DiT family replaces
-    the generic attention default with its own projections (``_select_lora_targets``), so the
-    identity must resolve the same tuple the trainer will; otherwise the start route would
-    compute a different fingerprint from the run and every resume would look like a mismatch.
-    Imported lazily -- the DiT trainer imports this module at load time, so the reverse edge has
-    to be deferred."""
+    """Must resolve the same targets the trainer attaches, or every resume fingerprints as a mismatch."""
     configured = tuple(cfg.lora_target_modules)
     if str(getattr(cfg, "resolved_family", "") or "").strip().lower() == "sdxl":
         return configured
@@ -436,22 +407,14 @@ def _resolve_lora_targets(cfg: Any) -> tuple[str, ...]:
 
 
 def with_cache_mode(identity: "CheckpointIdentity", used_cache: bool) -> "CheckpointIdentity":
-    """Record the latent-cache path the loop ACTUALLY took. The config only carries the request. The
-    environment override and the over-budget fallback can both turn it off, and the cached and
-    uncached paths consume different RNG streams for crops and flips, so a bundle written on one
-    and resumed on the other restores a state that no longer reproduces the training stream."""
+    """Records the cache path actually taken, since cached and in-loop runs draw different RNG streams."""
     return replace(identity, cache_mode = "cached" if used_cache else "in-loop")
 
 
 def with_resolved_base_precision(
     identity: "CheckpointIdentity", resolved: Any
 ) -> "CheckpointIdentity":
-    """Record the base precision the transformer was ACTUALLY converted to. The config carries the
-    request, and "auto" is not even a precision. Worse, fp8 and mxfp8 conversion can fail on the
-    host and both fall back to bf16 with only a warning in progress, so a bundle requested as fp8
-    recorded fp8 while its optimizer moments were produced against bf16 linears. A later resume
-    on a host where the conversion does take then restores those moments onto an fp8 frozen base
-    and calls it a clean continue."""
+    """Records the precision actually used: fp8 or mxfp8 can fall back to bf16 with just a warning."""
     value = str(resolved or "").strip().lower()
     if not value:
         return identity
@@ -459,22 +422,7 @@ def with_resolved_base_precision(
 
 
 def with_resolved_revision(identity: "CheckpointIdentity", base_model: Any) -> "CheckpointIdentity":
-    """``identity`` with its base revision re-read now that the base model is on disk.
-
-    The identity is built BEFORE the multi-GB load, deliberately: a mismatched resume should fail in
-    seconds, not after a download. But on the first run of an uncached Hub repo there is no local
-    ref to read, so the revision records "unresolved" and the bundle it goes into can never enforce
-    which commit it was trained on. Re-read once the loader has populated the cache: an unresolved
-    value is not comparable, so a repo that could not be read keeps whatever was recorded, and a
-    later resume against a repo that has advanced is refused instead of quietly restoring the
-    adapter and the Adam moments onto different frozen base weights.
-
-    The re-read is unconditional. A local ``refs/main`` can still report the OLD commit before the
-    load and be refreshed by ``from_pretrained`` itself, so returning early on an already-comparable
-    value left the pre-load revision standing for a base that had since advanced -- the resume then
-    compared A against A and restored A's adapter and moments onto B's frozen weights, which is the
-    exact outcome this field exists to prevent.
-    """
+    """Re-read after the load, always: from_pretrained can refresh refs/main past the pre-load commit."""
     from core.training.diffusion_train_extras import source_revision
 
     resolved = source_revision(base_model)
@@ -490,12 +438,7 @@ def identity_for_config(
     resolved_targets: Optional[tuple[str, ...]] = None,
     kind: str = "image",
 ) -> CheckpointIdentity:
-    """The identity a run with ``cfg`` would produce. ``resolved_targets`` is the LoRA target tuple
-    the trainer will actually attach; pass it where it is already known (the DiT trainer holds
-    its family spec), otherwise it is resolved here the same way, so the start route and the
-    trainer always agree. ``base_precision`` is the REQUESTED mode, not the one ``auto`` resolves
-    to at load time, since the start route has to compute the same identity before anything is
-    loaded."""
+    """base_precision is the requested mode, not what auto resolves to, since no model is loaded yet."""
     from core.training.diffusion_train_common import effective_mixed_precision
     from core.training.diffusion_train_extras import source_revision
 
@@ -539,11 +482,7 @@ def identity_for_config(
 
 
 def capture_rng_state(streams: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Snapshot every random stream a diffusion run draws from. ``streams`` maps a name to a
-    ``random.Random`` instance the trainer owns (the loop's index/crop stream and the
-    latent-cache variant stream are separate objects, so the module-level ``random`` state does
-    not cover them). Returns ``{"json": <JSON-safe dict>, "tensors": <torch tensors>}``; the
-    caller writes the first into the manifest and the second into ``rng_state.pt``. Never raises."""
+    """Trainer-owned random.Random streams are not in module random state, so they are passed in."""
     payload: dict[str, Any] = {
         "python": _random_state_to_json(random.getstate()),
         "streams": {},
@@ -717,26 +656,7 @@ def save_checkpoint(
     source_checkpoint: Optional[str | os.PathLike[str]] = None,
     preexisting: "Optional[Iterable[Any]]" = None,
 ) -> str:
-    """Write one resumable ``checkpoint-<step>`` bundle and return its path.
-
-    The ONE writer: periodic saves (``cfg.save_steps``) and stop-and-save both come through here, so
-    a stopped run and a crashed-then-restarted run resume from byte-identical state. Everything
-    lands in a hidden staging directory whose manifest is written last; the directory is then
-    promoted with a single ``os.replace``, so a kill at any instant leaves the previous checkpoint
-    intact and no valid-looking partial behind.
-
-    ``source_checkpoint`` is the bundle this run resumed FROM, when it resumed. It is what makes the
-    "this step is already written" shortcut below safe: without it, a stop at a step some OTHER run
-    happens to have written would silently keep that run's state.
-
-    ``discard_existing`` drops any bundle already in the directory first. A run that did NOT resume
-    owns its output dir outright (it overwrites the published adapter there too), so checkpoints
-    left by an EARLIER run of the same adapter name must go: they would otherwise outrank the new
-    run's lower-numbered ones and a later Resume would silently continue the wrong training.
-
-    Raises OSError / ValueError / RuntimeError on a real write failure -- callers treat that as
-    "this run cannot be resumed" and surface it, rather than failing the training.
-    """
+    """Staged in a hidden directory and promoted with one os.replace, so a kill keeps the old bundle."""
     import torch
     from safetensors.torch import save_file
 
@@ -894,24 +814,7 @@ _FSYNC_UNSUPPORTED = frozenset(
 
 
 def _fsync_file(path: Path) -> None:
-    """Flush the file to the device. Without it a host crash (not just a process kill) can promote a
-    directory whose manifest is durable but whose tensors are still in page cache.
-
-    A REAL fsync failure is raised, not swallowed: delayed allocation means ENOSPC and writeback EIO
-    surface here rather than at write() time, and ``_valid_state_file`` only parses a safetensors
-    header, so a bundle whose tensor bytes never reached the device would be promoted and later read
-    as valid. The caller turns that into "this run cannot be resumed". A platform that simply cannot
-    flush the handle is not such a failure and is ignored.
-
-    That discrimination is real on POSIX and NOT available on Windows: CPython maps os.fsync to the
-    UCRT's _commit, which collapses every FlushFileBuffers failure into EBADF and puts the actual
-    Win32 code in _doserrno, where Python does not look. EBADF has to stay in the set below, because
-    a volume that cannot flush reports it too, and failing every save on such a volume is the worse
-    error -- especially as the resulting write error is sticky for the life of the run record. So on
-    Windows a genuine flush failure is swallowed here, and the durability guarantee rests on the
-    per-file size check in read_checkpoint instead, which catches the truncation a lost writeback
-    actually produces.
-    """
+    """Raise real fsync failures (ENOSPC surfaces at fsync), except on Windows, where EBADF is ambiguous."""
     try:
         # O_RDWR: Windows' _commit maps to FlushFileBuffers, which needs write access.
         fd = os.open(str(path), os.O_RDWR)
@@ -942,19 +845,7 @@ def _fsync_dir(path: Path) -> None:
 
 
 def _promote(staging: Path, root: Path, step: int) -> Path:
-    """Rename the staging directory into place.
-
-    ``os.replace`` onto an EXISTING directory is not supported (POSIX rename() needs an empty
-    target; Windows MoveFileEx rejects it outright), so an occupied slot is first swapped out to a
-    staging name. The displaced bundle is KEPT there rather than deleted: two runs can share an
-    output directory (resume checkpoint-10 in a folder that also holds checkpoint-15, then save at
-    15), and the older run's bundle is not this run's to spend -- discarding this run removes the
-    replacement and hands the slot back to what was there.
-
-    A swap-aside that CANNOT be done (a Windows lock, a cross-device oddity) fails the save.
-    Deleting the occupant to free the slot was the older behaviour and the worse one: a partial
-    delete can fail the promotion too, and by then there is no copy left to put back.
-    """
+    """os.replace cannot overwrite a directory, so the occupant is moved aside and kept, not deleted."""
     final = root / f"{CHECKPOINT_PREFIX}{step}"
     displaced: Optional[Path] = None
     if final.exists():
@@ -981,17 +872,7 @@ _REPLACED_SLOT = re.compile(r"^replaced-(\d+)-")
 
 
 def _prune_staging(root: Path) -> None:
-    """Drop abandoned staging directories from an earlier killed process. Safe because only one trainer
-    ever writes into a run's output dir, and this runs after our own promotion.
-
-    A ``stale-<step>`` orphan whose slot is EMPTY is not abandoned work: it is the previous bundle,
-    moved aside by a promotion that was killed before the rename landed. Deleting it would throw
-    away the run's last resumable state, so it is handed back to its slot instead.
-
-    A ``replaced-<step>`` orphan is not abandoned work either, even with its slot occupied: it is
-    the bundle THIS run displaced, held so that discarding this run does not take another run's
-    resume point with it. Only the cleanup paths retire those.
-    """
+    """An empty-slot stale orphan is the previous bundle moved aside, so restore it, never delete."""
     try:
         entries = list(root.glob(f"{_STAGING_PREFIX}*"))
     except OSError:
@@ -1018,11 +899,8 @@ _LIVE_REPLACEMENT_GRACE_SECONDS = 5.0
 def _recover_orphaned_slots(
     root: Path, *, min_age: float = _LIVE_REPLACEMENT_GRACE_SECONDS
 ) -> None:
-    """Hand every stale orphan back to its empty slot. Read paths call this before deciding a run
-    has nothing to resume; it never deletes anything. Newest first per slot, for the reason
-    ``_retire_replaced_slots`` sorts: replacements stack, and filesystem order would restore
-    whichever appeared first, an older branch's adapter, optimizer and RNG rather than the bundle
-    that was in the slot immediately before the crash."""
+    """Never deletes: hands each stale orphan back to its empty slot, newest first, as replacements
+    stack."""
     try:
         entries = list(root.glob(f"{_STAGING_PREFIX}*"))
     except OSError:
@@ -1060,11 +938,7 @@ def _recover_orphaned_slot(root: Path, entry: Path) -> bool:
 
 
 def _retire_replaced_slots(root: Path, *, restore: bool) -> None:
-    """Settle the bundles this run displaced, once its own are gone. ``restore`` hands each one back
-    to the slot the cleanup just emptied, which is the whole reason it was kept: the pre-existing
-    bundle comes back instead of dying with the run that overwrote it. False is the fresh-run
-    case, where the adapter those bundles belong to has just been overwritten and they are a trap
-    rather than resumable state. Either way, nothing is left behind afterwards."""
+    """restore=False drops displaced bundles, since the adapter they belong to was just overwritten."""
     try:
         entries = list(root.glob(f"{_STAGING_PREFIX}replaced-*"))
     except OSError:
@@ -1117,21 +991,7 @@ def prune_checkpoints(
     also_protect: Optional[Path] = None,
     preexisting: "Optional[Iterable[Any]]" = None,
 ) -> None:
-    """Keep only the ``keep`` newest ``checkpoint-<N>`` bundles. ``keep <= 0`` keeps all.
-
-    ``protect`` and ``also_protect`` are never pruned. Newest is by STEP, and a resume can
-    legitimately write a bundle that is not the highest-numbered one in the folder: resume
-    checkpoint-10, stop at 15, with 20 and 30 still present and keep=2, and the bundle just written
-    is the one deleted, while the service reports checkpoint_saved for a path that no longer exists
-    and the run's own start fence stops those older bundles from making it resumable. So the caller
-    pins the one it just promoted, and the limit applies to the rest.
-
-    ``preexisting`` are the bundles that were in the directory before this run wrote anything. They
-    are not this run's to spend: the supported branched resume (continue checkpoint-10 while 20 and
-    30 are still there) pins 10 and the new 15, drops ``keep`` to zero and used to delete 20 and 30
-    outright, irreversibly, and a later stop-without-saving cannot bring them back. They are
-    excluded entirely, so the limit governs only what this run wrote.
-    """
+    """Only bundles this run wrote count toward keep; preexisting and protected ones are never pruned."""
     if keep <= 0:
         return
     # Identity, not pathname: a run can overwrite a slot that already existed.
@@ -1163,12 +1023,7 @@ def clear_checkpoints(output_dir: str | os.PathLike[str]) -> None:
 
 
 def resumed_into_this_dir(cfg: Any, output_dir: "str | os.PathLike[str]") -> bool:
-    """Whether the bundle this run resumed FROM lives in ``output_dir``. The usual case, and the one
-    the first-save discard is skipped for: a resumed run shares its source's directory, so
-    clearing "everything that was here" would take the source with it. An API caller can instead
-    resume from directory A into a reused output_dir B, and then B's contents are as foreign as
-    they would be to a fresh run -- keeping them lets a higher-step bundle outlive this run and
-    be picked by a later resume by directory."""
+    """A resumed run shares its source's directory, so clearing the directory would take the source too."""
     source = getattr(cfg, "resume_from_checkpoint", None)
     if not source:
         return False
@@ -1181,10 +1036,7 @@ def resumed_into_this_dir(cfg: Any, output_dir: "str | os.PathLike[str]") -> boo
 
 
 def snapshot_checkpoints(output_dir: str | os.PathLike[str]) -> list[tuple[Path, Optional[tuple]]]:
-    """The bundles in ``output_dir`` right now, each with its identity. Captured BEFORE the run's
-    first write, because ownership cannot be decided by pathname at cleanup time: a resumed run
-    can overwrite a bundle that was already there, and by then the directory holds this run's
-    state under the old name."""
+    """Taken before the first write: a path cannot tell a pre-existing bundle from one written over it."""
     return [(path, _bundle_identity(path)) for path in list_checkpoints(output_dir)]
 
 
@@ -1194,20 +1046,7 @@ def retire_own_checkpoints(
     *,
     resumed_here: bool = True,
 ) -> None:
-    """Drop the bundles a finished run leaves behind.
-
-    Same selection as ``clear_own_checkpoints`` and a different reason: nothing here is being
-    discarded, the run simply has no continuation left. Without it the newest bundle in the
-    directory is the last periodic save (the final iteration writes none), and a later resume --
-    which cannot see that the run completed -- rolls the whole training state back to it.
-
-    ``resumed_here`` False means a FRESH run in this directory, and then the bundles that were
-    already here go too. A fresh run that never wrote one of its own (the default ``save_steps=0``)
-    never reaches the ``discard_existing`` clear inside the writer, so it published its adapter
-    beside a previous run's checkpoints, which a later resume by output directory would continue
-    instead. The adapter those belonged to has just been overwritten, so they are not resumable
-    state, only a trap.
-    """
+    """Drops a finished run's bundles, so a later resume cannot roll back to its last periodic save."""
     if resumed_here:
         clear_own_checkpoints(output_dir, preexisting)
         return
@@ -1220,13 +1059,7 @@ def retire_own_checkpoints(
 def discard_preexisting_checkpoints(
     output_dir: str | os.PathLike[str], preexisting: "Iterable[Any]"
 ) -> None:
-    """Remove the bundles this run FOUND, keeping the ones it wrote. The inverse of
-    ``clear_own_checkpoints``. For a fresh retrain that stops WITH save: it owns the directory
-    (it overwrites the published adapter there), and its stop bundle is a lower step than an
-    earlier run's leftovers. Resume by directory picks the newest bundle by step, so those
-    leftovers outrank the partial the user just saved and a Resume continues the wrong training.
-    A run that RESUMED here does not call this: the bundles it found include the one it continued
-    from, which is not its to spend."""
+    """A fresh retrain that stops with save drops older bundles, which would outrank its lower-step save."""
     root = Path(output_dir).expanduser()
     keep: dict[Path, Optional[tuple]] = {}
     for entry in preexisting:
@@ -1243,11 +1076,8 @@ def discard_preexisting_checkpoints(
 
 
 def discard_named_checkpoints(paths: "Iterable[Any]") -> None:
-    """Remove the exact bundles named, then hand any slot they displaced back. The parent-side twin
-    of ``clear_own_checkpoints``: a child that is killed after a stop-without-saving never runs
-    its own cleanup, and the parent knows only the paths it saw ``checkpoint_saved`` for, which
-    is precisely the set this run wrote. Anything that predated the run is untouched, and a
-    bundle written OVER a predecessor gives its slot back."""
+    """Used when a killed child never ran its cleanup; removes exactly the bundles the parent saw
+    written."""
     roots: set[Path] = set()
     for value in paths:
         if not value:
@@ -1265,12 +1095,7 @@ def discard_named_checkpoints(paths: "Iterable[Any]") -> None:
 
 
 def clear_own_checkpoints(output_dir: str | os.PathLike[str], preexisting: "Iterable[Any]") -> None:
-    """Remove the bundles THIS run wrote, leaving the ones it found. A discard must not take the
-    checkpoint the run resumed FROM with it: a resumed run writes into the same directory the
-    source bundle lives in, so an accidental resume followed by "stop without saving" would
-    otherwise leave the original stopped run unresumable, the one thing the user was trying not
-    to disturb. Bundles are identified by the set captured before the run's first write, not by
-    step number, because a resume writes lower numbers than the ones already there."""
+    """Removes only bundles this run wrote, identified by the pre-run snapshot, never the resume source."""
     # Keyed by path AND identity: a periodic save can REPLACE a pre-existing bundle.
     keep: dict[Path, Optional[tuple]] = {}
     for entry in preexisting:
@@ -1287,11 +1112,7 @@ def clear_own_checkpoints(output_dir: str | os.PathLike[str], preexisting: "Iter
 
 
 def _bundle_identity(path: Path) -> Optional[tuple]:
-    """What distinguishes one bundle at this path from another written over it. The manifest is
-    written last and carries the writing run's own start time, so it separates "the bundle that
-    was here" from "the bundle this run put here" without hashing tensors. None for an unreadable
-    or absent manifest, which compares equal to itself and so leaves an unreadable pre-existing
-    directory alone."""
+    """The manifest's start time tells a bundle apart from one later written over the same path."""
     try:
         manifest = json.loads((path / TRAINER_STATE_FILENAME).read_text(encoding = "utf-8"))
     except (OSError, ValueError):
@@ -1324,11 +1145,7 @@ def list_checkpoints(output_dir: str | os.PathLike[str]) -> list[Path]:
 
 
 def read_checkpoint(path: str | os.PathLike[str]) -> Optional[dict[str, Any]]:
-    """The manifest of a COMPLETE, self-consistent bundle, or None. Every gate a resume depends on
-    is checked here: the manifest parses and declares a format/version this build understands,
-    its ``global_step`` agrees with the directory name, and every file the manifest lists is
-    present and parses as the state file it claims to be. A staging directory promoted mid-write
-    cannot pass, because the manifest is the last thing written."""
+    """Every gate a resume needs: manifest parses, step matches the name, and all listed files parse."""
     directory = Path(path).expanduser()
     if not directory.is_dir():
         return None
@@ -1375,11 +1192,7 @@ def read_checkpoint(path: str | os.PathLike[str]) -> Optional[dict[str, Any]]:
 
 
 def _valid_state_file(path: Path, require_tensor: bool = True) -> bool:
-    """Reuse the LLM resume validator: it already parses a safetensors header and walks a torch
-    zip's pickle to the STOP opcode without importing torch. Wrapped in a blanket catch because a
-    resume path is CLIENT-supplied: that validator only guards ``(OSError, ValueError,
-    BadZipFile)``, so a deflate-corrupt member raises ``zlib.error`` straight out of a route
-    preflight and 500s it. Anything unreadable is, by definition, not a usable checkpoint."""
+    """Catches everything: a deflate-corrupt member can raise zlib.error, which the LLM validator misses."""
     from core.training.resume import _valid_state_file as _validate
     try:
         return _validate(path, require_tensor = require_tensor)
@@ -1393,22 +1206,7 @@ def latest_valid_checkpoint(
     not_after: Optional[float] = None,
     usable: "Optional[Callable[[Path, dict], bool]]" = None,
 ) -> Optional[tuple[Path, dict]]:
-    """The newest complete bundle under ``output_dir`` as ``(path, manifest)``, or None. Scans
-    newest-first and skips any bundle that fails validation, so one corrupt checkpoint does not hide
-    the good one before it.
-
-    ``not_before`` (a run's start time) skips bundles written BEFORE it. Two runs can share an
-    output directory -- training the same adapter name twice writes into the same folder -- and the
-    earlier run's bundles can carry higher step numbers than the later run's, so without this a
-    fresh run would advertise, and then resume, a different run's training state.
-
-    ``not_after`` (a run's end time) is the same fence in the other direction, and it matters just
-    as much: with only a lower bound, an EARLIER run that has already finished still sees every
-    bundle a LATER run wrote into the shared folder, and offers the newest of them as its own. The
-    identity gate cannot catch that -- same family, same base, same dataset, same LoRA shape -- so
-    the earlier run resumes the later run's optimizer moments, LR position and RNG under its own
-    config, and records the wrong lineage while doing it.
-    """
+    """Bundles outside the run's start and end times are skipped, since runs can share one output dir."""
     # A promotion killed mid-swap leaves the only bundle under the stale name; recover it here.
     _recover_orphaned_slots(Path(output_dir).expanduser())
     for candidate in list_checkpoints(output_dir):
@@ -1437,12 +1235,7 @@ def latest_valid_checkpoint(
 
 
 def iter_valid_checkpoints(output_dir: str | os.PathLike[str]) -> "list[tuple[Path, dict]]":
-    """Every structurally complete bundle under ``output_dir``, newest first.
-    ``latest_valid_checkpoint`` answers with the first one; the resume preflight needs the rest,
-    because its own checks (identity, required state, a real torch.load) are stricter than the
-    header scan. Stopping at the newest defeated the two-checkpoint retention policy: a bundle
-    whose optimizer file passes the header walk but fails to load left the run unresumable with
-    an intact older copy sitting beside it."""
+    """Every complete bundle, newest first, since the preflight's stricter checks may reject the newest."""
     _recover_orphaned_slots(Path(output_dir).expanduser())
     found: list[tuple[Path, dict]] = []
     for candidate in list_checkpoints(output_dir):
@@ -1459,11 +1252,7 @@ _UNRESUMABLE_STATUS = {
 
 
 def _fully_loadable(path: Path, manifest: dict[str, Any]) -> bool:
-    """Whether ``path`` passes every non-identity gate ``preflight_resume`` applies.
-    ``read_checkpoint`` is a header scan, so the newest bundle can pass it and still fail the
-    required-state check or a real torch.load. Advertising THAT one as the run's resume point
-    pinned it: the UI sends back the exact checkpoint_path, which the preflight then treats as
-    explicit and cannot scan past, defeating the directory fallback built for this case."""
+    """Header scan is not enough; the required state and a real torch.load must also succeed."""
     try:
         _assert_required_state(path, manifest)
         _assert_optimizer_buildable(path, manifest)
@@ -1476,20 +1265,7 @@ def _fully_loadable(path: Path, manifest: dict[str, Any]) -> bool:
 def _source_checkpoint_bundle(
     source_checkpoint, source_created_at: Optional[float] = None
 ) -> Optional[tuple[Path, dict[str, Any]]]:
-    """The bundle a run RESUMED FROM, when it is still readable on disk AND still the same one.
-
-    A resume that ends before writing a bundle of its own -- an OOM on the first restored step is
-    the usual way -- has nothing under its own output dir, and if that dir is a new one it may not
-    even exist. The source it was validated against is still there and still correct to continue
-    from, so it is read directly rather than by widening the started_at fence, which exists to keep
-    an unrelated earlier run's bundles out.
-
-    ``source_created_at`` is the manifest timestamp recorded when this run actually resumed. A
-    pathname is not an identity: another run can write its own ``checkpoint-<N>`` over the same
-    slot, and with a matching training identity the route would accept it, silently continuing a
-    different branch's adapter and moments under this run's lineage. Absent (an older record), the
-    check is skipped rather than refusing an otherwise valid fallback.
-    """
+    """A pathname is not identity: a same-named bundle from another run is refused by its timestamp."""
     if not source_checkpoint:
         return None
     try:
@@ -1522,12 +1298,7 @@ def describe_resume_state(
     source_created_at: Optional[float] = None,
     total_steps: Optional[int] = None,
 ) -> dict[str, Any]:
-    """What the UI needs to offer (or explain the absence of) a Resume action for a run. Returns
-    ``can_resume`` / ``checkpoint_step`` / ``checkpoint_path`` / ``resume_blocked_reason``.
-    Mirrors the LLM ``can_resume_run`` rules: a completed run has nothing left, a stopped run
-    needs remaining steps, an errored run is resumable purely on the state it left behind. Never
-    raises: a deleted or unreadable output directory simply reports that there is nothing to
-    resume from."""
+    """Mirrors the LLM can_resume_run rules; an unreadable directory simply reports nothing to resume."""
     blank: dict[str, Any] = {
         "can_resume": False,
         "checkpoint_step": None,
@@ -1595,10 +1366,7 @@ def describe_resume_state(
 
 
 def resolve_resume_dir(path_value: str) -> Path:
-    """Contain a client-supplied resume path under the Unsloth outputs root. Accepts either the
-    run's ``output_dir`` (what the UI replays, matching the LLM resume flow) or an explicit
-    ``checkpoint-<N>`` directory. Raises ResumeError with a user-facing message for a path that
-    escapes outputs, comes from another operating system, or no longer exists."""
+    """Confines a client-supplied resume path to the outputs root; escapes raise ResumeError."""
     from core.training.resume import normalize_resume_output_dir
     from utils.paths import outputs_root
 
@@ -1672,20 +1440,7 @@ def _join_clauses(items: list[str]) -> str:
 
 
 def _assert_optimizer_buildable(path: Path, manifest: dict[str, Any]) -> None:
-    """Refuse moments this host provably cannot build an optimizer for, BEFORE teardown.
-
-    The trainers choose bitsandbytes AdamW8bit or torch AdamW from the HOST, so a bundle can arrive
-    with foreign moments, and the child's own check then fires after the route has evicted the
-    resident inference models and loaded a multi-GB base, for a run that is guaranteed to terminate
-    without training.
-
-    Deliberately one-directional, and deliberately import-free. ``find_spec`` answers "is
-    bitsandbytes installed" without creating a CUDA context in the Unsloth process, but it cannot
-    tell an installed-and-broken wheel (which the trainer catches and falls back from) from a
-    working one. So only the case that cannot be wrong is refused here: 8-bit moments with no
-    bitsandbytes to load them, or with the fp32 override forcing torch AdamW. The other direction
-    stays with the child, where the real optimizer object exists.
-    """
+    """Runs before teardown and refuses only the provably impossible: 8-bit moments with no bitsandbytes."""
     saved = manifest.get("optimizer_class")
     if not isinstance(saved, str) or "bitsandbytes" not in saved:
         return
@@ -1709,14 +1464,7 @@ def _assert_optimizer_buildable(path: Path, manifest: dict[str, Any]) -> None:
 
 
 def _assert_loadable(path: Path, manifest: dict[str, Any]) -> None:
-    """Actually open every state file the manifest lists, and turn any failure into a ResumeError.
-    read_checkpoint deliberately only parses headers -- it is called once per bundle by the
-    run-history listing, which must stay cheap -- so it cannot tell a torch zip that walks to
-    STOP from one torch.load will refuse. A pickle carrying a global outside the weights_only
-    allowlist is exactly that, and it passed the route preflight: 200 OK, resident GPU model
-    evicted, then the child died on a raw UnpicklingError. That is precisely the outcome the
-    module docstring promises this preflight prevents, so pay the load here, on the one bundle a
-    user actually asked to resume. These are MB-scale files and this runs in a worker thread."""
+    """Opens each state file for real, since the header scan passes pickles that torch.load refuses."""
     loaded = LoadedCheckpoint(path = path, manifest = manifest)
     files = manifest.get("files")
     for role in (files or {}) if isinstance(files, dict) else ():
@@ -1745,11 +1493,7 @@ def _assert_loadable(path: Path, manifest: dict[str, Any]) -> None:
 def preflight_resume(
     path_value: str, *, identity: CheckpointIdentity, target_steps: int
 ) -> tuple[str, int]:
-    """Validate a resume request and return ``(checkpoint_dir, resumed_step)``. Called by the start
-    route BEFORE the resident GPU model is evicted, and again inside the trainer, so a rejected
-    resume never costs the user their loaded pipeline. Raises ResumeError with a message written
-    for the user. ``identity`` may leave ``dataset_fingerprint`` unset on the first
-    (pre-discovery) pass; that comparison is then skipped and re-run once the images are known."""
+    """Runs before the resident model is evicted, so a rejected resume does not cost the loaded pipeline."""
     root = resolve_resume_dir(path_value)
     # An adapter dir can be named like a bundle; explicit only when it IS a valid bundle.
     explicit = read_checkpoint(root) if checkpoint_step(root) >= 0 else None
@@ -1894,11 +1638,8 @@ class LoadedCheckpoint:
         return load_file(str(path), device = device) if path is not None else {}
 
     def torch_state(self, role: str) -> Optional[Any]:
-        """A ``torch.save``d state dict (``optimizer`` / ``scheduler`` / ``rng``), or None. Loaded
-        with ``weights_only = True``: these files are written by Unsloth into its own outputs
-        directory, but a resume path is client-supplied, so the loader must never be able to
-        execute pickled code. Verified to round-trip bitsandbytes AdamW8bit state, whose
-        quantized moments and maps are plain uint8/fp32 tensors."""
+        """Loads with weights_only = True: the resume path is client-supplied, so no pickled code
+        may execute."""
         import torch
 
         path = self._file(role)

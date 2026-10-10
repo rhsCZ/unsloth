@@ -494,17 +494,7 @@ def scan_ollama_dir(
     limit: Optional[int] = None,
     materialize_links: bool = False,
 ) -> List[LocalModelInfo]:
-    """Scan an Ollama models directory for downloaded models.
-
-    Ollama uses a content-addressable layout
-    (``manifests/<host>/<namespace>/<model>/<tag>`` + ``blobs/sha256-...``),
-    iterated via ``rglob`` to find every depth. Each manifest's ``model`` layer
-    holds the GGUF weights (vision models add a projector layer).
-
-    Scans are read-only by default and return an opaque manifest reference;
-    the load route later calls :func:`materialize_ollama_model_ref` to create a
-    ``.gguf`` symlink/hardlink, keeping GET /local free of filesystem writes.
-    """
+    """Read-only scan; the load route materializes the .gguf so GET /local does no filesystem writes."""
     manifests_root = ollama_dir / "manifests"
     if not manifests_root.is_dir():
         return []

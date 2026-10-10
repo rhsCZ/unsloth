@@ -158,7 +158,9 @@ def test_start_route_reads_the_recorded_targets_off_the_event_loop(run_dir, monk
     monkeypatch.setattr(tr, "_resolve_diffusion_data_dir", lambda raw: Path(raw))
     monkeypatch.setattr(tr, "validate_job_paths", lambda _config: None)
     monkeypatch.setattr(
-        tr, "get_training_backend", lambda: type("B", (), {"is_training_active": lambda self: False})()
+        tr,
+        "get_training_backend",
+        lambda: type("B", (), {"is_training_active": lambda self: False})(),
     )
     body = DiffusionTrainingStartRequest(
         base_model = "Tongyi-MAI/Z-Image-Turbo",

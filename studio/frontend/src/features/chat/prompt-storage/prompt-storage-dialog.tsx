@@ -602,7 +602,7 @@ export async function saveChatItemAsProjectSource(
   }
 }
 
-/** Compare halves are named by model, since their order is not stable. */
+/** A sidebar row as one markdown document. Compare halves are named by model, since their order is not stable. */
 export async function buildChatItemMarkdown(item: {
   id: string;
   title: string;

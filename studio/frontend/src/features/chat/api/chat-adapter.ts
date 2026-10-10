@@ -2408,7 +2408,7 @@ export async function resolveChatInstructions(
   });
 }
 
-// Cached per thread so sandbox, RAG scope and instructions never mix two projects.
+// Answered once per thread and reused, so sandbox, RAG scope and instructions never mix two projects.
 const composerProjectByPendingThread = new Map<string, string | null>();
 
 /** The project the run started in, kept for the whole run; only a thread's first send records one. */

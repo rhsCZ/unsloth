@@ -505,6 +505,7 @@ export function DiffusionTrainPanel({
     }
   }, []);
 
+  // On first activation, load the dataset list and preselect a trainable base.
   useEffect(() => {
     if (!active) return;
     void refreshInfo().then((i) => {

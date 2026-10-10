@@ -769,7 +769,9 @@ async function refreshAndWaitForServerModel(options?: {
   }
 }
 
-/** Reconcile after the server unloaded the active local model (e.g. llama.cpp update). */
+/**
+ * Reconcile the UI after the SERVER unloaded the active local model (e.g. llama.cpp update).
+ */
 export async function resyncInferenceStatusAfterServerModelChange(): Promise<void> {
   // A llama.cpp update replaces the binary whose --help the flag catalogue describes.
   invalidateLlamaFlagCatalog();

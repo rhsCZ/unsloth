@@ -195,6 +195,7 @@ export interface DiffusionLoraInfo {
   families: string[];
   size_bytes: number;
   weight_default: number;
+  fine_tuned?: boolean;
 }
 
 export interface GalleryImage {

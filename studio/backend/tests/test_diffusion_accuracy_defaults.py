@@ -130,6 +130,54 @@ def test_a_run_folder_named_like_a_bundle_still_resumes_on_its_targets():
     assert cfg.lora_target_modules == _OLD_ZIMAGE_TARGETS
 
 
+def test_start_route_reads_the_recorded_targets_off_the_event_loop(run_dir, monkeypatch):
+    import asyncio
+    import threading
+
+    import routes.training as tr
+    from core.training import diffusion_train_common as dtc
+    from models.training import DiffusionTrainingStartRequest
+
+    _write_bundle(run_dir, _old_zimage_identity())
+    seen = {}
+    real = dc.recorded_resume_targets
+
+    def _recorded(path_value):
+        seen["thread"] = threading.current_thread()
+        return real(path_value)
+
+    class _Stop(Exception):
+        pass
+
+    def _stop(cfg):
+        seen["targets"] = cfg.lora_target_modules
+        raise _Stop
+
+    monkeypatch.setattr(dc, "recorded_resume_targets", _recorded)
+    monkeypatch.setattr(dtc, "h3_train_unsupported_reason", _stop)
+    monkeypatch.setattr(tr, "_resolve_diffusion_data_dir", lambda raw: Path(raw))
+    monkeypatch.setattr(tr, "validate_job_paths", lambda _config: None)
+    monkeypatch.setattr(
+        tr, "get_training_backend", lambda: type("B", (), {"is_training_active": lambda self: False})()
+    )
+    body = DiffusionTrainingStartRequest(
+        base_model = "Tongyi-MAI/Z-Image-Turbo",
+        data_dir = "d",
+        output_dir = "zimage-resumed",
+        resume_from_checkpoint = str(run_dir),
+    )
+
+    async def _run():
+        loop_thread = threading.current_thread()
+        with pytest.raises(_Stop):
+            await tr.start_diffusion_training(body = body, current_subject = "u", via_api_key = False)
+        return loop_thread
+
+    loop_thread = asyncio.run(_run())
+    assert seen["targets"] == _OLD_ZIMAGE_TARGETS
+    assert seen["thread"] is not loop_thread
+
+
 def test_explicit_request_targets_win_over_the_recorded_ones(run_dir):
     _write_bundle(run_dir, _old_zimage_identity())
     cfg = _zimage_cfg(

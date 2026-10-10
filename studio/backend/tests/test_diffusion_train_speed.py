@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import random
 import sys
@@ -147,7 +148,15 @@ def _write(
     return sched
 
 
-def test_recorded_optimizer_class_reads_the_bundle_being_resumed(run_dir):
+def test_recorded_optimizer_class_reads_the_bundle_being_resumed(run_dir, monkeypatch):
+    # The resume preflight refuses an 8-bit bundle on a host without bitsandbytes, so pretend it is installed.
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **k: object() if name == "bitsandbytes" else real_find_spec(name, *a, **k),
+    )
+    monkeypatch.delenv("UNSLOTH_DIFFUSION_FP32_OPTIM", raising = False)
     tmp_path = run_dir
     model = torch.nn.Linear(4, 4, bias = False)
     _write(tmp_path, model, torch.optim.AdamW(model.parameters(), lr = 1e-3))

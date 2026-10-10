@@ -1676,7 +1676,7 @@ _IMATRIX_TOKEN_RE = re.compile(r"^imatrix(?:[._\-]|$)|[._\-]imatrix$", re.IGNORE
 
 
 def _is_imatrix_path(path: str) -> bool:
-    """Activation statistics for llama-quantize, not a model; GGUF-suffixed ones reach llama-server."""
+    """Activation statistics for llama-quantize, not a model; must be excluded or llama-server gets it."""
     name = path.replace("\\", "/").rsplit("/", 1)[-1]
     stem = name.rsplit(".", 1)[0] if "." in name else name
     return bool(_IMATRIX_TOKEN_RE.search(stem)) or name.lower().endswith(".imatrix")

@@ -427,7 +427,7 @@ def select_attention_backend(
     family: Any = None,
     speed_unset: bool = False,
 ) -> Optional[str]:
-    """Auto picks cuDNN on CUDA only under a speed profile, so off stays bit-identical; else native."""
+    """Auto picks cuDNN on CUDA under a speed profile, and ROCm flash on gfx11 families; else native."""
     alias = normalize_attention_backend(requested)
     if alias != ATTN_AUTO:
         backend = _ALIASES[alias]
@@ -1522,7 +1522,8 @@ _KERNELS_HUB_FLOOR = (1, 10)
 
 
 def _kernels_hub_compatible() -> bool:
-    """False for hub versions under 1.10, since import kernels then breaks every later pipeline import."""
+    """False for hub under 1.10, below the kernels floor; hub 1.0-1.2.4 break every later pipeline
+    import."""
     try:
         import re
         from importlib.metadata import version

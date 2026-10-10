@@ -344,7 +344,8 @@ def _mlx_swaps_bnb_repo_for_its_base(model_name: str) -> bool:
 def _architecture_cannot_come_from_transformers(
     model_name: str = "", cfg: dict | None = None
 ) -> bool:
-    """On MLX, mlx-lm builds the model, so upgrading transformers cannot help, except unsloth bnb ids."""
+    """On MLX an upgrade cannot help, except for third-party or local bnb repos, which transformers
+    builds"""
     try:
         from utils.hardware import DeviceType, get_device
         if get_device() != DeviceType.MLX:

@@ -332,7 +332,7 @@ def _reprompt_intent_text(
     reasoning_prefilled: bool = False,
     visible_only: bool = False,
 ) -> str:
-    """Forward-looking words in <think> blocks are private planning, so only visible text is classified."""
+    """Classifies visible text, using reasoning only as a fallback for a reasoning-only stall."""
     prefilled_reasoning = ""
     if reasoning_prefilled:
         close = _THINK_CLOSE_RE.search(text)

@@ -600,7 +600,7 @@ def test_xet_keeps_its_own_writer(monkeypatch, tmp_path):
 
 
 def test_a_xet_backed_repo_downloading_over_http_still_resumes(monkeypatch, tmp_path):
-    """xet_file_data is set for any XET repo, so gate on it, not on whether hf_xet is active."""
+    """Gate on whether XET will actually run, not on xet_file_data, which is set for every XET repo."""
     module, calls = _fake_file_download(monkeypatch, xet_available = False)
     rp.restore_resumable_partials()
 

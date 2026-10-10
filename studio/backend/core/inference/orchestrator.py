@@ -1197,8 +1197,8 @@ class InferenceOrchestrator:
         request_id: str,
         cancel_event = None,
     ):
-        """Responses go through mailboxes so the dispatcher and this reader never both consume
-        _resp_queue."""
+        """Replies are routed to per-request mailboxes, so neither reader drops a reply meant for
+        the other."""
         mailbox = _WorkerMailbox(self._proc)
         with self._mailbox_lock:
             self._direct_mailboxes[request_id] = mailbox

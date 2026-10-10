@@ -1121,7 +1121,7 @@ def test_a_bundle_torch_load_refuses_is_rejected_by_the_preflight(run_dir):
 
 
 def test_a_finished_run_does_not_offer_its_successors_checkpoint(run_dir):
-    """not_before fences a finished run off bundles a later run wrote into the shared folder."""
+    """not_before fences off earlier runs bundles; a matching upper fence is needed for later ones."""
     early = _Run(run_dir)
     early.save(10)
     early_manifest = json.loads(

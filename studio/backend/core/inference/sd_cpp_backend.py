@@ -382,7 +382,7 @@ def sd_cpp_supports_sage_attn(binary: Optional[str]) -> bool:
 
 
 def sd_cpp_lists_accelerator_device(binary: Optional[str]) -> bool:
-    """Unreadable output does not count as missing; only a CPU-only device listing returns False."""
+    """Unreadable output does not mean no GPU; only a CPU-only listing or no binary returns False."""
     if not binary:
         return False
     return accelerator_verdict_keeps_gpu(sd_cpp_accelerator_device_verdict(binary))
@@ -736,7 +736,7 @@ def sd_cpp_device_named(
 
 
 def _h3_replacement_hint(binary: str) -> str:
-    """A user's build at the install path is moved aside, never deleted; a managed one is cleared."""
+    """Advises moving a user-owned build at the install path aside, never deleting it; else empty."""
     roots = [managed_install_root(), legacy_sibling_install_root()]
     for root in roots:
         if root is None:

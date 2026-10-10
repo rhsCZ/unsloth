@@ -780,7 +780,8 @@ def test_context_free_nvidia_smi_declines_whole_gpu_metrics_for_mig(monkeypatch)
 
 
 def test_context_free_never_spawns_amd_smi_on_windows_without_a_hip_sdk(monkeypatch):
-    """The probe must stay behind amd.py's elevation guard, or amd-smi raises a UAC prompt on Windows."""
+    """Stay behind the amd.py elevation guard; amd-smi raises a UAC prompt on Windows without HIP
+    runtime."""
     from utils.hardware import amd
 
     spawned = []

@@ -1050,7 +1050,7 @@ def test_the_seam_passes_the_launch_geometry_to_the_kv_vector():
 
 
 def test_an_inherited_split_mode_none_declines():
-    """An inherited LLAMA_ARG_SPLIT_MODE is scrubbed at launch, so only argv -sm can be planned against."""
+    """An inherited non-layer LLAMA_ARG_SPLIT_MODE is scrubbed at launch, so the plan must decline."""
     two_cards = [(0, 14 * 1024), (1, 14 * 1024)]
     assert _plan(_Stub(), gpus = two_cards, env = {"LLAMA_ARG_SPLIT_MODE": "none"}) is None
     assert _plan(_Stub(), gpus = two_cards, extra_args = ["-sm", "none"]) is not None

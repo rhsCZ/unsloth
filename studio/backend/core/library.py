@@ -1322,7 +1322,7 @@ def safe_file_name(
     fallback: str = "file",
     item_id: Optional[str] = None,
 ) -> str:
-    """With item_id, a hash of it keeps each item's copy apart, so adding one twice is a no-op."""
+    """A file name every OS can hold: no Windows-refused chars, leading dot, or device name like CON."""
     stem, ext = os.path.splitext(re.split(r"[\\/]", name or "")[-1])
     if not ext and stem.startswith("."):
         stem, ext = os.path.splitext(stem.lstrip("."))

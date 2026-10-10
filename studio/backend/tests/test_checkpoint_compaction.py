@@ -1059,7 +1059,7 @@ def test_the_final_answer_pass_never_starts_an_epoch_behind_the_tools_it_does_no
 
 
 def test_a_reasoning_models_saved_reply_is_still_recognised_as_on_branch():
-    """Saved reasoning must still match the branch, since the wire reply sends the thought as text."""
+    """A saved reasoning part must still match the branch, since the wire reply is text only."""
     from core.rag import conversation_archive
 
     stored = [
@@ -1688,7 +1688,7 @@ def test_the_unstored_newest_turn_cannot_move_the_request_to_a_sibling(monkeypat
 
 
 def test_an_indistinguishable_placeholder_twin_is_not_dropped_from_the_vote(monkeypatch):
-    """A placeholder twin must stay in the vote; dropping it lets the abandoned sibling decide."""
+    """An indistinguishable placeholder twin must stay in the vote, or the abandoned sibling decides."""
     from core.inference import checkpoint, llama_cpp
     from routes import inference as inference_routes
 

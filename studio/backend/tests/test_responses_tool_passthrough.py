@@ -2707,8 +2707,7 @@ class TestResponsesStreamAdapter:
         assert self._payloads(lines, "response.function_call_arguments.done")
 
     def test_studio_ownership_marker_reaches_the_chat_request(self):
-        """studio_tool_history must reach the chat request, or a Studio thread is refused or
-        forwarded raw."""
+        """The Studio marker must reach the chat request, or a Studio thread is refused or forwarded raw."""
         from routes.inference import _build_chat_request
 
         payload = ResponsesRequest.model_validate(

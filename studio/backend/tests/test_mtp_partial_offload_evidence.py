@@ -426,7 +426,7 @@ def test_zero_full_attention_interval_does_not_divide_by_zero():
 
 
 def test_the_reported_regression_is_still_fixed(tmp_path):
-    """A ~12 GiB Qwen3.8-27B load that cannot fit must still stand MTP down, or the regression returns."""
+    """Qwen3.8-27B with ~12 GiB free that cannot fit must stand MTP down, or the regression returns."""
     backend, gguf = _hybrid_mtp_backend(tmp_path, partial_offload = True)
 
     result = _launch(

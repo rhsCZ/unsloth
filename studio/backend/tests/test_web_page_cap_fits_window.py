@@ -112,7 +112,7 @@ def test_the_caller_can_still_pin_a_size(monkeypatch):
 
 
 class TestTheWindowIsReadPerRequest:
-    """The window is read per request: a loaded GGUF's window misreads native and external models."""
+    """Read the window per request: no-GGUF native chats got the full cap; externals got the GGUF window"""
 
     def test_a_native_model_window_is_read_when_no_gguf_is_loaded(self, monkeypatch):
         monkeypatch.undo()

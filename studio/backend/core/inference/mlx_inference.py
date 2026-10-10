@@ -97,7 +97,7 @@ def _is_cache(value):
 
 
 def _is_opaque_cache(value):
-    """A cache whose attributes live in __slots__, which vars() cannot see, so a copy would share it."""
+    """Attributes in __slots__ are invisible to vars(), so the copy must stop, not return the original."""
     return not hasattr(value, "__dict__") and hasattr(type(value), "state")
 
 
@@ -4372,8 +4372,7 @@ class MLXInferenceBackend:
         fitted = False,
         eligibility = None,
     ):
-        """A rotating cache cannot be quantized, so with kv_bits a pinned or fitted window becomes a
-        budget."""
+        """With kv_bits, only an enforceable pin or fitted window becomes a budget."""
         pinned = _positive_int(max_seq_length) is not None or fitted
         # Tri-state: True bounded, False confirmed unbounded, None unjudgeable
         confirmed = self._kv_cache_window_enforceable(served)

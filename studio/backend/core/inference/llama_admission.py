@@ -410,7 +410,8 @@ class LlamaAdmissionLease:
         timeout_s: Optional[float] = DEFAULT_RECOST_WAIT_TIMEOUT_S,
         allow_yield: bool = True,
     ) -> bool:
-        """Waits for cache room rather than overrunning it; call only between rounds, with allow_yield."""
+        """Waits for cache room; call only between rounds, and allow_yield only where idle cells
+        come back."""
         want = max(0, int(tokens or 0))
         if self.recost(want):
             return True

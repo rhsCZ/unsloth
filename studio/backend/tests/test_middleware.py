@@ -1361,8 +1361,8 @@ class TestCspHfEndpoints:
     def test_a_path_prefixed_mirror_is_listed_as_an_origin(
         self, main_module, monkeypatch, endpoint, expected_source
     ):
-        """A CSP host-source with a path matches only that exact URL, so mirrors are listed by
-        origin alone."""
+        """A CSP host-source path not ending in / matches only that exact URL, so list mirrors by
+        origin only."""
         monkeypatch.setenv("HF_ENDPOINT", endpoint)
         sources = _connect_src(main_module._build_csp("NONCE"))
         assert expected_source in sources

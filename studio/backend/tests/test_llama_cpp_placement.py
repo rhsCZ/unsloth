@@ -2102,7 +2102,7 @@ def test_an_unsized_model_abstains(tmp_path, monkeypatch):
 def test_placement_flags_never_turn_an_allowed_load_into_a_refusal(
     tmp_path, monkeypatch, extra_args
 ):
-    """Placement flags only move bytes off GPU or narrow VRAM, so they can never add a refusal."""
+    """Placement flags could only add refusals if read, so the floor leaves them out."""
     backend, gguf = _offload_backend_std(tmp_path, avail_mib = 64_000, monkeypatch = monkeypatch)
 
     assert _launch(backend, gguf, extra_args = extra_args)["cmd"]

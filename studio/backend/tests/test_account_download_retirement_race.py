@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A download still pre-claim has no registry entry for retirement to cancel, so it must recheck."""
+"""Pre-claim downloads have no registry entry for retirement to cancel, so they must not reach spawn."""
 
 from __future__ import annotations
 

@@ -6451,7 +6451,7 @@ def apply_gpu_ids(gpu_ids, backend: Optional[str] = None) -> None:
 
 
 def get_device_map(gpu_ids: Optional[list[int]] = None) -> str:
-    """CUDA uses unsloth_balanced, since plain unsloth falls back to sequential; XPU keeps balanced."""
+    """unsloth_balanced on CUDA, balanced on XPU with more than one GPU; sequential otherwise"""
     device = get_device()
     if device in (DeviceType.CUDA, DeviceType.XPU):
         multi_gpu = gpu_ids is not None and len(gpu_ids) > 1

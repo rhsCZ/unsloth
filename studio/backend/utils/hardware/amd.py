@@ -747,7 +747,7 @@ def _a_bare_soname_resolves(soname: str) -> bool:
 
 
 def _icd_manifest_is_usable(path: str) -> bool:
-    """Same checks as loader_parse_icd_manifest; an unknown file_format_version is still accepted."""
+    """Usable if its JSON fields are valid and its library resolves; unknown file_format_version passes."""
     try:
         with open(path, "r", encoding = "utf-8") as handle:
             manifest = json.load(handle)

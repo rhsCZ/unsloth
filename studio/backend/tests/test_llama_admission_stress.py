@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Under any interleaving, committed never exceeds budget and the queue always drains."""
+"""Under any interleaving, committed stays within budget except one escape holder; the queue drains."""
 
 from __future__ import annotations
 

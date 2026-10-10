@@ -2365,7 +2365,7 @@ def _resolve_swa_pattern(
 
 
 def _hf_repo_from_url(url: Optional[str]) -> Optional[str]:
-    """Also accepts huggingface.co, since entries written before a mirror was set still hold it."""
+    """Strips a huggingface.co or mirrored HF_ENDPOINT URL to owner/name; huggingface.co still accepted."""
     if not url:
         return None
     from utils.hf_endpoint import get_hf_endpoint
@@ -2432,7 +2432,7 @@ _GGUF_METADATA_LOGGED_LOCK = threading.Lock()
 
 
 def _note_gguf_metadata_read(gguf_path: str) -> bool:
-    """Returns True when the file cannot be stat'd, since an unidentifiable read is better logged."""
+    """True on the first read of this file or when its stat fails; False on repeat reads."""
     try:
         st = os.stat(gguf_path)
         key = (os.path.abspath(gguf_path), st.st_size, st.st_mtime_ns)
@@ -3179,7 +3179,7 @@ def chat_load_in_flight():
 
 
 def chat_load_active() -> bool:
-    """Counts loads still downloading, which is_active misses since no llama-server exists yet."""
+    """Whether any chat load is in flight, spawned or not; is_active misses loads still downloading."""
     with _LOADS_IN_FLIGHT_LOCK:
         return _CHAT_LOADS_IN_FLIGHT > 0
 
@@ -3839,7 +3839,7 @@ def _linux_math_core_count(
 def _spilled_decode_threads(
     n_threads: Optional[int] = None, extra_args: Optional[Iterable[str]] = None
 ) -> Optional[int]:
-    """Counts physical cores as llama.cpp does, not hyperthreads; explicit affinity or SMT returns None."""
+    """Physical cores as llama.cpp counts them; explicit affinity or SMT oversubscription returns None."""
     requested: Optional[int] = None
     if n_threads is not None and n_threads > 0:
         requested = int(n_threads)
@@ -7147,7 +7147,8 @@ class LlamaCppBackend:
 
     @property
     def holds_no_vram(self) -> bool:
-        """True for a zero-VRAM launch, including an arch-gated automatic one, so the arbiter skips it."""
+        """Zero-VRAM launches, incl. arch-gated automatic ones, let the arbiter spare image/video
+        pipelines."""
         if self._arch_gate_forced_cpu:
             return True
         return (
@@ -10080,8 +10081,8 @@ class LlamaCppBackend:
             return None
 
         def _pcie(reason: str) -> str:
-            """Adds the IOMMU note to every PCIe peer veto; a translating IOMMU makes peer copies
-            unsupported."""
+            """Appended to every PCIe peer veto; on bare-metal Linux a translating IOMMU makes
+            copies unsupported."""
             if cls._iommu_is_translating_cached() and not cls._running_virtualized():
                 reason += (
                     "; bare-metal Linux with a translating IOMMU, where CUDA "
@@ -10730,7 +10731,7 @@ class LlamaCppBackend:
     def _rocm_arch_gate_keep(
         binary: Optional[str], torch_mod, for_llama_server: bool
     ) -> Callable[[int], bool]:
-        """Keeps a physical id only if the installed ROCm prebuilt has kernels for its gfx arch."""
+        """Keeps a device unless it is ROCm with a gfx arch the installed prebuilt has no kernels for."""
         if not for_llama_server or not LlamaCppBackend._torch_is_rocm(torch_mod):
             return lambda _idx: True
         supported_archs = LlamaCppBackend._installed_llama_gfx_archs(binary)
@@ -11756,7 +11757,8 @@ class LlamaCppBackend:
         argv: list[str],
         env: Optional[Mapping[str, str]] = None,
     ) -> tuple[int, int]:
-        """Shared iGPU rows overlap, so only the largest pool counts; selected discrete cards reduce it."""
+        """Only the largest shared iGPU pool counts; selected discrete cards reduce the bytes it
+        must hold."""
         rows = [(row[0], max(0, row[1])) for row in gpus]
         pinned = _extra_args_main_device(argv)
         if pinned is None and env:
@@ -16178,7 +16180,7 @@ class LlamaCppBackend:
         extra_args: Optional[list[str]],
         caps: Optional[Callable[[Optional[str]], dict]] = None,
     ) -> bool:
-        """A cached DSpark path is not enough; the binary must support draft-dspark or no drafter loads."""
+        """A DSpark path alone is not enough; Auto picks DSpark only if the binary supports draft-dspark."""
         if spec_canon != "auto" or not dspark_draft_path:
             return False
         if _extra_args_set_spec_type(extra_args):
@@ -28030,7 +28032,8 @@ class LlamaCppBackend:
                 return started
 
     def _retire_device_lost_server(self, served_by) -> None:
-        """Kills the current server after device loss, since it survives VK_ERROR_DEVICE_LOST and fails."""
+        """Kills the device-lost server if still current, since it survives the loss and fails later
+        requests."""
         with self._respawn_lock:
             if (
                 served_by is None
@@ -32316,7 +32319,8 @@ class LlamaCppBackend:
         cancel_event: Optional[threading.Event] = None,
         stats_holder: Optional[dict] = None,
     ) -> tuple:
-        """cancel_event closes the client under the blocking decode POST, not polled; raises on cancel."""
+        """A watcher closes the client on cancel, since the decode is one blocking POST; raises
+        RuntimeError."""
         if audio_type not in self._TTS_PROMPTS:
             raise RuntimeError(f"GGUF TTS does not support '{audio_type}' codec.")
 

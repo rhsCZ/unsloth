@@ -496,7 +496,7 @@ LOCAL_STANDINS_FOR_HOSTED_TOOLS: dict[str, frozenset[str]] = {
 
 
 def hosted_only_tools(provider_type: str | None, enabled_tools: Any) -> list[str]:
-    """Hosted tools without a local version are forwarded, or the toggle stays on while nothing runs."""
+    """Hosted tools with no local version are forwarded, except code_execution when its local twin is on."""
     if not isinstance(enabled_tools, list):
         return []
     hosted = provider_hosted_tools(provider_type)
@@ -887,7 +887,7 @@ def validate_provider_base_url(base_url: str) -> str:
 def list_available_providers(
     include_hidden: bool = False, include_oauth: bool = False
 ) -> list[dict[str, Any]]:
-    """Hidden and OAuth rows need include_hidden; older cached bundles would show duplicate presets."""
+    """Hidden rows need include_hidden; OAuth rows are opt-in too, and either flag opts them in."""
     result = []
     for provider_type, info in PROVIDER_REGISTRY.items():
         if (info.get("hidden") and not include_hidden) or info.get("managed"):

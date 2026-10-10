@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Page cache counts as used in a Spark's cudaMemGetInfo, so GGUF context fits shrink to the minimum."""
+"""Spark's cudaMemGetInfo counts page cache as used, so GGUF context fits can drop to the minimum."""
 
 from __future__ import annotations
 

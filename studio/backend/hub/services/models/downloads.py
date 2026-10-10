@@ -214,7 +214,7 @@ async def download_model_response(
     *,
     allow_ambient_token: bool = True,
 ):
-    """With allow_ambient_token=False the worker stays anonymous for repos named over the API."""
+    """With allow_ambient_token=False, API-named repos stay anonymous unless the caller sent a token."""
     from core.training.account_jobs import account_is_retired
 
     if account_is_retired():

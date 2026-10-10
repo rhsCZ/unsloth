@@ -1817,7 +1817,8 @@ class TestLegacyBuildLatchIsBinaryWide:
         assert not LlamaCppBackend._tensor_quant_kv_unsupported_binary(None, ("q8_0", "q8_0"))
 
     def test_the_skip_keeps_the_multi_gpu_request(self):
-        """A missing capability says nothing about capacity, so the layer fallback keeps _layer_min_gpus."""
+        """Missing capability says nothing about capacity: the layer fallback must still spread
+        across GPUs."""
         load = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
         gate = load.find("self._tensor_quant_kv_unsupported_binary(")
         assert gate != -1

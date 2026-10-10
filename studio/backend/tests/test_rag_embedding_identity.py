@@ -417,7 +417,7 @@ def test_widening_survives_a_scope_larger_than_one_parameter_batch(rag_conn):
 
 
 def test_a_saturated_scope_keeps_widening_after_another_scope_is_full(rag_conn):
-    """Each vec0 scope is its own KNN list; a full scope must keep widening past stale-embedder vectors."""
+    """A full thread scope must not stop the project scope widening past stale-embedder vectors."""
     stale = config.embedding_identity("llama-server", MODEL, gguf_repo = "r")
     current = config.embedding_identity("sentence-transformers", MODEL)
     _put(rag_conn, "thread_t", "weak", ["alpha bravo charlie delta"] * 5, current)

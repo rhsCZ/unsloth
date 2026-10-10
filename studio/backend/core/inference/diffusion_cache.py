@@ -207,7 +207,7 @@ def register_unregistered_transformer_blocks(logger: Any = None) -> tuple:
 
 
 def _invalidate_child_registry_cache(transformer: Any) -> None:
-    """Clears diffusers' cached child-registry list, or a later enable_cache fails: No context is set."""
+    """Clears the cached child-registry list, otherwise a cached forward dies: No context is set."""
     registry = getattr(transformer, "_diffusers_hook", None)
     if registry is not None and getattr(registry, "_child_registries_cache", None) is not None:
         try:

@@ -2639,7 +2639,7 @@ def test_native_audio_codec_repos_are_companion_infrastructure(
 
 
 def test_the_real_companion_shape_never_reaches_a_row_at_all(monkeypatch, tmp_path):
-    """ComfyUI split_files mirrors are dropped before any row, so the flag alone keeps them out of chat."""
+    """ComfyUI split_files mirrors are dropped before any row; the flag guards them if that changes."""
     from types import SimpleNamespace
 
     snapshot = tmp_path / "snapshots" / _SNAPSHOT_SHA

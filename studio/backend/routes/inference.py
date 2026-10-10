@@ -1106,7 +1106,7 @@ def _json_dumps_safe(value) -> Optional[str]:
 
 
 def _anthropic_upstream_stream_error_event(text: str, counts_source: Optional[str] = None):
-    """In-band error for a 200 stream that later fails; oversize refusals keep their token counts."""
+    """In-band error for a failed 200 stream; oversize refusals keep their wording, not a generic error."""
     from core.inference.llama_keepwarm import mark_current_response_failed
 
     mark_current_response_failed()
@@ -9332,8 +9332,8 @@ async def _maybe_auto_switch_model(
     speech_budget: Optional[dict] = None,
     tool_images_only: bool = False,
 ) -> None:
-    """Rejects an unservable target before the swap, so a failing request never evicts the resident
-    model."""
+    """Auto-switch loads a downloaded model; rejects a target that cannot serve the input before
+    swapping."""
     gguf_requires_vision = (
         (require_audio_input or require_video) if tool_images_only else require_vision
     )
@@ -11509,7 +11509,7 @@ _ESTIMATE_DISK_UNKNOWN = "unknown"
 
 
 def _estimate_disk_residency(model_identifier: str) -> str:
-    """Keeps unknown apart from absent, which the route must never answer with a Hub round trip."""
+    """Keeps unknown apart from absent; the route must never answer unknown with a Hub round trip."""
     try:
         from utils.paths import is_local_path
     except Exception:
@@ -11606,7 +11606,8 @@ _ESTIMATE_NOT_ON_DISK = object()
 
 
 def _localized_estimate_config(config: ModelConfig, gguf_path: str) -> ModelConfig:
-    """Copy of the TTL-cached config with gguf_file at on-disk weights, so no paths-info network call."""
+    """Config unchanged if gguf_file is already on disk; else a copy with cached weights, no network
+    call."""
     main = getattr(config, "gguf_file", None)
     if main and Path(main).is_file():
         return config
@@ -17153,7 +17154,8 @@ async def check_transformers_upgrade_route(
     except Exception as exc:
         logger.debug("Latest-tier check failed for '%s': %s", model_name, exc)
 
-    # Only an install-only upgrade forces 16-bit; a merely offered one leaves 4-bit as an exit.
+    # Only install-only upgrades or sidecars already routing the model force 16-bit; offered ones do
+    # not.
     install_only_upgrade = bool(
         transformers_upgrade is not None
         and transformers_upgrade.installable
@@ -22603,7 +22605,7 @@ def _prepare_audio_for_llama(b64: str) -> tuple[str, str]:
 
 
 def _prepare_audio_clips_for_llama(clips: list[str]) -> list[tuple[str, str]]:
-    """Clips share one byte and rate budget, so the result does not depend on attachment order."""
+    """Clips share one byte and duration budget, so the result does not depend on attachment order."""
     stripped = [_strip_audio_data_uri(clip) for clip in clips]
     raws = [base64.b64decode(clip) for clip in stripped]
     passthrough = [_llama_passthrough_audio(raw) for raw in raws]
@@ -22831,7 +22833,8 @@ def _messages_have_input_audio(messages) -> bool:
 
 
 def _messages_have_embedded_image(messages) -> bool:
-    """Counts only inline base64 image data URLs, which durable runs would persist into every later turn."""
+    """True only for inline base64 image data URLs; durable runs would persist them into every later
+    turn."""
     for msg in messages:
         content = getattr(msg, "content", None)
         if not isinstance(content, list):
@@ -22906,7 +22909,7 @@ def _is_remote_video(url: str) -> bool:
 
 
 def _video_scheme_rejection(clip: str) -> Optional[tuple[int, str]]:
-    """Refuses URL schemes llama-server would honour, such as file://, since that is a local file read."""
+    """Refuses a clip URL whose scheme neither we nor llama-server should honour, such as file://."""
     if not clip or clip[:5].lower() == "data:" or _is_remote_video(clip):
         return None
     # ':' is not in the base64 alphabet, so an early colon marks a URL.
@@ -39617,7 +39620,7 @@ def _refuse_disabled_nvfp4_request(request: Any) -> None:
 
 
 async def _refuse_disabled_nvfp4_checkpoint(request: Any) -> None:
-    """Refuses an NVFP4 checkpoint named as the model itself, which the scheme gates above never see."""
+    """Refuses an NVFP4 checkpoint named as the model itself, with 400, while the NVFP4 switch is off."""
     from core.inference.diffusion_nvfp4_flag import (
         nvfp4_diffusion_enabled,
         refuse_disabled_nvfp4_checkpoint,
@@ -39771,7 +39774,7 @@ async def diffusion_download_plan(
             transformer_quant_fast_accum = request.transformer_quant_fast_accum,
             loras = request.loras,
             **_component_file_kwargs(request),
-            # Keeps the probe: clearing it drops the hosted DiT prequant, leaving a GGUF pick ~21 GB
+            # Keeps the probe: without it an explicit transformer_quant GGUF pick reports ~21 GB
             # short.
             memory_verdict = not training,
         )

@@ -615,7 +615,7 @@ def _resolve_base_model(model_name: str) -> str:
 
 
 def _token_cache_key(model_name: str, hf_token: HfTokenArg) -> tuple[str, str | None]:
-    """Anonymous and UI-session callers get their own slots, so a cached hit never skips authorization."""
+    """Anonymous and UI-session callers get own slots, so an API caller never reads a UI-session result"""
     import hashlib
 
     if is_anonymous(hf_token):

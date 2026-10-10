@@ -848,7 +848,7 @@ def test_continued_turn_never_reads_channel_state_from_its_tail():
 
 
 def test_tool_loop_pass_of_a_continued_turn_still_reads_the_prompt():
-    """Request flag outlives the continuation, so detect only if a trailing assistant turn was resumed."""
+    """Request flag outlives the turn; skip detection only if a trailing assistant turn was resumed."""
     resumed = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "partial"}]
     post_tool = [
         {"role": "user", "content": "q"},

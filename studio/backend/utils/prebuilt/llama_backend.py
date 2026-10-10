@@ -136,7 +136,7 @@ def marker_backend_request(marker: Optional[Mapping[str, Any]]) -> str:
 
 
 def marker_backend_was_chosen(marker: Optional[Mapping[str, Any]]) -> bool:
-    """Not marker_backend_request(...) != auto: anything but a plainly automatic marker counts as chosen."""
+    """Chosen unless plainly automatic or its request went unsatisfied; not simply request != auto."""
     if not marker:
         return False
     if marker.get("backend_request_unsatisfied"):

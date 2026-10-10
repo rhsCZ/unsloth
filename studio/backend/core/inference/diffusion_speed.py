@@ -1503,7 +1503,7 @@ def _guard_compiled_decode(
     eager_when_tiled: bool = False,
     owner: Any = None,
 ) -> Any:
-    """torch.compile is lazy, so failures surface on the first call; a tiled decode runs eager."""
+    """Lazy compile fails on first call; OOMs still raise; eager_when_tiled sends tiled decode eager."""
     owner = vae if owner is None else owner
     had_own = "decode" in getattr(owner, "__dict__", {})
     failed: list = []

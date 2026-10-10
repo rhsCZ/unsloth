@@ -139,7 +139,7 @@ def test_the_capability_is_published_and_never_memoised():
 
 
 def test_the_polled_route_never_imports_the_ml_stack():
-    """/api/system is polled through startup and reads sys.modules only, since importing torch stalls it."""
+    """Polled /api/system reads sys.modules and a cached value; it must never import torch."""
     reader = _src("_dense_quant_supported")
     assert '"torch" in sys.modules' in reader and '"torchao" in sys.modules' in reader
     assert "_probe_dense_quant_supported" not in reader

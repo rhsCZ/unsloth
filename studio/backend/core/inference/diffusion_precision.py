@@ -374,7 +374,7 @@ def _cast_int8_selective(encoder: Any, target: Any, skip_first: int, skip_last: 
 
 
 def _weight_has_zero_output_row(module: Any) -> bool:
-    """A zero output row gives fp8 a zero scale and NaN; SDXL's text_encoder_2 has one and stays dense."""
+    """A zero output row gives fp8 scale 0 and NaN; only that Linear in SDXL text_encoder_2 stays dense."""
     try:
         weight = getattr(module, "weight", None)
         if weight is None or weight.ndim != 2:

@@ -43,7 +43,7 @@ CONVERSATION_ARCHIVE_PREFIX = "convarchive_"
 
 
 def conversation_archive_scope(thread_id: str) -> str:
-    """Not thread_scope, which is rendered whole into every request and would re-inject archived turns."""
+    """Not thread_scope: under THREAD_WHOLE_DOC it renders whole into every request, re-injecting turns."""
     return f"{CONVERSATION_ARCHIVE_PREFIX}{thread_id}"
 
 

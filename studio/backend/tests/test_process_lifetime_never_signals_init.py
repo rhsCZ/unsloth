@@ -40,7 +40,7 @@ def recorded_signals(monkeypatch):
 
 @pytest.mark.parametrize("pid", [None, 0, 1, -1, -12345, "1", 1.0, True, False])
 def test_unsignalable_values_are_rejected(pid):
-    """True is rejected explicitly, so the rule holds even if the pid floor is ever written differently."""
+    """True is pinned for the pid floor: it stays rejected if the floor is ever rewritten."""
     assert pl.is_signalable_pid(pid) is False
 
 

@@ -307,7 +307,7 @@ def test_generated_bytecode_does_not_invalidate_the_install(monkeypatch, pinned_
 
 
 def test_a_sibling_planted_in_the_import_root_is_rebuilt(monkeypatch, pinned_digests):
-    """The origin check covers only deepseek_ocr.*, but the code imports addict from the same root."""
+    """Origin checks cover only deepseek_ocr, so a planted addict.py in the import root runs unchecked."""
     fetched = []
 
     def counting_download(

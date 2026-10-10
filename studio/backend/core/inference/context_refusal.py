@@ -74,7 +74,7 @@ def _int(value) -> int:
 
 
 def _blame_latest_turn(context_tokens: int):
-    """None when no refusal was recorded for this window; fits_alone is False only at or over the window."""
+    """(role, fits_alone) for the turn worth naming; None if history is to blame or no matching refusal"""
     refusal = latest_refusal()
     if not refusal:
         return None

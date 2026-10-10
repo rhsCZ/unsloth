@@ -75,7 +75,7 @@ def _map_onto_cwd(
     text,
     notify = True,
 ):
-    """``notify`` is False for reads that keep the original path, so the one-shot notice is not spent."""
+    """Maps prefix/rest onto ./rest under the CWD, contained so .. segments cannot escape it."""
     rel = text[len(prefix) :].lstrip("/")
     mapped = _contained_join(os.getcwd(), rel)
     if notify:

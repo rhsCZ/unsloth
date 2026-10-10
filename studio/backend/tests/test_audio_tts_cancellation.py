@@ -18,7 +18,7 @@ _STUBBED: list[str] = []
 
 
 def _stub_if_missing(name, attrs):
-    """Stub unsloth and deps the backend job lacks, since their module-scope import fails collection."""
+    """Stub unsloth, which the backend job lacks; the peft-gated core.inference import needs it"""
     if name in sys.modules:
         return
     try:

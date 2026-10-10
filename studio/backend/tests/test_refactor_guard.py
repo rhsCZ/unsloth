@@ -50,7 +50,7 @@ def test_guarded_functions_produce_the_same_bytes(corpus):
 
 
 def test_no_new_non_idempotent_strip(corpus):
-    """Non-idempotent strip failures may only shrink against the baseline, keyed per boolean variant."""
+    """The non-idempotent strip baseline may not grow; each boolean variant is keyed separately."""
     baseline = {
         (entry["module"], entry["function"], entry.get("variant", ""))
         for entry in refactor_guard._read("idempotence_baseline.json")

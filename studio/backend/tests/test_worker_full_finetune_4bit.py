@@ -56,7 +56,7 @@ def test_quantized_or_foreign_models_keep_4bit(outputs, tmp_path):
 
 
 def test_symlink_loop_under_outputs_keeps_4bit(outputs, monkeypatch):
-    """Before Python 3.13, resolve() raises RuntimeError on a symlink loop, which callers don't catch."""
+    """A symlink loop under outputs/ must read as not a full fine-tune, not fault the load"""
     outputs.mkdir(parents = True, exist_ok = True)
     looped, partner = outputs / "loop_a", outputs / "loop_b"
     looped.symlink_to(partner)

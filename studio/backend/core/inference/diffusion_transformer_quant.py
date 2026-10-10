@@ -1627,7 +1627,7 @@ def make_filter_fn(
     require_bf16: bool = False,
     require_divisible: int = 0,
 ):
-    """A single non-bf16 or unaligned Linear aborts the whole quantise pass; the require flags skip it."""
+    """A non-bf16 Linear aborts the whole quantise pass; an unaligned one crashes the first matmul later."""
 
     def filter_fn(module: Any, fqn: str = "") -> bool:
         try:

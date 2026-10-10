@@ -528,7 +528,8 @@ def _sed_long_flag(name: str) -> str:
 
 
 def _sed_disables_exec(name: str) -> bool:
-    """--sandbox and --posix, or unambiguous prefixes of them, disable e/r/w; the script is then inert."""
+    """--sandbox disables e/r/w; --posix drops GNU extensions e belongs to; either makes the script
+    inert."""
     if len(name) >= 4 and "--sandbox".startswith(name):
         return True
     return len(name) >= 3 and "--posix".startswith(name)
@@ -6727,7 +6728,7 @@ def _case_arm_sites(
 
 
 def _is_wrapper_flag_operand(command: str, start: int) -> bool:
-    """Checked in code, not the regex, because the regex backtracks and atomic groups need Python 3.11."""
+    """Whether the word at start is the value of a wrapper option such as xargs -P, not a command."""
     preceding = command[:start].split()
     return bool(preceding) and preceding[-1] in _ALL_WRAPPER_VALUE_FLAGS
 
@@ -11704,7 +11705,7 @@ def _enabled_mcp_servers(servers: list[dict]) -> list[dict]:
 
 
 def cached_mcp_tools() -> tuple[list[dict], bool]:
-    """Reads only cached MCP schemas, never probing servers; complete is False when one is uncached."""
+    """Reads only cached MCP schemas; complete is False when an uncached server is not in cool-off."""
     servers = _enabled_mcp_servers(mcp_servers_db.list_servers())
     if not stdio_mcp_enabled():
         servers = [s for s in servers if not is_stdio(s["url"])]

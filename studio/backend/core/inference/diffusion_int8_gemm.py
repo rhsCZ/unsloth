@@ -699,7 +699,7 @@ def install(
     offload_active: bool = False,
     device: Any = None,
 ) -> int:
-    """Idempotent; a block-streamed denoiser needs device passed, or it keeps the stock path."""
+    """Idempotent; must run before the first compiled forward; a block-streamed denoiser needs device."""
     if int8_gemm_mode() == "off" or transformer is None:
         return 0
     if device is not None:

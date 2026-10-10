@@ -556,7 +556,7 @@ def _hermes_native_home() -> Path:
 
 
 def _hermes_root() -> Path:
-    """A HERMES_HOME of <root>/profiles/<name> maps to <root>; otherwise HERMES_HOME is the root."""
+    """Under the native home HERMES_HOME means that home; a profiles/<name> elsewhere means its root."""
     env_home = os.environ.get("HERMES_HOME", "").strip()
     native = _hermes_native_home()
     if not env_home:

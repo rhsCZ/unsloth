@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""A download racing the torch warm's import of torch._dynamo can leave a half-built module."""
+"""A download racing the torch._dynamo import must not poison the process."""
 
 from __future__ import annotations
 

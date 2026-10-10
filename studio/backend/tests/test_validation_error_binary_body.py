@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Binary request bodies must return 422, since jsonable_encoder cannot decode the raw bytes."""
+"""A binary body on a JSON route must yield 422, since jsonable_encoder cannot decode raw bytes."""
 
 from __future__ import annotations
 

@@ -105,8 +105,7 @@ def loras_dir() -> Path:
 
 
 def sanitize_alias(raw: str) -> str:
-    """Dots are dropped because PEFT adapter names forbid them; the tag grammar rejects spaces and
-    colons."""
+    """Dots are replaced too, as PEFT forbids them; the tag NAME may not hold spaces or colons."""
     stem = raw.rsplit("/", 1)[-1]
     for ext in _ALL_EXTS:
         if stem.lower().endswith(ext):

@@ -968,7 +968,7 @@ def test_another_cache_type_is_left_alone(monkeypatch):
 
 
 def test_a_lost_marker_does_not_cost_a_healthy_cache(monkeypatch):
-    """A lost _cache_config marker must not tear down a healthy cache; the live config decides."""
+    """A lost own marker must not tear down a healthy cache; the live diffusers config decides."""
     registry = _stub_diffusers(monkeypatch)
 
     class FirstBlockCacheConfig:  # noqa: N801 - matched by NAME

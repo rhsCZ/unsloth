@@ -2179,7 +2179,8 @@ class TestLaunchShapedPricing:
 
 
 class TestInheritedEnvironment:
-    """The child inherits LLAMA_ARG_SPEC_* the panel never saw, and the projector path scrubs none."""
+    """Inherited LLAMA_ARG_SPEC_* is scrubbed if Unsloth owns the spec block; projector path never
+    scrubs."""
 
     @pytest.fixture
     def bare(self, gqa_gguf):

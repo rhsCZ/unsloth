@@ -236,7 +236,7 @@ def _build_sdxl_latent_cache(
 
 
 def _sample_sdxl_cached_latents(cache, idxs, variant_rng, device, weight_dtype):
-    """Draws fresh noise each step, like an in-loop sample, since the VAE scale is folded into the cache."""
+    """Draws fresh noise each step from the cached A and B, as an in-loop latent_dist.sample() would."""
     import torch
 
     parts_a, parts_b, tid_rows = [], [], []

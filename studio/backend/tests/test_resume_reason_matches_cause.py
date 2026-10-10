@@ -104,8 +104,7 @@ def test_a_row_with_no_output_dir_is_not_diagnosed_as_provenance(tmp_path, unres
 
 
 def test_the_start_route_gates_the_substitution_on_the_checkpoint(tmp_path):
-    """The guard is checked over the AST, since a substring match is satisfied by the explanatory
-    comment."""
+    """The start route must not ask the blocker unconditionally; the guard is pinned over the AST."""
     import ast
     import inspect
 

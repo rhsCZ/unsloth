@@ -2968,7 +2968,7 @@ def test_only_an_approved_call_is_marked_approved(monkeypatch, verdict):
 
 
 def test_auto_mode_render_html_suppresses_provisional_card_under_confirm(monkeypatch):
-    """Under confirm, render_html suppresses its provisional card; the full tool_start still fires."""
+    """Confirm under permission_mode=auto hides the render_html provisional card; full tool_start fires."""
     args = {"code": "<html>" + "x" * 80 + "</html>"}
     first_stream = _streamed_structured_tool_call("render_html", args, "call_rh")
     final_stream = [_sse({"content": "Done."}), _done()]
@@ -5342,7 +5342,7 @@ def _tool_call_opening(index: int, call_id: str, name: str, arguments: str) -> s
 
 
 def test_second_structured_call_at_one_index_keeps_its_own_fragments(monkeypatch):
-    """Key structured fragments by call id, since llama-server restarts delta index at 0 each round."""
+    """llama-server restarts delta index at 0 each round, so index alone merges two calls into one."""
 
     stream = [
         _tool_call_opening(0, "call_a", "web_search", '{"query":'),
@@ -5948,7 +5948,7 @@ def test_compacting_an_earlier_call_lets_the_next_one_run(monkeypatch):
 
 
 def test_refusing_a_call_also_stops_it_costing_the_window(monkeypatch):
-    """Refusing a tool call still makes its arguments cost the prompt, so refusal does not save room."""
+    """Refused arguments must not be replayed, so refusing a call also stops them costing the window"""
     immovable = "please read all of this: " + "u" * 40000
     oversized = "<!DOCTYPE html>" + "x" * 8000
     streams = [

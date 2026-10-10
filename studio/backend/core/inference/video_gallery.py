@@ -251,7 +251,7 @@ def first_frame_webp(
 
 
 def transcode_to_file(video_id: str, fmt: str) -> Optional[Path]:
-    """Transcode an owned clip to a temp file, not memory, since VP9 exports can run to hundreds of MB."""
+    """Re-encodes to a temp file, not memory; the caller must delete it after serving."""
     # only transcode an Unsloth-owned clip, so a guessed stem for a foreign MP4 cannot be re-encoded out
     path = owned_video_path(video_id)
     if path is None:

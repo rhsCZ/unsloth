@@ -237,7 +237,7 @@ async def download_dataset_response(
     *,
     allow_ambient_token: bool = True,
 ) -> dict:
-    """With allow_ambient_token=False the worker stays anonymous for repos named over the API."""
+    """allow_ambient_token=False: anonymous when the caller sent no token, for repos named over the API."""
     if account_is_retired():
         raise HTTPException(status_code = 403, detail = "Account is retired")
     hf_token = account_hf_token(hf_token)

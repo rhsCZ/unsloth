@@ -17,7 +17,7 @@ from core.inference import diffusion as diffusion_mod
 
 
 def _call_keyword_sets(module_path: str, function: str, callee: str) -> list[set[str]]:
-    """AST helper that reads keyword sets from source."""
+    """One set of keyword names per call to callee inside function, read from source by AST"""
     backend_root = pathlib.Path(diffusion_mod.__file__).resolve().parents[2]
     tree = ast.parse((backend_root / module_path).read_text(encoding = "utf-8"))
     found: list[set[str]] = []

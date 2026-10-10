@@ -251,7 +251,7 @@ def _preview_swap_gen() -> int:
 
 
 def note_preview_swap_begin() -> None:
-    """Marks a preview swap in progress; pair with note_preview_swap_end() once the gate releases."""
+    """Marks a preview swap; call before taking the lifecycle gate, and end it once the gate releases."""
     global _preview_swap_inflight
     with _lock:
         _preview_swap_inflight += 1
@@ -534,7 +534,7 @@ def _as_bytes(value) -> bytes:
 
 
 def _carries_bearer_credentials(scope, path: str = "") -> bool:
-    """Counts only bearer-authenticated requests, so a stalled upload cannot pin a multi-GB pipeline."""
+    """Counts only requests with the credentials their route demands; unauthenticated stalls cannot pin."""
     from utils.keyless_api_access import KEYLESS_ADMISSION_STATE_KEY
 
     state = scope.get("state")

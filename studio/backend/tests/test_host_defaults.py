@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Parses run.py with AST so the host default is checked without importing the heavy studio venv."""
+"""Checks run.py defaults the host to loopback 127.0.0.1, not 0.0.0.0, read by AST without the venv."""
 
 import ast
 from pathlib import Path

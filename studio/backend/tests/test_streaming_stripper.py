@@ -151,7 +151,7 @@ def test_repeated_call_is_cached():
 
 
 def test_scan_is_amortized_not_quadratic():
-    """Prose-only text must stay linear per token, checked as a machine-independent ratio of work."""
+    """Prose-only text must cost constant work per token, not grow with length; compared as a ratio."""
     import time
 
     def elapsed(fn, tokens):

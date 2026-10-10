@@ -754,7 +754,7 @@ def _cancel_research_runs(request: Request, run_ids: list[str]) -> None:
 
 
 def _cancel_active_generations(thread_ids: list[str]) -> None:
-    """Stop generations not yet in the executor, so a late tool call cannot recreate a deleted sandbox."""
+    """Stop every running generation of these threads so a late tool call cannot recreate the sandbox."""
     if not thread_ids:
         return
     try:

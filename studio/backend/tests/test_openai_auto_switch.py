@@ -10680,7 +10680,7 @@ def test_audio_beside_a_clip_is_rejected_before_a_non_gguf_switch(monkeypatch):
 
 
 def test_the_gguf_audio_preflight_takes_the_base64_llama_cpp_takes():
-    """Audio preflight must refuse exactly what _prepare_audio_for_llama refuses, incl. wrapped base64."""
+    """Audio preflight must refuse exactly what _prepare_audio_for_llama refuses; wrapped base64 passes."""
     import wave
 
     wav = io.BytesIO()

@@ -95,7 +95,8 @@ def watch_url(video_id: str) -> str:
 
 
 async def fetch_transcript(video_id: str, languages: Sequence[str] = ()) -> Transcript:
-    """No language match uses the default-audio track's caption; human-written beats auto-generated."""
+    """Languages in order first; within one, human-written beats auto-generated; else default-audio
+    track."""
     if not _VIDEO_ID_RE.fullmatch(video_id):
         raise TranscriptUnavailable("That is not a YouTube video link.")
 

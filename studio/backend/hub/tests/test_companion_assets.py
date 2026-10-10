@@ -315,7 +315,7 @@ def test_a_cached_mirror_and_its_upstream_do_not_pin_each_other(monkeypatch):
 
 
 def test_the_link_trim_keeps_the_newest_not_the_alphabetically_last(monkeypatch):
-    """Link cap drops oldest by insertion order; sort_keys would evict the alphabetically last instead."""
+    """Link cap drops oldest by insertion order; sort_keys would evict the alphabetically smallest."""
     monkeypatch.setattr(companion_assets, "_MAX_LINKS", 3)
     for name in ("unsloth/zz-GGUF", "unsloth/mm-GGUF", "unsloth/aa-GGUF"):
         assert companion_assets.record_companion_link(name, BASE_REPO) is True

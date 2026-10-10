@@ -611,7 +611,7 @@ def test_count_tokens_prices_the_same_roster_the_completion_sends(rag_conn, monk
 @pytest.mark.parametrize("overlap", [0, 1, 39, 40])
 @pytest.mark.parametrize("project_only", [0, 1, 60])
 def test_an_omitted_document_always_earns_and_n_more(rag_conn, thread_names, overlap, project_only):
-    """The +1 on each scope's LIMIT means a clipped scope always sets truncated; no document is hidden."""
+    """The +1 on each LIMIT makes any clipped scope set truncated, so omissions are never silent."""
     from routes import inference
 
     if overlap > thread_names:

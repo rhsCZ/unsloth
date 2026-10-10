@@ -1032,7 +1032,7 @@ _IS_COLAB = os.path.isdir("/content") and (
 
 
 def _reportable_hf_endpoints(request) -> dict:
-    """Omit loopback and private endpoints from remote browsers, which would call their own localhost."""
+    """Omit loopback and private endpoints from remote browsers, which would reach their own host or LAN."""
     from utils.hub_settings import saved_only_endpoints
 
     # A saved endpoint stays behind the owner-only settings route.

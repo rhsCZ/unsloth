@@ -891,7 +891,8 @@ def _assert_base_repo_accessible(
         return other_root_snapshot
 
     def _is_auth_error(exc: Any) -> bool:
-        """Catches the plain 401/403 HfHubHTTPError that expired tokens raise; anything else fails open."""
+        """Catches plain 401/403 HfHubHTTPError from expired tokens or missing permissions; others
+        fail open."""
         status = getattr(getattr(exc, "response", None), "status_code", None)
         return status in (401, 403)
 
@@ -1767,8 +1768,7 @@ def _torchao_render_needs_no_grad(state: Any) -> bool:
 
 
 def _memory_request_forces_offload(memory_mode: Optional[str], cpu_offload: bool) -> bool:
-    """Balanced, low_vram, or legacy cpu_offload force offload; fast and auto need the measured
-    footprint."""
+    """Balanced and low_vram force offload; cpu_offload only if no mode is set; fast/auto are measured."""
     mode = normalize_memory_mode(memory_mode)
     if mode in (MEMORY_MODE_BALANCED, MEMORY_MODE_LOW_VRAM):
         return True
@@ -8630,8 +8630,7 @@ class DiffusionBackend:
     def _apply_loras(
         self, state: Any, loras: Optional[list[tuple[str, float]]], cancel: threading.Event
     ) -> None:
-        """Unfused on purpose: fusing breaks quantised transformers; baked torchao adapters need a
-        reload."""
+        """Unfused: fusing breaks quantised transformers; baked adapters need a reload to add or remove."""
         from core.inference import diffusion_lora
 
         pipe = state.pipe

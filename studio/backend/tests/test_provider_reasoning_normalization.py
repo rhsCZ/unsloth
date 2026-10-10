@@ -121,8 +121,7 @@ def test_a_reasoning_only_prefix_is_already_output(shape):
 
 
 def test_openrouter_text_details_stay_the_only_copy():
-    """Do not rename when text arrives only in reasoning_details; a second copy would double the
-    thinking."""
+    """Leave the alias alone when reasoning_details has the text; renaming it doubles the thinking."""
     seen = _consume(_relay(_openrouter()))
 
     assert seen["rendered"] == "".join(THOUGHT)

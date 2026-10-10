@@ -2007,8 +2007,7 @@ class TestEstimateGgufRequiredGb(unittest.TestCase):
             )
 
     def test_a_priced_remote_extras_drafter_is_not_charged_twice(self):
-        """--spec-draft-hf is priced from its own listing; the target repo's sidecar is not charged
-        twice."""
+        """--spec-draft-hf is priced from its own listing; the target repo sidecar is never charged"""
         import utils.models.model_config as mc
         from core.inference.llama_cpp import LlamaCppBackend
 

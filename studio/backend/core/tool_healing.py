@@ -610,7 +610,7 @@ def _inside_open_parameter(
     param_closers = (_PARAM_CLOSE_TAG,),
     func_closers = (_FUNC_CLOSE_TAG,),
 ) -> bool:
-    """Opener regex and closer tags are parameters so core/inference/tool_call_parser.py can share it."""
+    """True when pos is inside an unclosed parameter value; shared with tool_call_parser.py"""
     if param_start_re is None:
         param_start_re = _TC_PARAM_START_RE
     last_param_start = -1

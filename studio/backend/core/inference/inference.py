@@ -560,7 +560,7 @@ class InferenceBackend:
         return 0 if top_k < 0 else top_k
 
     def _resolve_chat_eos(self, model_name: str) -> None:
-        """Qwen3.5/3.6 chats end turns on <|im_end|> yet declare <|endoftext|> as eos, so loops run past."""
+        """Caches chat turn-end stop ids at load and repairs generation_config; some Qwen3.5/3.6 need it."""
         info = self.models.get(model_name) or {}
         model = info.get("model")
         container = info.get("tokenizer")

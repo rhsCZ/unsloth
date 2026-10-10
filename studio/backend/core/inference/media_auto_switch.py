@@ -313,8 +313,7 @@ async def maybe_auto_switch_media_model(
     hf_token: Optional[str] = None,
     before_switch: Optional[Callable[[MediaModelPick], None]] = None,
 ) -> None:
-    """Refuses a name that resolves to no downloaded model, since output would carry another model's
-    name."""
+    """No-op unless the setting is on; then refuses a name resolving to no downloaded model."""
     from utils.openai_auto_switch_settings import get_media_auto_switch_enabled
 
     if not isinstance(requested_model, str) or not requested_model.strip():

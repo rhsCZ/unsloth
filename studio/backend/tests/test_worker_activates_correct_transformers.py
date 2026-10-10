@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Spoofs torch.cuda so unsloth_zoo eagerly imports transformers, exposing stale imports on CPU CI."""
+"""After activation the in-process transformers must be the sidecar version, not the base 4.57.x"""
 
 from __future__ import annotations
 

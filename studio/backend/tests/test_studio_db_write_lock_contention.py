@@ -119,7 +119,7 @@ def test_non_wal_journal_keeps_full(db, monkeypatch, mode):
     [None, (None,), ("",), (123,), sqlite3.OperationalError("pragma unavailable")],
 )
 def test_unreadable_journal_mode_is_not_treated_as_wal(answer):
-    """sqlite3.Connection is a C type that cannot be monkeypatched, so a double stands in for it."""
+    """An unexpected or failing journal_mode answer keeps the safe default rather than raising."""
 
     class Connection:
         def __init__(self):

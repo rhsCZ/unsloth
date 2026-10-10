@@ -463,7 +463,7 @@ def test_the_banner_never_promises_an_abort_the_caller_will_not_perform(monkeypa
 
 
 def test_an_older_run_py_can_still_call_this_prompt(monkeypatch):
-    """An older run.py must still be able to call this prompt, so the gate takes no unexpected keywords."""
+    """An older run.py passes refusal_aborts, so the gate must accept that keyword or the launch dies."""
 
     def _refuse(*_a, **_kw):
         raise KeyboardInterrupt

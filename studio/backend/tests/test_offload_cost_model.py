@@ -78,7 +78,7 @@ def test_the_model_reproduces_every_measured_anchor(label, placement, measured_d
 
 
 def test_the_kv_ratio_transfers_across_two_unrelated_models():
-    """The KV rate fitted on the dense model alone predicts the MoE within 3%, so cache spill is a rule."""
+    """The dense-only KV rate predicts the MoE within the same tolerance, so cache spill is a rule."""
     dense_rate = (DENSE_KV_HOST - DENSE_BASE) / (DENSE_KV_BYTES / GIB)
     moe_rate = (MOE_KV_HOST - MOE_BASE) / (MOE_KV_BYTES / GIB)
     assert rel_err(moe_rate, dense_rate) < 0.03
@@ -168,7 +168,7 @@ def test_the_measured_penalties_show_that_same_crossover():
 
 
 def test_a_smaller_host_makes_every_spill_worse():
-    """Spill cost is held slightly above the measured ratio, since under-warning promises a slower spill."""
+    """Spill cost is held slightly above the measured ratio, since under-warning promises a faster spill."""
     big = generation_penalty_ms(Placement([DENSE_FFN_G]), HostProfile(threads = 192))
     small = generation_penalty_ms(Placement([DENSE_FFN_G]), HostProfile(threads = 16))
     assert small > 2 * big

@@ -656,7 +656,8 @@ def test_an_explicit_compiler_cache_is_left_alone_when_the_builders_can_read_it(
 
 
 def test_an_inherited_unreadable_compiler_cache_is_refused(monkeypatch, tmp_path):
-    """An unpasteable inherited cache path is refused; Windows persists it, so refusing destroys nothing."""
+    """An inherited unpasteable cache path is refused; the pin is process-local and the cache
+    regenerable."""
     monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(tmp_path / "their choice"))
     temp_root = _a_temp_root_the_policy_accepts(monkeypatch, tmp_path)
     sr = _load_storage_roots()

@@ -1201,7 +1201,7 @@ def load_ltx23_comfy_transformer(
     target: Any = None,
     logger: Any = None,
 ) -> Any:
-    """LTX-2.3 DiT from a ComfyUI-quantized file: reads only DiT keys and keeps int8 / fp8 codes."""
+    """LTX-2.3 DiT from a ComfyUI-quantized file: DiT keys only; int8 / fp8 codes kept where supported"""
     from diffusers import LTX2VideoTransformer3DModel
 
     from .diffusion_comfy_quant import load_comfy_quant_transformer

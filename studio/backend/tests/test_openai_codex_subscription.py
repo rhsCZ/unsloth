@@ -1870,7 +1870,7 @@ def test_chat_reports_reconnection_when_an_image_needs_the_catalog(monkeypatch):
 
 
 def test_a_hidden_slug_is_not_invocable_just_because_the_catalog_was_fetched(monkeypatch):
-    """Internal slugs like codex-auto-review stay uninvocable, even when the catalog fetch returns them."""
+    """Hidden slugs such as codex-auto-review are not invocable from a catalog fetch alone."""
     hidden = "codex-auto-review"
     fake = _models_response(
         {

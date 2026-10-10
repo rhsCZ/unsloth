@@ -1983,8 +1983,7 @@ def arm_block_graphs(
     family_default: bool = True,
     logger: Any = None,
 ) -> tuple:
-    """Records the whole forward if it can hold; else per block, since an offload hook moves the
-    denoiser."""
+    """Whole forward if it holds, else per block; offloaded DiTs need UNSLOTH_DIFFUSION_BLOCK_GRAPHS=1."""
     handles = tuple(getattr(pipe, "_unsloth_cuda_graphs", ()) or ())
     whole = [h for h in handles if isinstance(h, GraphedForward)]
     prior = str(getattr(pipe, "_unsloth_cuda_graph_reason", None) or "")

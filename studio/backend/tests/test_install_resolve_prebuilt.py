@@ -1548,7 +1548,7 @@ _FORK_WINDOWS_ROCM_GFX = (
 
 
 def _published_fork_windows_rocm_artifacts():
-    """Reads the published manifest of the fork, which nothing in-tree mirrors; only OSError skips."""
+    """Reads the published manifest of the fork; OSError and PrebuiltFallback skip, parse errors fail."""
     try:
         resolved = ilp._download_host_resolved_release(FORK)
     except OSError as exc:

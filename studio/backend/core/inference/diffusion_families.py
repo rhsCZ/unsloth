@@ -1495,7 +1495,7 @@ def assert_pipeline_class_available(
     *,
     strict: bool = False,
 ) -> None:
-    """Fails before any download with ValueError (maps to 400); RuntimeError leaked as a 409 or bare 500."""
+    """Raises ValueError before any download if diffusers lacks the class; routes map it to 400."""
     # Request threads may race the background torch warm; importing diffusers pulls torch._dynamo.
     try:
         from loggers import get_logger

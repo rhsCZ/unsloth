@@ -708,7 +708,7 @@ def test_the_planned_sizing_matches_the_measured_one_it_stands_in_for():
 
 
 def test_auto_takes_the_hosted_denoiser_even_on_a_card_with_room_to_spare(monkeypatch):
-    """int8 is the default, not a fallback: spare VRAM is no reason to pick bf16, which changes output."""
+    """int8 is the default, not a fallback: spare VRAM is no reason to pick bf16, and int8 alters output."""
     fam, torch, vid = _shared_setup_1()
     monkeypatch.setattr(vid, "_h3_auto_precision_ok", lambda target = None: True, raising = False)
     monkeypatch.setattr(vid, "_h3_free_device_bytes", lambda device: 500 * 1000**3)

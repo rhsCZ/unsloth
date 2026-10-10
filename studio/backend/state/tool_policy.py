@@ -166,7 +166,7 @@ def requires_os_isolation(
     is_high_risk = None,
     sandbox_level: Optional[str] = None,
 ) -> bool:
-    """Takes prompted from needs_tool_confirmation; re-reading the cache here could race a refresh."""
+    """Whether this call must run with OS isolation required, no software fallback; prompted is passed in"""
     if prompted or not confirm_tool_calls or bypass_permissions or permission_mode != "off":
         return False
     if name not in OS_SANDBOXED_TOOLS or runs_without_os_sandbox(name, sandbox_level):

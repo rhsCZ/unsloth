@@ -2631,8 +2631,7 @@ def unreaped_clear_operation_image_ids(operation_id: Optional[str]) -> Optional[
 def record_clear_operation_reap_scope(
     operation_id: Optional[str], image_ids: Optional[set]
 ) -> None:
-    """Kept as its own statement so the clear's commit stays early; None is stored as an explicit
-    absence."""
+    """Records the reap scope before it runs, apart from the INSERT; None is stored as explicit absence"""
     if operation_id is None:
         return
     try:

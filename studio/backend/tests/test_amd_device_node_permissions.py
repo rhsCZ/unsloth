@@ -1791,7 +1791,7 @@ def _install_sh_kfd_scope(
     torch_index: str = "https://download.pytorch.org/whl/rocm6.4",
     nvidia: bool = False,
 ) -> str:
-    """Lifts the KFD filter alone, since it sits above the block that the other lift extracts."""
+    """Lifts the KFD filter and the closed-node message it gates; the filter sits above the other lift."""
     lines = _install_sh_lines()
     _filter_start = next(
         i for i, line in enumerate(lines) if line == "if ! _run_may_open_kfd; then"
@@ -2417,7 +2417,7 @@ def _icd_manifest(
     library = "libvulkan_radeon.so",
     present = True,
 ):
-    """Writes the manifest and its library to disk, since a path string alone proves nothing."""
+    """Writes an ICD manifest, and its library only if present, since a bare path string proves nothing."""
     lib = tmp_path / library
     if present:
         lib.write_bytes(b"")
@@ -2527,7 +2527,7 @@ def _blocks_under_selector(
 ))
 # fmt: on
 def test_whether_a_selector_narrows_the_host(monkeypatch, linux, value, count, var, blocks):
-    """Only a selector that excludes a GPU narrows; ROCr ends at a repeat, clr accepts it."""
+    """A UUID or unreadable GPU count stays narrowing; only a selector naming every GPU does not."""
     assert _blocks_under_selector(monkeypatch, value, count = count, var = var) is blocks
 
 
@@ -2818,7 +2818,7 @@ def test_how_an_added_driver_list_is_read(monkeypatch, linux, tmp_path, case):
 ])
 # fmt: on
 def test_which_shut_nodes_are_credited_to_amd(monkeypatch, linux, case):
-    """A shut node counts for AMD only on confirmed evidence; an unknown vendor alone never qualifies."""
+    """Unknown vendor still counts as AMD given KFD evidence; the DRM fallback needs a confirmed one."""
     node_kwargs, vendor, closed, hint = case
     _nodes(monkeypatch, present = _AMD_NODES, openable = set(), **node_kwargs)
     if vendor is not None:
@@ -3718,7 +3718,7 @@ _ICD_GONE = "/gone/radeon.json"
 ])
 # fmt: on
 def test_which_override_a_driverless_loader_blames(monkeypatch, case):
-    """Blames an override only when clearing it would leave a loadable driver, never otherwise."""
+    """Blames the override whose clearing restores a loadable driver, or both where neither alone does."""
     manifests, searched, env, blamed = case
     _answer = _loader_blame(monkeypatch, manifests, searched = searched, **env)
     if blamed is None:

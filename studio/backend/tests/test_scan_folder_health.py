@@ -307,7 +307,7 @@ def test_a_posix_error_is_unaffected_by_the_windows_branch():
 
 
 def test_a_model_deleted_mid_scan_does_not_condemn_the_folder(tmp_path: Path):
-    """A child that vanishes between listing and opening is a download in progress, not a folder fault."""
+    """A child that vanishes between listing and opening proves nothing about the folder itself."""
     folder = tmp_path / "models"
     keep = folder / "keep"
     keep.mkdir(parents = True)

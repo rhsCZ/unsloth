@@ -2069,7 +2069,7 @@ def detect_think_prefill(
     preserves_think_close: bool = False,
     resumes_thought: bool = False,
 ) -> str:
-    """Returns empty if </think> is special: stripping the closer would leave the think block open."""
+    """Returns empty if </think> is special and stripped, unless preserves_think_close keeps it."""
     if not prompt:
         return ""
     open_idx = prompt.rfind(_THINK_OPEN)
@@ -2449,7 +2449,7 @@ def messages_with_attached_image(
     audio: Any = None,
     extra_audio: Sequence[Any] = (),
 ) -> list:
-    """Only the last user turn changes; tool_calls and tool results in other turns are kept as sent."""
+    """Prepends the system prompt, adds media to the last user turn; other turns stay as sent."""
     conversation = list(messages or [])
     if structured_content:
         # EVERY message: a processor template raises on a replayed turn left as a string.

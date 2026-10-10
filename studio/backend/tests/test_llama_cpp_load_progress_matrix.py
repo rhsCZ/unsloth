@@ -354,7 +354,7 @@ class TestLifecycleRaces:
 
 class TestConcurrentSampling:
     def test_parallel_invocations_never_raise(self, tmp_path):
-        """No builtins.open patch here: mock.patch is not thread-safe and could leak a Mock into open."""
+        """Many concurrent samplers on one backend must not raise; mock.patch of open is not thread-safe."""
         _sparse(tmp_path / "m.gguf", 1 * 1024**3)
         inst = _make()
         inst._process = _Proc(os.getpid())

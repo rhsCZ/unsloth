@@ -218,7 +218,7 @@ def _apply_data_designer_prompt_blank_patch() -> None:
 
 
 def _require_public_provider_endpoint(endpoint: str) -> None:
-    """Managed endpoints need HTTPS: the certificate binds the peer, not a DNS answer that can rebind."""
+    """Managed endpoints need HTTPS unless the private switch is on; the cert binds the peer, not DNS."""
     if not managed_account():
         return
     from urllib.parse import urlsplit
@@ -257,7 +257,8 @@ def _require_public_provider_endpoint(endpoint: str) -> None:
 
 
 def install_public_egress_guard() -> None:
-    """Process-wide, so installed only in the job subprocess; rebinding hosts are refused at connect."""
+    """Job subprocess only: refuses rebinding hosts at connect; with the private switch on, metadata
+    only."""
     if not managed_account():
         return
     from utils.managed_provider_url_settings import get_managed_private_provider_urls_allowed

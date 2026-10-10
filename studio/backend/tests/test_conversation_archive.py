@@ -1014,7 +1014,7 @@ def test_a_thread_that_was_never_persisted_is_never_archived(conn):
 
 
 def test_a_thread_deleted_mid_ingest_does_not_leave_its_turns_behind(conn, monkeypatch):
-    """Cancellation is cooperative, so a sweep during ingest can be undone by the commit that follows."""
+    """Deleting a chat mid-compaction must not resurrect its archive; the commit can undo the sweep."""
     from storage import studio_db
 
     turns = _turn("what is the code", "the code is DELETED-9999")

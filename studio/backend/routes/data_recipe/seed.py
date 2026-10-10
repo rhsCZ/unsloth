@@ -322,7 +322,7 @@ def _files_under_patterns(
     *,
     as_the_loader_would: bool = False,
 ) -> list[str]:
-    """Judge matches by what the pattern plainly matches, since the module's own reader skips nothing."""
+    """Card globs obey loader skip rules; module-written patterns are judged on what they plainly match."""
     matchers = [(pattern, _glob_to_regex(pattern)) for pattern in patterns]
     return [
         f
@@ -508,8 +508,7 @@ def _of_suffix(paths: list[str], suffix: str) -> list[str]:
 
 
 def _extension_glob(paths: list[str], suffix: str, repo_files: list[str]) -> str:
-    """Shared .json/.jsonl glob only when a split uses both; otherwise a repo's .json.gz would be
-    swept in."""
+    """Shared .json/.jsonl glob when a split uses both, unless the repo has .json.gz; else one extension."""
     group = set(_builder_exts(suffix))
     used = {Path(path).suffix.lower() for path in paths} & group
     if len(used) < 2:

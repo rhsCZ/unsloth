@@ -1408,8 +1408,7 @@ def _is_provisional_call(text: str, found: int) -> bool:
 
 
 def _unmatched_think_closer(text: str, start: int = 0) -> int:
-    """A stray closer makes strip_outside_think start a span at offset 0, so such a segment is left
-    alone."""
+    """A stray closer makes strip_outside_think span from offset 0, so nothing may shift that offset."""
     best = -1
     for opener, closer in (("<think>", "</think>"), ("[THINK]", "[/THINK]")):
         close_at = text.find(closer, start)

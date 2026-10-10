@@ -4873,6 +4873,8 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
         checkpointChanged && options?.persist !== false
           ? rememberOutgoingModel(state, state.params)
           : null;
+      // A compare pane's load reaches the store only here.
+      noteLoadedContext(modelId, options?.maxTokensCap);
       const baseParams = getReplayedParams(
         state.rememberParamsPerModel,
         outgoing ?? state.paramsByModel,

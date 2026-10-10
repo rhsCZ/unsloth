@@ -1109,3 +1109,31 @@ test("an external model's cap is remembered as a number", () => {
     8192,
   );
 });
+
+// A compare pane loads through setCheckpoint alone, so the window it reports has to
+// count there too, or leaving that model records its Max as the number.
+test("a compare load keeps Max as Max when the next pane loads", () => {
+  useChatRuntimeStore.setState({
+    settingsHydrated: true,
+    rememberParamsPerModel: true,
+    paramsByModel: {},
+  });
+  loadAt(LLAMA, 8192);
+  useChatRuntimeStore.setState({
+    paramsByModel: { [QWEN]: { maxTokens: REMEMBERED_MAX_TOKENS_MAX } },
+  });
+  useChatRuntimeStore
+    .getState()
+    .setCheckpoint(QWEN, undefined, { maxTokensCap: 30000 });
+  assert.equal(useChatRuntimeStore.getState().params.maxTokens, 30000);
+  useChatRuntimeStore
+    .getState()
+    .setCheckpoint(LLAMA, null, { maxTokensCap: 8192 });
+
+  assert.equal(
+    useChatRuntimeStore.getState().paramsByModel[QWEN]?.maxTokens,
+    REMEMBERED_MAX_TOKENS_MAX,
+  );
+  loadAt(QWEN, 35000);
+  assert.equal(useChatRuntimeStore.getState().params.maxTokens, 35000);
+});

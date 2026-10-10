@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
-"""docker/run.sh must not pass --gpus, and the Studio image defaults UNSLOTH_ALLOW_CPU on."""
+"""run.sh must not pass --gpus without an NVIDIA GPU; the Studio image defaults UNSLOTH_ALLOW_CPU on."""
 
 import os
 import re

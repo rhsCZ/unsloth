@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Fp16 stacks never agree exactly, so the control asserts only that it ran and converged."""
+"""fp16 stacks disagree, so the control asserts only: it ran, converged, same step count as arm."""
 
 from __future__ import annotations
 

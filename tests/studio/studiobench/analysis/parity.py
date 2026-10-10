@@ -368,7 +368,7 @@ def scaffold_moved(base: dict, treat: dict) -> bool:
 
 
 def settled_messages_moved(base: dict, treat: dict) -> list[str]:
-    """Settled rows that moved; a user row is never the reply being written, so it is comparable."""
+    """Moved rows provably not the streamed reply: user rows both arms agree on, or role-changed rows."""
     bm, tm = _messages(base), _messages(treat)
     streaming = in_flight(base, treat)
     # See `fence_latch_residue`.

@@ -285,7 +285,7 @@ def test_both_arm64_opt_out_readers_go_through_one_helper():
 
 
 def test_the_arm64_rebuild_tells_the_user_what_it_does_not_carry_over():
-    """Arch rebuilds drop user packages silently; the branch must name where the old venv went."""
+    """Arch rebuilds unavoidably drop user packages; the branch must name the old tree and how to opt out"""
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     start = source.find("Test-StudioVenvArchMismatch -VenvPython")
     assert start != -1

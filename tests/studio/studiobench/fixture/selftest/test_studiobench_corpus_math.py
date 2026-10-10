@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Math must not change the fence share or span-free preamble; Shiki's span density rests on both."""
+"""Math must not change the fence share that span density rests on, or the span-free preamble."""
 
 from __future__ import annotations
 

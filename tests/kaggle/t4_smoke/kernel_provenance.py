@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Read after the model load: the vendored fla resolves only from then on, so earlier reads say absent."""
+"""Read after the model load: the other kernels resolve late, so an early read reports them absent."""
 
 from __future__ import annotations
 

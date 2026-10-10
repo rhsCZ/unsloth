@@ -104,8 +104,7 @@ def refuse_collisions(records: list[dict]) -> None:
 
 
 def collided_cells(records: list[dict]) -> dict[str, set[str]]:
-    """A cell id completing under several sessions is fine for a resume; one cell completing twice
-    is not."""
+    """Refuse a cell id completed under two sessions; several sessions alone, as in a resume, are fine"""
     seen: dict[str, set[str]] = {}
     for r in records:
         if r.get("row_type") == "cell" and r.get("completed") and r.get("cell_id"):

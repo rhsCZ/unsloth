@@ -1315,7 +1315,7 @@ def test_only_the_cell_that_failed_is_refused(tmp_path, capsys):
 
 
 def _legacy_capture(digest):
-    """Captures without mount fields read as full-mount, so their pairs fall back on the declaration."""
+    """Captures lacking mount fields have no measurement, so their pairs fall back on the declaration."""
     return {
         "parity_attempted": True,
         "root_kind": "thread",
@@ -1827,7 +1827,7 @@ def test_an_assertion_that_failed_on_BOTH_arms_is_not_a_build_difference(tmp_pat
 def test_an_action_that_could_not_be_performed_on_one_arm_fails_the_windowed_verdict(
     tmp_path, capsys
 ):
-    """An action that cannot be performed on one arm is a regression, not NOT EXERCISED coverage loss."""
+    """An action that runs on one arm but cannot be performed on the other is a regression."""
     from studiobench.sweep import ui_parity as U
 
     rows = []

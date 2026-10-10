@@ -99,7 +99,7 @@ def _stub_auto_tokenizer(monkeypatch):
 
 
 def test_old_tokenizer_is_saved_so_its_model_can_be_read(tmp_path, monkeypatch):
-    """The guard reads tokenizer.model from a fresh scratch dir, which exists only after save_pretrained."""
+    """The guard must not skip on a fresh scratch dir: tokenizer.model appears only after save_pretrained"""
     _stub_auto_tokenizer(monkeypatch)
     old, new = _tokenizers()
     location = str(tmp_path / "_unsloth_sentencepiece_temp")

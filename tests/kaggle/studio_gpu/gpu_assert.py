@@ -134,7 +134,7 @@ def is_cuda_install(kind: str | None) -> bool:
 
 # Most specific first; the canonical location is install_llama_prebuilt.py's default.
 def llama_cpp_marker(studio_home: Path) -> Path | None:
-    """Marker in studio_home/llama.cpp or ~/.unsloth/llama.cpp, where the installer writes; else None."""
+    """Marker in ~/.unsloth/llama.cpp (where the installer writes) or studio_home/llama.cpp; else None."""
     candidates = (
         Path(studio_home) / "llama.cpp" / "UNSLOTH_PREBUILT_INFO.json",
         Path.home() / ".unsloth" / "llama.cpp" / "UNSLOTH_PREBUILT_INFO.json",

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Workflow-reading guards must run in workflow-trigger-lint, the only job a workflow-only PR starts."""
+"""Workflow-reading guards must run in workflow-trigger-lint, the one job a path filter cannot skip."""
 
 import re
 from pathlib import Path

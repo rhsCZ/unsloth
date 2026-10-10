@@ -420,7 +420,7 @@ def test_a_forced_float32_load_cannot_force_an_unforced_trainer():
 def test_a_forced_load_earlier_in_the_process_cannot_force_this_trainer(
     model_dtype, bf16_supported, precision, autocast
 ):
-    """__init__ reads the model's stamp, not the env var, which a later load can leave at '1'."""
+    """Trainer init must read the model stamp, not the env var, which an earlier forced load leaves at 1"""
     env = {"UNSLOTH_FORCE_FLOAT32": "1"}
     trainer = _build_trainer(env, model_dtype, bf16_supported = bf16_supported, forced_float32 = False)
     assert env["ACCELERATE_MIXED_PRECISION"] == precision

@@ -4861,7 +4861,7 @@ def test_setup_scripts_unexpected_exit_branch_never_sets_source_build():
     ids = ["rate-limit", "bad-payload", "urlerror", "timeout"],
 )
 def test_release_listing_failure_exits_fallback_not_error(tmp_path, monkeypatch, error):
-    """Listing failures must exit EXIT_FALLBACK: source builds clone over git, not the GitHub API."""
+    """A network failure listing releases must exit EXIT_FALLBACK: source builds use git, not the API."""
 
     def boom(*args, **kwargs):
         raise error

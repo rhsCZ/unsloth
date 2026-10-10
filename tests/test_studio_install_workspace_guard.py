@@ -1576,7 +1576,7 @@ def test_install_sh_never_bakes_a_planted_id_into_the_launcher(tmp_path):
 
 
 def test_install_ps1_validates_an_existing_id_before_embedding_it():
-    """Use -cnotmatch: -match is case-insensitive and would accept an uppercase id the backend rejects."""
+    """Reject a non-hex existing id: use -cnotmatch, as -match accepts uppercase the backend rejects."""
     src = INSTALL_PS1.read_text(encoding = "utf-8")
     idx = src.index('$_studioIdFile = Join-Path $_studioIdDir "studio_install_id"')
     block = src[idx : idx + 1200]

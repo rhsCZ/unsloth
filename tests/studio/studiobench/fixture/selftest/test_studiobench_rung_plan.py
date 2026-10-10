@@ -78,8 +78,7 @@ def test_during_generation_slots_actually_fall_during_generation():
 
 
 def test_stop_opens_only_after_the_tail_has_drained():
-    """Plans are held to the declared STREAM_TAIL_CHARS ceiling, so re-freezing the corpus cannot
-    move it."""
+    """Stop must not open mid-stream; plans are held to the declared STREAM_TAIL_CHARS, not the corpus"""
     from studiobench.scene.schedule import SCENES
 
     worst = STREAM_TAIL_CHARS / FIELD_CHARS_PER_SEC

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Probing must continue past an unusable nvidia-smi, or mixed AMD+NVIDIA hosts swap CUDA for ROCm."""
+"""Keep probing past an unusable nvidia-smi; else mixed AMD+NVIDIA Windows hosts swap CUDA for ROCm."""
 
 import importlib.util
 import os

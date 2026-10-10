@@ -101,7 +101,7 @@ class WindowInUse(RuntimeError):
 
 
 def record_completeness_gate(recorder: Recorder, cell: Cell, completeness: dict) -> bool:
-    """Sets cell_id on the row, or a lost-message failure is filed under run and loses its arm and rung."""
+    """Gate row must carry cell_id so lost messages name their arm; unmeasured coverage must not pass."""
     coverage = completeness.get("ordinal_coverage_complete")
     state = completeness.get("ordinal_coverage_state")
     passed = (

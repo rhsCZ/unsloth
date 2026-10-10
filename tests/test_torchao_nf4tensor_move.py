@@ -146,7 +146,7 @@ def test_it_is_idempotent(tmp_path):
 
 
 def test_no_torchao_means_no_finder(tmp_path):
-    """Prunes site-packages from sys.path, since an empty tmp_path cannot hide an installed torchao."""
+    """No finder is appended without torchao; site-packages is pruned, as tmp_path cannot hide torchao."""
     r = _run(
         tmp_path,
         """

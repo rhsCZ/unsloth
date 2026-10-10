@@ -924,7 +924,7 @@ def test_the_surfaced_online_error_still_names_where_it_failed(monkeypatch):
 
 
 def test_the_retrys_own_frames_do_not_pin_the_cached_model(monkeypatch):
-    """A tokenizer error raised after the cached model loads must not keep that model's frames alive."""
+    """A tokenizer error after the cached model loads must not keep the model alive through its frames."""
     import gc
     import weakref
 

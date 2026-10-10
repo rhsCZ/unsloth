@@ -97,7 +97,7 @@ def test_an_extent_outside_the_declared_allowance_is_still_reported_broken():
 
 
 def test_the_extent_is_reconstructed_so_both_checks_answer_about_one_scrollbar():
-    """Both checks must describe one scrollbar, so the extent is rebuilt from client height, not bottom."""
+    """Rebuild the scroll extent as bottom plus client height so both checks measure one scrollbar."""
     base = _scroll_row(18, bottom = 9_200, client = 800)
     treat = _scroll_row(6, bottom = 8_600, client = 800)
     treat["census"]["viewport_scroll_height"] = 9_400

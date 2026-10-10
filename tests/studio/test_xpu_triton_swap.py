@@ -543,7 +543,7 @@ def test_install_sh_does_not_carry_a_second_copy():
 
 
 class TestCpuRepairSeesAnXpuWheel:
-    """An XPU wheel sets neither torch.version.cuda nor .hip, so it reads as CPU and the pin is ignored."""
+    """Before this, an XPU wheel sets neither cuda nor hip, so it read as CPU and the pin was ignored."""
 
     @staticmethod
     def _classify(

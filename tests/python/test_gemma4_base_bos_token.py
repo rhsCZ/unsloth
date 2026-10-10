@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Gemma 4 base tokenizers prepend <bos> via tokenizer.json post_processor, not add_bos_token."""
+"""Gemma 4 base tokenizers must get <bos> prepended at load time, detected via post_processor."""
 
 import types
 from unittest.mock import patch

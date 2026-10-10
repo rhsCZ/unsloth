@@ -328,7 +328,7 @@ def test_the_working_directory_is_still_stripped_without_safe_path(tmp_path):
 
 
 def test_the_stream_reconfigure_happens_once_per_process(monkeypatch):
-    """Both entry routes reach stream setup; off Windows its guard cannot stop a second reconfigure."""
+    """The console script reaches stream setup twice; streams must only be reconfigured once per process."""
     import unsloth_cli
 
     calls = []

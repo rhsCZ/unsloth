@@ -317,8 +317,19 @@ def exercise_permission_mode_controls(page, shoot):
             "WARN the app did not boot on the first reload and did on the second; see the state above"
         )
 
-    # The pill only proves the click landed locally; wait until the level is stored before
-    # reloading.
+    # choose() only drives THIS tab.
+    # The mirror to /api/chat/settings is a 400ms trailing-edge debounce (SETTINGS_DEBOUNCE_MS, chat-runtime-store.ts)
+    # whose only early flush is the beforeunload keepalive, so the pill turning over proves the click landed locally,
+    # not that the installation stored it.
+    # Measured on webkit, timed from the choose() below: choose returns at t+238ms, set_legacy_confirm at t+248ms, and
+    # the reload starts there.
+    # The debounce would not have fired until ~t+630ms, so the only PUT that goes out at all is the beforeunload
+    # keepalive at t+252ms, and the reloaded page's hydrating GET arrives at t+697ms.
+    # The assertion after the reload was therefore never testing the level this step chose. It was betting that an
+    # unload-time keepalive beats a hydrating GET by 445ms of loopback, on every engine, every run.
+    #
+    # So: wait for the level to actually be ON the installation before reloading and asserting on it. Assert what was
+    # achieved, not what was commanded.
     def expect_server_mode(
         expected,
         timeout_ms = 15_000,

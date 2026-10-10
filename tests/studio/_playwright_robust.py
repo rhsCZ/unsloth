@@ -606,7 +606,7 @@ def evaluate_fetch(
     transport_backoff_ms: int = 250,
     retry_on_context_loss: bool | None = None,
 ) -> dict[str, Any]:
-    """Replays context-lost fetches only for GET, HEAD and OPTIONS, since mutating calls may have run."""
+    """Default replays a context-lost fetch only for GET, HEAD and OPTIONS, never a mutating call"""
     body_arg: str | None
     if body is None:
         body_arg = None

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Pin transformers and tokenizers as a pair; a mismatch breaks every import on Apple Silicon."""
+"""Pin transformers with tokenizers; a mismatch fails every transformers import on Apple Silicon"""
 
 from __future__ import annotations
 

@@ -3496,7 +3496,7 @@ def test_shell_negation_flips_the_and_chain():
 
 
 def test_a_group_carries_its_success_into_the_outer_chain():
-    """A `{ ...; }` group exits with its last command's status, so an outer `&&` can judge it."""
+    """A subshell or brace group exits with its last command's status, so an outer && can judge it."""
     nv = _load_notebook_validator_module()
 
     for grouped in (

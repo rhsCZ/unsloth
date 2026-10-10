@@ -110,7 +110,7 @@ def test_no_directive_leg_is_scheduled_beside_a_co_tenant_it_cannot_fit():
 
 
 def test_a_wired_leg_never_carries_a_round_placeholder_over_a_gigabyte():
-    """Round VRAM placeholders are flagged: each real measurement recorded here was unrounded."""
+    """Wired legs with a round VRAM figure of 1 GB or more are flagged; measured figures are not round."""
     offenders = []
     for name in legs.KERNELS[0]:
         vram = legs.LEGS[name].vram_gb

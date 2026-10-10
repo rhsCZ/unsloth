@@ -1400,7 +1400,7 @@ class TestDiskFullDiagnosisCoversTheBiggestWrites:
 
 
 class TestDiagnosticsNeverCostTheRollback:
-    """Restore runs before the diagnosis, since a failed write under set -e would abort the exit trap."""
+    """Measure, then restore, then report; a failed report write under set -e would abort the exit trap."""
 
     def test_the_shell_restores_before_it_reports(self):
         """Measure first, restore, then report. Reporting before the restore lets a failed write

@@ -2256,7 +2256,7 @@ class TestDuplicateCoreMetadataRepair:
     def test_every_unreadable_record_with_a_manifest_is_made_uninstallable(
         self, tmp_path, monkeypatch
     ):
-        """Each unreadable record beside a manifest must be made uninstallable, or its files stay
+        """An unreadable record beside a readable one must be made uninstallable or its files stay
         importable."""
         stale = tmp_path / "unsloth-2026.8.12.dist-info"
         stale.mkdir()

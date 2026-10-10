@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team.
-"""TRL 1.0+ refuses padding-free with max_length set, so unsloth truncates via max_seq_length."""
+"""TRL 1.0+ refuses padding-free without packing while max_length is set; truncate via max_seq_length."""
 
 from __future__ import annotations
 

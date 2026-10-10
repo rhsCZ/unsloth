@@ -67,7 +67,7 @@ def _safe_parse(path: pathlib.Path):
 
 
 def _callback_list_attrs_in_nodes(nodes) -> set[str]:
-    """Takes the caller's already-walked nodes, so one ast.walk serves every callback-list lookup."""
+    """Finds self._<name>_callbacks attributes assigned or appended in the given nodes, sharing one walk"""
     found = set()
     for node in nodes:
         if isinstance(node, ast.Assign):

@@ -60,7 +60,7 @@ def unpatched():
 
 
 def test_the_bug_this_fix_exists_for_is_really_here(unpatched):
-    """Negative control: fails once upstream restores the guard, and is removed together with the fix."""
+    """Fails if upstream restores the guard. Do not delete it to go green; re-measure first."""
     mask = _call_sdpa_mask(unpatched, _left_padded_probe_mask(torch))
     assert mask is not None and not mask.is_floating_point()
     fully_masked = int((~mask.bool().any(dim = -1)).sum())

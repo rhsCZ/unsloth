@@ -258,7 +258,7 @@ def test_a_refused_run_does_not_leave_a_stale_ab_table(main_src: str):
 
 
 def test_a_refused_report_does_not_leave_a_stale_summary(main_src: str):
-    """SystemExit is not an Exception, so a refused report must delete any old summary explicitly."""
+    """SystemExit is not an Exception, so a refused report must explicitly overwrite any old summary.md."""
 
     assert "except SystemExit as exc:" in main_src
     assert 'out = path.parent / "summary.md"' in main_src

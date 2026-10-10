@@ -223,7 +223,7 @@ DRIVER_STEPS = {
 
 
 def test_the_composer_workflow_runs_on_a_catalog_only_change():
-    """Matches the workflow literally, not by evaluating it, so a restructure must update this test."""
+    """The composer workflow must run when only the catalog reader changes; its driver steps are pinned."""
     import yaml
 
     workflow = yaml.safe_load(COMPOSER_WORKFLOW.read_text(encoding = "utf-8"))

@@ -222,7 +222,7 @@ def _run_seed(tmp_path, freeze_text = None) -> list[str]:
 
 
 def test_no_declared_distro_marker_survives_the_seed(tmp_path):
-    """Only declared distro_dev_version pins are checked: a .devN can be a real published prerelease."""
+    """Declared distro_dev_version pins must not survive the seed; a +local suffix on any pin fails."""
     seeded = _run_seed(tmp_path)
     declared = {
         name: rule["from"] for name, rule in _mapping().get("distro_dev_version", {}).items()
@@ -373,7 +373,7 @@ def test_skipped_pins_are_not_also_marked_no_binary():
 
 
 def test_the_skip_list_is_closed_under_the_freezes_dependencies():
-    """Skip list must be closed under dependencies, or pip re-downloads a skipped package unpinned."""
+    """A skipped package must not be required by any kept pin, or pip re-downloads it unpinned."""
     skip = set(_mapping()["skip"])
     names = _freeze_names()
     edges = {

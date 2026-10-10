@@ -232,7 +232,7 @@ class TestPowerShellMirrorsThePin:
 
 
 class TestTheWindowsRepairSiteRunsForRdna1:
-    """End-to-end because the repair message once called _bare_gfx(), a name rebound later as a local."""
+    """Update repair gives gfx1010 on CPU torch the multi-arch trio, end to end for a _bare_gfx bug."""
 
     def test_a_gfx1010_host_on_cpu_torch_installs_the_multiarch_trio(self, monkeypatch):
         from unittest.mock import MagicMock, patch

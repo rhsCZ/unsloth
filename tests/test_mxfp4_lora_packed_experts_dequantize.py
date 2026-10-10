@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Native matmul_ogs has no backward, so MXFP4 LoRA must take unsloth_zoo's packed experts path."""
+"""Without load_in_16bit, MXFP4 LoRA must take the packed experts path; matmul_ogs has no backward."""
 
 import ast
 import inspect

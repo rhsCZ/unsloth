@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Runs extracted signing steps under pwsh against a local HTTP stand-in for the release asset."""
+"""Runs extracted signing steps under pwsh; a change that stops failing closed is caught"""
 
 import functools
 import hashlib

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Probe readings must survive a later failure in the cell, so they cannot rely on a window row."""
+"""Attribution has no window row, so it must reach the cell row even when the cell dies later."""
 
 from __future__ import annotations
 

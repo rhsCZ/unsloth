@@ -2394,7 +2394,7 @@ def test_the_launcher_agrees_with_the_deadline_about_its_own_worst_case():
 
 
 def test_the_launcher_is_told_when_the_job_is_killed():
-    """The start epoch is recorded in the first step and passed on, matching the job's timeout-minutes."""
+    """Start epoch is recorded in the first step and passed on; minutes must match timeout-minutes."""
     job = _workflow()["jobs"]["t4-smoke"]
     steps = job["steps"]
     assert "JOB_START_EPOCH=$(date +%s)" in steps[0].get("run", ""), (

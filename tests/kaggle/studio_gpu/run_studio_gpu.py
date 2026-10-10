@@ -316,7 +316,7 @@ def gpu_inventory() -> list[str]:
 
 
 def log_paths(server_log: Path, studio_home: Path) -> list[Path]:
-    """Every log Unsloth or a llama-server child may write to; the offload line lands in whichever."""
+    """Every log Unsloth or a llama-server child may write to; the offload line can land in any of them."""
     candidates = [server_log]
     log_dir = studio_home / "logs"
     if log_dir.is_dir():
@@ -1435,8 +1435,16 @@ class Payload:
         failures: list[str] = []
         detail: dict = {}
 
-        # Two attempts, one naming web_search and one omitting enabled_tools, to tell selection
-        # faults apart.
+        # TWO attempts, and the second is what makes a failure diagnosable.
+        # `enabled_tools = ["web_search"]` is one name out of ALL_TOOLS, and
+        # `routes/inference.py` also reads a request naming only hosted-tool
+        # names as a provider-hosted ask. Omitting `enabled_tools` selects
+        # every local tool instead, which is a different path through the same
+        # loop. If the first fails and the second executes, the fault is in the
+        # single-name selection; if neither does, the model will not call the
+        # tool however it is offered. Reporting "the loop offered web_search
+        # and never ran it" off one attempt was a guess dressed as a finding:
+        # nothing in that run showed the tool had been offered at all.
         marker = "execute_tool: name=web_search"
         prompt = (
             "Search the web for the current version of the Linux kernel, "

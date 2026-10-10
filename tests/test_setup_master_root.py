@@ -705,7 +705,7 @@ def test_only_a_directory_can_be_adopted_at_a_runtime_path(tmp_path):
 
 
 def test_the_windows_inductor_cache_agrees_with_the_resolver():
-    """Persisted TORCHINDUCTOR_CACHE_DIR must match the resolver, since later processes inherit it."""
+    """TORCHINDUCTOR_CACHE_DIR must match the resolver, except long-paths-off and space/apostrophe paths."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     block = _slice(ps, "$TorchCacheDir = $null", "$env:TORCHINDUCTOR_CACHE_DIR = $TorchCacheDir")
     assert 'Join-Path (Join-Path $StudioHome "cache") "torchinductor"' in block
@@ -823,7 +823,7 @@ def test_both_uninstallers_clear_the_master_root_children():
 
 
 def test_the_stop_pass_covers_the_master_root_runtimes():
-    """Stop runtimes under the master root before removing them, since Windows locks loaded executables."""
+    """Stop only marker-owned runtimes under master root before removing; Windows locks loaded binaries."""
     ps = UNINSTALL_PS1.read_text(encoding = "utf-8")
     stop_line = next(l for l in ps.splitlines() if l.strip().startswith("$stopRoots = "))
     assert "$masterChildrenToStop" in stop_line, stop_line
@@ -950,8 +950,7 @@ def test_the_windows_setup_records_the_master_root_for_the_uninstaller():
 
 
 def test_the_refused_windows_cache_path_is_taken_away_on_upgrade():
-    """A refused cache path already persisted must be cleared on every launch, not only in the deps
-    block."""
+    """A refused cache path this installer wrote must be cleared on every launch, not only in deps block."""
     ps = SETUP_PS1.read_text(encoding = "utf-8")
     body = _slice(
         ps, "function Clear-UnparseableTorchCacheEnv {", "\nClear-UnparseableTorchCacheEnv"

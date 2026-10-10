@@ -641,7 +641,7 @@ def test_run_attention_flash_varlen_covers_a_padded_flattened_row(monkeypatch):
 
 
 def test_run_attention_sdpa_windows_an_unpacked_unmasked_batch(monkeypatch):
-    """SDPA's is_causal has no window, so a sliding-window model must get an explicit mask when unpacked."""
+    """SDPA is_causal has no window; a sliding-window model unpacked and unmasked needs an explicit mask."""
     captured = {}
 
     def _fake_sdpa(Q, K, V, **kwargs):

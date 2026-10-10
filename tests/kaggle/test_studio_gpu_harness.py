@@ -766,7 +766,7 @@ def test_the_workflow_never_cancels_a_run_that_may_hold_a_kernel():
 
 
 def test_the_two_kaggle_legs_fit_the_account_side_by_side():
-    """The two legs' pushes must sum within the 2-kernel per-account cap, not share a concurrency group."""
+    """Pushes from both legs must sum within the 2-kernel per-account cap, not depend on a shared group"""
     yaml = pytest.importorskip("yaml")
     # Read gate.py as text: both kaggle CI dirs ship a `report` module, and importing either would
     # decide `import report` for every later test in the process.

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""embed_tokens and lm_head in target_modules get silently dropped unless moved to modules_to_save."""
+"""embed_tokens and lm_head in target_modules are auto-moved to modules_to_save, not dropped."""
 
 import os
 import pytest

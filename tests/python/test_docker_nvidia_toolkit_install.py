@@ -501,7 +501,7 @@ def test_the_default_sockets_are_accepted(tmp_path: Path):
 
 
 def test_docker_desktop_is_still_seen_when_the_daemon_answers_in_pieces(tmp_path: Path):
-    """grep -q closes the pipe on first match, so under pipefail its SIGPIPE reads a match as a miss."""
+    """grep -q exiting early sends the producer SIGPIPE (141), so under pipefail a match reads as a miss."""
     _, log, env = _setup(tmp_path, desktop = True, driver = False, uid = 1000, chunked = True)
     res = _run(env)
     assert res.returncode == 2, res.stdout + res.stderr

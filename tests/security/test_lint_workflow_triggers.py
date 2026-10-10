@@ -656,7 +656,7 @@ def _is_valid_owner(token: str) -> bool:
 
 
 def _pattern_matches(pattern: str, path: str) -> bool:
-    """A slash anchors a CODEOWNERS pattern to the root; a bare name floats to any depth."""
+    """A leading or inner slash anchors a CODEOWNERS pattern to root; a bare name floats to any depth."""
     if pattern == "*":
         return True
     is_dir = pattern.endswith("/")

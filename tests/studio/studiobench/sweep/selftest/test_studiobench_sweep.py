@@ -523,7 +523,7 @@ def test_a_clean_zero_base_arm_still_pairs_so_a_jank_regression_is_not_lost(tmp_
 
 
 def test_an_unchanged_repetition_does_not_read_as_a_pair_disagreeing_on_sign(tmp_path):
-    """A zero difference is a tie, not a sign disagreement; it must not void a group."""
+    """A zero difference is a tie, not a sign disagreement; such groups still void, for scatter."""
     result = stream_payload(tmp_path, "result", [(SMOOTH, SMOOTH), (SMOOTH, JANKY)] * 2)
     null = stream_payload(tmp_path, "null", [(SMOOTH, SMOOTH)] * 4)
 

@@ -2613,8 +2613,8 @@ class TestHasRocmGpuKfdVendorGuard:
         ), "_has_rocm_gpu must skip gpu_id 0 nodes (CPU nodes)"
 
     def test_install_sh_has_vendor_check(self):
-        """The KFD sysfs fallback must check vendor_id 4098 within _has_amd_rocm_gpu, which tests
-        lift by name."""
+        """The sysfs fallback must check vendor_id 4098 inside _has_amd_rocm_gpu, which tests lift
+        by name."""
         sh_path = PACKAGE_ROOT / "install.sh"
         source = sh_path.read_text(encoding = "utf-8")
         func_body = _extract_sh_function_body(source, "_has_amd_rocm_gpu")
@@ -2884,8 +2884,8 @@ class TestInstallShStructure:
         assert "amd-smi" in source
 
     def test_cpu_index_note_respects_explicit_pin(self):
-        """A pinned CPU index is a request, not a failure: the pin arm must enclose the note's
-        if/elif chain."""
+        """Pinned CPU index is a request, not a failure: the pin arm must open the chain holding the
+        note."""
         sh_path = PACKAGE_ROOT / "install.sh"
         source = sh_path.read_text(encoding = "utf-8")
         self._assert_guarded_by_pin_arm(
@@ -7855,7 +7855,7 @@ if __name__ == "__main__":
 
 
 def test_the_shell_extractor_says_so_when_a_function_is_gone():
-    """A missing shell function must fail the extractor, since an empty body lets checks pass vacuously."""
+    """A missing shell function must fail the extractor; an empty body falsely reports a missing check."""
     source = (PACKAGE_ROOT / "install.sh").read_text(encoding = "utf-8")
     with pytest.raises(AssertionError, match = "_amd_rocm_gpu_visible"):
         _extract_sh_function_body(source, "_amd_rocm_gpu_visible")

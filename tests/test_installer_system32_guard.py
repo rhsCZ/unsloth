@@ -576,7 +576,7 @@ def test_cli_guard_lands_where_the_desktop_puts_its_children():
 
 
 def test_cli_guard_relocates_when_the_desktop_marks_the_child():
-    """Newer desktop builds set UNSLOTH_DESKTOP_MANAGED for command shapes the argv rules miss."""
+    """Newer desktop builds set the marker for command shapes the argv rules miss."""
     message, colour, chdir_calls = _guard_outcome(
         r"C:\Windows\System32",
         argv = ["unsloth", "studio", "desktop-handshake", "--json"],

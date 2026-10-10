@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Shows the readiness gate admitting a windowed arm and refusing each broken one, in real Chromium."""
+"""Shows the readiness gate admitting windowed arms and refusing each unready thread, in Chromium."""
 
 from __future__ import annotations
 

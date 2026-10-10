@@ -476,7 +476,7 @@ def test_skip_env_warning_escapes_workflow_command_injection(tmp_path):
 
 
 def test_audit_runs_before_npm_install_in_consumer_workflows():
-    """Every job that runs npm install or npm ci must run the lockfile audit step before that install."""
+    """Each job running npm install or npm ci on an audited lockfile must audit it before that install"""
     import re
 
     import yaml

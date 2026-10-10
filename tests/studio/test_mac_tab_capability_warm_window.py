@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved.
 
-"""Checks the macOS tab-capability smoke can fail: it once passed green while observing nothing."""
+"""Checks the macOS tab-capability smoke can fail: it twice passed green while observing nothing."""
 
 from __future__ import annotations
 

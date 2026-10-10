@@ -2998,7 +2998,7 @@ class TestTheGgufPreflightIsToldTheModelDtype:
 
 
 class TestThePrewarmedCacheIsChargedToItsOwnFilesystem:
-    """The cached base is charged to its own filesystem, not the checkpoint's or the _gguf sibling's."""
+    """The cached base is charged to the _gguf sibling filesystem, not to the checkpoint filesystem."""
 
     CHECKPOINT = 60 * GB
     SIBLING = 40 * GB

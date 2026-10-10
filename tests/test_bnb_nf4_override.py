@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 
-"""NF4 Linear4bit.forward must equal bitsandbytes bit for bit; other cases fall back to the original."""
+"""Training forward and dX match bitsandbytes bit for bit; decode GEMV is judged against fp64"""
 
 import os
 import subprocess

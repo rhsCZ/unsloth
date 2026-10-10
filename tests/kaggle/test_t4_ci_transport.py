@@ -2069,8 +2069,7 @@ def test_a_failing_payload_only_reddens_the_reporter_that_owns_it(
 
 
 def test_the_build_step_actually_packs_studio_in():
-    """Build must pass --with-studio and --studio-args, or Studio reads NOT RUN while the job stays
-    green."""
+    """Build must pass --with-studio, or Studio reads NOT RUN while the job stays green."""
     source = NOTEBOOK_WORKFLOW.read_text(encoding = "utf-8")
     build = source.split("- name: Build the kernel notebooks")[1].split("- name:")[0]
     assert "--with-studio" in build

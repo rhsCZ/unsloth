@@ -253,7 +253,7 @@ def test_a_resumed_cell_is_not_failed_by_the_attempt_that_died(tmp_path):
 
 
 def test_the_superseded_attempt_does_not_count_as_a_second_cell(tmp_path):
-    """Only a later attempt at the same cell id supersedes an earlier one; other cells stay checked."""
+    """The superseded attempt is not a second cell; counting it would report two cells where one ran."""
 
     rows = [
         attempt(OLD, [{"action": "message_menu", "ran": False}], completed = False),
@@ -300,7 +300,7 @@ def test_the_latest_attempt_is_judged_on_its_own_failures(tmp_path):
 
 
 def test_a_different_cell_in_an_earlier_session_is_not_superseded(tmp_path):
-    """A killed attempt supersedes the recorded one and writes no cell row, so it cannot count as a pass."""
+    """Only the same cell id is superseded; cells an earlier session completed stay checked."""
 
     path = write_payload(
         tmp_path,
@@ -315,7 +315,7 @@ def test_a_different_cell_in_an_earlier_session_is_not_superseded(tmp_path):
 
 
 def test_an_attempt_killed_before_its_cell_row_is_not_a_pass(tmp_path):
-    """A run killed mid-cell must not pass on the strength of its earlier, complete cells."""
+    """A cell killed before its cell row is written is not a pass; it must not vanish from the gate."""
 
     path = write_payload(
         tmp_path,

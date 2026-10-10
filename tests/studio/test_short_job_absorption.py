@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Security suite stays on an equally isolated host; Backend CI must keep running the export test."""
+"""Security suite moved to a host with identical isolation; Backend CI must still run the export test"""
 
 from __future__ import annotations
 

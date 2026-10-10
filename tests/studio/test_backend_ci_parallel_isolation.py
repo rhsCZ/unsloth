@@ -241,7 +241,7 @@ _FRAGILE_CACHE: dict = {}
 
 
 def _fragile_timing_asserts(path: Path) -> list:
-    """Scheduler-sensitive asserts: absolute bounds <= TIGHT_BOUND_S, and ratios of two durations."""
+    """Scheduler-sensitive: absolute bounds at or below TIGHT_BOUND_S, or one duration vs another."""
     source = path.read_text(encoding = "utf-8", errors = "replace")
     key = (str(path.resolve()), source)
     cached = _FRAGILE_CACHE.get(key)

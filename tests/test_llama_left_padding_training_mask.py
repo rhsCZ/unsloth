@@ -8,6 +8,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from real_accelerator import has_real_cuda
 
 torch = pytest.importorskip("torch")
 
@@ -42,7 +43,7 @@ def test_is_left_padded(dtype):
 TINY = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason = "Unsloth fast forward needs a GPU")
+@pytest.mark.skipif(not has_real_cuda(), reason = "Unsloth fast forward needs a GPU")
 def test_left_padded_label_less_training_forward_matches_unpadded():
     from unsloth import FastLanguageModel
 

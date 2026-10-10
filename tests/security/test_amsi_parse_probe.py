@@ -324,7 +324,7 @@ def test_the_mark_of_the_web_is_written_the_documented_way() -> None:
         "the mark-of-the-web stamp no longer uses -Stream, which is the only documented way to "
         "address an alternate data stream"
     )
-    # Strip comment lines first: the comment above the fix names the banned form.
+    # Strip comment lines first, so prose that names the banned form does not trip the ban.
     code = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
     assert (
         ':Zone.Identifier"' not in code

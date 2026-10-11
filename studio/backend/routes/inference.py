@@ -144,6 +144,7 @@ from core.inference.llama_preemption import (
     PreemptSignal,
     ParticipantState,
     ServerParkNotices,
+    parse_server_park_notice,
     get_preemption_controller,
     preemption_eligible,
     preemption_enabled,
@@ -1980,7 +1981,13 @@ def _server_park_sse(raw_line) -> Optional[str]:
     """
     if isinstance(raw_line, (bytes, bytearray)):
         raw_line = bytes(raw_line).decode("utf-8", "replace")
-    return _SERVER_PARK_SSE_BY_COMMENT.get(str(raw_line or "").strip())
+    raw_line = str(raw_line or "").strip()
+    found = _SERVER_PARK_SSE_BY_COMMENT.get(raw_line)
+    if found is not None:
+        return found
+    # A batched request's notices carry the prompt index; the client reads one stream state.
+    notice = parse_server_park_notice(raw_line)
+    return None if notice is None else _SERVER_PARK_SSE_BY_COMMENT.get(": " + notice[0])
 
 
 def _server_recompute_counted(chunk) -> bool:
@@ -2748,6 +2755,9 @@ def _openai_llama_admission_charged_prompt_tokens(
 # Leave room for template overhead and llama-server's next-token check.
 # This margin does not cover arbitrary prompt-estimator undercounts.
 _OPENAI_LLAMA_ADMISSION_WIRE_RESERVE_TOKENS = 64
+# A tokenizer count already includes the template, so only the next-token check is left:
+# llama-server stops once n_past + 1 reaches n_ctx.
+_OPENAI_LLAMA_ADMISSION_COUNTED_RESERVE_TOKENS = 1
 
 
 def _openai_llama_admission_wire_output_bound(
@@ -2757,8 +2767,10 @@ def _openai_llama_admission_wire_output_bound(
     window: int,
     budget: Optional[int] = None,
     preemption_active: bool = False,
+    prompt_counted: bool = False,
 ) -> int:
     """Bound output by the reserved allowance, context window, and cache budget.
+    ``prompt_counted`` means ``prompt_tokens`` is the tokenizer's count, not an estimate.
     Prompts too large for their share use the flat allowance rather than a one-token cap.
     While preemption can reclaim, the ceiling is the window rather than a share: the cache is
     overcommitted and the controller reclaims as the live total nears it."""
@@ -2773,7 +2785,11 @@ def _openai_llama_admission_wire_output_bound(
     if budget:
         allowance = min(allowance, max(0, budget - prompt_tokens))
     # Deduct the safety margin from the reservation; do not add unreserved output.
-    allowance -= _OPENAI_LLAMA_ADMISSION_WIRE_RESERVE_TOKENS
+    allowance -= (
+        _OPENAI_LLAMA_ADMISSION_COUNTED_RESERVE_TOKENS
+        if prompt_counted
+        else _OPENAI_LLAMA_ADMISSION_WIRE_RESERVE_TOKENS
+    )
     # Never zero, which llama-server refuses.
     return max(1, allowance)
 
@@ -2928,6 +2944,10 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
     def _gguf_refresh_residency(controller, *, force: bool = False) -> None:
         if not _residency_applies:
             return
+        # The server parks slots itself and Studio plans nothing, so a reading decides
+        # nothing and its erases would destroy the prefix cache the server reuses.
+        if _server_parks_raw_streams(llama_backend):
+            return
         now = time.monotonic()
         if not force and now - _gguf_slots_seen["at"] < 1.0:
             return
@@ -3034,6 +3054,9 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
             # synchronous with a three second timeout, and the server keeps decoding while
             # it is out, so a count held back behind it can outrun the reaction headroom.
             victims = controller.observe(completion_id, generated)
+            if _server_parks_raw_streams(llama_backend):
+                # The server parks slots itself: no reading, no planning, no erase here.
+                return
             # A solo chat has nobody to preempt and nobody waiting for its cells, so the
             # round trip can decide nothing there. Admission and the resume wait pass
             # `force`, so both fresh-read barriers still read. Contended, it is read even
@@ -3375,6 +3398,10 @@ def _openai_llama_preemption_disarm(*, llama_backend, gen_id: str) -> None:
             # A generation that never armed holds nobody else's cells, and with preemption off, or
             # on a non-unified cache, this erased prefix caches. The unregister above is unconditional.
             return
+        if _server_parks_raw_streams(llama_backend):
+            # The server parks and restores slots itself; erasing idle ones would only
+            # throw away its prefix cache.
+            return
         base = str(getattr(llama_backend, "base_url", "") or "")
         if not base:
             return
@@ -3471,13 +3498,17 @@ def _openai_llama_admission_enforced_max_tokens(
     prompt_tokens: Optional[int] = None,
     capacity: Optional[int] = None,
     pausable: bool = True,
+    prompt_counted: bool = False,
 ) -> Optional[int]:
     """Enforce the reserved output allowance using the finalized conversation.
+    ``prompt_counted`` marks a given ``prompt_tokens`` as the tokenizer's exact count.
     Return None for disabled accounting, unpriceable media, or an explicit cap below
     the context window. Caps at or above the window count as unstated. Where preemption
     can reclaim, the whole window is offered and the controller is the enforcement.
     ``pausable`` is about THIS request: a raw relay has no generator to resume from, so it
     keeps the share unless the server parks raw streams itself."""
+    # Only a count the caller handed in can be exact; one derived below is an estimate.
+    counted_given = prompt_tokens is not None
     if capacity is None:
         capacity = _openai_llama_admission_capacity(request, llama_backend)
     if capacity <= 1:
@@ -3525,6 +3556,7 @@ def _openai_llama_admission_enforced_max_tokens(
         window = window or budget,
         budget = budget,
         preemption_active = pausable and _openai_llama_preemption_will_apply(llama_backend, budget),
+        prompt_counted = prompt_counted and counted_given,
     )
 
 
@@ -3684,6 +3716,20 @@ def _count_gguf_admission_prompt(
 ) -> int:
     """Exact prompt count plus media allowance; the whole pool if counting fails
     (the character estimate undercounts numeric text, #10671)."""
+    return _count_gguf_admission_prompt_detail(
+        llama_backend, payload, messages, tools, cancel_event
+    )[0]
+
+
+def _count_gguf_admission_prompt_detail(
+    llama_backend,
+    payload,
+    messages,
+    tools = None,
+    cancel_event = None,
+) -> tuple[int, bool]:
+    """`_count_gguf_admission_prompt`, plus whether the figure is exact: counted, with no
+    media allowance estimated on top."""
     from core.inference.chat_template_helpers import trailing_assistant_resume_kind
 
     budget = _openai_llama_admission_budget(llama_backend) or 0
@@ -3705,15 +3751,16 @@ def _count_gguf_admission_prompt(
         )
         if type(count) is not int or count <= 0:
             raise ValueError("Invalid prompt token count")
-        return count + _openai_llama_admission_media_tokens(
+        media = _openai_llama_admission_media_tokens(
             payload,
             message_image_parts = images,
             image_tokens = _openai_llama_admission_image_tokens(llama_backend),
             message_video_clips = _conversation_video_clips(messages),
         )
+        return count + media, media == 0
     except Exception:
         logger.debug("Prompt count unavailable; reserving the context pool", exc_info = True)
-        return budget
+        return budget, False
 
 
 async def _reserve_counted_gguf_chat(
@@ -3848,8 +3895,9 @@ def _openai_llama_admission_recost(
             return None
         capacity = _openai_llama_admission_capacity(request, llama_backend)
         vision = bool(getattr(llama_backend, "is_vision", False))
+        prompt_exact = False
         if count_prepared_prompt:
-            prompt_tokens = _count_gguf_admission_prompt(
+            prompt_tokens, prompt_exact = _count_gguf_admission_prompt_detail(
                 llama_backend, payload, conversation, injected_tools, cancel_event = cancel_event
             )
             if cancel_event is not None and cancel_event.is_set():
@@ -3866,12 +3914,18 @@ def _openai_llama_admission_recost(
                 payload, message_video_clips = _conversation_video_clips(conversation)
             )
         # Price the actual outgoing catalogue separately from the reservation catalogue.
-        wire_prompt_tokens = _openai_llama_admission_wire_prompt_tokens(
-            conversation,
-            image_tokens = _openai_llama_admission_image_tokens(llama_backend),
-            injected_tools = wire_tools,
-            markup = _openai_llama_admission_markup(llama_backend),
-            vision = vision,
+        # The tokenizer's count stands only when it counted that same catalogue.
+        wire_counted = prompt_exact and wire_tools is injected_tools
+        wire_prompt_tokens = (
+            prompt_tokens
+            if wire_counted
+            else _openai_llama_admission_wire_prompt_tokens(
+                conversation,
+                image_tokens = _openai_llama_admission_image_tokens(llama_backend),
+                injected_tools = wire_tools,
+                markup = _openai_llama_admission_markup(llama_backend),
+                vision = vision,
+            )
         )
         # Reading "Max" literally here would put the run back on the whole cache at its
         # first round boundary.
@@ -3923,6 +3977,7 @@ def _openai_llama_admission_recost(
             conversation = conversation,
             prompt_tokens = wire_prompt_tokens,
             capacity = capacity,
+            prompt_counted = wire_counted,
         )
     except (LlamaAdmissionRecostRefused, LlamaAdmissionCancelled):
         raise
@@ -5051,6 +5106,62 @@ def _raw_park_grace(llama_backend) -> Optional[Callable[[], bool]]:
         return None
     probe = getattr(llama_backend, "_server_park_grace", None)
     return probe if callable(probe) else None
+
+
+async def _nonstreaming_post_through_park(
+    client, url: str, *, llama_backend, json, upstream_headers
+):
+    """POST a non-streaming request, waiting out a server park longer than the read timeout.
+
+    llama-server writes no park notice on a non-streaming response, so a park is silence until
+    the body lands and the read timeout ended an answer that was coming. Where the server parks,
+    the deadline is enforced here instead: at each window the park probe is asked, a park buys
+    another window, up to `_RAW_PARK_STALL_CAP_S`. The connection stays open throughout, since
+    closing it would cancel the request upstream. Elsewhere this is the plain POST.
+    """
+    timeout = _llama_non_streaming_generation_timeout()
+    stall_grace = _raw_park_grace(llama_backend)
+    if stall_grace is None or timeout.read is None:
+        return await client.post(url, json = json, headers = upstream_headers, timeout = timeout)
+    window = float(timeout.read)
+    cap = float(_RAW_PARK_STALL_CAP_S)
+    # httpx's own read timeout is only the backstop now.
+    task = asyncio.ensure_future(
+        client.post(
+            url,
+            json = json,
+            headers = upstream_headers,
+            timeout = httpx.Timeout(window, read = window + cap + 5.0),
+        )
+    )
+    deadline = time.monotonic() + window
+    crossed_at: Optional[float] = None
+    try:
+        while True:
+            done, _pending = await asyncio.wait(
+                {task}, timeout = max(0.0, deadline - time.monotonic())
+            )
+            if done:
+                return task.result()
+            now = time.monotonic()
+            if crossed_at is None:
+                crossed_at = now
+            grace_left = crossed_at + cap - now
+            if grace_left <= 0 or not await _probe_off_the_loop(stall_grace):
+                raise httpx.ReadTimeout("The model did not produce a first token in time.")
+            logger.info(
+                "llama non-streaming request silent for %.0fs with a slot parked by the server; waiting",
+                now - crossed_at + window,
+            )
+            deadline = now + min(window, grace_left)
+    finally:
+        if not task.done():
+            task.cancel()
+            task.add_done_callback(_discard_task_outcome)
+            try:
+                await asyncio.wait({task}, timeout = _TEARDOWN_TASK_STOP_TIMEOUT_S)
+            except asyncio.CancelledError:
+                pass
 
 
 from models.inference import (
@@ -38622,11 +38733,14 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
         _direct_llama_request_started()
         try:
             try:
-                resp = await _client.post(
+                resp = await _nonstreaming_post_through_park(
+                    _client,
                     target_url,
+                    llama_backend = llama_backend,
                     json = body,
-                    headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend),
-                    timeout = _llama_non_streaming_generation_timeout(),
+                    upstream_headers = _openai_passthrough_upstream_headers(
+                        llama_backend = llama_backend
+                    ),
                 )
             except httpx.RequestError:
                 # The watcher closed the client out from under the request: report the cancel, not a transport failure.
@@ -45682,11 +45796,12 @@ async def _anthropic_passthrough_non_streaming(
 
     async def _post_once(payload_body):
         try:
-            response = await _client.post(
+            response = await _nonstreaming_post_through_park(
+                _client,
                 target_url,
+                llama_backend = llama_backend,
                 json = payload_body,
-                headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend),
-                timeout = _llama_non_streaming_generation_timeout(),
+                upstream_headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend),
             )
         except httpx.RequestError:
             # The watcher closes the client to break a blocked POST, so a transport error
@@ -47798,11 +47913,12 @@ async def _openai_passthrough_non_streaming_upstream(
 
     async def _post(body_to_send):
         if cancel_event is None and request is None:
-            return await nonstreaming_client().post(
+            return await _nonstreaming_post_through_park(
+                nonstreaming_client(),
                 target_url,
+                llama_backend = llama_backend,
                 json = body_to_send,
-                headers = upstream_headers,
-                timeout = _llama_non_streaming_generation_timeout(),
+                upstream_headers = upstream_headers,
             )
 
         if cancel_event is None:
@@ -47819,11 +47935,12 @@ async def _openai_passthrough_non_streaming_upstream(
         )
         try:
             try:
-                response = await client.post(
+                response = await _nonstreaming_post_through_park(
+                    client,
                     target_url,
+                    llama_backend = llama_backend,
                     json = body_to_send,
-                    headers = upstream_headers,
-                    timeout = _llama_non_streaming_generation_timeout(),
+                    upstream_headers = upstream_headers,
                 )
             except httpx.RequestError:
                 _raise_if_nonstreaming_request_cancelled(cancel)

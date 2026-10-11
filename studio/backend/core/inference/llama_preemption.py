@@ -4,17 +4,18 @@
 """Who pauses when the shared KV cache fills. llama-server admits on `prompt_tokens <
 slot.n_ctx` alone, so chats that each fit collide and it errors EVERY processing slot.
 
-OPT-IN: all of it is off unless `UNSLOTH_LLAMA_ADMISSION_PREEMPT=1`. Unset, an install behaves
-as it did before this module existed: no `/slots` reads on the token path, no participants, no
-`preempt_event` handed to a generation, no `: preempt-*` SSE comments, no park notices, and
-admission prices every request against its fair share. `preemption_enabled()` is that switch and
-every entry point below asks it first."""
+On by default only where the running llama-server parks slots itself (see `preemption_enabled`).
+Anywhere else, or with `UNSLOTH_LLAMA_ADMISSION_PREEMPT=0`, an install behaves as it did before
+this module existed: no `/slots` reads on the token path, no participants, no `preempt_event`
+handed to a generation, no `: preempt-*` SSE comments, no park notices, and admission prices
+every request against its fair share. Every entry point below asks `preemption_enabled()` first."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import math
+import re
 import sys
 import threading
 import time
@@ -24,7 +25,6 @@ from typing import Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from core.inference.llama_admission import (
     LlamaAdmissionLease,
-    _bool_env,
     llama_admission_config_from_env,
 )
 from core.inference.llama_exact import EXACT_STATE_OFF, EXACT_STATES
@@ -37,18 +37,40 @@ from loggers import get_logger
 _log = get_logger(__name__)
 
 
-# Opt-in: `=1` turns the whole controller on. Unset it is off and admission falls back to step 1's
-# wire clamp alone, which is what every install ran before preemption existed.
+# `=1` arms preemption wherever it can run, `=0` is the behaviour before it existed. Unset is
+# auto: on only once the running llama-server confirms through `/props` that it parks slots
+# itself, so a stock or older server keeps the fair share admission it always had.
 PREEMPT_ENV = "UNSLOTH_LLAMA_ADMISSION_PREEMPT"
-DEFAULT_PREEMPT_ENABLED = False
+DEFAULT_PREEMPT_ENABLED = True
+PREEMPT_SETTING_ON = "on"
+PREEMPT_SETTING_OFF = "off"
+PREEMPT_SETTING_AUTO = "auto"
+
+# Whether the loaded llama-server confirmed its own parking. Written at launch and on unload.
+_server_parking_confirmed = False
 
 
 # The park notices a llama-server built with unslothai/llama.cpp#197 writes on the very stream it
-# parks, matched as bytes at the start of a line so a `data:` payload quoting one is not mistaken
-# for it. `llama_cpp` spells the same two comments for its own relay; a test pins the pair.
+# parks, as SSE comment lines so a `data:` payload quoting one is not mistaken for it. A batched
+# request gets the prompt index appended (`: preempted 1`); unindexed means prompt 0. `llama_cpp`
+# spells the same comments for its own relay; a test pins the pair.
 _PARK_NOTICE_PARKED = b"\n: preempted"
 _PARK_NOTICE_RESUMED = b"\n: resumed"
-_PARK_NOTICE_TAIL = max(len(_PARK_NOTICE_PARKED), len(_PARK_NOTICE_RESUMED))
+_PARK_NOTICE_RE = re.compile(r": (preempted|resumed|recomputed)(?: (0|[1-9][0-9]{0,8}))?")
+# Longest line worth buffering: anything longer is not a notice.
+_PARK_NOTICE_MAX_LINE = 32
+
+
+def parse_server_park_notice(line) -> Optional[tuple]:
+    """``(kind, index)`` for one comment line that is exactly a park notice, else None."""
+    if isinstance(line, (bytes, bytearray)):
+        line = bytes(line).decode("utf-8", "replace")
+    if not isinstance(line, str):
+        return None
+    match = _PARK_NOTICE_RE.fullmatch(line.strip())
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2) or 0)
 
 
 class ServerParkNotices:
@@ -59,17 +81,29 @@ class ServerParkNotices:
     as the neighbour did. A build that writes the notices says which request is parked, so they
     decide; the aggregate probe stays as the documented fallback for a swap build that predates
     them (unslothai/llama.cpp#184), bounded by the same cap, and it stops applying to a stream
-    that has said anything about itself.
+    that has said anything about itself. A batched request is parked while any prompt is.
     """
 
-    __slots__ = ("_probe", "_parked", "_heard", "_tail")
+    __slots__ = ("_probe", "_parked", "_heard", "_line", "_skip")
 
     def __init__(self, probe: Optional[Callable[[], bool]] = None) -> None:
         self._probe = probe
-        self._parked = False
+        self._parked: set = set()
         self._heard = False
-        # A notice on the first body line has no newline in front of it yet.
-        self._tail = b"\n"
+        # The unterminated tail of the current line, and whether it is already too long.
+        self._line = b""
+        self._skip = False
+
+    def _take_line(self, line: bytes) -> None:
+        notice = parse_server_park_notice(line) if line.startswith(b":") else None
+        if notice is None:
+            return
+        self._heard = True
+        kind, index = notice
+        if kind == "preempted":
+            self._parked.add(index)
+        elif kind == "resumed":
+            self._parked.discard(index)
 
     def feed(self, data) -> None:
         """Read a piece of this stream's body for its own park notices."""
@@ -77,21 +111,32 @@ class ServerParkNotices:
             return
         if isinstance(data, str):
             data = data.encode("utf-8", "replace")
-        blob = self._tail + bytes(data)
-        parked_at = blob.rfind(_PARK_NOTICE_PARKED)
-        resumed_at = blob.rfind(_PARK_NOTICE_RESUMED)
-        if parked_at >= 0 or resumed_at >= 0:
-            self._heard = True
-            # Whichever came last: one read can carry a whole park and its resume.
-            self._parked = parked_at > resumed_at
-        self._tail = blob[-_PARK_NOTICE_TAIL:]
+        data = bytes(data)
+        # Fast path: no line ends in this piece.
+        if b"\n" not in data and b"\r" not in data:
+            if not self._skip:
+                self._line += data
+                if len(self._line) > _PARK_NOTICE_MAX_LINE:
+                    self._line, self._skip = b"", True
+            return
+        parts = re.split(rb"\r|\n", data)
+        last = parts.pop()
+        for part in parts:
+            if not self._skip:
+                line = self._line + part
+                if len(line) <= _PARK_NOTICE_MAX_LINE:
+                    self._take_line(line)
+            self._line, self._skip = b"", False
+        self._line = last[: _PARK_NOTICE_MAX_LINE + 1]
+        if len(self._line) > _PARK_NOTICE_MAX_LINE:
+            self._line, self._skip = b"", True
 
     def feed_line(self, line) -> None:
-        """One line from a line-oriented source, which has stripped the newline the match reads
-        on. A line always starts one, so the carried tail is that newline."""
+        """One line from a line-oriented source, which has stripped the newline."""
         if isinstance(line, (str, bytes, bytearray)):
-            self._tail = b"\n"
+            self._line, self._skip = b"", False
             self.feed(line)
+            self.feed(b"\n")
 
     @property
     def heard_a_notice(self) -> bool:
@@ -100,7 +145,7 @@ class ServerParkNotices:
 
     @property
     def parked(self) -> bool:
-        return self._parked
+        return bool(self._parked)
 
     def excuses_silence(self) -> bool:
         """Whether this stream's silence is its own park. Blocks when it falls back to the probe,
@@ -159,8 +204,20 @@ DEFAULT_PREEMPT_BUFFER_MIN_TOKENS = 256
 # under a prompt still going in.
 PENDING_PREFILL_TTL_S = 1200.0
 
-# Far above _MAX_LENGTH_CONTINUATIONS: that caps answer quality, this caps churn.
-DEFAULT_MAX_PREEMPT_RESUMES = 32
+# This many pauses in a row with no output between them end the turn; a pause after progress
+# is never counted. _MAX_LENGTH_CONTINUATIONS caps answer quality; this caps churn.
+DEFAULT_MAX_STALLED_RESUMES = 4
+
+
+def next_stall_count(stalled: int, new_tokens: int) -> int:
+    """Consecutive pauses without output, after one that decoded ``new_tokens``."""
+    return 0 if int(new_tokens or 0) > 0 else max(0, int(stalled or 0)) + 1
+
+
+def resumes_stalled(stalled: int) -> bool:
+    """Whether ``stalled`` pauses in a row without output should end the turn."""
+    return int(stalled or 0) >= DEFAULT_MAX_STALLED_RESUMES
+
 
 # A chat preempted this many times in a row outranks newest-first, so repeatedly losing
 # does not become never finishing.
@@ -458,14 +515,45 @@ _DECODES_WHEN_TOKENS_ARRIVE = frozenset(
 )
 
 
-def preemption_enabled() -> bool:
-    """Whether the operator opted in with ``UNSLOTH_LLAMA_ADMISSION_PREEMPT=1``.
+def preemption_setting() -> str:
+    """``on``, ``off`` or ``auto`` (unset or unrecognised) for ``UNSLOTH_LLAMA_ADMISSION_PREEMPT``."""
+    raw = (os.environ.get(PREEMPT_ENV) or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return PREEMPT_SETTING_ON
+    if raw in {"0", "false", "no", "off"}:
+        return PREEMPT_SETTING_OFF
+    return PREEMPT_SETTING_AUTO if DEFAULT_PREEMPT_ENABLED else PREEMPT_SETTING_OFF
 
-    A plain environment read, so it is cheap enough to be the FIRST thing every gate asks:
-    off, the caller must be able to bail out before it builds a signal, registers a
+
+def preemption_wanted() -> bool:
+    """Whether a launch should ask the server to park: anything but an explicit off."""
+    return preemption_setting() != PREEMPT_SETTING_OFF
+
+
+def note_server_parking(confirmed: bool) -> None:
+    """Record what the running llama-server reported. Auto preemption follows it."""
+    global _server_parking_confirmed
+    _server_parking_confirmed = bool(confirmed)
+
+
+def server_parking_confirmed() -> bool:
+    return _server_parking_confirmed
+
+
+def preemption_enabled() -> bool:
+    """Whether preemption is armed now.
+
+    ``on`` always; ``off`` never; ``auto`` only while the server confirmed its own parking or
+    ``UNSLOTH_LLAMA_PREEMPT_MODE=studio`` asks Studio to pause chats. Cheap enough to be the
+    FIRST thing every gate asks: off, the caller bails out before it builds a signal, registers a
     participant or opens a ``/slots`` round trip.
     """
-    return _bool_env(PREEMPT_ENV, DEFAULT_PREEMPT_ENABLED)
+    setting = preemption_setting()
+    if setting == PREEMPT_SETTING_ON:
+        return True
+    if setting == PREEMPT_SETTING_OFF:
+        return False
+    return _server_parking_confirmed or preempt_mode_setting() == PREEMPT_MODE_STUDIO
 
 
 def preemption_eligible() -> bool:
@@ -850,12 +938,10 @@ class PreemptionController:
         return total
 
     def _solo_ceiling_locked(self) -> int:
-        """The cache less what a lone chat still needs clear. Being alone removes the reaction
-        headroom but not the need to fit the next batch: a lone chat took 16297 cells of 16384."""
-        margin = max(
-            self._draft_tokens + max(64, self._budget // SOLO_MARGIN_DIVISOR),
-            self._batch_tokens + self._draft_tokens,
-        )
+        """The cache less what a lone chat still needs clear: its drafts, the estimate error and
+        the next decode step. No prefill batch: chunks are part of the history, so a lone replay of
+        W needs W cells plus the step after (a 7000 token chat at 8192 fits alone)."""
+        margin = self._draft_tokens + 1 + max(64, self._budget // SOLO_MARGIN_DIVISOR)
         return max(1, self._budget - margin)
 
     def outgrew_the_shared_ceiling(self, want: int) -> bool:
@@ -1552,7 +1638,7 @@ class ControllerPreemptionPolicy:
     ``resume_async`` awaits the queue's slot acquire, so the two are joined with run_coroutine_threadsafe.
     """
 
-    __slots__ = ("_controller", "_gen_id", "_signal", "_resumes", "_loop")
+    __slots__ = ("_controller", "_gen_id", "_signal", "_resumes", "_stalled", "_loop")
 
     def __init__(
         self,
@@ -1566,6 +1652,7 @@ class ControllerPreemptionPolicy:
         self._gen_id = gen_id
         self._signal = signal
         self._resumes = 0
+        self._stalled = 0
         self._loop = loop
 
     def should_preempt(self) -> bool:
@@ -1575,6 +1662,7 @@ class ControllerPreemptionPolicy:
         """The upstream response is closed, so the tokens may go back. Only once nothing can still be
         decoding against the lease, which the stream side guarantees by calling this after teardown."""
         self._resumes = checkpoint.resumes
+        self._stalled = next_stall_count(self._stalled, checkpoint.charged_tokens)
         _log.info(
             "llama preemption paused: gen_id=%s resumes=%s kept_chars=%s kept=%s charged=%s",
             self._gen_id,
@@ -1623,9 +1711,12 @@ class ControllerPreemptionPolicy:
         # None means "caller stated no preference", NOT "wait forever".
         if timeout is None:
             timeout = DEFAULT_RESUME_WAIT_TIMEOUT_S
-        if self._resumes >= DEFAULT_MAX_PREEMPT_RESUMES:
+        if resumes_stalled(self._stalled):
             _log.warning(
-                "llama preemption resume-cap: gen_id=%s resumes=%s", self._gen_id, self._resumes
+                "llama preemption resume-stalled: gen_id=%s resumes=%s stalled=%s",
+                self._gen_id,
+                self._resumes,
+                self._stalled,
             )
             return False
         participant = self._controller.participant(self._gen_id)
@@ -1769,6 +1860,7 @@ class ControllerPreemptionPolicy:
         """The next of `n` choices: the same lease, a fresh count of resumes and the ledger
         back to what admission charged, since the last choice's partials are not replayed."""
         self._resumes = 0
+        self._stalled = 0
         self._controller.restart(self._gen_id)
 
     def on_server_parked(self) -> None:

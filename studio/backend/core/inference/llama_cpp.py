@@ -10,6 +10,7 @@ OpenAI-compatible /v1/chat/completions endpoint.
 import ast
 import atexit
 import bisect
+import collections
 import weakref
 import contextlib
 import ctypes
@@ -2721,6 +2722,7 @@ def _stand_down_child_parking(
     env: dict,
     args: Optional[list] = None,
     server_supports: Optional[bool] = None,
+    probe_inconclusive: bool = False,
 ) -> Optional[list[str]]:
     """One owner pauses chats: a budget somebody named must not buy the child a park beside Studio's
     own pause, which no relay excuses. ``UNSLOTH_LLAMA_PREEMPT_MODE=studio`` stands the child down
@@ -2730,6 +2732,8 @@ def _stand_down_child_parking(
     it, since llama.cpp applies argv after the environment. With preemption switched off and no
     budget named anywhere, it writes nothing at all: the server parks nothing unless it is told to
     (unslothai/llama.cpp#197), so a default install's child is left exactly as upstream ships it.
+    ``probe_inconclusive`` (a ``--help`` that timed out or read as nothing) still writes the zero:
+    the binary may be a swap build from before #197, which parks on an implicit budget.
     Returns the budgets it overrode, empty when the line named none, and None when the child keeps
     its parking."""
     if not _child_parking_stands_down(server_supports):
@@ -2753,10 +2757,11 @@ def _stand_down_child_parking(
             if value.strip() != "0":
                 overridden.append(f"--preempt-ram={value}")
             args[i] = "--preempt-ram=0"
-    if named_anywhere or _preemption.preemption_enabled():
-        # Somebody named a budget the child would park on, or Studio's own preemptor is armed
-        # (``studio`` mode, or a probe that could not confirm the flag) and a build that parks
-        # after all must not park beside it. Otherwise nothing is written: nothing would park.
+    if named_anywhere or probe_inconclusive or _preemption.preemption_enabled():
+        # Somebody named a budget the child would park on, the probe could not say what the
+        # binary is, or Studio's own preemptor is armed (``studio`` mode, or a probe that could
+        # not confirm the flag) and a build that parks after all must not park beside it.
+        # Otherwise nothing is written: nothing would park.
         env["LLAMA_ARG_PREEMPT_RAM"] = "0"
     return overridden
 
@@ -8520,6 +8525,45 @@ def _extra_args_have_tensor_split(
         if str(token).split("=", 1)[0] in ("--tensor-split", "-ts", "--tensor_split"):
             return True
     return bool(str((env or {}).get("LLAMA_ARG_TENSOR_SPLIT", "")).strip())
+
+
+# Recent prompt counts, keyed by llama-server process and rendered request body.
+_COUNT_MEMO_MAX = 64
+_COUNT_MEMO: "collections.OrderedDict[tuple, int]" = collections.OrderedDict()
+_COUNT_MEMO_LOCK = threading.Lock()
+
+
+def _count_memo_key(backend, template_body: dict, prefer_native: bool) -> Optional[tuple]:
+    process = getattr(backend, "_process", None)
+    pid = getattr(process, "pid", None)
+    if pid is None:
+        return None
+    try:
+        encoded = json.dumps(template_body, sort_keys = True, ensure_ascii = False, default = str)
+    except (TypeError, ValueError):
+        return None
+    digest = hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
+    return (getattr(backend, "base_url", None), pid, bool(prefer_native), digest)
+
+
+def _count_memo_get(key: Optional[tuple]) -> Optional[int]:
+    if key is None:
+        return None
+    with _COUNT_MEMO_LOCK:
+        count = _COUNT_MEMO.get(key)
+        if count is not None:
+            _COUNT_MEMO.move_to_end(key)
+        return count
+
+
+def _count_memo_put(key: Optional[tuple], count: int) -> None:
+    if key is None:
+        return
+    with _COUNT_MEMO_LOCK:
+        _COUNT_MEMO[key] = count
+        _COUNT_MEMO.move_to_end(key)
+        while len(_COUNT_MEMO) > _COUNT_MEMO_MAX:
+            _COUNT_MEMO.popitem(last = False)
 
 
 @functools.lru_cache(maxsize = 1)
@@ -31070,7 +31114,10 @@ class LlamaCppBackend:
                 # the owner, and a child that parks after all is told not to: the variable is
                 # ignored by a build without the flag and honoured by one with it.
                 _parking_overridden = _stand_down_child_parking(
-                    env, cmd, server_supports = bool(server_caps.get("supports_preempt_ram"))
+                    env,
+                    cmd,
+                    server_supports = bool(server_caps.get("supports_preempt_ram")),
+                    probe_inconclusive = bool(server_caps.get("reasoning_budget_probe_inconclusive")),
                 )
                 if _parking_overridden is not None:
                     _stand_down_why = _child_parking_stand_down_reason(
@@ -33899,11 +33946,6 @@ class LlamaCppBackend:
                             else None
                         ),
                     )
-                if not self._publish_healthy():
-                    # Teardown began between the 200 and this commit; publishing
-                    # would report a model that is gone.
-                    _cleanup_cancelled_load("App shut down as the load was completing")
-                    return False
                 self._commit_effective_parallel_slots(n_parallel)
                 self._swa_full = swa_full
                 self._kv_cache_unified = kv_cache_unified
@@ -34101,6 +34143,13 @@ class LlamaCppBackend:
                         + _exact_why
                         + " Set exact concurrency to 'on' to fail the load instead."
                     )
+                # Published only now: a required mode the server cannot keep kills the child
+                # above, and a request admitted before that would be cut off mid-answer.
+                if not self._publish_healthy():
+                    # Teardown began between the 200 and this commit; publishing
+                    # would report a model that is gone.
+                    _cleanup_cancelled_load("App shut down as the load was completing")
+                    return False
                 # Re-derived from the slot count that LAUNCHED, not the one the sizing
                 # pass saw. The drafter drop and the non-MTP retry both hand slots back
                 # after the batch flag is emitted, and this is recorded next to
@@ -37790,7 +37839,7 @@ class LlamaCppBackend:
             first_token_deadline = time.monotonic() + _DEFAULT_FIRST_TOKEN_TIMEOUT_S
         last_chunk_at: Optional[float] = None
         last_prefill_progress: Optional[float] = None
-        # When the current park before the first token began; keepalives renew only up to the cap.
+        # When the current park began; its keepalives renew only up to the cap.
         parked_since: Optional[float] = None
         prefill_sse_buffer = ""
         while True:
@@ -37850,7 +37899,23 @@ class LlamaCppBackend:
                             response,
                             post_first_chunk_read_timeout_s,
                         )
-                    last_chunk_at = time.monotonic()
+                    now = time.monotonic()
+                    if last_chunk_at is not None and LlamaCppBackend._chunk_is_park_notice(chunk):
+                        # Parked after its first token: the keepalives renew the stall window
+                        # only up to the park cap, as the async relay does.
+                        if parked_since is None:
+                            parked_since = now
+                        if now - parked_since < _SERVER_PARK_STALL_CAP_S:
+                            last_chunk_at = now
+                        elif now - last_chunk_at >= stall_timeout_s:
+                            # The keepalives keep the socket busy, so no read ever times out.
+                            response.close()
+                            raise httpx.ReadTimeout(
+                                "The model stopped producing tokens mid-response."
+                            )
+                    else:
+                        last_chunk_at = now
+                        parked_since = None
                 yield chunk
             except StopIteration:
                 return
@@ -37862,6 +37927,16 @@ class LlamaCppBackend:
                 elif now - last_chunk_at >= stall_timeout_s:
                     raise httpx.ReadTimeout("The model stopped producing tokens mid-response.")
                 continue
+
+    @staticmethod
+    def _chunk_is_park_notice(chunk: str) -> bool:
+        """Whether a chunk carries only ``: preempted`` notices and the parked keepalive."""
+        lines = [line.strip() for line in chunk.splitlines() if line.strip()]
+        return bool(lines) and all(
+            line == ": preempt-keepalive"
+            or (_preemption.parse_server_park_notice(line) or ("",))[0] == "preempted"
+            for line in lines
+        )
 
     @staticmethod
     def _set_stream_read_timeout(response: "httpx.Response", read_timeout_s: float) -> None:
@@ -42849,7 +42924,20 @@ class LlamaCppBackend:
                                     messages_without_unpriced_media(_probe)
                                 )
 
-                        _round_spent = _round_prompt_tokens(conversation)
+                        # The over-cap notice is appended after the results and is not on the
+                        # assistant message, so the round reserves it, as a sequential call does.
+                        _round_notice = 0
+                        if _over_cap:
+                            _notice_msgs = [
+                                tool_call_limit_nudge(_over_cap, _MAX_TOOL_CALLS_PER_TURN)
+                            ]
+                            try:
+                                _round_notice = self.count_chat_tokens(
+                                    _notice_msgs, None, None, strict = True
+                                )
+                            except Exception:
+                                _round_notice = 2 * estimate_messages_tokens_dense(_notice_msgs)
+                        _round_spent = _round_prompt_tokens(conversation) + _round_notice
                         _round_budget = tool_result_budget(
                             self._effective_context_length,
                             _iteration_fit_max_tokens,
@@ -42863,7 +42951,7 @@ class LlamaCppBackend:
                                 conversation[:] = _roomier
                                 # Re-priced on the room that was just reclaimed, which is
                                 # the whole point of reclaiming it here.
-                                _round_spent = _round_prompt_tokens(conversation)
+                                _round_spent = _round_prompt_tokens(conversation) + _round_notice
                                 _round_budget = tool_result_budget(
                                     self._effective_context_length,
                                     _iteration_fit_max_tokens,
@@ -44624,6 +44712,14 @@ class LlamaCppBackend:
                         if continue_final_message:
                             template_body["continue_final_message"] = True
                             template_body["add_generation_prompt"] = False
+                        # A count is a pure function of the rendered body for one llama-server
+                        # process: a tool loop's opening reservation and its first-round recost
+                        # price the same prompt back to back. Keyed on the process, so a relaunch
+                        # (new template, new model) never reads an old answer.
+                        memo_key = _count_memo_key(self, template_body, prefer_native)
+                        hit = _count_memo_get(memo_key)
+                        if hit is not None:
+                            return hit, False
                         if prefer_native:
                             if should_abort is not None and should_abort():
                                 raise CountAborted()
@@ -44635,6 +44731,7 @@ class LlamaCppBackend:
                                 if native.status_code == 200:
                                     count = native.json().get("input_tokens")
                                     if type(count) is int and count > 0:
+                                        _count_memo_put(memo_key, count)
                                         return count, False
                             except Exception:
                                 pass
@@ -44650,7 +44747,10 @@ class LlamaCppBackend:
                         if isinstance(prompt, str):
                             if should_abort is not None and should_abort():
                                 raise CountAborted()
-                            return _tokenize(prompt), False
+                            count = _tokenize(prompt)
+                            if type(count) is int and count > 0:
+                                _count_memo_put(memo_key, count)
+                            return count, False
                     except CountAborted:
                         # Not a template failure: swallowed, the text fallback tokenizes anyway,
                         # which is the work being declined. Must precede the generic except.

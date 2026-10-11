@@ -4912,14 +4912,25 @@ async def _aiter_llama_stream_items(
     if track_prefill_progress:
         from core.inference.llama_cpp import LlamaCppBackend
 
-    def _park_renews_first_window() -> None:
-        """A park notice before any token renews the first-token window, up to the park cap."""
+    def _park_renews_first_window(notice: Optional[str] = None) -> None:
+        """A park notice before any token renews the first-token window, up to the park cap. A
+        resume ends that park, so a later one is measured from its own start."""
         nonlocal first_token_deadline, park_since
         now = time.monotonic()
+        if notice is not None and notice not in (
+            _OPENAI_PREEMPT_SSE_PAUSED,
+            _OPENAI_PREEMPT_SSE_KEEPALIVE,
+        ):
+            park_since = None
+            first_token_deadline = max(first_token_deadline, now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S)
+            return
         if park_since is None:
             park_since = now
         if now - park_since < _RAW_PARK_STALL_CAP_S:
-            first_token_deadline = max(first_token_deadline, now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S)
+            first_token_deadline = max(
+                first_token_deadline,
+                min(now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S, park_since + _RAW_PARK_STALL_CAP_S),
+            )
 
     def _post_first_timeout_s() -> Optional[float]:
         if callable(post_first_item_read_timeout_s):
@@ -5054,8 +5065,12 @@ async def _aiter_llama_stream_items(
                 # during its prefill, and the prefill it resumes into still needs the first-token
                 # window, not the stall clock. The window is renewed by each notice, up to the park
                 # cap, since a keepalive every two seconds means the wrapper below never times out
-                # and never gets to apply its own grace. Fed to the excuse and relayed.
-                _park_renews_first_window()
+                # and never gets to apply its own grace. Fed to the excuse and relayed. Checked
+                # here because the keepalives keep the read returning, so the deadline below
+                # (widened by the park cap again when the grace is installed) is never reached.
+                _park_renews_first_window(_server_park_sse(item))
+                if time.monotonic() >= first_token_deadline:
+                    raise httpx.ReadTimeout("The model did not produce a first token in time.")
                 if park_above is not None:
                     park_above.feed_line(item)
                 yield item
@@ -5070,9 +5085,9 @@ async def _aiter_llama_stream_items(
                     events = [item]
                 starts_output = False
                 for event in events:
-                    if _server_park_sse(event) is not None:
+                    if (_notice := _server_park_sse(event)) is not None:
                         # A byte chunk can carry a park notice beside other events.
-                        _park_renews_first_window()
+                        _park_renews_first_window(_notice)
                         if park_above is not None:
                             park_above.feed_line(event)
                         continue
@@ -8529,6 +8544,9 @@ def _display_tool_name_gate(active_tools):
     return names or None
 
 
+_DISPLAY_STRIP_TRIGGERS = _re.compile(r"[<\[{]")
+
+
 def _strip_tool_xml_for_display(
     text: str,
     *,
@@ -8547,6 +8565,13 @@ def _strip_tool_xml_for_display(
     ``enabled_tool_names`` or an execution-class one is kept as prose. The ``[TOOL_CALLS]``
     control-token arms strip unconditionally regardless of NAME."""
     if not auto_heal_tool_calls:
+        return text
+    # Every form this strips opens with one of these: XML/sentinel tags and <think> with "<",
+    # [TOOL_CALLS] / NAME[ARGS] / [THINK] with "[", wrapper-less Gemma call:NAME{ with "{".
+    # Without any of them nothing can match, so the text is returned as is. The streaming tool
+    # route calls this on the CUMULATIVE text once per token, which made every token re-scan the
+    # whole answer: at ~1k tok/s the relay delivered about half the server's decode rate.
+    if not _DISPLAY_STRIP_TRIGGERS.search(text):
         return text
     from core.tool_healing import (
         _markerless_promotable,

@@ -3205,9 +3205,63 @@ def _openai_llama_count_raw_holder(*, llama_backend, lease, gen_id: str) -> None
             tokens = int(getattr(lease, "tokens", 0) or 0),
             state = ParticipantState.STREAMING_RAW,
         )
+        _plan_for_unpausable_holder(controller, gen_id)
     except Exception:
         # Bookkeeping must never fail a request that is otherwise fine.
         logger.debug("could not count the raw holder", exc_info = True)
+
+
+def _plan_for_unpausable_holder(controller, gen_id: str) -> None:
+    """Make room for a holder that cannot be paused, before its request goes upstream.
+
+    Registering it only adds its charge: a chat that has outgrown its optimistic lease is
+    still booked at the stale figure until its next token report, 32 tokens away, and the raw
+    prefill can fill the cache in between. Read afresh and plan now, as arming a chat does."""
+    _refresh_residency_before_planning(controller)
+    victims = controller.plan_preemptions(needed = 0)
+    if victims:
+        _llama_preemption_log(
+            "raw-holder-plan",
+            gen_id = gen_id,
+            preempted = ",".join(v.gen_id for v in victims),
+        )
+
+
+def _prompt_kv_tokens(prompt) -> int:
+    """A conservative KV estimate for a raw prompt, with no tokenizer round trip on the request
+    path. Token arrays count exactly. Text is a quarter token per ASCII character and a whole
+    token per other character: four characters to a token undercounts CJK about fourfold."""
+    if isinstance(prompt, (list, tuple)):
+        if prompt and all(isinstance(x, int) for x in prompt):
+            return len(prompt)
+        return sum(_prompt_kv_tokens(part) for part in prompt)
+    if isinstance(prompt, int):
+        return 1
+    text = str(prompt or "")
+    ascii_chars = sum(1 for ch in text if ord(ch) < 128)
+    return ascii_chars // 4 + (len(text) - ascii_chars)
+
+
+def _openai_llama_count_direct_holder(llama_backend, tokens: int, prefix: str) -> Optional[str]:
+    """Count a request that reaches llama-server outside admission as a holder the controller
+    cannot pause, and plan room for it. Returns the id to release, or None when not counted."""
+    try:
+        if not preemption_enabled() or not _openai_llama_preemption_will_apply(
+            llama_backend, _openai_llama_admission_budget(llama_backend)
+        ):
+            return None
+        gen_id = f"{prefix}-{uuid.uuid4().hex}"
+        controller = get_preemption_controller(_preempt_key(llama_backend))
+        controller.register(
+            gen_id,
+            tokens = max(1, int(tokens)),
+            state = ParticipantState.STREAMING_RAW,
+        )
+        _plan_for_unpausable_holder(controller, gen_id)
+        return gen_id
+    except Exception:
+        logger.debug("could not count the direct holder", exc_info = True)
+        return None
 
 
 def _openai_llama_count_completions_holder(llama_backend, prompt_text) -> Optional[str]:
@@ -3218,21 +3272,9 @@ def _openai_llama_count_completions_holder(llama_backend, prompt_text) -> Option
     Charged by its prompt, unmeasured, like a non-streaming raw holder. Returns the id to
     release, or None when nothing was counted.
     """
-    try:
-        if not preemption_enabled() or not _openai_llama_preemption_will_apply(
-            llama_backend, _openai_llama_admission_budget(llama_backend)
-        ):
-            return None
-        gen_id = f"cmpl-holder-{uuid.uuid4().hex}"
-        get_preemption_controller(_preempt_key(llama_backend)).register(
-            gen_id,
-            tokens = max(1, len(str(prompt_text or "")) // 4),
-            state = ParticipantState.STREAMING_RAW,
-        )
-        return gen_id
-    except Exception:
-        logger.debug("could not count the completions holder", exc_info = True)
-        return None
+    return _openai_llama_count_direct_holder(
+        llama_backend, _prompt_kv_tokens(prompt_text), "cmpl-holder"
+    )
 
 
 def _openai_llama_release_completions_holder(llama_backend, gen_id: Optional[str]) -> None:
@@ -4927,14 +4969,14 @@ async def _aiter_llama_stream_items(
             and not own_parks.parked
         ):
             park_since = None
-            first_token_deadline = max(first_token_deadline, now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S)
+            first_token_deadline = max(first_token_deadline, now + _first_token_timeout_s())
             return
         if park_since is None:
             park_since = now
         if now - park_since < _RAW_PARK_STALL_CAP_S:
             first_token_deadline = max(
                 first_token_deadline,
-                min(now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S, park_since + _RAW_PARK_STALL_CAP_S),
+                min(now + _first_token_timeout_s(), park_since + _RAW_PARK_STALL_CAP_S),
             )
 
     def _post_first_timeout_s() -> Optional[float]:
@@ -4959,7 +5001,7 @@ async def _aiter_llama_stream_items(
         if not await _probe_off_the_loop(park_above.excuses_silence):
             return False
         if waiting_first_item:
-            first_token_deadline = now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S
+            first_token_deadline = now + _first_token_timeout_s()
         else:
             last_item_at = now
         return True
@@ -9538,21 +9580,29 @@ def _direct_llama_request_finished() -> None:
 
 
 @contextmanager
-def _direct_llama_request(counted: bool = True):
+def _direct_llama_request(counted: bool = True, *, kv_tokens: int = 0):
     """Hold the direct-call count for the duration of the block.
 
     The increment is the last statement before the try that decrements it, so no
     caller can leak a permanent +1 by placing the pair itself. ``counted`` False is
-    a no-op, for callers that pick their backend at runtime.
+    a no-op, for callers that pick their backend at runtime. ``kv_tokens`` is what the
+    call can occupy in the cache: given, it is also counted with the preemptor, so a chat
+    decoding beside a caption or OCR call is contended and reads the cache.
     """
     if not counted:
         yield
         return
+    holder = None
+    if kv_tokens:
+        backend = get_llama_cpp_backend()
+        holder = _openai_llama_count_direct_holder(backend, kv_tokens, "direct-holder")
     _direct_llama_request_started()
     try:
         yield
     finally:
         _direct_llama_request_finished()
+        if holder is not None:
+            _openai_llama_release_completions_holder(backend, holder)
 
 
 def _direct_llama_is_busy() -> bool:
@@ -10159,6 +10209,10 @@ def _gguf_request_intent(
         for name in (f.name for f in dataclass_fields(source))
         if hasattr(request, name) and (name != "hf_token" or source.hf_repo)
     }
+    if not is_owner_context():
+        # Exact concurrency is machine-wide and the owner's to set (the settings PUT is
+        # owner-only): another account's load follows the stored setting, not its own field.
+        settings["exact_concurrency"] = None
     settings.update(
         n_ctx = request.max_seq_length,
         chat_template_override = chat_template_override,
@@ -38697,7 +38751,9 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
             _cmpl_holder = None
             _direct_llama_request_started()
             try:
-                _cmpl_holder = _openai_llama_count_completions_holder(llama_backend, prompt_text)
+                _cmpl_holder = _openai_llama_count_completions_holder(
+                    llama_backend, body.get("prompt", "")
+                )
                 req = client.build_request(
                     "POST",
                     target_url,
@@ -38877,7 +38933,9 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
         _cmpl_holder = None
         _direct_llama_request_started()
         try:
-            _cmpl_holder = _openai_llama_count_completions_holder(llama_backend, prompt_text)
+            _cmpl_holder = _openai_llama_count_completions_holder(
+                llama_backend, body.get("prompt", "")
+            )
             try:
                 resp = await _nonstreaming_post_through_park(
                     _client,

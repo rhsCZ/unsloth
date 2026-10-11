@@ -602,6 +602,23 @@ def _serving_backends_snapshot() -> list:
         return list(_serving_backends)
 
 
+# Every backend whose server was launched to park, serving or not: the dataset and Hub assistants
+# build their own and never register as serving, but their parks take the same host RAM.
+_parking_backends: "weakref.WeakSet[LlamaCppBackend]" = weakref.WeakSet()
+
+
+def _note_parking_backend(backend) -> None:
+    with _serving_backends_lock:
+        _parking_backends.add(backend)
+
+
+def _parking_neighbours(backend) -> list:
+    seen = _serving_backends_snapshot()
+    with _serving_backends_lock:
+        seen += [b for b in _parking_backends if all(b is not s for s in seen)]
+    return [b for b in seen if b is not backend]
+
+
 class GgufDownloadCancelled(RuntimeError):
     """Expected signal from a cancelled GGUF download."""
 
@@ -2472,10 +2489,10 @@ def _exact_parking_need_mib(
 
 
 def _available_host_memory_mib() -> Optional[int]:
-    """Host RAM free right now, in MiB, or None where it cannot be read."""
+    """Host RAM this process can still charge, in MiB, or None where it cannot be read. Capped by
+    an enforcing cgroup: inside a container the host-wide reading approves parks the limit kills."""
     try:
-        import psutil
-        return int(psutil.virtual_memory().available // (1024 * 1024))
+        return LlamaCppBackend._available_system_memory_mib()
     except Exception:
         return None
 
@@ -2512,21 +2529,39 @@ _PARKING_HOST_AVAILABLE_FRACTION = 0.25
 
 
 def _total_host_memory_mib() -> Optional[int]:
+    """Host RAM this process may ever charge: total narrowed by an enforcing cgroup's limit."""
     try:
-        import psutil
-        return int(psutil.virtual_memory().total // (1024 * 1024))
+        return LlamaCppBackend._host_memory_capacity_mib()
     except Exception:
         return None
+
+
+def _exact_parks_held_mib() -> int:
+    """What the resident exact models certified and have not parked yet. A plain park past its
+    budget is only re-prefilled, but one that takes an exact model's room breaks its guarantee."""
+    held = 0
+    for other in _parking_neighbours(None):
+        if getattr(other, "_exact_concurrency", None) != _exact.EXACT_STATE_ON:
+            continue
+        try:
+            writes = max(0, int(getattr(other, "_exact_parking_writes", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if writes:
+            held += max(0, writes - _parked_host_mib(other))
+    return held
 
 
 def _host_bounded_parking_mib(need_mib: int) -> int:
     """``need_mib`` capped to what this host can pin without pressure; 0 means do not park.
 
     A park past the budget drops its cells and is re-prefilled, which costs about what the copy
-    would, so a short budget is safe; pinning past the host's headroom is not."""
+    would, so a short budget is safe; pinning past the host's headroom is not, nor into what a
+    resident exact model certified."""
     available = _available_host_memory_mib()
     if available is None:
         return 0
+    available = max(0, available - _exact_parks_held_mib())
     total = _total_host_memory_mib() or available
     reserve = max(_PARKING_HOST_RESERVE_MIB, int(total * _PARKING_HOST_RESERVE_FRACTION))
     cap = min(int(available * _PARKING_HOST_AVAILABLE_FRACTION), available - reserve)
@@ -2659,9 +2694,7 @@ def _exact_host_free_mib(backend) -> Optional[int]:
     if free is None:
         return None
     held = 0
-    for other in _serving_backends_snapshot():
-        if other is backend:
-            continue
+    for other in _parking_neighbours(backend):
         # Every neighbour that may park: an exact one up to the writes it certified, any other
         # up to the budget it was launched with.
         if getattr(other, "_exact_concurrency", None) == _exact.EXACT_STATE_ON:
@@ -2671,9 +2704,12 @@ def _exact_host_free_mib(backend) -> Optional[int]:
         else:
             continue
         try:
-            commitment = max(0, int(commitment or 0))
+            commitment = int(commitment or 0)
         except (TypeError, ValueError):
             continue
+        if commitment < 0:
+            # `--preempt-ram -1` is unlimited: it may park into all of it, so none is certifiable.
+            return 0
         if commitment:
             held += max(0, commitment - _parked_host_mib(other))
     return max(0, int(free) - held)
@@ -34011,6 +34047,8 @@ class LlamaCppBackend:
                     if self._server_launched_parking
                     else None
                 )
+                if self._server_launched_parking:
+                    _note_parking_backend(self)
                 if self._server_preempts_kv:
                     self._server_preempts_kv = self._server_confirms_parking()
                 _preemption.note_server_parking(self._server_preempts_kv and kv_cache_unified, self)

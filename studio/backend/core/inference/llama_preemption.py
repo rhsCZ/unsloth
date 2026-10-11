@@ -19,6 +19,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, runtime_checkable
@@ -48,6 +49,10 @@ PREEMPT_SETTING_AUTO = "auto"
 
 # Whether the loaded llama-server confirmed its own parking. Written at launch and on unload.
 _server_parking_confirmed = False
+# Per backend: helpers and extra model slots run their own llama-server, and one global let
+# loading any of them decide for the server a request is actually routed to.
+_parking_by_backend: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_routed_backend: Optional[Callable[[], object]] = None
 
 
 # The park notices a llama-server built with unslothai/llama.cpp#197 writes on the very stream it
@@ -530,13 +535,31 @@ def preemption_wanted() -> bool:
     return preemption_setting() != PREEMPT_SETTING_OFF
 
 
-def note_server_parking(confirmed: bool) -> None:
-    """Record what the running llama-server reported. Auto preemption follows it."""
+def note_server_parking(confirmed: bool, backend = None) -> None:
+    """Record what ``backend``'s llama-server reported. Auto preemption follows the one the
+    request is routed to; a note with no backend is the process-wide fallback."""
     global _server_parking_confirmed
-    _server_parking_confirmed = bool(confirmed)
+    if backend is None:
+        _server_parking_confirmed = bool(confirmed)
+    else:
+        _parking_by_backend[backend] = bool(confirmed)
+
+
+def set_routed_backend(resolver: Optional[Callable[[], object]]) -> None:
+    """Install the lookup for the backend serving the current request."""
+    global _routed_backend
+    _routed_backend = resolver
 
 
 def server_parking_confirmed() -> bool:
+    resolver = _routed_backend
+    if resolver is not None:
+        try:
+            confirmed = _parking_by_backend.get(resolver())
+        except Exception:
+            confirmed = None
+        if confirmed is not None:
+            return confirmed
     return _server_parking_confirmed
 
 
@@ -553,7 +576,7 @@ def preemption_enabled() -> bool:
         return True
     if setting == PREEMPT_SETTING_OFF:
         return False
-    return _server_parking_confirmed or preempt_mode_setting() == PREEMPT_MODE_STUDIO
+    return server_parking_confirmed() or preempt_mode_setting() == PREEMPT_MODE_STUDIO
 
 
 def preemption_eligible() -> bool:
@@ -1534,7 +1557,13 @@ class PreemptionController:
                 return []
             buffer = self._buffer_locked()
             ceiling = max(0, self._budget - buffer)
-            total = self._committed_locked()
+            # Net of holders already chosen: they are on their way out, and counting them again
+            # would stop a second chat for room the first is already giving back.
+            total = self._committed_locked() - sum(
+                p.tokens
+                for p in self._participants.values()
+                if p.holds_kv and p.state == ParticipantState.PREEMPTING
+            )
             want = max(0, int(needed or 0))
             # The two figures the sweep chooses between, recorded whenever they disagree: a run
             # that overran could have been the ledger drifting low or the sweep never running.

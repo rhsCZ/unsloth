@@ -9006,6 +9006,19 @@ class LlamaCppBackend:
             return False
         return _preemption.resolve_preempt_mode(True) == _preemption.PREEMPT_MODE_SERVER
 
+    @property
+    def server_may_park(self) -> bool:
+        """Whether the running llama-server can hold a slot parked, confirmed or not: what
+        decides that a silent stream may be a park rather than a stall."""
+        if not (
+            getattr(self, "_server_preempts_kv", False)
+            or getattr(self, "_server_launched_parking", False)
+        ):
+            return False
+        if not getattr(self, "_kv_cache_unified", False):
+            return False
+        return _preemption.resolve_preempt_mode(True) == _preemption.PREEMPT_MODE_SERVER
+
     def _server_park_grace(self) -> bool:
         """The AGGREGATE park reading, and the legacy fallback only: `requests_preempted` counts
         every request, so it cannot say that THIS stream is the parked one. A build that writes
@@ -9017,6 +9030,11 @@ class LlamaCppBackend:
         excused an unrelated stream's stall for as long as somebody else stayed parked."""
         if getattr(self, "_server_park_notices", False):
             return False
+        return self._server_park_grace_any()
+
+    def _server_park_grace_any(self) -> bool:
+        """The aggregate reading whatever the build writes: a non-streaming response carries no
+        notices, so on any parking build it is the only signal."""
         try:
             from core.inference.llama_stats import scrape_llama_metrics
 
@@ -20322,6 +20340,7 @@ class LlamaCppBackend:
         self._swa_full = False
         self._kv_cache_unified = False
         self._server_preempts_kv = False
+        self._server_launched_parking = False
         # The diffusion runner is not llama-server and reads no llama.cpp environment, so a
         # previous GGUF's mode must not be reported against it.
         self._requested_exact_concurrency = _exact.EXACT_OFF
@@ -25881,6 +25900,7 @@ class LlamaCppBackend:
             # Nothing parks until a launch names a budget (unslothai/llama.cpp#197), so the
             # capability alone sets nothing; the launch below records what it turned on.
             self._server_preempts_kv = False
+            self._server_launched_parking = False
             self._reserves_micro_batch_outputs = self.reserves_micro_batch_outputs(binary)
             self._resumes_thoughts = self.resumes_thoughts(binary)
 
@@ -29496,7 +29516,8 @@ class LlamaCppBackend:
 
                 server_caps = _launch_caps(binary)
                 self._server_preempts_kv = False
-                _preemption.note_server_parking(False)
+                self._server_launched_parking = False
+                _preemption.note_server_parking(False, self)
 
                 # Before the extras, like the batch pair: a hand-typed flag still
                 # last-wins over the control. Each is gated on the capability
@@ -33891,9 +33912,12 @@ class LlamaCppBackend:
                 # that actually spawned, which the retries can rewrite under the decision above.
                 if _preempt_ram_disabled_in(_last_spawn_cmd or cmd, env = env):
                     self._server_preempts_kv = False
+                # Asked to park even where auto cannot confirm it: such a child still parks, so
+                # its silence is read through the park probe, while admission stays fair share.
+                self._server_launched_parking = self._server_preempts_kv
                 if self._server_preempts_kv:
                     self._server_preempts_kv = self._server_confirms_parking()
-                _preemption.note_server_parking(self._server_preempts_kv and kv_cache_unified)
+                _preemption.note_server_parking(self._server_preempts_kv and kv_cache_unified, self)
                 # Read off the argv that LAUNCHED and the env it launched with, not the intent: respawns rewrite them.
                 self._requested_exact_concurrency = _exact_setting
                 _exact_short = getattr(self, "_exact_parking_short", None)
@@ -35214,7 +35238,8 @@ class LlamaCppBackend:
             self._swa_full = False
             self._kv_cache_unified = False
             self._server_preempts_kv = False
-            _preemption.note_server_parking(False)
+            self._server_launched_parking = False
+            _preemption.note_server_parking(False, self)
             self._requested_exact_concurrency = _exact.EXACT_OFF
             self._exact_concurrency = _exact.EXACT_STATE_OFF
             self._memory_state = None
@@ -37692,7 +37717,7 @@ class LlamaCppBackend:
             first_token_deadline = time.monotonic() + _DEFAULT_FIRST_TOKEN_TIMEOUT_S
             # A swap-capable server that predates the stream notices is silent while it holds
             # a slot parked, so the read wrapper asks before calling that silence a stall.
-            stall_grace = self._server_park_grace if self.server_preempts_kv else None
+            stall_grace = self._server_park_grace if self.server_may_park else None
             with self._stream_with_retry(
                 client,
                 url,
@@ -37765,6 +37790,8 @@ class LlamaCppBackend:
             first_token_deadline = time.monotonic() + _DEFAULT_FIRST_TOKEN_TIMEOUT_S
         last_chunk_at: Optional[float] = None
         last_prefill_progress: Optional[float] = None
+        # When the current park before the first token began; keepalives renew only up to the cap.
+        parked_since: Optional[float] = None
         prefill_sse_buffer = ""
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -37793,8 +37820,18 @@ class LlamaCppBackend:
                         prefill_sse_buffer = prefill_sse_buffer[match.end() :]
                         if event.startswith((": preempt", ": resumed")):
                             # Parked by the server before its first token, and the parked
-                            # keepalive says it is alive: a wait is not a stall.
-                            first_token_deadline = time.monotonic() + _DEFAULT_FIRST_TOKEN_TIMEOUT_S
+                            # keepalive says it is alive: a wait is not a stall, for as long as
+                            # the park cap allows, since a wedged park keeps sending them.
+                            now = time.monotonic()
+                            if event.startswith(": resumed"):
+                                parked_since = None
+                            elif parked_since is None:
+                                parked_since = now
+                            first_token_deadline = now + _DEFAULT_FIRST_TOKEN_TIMEOUT_S
+                            if parked_since is not None:
+                                first_token_deadline = min(
+                                    first_token_deadline, parked_since + _SERVER_PARK_STALL_CAP_S
+                                )
                             continue
                         if LlamaCppBackend._sse_event_has_generated_output(event):
                             starts_output = True
@@ -39168,8 +39205,7 @@ class LlamaCppBackend:
         context_policy: Optional[str] = None,
         compaction_headroom_ratio: Optional[float] = None,
         tool_choice: Any = None,
-        # Append parameters to preserve positional callers.
-        # The callback may block for cache room and returns the replacement output allowance.
+        # Appended for positional callers. May block for cache room; returns the new allowance.
         on_conversation_grew: Optional[Callable[[list, Optional[list]], Optional[int]]] = None,
         on_decode_slot: Optional[Callable[[str, int], None]] = None,
         thinking_budget_tokens: Optional[int] = None,
@@ -39177,7 +39213,7 @@ class LlamaCppBackend:
         deduplicate_tool_calls: bool = True,
         instruction_anchor_ids = None,
         sandbox_level: Optional[str] = None,
-        # Bounds the wire cap of every request the loop sends. Appended after existing hooks.
+        # Bounds the wire cap of every request the loop sends.
         admission_output_allowance: Optional[int] = None,
         # KV-pressure pause signal and the policy that answers it; None keeps the plain stream.
         preempt_event = None,
@@ -39233,6 +39269,7 @@ class LlamaCppBackend:
             normalize_sandbox_level,
             normalize_tool_permissions,
             requires_os_isolation,
+            round_may_prompt,
             runs_without_os_sandbox,
             tool_call_may_prompt,
         )
@@ -41801,36 +41838,15 @@ class LlamaCppBackend:
                         _forced_tool_call_pending = False
 
                 # Whether this round's calls may run at once. Decided BEFORE any is prepared: it has
-                # to hold for the whole round, or a modal lands in front of work already in flight.
-                _approval_gate = (
-                    bool(confirm_tool_calls) and not bypass_permissions and permission_mode != "off"
+                # to hold for the whole round, or a modal lands in front of work already in flight. "off"
+                # still counts an unisolated Python or Terminal call that would ask.
+                _approval_gate = round_may_prompt(
+                    tool_calls,
+                    confirm_tool_calls = bool(confirm_tool_calls),
+                    bypass_permissions = bypass_permissions,
+                    permission_mode = permission_mode,
+                    sandbox_level = sandbox_level,
                 )
-                if _approval_gate and permission_mode == "auto":
-
-                    def _risk_args(raw):
-                        """`is_high_risk_tool_call` reads the arguments as a mapping, but on the wire
-                        they are a JSON string. Anything that will not parse is treated as risky."""
-                        if isinstance(raw, Mapping):
-                            return dict(raw)
-                        if isinstance(raw, str):
-                            try:
-                                parsed = json.loads(raw)
-                            except Exception:
-                                return None
-                            return parsed if isinstance(parsed, dict) else None
-                        return None
-
-                    def _round_call_is_risky(_tc):
-                        _fn = (_tc or {}).get("function") or {}
-                        _args = _risk_args(_fn.get("arguments"))
-                        if _args is None:
-                            return True
-                        try:
-                            return bool(is_high_risk_tool_call(_fn.get("name", ""), _args))
-                        except Exception:
-                            return True
-
-                    _approval_gate = any(_round_call_is_risky(_tc) for _tc in (tool_calls or []))
                 # A round may only overlap when its calls cannot depend on each other's RESULTS.
                 # `prepare_call`'s two such dependencies, `_successful_keys` and
                 # `_completed_one_shot_tools`, are written by `record_result`, so a round with
@@ -43466,8 +43482,7 @@ class LlamaCppBackend:
             except Exception as exc:
                 logger.warning("Could not preflight the rolling context window: %s", exc)
 
-        # Re-cost the final pass: tool results and nudges may have grown since the last round.
-        # It sends no tools catalogue.
+        # Re-cost the final pass (no catalogue): tool results and nudges may have grown since.
 
         stream_payload = {
             "messages": neutralize_control_markup_in_messages(
@@ -43551,8 +43566,7 @@ class LlamaCppBackend:
                 conversation, truncation = _fit_with_instruction_pins(
                     conversation,
                     context_length = self._effective_context_length,
-                    # Pre-respawn window, as the iteration refit: a new window is not a new
-                    # reservation.
+                    # Pre-respawn window: a new window is not a new reservation.
                     max_tokens = _final_fit_max_tokens,
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(

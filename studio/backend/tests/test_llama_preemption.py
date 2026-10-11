@@ -15,6 +15,7 @@ import urllib.request
 import pytest
 
 from core.inference import llama_preemption as preemption
+from core.inference import llama_stats
 from core.inference.llama_admission import LlamaAdmissionConfig, LlamaAdmissionQueue
 from core.inference.llama_cpp import LlamaCppBackend, _CombinedCancelEvent, _interrupt_event
 from core.inference.llama_preemption import (
@@ -412,11 +413,13 @@ class TestTheBatchReserveIsOnlyHeldWhileSomethingPrefills:
         assert c.plan_preemptions(needed = 0), "the growing round's chunk was not covered"
 
         higher = self._c("test://higher")
+        fired = []
         for i in range(self.SLOTS):
             higher.register(f"chat{i}", tokens = 1900, signal = PreemptSignal())
-            higher.observe(f"chat{i}", 1)
+            fired += higher.observe(f"chat{i}", 1)
         assert higher.committed_tokens() == 7604 > self.BUDGET - self.IDLE
-        assert higher.plan_preemptions(needed = 0), "7604 is past the 7416 dynamic ceiling"
+        fired += higher.plan_preemptions(needed = 0)
+        assert fired, "7604 is past the 7416 dynamic ceiling"
 
 
 # ============================================================================== who stops
@@ -852,7 +855,14 @@ class TestTheSlotProbesAreAuthenticated:
             seen.append(request)
             return _Response()
 
-        monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+        class _Opener:
+            open = staticmethod(_urlopen)
+
+        def _proxied(*_a, **_k):
+            raise AssertionError("urlopen honours HTTP_PROXY and would hand the bearer to it")
+
+        monkeypatch.setattr(llama_stats, "_loopback_opener", _Opener)
+        monkeypatch.setattr(urllib.request, "urlopen", _proxied)
         key = {"Authorization": "Bearer secret"}
         fetch_llama_slots("http://127.0.0.1:8080", headers = key)
         assert seen[0].get_header("Authorization") == "Bearer secret"
@@ -861,6 +871,36 @@ class TestTheSlotProbesAreAuthenticated:
         assert erase_llama_slot("http://127.0.0.1:8080", 2, headers = key) == 4096
         assert seen[2].get_header("Authorization") == "Bearer secret"
         assert seen[2].get_method() == "POST"
+
+    def test_a_configured_proxy_never_sees_the_loopback_call(self, monkeypatch):
+        import http.server
+        import threading
+
+        seen = []
+
+        class _Slots(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"[]")
+
+            def log_message(self, *_a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _Slots)
+        threading.Thread(target = server.serve_forever, daemon = True).start()
+        for name in ("HTTP_PROXY", "http_proxy"):
+            monkeypatch.setenv(name, "http://127.0.0.1:9")
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(name, raising = False)
+        try:
+            url = f"http://127.0.0.1:{server.server_port}"
+            assert fetch_llama_slots(url, headers = {"Authorization": "Bearer k"}) == []
+        finally:
+            server.shutdown()
+        assert seen == ["Bearer k"]
 
 
 # ================================================================ the resume grant and waits
@@ -1100,3 +1140,31 @@ class TestALoneChatIsChargedItsNextStepNotABatch:
         assert controller.cannot_ever_fit(7000) is False
         assert controller.room_for("only", 7000) is True
         assert controller.cannot_ever_fit(8192 - 64) is True
+
+
+class TestAChoiceInFlightIsCountedOnce:
+    """A victim already chosen is giving its room back; a later sweep plans net of it."""
+
+    def test_a_second_sweep_does_not_stop_another_chat_for_the_same_room(self):
+        controller = _controller()
+        ceiling = _ceiling(controller)
+        for gen_id in ("a", "b", "c"):
+            _register(controller, gen_id, ceiling // 3)
+        _register(controller, "d", ceiling // 6)
+        first = controller.plan_preemptions(needed = 0)
+        assert [v.gen_id for v in first] == ["d"], "the newest goes first"
+        assert controller.plan_preemptions(needed = 0) == [], (
+            "d's room is already on its way back, so a second sweep must not stop c too"
+        )
+
+    def test_growth_found_after_a_choice_still_gets_planned(self):
+        controller = _controller()
+        ceiling = _ceiling(controller)
+        for gen_id in ("a", "b", "c"):
+            _register(controller, gen_id, ceiling // 3)
+        _register(controller, "d", ceiling // 6)
+        assert [v.gen_id for v in controller.plan_preemptions(needed = 0)] == ["d"]
+        # A sample past the cached reading, as the token path's refresh would bring in.
+        controller.note_resident(ceiling)
+        more = controller.plan_preemptions(needed = 0)
+        assert more and "d" not in [v.gen_id for v in more], "the cache holds more than d frees"

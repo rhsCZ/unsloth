@@ -150,6 +150,7 @@ from core.inference.llama_preemption import (
     preemption_enabled,
     read_slot_occupancy,
     reclaim_idle_slots,
+    set_routed_backend,
 )
 from core.inference.llama_admission import (
     LlamaAdmissionCancelled,
@@ -2164,11 +2165,9 @@ def _openai_llama_admission_output_allowance(
 ) -> int:
     """Reserve output KV, treating caps at or above the per-request window as unstated.
 
-    Unstated requests reserve their full share when the prompt and wire margin fit.
-    Larger prompts receive the flat allowance and a larger charge, reducing concurrency
-    instead of forcing a one-token reply. Only ``preemption_active`` charges less than the
-    share: with no preemptor to take the difference back, a small prompt would overrun the
-    cache beside a large one."""
+    A prompt too large for its share takes the flat allowance (less concurrency), not a one-token
+    reply. Only ``preemption_active`` charges less than the share: with no preemptor to take the
+    difference back, a small prompt would overrun the cache beside a large one."""
     window = context_window or budget
     stated = cap if (cap is not None and cap < window) else None
     if stated is not None and not preemption_active:
@@ -2695,9 +2694,8 @@ def _openai_llama_admission_wire_prompt_tokens(
     markup = None,
     vision: bool = True,
 ) -> int:
-    """Price the sanitized conversation and catalogue actually sent.
-    Exclude audio/video transport bytes and top-level fields already folded into messages.
-    Use the loaded markup profile so pricing matches the builders."""
+    """Price what is actually sent, under the loaded markup profile, without audio/video transport
+    bytes or top-level fields already folded into messages."""
     from core.inference.chat_template_helpers import neutralize_control_markup_in_messages
 
     conversation = neutralize_control_markup_in_messages(conversation, None, markup)
@@ -2752,8 +2750,7 @@ def _openai_llama_admission_charged_prompt_tokens(
     )
 
 
-# Leave room for template overhead and llama-server's next-token check.
-# This margin does not cover arbitrary prompt-estimator undercounts.
+# Template overhead and llama-server's next-token check; not a cover for estimator undercounts.
 _OPENAI_LLAMA_ADMISSION_WIRE_RESERVE_TOKENS = 64
 # A tokenizer count already includes the template, so only the next-token check is left:
 # llama-server stops once n_past + 1 reaches n_ctx.
@@ -3063,8 +3060,11 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
             # after a choice: the reclaim below plans from this reading.
             if controller.contended():
                 _gguf_refresh_residency(controller)
-                if not victims:
-                    victims = controller.plan_preemptions(needed = 0)
+                # Again even after a choice: the fresh reading can show more growth than the
+                # cached one the first victims were picked against.
+                victims = list(victims) + [
+                    v for v in controller.plan_preemptions(needed = 0) if v not in victims
+                ]
             if victims:
                 # Dead residue first: an idle slot's cache belongs to a finished request, so
                 # erasing it costs a future prefix hit where pausing costs a conversation.
@@ -3208,6 +3208,40 @@ def _openai_llama_count_raw_holder(*, llama_backend, lease, gen_id: str) -> None
     except Exception:
         # Bookkeeping must never fail a request that is otherwise fine.
         logger.debug("could not count the raw holder", exc_info = True)
+
+
+def _openai_llama_count_completions_holder(llama_backend, prompt_text) -> Optional[str]:
+    """Count a /v1/completions request as a holder the controller cannot pause.
+
+    It takes no admission lease, but its cells share the unified cache, and unseen it left
+    an admitted chat looking alone: no residency read, no plan, and the pair overran the cache.
+    Charged by its prompt, unmeasured, like a non-streaming raw holder. Returns the id to
+    release, or None when nothing was counted.
+    """
+    try:
+        if not preemption_enabled() or not _openai_llama_preemption_will_apply(
+            llama_backend, _openai_llama_admission_budget(llama_backend)
+        ):
+            return None
+        gen_id = f"cmpl-holder-{uuid.uuid4().hex}"
+        get_preemption_controller(_preempt_key(llama_backend)).register(
+            gen_id,
+            tokens = max(1, len(str(prompt_text or "")) // 4),
+            state = ParticipantState.STREAMING_RAW,
+        )
+        return gen_id
+    except Exception:
+        logger.debug("could not count the completions holder", exc_info = True)
+        return None
+
+
+def _openai_llama_release_completions_holder(llama_backend, gen_id: Optional[str]) -> None:
+    if gen_id is None:
+        return
+    try:
+        get_preemption_controller(_preempt_key(llama_backend)).unregister(gen_id)
+    except Exception:
+        logger.debug("could not release the completions holder", exc_info = True)
 
 
 def _openai_llama_note_raw_measured(*, llama_backend, gen_id: str) -> None:
@@ -3500,13 +3534,12 @@ def _openai_llama_admission_enforced_max_tokens(
     pausable: bool = True,
     prompt_counted: bool = False,
 ) -> Optional[int]:
-    """Enforce the reserved output allowance using the finalized conversation.
-    ``prompt_counted`` marks a given ``prompt_tokens`` as the tokenizer's exact count.
-    Return None for disabled accounting, unpriceable media, or an explicit cap below
-    the context window. Caps at or above the window count as unstated. Where preemption
-    can reclaim, the whole window is offered and the controller is the enforcement.
-    ``pausable`` is about THIS request: a raw relay has no generator to resume from, so it
-    keeps the share unless the server parks raw streams itself."""
+    """Enforce the reserved output allowance on the finalized conversation. None when accounting is
+    off, media is unpriceable, or the caller stated a cap below the window. ``prompt_counted``
+    marks ``prompt_tokens`` as the tokenizer's exact count. Where preemption can reclaim, the
+    whole window is offered and the controller is the enforcement. ``pausable`` is about THIS
+    request: a raw relay has no generator to resume from, so it keeps the share unless the
+    server parks raw streams itself."""
     # Only a count the caller handed in can be exact; one derived below is an estimate.
     counted_given = prompt_tokens is not None
     if capacity is None:
@@ -3870,9 +3903,8 @@ def _openai_llama_admission_recost(
 ) -> Optional[int]:
     """Re-cost the current tool conversation and return its output allowance.
 
-    Waiting releases the old commitment, so it requires reclaimable idle KV or
-    `cache_is_empty`. Otherwise, growth that cannot fit is refused.
-    `wire_tools` is the catalogue actually sent, or None for the final answer.
+    Waiting releases the old commitment, so it needs reclaimable idle KV or `cache_is_empty`;
+    otherwise growth that cannot fit is refused. `wire_tools` is None for the final answer.
 
     `count_prepared_prompt` charges the ledger the tokenizer's exact count of the round.
 
@@ -5070,8 +5102,18 @@ async def _aiter_llama_stream_items(
                 # Before yielding, not before the next read: the consumer may sit
                 # on this item while the first-token deadline is still armed.
                 _set_stream_response_read_timeout(response, _post_first_timeout_s())
-            last_item_at = time.monotonic()
-            park_since = None
+            notice = None if last_item_at is None else _server_park_sse(item)
+            now = time.monotonic()
+            if notice in (_OPENAI_PREEMPT_SSE_PAUSED, _OPENAI_PREEMPT_SSE_KEEPALIVE):
+                # Parked after its first token: the keepalives say it is alive, but only up to
+                # the park cap, or a wedged park would hold the relay open for ever.
+                if park_since is None:
+                    park_since = now
+                if now - park_since < _RAW_PARK_STALL_CAP_S:
+                    last_item_at = now
+            else:
+                last_item_at = now
+                park_since = None
             if park_above is not None:
                 # `aiter_lines` strips the newline the notices are matched on.
                 park_above.feed_line(item)
@@ -5100,11 +5142,14 @@ async def _aiter_llama_stream_items(
 _RAW_PARK_STALL_CAP_S = 1800.0
 
 
-def _raw_park_grace(llama_backend) -> Optional[Callable[[], bool]]:
-    """The `/metrics` park probe for a raw relay, or None when the server does not park."""
-    if not getattr(llama_backend, "server_preempts_kv", False):
+def _raw_park_grace(llama_backend, *, streaming: bool = True) -> Optional[Callable[[], bool]]:
+    """The `/metrics` park probe for a raw relay, or None when the server does not park. A
+    non-streaming response hears no notices, so it always takes the aggregate reading."""
+    if not getattr(llama_backend, "server_may_park", False):
         return None
-    probe = getattr(llama_backend, "_server_park_grace", None)
+    probe = getattr(
+        llama_backend, "_server_park_grace" if streaming else "_server_park_grace_any", None
+    )
     return probe if callable(probe) else None
 
 
@@ -5120,7 +5165,7 @@ async def _nonstreaming_post_through_park(
     closing it would cancel the request upstream. Elsewhere this is the plain POST.
     """
     timeout = _llama_non_streaming_generation_timeout()
-    stall_grace = _raw_park_grace(llama_backend)
+    stall_grace = _raw_park_grace(llama_backend, streaming = False)
     if stall_grace is None or timeout.read is None:
         return await client.post(url, json = json, headers = upstream_headers, timeout = timeout)
     window = float(timeout.read)
@@ -10463,6 +10508,9 @@ register_serving_backend(_llama_cpp_backend)
 def get_llama_cpp_backend() -> LlamaCppBackend:
     slot = routed_slot.get()
     return slot.llama if slot is not None else _llama_cpp_backend
+
+
+set_routed_backend(get_llama_cpp_backend)
 
 
 async def _route_to_extra_slot(requested: Optional[str]) -> Optional[_ExtraSlot]:
@@ -38578,8 +38626,10 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
             _tracker.__enter__()
             # Must stay the last statement before the try that decrements it: a raise in
             # between leaks a permanent +1, and there is no reset hook.
+            _cmpl_holder = None
             _direct_llama_request_started()
             try:
+                _cmpl_holder = _openai_llama_count_completions_holder(llama_backend, prompt_text)
                 req = client.build_request(
                     "POST",
                     target_url,
@@ -38710,6 +38760,7 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                         client = client,
                     )
                 finally:
+                    _openai_llama_release_completions_holder(llama_backend, _cmpl_holder)
                     _direct_llama_request_finished()
                     _tracker.__exit__(None, None, None)
 
@@ -38730,8 +38781,10 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                 client = _client,
             )
         )
+        _cmpl_holder = None
         _direct_llama_request_started()
         try:
+            _cmpl_holder = _openai_llama_count_completions_holder(llama_backend, prompt_text)
             try:
                 resp = await _nonstreaming_post_through_park(
                     _client,
@@ -38765,6 +38818,7 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                 except Exception:
                     pass
             finally:
+                _openai_llama_release_completions_holder(llama_backend, _cmpl_holder)
                 _direct_llama_request_finished()
                 _tracker.__exit__(None, None, None)
 

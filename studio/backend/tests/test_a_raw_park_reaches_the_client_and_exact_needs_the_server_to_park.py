@@ -77,19 +77,35 @@ class TestARawStreamForwardsTheServersPark:
 
     def test_a_recompute_the_server_only_counted_reaches_the_translated_relays(self):
         # The Responses and Anthropic relays rebuild the final object, dropping its `preempt`
-        # field, so a build that counts a recompute without writing the notice has it
-        # synthesised there, once, as the chat path does.
+        # field, and the chat passthrough forwards it to a frontend that reads only the
+        # comment, so a build that counts a recompute without writing the notice has it
+        # synthesised in all three, once, as the chat path does.
         assert inference._server_recompute_counted({"preempt": {"parks": 1, "recomputes": 1}})
         assert not inference._server_recompute_counted({"preempt": {"parks": 2, "recomputes": 0}})
         assert not inference._server_recompute_counted({"preempt": {"recomputes": "x"}})
         assert not inference._server_recompute_counted({"choices": []})
         assert not inference._server_recompute_counted("data: {}")
-        for relay in (inference._responses_stream, inference._anthropic_passthrough_stream):
+        for relay in (
+            inference._responses_stream,
+            inference._anthropic_passthrough_stream,
+            inference._openai_passthrough_stream_admitted,
+        ):
             source = inspect.getsource(relay)
             assert source.count("_raw_saw_recompute = False") == 1
             assert "_raw_saw_recompute |= _park == _OPENAI_PREEMPT_SSE_RECOMPUTED" in source
             assert "if not _raw_saw_recompute and _server_recompute_counted(" in source
             assert source.count("yield _OPENAI_PREEMPT_SSE_RECOMPUTED") == 1
+
+    def test_the_completions_relay_says_a_counted_recompute_once(self):
+        # It forwards raw events, but a client reading the normalized `: preempt-*` comments
+        # learns of a re-prefill only from the comment, so it is synthesized here too.
+        source = inspect.getsource(inference.openai_completions)
+        assert source.count("_cmpl_saw_recompute = False") == 1
+        assert "_cmpl_saw_recompute |= _park == _OPENAI_PREEMPT_SSE_RECOMPUTED" in source
+        assert (
+            source.count("not _cmpl_saw_recompute") == 2
+        ), "the event loop and the trailing buffer"
+        assert source.count("yield _OPENAI_PREEMPT_SSE_RECOMPUTED.encode(") == 2
 
     def test_every_raw_loop_asks(self):
         """One relay per raw loop: Responses, Anthropic passthrough, chat passthrough and the
@@ -357,7 +373,7 @@ class TestTheNamedBudgetIsJudged:
         assert "_exact_cap = _named_preempt_ram_mib(" in window
         assert "_exact_cap = _PREEMPT_RAM_DEFAULT_MIB" in window
         assert "_exact_writes = min(_exact_cap, _exact_writes)" in window
-        assert "_available_host_memory_mib()" in window
+        assert "_exact_host_free_mib(self)" in window
         assert "_exact_writes > _host_free_mib" in window
         assert "self._exact_host_short = (_exact_writes, _host_free_mib)" in window
         assert "if _exact_setting == _exact.EXACT_AUTO: _exact_wanted = False" in window
@@ -1540,7 +1556,7 @@ class TestParkingIsOffUntilTheLaunchAsksForIt:
 class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
     """The exact launch used to append ``--preempt-ram -1`` for an auto-fit context, before the
     running server had confirmed the mode, and every way the attempt is abandoned keeps that argv
-    (the refusal rung relaunches the same command; a build ignoring the variable never relaunches).
+    (a build ignoring the variable never relaunches; the refusal rung now relaunches on the host-bounded budget).
     A server with no exact concurrency then parked into unbounded host RAM. So the launch names the
     unsized budget for a pool it cannot measure, and judges that figure after launch."""
 
@@ -1559,15 +1575,18 @@ class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
         assert marked < judged
         assert "self._exact_pool_unknown = False" not in source[marked:judged]
 
-    def test_the_refusal_rung_relaunches_the_same_argv_with_only_the_env_changed(self):
-        # Why a generated flag had to go: the fallback rebuilds nothing.
+    def test_the_refusal_rung_relaunches_on_the_host_bounded_budget(self):
+        # The exact budget is sized whole, exempt from the host bound because exact mode judges
+        # a short budget itself. The plain server the refusal leaves behind is not exact, so its
+        # budget is bounded to the host before the relaunch, as the preflight shortage does.
         drop = inspect.getsource(LlamaCppBackend._drop_exact_after_refusal)
         assert "apply_child_env(env, on = False)" in drop
         spawn = inspect.getsource(LlamaCppBackend.load_model)
         rung = spawn.index("if not _did_exact_retry and self._drop_exact_after_refusal(")
-        window = spawn[rung : rung + 900]
+        window = spawn[rung : rung + 1400]
         assert "continue" in window
-        assert "run_cmd" not in window.split("continue")[0]
+        before = window.split("continue")[0]
+        assert "_rebound_named_parking_budget(run_cmd, _exact_budget)" in before
 
     def test_a_short_budget_is_reported_as_the_mode_running_short_not_as_absent(self):
         # The child keeps the mode after a late shortfall, so the warning, and the `on`

@@ -14,9 +14,23 @@ import torch.distributed as dist
 try:
     from torch.distributed.tensor.experimental import context_parallel
     from torch.distributed.device_mesh import DeviceMesh
+    from torch.distributed.tensor import DTensor
 except (ImportError, AttributeError):
     context_parallel = None
     DeviceMesh = None
+    DTensor = None
+
+
+def _unregister_cp_sharding_rules() -> None:
+    # torch 2.10 - 2.12 register CP sharding rules and skip removing them when the step raises.
+    try:
+        from torch.distributed.tensor.experimental._context_parallel._sharding_rules import (
+            unregister_cp_sharding_rules,
+        )
+    except ImportError:
+        return
+    unregister_cp_sharding_rules(clear_the_cache = False)
+
 
 from .device_type import DEVICE_TYPE_TORCH
 
@@ -124,8 +138,12 @@ class ContextParallelManager:
         ]
         global _ACTIVE_MANAGER
         previous, _ACTIVE_MANAGER = _ACTIVE_MANAGER, self
-        # torch < 2.13 does not restore SDPA when the step raises (OOM, KeyboardInterrupt).
+        # torch < 2.13 does not tear down its CP dispatcher (SDPA patch, DTensor handlers,
+        # sharding rules) when the step raises (OOM, KeyboardInterrupt, a caught eval error).
         sdpa = F.scaled_dot_product_attention
+        dispatcher = getattr(DTensor, "_op_dispatcher", None)
+        handlers = getattr(dispatcher, "_custom_op_handlers", None)
+        raised = False
         try:
             with context_parallel(
                 self.mesh,
@@ -134,9 +152,16 @@ class ContextParallelManager:
                 no_restore_buffers = set(buffers),
             ):
                 yield
+        except BaseException:
+            raised = True
+            raise
         finally:
             _ACTIVE_MANAGER = previous
             F.scaled_dot_product_attention = sdpa
+            if raised:
+                if handlers is not None:
+                    dispatcher._custom_op_handlers = handlers
+                _unregister_cp_sharding_rules()
 
 
 def _refuse_iterable_datasets(*datasets) -> None:
@@ -223,6 +248,9 @@ def patch_sft_trainer() -> None:
         if size <= 1:
             _install_accelerator_state(self)
             return
+        # train() would swap in a fresh model without the attention hooks or the support check.
+        if getattr(self, "model_init", None) is not None:
+            raise NotImplementedError("Unsloth: context parallelism does not support model_init.")
         if context_parallel is None:
             raise RuntimeError("Unsloth: context_parallel_size > 1 needs PyTorch >= 2.7.")
         if not (dist.is_available() and dist.is_initialized()):
@@ -333,7 +361,16 @@ def patch_sft_trainer() -> None:
     @functools.wraps(original_evaluate)
     def patched_evaluate(self, *args, **kwargs):
         if getattr(self, "_context_parallel_manager", None) is not None:
-            _refuse_iterable_datasets(args[0] if args else kwargs.get("eval_dataset"))
+            eval_dataset = args[0] if args else kwargs.get("eval_dataset")
+            # None means the trainer's current eval_dataset (it may have been replaced); a str names one.
+            if eval_dataset is None or isinstance(eval_dataset, str):
+                current = self.eval_dataset
+                eval_dataset = (
+                    current.get(eval_dataset)
+                    if isinstance(eval_dataset, str) and isinstance(current, dict)
+                    else current
+                )
+            _refuse_iterable_datasets(eval_dataset)
         _install_accelerator_state(self)
         return original_evaluate(self, *args, **kwargs)
 

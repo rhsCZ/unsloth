@@ -667,3 +667,54 @@ def test_null_inputs_embeds_placeholder_is_allowed():
     inputs = {"input_ids": torch.ones(1, 4, dtype = torch.long), "inputs_embeds": None}
     _manager()._prepare_inputs(inputs)
     assert inputs["position_ids"].shape == (1, 4)
+
+
+def test_replaced_iterable_eval_dataset_is_refused_at_evaluate(monkeypatch):
+    class Stream(torch.utils.data.IterableDataset):
+        def __iter__(self):
+            return iter(())
+
+    Trainer = _patched_trainer(monkeypatch)
+    trainer = object.__new__(Trainer)
+    trainer._context_parallel_manager = _manager()
+    trainer.eval_dataset = Stream()
+    with pytest.raises(NotImplementedError, match = "iterable datasets"):
+        trainer.evaluate()
+    trainer.eval_dataset = {"a": [1], "b": Stream()}
+    with pytest.raises(NotImplementedError, match = "iterable datasets"):
+        trainer.evaluate("b")
+    assert trainer.evaluate("a") == "evaluated"
+
+
+def test_model_init_is_refused(monkeypatch):
+    import types
+
+    _cp_env(monkeypatch)
+    args = types.SimpleNamespace(context_parallel_size = 2, label_smoothing_factor = 0.0)
+    Trainer = _patched_trainer(monkeypatch, args = args, model_init = lambda: None)
+    with pytest.raises(NotImplementedError, match = "model_init"):
+        Trainer()
+
+
+def test_cp_dtensor_dispatcher_is_torn_down_when_the_step_raises(monkeypatch):
+    dispatcher = cp.DTensor._op_dispatcher
+    original = dispatcher._custom_op_handlers
+    unregistered = []
+    monkeypatch.setattr(cp, "_unregister_cp_sharding_rules", lambda: unregistered.append(1))
+
+    @contextlib.contextmanager
+    def leaky(mesh, buffers, buffer_seq_dims, no_restore_buffers):
+        dispatcher._custom_op_handlers = {**original, "cp": None}  # torch < 2.13: no finally
+        yield
+        dispatcher._custom_op_handlers = original
+
+    monkeypatch.setattr(cp, "context_parallel", leaky)
+    manager = _manager()
+    manager.mesh = None
+    with manager.apply({"input_ids": torch.ones(1, 4, dtype = torch.long)}):
+        pass
+    assert dispatcher._custom_op_handlers is original and unregistered == []
+    with pytest.raises(RuntimeError):
+        with manager.apply({"input_ids": torch.ones(1, 4, dtype = torch.long)}):
+            raise RuntimeError("OOM")
+    assert dispatcher._custom_op_handlers is original and unregistered == [1]

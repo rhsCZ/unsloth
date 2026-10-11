@@ -188,6 +188,8 @@ def _build_sft_config(SFTConfig, args, is_mlx, bf16_supported):
     )
     if getattr(args, "context_parallel_size", 1) > 1:
         config_kwargs["context_parallel_size"] = args.context_parallel_size
+        # Required under CP; older transformers releases default it to False.
+        config_kwargs["average_tokens_across_devices"] = True
     if is_mlx:
         if args.per_device_eval_batch_size != 4:
             print("Warning: --per_device_eval_batch_size is ignored on MLX without eval data.")

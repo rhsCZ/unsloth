@@ -80,7 +80,7 @@ class ContextParallelManager:
 
     def _prepare_inputs(self, inputs: dict) -> None:
         input_ids = inputs.get("input_ids")
-        if not isinstance(input_ids, torch.Tensor) or "inputs_embeds" in inputs:
+        if not isinstance(input_ids, torch.Tensor) or inputs.get("inputs_embeds") is not None:
             raise ValueError(
                 "Unsloth: context parallelism needs input_ids batches (not inputs_embeds)."
             )
@@ -149,6 +149,23 @@ def _refuse_iterable_datasets(*datasets) -> None:
                 )
 
 
+def _cp_gather_for_metrics(accelerator, size: int):
+    # CP peers return the same reduced loss: keep one copy per group, else accelerate's
+    # remainder truncation of the last batch keeps CP duplicates and drops other replicas.
+    def gather(tensor, *args, **kwargs):
+        if not isinstance(tensor, torch.Tensor) or tensor.ndim == 0:
+            return accelerator.gather_for_metrics(tensor, *args, **kwargs)
+        gathered = accelerator.gather(tensor)
+        # Ranks are (dp_replicate, cp) row-major, as in ContextParallelManager's mesh.
+        gathered = gathered.reshape(-1, size, *tensor.shape)[:, 0].reshape(-1, *tensor.shape[1:])
+        state = accelerator.gradient_state
+        if state.end_of_dataloader and state.remainder > 0:
+            gathered = gathered[: state.remainder]
+        return gathered
+
+    return gather
+
+
 def patch_sft_trainer() -> None:
     import trl
 
@@ -161,6 +178,7 @@ def patch_sft_trainer() -> None:
     original_training_step = trainer_cls.training_step
     original_train = trainer_cls.train
     original_evaluate = trainer_cls.evaluate
+    original_evaluation_loop = trainer_cls.evaluation_loop
 
     def _install_accelerator_state(self):
         manager = getattr(self, "_context_parallel_manager", None)
@@ -301,6 +319,9 @@ def patch_sft_trainer() -> None:
 
     @functools.wraps(original_train)
     def patched_train(self, *args, **kwargs):
+        if getattr(self, "_context_parallel_manager", None) is not None:
+            # train_dataset may have been replaced after __init__ checked it.
+            _refuse_iterable_datasets(getattr(self, "train_dataset", None))
         _install_accelerator_state(self)
         return original_train(self, *args, **kwargs)
 
@@ -310,6 +331,14 @@ def patch_sft_trainer() -> None:
             _refuse_iterable_datasets(args[0] if args else kwargs.get("eval_dataset"))
         _install_accelerator_state(self)
         return original_evaluate(self, *args, **kwargs)
+
+    @functools.wraps(original_evaluation_loop)
+    def patched_evaluation_loop(self, *args, **kwargs):
+        manager = getattr(self, "_context_parallel_manager", None)
+        if manager is not None:
+            # transformers 4.x resets gather_function after every loop, so set it per loop.
+            self.gather_function = _cp_gather_for_metrics(self.accelerator, manager.size)
+        return original_evaluation_loop(self, *args, **kwargs)
 
     @functools.wraps(original_training_step)
     def patched_training_step(self, model, inputs, *args, **kwargs):
@@ -328,5 +357,6 @@ def patch_sft_trainer() -> None:
     trainer_cls.prediction_step = patched_prediction_step
     trainer_cls.train = patched_train
     trainer_cls.evaluate = patched_evaluate
+    trainer_cls.evaluation_loop = patched_evaluation_loop
     trainer_cls.training_step = patched_training_step
     trainer_cls.__unsloth_context_parallel__ = True

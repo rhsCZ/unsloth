@@ -142,6 +142,9 @@ def test_training_step_divides_the_pre_shard_token_count_by_cp_size(monkeypatch)
         def evaluate(self):
             pass
 
+        def evaluation_loop(self, *a, **k):
+            pass
+
     import trl
 
     monkeypatch.setattr(trl, "SFTTrainer", Trainer)
@@ -262,6 +265,9 @@ def _patched_trainer(monkeypatch, **init_attrs):
 
         def evaluate(self, *a, **k):
             return "evaluated"
+
+        def evaluation_loop(self, *a, **k):
+            return self.gather_function(torch.arange(1.0, 3.0))
 
     monkeypatch.setattr(trl, "SFTTrainer", Trainer)
     cp.patch_sft_trainer()
@@ -621,3 +627,43 @@ def test_sdpa_is_restored_when_the_cp_step_raises(monkeypatch):
         with manager.apply({"input_ids": torch.ones(1, 4, dtype = torch.long)}):
             raise RuntimeError("OOM")
     assert F.scaled_dot_product_attention is original
+
+
+@pytest.mark.parametrize("remainder", [0, 3])
+def test_eval_gather_keeps_one_loss_per_cp_group(monkeypatch, remainder):
+    import types
+
+    # 3 replicas x CP 2; each rank returns its 2 per-example losses, CP peers identical.
+    per_rank = [torch.tensor([10.0 * r + 1, 10.0 * r + 2]) for r in (0, 0, 1, 1, 2, 2)]
+    accelerator = types.SimpleNamespace(
+        gather = lambda t: torch.cat(per_rank),
+        gather_for_metrics = lambda t, *a, **k: t,
+        gradient_state = types.SimpleNamespace(end_of_dataloader = True, remainder = remainder),
+    )
+    Trainer = _patched_trainer(monkeypatch)
+    trainer = object.__new__(Trainer)
+    trainer.accelerator = accelerator
+    trainer._context_parallel_manager = _manager(size = 2)
+    out = trainer.evaluation_loop()
+    # One copy per replica, then the last-batch truncation counts replicas, not CP duplicates.
+    expected = [1.0, 2.0, 11.0, 12.0, 21.0, 22.0]
+    assert out.tolist() == (expected[:remainder] if remainder else expected)
+
+
+def test_replaced_iterable_train_dataset_is_refused_at_train(monkeypatch):
+    class Stream(torch.utils.data.IterableDataset):
+        def __iter__(self):
+            return iter(())
+
+    Trainer = _patched_trainer(monkeypatch)
+    trainer = object.__new__(Trainer)
+    trainer._context_parallel_manager = _manager()
+    trainer.train_dataset = Stream()
+    with pytest.raises(NotImplementedError, match = "iterable datasets"):
+        trainer.train()
+
+
+def test_null_inputs_embeds_placeholder_is_allowed():
+    inputs = {"input_ids": torch.ones(1, 4, dtype = torch.long), "inputs_embeds": None}
+    _manager()._prepare_inputs(inputs)
+    assert inputs["position_ids"].shape == (1, 4)

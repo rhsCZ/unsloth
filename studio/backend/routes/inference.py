@@ -3156,6 +3156,21 @@ def _openai_llama_note_self_erased(llama_backend, parked: Optional[dict]) -> Non
         logger.debug("could not record the approval erase", exc_info = True)
 
 
+def _openai_llama_self_erased(llama_backend, gen_id: str) -> bool:
+    """Whether a reclaim took this holder's cells since it last decoded. The route's own
+    approval erase sets its flag; the generic idle-slot reclaim tells only the ledger, and a
+    round recosting after it must be allowed to wait for room as it would after its own."""
+    if not preemption_enabled():
+        return False
+    try:
+        participant = get_preemption_controller(_preempt_key(llama_backend)).participant(gen_id)
+    except Exception:
+        return False
+    return participant is not None and bool(
+        participant.cells_reclaimed or participant.replay_pending
+    )
+
+
 def _openai_llama_publish_round_charge(
     *,
     llama_backend,
@@ -3165,6 +3180,7 @@ def _openai_llama_publish_round_charge(
     conversation,
     rendered_tools,
     observe_tokens,
+    counted_prompt_tokens: Optional[int] = None,
 ) -> None:
     """Hand a tool round's re-costed charge to the preemptor, then sweep on it.
 
@@ -3187,6 +3203,9 @@ def _openai_llama_publish_round_charge(
     catalogue, which is deliberate and separate: a charge may cover what a request does not
     send, a residency figure may not.
 
+    ``counted_prompt_tokens`` is the recost's tokenizer count of what the round sends, where it
+    took one: estimated again, dense text undercounts and overwrites the count arming used.
+
     Nothing to publish to when the switch is off: there is no participant, and
     ``observe_tokens`` is None on that path for the reason
     ``_openai_llama_inert_residency_observer`` gives.
@@ -3207,6 +3226,7 @@ def _openai_llama_publish_round_charge(
                 image_tokens = _openai_llama_admission_image_tokens(llama_backend),
                 injected_tools = rendered_tools,
                 markup = _openai_llama_admission_markup(llama_backend),
+                counted_prompt_tokens = counted_prompt_tokens,
             ),
         )
         observe_tokens(0)
@@ -3278,6 +3298,46 @@ def _plan_for_unpausable_holder(controller, gen_id: str) -> None:
             gen_id = gen_id,
             preempted = ",".join(v.gen_id for v in victims),
         )
+        # Kept for the route to wait on: they decode into their cells until their streams see
+        # the signal, and a prompt sent first can outrun llama-server's KV-full retries.
+        # Not one parked on a tool: it never reads the signal, only an erase frees it.
+        holder = controller.participant(gen_id)
+        if holder is not None:
+            holder.awaiting_victims = [v.gen_id for v in victims if not v.parked_on_a_tool]
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # A worker thread (a caption or OCR call): wait here, nothing else is on it.
+            _openai_llama_wait_for_victims(controller, gen_id)
+
+
+# How long an unpausable holder waits for the chats its plan paused to let go before it sends
+# anyway, as it did before. A pause lands within a token or two of the signal.
+_UNPAUSABLE_VICTIM_WAIT_S = 2.0
+
+
+def _openai_llama_wait_for_victims(controller, gen_id: str) -> None:
+    victims = controller.take_awaited_victims(gen_id)
+    if victims and not controller.wait_released(victims, _UNPAUSABLE_VICTIM_WAIT_S):
+        _llama_preemption_log(
+            "raw-holder-victims-late", level = "debug", gen_id = gen_id, victims = ",".join(victims)
+        )
+
+
+async def _openai_llama_let_victims_go(llama_backend, gen_id: Optional[str]) -> None:
+    """Before an unpausable request goes upstream, wait for the chats its plan paused.
+
+    Off the loop: a paused chat's stream is advanced from it, so blocking it here would keep
+    the victim from ever seeing its signal. Nothing to wait on is a no-op."""
+    if gen_id is None or not preemption_enabled():
+        return
+    try:
+        controller = get_preemption_controller(_preempt_key(llama_backend))
+        if controller.participant(gen_id) is None:
+            return
+        await asyncio.to_thread(_openai_llama_wait_for_victims, controller, gen_id)
+    except Exception:
+        logger.debug("could not wait for the unpausable holder's victims", exc_info = True)
 
 
 def _prompt_kv_tokens(prompt) -> int:
@@ -4008,13 +4068,15 @@ def _openai_llama_admission_recost(
     wire_tools = None,
     count_prepared_prompt: bool = False,
     cache_is_empty: bool = False,
+    counted_out: Optional[dict] = None,
 ) -> Optional[int]:
     """Re-cost the current tool conversation and return its output allowance.
 
     Waiting releases the old commitment, so it needs reclaimable idle KV or `cache_is_empty`;
     otherwise growth that cannot fit is refused. `wire_tools` is None for the final answer.
 
-    `count_prepared_prompt` charges the ledger the tokenizer's exact count of the round.
+    `count_prepared_prompt` charges the ledger the tokenizer's exact count of the round, and
+    `counted_out["prompt"]` gets that count of what the round sends, for the preemptor.
 
     Raise LlamaAdmissionRecostRefused before dispatching unreserved growth, or
     LlamaAdmissionCancelled on Stop/release. None preserves the current allowance."""
@@ -4067,6 +4129,8 @@ def _openai_llama_admission_recost(
                 vision = vision,
             )
         )
+        if counted_out is not None and wire_counted:
+            counted_out["prompt"] = wire_prompt_tokens
         # Reading "Max" literally here would put the run back on the whole cache at its
         # first round boundary.
         share = max(1, budget // max(1, capacity))
@@ -9669,7 +9733,8 @@ def _direct_llama_request(counted: bool = True, *, kv_tokens: int = 0):
         holder = _openai_llama_count_direct_holder(backend, kv_tokens, "direct-holder")
     _direct_llama_request_started()
     try:
-        yield
+        # The holder's id, for a caller on the event loop to wait on its victims with.
+        yield holder
     finally:
         _direct_llama_request_finished()
         if holder is not None:
@@ -24579,7 +24644,10 @@ async def _generate_tts_wav(
         # of the request timeout after the chat had already reported it stopped.
         _audio_watcher = asyncio.create_task(_await_disconnect_then_cancel(request, _audio_cancel))
         try:
-            with _direct_llama_request(_direct_llama_tts, kv_tokens = _direct_llama_kv_tokens):
+            with _direct_llama_request(
+                _direct_llama_tts, kv_tokens = _direct_llama_kv_tokens
+            ) as _tts_holder:
+                await _openai_llama_let_victims_go(get_llama_cpp_backend(), _tts_holder)
                 wav_bytes, sample_rate = await asyncio.to_thread(gen)
         except Exception as e:
             # An idle auto-unload cancels through the backend without setting this route's event.
@@ -33367,6 +33435,7 @@ async def produce_openai_chat_completions(
                     erased = _gguf_decode["erased"]
                     _gguf_decode["slot"] = None
                     _gguf_decode["erased"] = False
+                _round_counted: dict = {}
                 # RE-COST FIRST: the publish below reads `lease.tokens`, and the recost is
                 # what grows it for the round that just began, so reading it first swept on
                 # the PREVIOUS round's figure -- at exactly the boundary where the prompt
@@ -33389,8 +33458,11 @@ async def produce_openai_chat_completions(
                     # A round waiting for cache room must still answer Stop. Same event
                     # the loop polls each iteration, so a wait ends where a cancel would.
                     cancel_event = cancel_event,
-                    # Erased cells make yielding honest, so a grown round may wait.
-                    cache_is_empty = erased,
+                    # Erased cells make yielding honest, so a grown round may wait, whichever
+                    # erase took them.
+                    cache_is_empty = erased
+                    or _openai_llama_self_erased(llama_backend, completion_id),
+                    counted_out = _round_counted,
                 )
                 _openai_llama_publish_round_charge(
                     llama_backend = llama_backend,
@@ -33401,6 +33473,7 @@ async def produce_openai_chat_completions(
                     # What this round SENDS: None on the final pass, which renders none.
                     rendered_tools = round_tools,
                     observe_tokens = _gguf_observe_tokens,
+                    counted_prompt_tokens = _round_counted.get("prompt"),
                 )
                 return _recosted_allowance
 
@@ -38849,6 +38922,9 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                 _cmpl_holder = _openai_llama_count_completions_holder(
                     llama_backend, body.get("prompt", "")
                 )
+                # The chats its plan paused let go first: they hold their cells until their
+                # streams see the signal.
+                await _openai_llama_let_victims_go(llama_backend, _cmpl_holder)
                 req = client.build_request(
                     "POST",
                     target_url,
@@ -39031,6 +39107,7 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
             _cmpl_holder = _openai_llama_count_completions_holder(
                 llama_backend, body.get("prompt", "")
             )
+            await _openai_llama_let_victims_go(llama_backend, _cmpl_holder)
             try:
                 resp = await _nonstreaming_post_through_park(
                     _client,
@@ -41870,6 +41947,7 @@ async def _responses_stream(
                 gen_id = resp_id,
                 payload = chat_req,
             )
+            await _openai_llama_let_victims_go(llama_backend, resp_id)
             iterator = event_generator()
             stream_started = True
             try:
@@ -44071,6 +44149,8 @@ async def anthropic_messages(
             # With the lease in hand, not beside the reservation: arming a generation that is
             # still queued returns None and it never arms at all.
             _arm_anthropic(reservation, raw = raw)
+            if raw:
+                await _openai_llama_let_victims_go(llama_backend, message_id)
             body_started = True
             async for chunk in orig_body:
                 yield chunk
@@ -44151,6 +44231,8 @@ async def anthropic_messages(
             injected_tools = openai_tools,
             wire_tools = round_tools,
             cancel_event = cancel_event,
+            # Erased by an idle-slot reclaim while parked: yielding is honest, so it may wait.
+            cache_is_empty = _openai_llama_self_erased(llama_backend, message_id),
         )
         _openai_llama_publish_round_charge(
             llama_backend = llama_backend,
@@ -44256,6 +44338,8 @@ async def anthropic_messages(
             # With the lease in hand, exactly as the streaming wrapper does. Only that wrapper
             # called this, so a non-streaming /v1/messages request ran with no participant.
             _arm_anthropic(reservation, raw = raw)
+            if raw:
+                await _openai_llama_let_victims_go(llama_backend, message_id)
             # Registered only once admitted: a queued request is not holding
             # llama-server, so it has no business blocking a swap.
             monitored = await _tracked_anthropic_non_streaming(coro)
@@ -47137,6 +47221,7 @@ async def _openai_passthrough_stream_admitted(
         gen_id = completion_id,
         payload = payload,
     )
+    await _openai_llama_let_victims_go(llama_backend, completion_id)
     target_url = f"{llama_backend.base_url}/v1/chat/completions"
     upstream_headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend)
     # A mid-stream llama-server error keeps HTTP 200, so flag the scope when one is seen: the
@@ -48133,6 +48218,7 @@ async def _openai_passthrough_non_streaming(
             gen_id = _raw_gen_id,
             payload = payload,
         )
+        await _openai_llama_let_victims_go(llama_backend, _raw_gen_id)
         return await _openai_passthrough_non_streaming_upstream(
             llama_backend,
             payload,

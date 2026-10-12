@@ -2995,13 +2995,18 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
         # Whether this reading's residue was already offered: see `_gguf_idle_residue_wanted`.
         _gguf_slots_seen["reclaim_tried"] = needed > 0
         if needed > 0 and occupancy.get("idle"):
+            _maybe_erased: list = []
             freed = reclaim_idle_slots(
                 occupancy,
                 lambda slot_id: erase_llama_slot(
                     base, slot_id, headers = _llama_slot_headers(llama_backend)
                 ),
                 needed = needed,
+                recheck = lambda: fetch_llama_slots(base, headers = _llama_slot_headers(llama_backend)),
+                ambiguous = _maybe_erased,
             )
+            if _maybe_erased:
+                controller.note_cells_possibly_erased(parked_before)
             if freed:
                 _llama_preemption_log(
                     "reclaimed-idle-early",
@@ -3090,13 +3095,20 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
                 occupancy = _gguf_slots_seen.get("occupancy")
                 if base and occupancy:
                     _idle_tokens = int(occupancy.get("idle_tokens") or 0)
+                    _maybe_erased: list = []
                     freed = reclaim_idle_slots(
                         occupancy,
                         lambda slot_id: erase_llama_slot(
                             base, slot_id, headers = _llama_slot_headers(llama_backend)
                         ),
                         needed = sum(v.tokens for v in victims),
+                        recheck = lambda: fetch_llama_slots(
+                            base, headers = _llama_slot_headers(llama_backend)
+                        ),
+                        ambiguous = _maybe_erased,
                     )
+                    if _maybe_erased:
+                        controller.note_cells_possibly_erased(_gguf_slots_seen.get("parked"))
                     if freed:
                         _llama_preemption_log("reclaimed-idle", freed = freed, gen_id = completion_id)
                         # ONLY when every idle slot went: `reclaim_idle_slots` stops at
@@ -3319,37 +3331,73 @@ def _plan_for_unpausable_holder(controller, gen_id: str) -> None:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            # A worker thread (a caption or OCR call): wait here, nothing else is on it.
-            _openai_llama_wait_for_victims(controller, gen_id)
+            # A worker thread (a caption or OCR call): wait here, nothing else is on it, and
+            # refuse it as the loop's callers are when the victims stay wedged.
+            if not _openai_llama_wait_for_victims(controller, gen_id):
+                raise LlamaAdmissionTimeout(
+                    "Timed out waiting for the local llama-server cache to free room for this "
+                    "request"
+                )
 
 
-# How long an unpausable holder waits for the chats its plan paused to let go before it sends
-# anyway, as it did before. A pause lands within a token or two of the signal.
+# How long an unpausable holder waits for the chats its plan paused to let go. A pause lands
+# within a token or two of the signal, so past the first figure it keeps waiting only while the
+# cache still has no room for it, and past the second the victims are wedged: the holder is
+# refused rather than sent into cells they still hold, where its prefill overflows the cache.
 _UNPAUSABLE_VICTIM_WAIT_S = 2.0
+_UNPAUSABLE_VICTIM_HARD_WAIT_S = 60.0
 
 
-def _openai_llama_wait_for_victims(controller, gen_id: str) -> None:
+def _openai_llama_wait_for_victims(controller, gen_id: str) -> bool:
+    """True once the victims let go, the cache has room anyway, or the holder is gone."""
     victims = controller.take_awaited_victims(gen_id)
-    if victims and not controller.wait_released(victims, _UNPAUSABLE_VICTIM_WAIT_S):
-        _llama_preemption_log(
-            "raw-holder-victims-late", level = "debug", gen_id = gen_id, victims = ",".join(victims)
-        )
+    if not victims or controller.wait_released(victims, _UNPAUSABLE_VICTIM_WAIT_S):
+        return True
+    _llama_preemption_log(
+        "raw-holder-victims-late", level = "debug", gen_id = gen_id, victims = ",".join(victims)
+    )
+    deadline = time.monotonic() + max(
+        0.0, _UNPAUSABLE_VICTIM_HARD_WAIT_S - _UNPAUSABLE_VICTIM_WAIT_S
+    )
+    while True:
+        holder = controller.participant(gen_id)
+        # Released by its route (a disconnect), or room freed some other way: nothing to wait on.
+        if holder is None or controller.room_for(gen_id, holder.tokens):
+            return True
+        left = deadline - time.monotonic()
+        if left <= 0:
+            _llama_preemption_log(
+                "raw-holder-victims-wedged",
+                level = "warning",
+                gen_id = gen_id,
+                victims = ",".join(victims),
+            )
+            return False
+        if controller.wait_released(victims, min(_UNPAUSABLE_VICTIM_WAIT_S, left)):
+            return True
 
 
 async def _openai_llama_let_victims_go(llama_backend, gen_id: Optional[str]) -> None:
     """Before an unpausable request goes upstream, wait for the chats its plan paused.
 
     Off the loop: a paused chat's stream is advanced from it, so blocking it here would keep
-    the victim from ever seeing its signal. Nothing to wait on is a no-op."""
+    the victim from ever seeing its signal. Nothing to wait on is a no-op; victims that never
+    let go raise LlamaAdmissionTimeout, which every caller already answers as a timeout."""
     if gen_id is None or not preemption_enabled():
         return
     try:
         controller = get_preemption_controller(_preempt_key(llama_backend))
         if controller.participant(gen_id) is None:
             return
-        await asyncio.to_thread(_openai_llama_wait_for_victims, controller, gen_id)
+        released = await asyncio.to_thread(_openai_llama_wait_for_victims, controller, gen_id)
     except Exception:
         logger.debug("could not wait for the unpausable holder's victims", exc_info = True)
+        return
+    if not released:
+        # Retryable, as an admission timeout is; sent anyway it would overflow every chat.
+        raise LlamaAdmissionTimeout(
+            "Timed out waiting for the local llama-server cache to free room for this request"
+        )
 
 
 def _prompt_kv_tokens(prompt) -> int:
@@ -3383,8 +3431,15 @@ def _openai_llama_count_direct_holder(llama_backend, tokens: int, prefix: str) -
             tokens = max(1, int(tokens)),
             state = ParticipantState.STREAMING_RAW,
         )
-        _plan_for_unpausable_holder(controller, gen_id)
+        try:
+            _plan_for_unpausable_holder(controller, gen_id)
+        except LlamaAdmissionTimeout:
+            # Refused: nothing goes upstream, so nothing is left registered either.
+            controller.unregister(gen_id)
+            raise
         return gen_id
+    except LlamaAdmissionTimeout:
+        raise
     except Exception:
         logger.debug("could not count the direct holder", exc_info = True)
         return None
@@ -3644,13 +3699,20 @@ def _openai_llama_preemption_disarm(*, llama_backend, gen_id: str) -> None:
                 )
                 if not occupancy or not occupancy.get("idle"):
                     return
+                _maybe_erased: list = []
                 freed = reclaim_idle_slots(
                     occupancy,
                     lambda slot_id: erase_llama_slot(
                         base, slot_id, headers = _llama_slot_headers(llama_backend)
                     ),
                     needed = int(occupancy.get("resident") or 0),
+                    recheck = lambda: fetch_llama_slots(
+                        base, headers = _llama_slot_headers(llama_backend)
+                    ),
+                    ambiguous = _maybe_erased,
                 )
+                if _maybe_erased:
+                    get_preemption_controller(key).note_cells_possibly_erased(parked_before)
                 if freed:
                     _llama_preemption_log("released-cells", gen_id = gen_id, freed = freed)
                     _controller = get_preemption_controller(key)
@@ -24703,6 +24765,8 @@ async def _generate_tts_wav(
             # An idle auto-unload cancels through the backend without setting this route's event.
             if _audio_cancel.is_set() or isinstance(e, AudioGenerationCancelledError):
                 raise HTTPException(status_code = 499, detail = "Audio generation cancelled")
+            if isinstance(e, LlamaAdmissionTimeout):
+                raise HTTPException(status_code = 503, detail = str(e))
             # Missing capability, not a failure: no retry helps, and the message
             # carries no path or user input, so send it as written.
             if isinstance(e, AudioBackendUnsupportedError):

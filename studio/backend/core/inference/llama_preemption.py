@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from core.inference.llama_admission import (
-    _MAX_REPARK_WAIT_MULTIPLE,
     LlamaAdmissionLease,
     llama_admission_config_from_env,
 )
@@ -1069,8 +1068,11 @@ class PreemptionController:
             participant = self._participants.get(gen_id)
             if participant is not None:
                 need = max(0, int(want or 0))
-                participant.tokens = max(participant.tokens, need)
-                participant.base_tokens = max(participant.base_tokens, need)
+                if need > 0:
+                    # The replay, which is all the lease commits: the charge from before the
+                    # pause still carries an output allowance no cell holds yet.
+                    participant.tokens = need
+                    participant.base_tokens = need
                 if participant.prompt_tokens > 0:
                     # `want` is the whole replayed prompt, which is what becomes resident.
                     participant.prompt_tokens = max(participant.prompt_tokens, need)
@@ -1517,6 +1519,25 @@ class PreemptionController:
                         participant.replay_pending = True
         return len(released)
 
+    def note_cells_possibly_erased(self, only: Optional[Dict[str, int]] = None) -> int:
+        """An erase may have taken a slot another request was handed after the reading.
+
+        The holders that reading did not see parked (`only`, a `parked_holders()` reading
+        from before it) are the ones whose cells it could not account for, so their next
+        round replays the whole prompt rather than only its growth. Their charge stays: the
+        cells may well be there. Returns how many holders it applied to."""
+        marked = 0
+        with self._lock:
+            for participant in self._participants.values():
+                if not participant.holds_kv or participant.cells_reclaimed:
+                    continue
+                if only is not None and only.get(participant.gen_id) == participant.park_seq:
+                    # Seen parked by the reading: `note_cells_reclaimed` accounts for it.
+                    continue
+                participant.replay_pending = True
+                marked += 1
+        return marked
+
     def restart(self, gen_id: str) -> None:
         """The same request starts over from its original prompt: the next of `n` choices.
         The replayed partials and the resume debt of the last choice are not its own."""
@@ -1665,9 +1686,24 @@ class PreemptionController:
             participant.state = ParticipantState.DECODING
             participant.preempt_chosen_at = 0.0
             participant.consecutive_preemptions = max(0, participant.consecutive_preemptions - 1)
+            # Held pending for a waiter until the re-plan says who replaces it.
+            self._replaced_by[gen_id] = None
             # Last, and inside the lock: a signal still set aborts the very stream this is
             # letting run, and clearing it first leaves a window for a sweep to re-arm it.
             participant.preempt_event.clear()
+        # Its cells were counted as leaving: planned again, as a revoked choice is, so a
+        # direct holder waiting on it waits on whoever stops in its place. Without it: it
+        # has just said no, and later pressure in the turn may still ask it again.
+        replacements: List[str] = []
+        try:
+            replacements = [
+                v.gen_id
+                for v in self.plan_preemptions(needed = 0, exclude = gen_id)
+                if not v.parked_on_a_tool
+            ]
+        finally:
+            with self._lock:
+                self._replaced_by[gen_id] = replacements
 
     def participant(self, gen_id: str) -> Optional[Participant]:
         """The registered participant, or None once it has finished. By reference."""
@@ -1781,9 +1817,14 @@ class PreemptionController:
                 return False
             return self._contended_locked()
 
-    def plan_preemptions(self, *, needed: int = 0) -> List[Participant]:
-        """Who must stop so ``needed`` more tokens fit. Sets each victim's ``preempt_event`` and
-        marks it PAUSED, so decision and signal cannot drift."""
+    def plan_preemptions(
+        self,
+        *,
+        needed: int = 0,
+        exclude: Optional[str] = None,
+    ) -> List[Participant]:
+        """Who must stop so ``needed`` more tokens fit; ``exclude`` is never chosen. Sets each
+        victim's ``preempt_event`` and marks it PAUSED, so decision and signal cannot drift."""
         with self._lock:
             if not self._kv_unified or self._budget <= 0 or not preemption_eligible():
                 return []
@@ -1848,7 +1889,11 @@ class PreemptionController:
             #
             # `holds_kv` as well as `preemptable`: a participant whose cells an idle reclaim
             # erased keeps `preemptable` True while `holds_kv` is False, so stale `tokens` get subtracted.
-            victims = [p for p in self._participants.values() if p.preemptable and p.holds_kv]
+            victims = [
+                p
+                for p in self._participants.values()
+                if p.preemptable and p.holds_kv and p.gen_id != exclude
+            ]
             # Promoted above newest-first, so repeatedly losing does not become never finishing.
             # A THRESHOLD, not a continuous term, which is least-preempted-first by another name.
             victims.sort(
@@ -1861,7 +1906,9 @@ class PreemptionController:
             # Always leave one holder standing: pausing the last one is pure loss. One HOLDER, not
             # one preemptable victim; a holder already PREEMPTING does not count as standing.
             standing = any(
-                p.holds_kv and not p.preemptable and p.state != ParticipantState.PREEMPTING
+                p.holds_kv
+                and (not p.preemptable or p.gen_id == exclude)
+                and p.state != ParticipantState.PREEMPTING
                 for p in self._participants.values()
             )
             spare = len(victims) if standing else max(0, len(victims) - 1)
@@ -2097,21 +2144,32 @@ class ControllerPreemptionPolicy:
             self._controller.end_resume(self._gen_id)
         try:
             try:
+                # The room wait's own hard deadline, not a fresh one: the absolute bound
+                # covers the whole pause, slot line included.
                 coro = lease.resume_async(
                     want,
                     timeout_s = timeout,
                     cancel_event = cancel_event,
                     progress = self._controller.progress_signature,
+                    hard_deadline_at = hard_deadline,
                 )
             except TypeError:
-                # An older lease without the stall-aware wait.
-                coro = lease.resume_async(want, timeout_s = timeout, cancel_event = cancel_event)
+                try:
+                    coro = lease.resume_async(
+                        want,
+                        timeout_s = timeout,
+                        cancel_event = cancel_event,
+                        progress = self._controller.progress_signature,
+                    )
+                except TypeError:
+                    # An older lease without the stall-aware wait.
+                    coro = lease.resume_async(want, timeout_s = timeout, cancel_event = cancel_event)
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             # A backstop for a loop that never runs the coroutine at all. resume_async resets
-            # its own bound on progress up to its hard deadline, so this waits as long, and on
+            # its own bound on progress up to the same hard deadline, so this waits as long, and on
             # giving up cancels it: left running, it kept its place in the slot line for hours.
             try:
-                got = bool(future.result(timeout = timeout * _MAX_REPARK_WAIT_MULTIPLE + 5.0))
+                got = bool(future.result(timeout = max(0.0, hard_deadline - time.monotonic()) + 5.0))
             except BaseException:
                 future.cancel()
                 raise
@@ -2199,6 +2257,9 @@ def read_slot_occupancy(fetch: Callable[[], Optional[list]]) -> Optional[dict]:
     resident = 0
     idle_tokens = 0
     idle = []
+    # The task each idle slot last ran: an erase is tied to it, since the slot can be handed
+    # to another request between this reading and the erase.
+    idle_task = {}
     for slot in slots:
         # A parked slot (`is_preempted`) reports its logical sequence but holds no cells.
         # Counting it made a nearly empty pool read as over the ceiling.
@@ -2231,6 +2292,7 @@ def read_slot_occupancy(fetch: Callable[[], Optional[list]]) -> Optional[dict]:
         if not slot.get("is_processing") and tokens > 0:
             idle_tokens += max(0, tokens)
             idle.append((slot.get("id"), max(0, tokens)))
+            idle_task[slot.get("id")] = slot.get("id_task")
     # Largest first: the fewest erases free the most.
     idle.sort(key = lambda pair: -pair[1])
     return {
@@ -2239,29 +2301,56 @@ def read_slot_occupancy(fetch: Callable[[], Optional[list]]) -> Optional[dict]:
         # pausing anybody.
         "idle_tokens": idle_tokens,
         "idle": idle,
+        "idle_task": idle_task,
         "slots": len(slots),
     }
 
 
+def _slot_incarnation(slots: Optional[list], slot_id) -> Optional[tuple]:
+    """``(is_processing, id_task)`` for one slot of a ``GET /slots`` reading, None if absent."""
+    for slot in slots or ():
+        if isinstance(slot, dict) and slot.get("id") == slot_id:
+            return bool(slot.get("is_processing")), slot.get("id_task")
+    return None
+
+
 def reclaim_idle_slots(
-    occupancy: Optional[dict], erase: Callable[[int], int], *, needed: int
+    occupancy: Optional[dict],
+    erase: Callable[[int], int],
+    *,
+    needed: int,
+    recheck: Optional[Callable[[], Optional[list]]] = None,
+    ambiguous: Optional[list] = None,
 ) -> int:
     """Free dead residue before asking a live chat to stop. llama.cpp does this itself in
-    ``try_clear_idle_slots``, but only once the decode has ALREADY failed. Returns tokens freed."""
+    ``try_clear_idle_slots``, but only once the decode has ALREADY failed. Returns tokens freed.
+    ``recheck`` re-reads ``GET /slots``: llama-server defers an erase aimed at a processing slot,
+    so each erase goes only to a slot still idle on the task the reading saw, and a slot on
+    another task afterwards is added to ``ambiguous``, the erase having maybe taken its cache."""
     if not occupancy or needed <= 0:
         return 0
+    seen_task = occupancy.get("idle_task") or {}
     freed = 0
     for slot_id, tokens in occupancy.get("idle") or ():
         if freed >= needed:
             break
         if slot_id is None:
             continue
+        if recheck is not None:
+            now = _slot_incarnation(recheck(), slot_id)
+            if now is None or now[0] or now[1] != seen_task.get(slot_id, now[1]):
+                # Taken by another request, or unreadable: nothing here is dead residue.
+                continue
         try:
             freed += max(0, int(erase(slot_id) or 0))
         except Exception:
             # An erase that fails leaves the residue in place; the caller falls back to
             # preempting a live generation.
             continue
+        if recheck is not None and ambiguous is not None:
+            after = _slot_incarnation(recheck(), slot_id)
+            if after is None or after[0] or after[1] != seen_task.get(slot_id, after[1]):
+                ambiguous.append(slot_id)
     return freed
 
 

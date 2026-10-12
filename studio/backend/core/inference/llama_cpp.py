@@ -2885,7 +2885,7 @@ def _exact_auto_blocker(setting: str, args, env: Mapping[str, str]) -> Optional[
     # an argv with no --preempt-ram yet is undecided, not parking off.
     if _preempt_ram_switched_off_in(args, env = env):
         return "the server's parking is switched off (--preempt-ram 0)"
-    conflicts = _exact.contradicting_args(args) + _exact.contradicting_env(env)
+    conflicts = _exact.contradicting_args(args) + _exact.contradicting_env(env, args)
     if conflicts:
         return (
             "the launch line passes "
@@ -9724,7 +9724,7 @@ class LlamaCppBackend:
             and _flash_attn_enabled_from_args(args, env = env)
             and not _exact.contradicting_args(args)
             # The env twins of the CPU placements reach the child however the argv was stripped.
-            and not _exact.contradicting_env(env)
+            and not _exact.contradicting_env(env, args)
             and bool(server_parks)
             and bool(parking_holds)
         )
@@ -31714,7 +31714,9 @@ class LlamaCppBackend:
                     # The user's extras are appended last and win by last-arg, so name the flag ourselves.
                     _exact_conflicts = _exact.contradicting_args(
                         extra_args
-                    ) + _exact.contradicting_env(_exact_preflight_env(os.environ, gpu_memory_mode))
+                    ) + _exact.contradicting_env(
+                        _exact_preflight_env(os.environ, gpu_memory_mode), extra_args
+                    )
                     if _exact_conflicts:
                         self._record_load_warning(
                             "Exact concurrency was requested, but the extra arguments "
@@ -34877,6 +34879,70 @@ class LlamaCppBackend:
                         _named_now = _named_preempt_ram_mib(_last_spawn_cmd or cmd, env)
                         _exact_short = (_named_now or 0, 0, 0)
                     self._exact_parking_short = _exact_short
+
+                def _relaunch_as_ordinary(host_short, exact_running) -> bool:
+                    """Auto publishes an ordinary server when the mode is unavailable, so the child
+                    it keeps has to be one. Two things can make it otherwise, and no running
+                    server changes either: a budget sized whole for exact parks the host cannot
+                    hold, and exact kernels the child still runs. Launched again, same argv, on
+                    the host-bounded budget and without the mode. False when the load was
+                    cancelled during the relaunch."""
+                    _bounded_cmd = list(_last_spawn_cmd or cmd)
+                    _bounded = None
+                    # Only a launch that kept the exact-sized budget: a fallback before launch
+                    # was bounded already, and a budget the user named is theirs.
+                    if (
+                        host_short is not None
+                        and _exact_budget is not None
+                        and _exact_wanted
+                        and self._server_launched_parking
+                        and _named_preempt_ram_mib(_bounded_cmd, env) == _exact_budget
+                    ):
+                        # The weights are resident, so the free reading already excludes them.
+                        _bounded = _rebound_named_parking_budget(_bounded_cmd, _exact_budget, self)
+                        if (_bounded or 0) >= _exact_budget:
+                            _bounded = None
+                            self._parking_reserving_mib = None
+                    # Exact kernels cost their decode overhead for a guarantee nobody is given.
+                    _exact_off = bool(exact_running) and _exact.child_flag_set(env)
+                    if _bounded is None and not _exact_off:
+                        return True
+                    logger.info(
+                        "Exact concurrency (auto): relaunching llama-server as an ordinary "
+                        "server%s",
+                        ""
+                        if _bounded is None
+                        else ", with a %d MiB parking budget bounded to this host in place of %d MiB"
+                        % (int(_bounded or 0), int(_exact_budget)),
+                    )
+                    self._kill_process()
+                    _exact.apply_child_env(env, on = False)
+                    # No label: the same placement, which a labelled retry would re-plan.
+                    if not _spawn_and_wait(_bounded_cmd):
+                        if _finish_cancelled_health_wait(
+                            "Load cancelled during the ordinary-server relaunch"
+                        ):
+                            return False
+                        _raise_terminal_load_failure(
+                            "llama-server started with exact concurrency but did not come back "
+                            "up as an ordinary server."
+                        )
+                    if _preempt_ram_disabled_in(_last_spawn_cmd or cmd, env = env):
+                        self._server_preempts_kv = False
+                    self._server_launched_parking = bool(
+                        self._server_preempts_kv and kv_cache_unified
+                    )
+                    self._launched_parking_mib = (
+                        _named_preempt_ram_mib(_last_spawn_cmd or cmd, env)
+                        if self._server_launched_parking
+                        else None
+                    )
+                    self._parking_reserving_mib = None
+                    _preemption.note_server_parking(
+                        self._server_preempts_kv and kv_cache_unified, self
+                    )
+                    return True
+
                 # The server's own answer, not the launch's intent. See the helper.
                 _server_props = self._server_props_or_last()
                 # unslothai/llama.cpp#197 carries the field and writes the per-request notices,
@@ -34956,6 +35022,8 @@ class LlamaCppBackend:
                         + _exact_why
                         + " Set exact concurrency to 'on' to fail the load instead."
                     )
+                    if not _relaunch_as_ordinary(_exact_host_short, _exact_running):
+                        return False
                 # Published only now: a required mode the server cannot keep kills the child
                 # above, and a request admitted before that would be cut off mid-answer.
                 if not self._publish_healthy():
@@ -42818,6 +42886,7 @@ class LlamaCppBackend:
                     bypass_permissions = bypass_permissions,
                     permission_mode = permission_mode,
                     sandbox_level = sandbox_level,
+                    healed = getattr(tool_controller, "healed_arguments", None),
                 )
                 # A round may only overlap when its calls cannot depend on each other's RESULTS.
                 # `prepare_call`'s two such dependencies, `_successful_keys` and

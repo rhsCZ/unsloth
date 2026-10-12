@@ -2961,7 +2961,7 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
         occupancy = read_slot_occupancy(
             lambda: fetch_llama_slots(base, headers = _llama_slot_headers(llama_backend))
         )
-        controller.note_resident(
+        recorded_seq = controller.note_resident(
             None if occupancy is None else occupancy.get("resident"),
             0 if occupancy is None else int(occupancy.get("idle_tokens") or 0),
             started_at_seq = sample_epoch,
@@ -3004,10 +3004,13 @@ def _openai_llama_residency_observer(*, llama_backend, completion_id: str):
                     waiting = waiting,
                     resident = occupancy.get("resident"),
                 )
-                controller.note_resident(
+                # Against the reading just recorded: that record advanced the epoch, so
+                # passed `sample_epoch` again this was dropped as stale and the plan after
+                # it still saw the cells the erase took.
+                controller.note_erased_since(
+                    recorded_seq,
                     max(0, int(occupancy.get("resident") or 0) - freed),
                     max(0, int(occupancy.get("idle_tokens") or 0) - freed),
-                    started_at_seq = sample_epoch,
                 )
                 # ONLY when every idle slot went: the erase can stop after one, and after a
                 # partial erase the release would hand back commitments whose cells are
@@ -3127,6 +3130,29 @@ def _note_tool_loop_state(note_state, event) -> None:
         note_state(ParticipantState.DECODING)
 
 
+def _openai_llama_parked_self(llama_backend, gen_id: str) -> Optional[dict]:
+    """This holder's entry in `parked_holders()`, or None when it is not parked or the
+    switch is off."""
+    if not preemption_enabled():
+        return None
+    try:
+        seq = get_preemption_controller(_preempt_key(llama_backend)).parked_holders().get(gen_id)
+    except Exception:
+        return None
+    return None if seq is None else {gen_id: seq}
+
+
+def _openai_llama_note_self_erased(llama_backend, parked: Optional[dict]) -> None:
+    """An approval erase took this holder's cells. Its lease has already handed the
+    commitment back, so only the ledger's view moves."""
+    if not parked:
+        return
+    try:
+        get_preemption_controller(_preempt_key(llama_backend)).note_cells_reclaimed(parked)
+    except Exception:
+        logger.debug("could not record the approval erase", exc_info = True)
+
+
 def _openai_llama_publish_round_charge(
     *,
     llama_backend,
@@ -3239,7 +3265,8 @@ def _prompt_kv_tokens(prompt) -> int:
         return 1
     text = str(prompt or "")
     ascii_chars = sum(1 for ch in text if ord(ch) < 128)
-    return ascii_chars // 4 + (len(text) - ascii_chars)
+    # Rounded up, so a batch of short prompts is not counted as nothing.
+    return -(-ascii_chars // 4) + (len(text) - ascii_chars)
 
 
 def _openai_llama_count_direct_holder(llama_backend, tokens: int, prefix: str) -> Optional[str]:
@@ -5211,6 +5238,10 @@ async def _aiter_llama_stream_items(
                     park_since = now
                 if now - park_since < _RAW_PARK_STALL_CAP_S:
                     last_item_at = now
+                elif (stall := _post_first_timeout_s()) is not None and now >= last_item_at + stall:
+                    # Here, not at the deadline below: the keepalives keep the read returning,
+                    # so the wrapper never times out, and the pump's backstop is a cap later.
+                    raise httpx.ReadTimeout("The model stopped producing tokens mid-response.")
             else:
                 last_item_at = now
                 park_since = None
@@ -24344,6 +24375,7 @@ async def _generate_tts_wav(
     # GGUF TTS goes straight to llama-server /completion, holding a slot with no
     # admission lease, so only the direct counter can show it in the slot readout.
     _direct_llama_tts = bool(llama_backend.is_loaded and getattr(llama_backend, "_is_audio", False))
+    _direct_llama_kv_tokens = 0
     if _direct_llama_tts:
         # Advertised repo id after an auto-switch load, else a clean public id,
         # never the absolute .gguf path.
@@ -24351,6 +24383,14 @@ async def _generate_tts_wav(
         audio_type = getattr(llama_backend, "_audio_type", None)
         supported_audio_types = _GGUF_TTS_AUDIO_TYPES
         _audio_model_id = getattr(llama_backend, "model_identifier", None) or model_name
+        _tts_new_tokens = _tts_max_new_tokens(
+            payload,
+            prompt_for_budget,
+            audio_type = audio_type,
+            speech_api_default_max_tokens = speech_api_default_max_tokens,
+        )
+        # The cells the speech can occupy, so a chat beside it is contended and reads the cache.
+        _direct_llama_kv_tokens = _prompt_kv_tokens(text) + int(_tts_new_tokens or 0)
         gen = lambda: llama_backend.generate_audio_response(
             text = text,
             audio_type = llama_backend._audio_type,
@@ -24358,12 +24398,7 @@ async def _generate_tts_wav(
             top_p = payload.top_p,
             top_k = payload.top_k,
             min_p = payload.min_p,
-            max_new_tokens = _tts_max_new_tokens(
-                payload,
-                prompt_for_budget,
-                audio_type = audio_type,
-                speech_api_default_max_tokens = speech_api_default_max_tokens,
-            ),
+            max_new_tokens = _tts_new_tokens,
             repetition_penalty = payload.repetition_penalty,
             cancel_event = _audio_cancel,
             stats_holder = stats_holder,
@@ -24489,7 +24524,7 @@ async def _generate_tts_wav(
         # of the request timeout after the chat had already reported it stopped.
         _audio_watcher = asyncio.create_task(_await_disconnect_then_cancel(request, _audio_cancel))
         try:
-            with _direct_llama_request(_direct_llama_tts):
+            with _direct_llama_request(_direct_llama_tts, kv_tokens = _direct_llama_kv_tokens):
                 wav_bytes, sample_rate = await asyncio.to_thread(gen)
         except Exception as e:
             # An idle auto-unload cancels through the backend without setting this route's event.
@@ -33534,9 +33569,15 @@ async def produce_openai_chat_completions(
                             erased = _gguf_decode["erased"]
                         if target is None or _reclaim_stop.is_set():
                             return
+                        # Before the erase, so the ledger is told about this park and not one
+                        # that began while the erase was out.
+                        parked_now = _openai_llama_parked_self(llama_backend, completion_id)
                         if not erased and not await asyncio.to_thread(_erase_and_record, target):
                             return
                         lease.release_parked_cache()
+                        # The cells went: the next round prefills the whole prompt, not
+                        # its growth, and the ledger must reserve for that.
+                        _openai_llama_note_self_erased(llama_backend, parked_now)
                     except asyncio.CancelledError:
                         raise
                     except Exception:
@@ -47629,11 +47670,6 @@ async def _openai_passthrough_stream_admitted(
                         continue
                     if not raw_line.startswith("data:"):
                         continue
-                    if not _raw_measured:
-                        _raw_measured = True
-                        _openai_llama_note_raw_measured(
-                            llama_backend = llama_backend, gen_id = completion_id
-                        )
                     saw_stream_item = True
                     data_text = raw_line[5:].strip()
                     if data_text == "[DONE]":
@@ -47702,6 +47738,13 @@ async def _openai_passthrough_stream_admitted(
                         if _monitor_openai_error_message(chunk_data):
                             saw_stream_error = True
                             mark_response_failed(getattr(request, "scope", None))
+                    # Not on a progress frame: `return_progress` is forced upstream, and the
+                    # prompt is still prefilling batch by batch while those arrive.
+                    if not _raw_measured and not _is_prefill_progress_only(chunk_data):
+                        _raw_measured = True
+                        _openai_llama_note_raw_measured(
+                            llama_backend = llama_backend, gen_id = completion_id
+                        )
                     if not client_wants_progress and _is_prefill_progress_only(chunk_data):
                         _monitor_openai_sse_line(monitor_id, raw_line, llama_backend.context_length)
                         if progress_keepalive.due():

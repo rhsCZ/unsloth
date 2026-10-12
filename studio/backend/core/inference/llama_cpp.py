@@ -8953,6 +8953,9 @@ class LlamaCppBackend:
         # Budget a load has committed to but not published, covering planning ->
         # Popen as _memory_pending_launch does for Model Memory placement.
         self._vram_fraction_pending: Optional[float] = None
+        # The exact setting a load resolved but has not published, read by the settings route
+        # while no child is running yet.
+        self._exact_setting_pending: Optional[str] = None
         # --batch-size / --ubatch-size the last load asked for; none = defaults or extras / env
         self._requested_n_batch: Optional[int] = None
         self._requested_n_ubatch: Optional[int] = None
@@ -25537,6 +25540,7 @@ class LlamaCppBackend:
             finally:
                 self._vram_fraction_pending = None
                 self._binary_revision_pending = None
+                self._exact_setting_pending = None
                 # Same for the placement marker: released at the end of the call instead, a
                 # finished load could blank the marker of a queued one that had published.
                 self._memory_pending_launch = None
@@ -31473,7 +31477,14 @@ class LlamaCppBackend:
                     )
 
                 # The mode needs a unified cache, and adding one keeps a single-slot load from being refused.
-                _exact_setting = _exact.resolve_exact_setting(intent.exact_concurrency)
+                # This load runs under it from here, so a save from now on needs a reload to apply.
+                # Published with the read, so a save between the two is never missed.
+                from utils.exact_concurrency_settings import capture_exact_concurrency
+
+                _exact_setting = capture_exact_concurrency(
+                    lambda: _exact.resolve_exact_setting(intent.exact_concurrency),
+                    lambda setting: setattr(self, "_exact_setting_pending", setting),
+                )
                 _exact_wanted = _exact.wants_exact(_exact_setting)
                 if _exact_wanted and _flash_attn_known_off and _exact_setting == _exact.EXACT_AUTO:
                     # V is left transposed without flash attention and the paged pool refuses
@@ -31591,14 +31602,23 @@ class LlamaCppBackend:
                             # Judged again once the weights are resident: see after launch.
                             self._exact_parking_writes = _exact_writes
                             _host_free_mib = _exact_host_free_mib(self)
-                            if _host_free_mib is not None and _exact_writes > _host_free_mib:
-                                self._exact_host_short = (_exact_writes, _host_free_mib)
+                            # An unreadable host is short too: it certifies nothing, and the
+                            # plain parking an auto fallback gets is bounded to nothing there.
+                            _host_short_now = _exact_host_shortfall_after_load(
+                                _exact_writes, _host_free_mib
+                            )
+                            if _host_short_now is not None:
+                                self._exact_host_short = _host_short_now
                                 self._record_load_warning(
                                     "Exact concurrency may park up to %d MiB of KV state in host "
                                     "RAM, and this host has %d MiB free. A park the host cannot "
                                     "hold is re-prefilled, which is not byte-identical. The load "
                                     "will run without exact concurrency, or fail, depending on "
-                                    "the setting." % (_exact_writes, _host_free_mib)
+                                    "the setting." % _host_short_now
+                                    if _host_short_now[1] >= 0
+                                    else _exact_host_short_warning(_host_short_now)
+                                    + " The load will run without exact concurrency, or fail, "
+                                    "depending on the setting."
                                 )
                                 if _exact_setting == _exact.EXACT_AUTO:
                                     _exact_wanted = False
@@ -32487,6 +32507,43 @@ class LlamaCppBackend:
                     child_has_no_gpu = _child_has_no_gpu,
                     shared_gpu_ids = _shared_gpu_ids,
                 )
+                # The parks were judged against the host before the placement was known, and
+                # the weights this launch leaves in host RAM take that room: judged again here,
+                # while auto can still fall back to a plain launch rather than find it short
+                # after the load, as the shortage before launch does.
+                _exact_writes_now = getattr(self, "_exact_parking_writes", None)
+                if (
+                    _exact_wanted
+                    and _host_weights_mib
+                    and _exact_writes_now is not None
+                    and getattr(self, "_exact_host_short", None) is None
+                ):
+                    _exact_free_now = _exact_host_free_mib(self)
+                    if _exact_free_now is None:
+                        # Unreadable now: certifies nothing, as before launch.
+                        self._exact_host_short = (int(_exact_writes_now), -1)
+                        self._record_load_warning(
+                            _exact_host_short_warning(self._exact_host_short)
+                            + " The load will run without exact concurrency, or fail, "
+                            "depending on the setting."
+                        )
+                        if _exact_setting == _exact.EXACT_AUTO:
+                            _exact_wanted = False
+                    else:
+                        _exact_room = max(0, int(_exact_free_now) - _host_weights_mib)
+                        if int(_exact_writes_now) > _exact_room:
+                            self._exact_host_short = (int(_exact_writes_now), _exact_room)
+                            self._record_load_warning(
+                                "Exact concurrency may park up to %d MiB of KV state in host "
+                                "RAM, and this host has %d MiB free once the model's own %d "
+                                "MiB in host RAM is loaded. A park the host cannot hold is "
+                                "re-prefilled, which is not byte-identical. The load will run "
+                                "without exact concurrency, or fail, depending on the setting."
+                                % (int(_exact_writes_now), _exact_room, _host_weights_mib)
+                            )
+                            if _exact_setting == _exact.EXACT_AUTO:
+                                # Bounded below with the weights, as any plain launch is.
+                                _exact_wanted = False
                 if _host_weights_mib and _exact_budget is not None and not _exact_wanted:
                     # Sized before the placement was known: they come off the room its parking
                     # may pin.
@@ -32684,12 +32741,31 @@ class LlamaCppBackend:
                         shared_gpu_ids = _shared_gpu_ids,
                     )
                     _rebound_named_parking_budget(launch_cmd, _named, self, _planned)
-                    if _planned:
-                        with _parking_budget_lock:
-                            _held = getattr(self, "_parking_reserving_mib", None) or 0
+                    # The rebound reserves the budget alone; the spawn puts the weights back.
+                    with _parking_budget_lock:
+                        _reserved_weights_mib[0] = 0
+
+                # The host weights the in-flight reservation holds, priced for the launch first.
+                _reserved_weights_mib = [_host_weights_mib]
+
+                def _reserve_launch_weights(launch_cmd) -> None:
+                    """Price the weights a spawn leaves in host RAM off ITS argv: a retry re-places
+                    them (CPU replay, arch fallback, no-flash fit, projector on CPU), and a peer
+                    certifying exact parks reads the reservation, not the launch it replaced."""
+                    _planned = self._planned_host_weights_mib(
+                        launch_cmd,
+                        _reachable_gpus,
+                        env,
+                        child_has_no_gpu = _child_has_no_gpu,
+                        shared_gpu_ids = _shared_gpu_ids,
+                    )
+                    with _parking_budget_lock:
+                        _held = getattr(self, "_parking_reserving_mib", None) or 0
+                        if _held >= 0:
                             _reserve_inflight_parking(
-                                self, _held if _held < 0 else _held + _planned
+                                self, max(0, _held - _reserved_weights_mib[0]) + _planned
                             )
+                        _reserved_weights_mib[0] = _planned
 
                 # Memoed only when the load ends terminally, so a recovering fallback is not blocked.
                 _sched_abort_seen = False
@@ -32763,6 +32839,7 @@ class LlamaCppBackend:
                             logger.warning(f"Could not open llama-server log file: {e}")
                             self._llama_log_path = None
                         _last_spawn_cmd = list(run_cmd)
+                        _reserve_launch_weights(run_cmd)
                         # Read off the argv actually spawned rather than the intent, so
                         # every emitter is covered by construction.
                         self._idle_slot_clearing_active = _idle_slot_clearing_active(
@@ -39810,6 +39887,8 @@ class LlamaCppBackend:
                 compaction_headroom_ratio = compaction_headroom_ratio,
                 thread_id = thread_id,
                 tools_withheld = tools_withheld,
+                # The caller's reasoning limit holds for the whole answer, as the respawn keeps it.
+                thinking_budget_tokens = thinking_budget_tokens,
                 _allow_respawn_retry = _allow_respawn_retry,
                 **({} if preempt_event is None else {"preempt_event": preempt_event}),
                 preempt_policy = preempt_policy,
@@ -39897,9 +39976,8 @@ class LlamaCppBackend:
 
         if checkpoint.has_resume_point():
             # Unstripped, as the length continuation is: the replayed prefix has to match
-            # the text already streamed. A half-parsed tool call is dropped by not being
-            # appended, which is intended: nothing executed, so nothing is lost by asking
-            # again.
+            # the text already streamed. A half-written textual call is cut before it gets
+            # here: nothing executed, so nothing is lost by asking again.
             partial = {"role": "assistant", "content": content_accum}
             # The thought that preceded the prose is the same turn's work: replayed as prose
             # alone, the continuation is conditioned on a prefix that never produced it.
@@ -43932,8 +44010,18 @@ class LlamaCppBackend:
                     content_accum,
                     reasoning_accum,
                 )
+                # A textual call the attempt was writing is dropped, not replayed: nothing has
+                # run, and the restarted parser would see only its tail and never run it. The
+                # prose the client was shown is what goes back, as the display strips it.
+                _preempt_content = content_accum
+                if detect_state == _S_DRAINING and _text_args_call_start >= 0:
+                    _preempt_content = _preempt_content[:_text_args_call_start]
+                if auto_heal_tool_calls:
+                    _preempt_content = _StreamingMarkupStripper(_enabled_names_gate).strip(
+                        _preempt_content
+                    )
                 _checkpoint = _preemption.StreamCheckpoint(
-                    visible_text = content_accum,
+                    visible_text = _preempt_content,
                     reasoning_text = reasoning_accum,
                     charged_tokens = _pre_charged,
                     resumes = _preempt_resumes + 1,
@@ -44013,7 +44101,7 @@ class LlamaCppBackend:
                     _resume_assembled = self._assemble_preempt_resume(
                         conversation,
                         _checkpoint,
-                        content_accum,
+                        _preempt_content,
                         reasoning_accum,
                     )
                 except Exception:
@@ -44109,7 +44197,11 @@ class LlamaCppBackend:
                     # would turn a pause into a silently empty turn.
                     _continuation_max_tokens = max(1, _preempt_cap_left)
                 _preempt_display_seed = (
-                    cumulative_display,
+                    # Without the dropped call's markup: left in, it reads as an open call that
+                    # hides every word the resumed attempt writes after it.
+                    _strip_tool_markup_streaming(cumulative_display)
+                    if _preempt_content != content_accum
+                    else cumulative_display,
                     _last_emitted,
                     in_thinking,
                     # Carried so the promoted answer is the WHOLE thought. Dropped once the

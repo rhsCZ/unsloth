@@ -374,8 +374,12 @@ class TestTheNamedBudgetIsJudged:
         assert "_exact_cap = _PREEMPT_RAM_DEFAULT_MIB" in window
         assert "_exact_writes = min(_exact_cap, _exact_writes)" in window
         assert "_exact_host_free_mib(self)" in window
-        assert "_exact_writes > _host_free_mib" in window
-        assert "self._exact_host_short = (_exact_writes, _host_free_mib)" in window
+        # An unreadable host is a shortfall too, read as the check after the load reads it.
+        assert (
+            "_host_short_now = _exact_host_shortfall_after_load( _exact_writes, _host_free_mib )"
+            in window
+        )
+        assert "self._exact_host_short = _host_short_now" in window
         assert "if _exact_setting == _exact.EXACT_AUTO: _exact_wanted = False" in window
         assert "parking_holds = _exact_short is None and _exact_host_short is None" in source
         assert "self._exact_host_short = None" in source
@@ -387,7 +391,9 @@ class TestTheNamedBudgetIsJudged:
         launch = source.index('cmd.extend(["--preempt-ram", str(_exact_budget)])')
         assert "self._exact_parking_writes = _exact_writes" in source[launch : launch + 1800]
         after = source.index("_server_props = self._query_server_props() or {}")
-        again = source.index("_exact_host_shortfall_after_load(")
+        again = source.index(
+            '_exact_host_shortfall_after_load( getattr(self, "_exact_parking_writes", None)'
+        )
         assert again < after, "judged after the props read, which is after the launch"
         assert "if _exact_host_short is None: " in source[again - 400 : again]
         assert (
@@ -650,6 +656,34 @@ class TestTheRunLoopProbesParkingRatherThanWaitForTheStamp:
         runs._park_probe_last[backend] = (at - runs._PARK_PROBE_MIN_INTERVAL_S - 0.1, answer)
         assert runs._server_park_excused_recently() is True
         assert backend.asked == 2
+
+    def test_runs_silent_together_share_one_scrape(self, monkeypatch):
+        import threading
+
+        backend = self._Backend()
+        started = threading.Event()
+
+        def slow_scrape():
+            backend.asked += 1
+            started.set()
+            time.sleep(0.3)
+            return True
+
+        backend._server_park_grace = slow_scrape
+        monkeypatch.setattr(inference, "get_llama_cpp_backend", lambda: backend)
+        answers: list = []
+        workers = [
+            threading.Thread(target = lambda: answers.append(runs._server_park_excused_recently()))
+            for _ in range(6)
+        ]
+        workers[0].start()
+        assert started.wait(2.0)
+        for worker in workers[1:]:
+            worker.start()
+        for worker in workers:
+            worker.join(5.0)
+        assert answers == [True] * 6
+        assert backend.asked == 1, f"{backend.asked} scrapes for one expired entry"
 
     def test_a_probe_on_one_server_does_not_starve_another(self, monkeypatch):
         first, second = self._Backend(), self._Backend()

@@ -412,18 +412,29 @@ _PREEMPT_RECOMPUTED_MARKER = ": preempt-recomputed"
 _PREEMPT_KEEPALIVE_MARKER = ": preempt-keepalive"
 
 
-def _admission_status_chunks(text: str) -> list[dict]:
-    """The pause and resume comments in one piece of the upstream stream, as chunks a durable
-    follower renders the way the legacy stream renders the comments."""
+_ADMISSION_STATUS_BY_MARKER = {
+    _ADMISSION_WAIT_MARKER: "waiting",
+    _ADMISSION_DONE_MARKER: "admitted",
+    _PREEMPT_PAUSED_MARKER: "paused",
+    _PREEMPT_RESUMED_MARKER: "resumed",
+    _PREEMPT_RECOMPUTED_MARKER: "recomputed",
+}
+
+
+def _admission_status_chunks(text: str, last: list | None = None) -> list[dict]:
+    """The queue, pause and resume comments in one piece of the upstream stream, as chunks a
+    durable follower renders the way the legacy stream renders the comments. ``last`` holds the
+    status relayed before: the wait comment repeats every keepalive, and only a change counts."""
     chunks: list[dict] = []
     for line in text.replace("\r\n", "\n").split("\n"):
-        stripped = line.strip()
-        if stripped == _PREEMPT_PAUSED_MARKER:
-            chunks.append({"_admissionStatus": "paused"})
-        elif stripped == _PREEMPT_RESUMED_MARKER:
-            chunks.append({"_admissionStatus": "resumed"})
-        elif stripped == _PREEMPT_RECOMPUTED_MARKER:
-            chunks.append({"_admissionStatus": "recomputed"})
+        status = _ADMISSION_STATUS_BY_MARKER.get(line.strip())
+        if status is None:
+            continue
+        if last is not None:
+            if last and last[0] == status:
+                continue
+            last[:] = [status]
+        chunks.append({"_admissionStatus": status})
     return chunks
 
 
@@ -518,6 +529,9 @@ _PARK_PROBE_MIN_INTERVAL_S = 5.0
 # backend, so a run on another model's server is never starved of its own reading.
 _park_probe_last: "weakref.WeakKeyDictionary[Any, tuple]" = weakref.WeakKeyDictionary()
 _park_probe_lock = threading.Lock()
+# One probe in flight per backend: callers arriving while it runs wait for it and take its answer,
+# rather than each seeing the same expired entry and scraping at once.
+_park_probe_inflight: "weakref.WeakKeyDictionary[Any, threading.Lock]" = weakref.WeakKeyDictionary()
 
 
 def _server_park_probe_now(backend: Any) -> bool:
@@ -534,15 +548,20 @@ def _server_park_probe_now(backend: Any) -> bool:
     probe = getattr(backend, "_server_park_grace", None)
     if not callable(probe):
         return False
-    now = time.monotonic()
     with _park_probe_lock:
-        last = _park_probe_last.get(backend)
-        if last is not None and now - last[0] < _PARK_PROBE_MIN_INTERVAL_S:
-            return last[1]
-    answer = bool(probe())
-    with _park_probe_lock:
-        _park_probe_last[backend] = (now, answer)
-    return answer
+        inflight = _park_probe_inflight.get(backend)
+        if inflight is None:
+            inflight = _park_probe_inflight[backend] = threading.Lock()
+    with inflight:
+        now = time.monotonic()
+        with _park_probe_lock:
+            last = _park_probe_last.get(backend)
+            if last is not None and now - last[0] < _PARK_PROBE_MIN_INTERVAL_S:
+                return last[1]
+        answer = bool(probe())
+        with _park_probe_lock:
+            _park_probe_last[backend] = (now, answer)
+        return answer
 
 
 def _server_park_excused_recently() -> bool:
@@ -864,6 +883,7 @@ class ChatGenerationSupervisor:
                 raise RuntimeError("Local generation did not return an event stream")
             decoder = _SSEDecoder()
             last_keepalive = time.monotonic()
+            last_status: list = []
             next_raw_task = asyncio.create_task(iterator.__anext__())
             while True:
                 timeout = (
@@ -912,7 +932,7 @@ class ChatGenerationSupervisor:
                     if now_s - last_keepalive >= _renew_interval_seconds():
                         last_keepalive = now_s
                         await self._try_touch_progress(run_id)
-                status_chunks = _admission_status_chunks(text)
+                status_chunks = _admission_status_chunks(text, last_status)
                 if status_chunks:
                     # Written at once, not batched: nothing follows a pause while it lasts, so a
                     # batched notice would reach the follower with the resume. Also lease progress.

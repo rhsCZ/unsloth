@@ -668,6 +668,9 @@ class Participant:
     # True once an idle-slot reclaim erased this holder's cells while it was parked. Counting
     # them anyway kept two waiting chats out of an EMPTY cache for three minutes.
     cells_reclaimed: bool = False
+    # Erased but re-charged before the release ran, so it counts again: the next round
+    # boundary still replays the whole prompt, and must announce it so.
+    replay_pending: bool = False
     # Bumped every time this holder stops on a tool. A reclaim is planned from a `/slots`
     # reading and released after the erases, so the release has to tell the holder that
     # reading saw parked from one that parked (or parked again) while the erases were in
@@ -1084,18 +1087,17 @@ class PreemptionController:
         # the prefill, and a chat that announced must not pay twice.
         pending = self._pending_prefill_locked(exclude = gen_id) + max(0, int(want or 0))
         ceiling = max(0, self._budget - self._buffer_locked(pending = pending))
-        ledger_others = sum(
-            p.tokens for gid, p in self._participants.items() if p.holds_kv and gid != gen_id
-        )
-        # Resident cells count too, minus what this generation holds, or an idle slot's
-        # leftovers are invisible here exactly as they were to the watermark.
-        others = ledger_others
+        holders = [p for gid, p in self._participants.items() if p.holds_kv and gid != gen_id]
+        measured = sum(p.tokens for p in holders if p.measured)
+        # Not yet in any reading (a resume granted ahead of this one, a prefill under way): on
+        # top of it, as the watermark counts them, or two resumes are each granted the same room.
+        unmeasured = sum(p.tokens for p in holders if not p.measured)
+        others = measured + unmeasured
         if self._resident is not None:
-            mine = self._participants.get(gen_id)
             # Minus the idle residue, erased for the waiter rather than waited out. Counting it
             # deadlocked scheduling: the ledger read 0 while the slots read 21304 of 14312.
             occupied = self._resident - self._reclaimable
-            others = max(others, occupied - self._my_resident_locked(gen_id))
+            others = max(measured, occupied - self._my_resident_locked(gen_id)) + unmeasured
         need = max(0, int(want or 0))
         others = max(0, others)
         reserved = max(0, int(reserved or 0))
@@ -1108,9 +1110,16 @@ class PreemptionController:
             return need <= self._solo_ceiling_locked()
         return False
 
-    def observe(self, gen_id: str, generated: int) -> List["Participant"]:
+    def observe(
+        self,
+        gen_id: str,
+        generated: int,
+        *,
+        plan: bool = True,
+    ) -> List["Participant"]:
         """Live growth during generation, and THE watermark sweep. It cannot live only between
-        rounds: one round can generate thousands of tokens. Returns whoever must stop, signalled.
+        rounds: one round can generate thousands of tokens. Returns whoever must stop, signalled;
+        ``plan = False`` records the growth only, for a caller that reclaims before it plans.
 
         Gated first: off, the surfaces hand out `on_tokens = None` and no chat reaches here, but
         the tool loops re-baseline through `note_tokens`, and that sweeps."""
@@ -1126,16 +1135,19 @@ class PreemptionController:
                 participant.generated_seen = reported
                 self._progress_tokens += (reported - previous) if reported >= previous else reported
                 participant.tokens = participant.resident_tokens(reported)
-                participant.measured = True
-                participant.cells_reclaimed = False
                 if reported > 0:
-                    # Guarded on `generated`: the round-boundary sweep calls this with zero
-                    # right after `note_tokens` announced the growth.
+                    # Only a decoded token says the prompt is in: the round boundary's zero
+                    # follows `note_tokens`, and would undo a replay it just announced.
+                    participant.measured = True
+                    participant.cells_reclaimed = False
+                    participant.replay_pending = False
                     participant.prefill_done()
                 # A generated token is proof of decoding, whatever the route last reported: a round
                 # streaming only tool-call deltas left a chat unpreemptable past the ceiling.
                 if participant.state in _DECODES_WHEN_TOKENS_ARRIVE:
                     participant.state = ParticipantState.DECODING
+        if not plan:
+            return []
         # Outside the lock: plan_preemptions takes it, and it is not reentrant.
         return self.plan_preemptions(needed = 0)
 
@@ -1265,7 +1277,7 @@ class PreemptionController:
                     participant.prompt_tokens if participant.prompt_tokens > 0 else charge
                 )
                 growth = participant.tokens - previous
-                replayed = participant.cells_reclaimed
+                replayed = participant.cells_reclaimed or participant.replay_pending
                 if replayed:
                     # A reclaim erased every cell: the whole prompt goes in again, not the
                     # round's growth. This runs before `note_state` sees DECODING.
@@ -1286,6 +1298,7 @@ class PreemptionController:
                 participant.measured = not replayed
                 participant.measured_at_seq = None
                 participant.cells_reclaimed = False
+                participant.replay_pending = False
 
     # PAUSED, PREEMPTING, QUEUED and the raw surfaces are owned by other transitions.
     _LIVE_STATES = frozenset(
@@ -1302,37 +1315,51 @@ class PreemptionController:
         if state not in self._LIVE_STATES:
             return False
         with self._lock:
-            participant = self._participants.get(gen_id)
-            if (
-                participant is not None
-                and participant.state == ParticipantState.PREEMPTING
-                and state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING)
-            ):
-                # Chosen as its stream finished a tool call: nothing reads the signal while the
-                # tool runs, so the choice is undone as `note_declined` undoes one. A tool holder
-                # is the cheapest room anyway: its idle cells are reclaimed, and the next sweep
-                # can choose it again.
-                participant.preempt_chosen_at = 0.0
-                participant.consecutive_preemptions = max(
-                    0, participant.consecutive_preemptions - 1
-                )
-                participant.preempt_event.clear()
-                participant.state = ParticipantState.DECODING
-            if participant is None or participant.state not in self._LIVE_STATES:
-                return False
-            if participant.state == state:
-                return False
-            participant.state = state
-            if state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING):
-                participant.park_seq += 1
-                participant.park_charge_seq = getattr(participant.lease, "charge_seq", None)
-            if state == ParticipantState.DECODING:
-                # Back at the model: the prompt is prefilled in again, so the cells are real.
-                if participant.cells_reclaimed:
-                    # And the WHOLE prompt: a reclaim erased every cell, so no prefix is left to hit.
-                    participant.announce_prefill(participant.tokens)
-                participant.cells_reclaimed = False
+            changed = self._note_state_locked(gen_id, state)
+        if changed is None:
+            # The plan that chose it counted its cells as leaving, and nothing else may sweep
+            # before the room is used: an unpausable holder plans once and reports no growth.
+            # Planned again, in memory only, since the streaming drains call this on the loop.
+            self.plan_preemptions(needed = 0)
             return True
+        return changed
+
+    def _note_state_locked(self, gen_id: str, state: str) -> Optional[bool]:
+        """`note_state` under the lock: None when a pending choice was undone (and the state
+        then recorded), else whether the state changed."""
+        revoked = False
+        participant = self._participants.get(gen_id)
+        if (
+            participant is not None
+            and participant.state == ParticipantState.PREEMPTING
+            and state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING)
+        ):
+            # Chosen as its stream finished a tool call: nothing reads the signal while the
+            # tool runs, so the choice is undone as `note_declined` undoes one. A tool holder
+            # is the cheapest room anyway: its idle cells are reclaimed, and the next sweep
+            # can choose it again.
+            participant.preempt_chosen_at = 0.0
+            participant.consecutive_preemptions = max(0, participant.consecutive_preemptions - 1)
+            participant.preempt_event.clear()
+            participant.state = ParticipantState.DECODING
+            revoked = True
+        if participant is None or participant.state not in self._LIVE_STATES:
+            return False
+        if participant.state == state:
+            return None if revoked else False
+        participant.state = state
+        if state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING):
+            participant.park_seq += 1
+            participant.park_charge_seq = getattr(participant.lease, "charge_seq", None)
+        if state == ParticipantState.DECODING:
+            # Back at the model: llama-server prefills the prompt in again, so the
+            # cells are real once more.
+            if participant.cells_reclaimed:
+                # The WHOLE prompt, not a round's growth: the reclaim erased every
+                # cell, so there is no prefix left to hit.
+                participant.announce_prefill(participant.tokens)
+            participant.cells_reclaimed = False
+        return None if revoked else True
 
     def parked_holders(self) -> Dict[str, int]:
         """Who is parked on a tool right now, with each one's park count.
@@ -1402,6 +1429,9 @@ class PreemptionController:
                     if participant.cells_reclaimed and participant.park_seq == park_seq:
                         participant.cells_reclaimed = False
                         participant.announce_prefill(participant.tokens)
+                        # The round publishing that charge has not run yet, and would read
+                        # this as a prefix kept: its whole prompt is still to go in.
+                        participant.replay_pending = True
         return len(released)
 
     def restart(self, gen_id: str) -> None:
@@ -1418,6 +1448,7 @@ class PreemptionController:
             participant.measured = False
             participant.measured_at_seq = None
             participant.cells_reclaimed = False
+            participant.replay_pending = False
             participant.consecutive_preemptions = 0
             participant.state = ParticipantState.DECODING
             participant.preempt_event.clear()

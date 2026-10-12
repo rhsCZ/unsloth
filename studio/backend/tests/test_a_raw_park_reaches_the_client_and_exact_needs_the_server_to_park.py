@@ -397,7 +397,12 @@ class TestTheNamedBudgetIsJudged:
         assert llama_mod._exact_host_shortfall_after_load(4096, 4096) is None
         assert llama_mod._exact_host_shortfall_after_load(4096, 1000) == (4096, 1000)
         assert llama_mod._exact_host_shortfall_after_load(None, 1000) is None
-        assert llama_mod._exact_host_shortfall_after_load(4096, None) is None
+        # Unreadable is not room: nothing certifies the parks, so exact is not reported on.
+        assert llama_mod._exact_host_shortfall_after_load(4096, None) == (4096, -1)
+        assert llama_mod._exact_host_shortfall_after_load(0, None) is None
+        assert "could not be read" in llama_mod._exact_host_short_warning((4096, -1))
+        assert "1000 MiB free" in llama_mod._exact_host_short_warning((4096, 1000))
+        assert "free memory could not be read" in source
 
     def test_a_single_slot_still_budgets_the_one_snapshot_it_writes(self):
         pool = 1024 * 1024 * 1024
@@ -1546,7 +1551,7 @@ class TestParkingIsOffUntilTheLaunchAsksForIt:
     def test_the_launch_takes_the_decision_this_way(self):
         source = " ".join(inspect.getsource(LlamaCppBackend.load_model).split())
         site = source.index('_park_supported = bool(server_caps.get("supports_preempt_ram"))')
-        window = source[site : site + 1500]
+        window = source[site : site + 2500]
         assert (
             "_park_owned = _park_supported and not _child_parking_stands_down(_park_supported)"
             in window
@@ -1598,7 +1603,7 @@ class TestAnAbandonedExactAttemptLeavesNoUnlimitedParkingBudget:
         window = spawn[rung : rung + 1400]
         assert "continue" in window
         before = window.split("continue")[0]
-        assert "_rebound_named_parking_budget(run_cmd, _exact_budget, self)" in before
+        assert "_bound_parking_off_exact(run_cmd)" in before
 
     def test_a_short_budget_is_reported_as_the_mode_running_short_not_as_absent(self):
         # The child keeps the mode after a late shortfall, so the warning, and the `on`

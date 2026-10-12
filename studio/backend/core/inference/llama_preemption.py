@@ -266,6 +266,16 @@ class PreemptSignal:
         self._depth = 0
         self._pending = False
         self._reason: Optional[str] = None
+        # When the stream last saw its prefill advance, on `time.monotonic()`; 0 is never.
+        self._prefill_progress_at = 0.0
+
+    def note_prefill_progress(self) -> None:
+        """The stream this signal pauses saw its prompt processing move forward."""
+        self._prefill_progress_at = time.monotonic()
+
+    @property
+    def prefill_progress_at(self) -> float:
+        return self._prefill_progress_at
 
     def request(self, reason: str = "kv_pressure") -> None:
         with self._lock:
@@ -713,7 +723,13 @@ class Participant:
         submits nothing until the resume grant, which is where it announces again."""
         if self.pending_prefill <= 0 or not self.holds_kv:
             return 0
-        if now - self.pending_prefill_at > PENDING_PREFILL_TTL_S:
+        # Counted from the last progress the stream saw as well: a prefill still advancing
+        # keeps its first-token window renewed past this TTL, and still needs the batch.
+        since = max(
+            self.pending_prefill_at,
+            float(getattr(self.preempt_event, "prefill_progress_at", 0.0) or 0.0),
+        )
+        if now - since > PENDING_PREFILL_TTL_S:
             return 0
         return self.pending_prefill
 
@@ -926,7 +942,8 @@ class PreemptionController:
             participant.charged_tokens = participant.tokens
             participant.charged_prompt_tokens = participant.prompt_tokens
             # Announced HERE, so the sweep right afterwards already plans against the raised buffer.
-            participant.announce_prefill(participant.tokens)
+            # The prompt, not the charge: the output allowance is decoded, never prefilled.
+            participant.announce_prefill(participant.prompt_tokens or participant.tokens)
             self._participants[gen_id] = participant
             return participant
 
@@ -1248,7 +1265,8 @@ class PreemptionController:
                     participant.prompt_tokens if participant.prompt_tokens > 0 else charge
                 )
                 growth = participant.tokens - previous
-                if participant.cells_reclaimed:
+                replayed = participant.cells_reclaimed
+                if replayed:
                     # A reclaim erased every cell: the whole prompt goes in again, not the
                     # round's growth. This runs before `note_state` sees DECODING.
                     participant.announce_prefill(participant.tokens)
@@ -1263,7 +1281,10 @@ class PreemptionController:
                 # This round has written nothing yet, and what the last one wrote is now
                 # part of the prompt above.
                 participant.generated_seen = 0
-                participant.measured = True
+                # Not after an erase: no reading can hold the replay until it is sent, so it is
+                # added on top until a token or a later sample says it is in.
+                participant.measured = not replayed
+                participant.measured_at_seq = None
                 participant.cells_reclaimed = False
 
     # PAUSED, PREEMPTING, QUEUED and the raw surfaces are owned by other transitions.
@@ -1282,6 +1303,21 @@ class PreemptionController:
             return False
         with self._lock:
             participant = self._participants.get(gen_id)
+            if (
+                participant is not None
+                and participant.state == ParticipantState.PREEMPTING
+                and state in (ParticipantState.PARKED_ON_TOOL, ParticipantState.TOOLS_RUNNING)
+            ):
+                # Chosen as its stream finished a tool call: nothing reads the signal while the
+                # tool runs, so the choice is undone as `note_declined` undoes one. A tool holder
+                # is the cheapest room anyway: its idle cells are reclaimed, and the next sweep
+                # can choose it again.
+                participant.preempt_chosen_at = 0.0
+                participant.consecutive_preemptions = max(
+                    0, participant.consecutive_preemptions - 1
+                )
+                participant.preempt_event.clear()
+                participant.state = ParticipantState.DECODING
             if participant is None or participant.state not in self._LIVE_STATES:
                 return False
             if participant.state == state:
@@ -1359,6 +1395,13 @@ class PreemptionController:
                         yield_parked(charged_at = charge_seq)
                 except Exception:  # pragma: no cover - bookkeeping must not fail a run
                     _log.debug("could not yield a parked commitment", exc_info = True)
+            if charge_seq is not None and getattr(lease, "charge_seq", charge_seq) != charge_seq:
+                # Re-charged before the scan, so the lease kept the new commitment: it is a
+                # prompt being prefilled again, and must count, reserve included.
+                with self._lock:
+                    if participant.cells_reclaimed and participant.park_seq == park_seq:
+                        participant.cells_reclaimed = False
+                        participant.announce_prefill(participant.tokens)
         return len(released)
 
     def restart(self, gen_id: str) -> None:
@@ -1378,7 +1421,7 @@ class PreemptionController:
             participant.consecutive_preemptions = 0
             participant.state = ParticipantState.DECODING
             participant.preempt_event.clear()
-            participant.announce_prefill(participant.tokens)
+            participant.announce_prefill(participant.prompt_tokens or participant.tokens)
 
     def note_replayed(self, gen_id: str, tokens: int) -> None:
         """Tokens a paused attempt decoded that the NEXT attempt sends back as prompt: they do not

@@ -245,6 +245,7 @@ import {
   getGroundedExternalMaxOutputTokens,
   getExternalMinOutputTokens,
   getExternalReasoningCapabilities,
+  providerModelReplaysReasoning,
   providerSupportsPreserveThinking,
   getProviderCapabilities,
   providerHostsCodeExecution,
@@ -2555,7 +2556,7 @@ const MAX_AUTO_LOAD_ATTEMPTS = 3;
 const MAX_AUTO_VALIDATE_FAILURES = 12;
 const BIG_ENDIAN_GGUF_FILENAME_RE = /(^|[-_])be(?:[._-]|$)/gi;
 const GGUF_KNOWN_QUANT_RE =
-  /(UD-)?(MXFP[0-9]+(?:_[A-Z0-9]+)*|IQ[0-9]+_[A-Z]+(?:_[A-Z0-9]+)?|P?TQ[0-9]+_[0-9]+|Q[0-9]+_K_[A-Z]+|P?Q[0-9]+_[0-9]+(?:_G[0-9]+)?|Q[0-9]+_K|BF16|F16|F32)/i;
+  /(UD-)?(MXFP[0-9]+(?:_[A-Z0-9]+)*|IQ[0-9]+_[A-Z]+(?:_[A-Z0-9]+)?|P?TQ[0-9]+_[0-9]+|Q[0-9]+_K_[A-Z]+|P?Q[0-9]+_(?:[0-9]+(?:_G[0-9]+)?|G[0-9]+)|Q[0-9]+_K|BF16|F16|F32)/i;
 
 type AutoLoadCandidate = {
   id: string;
@@ -3522,6 +3523,12 @@ async function autoLoadSmallestModel(options?: AutoLoadOptions): Promise<{
     }
     // Never install packages from a background load; explicit loads raise the upgrade dialog.
     if (validation.requires_transformers_upgrade) {
+      hadNonTrustFailure = true;
+      validateFailures += 1;
+      return false;
+    }
+    // Engine choice is the picker dialog's; the default engine would decompress and crawl (#8861).
+    if (validation.managed_engine_offer) {
       hadNonTrustFailure = true;
       validateFailures += 1;
       return false;
@@ -5280,6 +5287,9 @@ export function createOpenAIStreamAdapter(
       const replayReasoning = !isExternalRequest || (
         providerSupportsPreserveThinking(externalProvider?.providerType) &&
         runtime.preserveThinking
+      ) || providerModelReplaysReasoning(
+        externalProvider?.providerType,
+        externalSelection?.modelId,
       );
       const survivingMessages = pruneOutboundHistory(messages, replayReasoning);
       const { messages: renderedMessages, sandboxAttachments } =
@@ -5901,6 +5911,11 @@ export function createOpenAIStreamAdapter(
       // Seeded from the answer this continues, so a later round that was not recomputed does
       // not clear it off the joined answer.
       let sawPreemptRecompute = continuation?.preemptRecomputed === true;
+      // Where that recompute happened: a Continue on another checkpoint keeps it, and only a
+      // recompute of its own moves it to this one.
+      let preemptRecomputedOn =
+        continuation?.preemptRecomputedModelId ??
+        (sawPreemptRecompute ? params.checkpoint : undefined);
       let providerCompaction: ProviderCompactionContentPart | undefined =
         continuationCompaction ?? undefined;
       let providerCompactionAfterToolCalls: number | undefined =
@@ -5934,7 +5949,7 @@ export function createOpenAIStreamAdapter(
         contextTruncation,
         preemptRecomputed: sawPreemptRecompute || undefined,
         // Live yields carry no response details, and an interrupted answer persists from here.
-        preemptRecomputedModelId: sawPreemptRecompute ? params.checkpoint : undefined,
+        preemptRecomputedModelId: sawPreemptRecompute ? preemptRecomputedOn : undefined,
         providerCompaction,
         providerCompactionAfterToolCalls,
         providerCompactionProviderType,
@@ -7257,6 +7272,7 @@ export function createOpenAIStreamAdapter(
                   // Qualifies the resume before it, so the status line stays as it is.
                   // Reaches the chip through the message metadata below, per branch.
                   sawPreemptRecompute = true;
+                  preemptRecomputedOn = params.checkpoint;
                   continue;
                 }
                 runtime.setToolStatus(
@@ -8831,7 +8847,7 @@ export function createOpenAIStreamAdapter(
               openaiResponsesReasoning: openAIResponsesReasoningLedger,
               contextTruncation,
               preemptRecomputed: sawPreemptRecompute || undefined,
-              preemptRecomputedModelId: sawPreemptRecompute ? params.checkpoint : undefined,
+              preemptRecomputedModelId: sawPreemptRecompute ? preemptRecomputedOn : undefined,
               providerCompaction,
               providerCompactionAfterToolCalls,
               providerCompactionProviderType,
@@ -9011,6 +9027,9 @@ export function createOpenAIStreamAdapter(
               custom: {
                 ...reasoningDurationTracker.metadata(),
                 contextTruncation,
+                // Replaces every earlier snapshot, so the re-prefill caveat rides it too.
+                preemptRecomputed: sawPreemptRecompute || undefined,
+                preemptRecomputedModelId: sawPreemptRecompute ? preemptRecomputedOn : undefined,
                 providerCompaction,
                 providerCompactionAfterToolCalls,
                 providerCompactionProviderType,

@@ -427,6 +427,9 @@ class ToolLoopPolicy:
     # None keeps the request default (on); explicit booleans win.
     deduplicate_tool_calls: bool | None = None
     sandbox_level: str = "high"
+    # The request's `parallel_tool_calls`. False runs a round's calls one at a time; the
+    # provider already returned them all, so each still gets its result in its slot.
+    parallel_tool_calls: bool | None = None
 
 
 def _split_top_level_json_objects(text: str) -> tuple[list[str], str]:
@@ -1968,6 +1971,7 @@ async def stream_with_studio_tools(
         _round_one_shot = [name for name in _round_names if name in _one_shot]
         parallel_round = (
             parallel_tool_calls_enabled()
+            and policy.parallel_tool_calls is not False
             and len(calls) > 1
             # Bounded: overlap is a thread and a task per call, and this round's length is the
             # model's choice, not the user's.
@@ -2140,10 +2144,14 @@ async def stream_with_studio_tools(
                         _unrun_call_card(
                             tool_name = decision.tool_name,
                             tool_call_id = (
-                                call.get("card_id") or call.get("stream_id") or decision.tool_call_id
+                                call.get("card_id")
+                                or call.get("stream_id")
+                                or decision.tool_call_id
                             ),
                             arguments = decision.arguments,
-                            result = _TOOL_SKIPPED.get(decision.action, "Unsloth did not run this call."),
+                            result = _TOOL_SKIPPED.get(
+                                decision.action, "Unsloth did not run this call."
+                            ),
                             provenance = decision.provenance,
                         )
                     )
@@ -2200,7 +2208,9 @@ async def stream_with_studio_tools(
                 try:
                     # A gated call has not started, so it must not read as running.
                     yield _status_sse(
-                        awaiting_approval_status(name) if needs_confirmation else decision.status_text
+                        awaiting_approval_status(name)
+                        if needs_confirmation
+                        else decision.status_text
                     )
                     yield _sse(start_event)
                     verdict = None
@@ -2346,7 +2356,17 @@ async def stream_with_studio_tools(
                 pump = asyncio.create_task(
                     _pump_tool_stream(tool_stream, outcome, events, cancel_event)
                 )
-                entry = ("call", decision, name, call_id, card_id, tool_stream, outcome, events, pump)
+                entry = (
+                    "call",
+                    decision,
+                    name,
+                    call_id,
+                    card_id,
+                    tool_stream,
+                    outcome,
+                    events,
+                    pump,
+                )
                 if parallel_round:
                     # Started, not awaited: the next call's tool is launched while this one works.
                     pending_calls.append(entry)

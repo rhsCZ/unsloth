@@ -202,8 +202,8 @@ test("the recompute note is persisted with the answer and read from the answer o
   // visible branch, so a reload, a retry and a switch back to a sibling all agree.
   assert.equal(
     ADAPTER.match(/preemptRecomputed: sawPreemptRecompute \|\| undefined,/g)?.length,
-    2,
-    "the live and the final metadata both carry it",
+    3,
+    "the live, the final and the interrupted settlement metadata all carry it",
   );
   assert.doesNotMatch(ADAPTER, /notePreemptRecompute|clearPreemptRecompute/);
   assert.match(PROVIDER, /preemptRecomputed: true/);
@@ -220,16 +220,22 @@ test("the recompute note is persisted with the answer and read from the answer o
   );
   // An answer with no usage record still names its model in its details.
   assert.match(PROVIDER, /custom\?\.responseDetails as \{ modelId\?: unknown \}/);
-  assert.match(PROVIDER, /: typeof details\?\.modelId === "string" && details\.modelId\s+\? details\.modelId/);
+  assert.match(PROVIDER, /typeof details\?\.modelId === "string" && details\.modelId\s+\? details\.modelId/);
   // An interrupted answer persists from a live yield, which carries no details, so the
   // recompute records the model it happened on itself.
   assert.equal(
-    ADAPTER.match(/preemptRecomputedModelId: sawPreemptRecompute \? params\.checkpoint : undefined,/g)
+    ADAPTER.match(/preemptRecomputedModelId: sawPreemptRecompute \? preemptRecomputedOn : undefined,/g)
       ?.length,
-    2,
-    "the live and the final metadata both name the recompute's model",
+    3,
+    "the live, the final and the interrupted settlement all name the recompute's model",
   );
-  assert.match(PROVIDER, /: typeof recomputedOn === "string" && recomputedOn\s+\? recomputedOn/);
+  // Read before usage: a Continue on another checkpoint stamps the joined usage with that one.
+  assert.match(PROVIDER, /const answerModelId =\s+typeof recomputedOn === "string" && recomputedOn\s+\? recomputedOn/);
+  // And the durable follower, whose interrupted answers persist without details either.
+  assert.match(
+    PROVIDER,
+    /const recomputedOn = update\.run\.requestPayload\?\.model;[\s\S]{0,300}preemptRecomputedModelId: recomputedOn/,
+  );
   // The selector hands back the message itself, never a fresh object: a new object on every
   // store read re-renders without end (React error 185, seen in the Windows UI lane).
   assert.doesNotMatch(PROVIDER, /useAuiState\(\(\{ thread \}\) => \{[\s\S]{0,400}return \{/);

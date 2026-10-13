@@ -29,7 +29,6 @@ test("a finished answer clears the give-up, a length stop does not", () => {
   assert.equal(completedAfterGivingUp(""), false);
 });
 
-/** The adapter's own two steps over a stream, in the order it runs them. */
 function replay(
   chunks: readonly { finishReason?: string; gaveUp?: boolean }[],
 ): IncompleteReason | null {
@@ -60,7 +59,6 @@ test("a turn that gave up mid-round and then answered is complete", () => {
     replay([
       { finishReason: "tool_calls" },
       { gaveUp: true },
-      // The final synthesis pass the backend breaks into, finishing normally.
       { finishReason: "stop" },
     ]),
     null,
@@ -79,8 +77,7 @@ test("a turn that gave up and stopped there is still paused", () => {
 });
 
 test("a give-up after an answer still wins", () => {
-  // The order that matters: the notice arrives AFTER a pass that stopped normally when the
-  // give-up happened in the final pass itself, which really did end the turn early.
+  // A give-up in the final pass itself really did end the turn early.
   assert.equal(replay([{ finishReason: "stop" }, { gaveUp: true }]), "paused");
 });
 

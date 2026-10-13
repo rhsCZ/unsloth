@@ -26,8 +26,7 @@ from .preempt_fakes import executed, rendezvous  # noqa: E402
 # pytest finds these by name; named here so the import reads as a use.
 _FIXTURES = (executed, rendezvous)
 
-# The scripted transport and the SSE readers, rather than a second copy: a fake that drifts
-# from the one the rest of the loop is tested against would be testing a different loop.
+# Shared fakes: a drifting copy would test a different loop.
 from test_studio_tool_loop import (  # noqa: E402
     WEB,
     PY,
@@ -42,8 +41,6 @@ from test_llama_cpp_tool_loop import _make_backend  # noqa: E402
 from test_llama_cpp_tool_loop import _sse as _gguf_sse  # noqa: E402
 
 _CAP = loop_mod._MAX_PARALLEL_TOOL_CALLS_PER_ROUND
-# `max_tool_calls_per_message` at its unlimited sentinel, where nothing above the launch
-# refuses a call: the value the overlap report was filed against.
 _UNLIMITED = 9999
 
 
@@ -315,7 +312,6 @@ class TestTheLocalGgufLoopOverlapsToo:
         ends = [e for e in events if e.get("type") == "tool_end"]
         assert [e.get("tool_call_id") for e in ends] == ["call_a", "call_b", "call_c"]
         assert _results(ends) == ["RESULT<alpha>", "RESULT<beta>", "RESULT<gamma>"]
-        # And one assistant row carries every call, each beside its own result.
         messages = payloads[1]["messages"]
         assistant = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
         assert assistant and [c["id"] for c in assistant[-1]["tool_calls"]] == [
@@ -331,9 +327,7 @@ class TestTheLocalGgufLoopOverlapsToo:
         ], "a result was attached to a call that did not produce it"
 
     def test_a_refused_call_keeps_its_place_in_the_round(self, monkeypatch):
-        """A call whose arguments put the prompt over the window is refused without running.
-        In a parallel round the refusal used to close and append at once while the calls before
-        it were still deferred, so the tool messages settled B, A against the model's A, B."""
+        """A call whose arguments put the prompt over the window is refused without running."""
         payloads: list[dict] = []
         filler = "go"
         backend = _make_backend(
@@ -358,8 +352,6 @@ class TestTheLocalGgufLoopOverlapsToo:
         )
 
         def _count(messages, *_args, **_kwargs):
-            # The edit's own arguments are what put the prompt over the window: any prompt
-            # in which its call is answered, compacted or not, is far past it.
             answered_b = any(
                 m.get("role") == "tool" and m.get("tool_call_id") == "call_b" for m in messages
             )
@@ -392,12 +384,7 @@ class TestTheLocalGgufLoopOverlapsToo:
         assert [m.get("tool_call_id") for m in tool_msgs] == ["call_a", "call_b"], tool_msgs
 
     def test_a_refused_call_does_not_spend_the_turns_one_shot(self, monkeypatch):
-        """A call refused before it ran must not be recorded as a successful execution.
-
-        The refusal text says "Nothing was written", so settling it through the real-execution
-        path told the controller `render_html` had completed: the smaller retry later in the
-        same turn was turned into a no-op and the turn ended without a page.
-        """
+        """A call refused before it ran must not be recorded as a successful execution."""
         payloads: list[dict] = []
         backend = _make_backend(
             monkeypatch,
@@ -415,7 +402,6 @@ class TestTheLocalGgufLoopOverlapsToo:
         )
 
         def _count(messages, *_args, **_kwargs):
-            # Everything after the refusal prices small, so only call_b is ever refused.
             if "refused before it ran" in json.dumps(messages, default = str):
                 return 100
             answered_b = any(
@@ -446,11 +432,8 @@ class TestTheLocalGgufLoopOverlapsToo:
         assert [e.get("tool_call_id") for e in ends[:2]] == ["call_a", "call_b"], ends
         assert "Nothing was written" in str(ends[1].get("result") or "")
         assert executed == ["web_search", "render_html"], executed
-        # The refusal is still answered in its own slot of the round.
         tool_msgs = [m for m in payloads[1]["messages"] if m.get("role") == "tool"]
         assert [m.get("tool_call_id") for m in tool_msgs] == ["call_a", "call_b"], tool_msgs
-        # And `render_html` is still advertised: `active_tools` drops a one-shot tool the
-        # controller believes completed.
         assert "render_html" in json.dumps(payloads[1].get("tools"), default = str)
 
     def test_a_round_of_refusals_does_not_spend_a_tool_iteration(self, monkeypatch):
@@ -479,7 +462,6 @@ class TestTheLocalGgufLoopOverlapsToo:
         )
 
         def _count(messages, *_args, **_kwargs):
-            # Both calls of the first round are refused; everything after prices small.
             refusals = json.dumps(messages, default = str).count("refused before it ran")
             return 100000 if refusals < 2 else 100
 
@@ -547,8 +529,7 @@ class TestTheLocalGgufLoopOverlapsToo:
         assert [e.get("type") for e in events].count("tool_end") == 1
 
     def test_a_padded_one_shot_name_is_the_same_tool(self, monkeypatch):
-        # `prepare_call` strips the name, so ` render_html ` is render_html: the round may not
-        # overlap, or both launch before either records the one-shot as spent.
+        # `prepare_call` strips names, so a padded one-shot name must not overlap.
         ran: list = []
 
         def _execute(name, arguments, **_kwargs):
@@ -605,9 +586,7 @@ class TestARoundIsPreparedWholeAndBounded:
             order.append(("attach", self_.tool_name))
             return real_attach(self_)
 
-        # *args: this stands in for a production helper whose parameters have changed
-        # once already, and a stale stub here fails as a TypeError rather than as this
-        # test's own claim.
+        # *args, so a stale stub fails as this test rather than as a TypeError.
         def _start(decision, *args, **kwargs):
             order.append(("start", decision.tool_name))
             return real_start(decision, *args, **kwargs)
@@ -687,9 +666,6 @@ class TestTheRoundIsPricedOnceForEveryCallInIt:
         counted: list = []
 
         def _count(messages, *_args, **_kwargs):
-            # Each count is dearer than the last, which is what a conversation the round
-            # is settling results into does. Priced once, the round reads one number
-            # whoever asks; priced per worker, every call reads a different one.
             with lock:
                 if threading.current_thread() is not main:
                     off_thread.append(threading.current_thread().name)

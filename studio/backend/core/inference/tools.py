@@ -41,6 +41,7 @@ import sys
 import tempfile
 import contextlib
 import threading
+import unicodedata
 import zlib
 from contextvars import ContextVar
 
@@ -88,7 +89,9 @@ from core.inference.mcp_client import (
     get_cached_resources,
     get_cached_tools,
     in_failure_cooloff,
+    invalidate_tool_cache,
     is_studio_decisions,
+    is_studio_tools,
     is_stdio,
     list_tools_async,
     oauth_client_kwargs,
@@ -102,9 +105,17 @@ from core.inference.mcp_client import (
     tool_visible_to,
 )
 from storage import mcp_servers_db
-from utils.account_context import account_thread, current_account_id, is_owner_context
+from utils.account_context import (
+    account_thread,
+    current_account,
+    current_account_id,
+    is_owner_context,
+)
 from utils.current_date_prompt_settings import strip_current_date_update_note
+from utils.host_policy import _literal_ip_address
+from core.inference.providers import _metadata_host as _provider_metadata_host
 from utils import sandbox_memory_limit, tool_result_limit
+from core.inference import tool_facts
 from core.inference.tool_confinement import ToolConfinementUnavailable, account_confinement
 from pathlib import Path
 from utils.paths.storage_roots import RetiredAccountError, ensure_dir
@@ -8498,6 +8509,8 @@ def _build_safe_env(workdir: str, shell: "str | None" = None) -> dict[str, str]:
         "MPLBACKEND": "Agg",
         # Remaps ChatGPT code-interpreter paths (/mnt/data) onto the sandbox cwd.
         "PYTHONPATH": _SANDBOX_SITE_DIR,
+        # Read by sandbox_site: refuses connects to cloud-metadata addresses at runtime.
+        "_UNSLOTH_SANDBOX_BLOCK_METADATA": "1",
     }
     if venv:
         env["VIRTUAL_ENV"] = venv
@@ -9455,6 +9468,111 @@ def _windows_bash_userland_dirs() -> list[str]:
 def _shell_is_posix() -> bool:
     """True when the shell that will run a command parses POSIX syntax."""
     return sys.platform != "win32" or _windows_bash() is not None
+
+
+# cmd's `>nul` idiom; `<<` is matched first by the heredoc pattern, and `x->nul` / `a=>nul` are not redirects.
+_NUL_REDIRECT_RE = re.compile(
+    r"(?<![-=<>])((?:[0-9]+|&)?(?:>>?|>\||>&)|<)([ \t]*)nul(?=[\s;&|()<>]|$)", re.IGNORECASE
+)
+_HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(['\"]?)([^\s'\"<>;&|()]+)\2")
+
+
+def _substitution_end(command: str, i: int) -> int:
+    depth, n = 1, len(command)
+    while i < n:
+        c = command[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"":
+            j = command.find(c, i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return n
+
+
+def _bash_nul_to_dev_null(command: str) -> str:
+    """Git Bash turns `2>nul` into a real file named nul that Explorer cannot delete (#16991).
+    Quoted text and heredoc bodies (a .bat written through cat) keep their spelling."""
+    if "nul" not in command.lower():
+        return command
+    out: list[str] = []
+    heredocs: list[tuple[bool, str]] = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == "\\":
+            out.append(command[i : i + 2])
+            i += 2
+            continue
+        if c == "'":
+            j = command.find("'", i + 1)
+            j = n if j < 0 else j + 1
+            out.append(command[i:j])
+            i = j
+            continue
+        if c == '"':
+            # A $( ) inside double quotes still runs: `x="$(cmd 2>nul)"`.
+            out.append(c)
+            i += 1
+            while i < n and command[i] != '"':
+                if command.startswith("$(", i):
+                    end = _substitution_end(command, i + 2)
+                    out.append("$(" + _bash_nul_to_dev_null(command[i + 2 : end]))
+                    i = end
+                    continue
+                step = 2 if command[i] == "\\" else 1
+                out.append(command[i : i + step])
+                i += step
+            out.append(command[i : i + 1])
+            i += 1
+            continue
+        if c == "#" and (i == 0 or command[i - 1] in " \t\n;&|()"):
+            j = command.find("\n", i)
+            j = n if j < 0 else j
+            out.append(command[i:j])
+            i = j
+            continue
+        if c == "\n" and heredocs:
+            i += 1
+            out.append("\n")
+            for strip_tabs, delim in heredocs:
+                while i < n:
+                    j = command.find("\n", i)
+                    j = n if j < 0 else j + 1
+                    line = command[i:j].rstrip("\n")
+                    out.append(command[i:j])
+                    i = j
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
+                        break
+            heredocs = []
+            continue
+        if command.startswith("<<<", i):
+            out.append("<<<")
+            i += 3
+            continue
+        if command.startswith("<<", i):
+            m = _HEREDOC_RE.match(command, i)
+            if m:
+                heredocs.append((m.group(1) == "-", m.group(3)))
+                out.append(m.group(0))
+                i = m.end()
+                continue
+        m = _NUL_REDIRECT_RE.match(command, i)
+        if m:
+            out.append(f"{m.group(1)}{m.group(2)}/dev/null")
+            i = m.end()
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _get_shell_cmd(command: str) -> list[str]:
@@ -13097,6 +13215,7 @@ def _mcp_specs_for_server(server: dict, mcp_tools: list[dict]) -> list[dict]:
             logger.warning("Skipping duplicate MCP tool '%s' on '%s'.", raw_name, display)
             continue
         seen_names.add(name)
+        tool_facts.note_mcp_tool(name, tool, studio = is_studio_tools(server.get("url") or ""))
         description = tool.get("description") or ""
         if name.split("__", 2)[2] != raw_name:
             _MCP_TOOL_ALIASES[name] = raw_name
@@ -13125,7 +13244,14 @@ def _mcp_specs_for_server(server: dict, mcp_tools: list[dict]) -> list[dict]:
 
 
 def _enabled_mcp_servers(servers: list[dict]) -> list[dict]:
-    enabled = [server for server in servers if server.get("is_enabled")]
+    from core.inference.studio_tools_mcp import keyless_caller
+
+    keyless = keyless_caller(current_account())
+    enabled = [
+        server
+        for server in servers
+        if server.get("is_enabled") and not (keyless and is_studio_tools(server["url"]))
+    ]
     if not any(is_studio_decisions(server["url"]) for server in enabled):
         return enabled
     from utils import systemone_settings
@@ -13168,9 +13294,13 @@ async def get_enabled_mcp_tools(
     if not servers:
         return []
 
-    # cool-off avoids blocking every send for the full probe timeout when a server is down.
+    # cool-off avoids blocking every send for the full probe timeout when a server is down. The in-process
+    # Unsloth Studio row is re-listed every send, so tool toggles apply at once.
     uncached = [
-        s for s in servers if get_cached_tools(s["id"]) is None and not in_failure_cooloff(s["id"])
+        s
+        for s in servers
+        if is_studio_tools(s["url"])
+        or (get_cached_tools(s["id"]) is None and not in_failure_cooloff(s["id"]))
     ]
     if uncached:
         results = await asyncio.gather(
@@ -13203,6 +13333,9 @@ async def get_enabled_mcp_tools(
                 )
                 # Not cached, but a failure is recorded so a down server isn't re-probed during the cool-off.
                 record_probe_failure(server["id"], bool(fresh.get("use_oauth")))
+                if is_studio_tools(server["url"]):
+                    # Never fall back to an older listing that may name a tool since turned off.
+                    invalidate_tool_cache(server["id"])
                 continue
             cache_tools(server["id"], payload)
 
@@ -14229,6 +14362,16 @@ def _thread_document_ids(thread_id) -> set | None:
 
 def build_rag_autoinject(conversation: list[dict], rag_scope: dict | None) -> dict | None:
     """Pre-retrieves the latest turn for models that skip search_knowledge_base. Toggle rag_scope.autoinject or RAG_AUTOINJECT; floor RAG_AUTOINJECT_MIN_SCORE."""
+    try:
+        from core.rag.retrieval import query_vector_memo
+    except Exception:  # noqa: BLE001 - the build reports an unavailable RAG stack itself
+        return _build_rag_autoinject(conversation, rag_scope)
+    # The thread retry, the hybrid retry and the dense probe re-ask the same query: encode it once.
+    with query_vector_memo():
+        return _build_rag_autoinject(conversation, rag_scope)
+
+
+def _build_rag_autoinject(conversation: list[dict], rag_scope: dict | None) -> dict | None:
     enabled, whole_doc_requested = rag_autoinject_reaches_retrieval(conversation, rag_scope)
     if not enabled and not whole_doc_requested:
         return None
@@ -17460,15 +17603,32 @@ def _check_signal_escape_patterns(code: str):
                 found |= _find_blocked_commands(s)
         return found
 
+    _STAR_EXPORTS = frozenset(fq.split(".", 1)[1] for fq in _SHELL_EXEC_FUNCS) | {"modules"}
+
+    def _module_expr(dotted):
+        # posix and nt are the os module under its platform name.
+        top, _, rest = dotted.partition(".")
+        if top in ("posix", "nt"):
+            dotted = "os" + (f".{rest}" if rest else "")
+        return ast.parse(dotted, mode = "eval").body
+
     class SignalEscapeVisitor(ast.NodeVisitor):
         def __init__(self):
             self.imports_signal = False
             self.signal_aliases = {"signal"}
-            self.os_aliases = {"os"}
-            self.subprocess_aliases = {"subprocess"}
-            # Bare name -> fully-qualified form for from-import tracking (e.g. "system" -> "os.system").
-            self.shell_exec_aliases: dict[str, str] = {}
+            # Name -> every value bound to it anywhere; flow- and scope-insensitive, so it fails closed.
+            self.bindings: dict[str, list] = {}
+            self._final: dict = {}
+            self._cache: dict = {}
+            self._guess: dict = {}
+            self._active: set = set()
+            self._cyclic = False
+            self.collecting = False
             self.loop_depth = 0
+
+        def _bind(self, name, value):
+            if self.collecting:
+                self.bindings.setdefault(name, []).append(value)
 
         def visit_Import(self, node):
             for alias in node.names:
@@ -17476,10 +17636,8 @@ def _check_signal_escape_patterns(code: str):
                     self.imports_signal = True
                     if alias.asname:
                         self.signal_aliases.add(alias.asname)
-                elif alias.name == "os":
-                    self.os_aliases.add(alias.asname or "os")
-                elif alias.name == "subprocess":
-                    self.subprocess_aliases.add(alias.asname or "subprocess")
+                elif alias.asname or alias.name in ("posix", "nt"):
+                    self._bind(alias.asname or alias.name, _module_expr(alias.name))
             self.generic_visit(node)
 
         def visit_ImportFrom(self, node):
@@ -17497,16 +17655,171 @@ def _check_signal_escape_patterns(code: str):
                         "alarm",
                     ):
                         self.signal_aliases.add(alias.asname or alias.name)
-            elif node.module in ("os", "subprocess"):
-                if node.module == "os":
-                    self.os_aliases.add("os")
-                else:
-                    self.subprocess_aliases.add("subprocess")
-                # Track from-imports of dangerous functions.
+            if node.module and not node.level:
                 for alias in node.names:
-                    fq = f"{node.module}.{alias.name}"
-                    if fq in _SHELL_EXEC_FUNCS:
-                        self.shell_exec_aliases[alias.asname or alias.name] = fq
+                    if alias.name != "*":
+                        names = (alias.name,)
+                    elif node.module in ("os", "posix", "nt", "subprocess", "sys"):
+                        names = _STAR_EXPORTS
+                    else:
+                        continue
+                    for name in names:
+                        self._bind(
+                            alias.asname or name,
+                            ast.Attribute(_module_expr(node.module), name, ast.Load()),
+                        )
+            self.generic_visit(node)
+
+        def _memo(self, kind, node, compute, pending):
+            key = (kind, node.id if isinstance(node, ast.Name) else id(node))
+            if key in self._cache:
+                return self._cache[key]
+            if key in self._active:
+                self._cyclic = True
+                return self._guess.get(key, pending)
+            self._active.add(key)
+            try:
+                self._cache[key] = compute(node)
+            finally:
+                self._active.discard(key)
+            return self._cache[key]
+
+        def _converged(self, query, node):
+            # A self-referential binding (d = d["system"]) reads the previous pass's answer, so repeat
+            # until no answer grows (they are finite sets, so this ends); keep only converged answers.
+            previous, self._guess = None, {}
+            while True:
+                self._cache, self._cyclic = dict(self._final), False
+                result = query(node)
+                if not self._cyclic or self._cache == previous:
+                    self._final = self._cache
+                    return result
+                previous = self._guess = self._cache
+
+        def _resolve(self, node):
+            while isinstance(node, ast.NamedExpr):
+                node = node.value
+            if not isinstance(node, ast.Name):
+                return frozenset((node,))
+            return self._memo("resolve", node, self._values_of, frozenset((node,)))
+
+        def _values_of(self, node):
+            values, seen, todo = [], set(), [node]
+            while todo:
+                value = todo.pop()
+                while isinstance(value, ast.NamedExpr):
+                    value = value.value
+                values.append(value)
+                if isinstance(value, ast.Name) and value.id not in seen:
+                    seen.add(value.id)
+                    todo.extend(self.bindings.get(value.id, ()))
+            return frozenset(values)
+
+        def _lookups(self, node):
+            # (owner, name) for owner.name, getattr(owner, "name"), and owner.__dict__ / vars(owner) by key or .get().
+            return self._memo("lookups", node, self._find_lookups, frozenset())
+
+        def _find_lookups(self, node):
+            found = []
+            for value in self._resolve(node):
+                if isinstance(value, ast.Attribute):
+                    found.append((value.value, value.attr))
+                elif isinstance(value, ast.Subscript):
+                    found.extend(self._namespace_lookup(value.value, value.slice))
+                elif isinstance(value, ast.Call) and value.args:
+                    if len(value.args) >= 2 and self._is_builtin(value.func, "getattr"):
+                        found.append((value.args[0], _folded_str_literal(value.args[1])))
+                    for owner, attr in self._lookups(value.func):
+                        if attr == "get":
+                            found.extend(self._namespace_lookup(owner, value.args[0]))
+            return frozenset(found)
+
+        def _namespace_lookup(self, namespace, key):
+            name = _folded_str_literal(key)
+            found = [
+                (owner, name) for owner, attr in self._lookups(namespace) if attr == "__dict__"
+            ]
+            for value in self._resolve(namespace):
+                if (
+                    isinstance(value, ast.Call)
+                    and len(value.args) == 1
+                    and self._is_builtin(value.func, "vars")
+                ):
+                    found.append((value.args[0], name))
+            return found
+
+        def _is_builtin(self, node, name):
+            # By its own name, an alias, or as an attribute (builtins.getattr, importlib.import_module).
+            return any(
+                isinstance(v, ast.Name) and v.id == name for v in self._resolve(node)
+            ) or any(attr == name for _owner, attr in self._lookups(node))
+
+        def _is_registry(self, node):
+            return any(attr == "modules" for _owner, attr in self._lookups(node))
+
+        @staticmethod
+        def _keyword_arg(call, name):
+            found = None
+            for kw in call.keywords:
+                if kw.arg == name:
+                    found = kw.value
+                elif kw.arg is None and isinstance(kw.value, ast.Dict):
+                    for key, value in zip(kw.value.keys, kw.value.values):
+                        if key is not None and _extract_string_from_node(key) == name:
+                            found = value
+            return found
+
+        def _modules_of(self, node):
+            return self._memo("modules", node, self._find_modules, frozenset())
+
+        def _find_modules(self, node):
+            modules = set()
+            for value in self._resolve(node):
+                name = None
+                if isinstance(value, ast.Name):
+                    name = value.id
+                elif isinstance(value, ast.Call):
+                    if self._is_builtin(value.func, "__import__") or self._is_builtin(
+                        value.func, "import_module"
+                    ):
+                        arg = value.args[0] if value.args else self._keyword_arg(value, "name")
+                        name = None if arg is None else _folded_str_literal(arg)
+                    elif value.args and any(
+                        attr == "get" and self._is_registry(owner)
+                        for owner, attr in self._lookups(value.func)
+                    ):
+                        name = _folded_str_literal(value.args[0])
+                elif isinstance(value, ast.Subscript) and self._is_registry(value.value):
+                    name = _folded_str_literal(value.slice)
+                # __import__("os.path") returns the top-level os package.
+                top = (name or "").split(".")[0]
+                if top in ("os", "subprocess"):
+                    modules.add(top)
+                elif top in ("posix", "nt") and not isinstance(value, ast.Name):
+                    modules.add("os")
+            return frozenset(modules)
+
+        def _shell_func_of(self, node):
+            for owner, attr in self._lookups(node):
+                for module in self._modules_of(owner):
+                    if f"{module}.{attr}" in _SHELL_EXEC_FUNCS:
+                        return f"{module}.{attr}"
+            return None
+
+        def visit_Assign(self, node):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    self._bind(tgt.id, node.value)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node):
+            if node.value is not None and isinstance(node.target, ast.Name):
+                self._bind(node.target.id, node.value)
+            self.generic_visit(node)
+
+        def visit_NamedExpr(self, node):
+            if isinstance(node.target, ast.Name):
+                self._bind(node.target.id, node.value)
             self.generic_visit(node)
 
         def visit_While(self, node):
@@ -17520,6 +17833,9 @@ def _check_signal_escape_patterns(code: str):
             self.loop_depth -= 1
 
         def visit_Call(self, node):
+            if self.collecting:
+                self.generic_visit(node)
+                return
             func = node.func
             func_name = None
             if isinstance(func, ast.Attribute):
@@ -17569,16 +17885,7 @@ def _check_signal_escape_patterns(code: str):
                     )
 
             # Shell escape detection: resolve the FQ function name for os.*/subprocess.*
-            shell_func = None
-            if isinstance(func, ast.Attribute):
-                if isinstance(func.value, ast.Name):
-                    if func.value.id in self.os_aliases:
-                        shell_func = f"os.{func.attr}"
-                    elif func.value.id in self.subprocess_aliases:
-                        shell_func = f"subprocess.{func.attr}"
-            elif isinstance(func, ast.Name):
-                # from-import aliases: from os import system; system(...)
-                shell_func = self.shell_exec_aliases.get(func.id)
+            shell_func = self._converged(self._shell_func_of, func)
 
             if shell_func and shell_func in _SHELL_EXEC_FUNCS:
                 # Expand **kwargs dicts to inspect their keys.
@@ -17666,7 +17973,7 @@ def _check_signal_escape_patterns(code: str):
             self.generic_visit(node)
 
         def visit_ExceptHandler(self, node):
-            if self.loop_depth == 0:
+            if self.collecting or self.loop_depth == 0:
                 self.generic_visit(node)
                 return
             if node.type is None:
@@ -17701,6 +18008,9 @@ def _check_signal_escape_patterns(code: str):
             self.generic_visit(node)
 
     visitor = SignalEscapeVisitor()
+    visitor.collecting = True
+    visitor.visit(tree)
+    visitor.collecting = False
     visitor.visit(tree)
 
     if visitor.imports_signal and not signal_tampering:
@@ -18150,9 +18460,17 @@ def _check_signal_escape_patterns(code: str):
         return h
 
     def _is_metadata_host(host: str) -> bool:
-        h = _normalize_host(host)
+        h = _normalize_host(unicodedata.normalize("NFKC", host or ""))
         if not h:
             return False
+        if _provider_metadata_host(h):
+            return True
+        try:
+            ip = _literal_ip_address(h)
+        except ValueError:
+            return True
+        if ip is not None:
+            h = str(ip)
         if h in _METADATA_HOST_LITERALS:
             return True
         if any(h.startswith(p) for p in _METADATA_HOST_PREFIXES):
@@ -20048,9 +20366,9 @@ def _check_signal_escape_patterns(code: str):
     }
 
 
-def _check_code_safety(code: str) -> str | None:
+def _check_code_safety(code: str, *, host_approved: bool = False) -> str | None:
     """Validate code safety via static analysis. Returns an error message string if the code is
-    unsafe, or None if OK."""
+    unsafe, or None if OK. host_approved lets an approved call reach hosts off the allowlist."""
     safe, info = _check_signal_escape_patterns(code)
     if not safe:
         # Let SyntaxError through so the child reports a normal traceback.
@@ -20062,7 +20380,11 @@ def _check_code_safety(code: str) -> str | None:
         exception_reasons = [
             item.get("description", "") for item in info.get("exception_catching", [])
         ]
-        network_reasons = [item.get("description", "") for item in info.get("network_calls", [])]
+        network_reasons = [
+            item.get("description", "")
+            for item in info.get("network_calls", [])
+            if not (host_approved and item.get("type") == "untrusted_host_blocked")
+        ]
         file_reasons = [
             item.get("description", "") for item in info.get("sensitive_file_reads", [])
         ]
@@ -21976,7 +22298,10 @@ def _python_exec(
 
     # Validate imports and code safety (skipped when the sandbox is disabled)
     if not disable_sandbox:
-        error = _check_code_safety(code)
+        # The allowlist is advisory (the network is not confined), so a user's approval lifts it; API keys keep it.
+        error = _check_code_safety(
+            code, host_approved = host_access_approved and not _api_host_access_refused()
+        )
         if error:
             # Capped: repeated forbidden constructs can produce an oversized error.
             return _truncate(error)
@@ -22195,6 +22520,8 @@ def _bash_exec(
     # Chosen once, so the blocklist, env and argv all agree on the shell that will run this call.
     # Sandbox Low runs on the host shell: cmd is only picked to stay inside MXC.
     profile = _terminal_profile(disable_sandbox or tool_execution_mode == "software")
+    if profile == "bash" and sys.platform == "win32":
+        command = _bash_nul_to_dev_null(command)
     if profile == "cmd_isolated":
         # Models often end a command with a newline; cmd /s /c cannot carry one.
         command = command.strip()

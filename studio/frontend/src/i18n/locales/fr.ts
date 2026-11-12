@@ -665,6 +665,8 @@ export const fr = {
     keepsRunning: "Fermer cette fenêtre n'arrête pas la configuration. Le résultat s'affiche dans Paramètres > Sécurité.",
   },
   composerSettings: {
+    shareDraft: "Partager les brouillons entre les discussions",
+    shareDraftDescription: "Utiliser un seul brouillon pour les discussions et les comparaisons. Désactivé par défaut ; chaque discussion conserve son propre brouillon.",
     title: "Saisie des messages",
     plainText: "Saisie en texte brut",
     plainTextDescription: "Conserver le code, le Markdown et les liens en texte brut. Désactivez pour afficher un aperçu mis en forme.",
@@ -1665,6 +1667,13 @@ export const fr = {
         audioUploadCancel: "Annuler la transcription",
         audioUploadTranscribing: "Transcription audio en cours…",
         sectionTitle: "Dictée",
+        micTargetLabel: "Bouton du micro",
+        micTargetAsr: "Transcrire avec l'ASR",
+        micTargetModel: "Envoyer l'audio au modèle",
+        micTargetAsrDescription: "Le bouton du micro écrit ce que vous dites dans la zone de message.",
+        micTargetModelDescription: "Avec un modèle à entrée audio chargé, le micro enregistre un extrait et le joint à votre message. Les autres modèles utilisent toujours la dictée.",
+        micTargetModelUnavailable: "Chargez un modèle qui accepte l'entrée audio (par exemple LFM3-Omni) pour lui envoyer votre voix.",
+        micRecordForModel: "Enregistrer l'audio pour le modèle",
         engineLabel: "Moteur de dictée",
         engineBrowser: "Navigateur",
         engineBrowserDescription:
@@ -1690,6 +1699,13 @@ export const fr = {
         sttQuantDescription:
           "Choisissez ou recherchez un modèle STT à exécuter en local, puis sa quantification.",
         sttDeviceLabel: "Charger dans",
+        sttContextLabel: "Contexte vocal",
+        sttContextAuto: "Auto (recommandé)",
+        sttContextAutoDescription:
+          "S’adapte à chaque enregistrement et utilise davantage de mémoire pour les fichiers audio plus longs. Les anciens environnements d’exécution peuvent nécessiter une taille fixe pour réduire l’utilisation de mémoire. S’applique à Qwen3-ASR dans Voix et Transcrire.",
+        sttContextFixedDescription:
+          "Les limites plus petites utilisent moins de mémoire. Les enregistrements qui dépassent la limite nécessitent une limite plus élevée ou le mode Auto. S’applique à Qwen3-ASR dans Voix et Transcrire.",
+        sttContextTokens: "{count} tokens",
         sttDeviceAuto: "GPU si disponible",
         sttDeviceCpu: "RAM du CPU",
         sttDeviceAutoDescription:
@@ -3064,11 +3080,11 @@ export const fr = {
       showReplyTimesDescription: "Afficher sous chaque réponse l'heure à laquelle elle s'est terminée.",
       showReplyTimesKeywords:
         "horodatage heure date quand terminé réponse message timestamp time clock date reply",
-      showGenerationDetails: "Infos détaillées de vitesse et de chargement",
+      showGenerationDetails: "Infos détaillées de vitesse",
       showGenerationDetailsDescription:
-        "Ajoute aux indicateurs en direct la vitesse de lecture du prompt, le nombre de tokens et l'acceptation des brouillons, et indique où les couches du modèle ont été chargées.",
+        "Ajoute aux indicateurs en direct la vitesse de lecture du prompt, le nombre de tokens et l'acceptation des brouillons.",
       showGenerationDetailsKeywords:
-        "détails vitesse jetons statistiques couches déchargement verbose developer stats speed tok/s prefill decode layers offload vram experts",
+        "détails vitesse jetons statistiques verbose developer stats speed tok/s prefill decode",
       generationStatsUpdates: "Statistiques de vitesse et de contexte",
       generationStatsUpdatesDescription:
         "En temps réel compte les tokens par seconde et l'utilisation du contexte pendant la diffusion d'une réponse. À la fin les met à jour quand chaque réponse se termine.",

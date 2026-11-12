@@ -747,6 +747,8 @@ export const tr = {
       "Bunu kapatmak kurulumu durdurmaz. Sonuç, Ayarlar > Güvenlik bölümünde görünür.",
   },
   composerSettings: {
+    shareDraft: "Taslakları sohbetler arasında paylaş",
+    shareDraftDescription: "Sohbetler ve karşılaştırmalar için tek bir taslak kullan. Varsayılan olarak kapalıdır; her sohbet kendi taslağını tutar.",
     title: "Yazma alanı",
     plainText: "Düz metin yazma alanı",
     plainTextDescription:
@@ -1825,6 +1827,13 @@ export const tr = {
         audioUploadCancel: "Metne dönüştürmeyi iptal et",
         audioUploadTranscribing: "Ses metne dönüştürülüyor…",
         sectionTitle: "Dikte",
+        micTargetLabel: "Mikrofon düğmesi",
+        micTargetAsr: "ASR ile yazıya dök",
+        micTargetModel: "Sesi modele gönder",
+        micTargetAsrDescription: "Mikrofon düğmesi söylediklerinizi mesaj kutusuna yazar.",
+        micTargetModelDescription: "Ses girişi alan bir model yüklüyken mikrofon bir klip kaydeder ve mesajınıza ekler. Diğer modeller dikte almaya devam eder.",
+        micTargetModelUnavailable: "Sesinizi göndermek için ses girişi kabul eden bir model yükleyin (örneğin LFM3-Omni).",
+        micRecordForModel: "Model için ses kaydet",
         engineLabel: "Dikte motoru",
         engineBrowser: "Tarayıcı",
         engineBrowserDescription:
@@ -1850,6 +1859,13 @@ export const tr = {
         sttQuantDescription:
           "Yerel olarak çalıştırılacak bir STT modeli seçin veya arayın, ardından nicelemesini seçin.",
         sttDeviceLabel: "Yükleneceği yer",
+        sttContextLabel: "Ses bağlamı",
+        sttContextAuto: "Otomatik (önerilen)",
+        sttContextAutoDescription:
+          "Her kayda uyum sağlar, daha uzun seslerde daha fazla bellek kullanır. Eski çalışma ortamları belleği azaltmak için sabit bir boyut gerektirebilir. Ses ve Yazıya dök bölümlerindeki Qwen3-ASR için geçerlidir.",
+        sttContextFixedDescription:
+          "Daha küçük sınırlar daha az bellek kullanır. Sığmayan kayıtlar daha yüksek bir sınır veya Otomatik gerektirir. Ses ve Yazıya dök bölümlerindeki Qwen3-ASR için geçerlidir.",
+        sttContextTokens: "{count} token",
         sttDeviceAuto: "Varsa GPU",
         sttDeviceCpu: "CPU RAM",
         sttDeviceAutoDescription: "Varsa GPU'yu, yoksa CPU'yu kullanın.",
@@ -3274,11 +3290,11 @@ export const tr = {
         "Her yanıtın ne zaman tamamlandığını yanıtın altında gösterin.",
       showReplyTimesKeywords:
         "zaman damgası zaman saat tarih ne zaman bitti geldi yanıt cevap mesaj timestamp",
-      showGenerationDetails: "Ayrıntılı hız ve yükleme bilgisi",
+      showGenerationDetails: "Ayrıntılı hız bilgisi",
       showGenerationDetailsDescription:
-        "Canlı göstergelere istem okuma hızını, token sayılarını ve taslak kabulünü ekler ve modelin katmanlarının nereye yüklendiğini gösterir.",
+        "Canlı göstergelere istem okuma hızını, token sayılarını ve taslak kabulünü ekler.",
       showGenerationDetailsKeywords:
-        "ayrıntılı geliştirici istatistik hız tok/s prefill decode katmanlar aktarım offload vram uzmanlar experts",
+        "ayrıntılı geliştirici istatistik hız tok/s prefill decode",
       generationStatsUpdates: "Hız ve bağlam istatistikleri",
       generationStatsUpdatesDescription:
         "Gerçek zamanlı, bir yanıt akarken saniye başına token ve bağlam kullanımını sayar. Bitince, her yanıt tamamlandığında bunları günceller.",

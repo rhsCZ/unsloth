@@ -712,6 +712,8 @@ export const th = {
       "การปิดหน้าต่างนี้จะไม่หยุดการตั้งค่า ผลลัพธ์จะแสดงในการตั้งค่า > ความปลอดภัย",
   },
   composerSettings: {
+    shareDraft: "แชร์แบบร่างระหว่างแชต",
+    shareDraftDescription: "ใช้แบบร่างเดียวกันในแชตและการเปรียบเทียบ ปิดไว้ตามค่าเริ่มต้น โดยแต่ละแชตจะเก็บแบบร่างของตนเอง",
     title: "ช่องเขียนข้อความ",
     plainText: "ช่องเขียนข้อความแบบข้อความธรรมดา",
     plainTextDescription:
@@ -1748,6 +1750,13 @@ export const th = {
         audioUploadCancel: "ยกเลิกการถอดเสียง",
         audioUploadTranscribing: "กำลังถอดเสียง…",
         sectionTitle: "การป้อนตามคำบอก",
+        micTargetLabel: "ปุ่มไมโครโฟน",
+        micTargetAsr: "ถอดความด้วย ASR",
+        micTargetModel: "ส่งเสียงไปยังโมเดล",
+        micTargetAsrDescription: "ปุ่มไมโครโฟนจะพิมพ์สิ่งที่คุณพูดลงในช่องข้อความ",
+        micTargetModelDescription: "เมื่อโหลดโมเดลที่รับอินพุตเสียง ไมโครโฟนจะบันทึกคลิปและแนบไปกับข้อความของคุณ โมเดลอื่นยังคงใช้การป้อนตามคำบอก",
+        micTargetModelUnavailable: "โหลดโมเดลที่รับอินพุตเสียงได้ (เช่น LFM3-Omni) เพื่อส่งเสียงของคุณไปให้",
+        micRecordForModel: "บันทึกเสียงสำหรับโมเดล",
         engineLabel: "เอนจินการป้อนตามคำบอก",
         engineBrowser: "เบราว์เซอร์",
         engineBrowserDescription:
@@ -1771,6 +1780,13 @@ export const th = {
         sttQuantDescription:
           "เลือกหรือค้นหาโมเดล STT เพื่อรันภายในเครื่อง แล้วเลือกการควอนไทซ์",
         sttDeviceLabel: "โหลดลงใน",
+        sttContextLabel: "บริบทเสียง",
+        sttContextAuto: "อัตโนมัติ (แนะนำ)",
+        sttContextAutoDescription:
+          "ปรับตามการบันทึกแต่ละครั้ง โดยใช้หน่วยความจำมากขึ้นสำหรับเสียงที่ยาวขึ้น รันไทม์รุ่นเก่าอาจต้องใช้ขนาดคงที่เพื่อลดการใช้หน่วยความจำ ใช้กับ Qwen3-ASR ในเสียงพูดและถอดเสียง",
+        sttContextFixedDescription:
+          "ขีดจำกัดที่เล็กลงจะใช้หน่วยความจำน้อยลง การบันทึกที่ใส่ไม่พอต้องใช้ขีดจำกัดที่สูงขึ้นหรืออัตโนมัติ ใช้กับ Qwen3-ASR ในเสียงพูดและถอดเสียง",
+        sttContextTokens: "{count} โทเค็น",
         sttDeviceAuto: "GPU เมื่อพร้อมใช้งาน",
         sttDeviceCpu: "RAM ของ CPU",
         sttDeviceAutoDescription: "ใช้ GPU เมื่อมี หากไม่มีให้ใช้ CPU",
@@ -3140,11 +3156,11 @@ export const th = {
       showReplyTimesDescription: "แสดงเวลาที่การตอบกลับแต่ละครั้งเสร็จสิ้นไว้ใต้การตอบกลับ",
       showReplyTimesKeywords:
         "เวลา นาฬิกา วันที่ ชั่วโมง เมื่อใด เสร็จ มาถึง ตอบกลับ คำตอบ ข้อความ timestamp time clock date reply response message",
-      showGenerationDetails: "ข้อมูลความเร็วและการโหลดแบบละเอียด",
+      showGenerationDetails: "ข้อมูลความเร็วแบบละเอียด",
       showGenerationDetailsDescription:
-        "เพิ่มความเร็วการอ่านพรอมต์ จำนวนโทเค็น และอัตราการยอมรับร่างลงในการแสดงผลสด และแสดงว่าเลเยอร์ของโมเดลโหลดไว้ที่ใด",
+        "เพิ่มความเร็วการอ่านพรอมต์ จำนวนโทเค็น และอัตราการยอมรับร่างลงในการแสดงผลสด",
       showGenerationDetailsKeywords:
-        "ละเอียด นักพัฒนา สถิติ ความเร็ว เลเยอร์ verbose developer stats speed tok/s prefill decode layers offload vram experts",
+        "ละเอียด นักพัฒนา สถิติ ความเร็ว verbose developer stats speed tok/s prefill decode",
       generationStatsUpdates: "สถิติความเร็วและบริบท",
       generationStatsUpdatesDescription:
         "แบบเรียลไทม์จะนับโทเค็นต่อวินาทีและการใช้บริบทระหว่างที่คำตอบกำลังสตรีม แบบเมื่อเสร็จจะอัปเดตเมื่อแต่ละคำตอบจบ",

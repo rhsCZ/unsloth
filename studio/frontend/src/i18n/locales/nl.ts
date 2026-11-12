@@ -753,6 +753,8 @@ export const nl = {
       "Als je dit sluit, wordt het instellen niet gestopt. Het resultaat wordt weergegeven in Instellingen > Beveiliging.",
   },
   composerSettings: {
+    shareDraft: "Concepten delen tussen chats",
+    shareDraftDescription: "Gebruik één concept voor chats en vergelijkingen. Standaard uit; elke chat bewaart zijn eigen concept.",
     title: "Invoerveld",
     plainText: "Invoerveld met platte tekst",
     plainTextDescription:
@@ -1851,6 +1853,13 @@ export const nl = {
         audioUploadCancel: "Transcriptie annuleren",
         audioUploadTranscribing: "Audio transcriberen…",
         sectionTitle: "Dicteren",
+        micTargetLabel: "Microfoonknop",
+        micTargetAsr: "Transcriberen met ASR",
+        micTargetModel: "Audio naar het model sturen",
+        micTargetAsrDescription: "De microfoonknop typt wat je zegt in het berichtvak.",
+        micTargetModelDescription: "Met een model met audio-invoer geladen neemt de microfoon een clip op en voegt die toe aan je bericht. Andere modellen krijgen nog steeds dicteren.",
+        micTargetModelUnavailable: "Laad een model dat audio-invoer accepteert (bijvoorbeeld LFM3-Omni) om het je stem te sturen.",
+        micRecordForModel: "Audio opnemen voor het model",
         engineLabel: "Dicteerengine",
         engineBrowser: "Browser",
         engineBrowserDescription:
@@ -1876,6 +1885,13 @@ export const nl = {
         sttQuantDescription:
           "Kies of zoek een STT-model om lokaal uit te voeren en kies daarna de kwantisatie.",
         sttDeviceLabel: "Laden in",
+        sttContextLabel: "Spraakcontext",
+        sttContextAuto: "Automatisch (aanbevolen)",
+        sttContextAutoDescription:
+          "Past zich aan elke opname aan en gebruikt meer geheugen voor langere audio. Oudere runtimes hebben mogelijk een vaste grootte nodig om geheugen te besparen. Geldt voor Qwen3-ASR in Spraak en Transcriberen.",
+        sttContextFixedDescription:
+          "Kleinere limieten gebruiken minder geheugen. Opnamen die niet passen hebben een hogere limiet of Automatisch nodig. Geldt voor Qwen3-ASR in Spraak en Transcriberen.",
+        sttContextTokens: "{count} tokens",
         sttDeviceAuto: "GPU indien beschikbaar",
         sttDeviceCpu: "CPU-RAM",
         sttDeviceAutoDescription:
@@ -3317,11 +3333,11 @@ export const nl = {
         "Onder elk antwoord tonen wanneer het klaar was.",
       showReplyTimesKeywords:
         "tijdstempel tijd klok datum uur wanneer voltooid aangekomen antwoord reactie bericht timestamp time",
-      showGenerationDetails: "Gedetailleerde snelheids- en laadinfo",
+      showGenerationDetails: "Gedetailleerde snelheidsinfo",
       showGenerationDetailsDescription:
-        "Voegt promptleessnelheid, tokenaantallen en conceptacceptatie toe aan de live weergaven en toont waar de lagen van een model zijn geladen.",
+        "Voegt promptleessnelheid, tokenaantallen en conceptacceptatie toe aan de live weergaven.",
       showGenerationDetailsKeywords:
-        "uitgebreid ontwikkelaar statistieken snelheid tok/s prefill decode lagen offload vram experts verbose developer stats speed layers",
+        "uitgebreid ontwikkelaar statistieken snelheid tok/s prefill decode verbose developer stats speed",
       generationStatsUpdates: "Snelheids- en contextstatistieken",
       generationStatsUpdatesDescription:
         "Realtime telt tokens per seconde en contextgebruik terwijl een antwoord wordt gestreamd. Na afloop werkt ze bij zodra elk antwoord klaar is.",

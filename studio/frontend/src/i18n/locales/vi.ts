@@ -749,6 +749,8 @@ export const vi = {
       "Đóng cửa sổ này không dừng quá trình thiết lập. Kết quả sẽ hiển thị trong Cài đặt > Bảo mật.",
   },
   composerSettings: {
+    shareDraft: "Chia sẻ bản nháp giữa các cuộc trò chuyện",
+    shareDraftDescription: "Dùng một bản nháp cho các cuộc trò chuyện và chế độ so sánh. Mặc định tắt; mỗi cuộc trò chuyện giữ bản nháp riêng.",
     title: "Khung soạn thảo",
     plainText: "Khung soạn thảo văn bản thuần",
     plainTextDescription:
@@ -1835,6 +1837,13 @@ export const vi = {
         audioUploadCancel: "Hủy chép lời",
         audioUploadTranscribing: "Đang chép lời âm thanh…",
         sectionTitle: "Đọc chính tả",
+        micTargetLabel: "Nút micrô",
+        micTargetAsr: "Chép lời bằng ASR",
+        micTargetModel: "Gửi âm thanh cho mô hình",
+        micTargetAsrDescription: "Nút micrô nhập những gì bạn nói vào ô tin nhắn.",
+        micTargetModelDescription: "Khi đã tải mô hình nhận đầu vào âm thanh, micrô sẽ ghi một đoạn và đính kèm vào tin nhắn của bạn. Các mô hình khác vẫn dùng đọc chính tả.",
+        micTargetModelUnavailable: "Hãy tải một mô hình nhận đầu vào âm thanh (ví dụ LFM3-Omni) để gửi giọng nói của bạn.",
+        micRecordForModel: "Ghi âm cho mô hình",
         engineLabel: "Công cụ đọc chính tả",
         engineBrowser: "Trình duyệt",
         engineBrowserDescription:
@@ -1860,6 +1869,13 @@ export const vi = {
         sttQuantDescription:
           "Chọn hoặc tìm kiếm một mô hình STT để chạy cục bộ, sau đó chọn mức lượng tử hóa.",
         sttDeviceLabel: "Nạp vào",
+        sttContextLabel: "Ngữ cảnh giọng nói",
+        sttContextAuto: "Tự động (khuyên dùng)",
+        sttContextAutoDescription:
+          "Tự điều chỉnh theo từng bản ghi, dùng nhiều bộ nhớ hơn cho âm thanh dài hơn. Các runtime cũ có thể cần kích thước cố định để giảm bộ nhớ. Áp dụng cho Qwen3-ASR trong Giọng nói và Chép lời.",
+        sttContextFixedDescription:
+          "Giới hạn nhỏ hơn dùng ít bộ nhớ hơn. Bản ghi không vừa cần giới hạn cao hơn hoặc Tự động. Áp dụng cho Qwen3-ASR trong Giọng nói và Chép lời.",
+        sttContextTokens: "{count} token",
         sttDeviceAuto: "GPU khi có sẵn",
         sttDeviceCpu: "RAM của CPU",
         sttDeviceAutoDescription: "Dùng GPU nếu có, nếu không thì dùng CPU.",
@@ -3275,11 +3291,11 @@ export const vi = {
         "Hiển thị thời điểm mỗi câu trả lời hoàn tất, bên dưới câu trả lời.",
       showReplyTimesKeywords:
         "timestamp time clock date hour when finished arrived reply response message dấu thời gian giờ ngày hoàn tất trả lời tin nhắn",
-      showGenerationDetails: "Thông tin chi tiết về tốc độ và tải",
+      showGenerationDetails: "Thông tin chi tiết về tốc độ",
       showGenerationDetailsDescription:
-        "Thêm tốc độ đọc lời nhắc, số token và tỷ lệ chấp nhận bản nháp vào chỉ số trực tiếp, và cho biết các lớp của mô hình được tải ở đâu.",
+        "Thêm tốc độ đọc lời nhắc, số token và tỷ lệ chấp nhận bản nháp vào chỉ số trực tiếp.",
       showGenerationDetailsKeywords:
-        "verbose developer stats speed tok/s prefill decode layers offload vram experts chi tiết nhà phát triển thống kê tốc độ lớp",
+        "verbose developer stats speed tok/s prefill decode chi tiết nhà phát triển thống kê tốc độ",
       generationStatsUpdates: "Thống kê tốc độ và ngữ cảnh",
       generationStatsUpdatesDescription:
         "Thời gian thực đếm token mỗi giây và mức dùng ngữ cảnh trong khi phản hồi đang truyền. Khi xong cập nhật chúng khi mỗi phản hồi kết thúc.",

@@ -665,6 +665,8 @@ export const zhCN = {
     keepsRunning: "关闭不会停止设置。结果会显示在 设置 > 安全 中。",
   },
   composerSettings: {
+    shareDraft: "在聊天之间共享草稿",
+    shareDraftDescription: "在聊天和对比中使用同一份草稿。默认关闭；每个聊天保留各自的草稿。",
     title: "消息输入",
     plainText: "纯文本输入",
     plainTextDescription: "将代码、Markdown 和链接保留为原始文本。关闭后显示格式化预览。",
@@ -1658,6 +1660,13 @@ export const zhCN = {
         audioUploadCancel: "取消转录",
         audioUploadTranscribing: "正在转录音频…",
         sectionTitle: "语音输入",
+        micTargetLabel: "麦克风按钮",
+        micTargetAsr: "使用 ASR 转写",
+        micTargetModel: "将音频发送给模型",
+        micTargetAsrDescription: "麦克风按钮会把你说的话输入到消息框中。",
+        micTargetModelDescription: "加载支持音频输入的模型后，麦克风会录制一段音频并附加到你的消息中。其他模型仍使用语音输入。",
+        micTargetModelUnavailable: "加载支持音频输入的模型（例如 LFM3-Omni）即可向它发送语音。",
+        micRecordForModel: "为模型录制音频",
         engineLabel: "语音输入引擎",
         engineBrowser: "浏览器",
         engineBrowserDescription:
@@ -1682,6 +1691,13 @@ export const zhCN = {
         sttQuantDescription:
           "选择或搜索要在本地运行的 STT 模型，再选择其量化。",
         sttDeviceLabel: "加载到",
+        sttContextLabel: "语音上下文",
+        sttContextAuto: "自动（推荐）",
+        sttContextAutoDescription:
+          "根据每段录音调整大小，音频越长，使用的内存越多。旧版运行时可能需要设置固定大小才能减少内存占用。适用于“语音”和“转写”中的 Qwen3-ASR。",
+        sttContextFixedDescription:
+          "上限越小，内存占用越少。如果录音超出上限，请提高上限或选择“自动”。适用于“语音”和“转写”中的 Qwen3-ASR。",
+        sttContextTokens: "{count} 个 token",
         sttDeviceAuto: "有 GPU 时使用 GPU",
         sttDeviceCpu: "CPU 内存",
         sttDeviceAutoDescription: "有 GPU 时使用 GPU，否则使用 CPU。",
@@ -2984,11 +3000,11 @@ export const zhCN = {
       showReplyTimesDescription: "在每条回复下方显示其完成的时间。",
       showReplyTimesKeywords:
         "时间戳 时间 时刻 日期 完成 回复 消息 timestamp time clock date reply",
-      showGenerationDetails: "详细速度与加载信息",
+      showGenerationDetails: "详细速度信息",
       showGenerationDetailsDescription:
-        "在实时读数中加入提示词读取速度、token 数和草稿采纳率，并显示模型各层加载在哪里。",
+        "在实时读数中加入提示词读取速度、token 数和草稿采纳率。",
       showGenerationDetailsKeywords:
-        "详情 速度 统计 层 卸载 verbose developer stats speed tok/s prefill decode layers offload vram experts",
+        "详情 速度 统计 verbose developer stats speed tok/s prefill decode",
       generationStatsUpdates: "速度与上下文统计",
       generationStatsUpdatesDescription:
         "实时模式在回复流式输出时统计每秒 token 数和上下文用量。完成后模式在每条回复结束时更新。",

@@ -665,6 +665,8 @@ export const ar = {
     keepsRunning: "إغلاق هذه النافذة لا يوقف الإعداد. تظهر نتيجته في الإعدادات > الأمان.",
   },
   composerSettings: {
+    shareDraft: "مشاركة المسودات بين المحادثات",
+    shareDraftDescription: "استخدام مسودة واحدة للمحادثات والمقارنة. معطّل افتراضيًا؛ تحتفظ كل محادثة بمسودتها الخاصة.",
     title: "كتابة الرسائل",
     plainText: "محرر نص عادي",
     plainTextDescription: "إبقاء التعليمات البرمجية وMarkdown والروابط كنص حرفي. عطّل هذا الخيار لعرض معاينة منسقة.",
@@ -1661,6 +1663,13 @@ export const ar = {
         audioUploadCancel: "إلغاء التفريغ النصي",
         audioUploadTranscribing: "جارٍ التفريغ النصي للصوت…",
         sectionTitle: "الإملاء",
+        micTargetLabel: "زر الميكروفون",
+        micTargetAsr: "النسخ باستخدام ASR",
+        micTargetModel: "إرسال الصوت إلى النموذج",
+        micTargetAsrDescription: "يكتب زر الميكروفون ما تقوله في مربع الرسالة.",
+        micTargetModelDescription: "عند تحميل نموذج يقبل إدخال الصوت، يسجّل الميكروفون مقطعًا ويرفقه برسالتك. تحصل النماذج الأخرى على الإملاء كالمعتاد.",
+        micTargetModelUnavailable: "حمّل نموذجًا يقبل إدخال الصوت (مثل LFM3-Omni) لترسل إليه صوتك.",
+        micRecordForModel: "تسجيل صوت للنموذج",
         engineLabel: "محرك الإملاء",
         engineBrowser: "المتصفح",
         engineBrowserDescription:
@@ -1684,6 +1693,13 @@ export const ar = {
         sttQuantDescription:
           "اختر نموذج STT أو ابحث عنه لتشغيله محليًا، ثم اختر التكميم.",
         sttDeviceLabel: "التحميل إلى",
+        sttContextLabel: "سياق الصوت",
+        sttContextAuto: "تلقائي (موصى به)",
+        sttContextAutoDescription:
+          "يضبط حجم السياق حسب كل تسجيل، ويستخدم ذاكرة أكثر للتسجيلات الأطول. قد تحتاج بيئات التشغيل القديمة إلى حجم ثابت لتقليل استخدام الذاكرة. ينطبق على Qwen3-ASR في «الصوت» و«تفريغ نصي».",
+        sttContextFixedDescription:
+          "تستهلك الحدود الأصغر ذاكرة أقل. تحتاج التسجيلات التي تتجاوز الحد إلى حد أعلى أو الوضع التلقائي. ينطبق على Qwen3-ASR في «الصوت» و«تفريغ نصي».",
+        sttContextTokens: "{count} توكن",
         sttDeviceAuto: "وحدة معالجة الرسومات عند توفرها",
         sttDeviceCpu: "ذاكرة المعالج",
         sttDeviceAutoDescription:
@@ -3027,11 +3043,11 @@ export const ar = {
       showReplyTimesDescription: "إظهار وقت انتهاء كل رد أسفله.",
       showReplyTimesKeywords:
         "طابع زمني وقت ساعة تاريخ متى انتهى رد رسالة timestamp time clock date reply",
-      showGenerationDetails: "معلومات مفصّلة عن السرعة والتحميل",
+      showGenerationDetails: "معلومات مفصّلة عن السرعة",
       showGenerationDetailsDescription:
-        "يضيف سرعة قراءة الموجّه وعدد الرموز وقبول المسودات إلى القراءات المباشرة، ويعرض مكان تحميل طبقات النموذج.",
+        "يضيف سرعة قراءة الموجّه وعدد الرموز وقبول المسودات إلى القراءات المباشرة.",
       showGenerationDetailsKeywords:
-        "تفاصيل سرعة رموز إحصاءات طبقات ذاكرة verbose developer stats speed tok/s prefill decode layers offload vram experts",
+        "تفاصيل سرعة رموز إحصاءات verbose developer stats speed tok/s prefill decode",
       generationStatsUpdates: "إحصاءات السرعة والسياق",
       generationStatsUpdatesDescription:
         "يحسب الوضع الفوري الرموز في الثانية واستخدام السياق أثناء بث الرد. أما عند الانتهاء فيحدّثها عند اكتمال كل رد.",

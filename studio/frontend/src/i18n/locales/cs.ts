@@ -749,6 +749,8 @@ export const cs = {
       "Zavřením tohoto okna se nastavení nezastaví. Jeho výsledek se zobrazí v části Nastavení > Zabezpečení.",
   },
   composerSettings: {
+    shareDraft: "Sdílet koncepty mezi chaty",
+    shareDraftDescription: "Používat jeden koncept pro chaty a porovnání. Ve výchozím stavu vypnuto; každý chat si ponechá vlastní koncept.",
     title: "Pole zprávy",
     plainText: "Pole zprávy s prostým textem",
     plainTextDescription:
@@ -1834,6 +1836,13 @@ export const cs = {
         audioUploadCancel: "Zrušit přepis",
         audioUploadTranscribing: "Přepisování zvuku…",
         sectionTitle: "Diktování",
+        micTargetLabel: "Tlačítko mikrofonu",
+        micTargetAsr: "Přepsat pomocí ASR",
+        micTargetModel: "Odeslat zvuk modelu",
+        micTargetAsrDescription: "Tlačítko mikrofonu zapíše, co řeknete, do pole zprávy.",
+        micTargetModelDescription: "Když je načten model se zvukovým vstupem, mikrofon nahraje klip a připojí ho ke zprávě. Ostatní modely dál používají diktování.",
+        micTargetModelUnavailable: "Načtěte model, který přijímá zvukový vstup (například LFM3-Omni), abyste mu mohli poslat svůj hlas.",
+        micRecordForModel: "Nahrát zvuk pro model",
         engineLabel: "Modul diktování",
         engineBrowser: "Prohlížeč",
         engineBrowserDescription:
@@ -1859,6 +1868,13 @@ export const cs = {
         sttQuantDescription:
           "Vyberte nebo vyhledejte model STT, který se má spouštět místně, a potom jeho kvantizaci.",
         sttDeviceLabel: "Načíst do",
+        sttContextLabel: "Kontext hlasu",
+        sttContextAuto: "Automaticky (doporučeno)",
+        sttContextAutoDescription:
+          "Přizpůsobí se každé nahrávce a pro delší zvuk použije více paměti. Starší běhová prostředí mohou ke snížení paměti potřebovat pevnou velikost. Platí pro Qwen3-ASR v sekcích Hlas a Přepis.",
+        sttContextFixedDescription:
+          "Menší limity používají méně paměti. Nahrávky, které se nevejdou, potřebují vyšší limit nebo Automaticky. Platí pro Qwen3-ASR v sekcích Hlas a Přepis.",
+        sttContextTokens: "tokeny: {count}",
         sttDeviceAuto: "GPU, pokud je k dispozici",
         sttDeviceCpu: "RAM procesoru",
         sttDeviceAutoDescription:
@@ -3292,11 +3308,11 @@ export const cs = {
         "Pod každou odpovědí zobrazovat, kdy byla dokončena.",
       showReplyTimesKeywords:
         "časové razítko čas hodiny datum kdy dokončeno odpověď zpráva timestamp time clock date hour when finished arrived reply response message",
-      showGenerationDetails: "Podrobné informace o rychlosti a načítání",
+      showGenerationDetails: "Podrobné informace o rychlosti",
       showGenerationDetailsDescription:
-        "Přidá do živých údajů rychlost čtení výzvy, počty tokenů a přijetí návrhů a ukáže, kam se načetly vrstvy modelu.",
+        "Přidá do živých údajů rychlost čtení výzvy, počty tokenů a přijetí návrhů.",
       showGenerationDetailsKeywords:
-        "podrobné vývojář statistiky rychlost vrstvy verbose developer stats speed tok/s prefill decode layers offload vram experts",
+        "podrobné vývojář statistiky rychlost verbose developer stats speed tok/s prefill decode",
       generationStatsUpdates: "Statistiky rychlosti a kontextu",
       generationStatsUpdatesDescription:
         "Režim V reálném čase počítá tokeny za sekundu a využití kontextu během streamování odpovědi. Po dokončení je aktualizuje, až každá odpověď skončí.",

@@ -628,10 +628,10 @@ def _delete_retired_folder(folder_id: str) -> bool | None:
             for snapshot in dict.fromkeys(doc["stored_path"] for doc in docs):
                 _remove_retired_snapshot(snapshot)
         conn.execute("DELETE FROM linked_folder_files WHERE folder_id=?", (folder_id,))
-        for doc in docs:
-            if folder["delete_remove_index"]:
-                store.delete_document(conn, doc["id"], commit = False)
-            else:
+        if folder["delete_remove_index"]:
+            store.delete_documents(conn, [doc["id"] for doc in docs], commit = False)
+        else:
+            for doc in docs:
                 conn.execute(
                     "UPDATE documents SET linked_folder_id=NULL, linked_relative_path=NULL "
                     "WHERE id=?",
@@ -857,8 +857,7 @@ def delete_retired_scope(scope: str) -> bool:
         ).fetchall()
         for stored_path in dict.fromkeys(document["stored_path"] for document in documents):
             _remove_retired_snapshot(stored_path)
-        for document in documents:
-            store.delete_document(conn, document["id"], commit = False)
+        store.delete_documents(conn, [document["id"] for document in documents], commit = False)
         conn.execute(
             "DELETE FROM rag_job_leases WHERE kind=? AND job_id IN "
             "(SELECT id FROM ingestion_jobs WHERE scope=?)",
@@ -2151,8 +2150,7 @@ def reconcile_folder(job_id: str) -> None:
     """Reconcile and persist a terminal folder state for every unexpected failure."""
     claimed = _claim_job(job_id)
     if claimed is None:
-        # Drop an already-activated claim here, or the heartbeat renews it for the process lifetime and an
-        # unlink waits on a job that will never run.
+        # Release the claim here or the heartbeat renews it forever and unlink waits on it.
         job_leases.release(job_leases.FOLDER_SYNC, job_id)
         return
     _, folder_id = claimed
@@ -2290,8 +2288,7 @@ def _worker(stop_event: threading.Event | None = None, project_exists = None) ->
                 try:
                     job = _next_account_job()
                 except Exception:
-                    # Writer-lock contention must not retire the only worker; the initialization and periodic paths
-                    # retry.
+                    # Lock contention must not retire the only worker; the other paths retry.
                     logger.warning("linked-folder queue selection failed", exc_info = True)
                     stop_event.wait(1.0)
                     continue

@@ -511,14 +511,43 @@ def _run(kernel, grid, args, **constexprs):
 _S2_PRODUCT_FMA = {torch.float32: True, torch.float16: False, torch.bfloat16: False}
 
 
-def _check(p, g):
+class Adam8bitUsageError(ValueError):
+    """Operands on another device, or a capture the step cannot be recorded in: the caller's to fix
+    (raised as is; the stand-in does not switch to the torch path over it)."""
+
+
+class Adam8bitUnsupported(ValueError):
+    """A dtype / layout these kernels do not take: the torch path steps this weight instead."""
+
+
+def _check(p, g, *tensors):
+    device = p.device
+    if any(t.device != device for t in (g, *tensors) if torch.is_tensor(t)):
+        raise Adam8bitUsageError(
+            f"Unsloth: 8-bit Adam needs the weight, gradient and optimizer state on one device, "
+            f"the weight is on {device}"
+        )
     if p.dtype not in _S2_PRODUCT_FMA or g.dtype != p.dtype:
-        raise ValueError(
+        raise Adam8bitUnsupported(
             f"Unsloth: 8-bit Adam needs float32 / float16 / bfloat16 weights and gradients of the "
             f"same dtype, got weight {p.dtype} and gradient {g.dtype}"
         )
     if not (p.is_contiguous() and g.is_contiguous()) or g.numel() != p.numel():
-        raise ValueError("Unsloth: 8-bit Adam needs contiguous weights and gradients of one size")
+        raise Adam8bitUnsupported(
+            "Unsloth: 8-bit Adam needs contiguous weights and gradients of one size"
+        )
+
+
+def _no_temporary_in_capture(step, lr):
+    # A scalar turned into a tensor here would be freed while a captured graph still reads it.
+    if (
+        not (torch.is_tensor(step) and torch.is_tensor(lr))
+        and torch.cuda.is_current_stream_capturing()
+    ):
+        raise Adam8bitUsageError(
+            "Unsloth: under CUDA graph capture pass both step and lr as device tensors "
+            "(optimizer capturable=True does)"
+        )
 
 
 def adam_8bit_blockwise_step(
@@ -541,13 +570,14 @@ def adam_8bit_blockwise_step(
 ):
     """bitsandbytes optimizer_update_8bit_blockwise("adam", ...) in place. step / lr: Python
     numbers, or device tensors (CUDA graph capture)."""
-    _check(p, g)
+    _check(p, g, state1, state2, qmap1, qmap2, absmax1, absmax2, step, lr)
     n = p.numel()
     if n == 0:
         return
     blocks = -(n // -BLOCKSIZE)
     capturable = torch.is_tensor(step) or torch.is_tensor(lr)
     if capturable:
+        _no_temporary_in_capture(step, lr)
         step = step if torch.is_tensor(step) else torch.tensor(step, device = p.device)
         lr = lr if torch.is_tensor(lr) else torch.tensor(lr, dtype = torch.float32, device = p.device)
     if s2_product_fma is None:
@@ -598,12 +628,13 @@ def adam_32bit_step(
     gnorm_scale = 1.0,
 ):
     """bitsandbytes optimizer_update_32bit("adam", ...) in place (no max_unorm, no skip_zeros)."""
-    _check(p, g)
+    _check(p, g, state1, state2, step, lr)
     n = p.numel()
     if n == 0:
         return
     capturable = torch.is_tensor(step) or torch.is_tensor(lr)
     if capturable:
+        _no_temporary_in_capture(step, lr)
         step = step if torch.is_tensor(step) else torch.tensor(step, device = p.device)
         lr = lr if torch.is_tensor(lr) else torch.tensor(lr, dtype = torch.float32, device = p.device)
     with torch.cuda.device(p.device):

@@ -7,7 +7,9 @@ installed or cannot load its native library (see unsloth/bnb_shim/__init__.py).
 It implements the 4-bit subset transformers, PEFT, accelerate and Unsloth use (Params4bit,
 Linear4bit, QuantState, quantize_4bit / dequantize_4bit, blockwise 8-bit quantization of the
 double-quant absmax) on Unsloth's Triton kernels, byte compatible with bitsandbytes checkpoints.
-Optimizers run their torch counterparts; LLM.int8 refuses with a clear error."""
+Adam / AdamW (8-bit, 32-bit, paged) keep bitsandbytes' blockwise 8-bit optimizer state on Unsloth's
+Triton kernels (bitsandbytes.optim); SGD / RMSprop / Adagrad run their torch counterparts; Lion,
+AdEMAMix, LAMB, LARS and LLM.int8 refuse with a clear error."""
 
 import torch
 

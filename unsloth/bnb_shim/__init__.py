@@ -207,8 +207,8 @@ def install():
     if os.environ.get("UNSLOTH_BNB_SHIM_QUIET", "0") != "1":
         print(
             f"Unsloth: bitsandbytes is unavailable ({reason}) - 4bit QLoRA uses Unsloth's own NF4 "
-            "kernels instead (UNSLOTH_BNB_SHIM=0 turns this off). 8-bit optimizers fall back to "
-            "torch, LLM.int8 is unsupported."
+            "kernels instead (UNSLOTH_BNB_SHIM=0 turns this off). 8-bit Adam / AdamW keep blockwise "
+            "8-bit state on Unsloth's Triton kernels, LLM.int8 is unsupported."
         )
     return True
 

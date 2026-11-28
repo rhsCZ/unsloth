@@ -101,19 +101,67 @@ class GlobalOptimManager:
 
 
 # UNSLOTH_BNB_SHIM_TRITON=0 steps with the torch path everywhere; read once, not inside traced code.
-_TRITON_WANTED = os.environ.get("UNSLOTH_BNB_SHIM_TRITON", "1") != "0"
-_KERNELS = {"module": None, "ok": None}
+_KERNELS = {"module": None, "ok": None, "wanted": True}
+# Triton releases the kernels are known to compile on (Triton 3.0 compile failures can end the
+# process instead of raising, so older releases take the torch path without trying).
+_MIN_TRITON = (3, 2)
+
+
+def _triton_wanted():
+    """UNSLOTH_BNB_SHIM_TRITON=0 steps with the torch path; read per call, outside traced code."""
+    if not torch.compiler.is_compiling():
+        _KERNELS["wanted"] = os.environ.get("UNSLOTH_BNB_SHIM_TRITON", "1") != "0"
+    return _KERNELS["wanted"]
+
+
+def _modes_active():
+    """A TorchDispatchMode / TorchFunctionMode (make_fx, fake tensors, profilers) is on: raw-pointer
+    Triton launches would bypass it, so the torch ops route steps instead. `with torch.device(...)`
+    (a DeviceContext function mode) does not count."""
+    for probe in (
+        getattr(torch._C, "_len_torch_dispatch_stack", None),
+        getattr(getattr(torch, "_ops", None), "_len_torch_dispatch_stack_pre_dispatch", None),
+    ):
+        try:
+            if probe is not None and probe():
+                return True
+        except Exception:
+            return True
+    length = getattr(torch._C, "_len_torch_function_stack", None)
+    at = getattr(torch._C, "_get_function_stack_at", None)
+    try:
+        n = length() if length is not None else 0
+        if n and at is None:
+            return True
+        from torch.utils._device import DeviceContext
+
+        return any(not isinstance(at(i), DeviceContext) for i in range(n))
+    except Exception:
+        return True
+
+
+def _triton_version_ok():
+    try:
+        import triton
+        return tuple(int(x) for x in triton.__version__.split(".")[:2]) >= _MIN_TRITON
+    except Exception:
+        return False
 
 
 def _triton_kernels(device):
     """unsloth/kernels/adam8bit_blockwise.py when it can run on `device`, else None."""
-    if not _TRITON_WANTED or device.type != "cuda" or _KERNELS["ok"] is False:
+    if not _triton_wanted() or device.type != "cuda" or _KERNELS["ok"] is False:
+        return None
+    if not torch.compiler.is_compiling() and _modes_active():
         return None
     if _KERNELS["ok"] is None:
         if torch.compiler.is_compiling():
             return None
         try:
+            if not _triton_version_ok():
+                raise RuntimeError(f"needs Triton >= {_MIN_TRITON[0]}.{_MIN_TRITON[1]}")
             from unsloth.kernels import adam8bit_blockwise
+
             _KERNELS["module"] = adam8bit_blockwise
             _KERNELS["ok"] = True
         except Exception as error:
@@ -142,6 +190,8 @@ def _bf16_triton_ok(device):
 def _triton_failed(error):
     """A compile / launch failure (not OOM, not a tracing error) moves every later step to torch."""
     if isinstance(error, torch.cuda.OutOfMemoryError) or torch.compiler.is_compiling():
+        return False
+    if type(error).__name__ == "Adam8bitUsageError":  # the caller's operands / capture: raise it
         return False
     if type(error).__module__.startswith("torch._dynamo"):
         return False
@@ -199,6 +249,10 @@ def _multi_tensor_step(optimizer):
     steps (not capturable), at most 4 param groups, no instance-level or subclass override of
     update_step / init_state / get_config (bfloat16 stochastic rounding, FSDP2 shards keep theirs)."""
     if not _multi_tensor_wanted() or getattr(optimizer, "capturable", False):
+        return False
+    # Under CUDA graph capture the gradient-pointer refresh (a host copy) cannot be recorded; a
+    # captured non-capturable step takes the per-tensor route as it did before.
+    if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
         return False
     cls = type(optimizer)
     if (
@@ -814,7 +868,8 @@ class Optimizer2State(Optimizer8bit):
                     )
                 return
             except Exception as error:
-                if not _triton_failed(error):
+                # a dtype / layout the kernels do not take steps this weight with torch ops
+                if type(error).__name__ != "Adam8bitUnsupported" and not _triton_failed(error):
                     raise
         if eight:
             adam_8bit_blockwise_torch(

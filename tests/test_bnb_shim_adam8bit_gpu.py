@@ -233,8 +233,16 @@ print("OUT " + json.dumps(out))
 """
 
 
-def test_triton_matches_torch_path_and_float64_oracle():
-    out = run(KERNEL_VS_TORCH)
+@pytest.mark.parametrize("exact", [True, False], ids = ["ptx_fast_math", "ieee_rocm_path"])
+def test_triton_matches_torch_path_and_float64_oracle(exact):
+    # exact=False: the IEEE operations ROCm (and the Triton interpreter) run, forced on this GPU
+    body = (
+        KERNEL_VS_TORCH
+        if exact
+        else KERNEL_VS_TORCH.replace('dev = "cuda"\n', 'dev = "cuda"\nK._EXACT = False\n', 1)
+    )
+    assert exact or "K._EXACT = False" in body
+    out = run(body)
     for case, w in out.items():
         # fast-math vs IEEE float32: the step agrees to 5e-4 of itself and the weight, rounded twice
         # (step, then decay), is at most two representable values further; codes one step
@@ -407,3 +415,209 @@ def test_multi_tensor_step_matches_per_tensor_step():
     assert out["fallback"] == [0, 0], out
     # 8-bit: bf16 + fp16 + fp32 weights; 32-bit: small fp32 weights; at most 2 variants per dtype
     assert out["variants"] <= 6 and out["variants32"] <= 2, out
+
+
+RECHECK = """
+import json, os, torch
+import bitsandbytes as bnb
+from bitsandbytes.optim import optimizer as O
+from unsloth.kernels import adam8bit_blockwise as K
+from torch.utils._python_dispatch import TorchDispatchMode
+dev = "cuda"
+calls = {"k8": 0, "multi": 0}
+k8 = K.compiled_safe_8bit_step
+def counted(*a, **k):
+    calls["k8"] += 1
+    return k8(*a, **k)
+K.compiled_safe_8bit_step = counted
+out = {}
+
+
+def fresh(multi):
+    os.environ["UNSLOTH_BNB_SHIM_MULTI_TENSOR"] = "1" if multi else "0"
+    p = torch.nn.Parameter(torch.randn(8192, device = dev))
+    o = bnb.optim.AdamW8bit([p], lr = 1e-3)
+    return p, o
+
+
+def step(p, o):
+    p.grad = torch.ones_like(p)
+    o.step()
+    torch.cuda.synchronize()
+
+
+# kill switch read at call time: the Triton route, then torch ops after flipping it, then Triton again
+for multi in (False, True):
+    p, o = fresh(multi)
+    seen = []
+    for flag in ("1", "0", "1"):
+        os.environ["UNSLOTH_BNB_SHIM_TRITON"] = flag
+        before = (calls["k8"], o.__dict__.get("_unsloth_multi_tensor_steps", 0))
+        step(p, o)
+        after = (calls["k8"], o.__dict__.get("_unsloth_multi_tensor_steps", 0))
+        seen.append(after != before)
+    out[f"kill_switch_multi{int(multi)}"] = seen
+    assert o.state[p]["state1"].dtype == torch.uint8
+os.environ["UNSLOTH_BNB_SHIM_TRITON"] = "1"
+
+
+# a dispatch mode (what make_fx / FakeTensorMode / op counters install): torch ops step, and the mode sees them
+class Count(TorchDispatchMode):
+    n = 0
+    def __torch_dispatch__(self, func, types, args = (), kwargs = None):
+        Count.n += 1
+        return func(*args, **(kwargs or {}))
+
+
+for multi in (False, True):
+    p, o = fresh(multi)
+    step(p, o)
+    before = (calls["k8"], o.__dict__.get("_unsloth_multi_tensor_steps", 0))
+    with Count():
+        step(p, o)
+    out[f"mode_multi{int(multi)}"] = [(calls["k8"], o.__dict__.get("_unsloth_multi_tensor_steps", 0)) == before, Count.n > 20]
+    with torch.device(dev):  # a DeviceContext function mode is not one of them
+        step(p, o)
+    out[f"device_ctx_multi{int(multi)}"] = (calls["k8"], o.__dict__.get("_unsloth_multi_tensor_steps", 0)) != before
+
+# operand device checks
+n = 4096
+code1 = bnb.functional.create_dynamic_map(signed = True).to(dev)
+code2 = bnb.functional.create_dynamic_map(signed = False).to(dev)
+args = dict(p = torch.zeros(n, device = dev), g = torch.ones(n, device = dev),
+            s1 = torch.zeros(n, dtype = torch.uint8, device = dev), s2 = torch.zeros(n, dtype = torch.uint8, device = dev),
+            q1 = code1, q2 = code2, a1 = torch.zeros(16, device = dev), a2 = torch.zeros(16, device = dev))
+refused = []
+for k in args:
+    bad = dict(args)
+    bad[k] = bad[k].cpu()
+    try:
+        K.adam_8bit_blockwise_step(*bad.values(), 1, 1e-3, 0.9, 0.999, 1e-8, 0.0)
+        refused.append(False)
+    except ValueError:
+        refused.append(True)
+for bad_step, bad_lr in ((torch.ones((), dtype = torch.int32), 1e-3), (1, torch.full((), 1e-3))):
+    try:
+        K.adam_8bit_blockwise_step(*args.values(), bad_step, bad_lr, 0.9, 0.999, 1e-8, 0.0)
+        refused.append(False)
+    except ValueError:
+        refused.append(True)
+try:
+    K.adam_32bit_step(args["p"], args["g"].cpu(), torch.zeros(n, device = dev), torch.zeros(n, device = dev),
+                      1, 1e-3, 0.9, 0.999, 1e-8, 0.0)
+    refused.append(False)
+except ValueError:
+    refused.append(True)
+out["device_refused"] = refused
+# through the optimizer: state moved off the weight's device is the caller's error, raised as is,
+# and the Triton route stays on for every other weight
+p, o = fresh(False)
+step(p, o)
+o.state[p]["state2"] = o.state[p]["state2"].cpu()
+try:
+    step(p, o)
+    out["optimizer_device_error"] = None
+except ValueError as error:
+    out["optimizer_device_error"] = type(error).__name__
+out["triton_still_on"] = O._KERNELS["ok"] is True
+
+# CUDA graph capture: a step / lr pair the wrapper would have to turn into a tensor is refused (the
+# temporary would be freed while the graph still reads it); both on the device is captured
+step_t = torch.ones((), dtype = torch.int32, device = dev)
+lr_t = torch.full((), 1e-3, device = dev)
+s = torch.cuda.Stream()
+s.wait_stream(torch.cuda.current_stream())
+with torch.cuda.stream(s):
+    K.adam_8bit_blockwise_step(*args.values(), step_t, lr_t, 0.9, 0.999, 1e-8, 0.0)
+torch.cuda.current_stream().wait_stream(s)
+torch.cuda.synchronize()
+graph = torch.cuda.CUDAGraph()
+capture_refused = False
+try:
+    with torch.cuda.graph(graph):
+        K.adam_8bit_blockwise_step(*args.values(), step_t, 1e-3, 0.9, 0.999, 1e-8, 0.0)
+except ValueError:
+    capture_refused = True
+graph2 = torch.cuda.CUDAGraph()
+with torch.cuda.graph(graph2):
+    K.adam_8bit_blockwise_step(*args.values(), step_t, lr_t, 0.9, 0.999, 1e-8, 0.0)
+graph2.replay()
+torch.cuda.synchronize()
+out["capture"] = [capture_refused, bool(torch.isfinite(args["p"]).all())]
+
+# the multi-tensor route declines inside a capture (its gradient pointer refresh is a host copy)
+os.environ["UNSLOTH_BNB_SHIM_MULTI_TENSOR"] = "1"
+p = torch.nn.Parameter(torch.randn(8192, device = dev))
+o = bnb.optim.AdamW8bit([p], lr = 1e-3)
+p.grad = torch.ones_like(p)
+o.step()
+torch.cuda.synchronize()
+g3 = torch.cuda.CUDAGraph()
+with torch.cuda.graph(g3):
+    out["multi_in_capture"] = O._multi_tensor_step(o)
+print("OUT " + json.dumps(out))
+"""
+
+
+def test_recheck_kill_switch_modes_devices_capture():
+    out = run(RECHECK)
+    # UNSLOTH_BNB_SHIM_TRITON is read on every step, per-tensor and multi-tensor routes alike
+    assert out["kill_switch_multi0"] == [True, False, True], out
+    assert out["kill_switch_multi1"] == [True, False, True], out
+    # under a dispatch mode the raw-pointer kernels stand down; a torch.device context does not count
+    assert out["mode_multi0"] == [True, True] and out["mode_multi1"] == [True, True], out
+    assert out["device_ctx_multi0"] and out["device_ctx_multi1"], out
+    assert all(out["device_refused"]) and len(out["device_refused"]) == 11, out
+    assert out["optimizer_device_error"] == "Adam8bitUsageError" and out["triton_still_on"], out
+    assert out["capture"] == [True, True], out
+    assert out["multi_in_capture"] is False, out
+
+
+# int64 offsets past 2**31 elements: the tail of a 2**31 + 1000 element bfloat16 weight (about 13 GB
+# with its gradient and state) steps exactly like the same values in a small weight, on both routes.
+HUGE = """
+import json, os, sys, torch
+import bitsandbytes as bnb
+os.environ["UNSLOTH_BNB_SHIM_MULTI_TENSOR"] = sys.argv[1]
+dev = "cuda"
+N = 2**31 + 1000
+START = 2**31 - 4096  # a multiple of the 256 element block; the small weight keeps 8-bit state
+p = torch.nn.Parameter(torch.empty(N, dtype = torch.bfloat16, device = dev))
+g = torch.Generator(device = dev).manual_seed(0)
+tail = torch.randn(N - START, generator = g, device = dev).to(torch.bfloat16)
+grads = [torch.randn(N - START, generator = g, device = dev).to(torch.bfloat16) for _ in range(3)]
+with torch.no_grad():
+    p[:START].fill_(0.5)
+    p[START:].copy_(tail)
+small = torch.nn.Parameter(tail.clone())
+ob, os_ = bnb.optim.AdamW8bit([p], lr = 1e-3), bnb.optim.AdamW8bit([small], lr = 1e-3)
+p.grad = torch.zeros_like(p)
+for gr in grads:
+    p.grad[START:].copy_(gr)
+    small.grad = gr.clone()
+    ob.step()
+    os_.step()
+torch.cuda.synchronize()
+sb, ss = ob.state[p], os_.state[small]
+B = START // 256
+same = dict(
+    p = torch.equal(p.detach()[START:].view(torch.int16), small.detach().view(torch.int16)),
+    s1 = torch.equal(sb["state1"][START:], ss["state1"]),
+    s2 = torch.equal(sb["state2"][START:], ss["state2"]),
+    a1 = torch.equal(sb["absmax1"][B:], ss["absmax1"]),
+    a2 = torch.equal(sb["absmax2"][B:], ss["absmax2"]),
+    moved = not torch.equal(p.detach()[START:], tail),
+    multi = ob.__dict__.get("_unsloth_multi_tensor_steps", 0),
+)
+print("OUT " + json.dumps(same))
+"""
+
+
+@pytest.mark.parametrize("multi", ["0", "1"])
+def test_int64_offsets_past_2_31_elements(multi):
+    free, _ = torch.cuda.mem_get_info()
+    if free < 16 * 2**30:
+        pytest.skip("needs 16 GB free on the GPU")
+    out = run(HUGE, argv = (multi,))
+    assert out.pop("multi") == (3 if multi == "1" else 0), out
+    assert all(out.values()), out
